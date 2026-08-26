@@ -70,10 +70,16 @@ public class ProcessingShard<K, V> {
      * "Between operations" is not a hedge: {@link #countAsSelectable(WorkContainer)} claims the unit and then
      * increments, which is two atomics rather than one, so a reader interleaving there can see the scan one ahead
      * of the counter - and, if a concurrent {@link #uncount(WorkContainer)} wins the release inside that window,
-     * can see the counter momentarily at -1. Every such interleaving still settles correct, and every consumer
-     * reads the aggregate in {@link ShardManager#getNumberOfWorkQueuedInShardsAwaitingSelection()}, which floors at
-     * zero. Collapsing the two atomics into one is the follow-up that arrives with astubbs/parallel-consumer#335's
-     * {@code Execution} transition.
+     * can see the counter momentarily at -1. Every such interleaving still settles correct, and every consumer that
+     * DRIVES ANYTHING reads the aggregate in
+     * {@link ShardManager#getNumberOfWorkQueuedInShardsAwaitingSelection()}, which floors at zero - that is the one
+     * behind {@code isSufficientlyLoaded()} and {@code drain()}. The single exception reads nothing: the
+     * under-served-retrieval diagnostic in {@link ShardManager#getWorkIfAvailable(int)} sums this counter unfloored
+     * behind {@code log.isDebugEnabled()}, so the transient can surface as {@code awaitingSelection=-1} in one debug
+     * line. Left unfloored deliberately - that line exists to show a human what the accounting actually says, and a
+     * clamp there would hide the very drift it was added to expose. Collapsing the two atomics into one is the
+     * follow-up that arrives with astubbs/parallel-consumer#335's {@code Execution} transition, and it removes the
+     * transient rather than masking it.
      * <p>
      * Note this is <em>not</em> the count of entries for which {@link WorkContainer#isAvailableToTakeAsWork()} is
      * true: {@link #onFailure(WorkContainer)} counts a failed record back in before its retry delay has passed, and
