@@ -237,7 +237,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         long outForProcessing = getNumberRecordsOutForProcessing();
         long threshold = (long) options.getTargetAmountOfRecordsInFlight() * getLoadingFactor();
         boolean loaded = (awaitingSelection + outForProcessing) > threshold;
-        // Silent-stall diagnostic (#857): this gates the broker-poller pause/resume. If it stays true while no
+        // Silent-stall diagnostic (confluentinc#857): this gates the broker-poller pause/resume. If it stays true while no
         // records are actually flowing, the poller never resumes and the PC stalls. A high outForProcessing with
         // no awaitingSelection and no real progress is the numberRecordsOutForProcessing counter-drift signature.
         // See docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md
@@ -278,6 +278,9 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     }
 
     public void handleFutureResult(WorkContainer<K, V> wc) {
+        // Third of the three staleness checkpoints - see PartitionState#epochIsStale for the scheme.
+        // Work that went stale mid-flight never reaches onSuccessResult/onFailureResult, which is what
+        // stops a returning stale result removing a FRESH container that replaced it at the same offset.
         if (checkIfWorkIsStale(wc)) {
             // no op, partition has been revoked
             log.debug("Work result received, but from an old generation. Dropping work from revoked partition {}", wc);

@@ -3,7 +3,9 @@
 **Status:** **done for issues** (2026-08-05). All 78 upstream issues are mirrored, diagnosed and backlinked; 7 are closed against a released version. Phases 3-5 are done too; nothing outstanding in this plan. See *What actually happened* below - the execution diverged from the plan in ways worth knowing.
 **Date:** 2026-08-04
 **Scope:** all 78 open issues in `confluentinc/parallel-consumer` - **all 78 mirrored 2026-08-05**
-**Ledger entry:** [`docs/inflight/parked-upstream-issue-mirroring.md`](../inflight/parked-upstream-issue-mirroring.md)
+**Ledger entry:** retired - the work landed, so the `docs/inflight/` entry was deleted per the rule that
+inflight files do not outlive their work. The durable half now lives in `AGENTS.md` → *Mirror format*
+(how to write a mirror) and *Backlinking upstream* (that the bulk run is finished).
 **Related:** `src/docs/development/upstream-map.yaml`
 
 ## Why
@@ -76,7 +78,9 @@ numbers. Dropped:
   `#857` will eventually exist and mean something else entirely.
 
 The underlying problem - an unqualified number resolving against the wrong repo - is already solved by
-the reference convention this repo adopted (AGENTS.md "Reference convention"): bare `#NN` is the fork,
+the reference convention this repo adopted (then at docs/inflight/AGENTS.md "Reference convention" -
+heading retired in astubbs#324, readable via `git show e7af9e897^:docs/inflight/AGENTS.md`;
+[`docs/issue-references.md`](../issue-references.md) owns the rule today): bare `#NN` is the fork,
 `upstream #NN` is upstream. Phase 4 extends it rather than replacing it.
 
 ## Label scheme
@@ -117,6 +121,14 @@ unmaintained tracker.
 dates and comment count go in the mirrored body, where they stay accurate by construction.
 
 ## Mirror format
+
+> **Superseded as a spec - kept as the record of what was proposed.** The live convention is
+> `AGENTS.md` → *Mirror format*; follow that when creating or editing a mirror. Two ways this section
+> no longer matches reality: the title prefix below was **not** what shipped (the import used
+> `upstream #NNN:`, which all 78 mirrors carry), and the body template predates the rule that a mirror
+> records its **upstream title verbatim** in the header, which was added on 2026-08-06 after
+> astubbs#118 was retitled. Left unedited otherwise - a dated plan is a record of the decision, not a
+> place to retcon it.
 
 Title:
 
@@ -189,6 +201,7 @@ the mirror on merge. This removed a whole artefact: `docs/runbooks/pr57-post-mer
 because closing and announcing had to be remembered and done by hand. Phase 2 step 5 ("close the
 already-fixed mirrors") is therefore only needed for issues whose fix has *already* merged; anything
 still in review should be wired with `Fixes` instead.
+<!-- file-refs: N/A - the sentence records that this artefact was removed -->
 
 **"Already fixed" needs three states, not two.** Of the six, only three could honestly be closed.
 [`confluentinc#233`](https://github.com/confluentinc/parallel-consumer/issues/233) is partially addressed, [`confluentinc#857`](https://github.com/confluentinc/parallel-consumer/issues/857) is two-thirds fixed with the original defect
@@ -250,12 +263,26 @@ and four axes were added that this plan did not anticipate:
   does not commit to a version number that has not been decided. A `next` label was tried and dropped
   as meaningless.
 
+### The title format evolved past this plan, twice
+
+The import shipped `upstream #NNN: <title>`, not the `confluentinc#NNN:` this plan proposed - so every
+one of the 78 carries the `upstream` form. Nothing recorded that at the time; it surfaced on
+2026-08-06 while retitling astubbs#118.
+
+Then the description half stopped being upstream's words. astubbs#118 was mirrored as *"Error in
+onPartitionsAssigned in parallel consumer"*, which names where a failure surfaced and nothing a
+sufferer would search for; once astubbs#217 established the cause it was retitled to lead with the
+error string. That made the upstream title worth keeping, so mirrors now record it verbatim in the
+header block - unconditionally, not only when retitled, so a reader never has to open upstream to
+learn whose words a title is. See `AGENTS.md` → *Mirror format*, which is the live spec.
+
 ### The manifest-driven backlink tooling was retired
 
 `scripts/upstream-backlink.sh`, its two templates (`fix-backlink`, `fork-awareness`) and
 `src/docs/development/upstream-backlink-plan.md` are **deleted**. So are `upstream-map.py`'s
 `posted-refs` and `todo` subcommands, which existed only to serve that script, and the `backlink:`,
 `forwarded:` and `todo:` fields it read.
+<!-- file-refs: N/A - the sentence states these are deleted -->
 
 It commented on one upstream issue per manifest entry. After the mirror there are no issue entries -
 the map tracks the upstream **PRs** we may carry, and every upstream issue already has its backlink.
@@ -360,6 +387,7 @@ expensive part and they do not automate - the mechanical rules below still apply
 
 `scripts/upstream-mirror.py` would have followed the conventions of the (now retired)
 `upstream-backlink.sh`:
+<!-- file-refs: N/A - describes a script that was never written -->
 
 - **dry-run by default**, `--post` to execute, confirmation prompt even then
 - `--limit N` / `--only <numbers>` for staged rehearsal
@@ -370,6 +398,7 @@ expensive part and they do not automate - the mechanical rules below still apply
   content-creation limit
 - emits `src/docs/development/mirror-map.tsv` (`upstream# → fork# → title`) as the durable migration record
 - creates labels first, idempotently
+<!-- file-refs: N/A - a planned output of a design that was not built -->
 
 Summaries are editorial, so they are drafted into a curated file the script only renders, and reviewed
 before posting. Unit tests cover the two mechanical rules (no `@`, qualified cross-repo refs).
@@ -410,7 +439,8 @@ table matches.
 
 ### Phase 4 - enforce the reference convention — **DONE**
 
-The convention itself already exists (AGENTS.md "Reference convention", `docs/inflight/AGENTS.md`,
+The convention itself already exists (docs/inflight/AGENTS.md's then "Reference convention" section -
+retired in astubbs#324, `docs/issue-references.md` owns it now -
 `CHANGELOG.adoc`, `docs/refactoring.md`): bare `#NN` is the fork, `upstream #NN` is upstream. What is
 missing is enforcement and the GitHub-rendering carve-out:
 

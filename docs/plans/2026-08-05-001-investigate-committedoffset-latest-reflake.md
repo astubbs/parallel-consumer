@@ -1,4 +1,4 @@
-# `PartitionStateCommittedOffsetIT.committedOffsetRemoved[1] latest` - re-flaked after #80 un-quarantined it
+# `PartitionStateCommittedOffsetIT.committedOffsetRemoved[1] latest` - re-flaked after astubbs#80 un-quarantined it
 
 **Status:** RESOLVED. Hypothesis confirmed by deterministic reproduction, fixed, and verified against
 a harsher trigger than the one that broke it. Kept as the record of the diagnosis - the fix commit
@@ -8,11 +8,11 @@ carries the summary.
 
 ## Why this branch exists
 
-This test was the quarantine lane's first occupant (the `[latest]` nudge race). PR #80 owned the fix,
+This test was the quarantine lane's first occupant (the `[latest]` nudge race). PR astubbs#80 owned the fix,
 and on merging it removed the `@Quarantined` annotation and the registry entry. It has since failed
-again, on an unrelated PR (#111, which changes no main code).
+again, on an unrelated PR (astubbs#111, which changes no main code).
 
-That matters procedurally as well as technically: with #80 merged there is **no open owning fix PR**,
+That matters procedurally as well as technically: with astubbs#80 merged there is **no open owning fix PR**,
 so `bin/check-quarantine-owners.sh` will reject a re-quarantine. The options are a real fix, or a new
 owning PR - this branch.
 
@@ -43,7 +43,7 @@ the fault is likely in the test itself, not consumer-group progress
 === END AMBIENT PROBE AUTOPSY ===
 ```
 
-Two things to take from it. The failing parameter is **`[1] latest`** - the same one #80 called out.
+Two things to take from it. The failing parameter is **`[1] latest`** - the same one astubbs#80 called out.
 And **`probe clean`**: consumer-group progress was healthy, so per `AGENTS.md` this points at the test
 rather than at the library.
 
@@ -53,8 +53,8 @@ rather than at the library.
 22:07.467  Producing 200 messages to LoadTest-834464130      <- TO_PRODUCE = 200, offsets 0..199
 22:08.068  PC1 assigned LoadTest-834464130-0
 22:08.545  runPcUntilOffset first-poll await: pcId=PC1 ...   <- awaitWithTopicNudge begins
-22:09.547  Producing 1 messages to LoadTest-834464130        <- NUDGE #1
-22:10.573  Producing 1 messages to LoadTest-834464130        <- NUDGE #2
+22:09.547  Producing 1 messages to LoadTest-834464130        <- NUDGE 1
+22:10.573  Producing 1 messages to LoadTest-834464130        <- NUDGE 2
 22:10.595  PC1 partitions revoked
 22:11.098  new consumer, offset reset  (checkHowManyRecordsWithKeyPresent)
 22:11.317  FAILURE: expected 2, but was 1
@@ -100,7 +100,7 @@ fails. The suite runs forked, and the same log shows `CloseAndOpenOffsetTest` an
 
 **Confidence:** high on the mechanism, because it is arithmetic rather than timing - but it is a
 hypothesis until the experiment below runs. Note it is *not* a product bug on this evidence, which is
-consistent with `probe clean`. That must be re-checked rather than assumed: #80's own history is a
+consistent with `probe clean`. That must be re-checked rather than assumed: astubbs#80's own history is a
 reminder that a "known flake" here was previously a real drain-zombie defect.
 
 ## Outcome
@@ -113,7 +113,7 @@ reproduced the exact signature (`expected: 2, but was: 1`, surviving record bein
 The second stale assumption turned up during the trace and explains the `[1] latest` bias:
 `producedCount = producedCount + 1; // run sends one` feeds `EXPECTED_RESET_OFFSET`, which is only used
 under LATEST. `git log -L` dates that line to upstream `28ccc1da6`, when `runPcUntilOffset` genuinely
-sent one record up front; #80 later moved nudging inside the await and left the arithmetic behind.
+sent one record up front; astubbs#80 later moved nudging inside the await and left the arithmetic behind.
 
 Fixed by removing the assumption rather than correcting it - both call sites now read the partition end
 offset from the broker. After the fix, TWO extra nudges give 3 tests / 0 failures, and a soak of 8 runs
@@ -154,7 +154,7 @@ into a confirmed one, and step 2's "fix the arithmetic, not the timing" is what 
 ## Prior art
 
 **`debug/committedoffset-firstpoll-stall` - a different symptom of this same test, and it has
-instrumentation worth reusing before you write your own.** From the #80 era, it investigated the
+instrumentation worth reusing before you write your own.** From the astubbs#80 era, it investigated the
 *first-poll stall*: the test hanging in `runPcUntilOffset`'s await. That is not what happened here -
 this run's await completed (it fired its nudges and moved on) and the failure came later, in the
 assertion. So the two are separate faults in one test, and the earlier branch is **not** a duplicate of
@@ -181,4 +181,4 @@ arithmetic elsewhere silently depended on. `AGENTS.md` says to check `docs/solut
 a problem as novel; here it would have named the mechanism immediately.
 
 - `docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md` - the drain-zombie
-  write-up that landed with #80, and the reason "it's just a flake" gets no benefit of the doubt here.
+  write-up that landed with astubbs#80, and the reason "it's just a flake" gets no benefit of the doubt here.

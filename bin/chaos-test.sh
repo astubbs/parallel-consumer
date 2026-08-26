@@ -3,8 +3,8 @@
 # Copyright (C) 2026 Antony Stubbs and contributors
 #
 
-# Run the Chaos Pain Suite - shared by the per-PR highcpu lane (pr-highcpu-fast-feedback.yml,
-# check "highcpu / Chaos Pain Suite") and the on-demand chaos-pain.yml dispatch workflow.
+# Run the Chaos Pain Suite - shared by the per-PR gate (maven.yml, check "Chaos Pain Suite") and
+# the on-demand chaos-pain.yml dispatch workflow.
 #
 # Env (data, not code - workflow inputs must pass through env, never ${{ }} into scripts):
 #   CHAOS_SEED - optional seed (replays a schedule); empty = random, logged by the run
@@ -12,9 +12,12 @@
 #
 # @Quarantined chaos scenarios are EXCLUDED (the Quarantine Lane owns them): a known-RED detector
 # must not drown the tripwire signal. If that leaves zero tests selected, the summary says so
-# loudly instead of impersonating a real GREEN run (see docs/QUARANTINED_TESTS.md).
+# loudly instead of impersonating a real GREEN run (see docs/quarantined-tests.md).
 
 set -euo pipefail
+
+# Must byte-match the WARN line ProgressProbe.observe() emits - grep it there before editing.
+readonly OBSERVATION_MARKER="OBSERVATION (does not fail the run)"
 
 REPS="${CHAOS_REPS:-1}"
 SEED_ARG=""
@@ -28,40 +31,109 @@ summary() {
     echo ""
     printf 'Total chaos wall-clock: **%dm %02ds** (build included)\n\n' $((total / 60)) $((total % 60))
     local tests
-    tests=$(find . -path '*/failsafe-reports/TEST-*.xml' | wc -l | tr -d ' ')
+    tests=$(find . -path '*failsafe-reports/TEST-*.xml' | wc -l | tr -d ' ')
     if [ "$tests" -eq 0 ]; then
         echo "### ZERO chaos tests selected - this run measured NOTHING"
         echo ""
         echo "All chaos-tagged scenarios are currently @Quarantined (excluded here; the"
-        echo "Quarantine Lane runs them - see docs/QUARANTINED_TESTS.md). Real coverage"
-        echo "returns when the W4 variants or the quarantine owner fix (#80) land."
+        echo "Quarantine Lane runs them - see docs/quarantined-tests.md). Real coverage"
+        echo "returns when the W4 variants or the quarantine owner fix (astubbs#80) land."
     else
-        echo "| Test class | Time |"
-        echo "|---|---|"
-        find . -path '*/failsafe-reports/TEST-*.xml' -print0 | while IFS= read -r -d '' f; do
-            local tag n t
+        # Class 2 lag stagnation REPORTS rather than gates (see ProgressProbe.getObservations and
+        # docs/solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md),
+        # so a green run is the
+        # only place its findings can ever appear. Printing them here is what stops "does not gate"
+        # from meaning "nobody reads it" - the peak is the number a timing regression moves.
+        # Every read here uses a whole-file `grep` with no early-exiting reader downstream: `| head`
+        # would close the pipe and pipefail would promote the writer's EPIPE to a failure, which
+        # bin/AGENTS.md bans and bin/check-shell-sigpipe.sh enforces.
+        # One pass over the reports, feeding the loop by process substitution rather than a pipe:
+        # `find | while` runs the loop in a SUBSHELL, so per-file counts cannot accumulate and a
+        # second full scan was needed to answer "did anything observe?". These XMLs embed captured
+        # stdout and reach hundreds of MB, so the extra scan was not free. Same shape as
+        # bin/quarantine-lane-report.sh. No early-exiting reader is introduced, so the
+        # check-shell-sigpipe.sh ban is not implicated.
+        local any_observations=0
+        echo "| Test class | Time | Lag stagnation peak | Class 2 observations |"
+        echo "|---|---|---|---|"
+        while IFS= read -r -d '' f; do
+            local tag n t obs peak_ms peak_line
             tag=$(head -3 "$f" | tr '\n' ' ')
             n=$(grep -o 'name="[^"]*"' <<< "$tag" | head -1 | cut -d'"' -f2)
             t=$(grep -o 'time="[^"]*"' <<< "$tag" | head -1 | cut -d'"' -f2)
-            if [ -n "$n" ]; then echo "| $n | ${t}s |"; fi
-        done
+            obs=$(grep -c "$OBSERVATION_MARKER" "$f") || obs=0
+            # MAX, not first match: a class with several test methods emits one `peaks:` line per
+            # method, and reporting the first would understate a later method's peak.
+            peak_ms=""
+            while IFS= read -r peak_line; do
+                [ -n "$peak_line" ] || continue
+                if [ -z "$peak_ms" ] || [ "$peak_line" -gt "$peak_ms" ]; then peak_ms="$peak_line"; fi
+            done <<< "$(grep -o 'maxLagStagnation=[0-9]*ms' "$f" | cut -d= -f2 | tr -d 'ms')"
+            # Counted independently of the table-row guard: a report with no name= attribute still
+            # observed whatever it observed.
+            if [ "$obs" -gt 0 ]; then any_observations=$((any_observations + 1)); fi
+            if [ -n "$n" ]; then echo "| $n | ${t}s | ${peak_ms:-n/a}${peak_ms:+ms} | ${obs} |"; fi
+        done < <(find . -path '*failsafe-reports/TEST-*.xml' -print0)
+        if [ "$any_observations" -gt 0 ]; then
+            echo ""
+            echo "### Class 2 observations fired in ${any_observations} scenario(s) - this did NOT fail the run"
+            echo ""
+            echo "\`CLASS2_STALL/LAG_STAGNATION\` measures how long a partition's committed offset stayed"
+            echo "pinned. One incomplete record pins it legitimately, so a busy fleet and a wedged one look"
+            echo "identical to it - three replays cross this bound and drain completely. Read the peak as a"
+            echo "SPEED number: worth noticing if it moves, never a defect on its own. The liveness claim is"
+            echo "\`INSTANCE_STALL\`, which gates; if that stayed silent, this run was slow, not stalled."
+            echo ""
+            echo "One caveat worth knowing before you close the tab: \`INSTANCE_STALL\` is per-INSTANCE, so a"
+            echo "single wedged shard beside busy siblings gates nothing. If a watermark froze here while the"
+            echo "fleet stayed busy, rule that case out by hand -"
+            echo "docs/inflight/test-per-shard-liveness-has-no-gate.md has the shape to look for."
+        fi
     fi
 }
 
 # Emit the summary on EVERY exit - a RED run's autopsy needs the timing/selection data most.
 # MUST capture $? first and re-exit with it: an EXIT trap's own last command otherwise becomes
 # the script's exit status, and everything below is made to succeed - which would report a real
-# chaos RED as green (caught in PR #83 review round 6; repro: `set -e; trap true EXIT; false`
+# chaos RED as green (caught in PR astubbs#83 review round 6; repro: `set -e; trap true EXIT; false`
 # exits 0).
 emit_summaries() {
     local ec=$?
-    summary || true
-    if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then summary >> "$GITHUB_STEP_SUMMARY" || true; fi
+    # Build it ONCE. summary() now greps every failsafe report, and CI rendered it twice - to stdout
+    # and again into the step summary - doubling the reads of files that reach hundreds of MB.
+    local rendered
+    rendered=$(summary) || true
+    printf '%s\n' "$rendered"
+    if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then printf '%s\n' "$rendered" >> "$GITHUB_STEP_SUMMARY" || true; fi
     exit "$ec"
 }
 trap emit_summaries EXIT
 
+# With CHAOS_REPS > 1 every rep writes the SAME TEST-<class>.xml filenames, so the end-of-run scan
+# would describe only the LAST rep: an observation or a higher peak seen in rep 1 vanishes if the
+# final rep happens to be quiet, and the summary then under-reports a hunt that did find something.
+# That is the exact silent-under-reporting shape this summary exists to prevent, so archive each
+# finished rep before the next overwrites it. Caught in review on astubbs/parallel-consumer#354.
+#
+# `rep<N>-failsafe-reports`, beside the live directory, is chosen so BOTH readers still see it: this
+# script's own `*failsafe-reports/TEST-*.xml` scans (note: no leading slash, so the prefixed name
+# matches), and the workflow's artifact glob `**/target/*-reports/*.xml`, which requires the
+# directory to sit directly under `target/` and to end in `-reports`. Nesting it deeper would keep
+# the first reader and silently lose the artifacts.
+archive_finished_rep() {
+    local n="$1" f dir dest
+    while IFS= read -r -d '' f; do
+        dir=$(dirname "$f")
+        dest="${dir%/failsafe-reports}/rep${n}-failsafe-reports"
+        mkdir -p "$dest"
+        mv "$f" "$dest/"
+    # Scoped to the LIVE directory, never `*failsafe-reports`, or each rep would re-archive every
+    # earlier rep's files and renumber them under the newest rep.
+    done < <(find . -path '*/failsafe-reports/TEST-*.xml' -print0)
+}
+
 for i in $(seq 1 "$REPS"); do
+    if [ "$i" -gt 1 ]; then archive_finished_rep "$((i - 1))"; fi
     echo "=== chaos rep $i/$REPS ==="
     time ./mvnw --batch-mode -Pci -pl parallel-consumer-core -am verify \
         -DskipUTs=true \

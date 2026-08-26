@@ -69,7 +69,7 @@ public class KafkaClientUtils implements AutoCloseable {
      * Gives every PC built here a unique id so its threads ({@code pc-control-PCn}, {@code pc-broker-poll-PCn})
      * and the {@code pcId} MDC are attributable to one instance in the logs. Without it, concurrent PC
      * instances all log under the same generic thread names and are impossible to tell apart - which made
-     * the #857 silent-stall investigation much harder than it needed to be.
+     * the confluentinc#857 silent-stall investigation much harder than it needed to be.
      */
     private static final AtomicInteger PC_INSTANCE_COUNTER = new AtomicInteger();
 
@@ -256,7 +256,20 @@ public class KafkaClientUtils implements AutoCloseable {
         return createNewProducer(ProducerMode.matching(commitMode));
     }
 
+    /**
+     * As {@link #createNewProducer(CommitMode)}, but lets the caller pin producer config this helper would otherwise
+     * leave at the client default. A test whose behaviour depends on a specific value should pin it here rather than
+     * inherit it, so the dependency lives in the test instead of in a comment.
+     */
+    public KafkaProducer<String, String> createNewProducer(CommitMode commitMode, Properties overrides) {
+        return createNewProducer(ProducerMode.matching(commitMode), overrides);
+    }
+
     public <K, V> KafkaProducer<K, V> createNewProducer(ProducerMode mode) {
+        return createNewProducer(mode, new Properties());
+    }
+
+    public <K, V> KafkaProducer<K, V> createNewProducer(ProducerMode mode, Properties overrides) {
         Properties properties = setupProducerProps();
 
         var txProps = new Properties();
@@ -271,6 +284,9 @@ public class KafkaClientUtils implements AutoCloseable {
             txProps.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, this.getClass().getSimpleName() + ":" + nextInt()); // required for tx
             txProps.put(ProducerConfig.TRANSACTION_TIMEOUT_CONFIG, (int) ofSeconds(10).toMillis()); // speed things up
         }
+
+        // last, so a caller can pin anything this helper set above
+        txProps.putAll(overrides);
 
         KafkaProducer<K, V> kvKafkaProducer = new KafkaProducer<>(txProps);
 

@@ -66,7 +66,7 @@ await().atMost(10s).until(() -> pc.getWm().getNumberOfWorkQueuedInShardsAwaiting
 
 Rewrote the test (`brokerPollPausedWhenBlockedInFlightFillsBuffer`) to await the real, satisfiable
 steady state - `outForProcessing == 150 && awaitingSelection == 50`, derived from named constants -
-then assert the pause. This also verifies upstream #836's actual behaviour non-vacuously for the
+then assert the pause. This also verifies confluentinc#836's actual behaviour non-vacuously for the
 first time: the 50 shard-queued records alone are below the pause threshold, so the pause firing
 proves blocked in-flight records are counted. The exact 150/50 split doubles as a regression pin on
 the static-buffer take-cap. Await bounds raised to 30s (conditions got stronger; only the
@@ -85,7 +85,7 @@ were checked and rejected before the rewrite:
 - **Not a main-code bug.** The 50-record shard floor is the static buffer cap behaving as designed,
   and the pause/resume machinery worked (the sibling test passed in the same failing run).
 - **Not already tracked.** No fork or upstream (`confluentinc/parallel-consumer`) issue mentions the
-  test; not in the quarantine lane; not covered by #63, `fix/flaky-ensure-topic-timeout`, or the
+  test; not in the quarantine lane; not covered by astubbs#63, `fix/flaky-ensure-topic-timeout`, or the
   `PartitionStateCommittedOffsetIT` work.
 
 ## Prevention
@@ -105,9 +105,9 @@ were checked and rejected before the rewrite:
 
 ## Related
 
-- Fix + full diagnosis trail: PR #98
+- Fix + full diagnosis trail: PR astubbs#98
 - Failing run: highcpu 30603617471 (Integration job 91071293663); green same-sha run: CI 30603617430
-- Test provenance: upstream confluentinc/parallel-consumer #682 (configurable buffer), #836
+- Test provenance: upstream confluentinc/parallel-consumer confluentinc#682 (configurable buffer), confluentinc#836
   (in-flight counts toward backpressure)
 - Adjacent-but-different pattern: [parallel-integration-tests-flaky-under-concurrency-2026-07-28](parallel-integration-tests-flaky-under-concurrency-2026-07-28.md)
 
@@ -143,3 +143,46 @@ private void awaitProcessedRecords(double expected, String... pcInstanceTags)
 
 Note the failure mode is load-dependent, so a green local run proves nothing - the original raced on
 every record and simply won each time.
+
+## Third instance: CommitResponseTimeoutSymptomTest (2026-08-06) - and how to tell the two directions apart
+
+Found by applying the rule above to a new test rather than by a failure. The useful part is that the
+same file contains **one site of each direction**, so it makes the distinction concrete: the rule is
+not "never await one thing and assert another", it is "never await a signal that *leads* the value
+you assert".
+
+**The bad direction, fixed.** The test awaited a `Set` populated inside the user function, then read
+a rejection counter incremented on the broker-poll thread inside `commitSync`:
+
+```java
+await().untilAsserted(() -> assertThat(succeeded).hasSize(KEYS));  // user-function thread
+assertThat(commitsRejected.get()).isAtLeast(MIN_REJECTIONS);       // broker-poll thread, unordered
+```
+
+Two threads, neither ordering the other. The margin is genuinely large - feeding spans tens of commit
+intervals - which is exactly what a latent race looks like right up until it loses. Now awaited on
+the value actually asserted, which cannot mask anything: if the rejections never arrive it still
+fails.
+
+**The safe direction, deliberately left alone and commented so.** The other test awaits
+`isClosedOrFailed()` and then asserts `getFailureCause()`:
+
+```java
+await().untilAsserted(() -> assertThat(pc.isClosedOrFailed()).isTrue());
+assertThat(pc.getFailureCause()).isNotNull();
+```
+
+This is fine, because `supervisorLoop()` assigns `failureReason` **before** `doClose()` sets
+`state=CLOSED` and before the throw that completes `controlThreadFuture` - and `isClosedOrFailed()`
+reads only those two later signals. The awaited signal **lags** the asserted value. The volatile
+read inside `FutureTask.isDone()` also supplies the happens-before edge that publishes
+`failureReason` to the asserting thread.
+
+Converting that second site to "await `getFailureCause()` non-null" would be a real regression in
+test strength: a null cause is precisely what a bug here produces, so awaiting it would convert a
+failure into a timeout at best, and hide it at worst.
+
+**Refined rule: establish which of the two values is written first.** If the awaited signal is
+written *after* the asserted one, the await is sound and tightening it weakens the test. If it is
+written *before* - a user-side counter, a log line, a queue depth - it leads, and the assertion is
+racing. Read the production ordering; do not infer it from which value looks more "final".

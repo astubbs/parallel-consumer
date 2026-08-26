@@ -108,14 +108,28 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
                 this.consumerManager, ConsumerManager::getPausedPartitionSize);
     }
 
-    public void start(String managedExecutorService) {
-        ExecutorService executorService;
+    /**
+     * Looks up the container-managed executor by JNDI name, falling back to a Java SE single-thread executor when
+     * there is no container to ask.
+     * <p>
+     * Split out so the {@code BanJNDI} suppression covers the lookup and nothing else. It is deliberately not shared
+     * with the near-identical lookup in {@link AbstractParallelEoSStreamProcessor}: the two log different messages
+     * under different logger names, and that text is what an operator greps for when a container executor was not
+     * picked up.
+     */
+    // BanJNDI: same managed-executor lookup as AbstractParallelEoSStreamProcessor#setupWorkerPool, same reasoning.
+    @SuppressWarnings("BanJNDI")
+    private static ExecutorService lookupManagedExecutor(String managedExecutorService) {
         try {
-            executorService = InitialContext.doLookup(managedExecutorService);
+            return InitialContext.doLookup(managedExecutorService);
         } catch (NamingException e) {
             log.debug("Couldn't look up an execution service, falling back to Java SE Thread", e);
-            executorService = Executors.newSingleThreadExecutor();
+            return Executors.newSingleThreadExecutor();
         }
+    }
+
+    public void start(String managedExecutorService) {
+        ExecutorService executorService = lookupManagedExecutor(managedExecutorService);
         Future<Boolean> submit = executorService.submit(this::controlLoop);
         this.pollControlThreadFuture = Optional.of(submit);
     }
@@ -165,6 +179,13 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
             return true;
         } catch (Exception e) {
             log.error("Unknown error", e);
+            // This thread is the only producer of commit responses, so tell the committer before
+            // unwinding: a control thread already blocked in ConsumerOffsetCommitter#commitAndWait
+            // cannot discover this by waiting, and would otherwise wait out the whole
+            // offsetCommitTimeout only to report the symptom instead of this. Deliberately only on
+            // the exceptional exit - a normal exit is the coordinated shutdown path, which has its
+            // own handling. See astubbs#177, confluentinc#833.
+            committer.ifPresent(c -> c.notifyPollerDied(e));
             throw e;
         }
     }

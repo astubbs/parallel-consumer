@@ -129,11 +129,40 @@ class CheckQuarantineOwnersScriptTest extends AbstractQuarantineScriptTest {
         Result r = run();
         assertThat(r.exitCode).isEqualTo(0);
         assertThat(r.output).contains("no owning PR");
+        assertThat(r.output).contains("diagnosed-but-unowned");
+    }
+
+    @Test
+    void unownedRule1ExceptionIsReportedAsUndiagnosedNotDiagnosed() throws Exception {
+        // an unowned entry recording a rule-1 exception is UNDIAGNOSED - the advisory must point at
+        // completing the diagnosis, not claim it is diagnosed and merely needs an owner
+        writeRegistry("- [ ] `SomeQuarantinedIT.someMethod` - UNDIAGNOSED, quarantined as an explicit"
+                + " rule-1 exception by owner decision.\n");
+        Result r = run();
+        assertThat(r.exitCode).isEqualTo(0);
+        assertThat(r.output).contains("no owning PR");
+        assertThat(r.output).contains("UNDIAGNOSED (recorded rule-1 exception)");
+        assertThat(r.output).doesNotContain("diagnosed-but-unowned");
     }
 
     @Test
     void fixedByDisagreeingWithRegistryOwnerIsFlagged() throws Exception {
         writeRegistry("- [ ] `SomeQuarantinedIT.someMethod` - diagnosed. **Owner: PR #999998**\n");
+        Result r = run("GIT_STUB_BASE_ANNOTATED", "0");
+        assertThat(r.exitCode).isEqualTo(0);
+        assertThat(r.output).contains("fixedBy PR #999999");
+        assertThat(r.output).contains("Owner line says PR #999998");
+    }
+
+    @Test
+    void qualifiedFixedByDisagreeingWithRegistryOwnerIsFlagged() throws Exception {
+        // regression: the extraction matched only `fixedBy = "PR #NN"`, so a qualified reference
+        // parsed as empty `declared` and this cross-check silently never fired
+        Files.write(fixture.resolve("module/src/test-integration/java/SomeQuarantinedIT.java"),
+                ("class SomeQuarantinedIT {\n" +
+                        "    @Quarantined(reason = \"d\", tracking = \"t\", fixedBy = \"astubbs#999999\")\n" +
+                        "    void someMethod() {}\n}\n").getBytes(StandardCharsets.UTF_8));
+        writeRegistry("- [ ] `SomeQuarantinedIT.someMethod` - diagnosed. **Owner: PR astubbs#999998**\n");
         Result r = run("GIT_STUB_BASE_ANNOTATED", "0");
         assertThat(r.exitCode).isEqualTo(0);
         assertThat(r.output).contains("fixedBy PR #999999");

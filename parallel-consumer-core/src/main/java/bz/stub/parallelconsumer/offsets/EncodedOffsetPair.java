@@ -75,7 +75,7 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
         return bytes;
     }
 
-    static EncodedOffsetPair unwrap(byte[] input) {
+    static EncodedOffsetPair unwrap(byte[] input) throws OffsetDecodingError {
         ByteBuffer wrap = ByteBuffer.wrap(input).asReadOnlyBuffer();
         byte magic = wrap.get();
         OffsetEncoding decode = decode(magic);
@@ -128,8 +128,12 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
                     throw new KafkaStreamsEncodingNotSupported();
                 }
             }
+            // Reachable for encodings that have a registered magic byte but no decoder here - currently the ByteArray
+            // pair (see OffsetSimultaneousEncoder, which no longer emits them). Same hazard as an unknown magic byte:
+            // an OffsetDecodingError routes it to the drop-the-map recovery, where an unchecked exception would escape
+            // the rebalance listener and shut the consumer down.
             default ->
-                    throw new UnsupportedOperationException("Encoding (" + encoding.description() + ") not supported");
+                    throw new OffsetDecodingError("Encoding (" + encoding.description() + ") not supported", null);
         };
         return binaryArrayString;
     }

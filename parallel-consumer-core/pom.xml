@@ -15,7 +15,36 @@
     <modelVersion>4.0.0</modelVersion>
 
     <artifactId>parallel-consumer-core</artifactId>
-    <name>Kafka Parallel Consumer Core</name>
+    <name>Parallel Consumer - Core</name>
+
+    <properties>
+        <!-- JUnit 5 thread-parallelism for THIS module's tests. Declared once here because surefire and
+             failsafe both need it verbatim, and a copy in each drifted the moment one gained a comment.
+             A property is the right home: property values preserve newlines, which the JUnit
+             configurationParameters format needs.
+
+             The high dynamic.factor is deliberate: most of these tests are io bound, not cpu bound.
+
+             This used to live in src/test/resources/junit-platform.properties, which was a bug: that file
+             is packaged at the ROOT of the core tests jar, and eight modules depend on that jar (the four
+             integrations plus every example). JUnit reads the first junit-platform.properties on the
+             classpath, so all eight silently ran with whatever value ${parallel-tests} happened to hold
+             WHEN CORE WAS BUILT - their own setting was never consulted.
+
+             That inverted the intent of the settings: the `ci` profile sets parallel-tests=false on
+             purpose, because JUnit thread parallelism contends on static state and CI parallelises by
+             forking JVMs instead. A downstream module could nonetheless inherit enabled=true, factor=20
+             from a locally-built jar.
+
+             As surefire/failsafe configurationParameters the setting is per-module by construction - each
+             module evaluates its own ${parallel-tests}, nothing is packaged, nothing leaks, and these
+             outrank a properties file if one is ever reintroduced. -->
+        <junit.parallelism.configuration.parameters>
+            junit.jupiter.execution.parallel.enabled=${parallel-tests}
+            junit.jupiter.execution.parallel.mode.default=concurrent
+            junit.jupiter.execution.parallel.config.dynamic.factor=20
+        </junit.parallelism.configuration.parameters>
+    </properties>
 
     <dependencies>
         <!-- Main -->
@@ -117,10 +146,69 @@
             <version>8.0.2.RELEASE</version>
             <scope>test</scope>
         </dependency>
+        <!-- Lincheck - scheduler-controlled concurrency testing (bounded model checking + stress).
+             CORE ONLY and TEST ONLY, deliberately: it is Mozilla Public License 2.0, which is
+             file-level copyleft and incompatible with shipping inside an Apache-2.0 artifact. As a
+             test-scope dependency it is never packaged, never on a consumer's classpath, and never in
+             the published pom's compile/runtime graph - the same position jUnit and Mockito hold.
+             It also drags in the Kotlin stdlib, kotlin-reflect, kotlinx-coroutines, ASM and
+             ByteBuddy; keeping it out of the other four modules keeps that graph in one place.
+             Evaluation and calibration result: docs/plans/2026-08-25-001-test-lincheck-poc-plan.md -->
+        <dependency>
+            <groupId>org.jetbrains.lincheck</groupId>
+            <artifactId>lincheck</artifactId>
+            <version>3.7</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- ASM core, pinned FORWARD to match the asm-commons/asm-util/asm-analysis 9.9.1 that Lincheck
+             brings. Without this the build is green and Lincheck is blind.
+
+             wiremock-jre8 declares org.ow2.asm:asm 9.4 as a DIRECT dependency, so Maven's nearest-wins
+             put 9.4 on the test classpath beside Lincheck's 9.9.1 asm-commons. Lincheck's class-file
+             transformer then dies inside every transform with
+             NoSuchMethodError: org.objectweb.asm.Type.getArgumentCount(String) - a method that only
+             exists from ASM 9.6 - and CATCHES it per class, logs it, and carries on with the class
+             uninstrumented. The model checker therefore observes no shared-memory accesses, finds no
+             interleavings, and reports SUCCESS. A deliberately-buggy control probe passed clean until
+             this pin was added; that is how it was found, and it is why LincheckToolchainProbeTest
+             exists (docs/plans/2026-08-25-001-test-lincheck-poc-plan.md). -->
+        <dependency>
+            <groupId>org.ow2.asm</groupId>
+            <artifactId>asm</artifactId>
+            <version>9.9.1</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
         <plugins>
+            <!-- Per-module JUnit thread-parallelism - see junit.parallelism.configuration.parameters above
+                 for why it lives in the build rather than in a packaged properties file. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <properties>
+                        <configurationParameters>${junit.parallelism.configuration.parameters}</configurationParameters>
+                    </properties>
+                    <!-- ${lincheck.jvm.args} opens the JDK internals Lincheck's MODEL CHECKING strategy needs;
+                         @{argLine} preserves whatever JaCoCo's prepare-agent put there, which a plain <argLine>
+                         would silently replace (and the coverage report would then be empty, with a green build).
+                         Root pom declares an empty argLine property so this still resolves under -Djacoco.skip.
+                         Why it is needed and what it costs: docs/plans/2026-08-25-001-test-lincheck-poc-plan.md -->
+                    <argLine>@{argLine} ${lincheck.jvm.args}</argLine>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <configuration>
+                    <properties>
+                        <configurationParameters>${junit.parallelism.configuration.parameters}</configurationParameters>
+                    </properties>
+                </configuration>
+            </plugin>
+
             <plugin>
                 <groupId>io.stubbs.truth</groupId>
                 <artifactId>truth-generator-maven-plugin</artifactId>

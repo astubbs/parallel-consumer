@@ -123,7 +123,9 @@ public class CoreApp {
 
     void customRetryDelay() {
         // tag::customRetryDelay[]
-        final double multiplier = 0.5;
+        // Exponential backoff: the multiplier must be > 1 so the delay GROWS with each failed
+        // attempt. Here: 1s, 2s, 4s, 8s ...
+        final double multiplier = 2;
         final int baseDelaySecond = 1;
 
         ParallelConsumerOptions.<String, String>builder()
@@ -223,6 +225,29 @@ public class CoreApp {
 
     private void processBatchPayload(List<String> batchPayload) {
         // example
+    }
+
+    /**
+     * Never called - this exists so the README's shutdown section can include real code rather than a snippet pasted
+     * into the doc. The {@code closeModes} tag below is pulled into {@code src/docs/README_TEMPLATE.adoc} by the
+     * asciidoc template plugin, so compiling this file is what stops that example silently going stale: if the
+     * options builder or the close API changes, this method fails to compile instead of the README quietly lying.
+     * <p>
+     * The other tagged methods in this class exist for the same reason.
+     */
+    void closeModes() {
+        // tag::closeModes[]
+        var options = ParallelConsumerOptions.<String, String>builder()
+                .consumer(getKafkaConsumer())
+                .drainTimeout(Duration.ofMinutes(2)) // <1>
+                .shutdownTimeout(Duration.ofSeconds(30)) // <2>
+                .build();
+        var pc = ParallelStreamProcessor.createEosStreamProcessor(options);
+
+        pc.poll(context -> processRecord(context.getSingleRecord().getConsumerRecord()));
+
+        pc.closeDrainFirst(); // <3>
+        // end::closeModes[]
     }
 
     private String preparePayload(RecordContext<String, String> rc) {

@@ -137,7 +137,8 @@ for t in $entries; do
     cls=${t%%.*}; method=${t#*.}
     [ "$method" = "$t" ] && method=""
     block=$(registry_entry_block "$t")
-    owner=$(echo "$block" | grep -oE 'Owner: PR #[0-9]+' | grep -oE '#[0-9]+' | head -1 || true)
+    # Same three accepted forms as bin/check-quarantine-owners.sh - keep the two in step.
+    owner=$(echo "$block" | grep -oE 'Owner: PR (astubbs/parallel-consumer|astubbs)?#[0-9]+' | grep -oE '#[0-9]+' | head -1 || true)
     outcome=$(outcome_of "$cls" "$method")
     flapping=$(is_flapping "$cls")
     case "$outcome" in
@@ -164,7 +165,7 @@ body="$STICKY_MARKER
 | Quarantined test | Outcome | Owner | Meaning |
 |---|---|---|---|
 $table
-<sub>🔴 expected while the owner PR is open · 🟡🎲 flapper, pass proves nothing · 🚨 a deterministic quarantined test passing means its fix landed: delete its \`@Quarantined\` annotation + \`docs/QUARANTINED_TESTS.md\` entry (a merge-blocking review thread has been opened). Lane: non-gating; rules: see the Quarantine Audit check.</sub>"
+<sub>🔴 expected while the owner PR is open · 🟡🎲 flapper, pass proves nothing · 🚨 a deterministic quarantined test passing means its fix landed: delete its \`@Quarantined\` annotation + \`docs/quarantined-tests.md\` entry (a merge-blocking review thread has been opened). Lane: non-gating; rules: see the Quarantine Audit check.</sub>"
 
 # --- upsert the sticky comment ---
 if [ "$DRY_RUN" = "1" ]; then
@@ -204,7 +205,7 @@ while IFS= read -r t; do
 🚨✅ **Quarantined test \`$t\` PASSED** - its fix appears to have landed.
 
 Reality no longer matches the quarantine ledger. Before merging, either:
-1. **Re-enable it**: delete the \`@Quarantined\` annotation at \`$loc\` **and** its entry in \`docs/QUARANTINED_TESTS.md\` (same commit), or
+1. **Re-enable it**: delete the \`@Quarantined\` annotation at \`$loc\` **and** its entry in \`docs/quarantined-tests.md\` (same commit), or
 2. Resolve this thread with a reason (e.g. one lucky pass on a test that should be marked \`flapping = true\`).
 
 <sub>Posted by the Quarantine Lane · this thread blocks merge until resolved (repo requires conversation resolution)</sub>"

@@ -10,7 +10,7 @@ symptoms:
   - "ONLY the [1]=latest parameter ever fails; earliest/none never do"
   - "Correlates with box contention (forkCount=16, loaded highcpu runner) but reproduces on any environment"
   - "All PC-side diagnostics healthy: fresh RUNNING PC, counters 0, poller not throttle-paused, work-selection clean"
-  - "Still fired with the drain fix AND #29 AND #31 all applied - no product fix touched it"
+  - "Still fired with the drain fix AND astubbs#29 AND astubbs#31 all applied - no product fix touched it"
 root_cause: latest_offset_reset_resolves_after_single_pre_await_nudge_record
 resolution_type: test_harness_fix
 severity: medium
@@ -21,6 +21,7 @@ related:
   - "branch debug/committedoffset-firstpoll-stall (the instrumented hunt that captured it)"
 tags: [flaky-tests, offset-reset, latest, awaitility, test-harness, solved]
 ---
+  <!-- file-refs: N/A - quotes an earlier pointer; that write-up was never committed to master -->
 
 # SOLVED: the `committedOffsetRemoved[latest]` stall was an offset-reset race in the test harness
 
@@ -76,7 +77,7 @@ apparent stop was a test that could no longer be satisfied.
 - Contention **correlates** because it widens bootstrap past the ~1s pre-bumper sleep - so it tracked
   load like a real stall would.
 - Timeout size was irrelevant (10s/60s/120s all failed) - which *looked* like a hard hang.
-- Every product-side fix (drain zombie, #29's set, #31) left it untouched - because there was nothing
+- Every product-side fix (drain zombie, astubbs#29's set, astubbs#31) left it untouched - because there was nothing
   wrong with the product.
 
 ## The fix (test harness - and DRY'd, not copied)
@@ -119,4 +120,4 @@ extracted once instead of copied:
 - ❌ Does not touch the two single-occurrence uber-run stalls (`KafkaSanityTests`,
   `TransactionMarkersTest` - one sighting each; plausibly this same race class via their own await
   patterns, unverified) nor the known `MultiInstanceMetricsTest` lock-timeout flake.
-- ❌ Production #857 reports remain #29's territory - unrelated to this test race.
+- ❌ Production confluentinc#857 reports remain astubbs#29's territory - unrelated to this test race.

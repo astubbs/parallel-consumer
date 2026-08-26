@@ -38,7 +38,7 @@ import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.number.OrderingComparison.greaterThan;
 
 /**
- * Originally created to reproduce the bug #541 https://github.com/confluentinc/parallel-consumer/issues/541
+ * Originally created to reproduce the bug confluentinc#541 https://github.com/confluentinc/parallel-consumer/issues/541
  * <p>
  * This test reproduces the potential deadlock situation when a rebalance occurs
  * using EoS with transactional producer configuration.

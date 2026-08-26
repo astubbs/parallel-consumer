@@ -492,6 +492,7 @@ class WorkManagerOffsetMapCodecManagerTest {
      * Compare compression performance on different types of inputs, and tests that each encoding type is decompressed
      * again correctly
      */
+    @SneakyThrows
     @ParameterizedTest
     @MethodSource
     void differentInputsAndCompressions(String input) {
