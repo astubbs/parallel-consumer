@@ -319,8 +319,11 @@ entries:
       and PartitionStateManager caches the OffsetMapCodecManager instead of a
       throwaway per assignment (also closes #233). Touches PCMetrics.java,
       PartitionStateManager.java; regression test PCMetricsTest859.java + P1
-      hardening. PR #57 also bundles cherry-picks #893 (PartitionState offset
-      accuracy) and #905 (max-shard metric) -- those are NOT part of the leak fix.
+      hardening. PR #57 also bundles cherry-pick #905 (max-shard metric), which is
+      NOT part of the leak fix. It bundled #893 (PartitionState offset accuracy)
+      too until 2026-08-24, when that was split out into fork PR #337 so the fix
+      and its reproduction got their own review; see cherry-pick-893-offset-reset,
+      which is the carrier of record.
       Supersedes closed fork PR #45. confluentinc#892 already fixed the per-commit
       OffsetMapCodecManager churn (see reconciliation).
 

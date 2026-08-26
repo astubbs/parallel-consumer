@@ -57,12 +57,20 @@ class RacingCommitCycleState extends PartitionState<String, String> {
     /**
      * Arm one completion for the next encoder snapshot. Disarms itself after firing, so a single call gives the
      * one-shot behaviour a single-hop test wants, and re-arming each cycle drives a repeating one.
+     * <p>
+     * <b>Clears {@link #raceHasFired()}, so the guard is per-arm rather than per-instance.</b> A repeating test
+     * arms once per cycle on one state object; a latched flag would stay true after the first cycle fired and
+     * report a seam that had since gone dead as healthy - which is the one thing the guard exists to catch.
      */
     void armRaceOn(long offset) {
         this.armedRacingOffset = offset;
+        this.raceFired = false;
     }
 
-    /** @return whether a race has actually fired - the guard against a silently dead seam, or a forgotten arm. */
+    /**
+     * @return whether the <em>most recent</em> arm actually fired - the guard against a silently dead seam, or a
+     *         forgotten arm. Assert it after every commit that armed one, not once at the end of a run.
+     */
     boolean raceHasFired() {
         return raceFired;
     }

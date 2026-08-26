@@ -162,6 +162,7 @@ class PartitionStateCommitShiftCompounding894Test {
 
             state.armRaceOn(lowestOutstanding);
             OffsetAndMetadata committed = state.createOffsetAndMetadata();
+            assertRaceFired(state, cycle);
             long encodeBase = state.firstOffsetToCommitRead();
             carriedOverRebalance = decode(committed);
 
@@ -209,19 +210,18 @@ class PartitionStateCommitShiftCompounding894Test {
     void repeatingTheRaceOnAPartitionThatKeepsProducing() throws OffsetDecodingError {
         List<String> ledger = new ArrayList<>();
         long worstOvershoot = Long.MIN_VALUE;
+        int worstDropped = 0;
 
         for (long producedPerCycle : RECORDS_PRODUCED_PER_CYCLE) {
-            worstOvershoot = Math.max(worstOvershoot, runGrowingPartition(producedPerCycle, ledger));
+            SweepResult swept = runGrowingPartition(producedPerCycle, ledger);
+            worstOvershoot = Math.max(worstOvershoot, swept.worstOvershoot);
+            worstDropped = Math.max(worstDropped, swept.worstDropped);
         }
 
         String report = String.join("\n  ", ledger);
         log.info("confluentinc#894 growing-partition ledger:\n  {}", report);
 
-        assertWithMessage("confluentinc#894: a committed offset above the partition's log end offset is out of range "
-                + "on the next poll, and fires auto.offset.reset. Worst overshoot across the sweep was %s. "
-                + "Per-cycle ledger:\n  %s", worstOvershoot, report)
-                .that(worstOvershoot)
-                .isAtMost(0L);
+        assertBothRegimes(worstOvershoot, worstDropped, report);
     }
 
     /**
@@ -237,18 +237,19 @@ class PartitionStateCommitShiftCompounding894Test {
      * @return the largest amount by which a committed offset exceeded the true log end offset, or
      *         {@link Long#MIN_VALUE} if no cycle ever committed
      */
-    private long runGrowingPartition(long producedPerCycle, List<String> ledger) throws OffsetDecodingError {
+    private SweepResult runGrowingPartition(long producedPerCycle, List<String> ledger) throws OffsetDecodingError {
         return runGrowingPartition(SINGLE_INCOMPLETE_HIGHEST_POLLED, SINGLE_INCOMPLETE_OUTSTANDING,
                 producedPerCycle, CYCLES, ledger);
     }
 
-    private long runGrowingPartition(long highestPolledAtStart,
-                                     List<Long> outstandingAtStart,
-                                     long producedPerCycle,
-                                     int cycles,
-                                     List<String> ledger) throws OffsetDecodingError {
+    private SweepResult runGrowingPartition(long highestPolledAtStart,
+                                            List<Long> outstandingAtStart,
+                                            long producedPerCycle,
+                                            int cycles,
+                                            List<String> ledger) throws OffsetDecodingError {
         long logEndOffset = highestPolledAtStart + 1;
         long worstOvershoot = Long.MIN_VALUE;
+        int worstDropped = 0;
         HighestOffsetAndIncompletes carriedOverRebalance = null;
         // Seeded with what the cycle-1 fixture itself completes before the loop starts. Without this the harness
         // counts those as never having run, and reports correct skips as data loss - which it did, until the
@@ -305,8 +306,10 @@ class PartitionStateCommitShiftCompounding894Test {
             state.armRaceOn(racing);
 
             OffsetAndMetadata committed = state.createOffsetAndMetadata();
+            assertRaceFired(state, cycle);
             long overshoot = committed.offset() - logEndOffset;
             worstOvershoot = Math.max(worstOvershoot, overshoot);
+            worstDropped = Math.max(worstDropped, droppedWithoutEverRunning);
 
             if (committed.metadata().isEmpty()) {
                 ledger.add(String.format("K=%d cycle %d: log end offset %d, committed %d (overshoot %+d), no payload "
@@ -325,7 +328,45 @@ class PartitionStateCommitShiftCompounding894Test {
                     carriedOverRebalance.getIncompleteOffsets()));
         }
 
-        return worstOvershoot;
+        return new SweepResult(worstOvershoot, worstDropped);
+    }
+
+    /**
+     * What one sweep arm measured. The two travel together because they are the defect's <b>two mutually exclusive
+     * regimes</b>: below the payload width the commit overshoots the log end and the run walks off the end of the
+     * partition, and at or above it the overshoot stays exactly zero while real records are dismissed against a
+     * fabricated high-water mark. Returning only the overshoot would leave the quiet regime measured, printed, and
+     * unasserted - green while dropping records, which is the failure this class exists to catch.
+     */
+    private static final class SweepResult {
+
+        /** How far the worst commit sat above the partition's log end offset. */
+        final long worstOvershoot;
+
+        /** The most records any one cycle dismissed that no cycle had ever actually run. */
+        final int worstDropped;
+
+        SweepResult(long worstOvershoot, int worstDropped) {
+            this.worstOvershoot = worstOvershoot;
+            this.worstDropped = worstDropped;
+        }
+    }
+
+    /**
+     * The seam guard. {@code armRaceOn} clears the fired flag, so this asserts the race armed for <em>this</em>
+     * cycle actually landed - not that some earlier cycle's did.
+     * <p>
+     * Without it the whole class degrades silently the moment the encoder stops calling the overridden method,
+     * which astubbs#344 changes it to do: the fix under test already produces zero shift and zero overshoot, so
+     * every assertion here would still pass against a seam that never fires.
+     */
+    private static void assertRaceFired(RacingCommitCycleState state, int cycle) {
+        assertWithMessage("cycle %s armed a racing completion that never fired - the seam "
+                + "RacingCommitCycleState overrides is dead, so this cycle proved nothing. If the encoder stopped "
+                + "calling getIncompleteOffsetsBelowHighestSucceeded (astubbs#344), re-hook the double to the "
+                + "bounded getIncompleteOffsetsBelow(long) overload rather than deleting this guard.", cycle)
+                .that(state.raceHasFired())
+                .isTrue();
     }
 
     /**
@@ -348,20 +389,44 @@ class PartitionStateCommitShiftCompounding894Test {
     void theOvershootCompoundsWhenThePayloadIsWiderThanTheTraffic() throws OffsetDecodingError {
         List<String> ledger = new ArrayList<>();
         long worstOvershoot = Long.MIN_VALUE;
+        int worstDropped = 0;
 
         for (long producedPerCycle : WIDE_GAP_RECORDS_PRODUCED_PER_CYCLE) {
-            worstOvershoot = Math.max(worstOvershoot, runGrowingPartition(WIDE_GAP_HIGHEST_POLLED,
-                    WIDE_GAP_OUTSTANDING, producedPerCycle, WIDE_GAP_CYCLES, ledger));
+            SweepResult swept = runGrowingPartition(WIDE_GAP_HIGHEST_POLLED,
+                    WIDE_GAP_OUTSTANDING, producedPerCycle, WIDE_GAP_CYCLES, ledger);
+            worstOvershoot = Math.max(worstOvershoot, swept.worstOvershoot);
+            worstDropped = Math.max(worstDropped, swept.worstDropped);
         }
 
         String report = String.join("\n  ", ledger);
         log.info("confluentinc#894 wide-payload ledger:\n  {}", report);
 
+        assertBothRegimes(worstOvershoot, worstDropped, report);
+    }
+
+    /**
+     * Assert the invariant for <b>both</b> regimes of the defect, over one sweep.
+     * <p>
+     * The loud one is a committed offset above the log end offset - out of range on the next poll, and
+     * {@code auto.offset.reset}. The quiet one drops no offset above the end at all: the commit tracks the log end
+     * exactly while real records are dismissed against a fabricated {@code offsetHighestSucceeded}. The two never
+     * occur together, so asserting only the overshoot leaves every {@code K >= L} arm of the sweep green while it
+     * loses records - and those arms are the ones the write-up calls the stronger argument for the fix.
+     */
+    private static void assertBothRegimes(long worstOvershoot, int worstDropped, String report) {
         assertWithMessage("confluentinc#894: a committed offset above the partition's log end offset is out of range "
-                + "on the next poll. Worst overshoot across the sweep was %s. Per-cycle ledger:\n  %s",
-                worstOvershoot, report)
+                + "on the next poll, and fires auto.offset.reset. Worst overshoot across the sweep was %s. "
+                + "Per-cycle ledger:\n  %s", worstOvershoot, report)
                 .that(worstOvershoot)
                 .isAtMost(0L);
+
+        assertWithMessage("confluentinc#894, the quiet regime: no record may be dismissed as already-processed "
+                + "unless some cycle actually ran it. %s record(s) were dropped without ever running, against a "
+                + "fabricated offsetHighestSucceeded - with the commit tracking the log end exactly, so the "
+                + "overshoot assertion above stays green while records are lost. Per-cycle ledger:\n  %s",
+                worstDropped, report)
+                .that(worstDropped)
+                .isEqualTo(0);
     }
 
     /**
@@ -439,6 +504,7 @@ class PartitionStateCommitShiftCompounding894Test {
         state.armRaceOn(racingOffset);
 
         OffsetAndMetadata committed = state.createOffsetAndMetadata();
+        assertRaceFired(state, 1);
 
         assertWithMessage("precondition: this commit cycle must take the encoding path, not the empty early-return, "
                 + "or there is no payload whose base could disagree with the committed offset")
