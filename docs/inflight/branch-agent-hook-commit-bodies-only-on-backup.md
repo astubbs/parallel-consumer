@@ -3,12 +3,16 @@
 <!-- inflight-type: task -->
 <!-- inflight-impact: stranded-work -->
 
+<!-- post-merge: checked-begin -->
 The **content** of these five commits is on master; their **bodies** are not, and in this repo a
 commit body is where the diagnosis, the rejected alternative and the reasoning live - `AGENTS.md`,
 "Read the record you inherit", is built on that. They could not be replayed onto master during the
 astubbs#322 split (all collided with astubbs#299, `da049f703`), and **the reconciliation commit that
 was said to name them does not exist** - it was lost when the stack was rebuilt, so the claim itself
-was the last thing pointing at them.
+was the last thing pointing at them. The astubbs#322 reference is a past-tense account of a replay
+that already failed, so it reads the same once that PR has landed; the stranding it describes is
+unaffected by the merge.
+<!-- post-merge: checked-end -->
 
 **Read them before changing `.claude/hooks/check-merge-outstanding-work.sh`** - between them they are
 the whole design record for that guard, including two decisions that read as oversights from the

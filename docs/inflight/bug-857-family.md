@@ -382,6 +382,7 @@ to put a number on the rate. Until someone does that, treat the test as un-quara
 of astubbs#265's fix and one contrary observation, rather than as proven stable.
 
 **SUPERSEDED 2026-08-19 - this sighting is a test defect, and does not belong to the family.**
+<!-- post-merge: checked-begin -->
 The entry above asks for "a full-suite run on a CI runner, repeated enough times to put a number on
 the rate". A mechanism settles it instead:
 [`bug-pcmetrics-committed-offset-vs-completion-count.md`](bug-pcmetrics-committed-offset-vs-completion-count.md)
@@ -389,7 +390,9 @@ the rate". A mechanism settles it instead:
 completion counter under `UNORDERED`, and the gap is permanent, not slow. That explains every
 observation here without invoking a stall: failing only under load (concurrency is what produces
 out-of-order completion), passing in isolation, and both observed gaps - the 2 records here
-(`205.0` vs `203.0`) and the 7 seen later on astubbs/parallel-consumer#322.
+(`205.0` vs `203.0`) and the 7 seen later on astubbs/parallel-consumer#322. That citation records
+where a gap was OBSERVED, so it reads the same once that PR has landed.
+<!-- post-merge: checked-end -->
 
 **Do not count this as a family sighting.** It was recorded as "the family's signature" on the
 strength of a shortfall under load, which the family shares with any test that races. Leaving it here
