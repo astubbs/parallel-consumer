@@ -16,9 +16,12 @@ diff and concludes there is nothing to reconcile - which is the same shape of fa
 whole class of finding is about. Diff the blob, not the PR.
 
 <!-- post-merge: checked-begin -->
-Measured at the time of writing (merge base `0e21b903d`): master to astubbs#338 is +609/-59, master
-to astubbs#331 is +476/-40, astubbs#331 to astubbs#340 is +1/-0, and astubbs#331's copy differs from
-astubbs#338's by +203/-89 across ~24 hunks.
+Both are substantial rewrites of the same base and they are substantially different from each other,
+which is the whole of the risk. Reproduce with
+`git diff origin/feats/polyglot-demos:bin/check-copyright-headers.sh
+origin/ci/copyright-gate-beyond-java:bin/check-copyright-headers.sh` against whatever the two heads
+are today - the shape does not change, and any figure written here would be wrong the next time
+either branch is pushed.
 <!-- post-merge: checked-end -->
 
 ## Why the resolution is not symmetric

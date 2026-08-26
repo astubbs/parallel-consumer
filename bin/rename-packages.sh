@@ -1873,10 +1873,10 @@ if [ -s "$MANUAL_FOLLOWUPS" ]; then
 fi
 echo
 echo "  NOT covered here, and NOT green merely because this exited 0:"
-echo "   - The mutation lane EXITS 0 when it matches nothing. On the first PR after this lands,"
-echo "     change a class under the decidable packages and read the job summary for a mutation score"
-echo "     and a survivor list. A green tick carrying 'nothing to mutate, skipping' is the FAILURE"
-echo "     mode, not the pass."
+echo "   - The mutation lane no longer exits 0 when its scope matches nothing - it exits 2, and 3"
+echo "     for a genuine skip. Read the exit code, not the tick. On the first PR after this lands,"
+echo "     change a class under the decidable packages and confirm the job summary carries a"
+echo "     mutation score and a survivor list."
 echo "   - ArchUnit rules pin package names as STRINGS and pass vacuously when they select nothing."
 echo "     Break one on purpose and watch it go red before believing the suite still guards anything."
 echo

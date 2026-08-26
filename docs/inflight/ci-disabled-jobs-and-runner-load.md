@@ -54,3 +54,12 @@
   interrupt` across a dozen PC instances, and a `RebalanceInProgressException` storm. Those are the
   symptoms of a box that cannot schedule the threads the scenario's timing assumes, and they read
   exactly like a product stall to anyone who has not checked the load first.
+
+  **The mechanism behind both re-checks was fixed later the same day** - `2ccd3c799` re-keyed the
+  concurrency group off the ref and onto the `box-exclusive` matrix key, and put every job that can
+  occupy the host into it, so co-residency is meant to be impossible now. **A chaos red taken after
+  that commit is therefore a new fact, not another instance of this entry.** Confirming the fix
+  actually holds is
+  [`ci-chaos-lane-serialised-confirm-no-coresidency.md`](ci-chaos-lane-serialised-confirm-no-coresidency.md),
+  which owns the story from here; what stays above is the evidence from before it landed, which is
+  what makes the before/after comparison possible at all.

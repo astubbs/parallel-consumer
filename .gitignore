@@ -19,6 +19,7 @@ CLAUDE.md
 !/CLAUDE.md
 !/bin/CLAUDE.md
 !/docs/inflight/CLAUDE.md
+!/parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/CLAUDE.md
 
 # Local per-worktree ownership markers (see AGENTS.md "Worktree ownership")
 .worktree-owner
@@ -129,3 +130,8 @@ release.properties
 /.idea/inspectionProfiles/Project_Default.xml
 /.idea/uiDesigner.xml
 /.idea/vcs.xml
+
+# jcstress run output - both land in the working directory the run was launched from, not
+# under target/, so the documented repo-root command leaves them beside the source tree
+jcstress-results-*.bin.gz
+/results/

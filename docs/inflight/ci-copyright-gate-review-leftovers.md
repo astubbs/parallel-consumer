@@ -13,13 +13,16 @@ close. Delete this note when these are resolved.
 
 ## Policy calls, not defects
 
-- **`.claude/*` is exempt, and that exempts seven hand-written hook scripts** which already carry
-  correct headers. Narrowing the exemption is verified green (416 files, 0 violations). Whether
-  unshipped agent tooling owes a notice is a call for the author, not something the gate can decide.
+- **`.claude/*` is exempt, and that exempts every hand-written hook script** - `git ls-files
+  '.claude/hooks/*.sh'` - all of which already carry correct headers. Narrowing the exemption is
+  verified green: delete the `.claude/*` row from `EXEMPT_PATHS` and re-run
+  `bin/check-copyright-headers.sh`. Whether unshipped agent tooling owes a notice is a call for the
+  author, not something the gate can decide.
 - **The grandfathering rule is stated twice**, in the scanner and in `docs/copyright.md`. Trimming
   either increases divergence from the language-proxy stack the scanner was extracted from.
 - **`AGENTS.md` is past its own backstop.** That file declares "`wc -l AGENTS.md` past ~400 lines
-  means something situational has crept in"; it is now 531.
+  means something situational has crept in"; run it and it has been comfortably past for a while,
+  and still climbing.
 
 ## Two heuristics the review flagged and this work did not change
 
@@ -44,11 +47,19 @@ A gate whose glob covers less than its summary line claims reports a clean subse
 astubbs#338 fixed one instance. Two more stand:
 <!-- post-merge: checked-end -->
 
-- **`bin/check-shell-sigpipe.sh` globs `bin/*.sh` and `.claude/hooks/*.sh`, one directory level
-  each**, so `bin/lib/`, `scripts/` and the two repo-root scripts are outside it. A scope gap rather
-  than live instances, and both halves of that are worth keeping: of the five excluded files, four
-  carry no `set -o pipefail` at all, and `scripts/upstream-sweep.sh`'s `grep -qx` reads a file
-  argument rather than a pipe, which is not the pattern that bites.
+- **The bespoke shell corpus is one directory level deep**, so `bin/lib/`, `scripts/` and the two
+  repo-root scripts are outside it. It now lives in `bin/lib/shell-corpus.sh`
+  (`shell_corpus_files`, `ls "$d"/*.sh`) and is shared by `bin/check-shell-sigpipe.sh` and
+  `bin/check-shell-hazards.sh`, so extracting it doubled the gap's reach rather than closing it.
+  A scope gap rather than live instances, and both halves of that are worth keeping: of the
+  excluded files, most carry no `set -o pipefail` at all, and `scripts/upstream-sweep.sh`'s
+  `grep -qx` reads a file argument rather than a pipe, which is not the pattern that bites.
+
+  **The ShellCheck lane looks like a fourth instance and is not, for a reason worth writing down.**
+  `bin/check-shell-lint.sh` describes the same corpus in the same words - "bin/ and
+  .claude/hooks/" - but resolves it with `git ls-files 'bin/*.sh'`, and a git pathspec `*` crosses
+  `/`, so it *does* scan `bin/lib/`. Two gates whose headers claim identical scope scan different
+  sets, and nothing says so. Whatever closes the gap should make them share one resolution.
 - **`.github/scripts/file-ref-gate.js` reads citations from `.md`/`.adoc`/`.txt`/`.html` only**,
   which is why a dangling path inside a `.sh` was invisible. It already grew once, for `.html`, so
   this is the second recurrence and nothing records the class.
