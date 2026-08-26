@@ -30,7 +30,13 @@ document. This section is the detail behind it.
 - **`maven.yml`** - build and test on every push/PR. PRs run two tiers in parallel: split suites on
   the pom's default Kafka version (`bin/ci-unit-test.sh`, `bin/ci-integration-test.sh`,
   `bin/performance-test.sh`) for fast feedback, and an experimental Kafka 4.x compatibility check
-  (`bin/ci-build.sh`). Also carries the seconds-fast Quarantine Audit job, SpotBugs, duplicate
+  (`bin/ci-build.sh`). It also carries **`Chaos Pain Suite (hosted, experimental)`** - an advisory
+  (`continue-on-error`) trial of whether chaos needs the self-hosted box at all. A hosted runner
+  gives each job its own VM, so the co-residency that drove every scheduling contortion in the
+  `highcpu` lane cannot happen here. While the trial runs, chaos executes in **both** lanes on
+  purpose; if the hosted one proves neither flaky nor timing-out, the self-hosted copy goes and that
+  lane is left carrying only the full mutation sweep. Tracked in
+  [`docs/inflight/ci-chaos-on-hosted-runners-experiment.md`](inflight/ci-chaos-on-hosted-runners-experiment.md). Also carries the seconds-fast Quarantine Audit job, SpotBugs, duplicate
   detection, PR-scoped mutation testing (PIT), and dependency vulnerability scanning. Push to
   master runs a single full `bin/ci-build.sh` on the default Kafka version to gate SNAPSHOT
   publishing. All jobs use explicit `cache/restore` with rotating keys from the `prepare-deps`
