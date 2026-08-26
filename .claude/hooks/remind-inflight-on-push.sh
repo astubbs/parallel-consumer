@@ -78,7 +78,25 @@ branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 # THROTTLE. Same branch, same hour, one reminder.
 stamp="${TMPDIR:-/tmp}/pc-push-reminder-$(printf '%s' "$branch" | tr '/' '_')"
 if [ -f "$stamp" ]; then
-    last="$(stat -c %Y "$stamp" 2>/dev/null || echo 0)"
+    # PORTABLE MTIME, read where it is used - on a branch's first push there is no stamp and this
+    # never runs. `stat -c %Y` is GNU; BSD/macOS stat rejects `-c` and returned nothing while still
+    # exiting 0, so the throttle silently read "no mtime". PROBE the platform once rather than
+    # falling back arm to arm: on GNU, `stat -f %m FILE` exits 1 while PRINTING filesystem prose to
+    # stdout, so a blind `-c || -f` returns a string, not a number.
+    # hazard-ok: this IS the platform probe - it asks whether GNU stat exists before anything uses it
+    if stat -c %Y . >/dev/null 2>&1; then
+        # hazard-ok: the probe above already established GNU stat is present
+        last="$(stat -c %Y "$stamp" 2>/dev/null)"   # GNU coreutils
+    else
+        # hazard-ok: the probe above rejected GNU stat, so this is the BSD branch
+        last="$(stat -f %m "$stamp" 2>/dev/null)"   # BSD / macOS
+    fi
+    # ANYTHING THAT IS NOT A TIMESTAMP MEANS REMIND, not stay silent - the safe direction for a
+    # reminder, where the guards in check-merge-outstanding-work.sh and bin/check-pr-ready.sh must
+    # instead assume live work. Reminding twice costs a paragraph; skipping loses the only prompt
+    # there is. Testing the shape and not just emptiness matters for the same reason it does there:
+    # `$(( now - last ))` on prose evaluates it as an expression and `set -u` would abort the hook.
+    case "$last" in ''|*[!0-9]*) last=0 ;; esac
     now="$(date +%s)"
     [ $(( now - last )) -lt "${INFLIGHT_PUSH_REMINDER_SECONDS:-3600}" ] && exit 0
 fi

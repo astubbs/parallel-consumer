@@ -3,10 +3,29 @@
 # Separate from copyright.yml deliberately: these checks are not about copyright and never were,
 # and bolting them there left a job called "Copyright header check" doing two unrelated things.
 #
-# ONE JOB PER CONCERN, named `<area>: <check>` to match the context convention already in the master
-# ruleset (`quarantine: audit`, `dups: clones`, `deps: vulnerabilities`). Each appears as its own
-# required-status-check candidate instead of hiding inside a shared green tick - and a job renamed
-# here silently stops satisfying that ruleset, so treat these names as an API.
+# ONE LANE, DISCOVERED - and this replaced one-job-per-concern deliberately. That shape gave each
+# gate its own required-status-check candidate and its own red tick, which reads well, and cost
+# something that mattered more: every gate and every self-test had to be NAMED here to run at all.
+# A gate added to bin/ ran nowhere until somebody remembered to wire it, and that is not
+# hypothetical - the shallow-clone hook's self-test was added and was the only self-test in bin/
+# that no workflow named. The failure is silent by construction: nothing goes red to tell you a
+# check is not running.
+#
+# `bin/check-all.sh --with-tests` globs `bin/check-*.sh` and `bin/test-*.sh`, so the set cannot drift
+# from what exists. It does not stop at the first failure - every check runs, and the summary names
+# each one that failed with the tail of its output - so a single lane loses no attribution against
+# the previous per-job layout. It runs the gates concurrently and finishes in about a minute, which
+# is why splitting them across runners bought little: the wall-clock was dominated by ten checkouts,
+# not by the checks.
+#
+# WHAT IS INTENTIONALLY NOT HERE: anything needing a broker, Docker or Infer. Those lanes live in
+# maven.yml with their own setup. A JDK IS set up, because one self-test fails rather than skips
+# without it - see the step below. Keep the dependency list short and explicit; the failure mode this
+# guards against is a lane that passes only because of what the runner image happens to ship.
+#
+# THE JOB NAME IS AN API. It is a required status check in the master ruleset, and renaming it
+# silently stops satisfying that ruleset - the same trap the per-job names carried. If you rename it,
+# update the ruleset in the same change.
 
 name: Repo Hygiene
 
@@ -26,155 +45,184 @@ permissions:
   contents: read
 
 jobs:
-  sigpipe:
-    name: "shell: sigpipe"
+  hygiene:
+    name: "repo: hygiene"
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      # Shallow is fine: these checks read the working tree, not history.
-      - uses: actions/checkout@v6
-
-      # The self-test runs BEFORE the guard it protects, the same way copyright.yml sequences
-      # bin/test-check-copyright-headers.sh ahead of the scanner. A guard nobody has proven can
-      # fail is a guard nobody should trust.
-      - name: Self-test the SIGPIPE guard
-        run: bash bin/test-check-shell-sigpipe.sh
-
-      # `writer | grep -q` under `set -o pipefail` reports failure exactly when it MATCHES: grep
-      # exits on the first hit, the writer takes EPIPE, and pipefail promotes 141 to the pipeline's
-      # status. It only bites once the writer has more than one pipe buffer (64 KiB) left, so it
-      # passes every small fixture and surfaces in production. shellcheck does not catch it.
-      - name: No SIGPIPE-prone pipes in bin/
-        run: bash bin/check-shell-sigpipe.sh
-
-  agent-hooks:
-    name: "agents: hook self-tests"
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      # Reads .claude/hooks/* and docs/merge-checklist.md from the working tree; no history needed.
-      - uses: actions/checkout@v6
-
-      # The hooks in .claude/hooks/ enforce repo conventions on every agent session, and they are
-      # the one layer with no CI behind it - a broken hook either blocks work or silently stops
-      # checking, and both look like nothing happening. docs/agent-harness.md rule 3 ("give it a
-      # negative control") applies to the harness itself; this is that control.
-      - name: Self-test the agent hooks
-        run: bash bin/test-check-agent-hooks.sh
-
-  inflight-tags:
-    name: "inflight: tags"
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
+    # PR_NUMBER is not a convenience here - without it bin/check-branch-self-reference.sh checks HALF
+    # of what it claims and still exits 0. `gh` on this runner is unauthenticated (no GH_TOKEN in
+    # this workflow, by design - nothing else here needs one), so the script's `gh pr list` fallback
+    # fails, the failure is swallowed, and the `#NNN` / `/pull/NNN` arm is skipped entirely - the
+    # gate prints "NO PR NUMBER RESOLVED... were NOT checked" and still exits 0. That arm is the
+    # gate's own motivating incident: a note citing astubbs#1 by number, with no branch name in it.
+    # Job-level (not step-level) because this lane collapsed nine per-gate steps into one
+    # bin/check-all.sh invocation - there is no single step to attach it to, and check-all.sh's
+    # run_capture already passes PR_NUMBER through to every gate harmlessly. The event payload
+    # already carries the number, so this costs nothing and needs no token.
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          # Gates that read history must not see a truncated graft. A shallow clone does not error
+          # on `git log` or `git merge-base` - it answers, wrongly, which is the exact class
+          # .claude/hooks/check-shallow-history.sh exists to stop locally.
+          fetch-depth: 0
 
-      # Same self-test-then-gate sequencing as the sigpipe job: prove the tag checker can fail, then
-      # run it. The session-start index already LISTS a note no group claimed, but only to whoever
-      # starts the next session - which may not be whoever mistyped the tag, and may be days later.
-      # This fails the commit that made the mistake.
-      - name: Self-test the inflight tag checker
-        run: bash bin/test-check-inflight-tags.sh
+      # ubuntu-latest ships shellcheck, but an image change that removed it must fail rather than
+      # silently pass - bin/check-shell-lint.sh exits 2 for "cannot run", and check-all counts an
+      # exit 2 as CANNOT rather than a pass, so this makes the dependency explicit at the point a
+      # reader looks.
+      - name: Confirm shellcheck is present
+        run: shellcheck --version
 
-      - name: Inflight notes carry valid tags
-        run: bash bin/check-inflight-tags.sh
+      # A JDK IS REQUIRED, and the requirement is not obvious from the job name. The self-test
+      # `bin/test-check-infer.sh` FAILS rather than skips when no JDK resolves and `CI` is set - by
+      # design, since on a hosted runner an unresolvable JDK means the fixture is wrong, not that the
+      # check is unnecessary. Without this step the lane passes only because ubuntu-latest happens to
+      # ship a default JDK, which is an undocumented dependency on the runner image and exactly the
+      # kind of thing that breaks on an image bump with no code change to blame.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          # No `cache: maven` - see the caching strategy note at the top of maven.yml
 
-      - name: "Self-test the branch self-reference gate"
-        run: bash bin/test-check-branch-self-reference.sh
+      - name: Every gate and every self-test, discovered rather than listed
+        run: bash bin/check-all.sh --with-tests
 
-      # PR_NUMBER is not a convenience here - without it the gate checks HALF of what it claims and
-      # still exits 0. `gh` on a runner is unauthenticated (no GH_TOKEN in this workflow, by design -
-      # nothing else here needs one), so the script's `gh pr list` fallback exits 4, `2>/dev/null ||
-      # true` swallows it, and the `#NNN` / `/pull/NNN` arm is skipped entirely. That arm is the
-      # gate's own motivating incident: a note citing astubbs#1 by number, with no branch name in it.
-      # The event payload already carries the number, so this costs nothing and needs no token.
-      - name: "A doc that mentions this branch must read correctly after the merge"
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: bash bin/check-branch-self-reference.sh
-
-      # Self-test only. check-pr-ready.sh reads a live PR, so running the gate itself in CI would be
-      # a network call with an answer that changes by the minute; what must not rot is its refusal to
-      # ever conclude "ready".
-      - name: Self-test the PR-readiness reporter
-        run: bash bin/test-check-pr-ready.sh
-
-  test-log-config:
-    name: "tests: log config"
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+  # WHY THIS LANE EXISTS. Every other job in this file is ubuntu, so the shell harness was only ever
+  # exercised against GNU coreutils and bash 5, while contributors run it on macOS with BSD userland
+  # and bash 3.2. Four live defects survived a deliberate portability sweep, two automated reviews
+  # and two human lgtms, and were found only because somebody happened to be working on a Mac
+  # (astubbs/parallel-consumer#341). The class, its four instances and the constructs to reach for
+  # instead are written up in
+  # docs/solutions/workflow-issues/gnu-only-constructs-fail-silently-on-bsd-2026-08-25.md, which
+  # OWNS that knowledge - this comment says only why there is a job here.
+  #
+  # The damaging shape is not a flag that errors on BSD; that exits non-zero and somebody fixes it.
+  # It is the construct BSD ACCEPTS with a different meaning, so the script keeps running and
+  # reports a confident wrong answer - check-inflight-tags.sh extracted 0 of 17 impacts and printed
+  # "valid", rename-packages.sh printed "already applied, nothing to do" over an untouched tree.
+  macos:
+    name: "shell: macos"
+    runs-on: macos-latest
+    # The suite builds throwaway git fixture repos; 101s on an M-series laptop, and hosted macOS
+    # runners are slower. Generous ceiling, not an expected duration.
+    timeout-minutes: 20
     steps:
+      # Fixtures are built in temp dirs and the parse sweep reads the working tree, so shallow is
+      # fine - same reasoning as the other jobs here.
       - uses: actions/checkout@v6
 
-      # Same sequencing again. This one guards a default that fails SILENTLY: a logback-test.xml
-      # committed at debug does not go red, it floods the log and slows the run - and the volume alone
-      # broke three tests when measured (see the script header). Nobody attributes a latch timeout to a
-      # logging default, which is why it is a gate and not a note.
-      - name: Self-test the test log config checker
-        run: bash bin/test-check-test-log-config.sh
+      # PATH bash decides what is actually under test: 60 of the 62 tracked scripts are
+      # `#!/usr/bin/env bash`, and each self-test invokes the gate it protects as a bare `bash`.
+      # Pinning it to the system 3.2 makes "this lane exercises bash 3.2" true by CONSTRUCTION
+      # rather than an assumption about the runner image. If an image ever put a newer bash first
+      # on PATH, the bash-3.2 half of this job would quietly stop testing anything and stay green -
+      # which is precisely the failure mode the lane exists to catch, one level up.
+      # The self-test suites are not self-contained: bin/check-docs-data.sh needs PyYAML and
+      # fails CLOSED without it, exit 2 "cannot run". ubuntu-latest ships it, hosted macOS does
+      # not, so the lane's first run reported 17 suites with 1 failed and every docs-data case
+      # returning 2 - including the baseline, which is the tell that it is an environment gap
+      # rather than a finding. Installing it is what makes the lane test the SCRIPTS rather than
+      # the runner image.
+      - name: Install the self-tests' Python dependency
+        run: python3 -m pip install --break-system-packages --quiet pyyaml
 
-      - name: Test log config is flag-driven, not edited
-        run: bash bin/check-test-log-config.sh
+      - name: Confirm PyYAML is importable, so a docs-data exit 2 means a real defect
+        run: python3 -c 'import yaml; print("PyYAML", yaml.__version__)'
 
-  rename:
-    name: "tooling: package rename"
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      # Needs to build fixture git repositories and make commits in them, but only in a temp dir -
-      # it never touches this checkout, so shallow is fine.
-      - uses: actions/checkout@v6
+      # Same environment gap, second instance, surfaced when master's newer suites arrived here:
+      # bin/check-shell-lint.sh wraps ShellCheck, and bin/test-check-shell-lint.sh exits 2 "cannot
+      # run" without the binary. ubuntu-latest ships it, hosted macOS does not.
+      # bin/check-all.sh already names this exact pair as a hole it cannot close on such a machine -
+      # "the broken gate exits 2 and the linter exits 2, both land in cannot, and the sweep reports
+      # zero failures - a false green produced by two skips agreeing" - so installing it here is
+      # what gives that gate any BSD coverage at all, rather than a skip wearing a tick.
+      - name: Install the self-tests' shell-lint dependency
+        run: brew install shellcheck
 
-      # bin/rename-packages.sh is run by hand, once per branch, on master and on ~29 open PRs. That
-      # is exactly the shape of tool that rots unnoticed: nobody exercises it between the day it is
-      # written and the day the whole rename depends on it, and by then a regression costs a
-      # conflict storm across every open PR. Seconds to run, so it runs on every PR.
+      - name: Confirm shellcheck runs, so a shell-lint exit 2 means a real defect
+        run: shellcheck --version
+
+      - name: Pin bash to the system 3.2
+        run: |
+          mkdir -p "$RUNNER_TEMP/bash32"
+          ln -sf /bin/bash "$RUNNER_TEMP/bash32/bash"
+          echo "$RUNNER_TEMP/bash32" >> "$GITHUB_PATH"
+
+      # And prove the pin took, because a pin that silently did not apply is the same defect again.
+      # macOS ships bash 3.2.57 (2007) - everything later is GPLv3 - and that shell has no `mapfile`
+      # and a `$( ... )` parser that does not skip `#` comments. Both are things this lane is here
+      # to notice.
+      - name: The bash under test really is 3.2
+        run: |
+          bash --version
+          v="$(bash -c 'echo "${BASH_VERSINFO[0]}"')"
+          [ "$v" = 3 ] || {
+              echo "::error::bash on PATH is major version $v, expected 3 - this lane is no longer exercising the bash 3.2 parser. If the runner image changed deliberately, update the pin step above and say so."
+              exit 1
+          }
+
+      # The whole self-test set by glob, not a hand-kept list: a suite added later gets macOS
+      # coverage without anyone remembering this file exists, and a hand-listed lane is exactly how
+      # the blind spot grows back. Runs all of them and reports every failure rather than stopping
+      # at the first - on a platform nobody develops on, one run should say everything that is
+      # broken.
       #
-      # The self-test includes three NEGATIVE CONTROLS (a stale reference, a misspelt one, and the
-      # escaped-regex form the habitual `grep -rn "io\.confluent"` cannot see) plus the paired
-      # commit-shape experiment whose result set the script's default. See its header.
-      - name: Self-test the package-rename tool
-        run: bash bin/test-rename-packages.sh
-
-  actions:
-    name: "workflows: action versions"
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v6
-
-      # Dependabot bumps what is already there; it cannot notice a NEW workflow authored at an old
-      # version, which is how repo-hygiene.yml itself shipped at actions/checkout@v4 while 21 other
-      # uses were on @v6. The rule is "one version everywhere", not "checkout must be vN" - the
-      # latter rots on the next bump, the former survives it, because Dependabot raises every use of
-      # an action in one grouped PR.
-      - name: One version per action
-        run: bash bin/check-action-versions.sh
-
-  cve-exclusions:
-    name: "deps: CVE exclusion expiry"
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v6
-
-      # Self-test first, as everywhere else here. This one has a control arm: two fixtures that
-      # differ only by a single day either side of the limit, so a pass on one and a fail on the
-      # other shows the expiry rule is what decides, and not something incidental.
-      - name: Self-test the exclusion-expiry guard
-        run: bash bin/test-check-cve-exclusions.sh
-
-      # The root pom's `excludeVulnerabilityIds` is what keeps the whole-tree CVE scan from going
-      # permanently red on a finding nobody can act on, and some of those entries are TEMPORARY -
-      # parked only until an upstream release carries a fix that is already merged. Nothing was
-      # going to tell us when it landed: the two ids this was written for are in no advisory
-      # database, so no Dependabot alert can fire, and the retirement condition lived in a pom
-      # comment addressed to whoever happened to read it. After 90 days the entry stops being a note
-      # and becomes a red check that names itself.
+      # The count guard is not ceremony: a glob that matched nothing would otherwise be a green tick
+      # over zero tests, which is the "reports success having scanned nothing" result this workflow
+      # is written against.
       #
-      # HERE rather than in dependency-audit.yml, which is where the exclusion list is otherwise
-      # read: that job is skipped for fork PRs and dies early on a token expiry or a Sonatype
-      # outage, so the list would rot unwatched for exactly as long as the lane was broken. This
-      # check needs no JDK, no secrets and no network - the charter of this workflow.
-      - name: Temporary CVE exclusions must expire
-        run: bash bin/check-cve-exclusions.sh
+      # A SKIP IS NOT A PASS, and it is not a failure either - it is its own result, the house rule
+      # bin/check-all.sh states and this loop originally ignored. A bare `if bash "$t"` collapses
+      # every non-zero into one bucket, so bin/test-check-shell-lint.sh exiting 2 for a ShellCheck
+      # that is not installed was reported as "self-test fails on macOS": a suite that never ran,
+      # described as a suite that ran and found a defect. That is this lane's own subject matter -
+      # a confident wrong answer - reproduced in the lane, which is why the counts are split rather
+      # than the dependency merely installed above.
+      #
+      # Exit 2 still FAILS the job, deliberately. On a dedicated portability lane a suite that could
+      # not run is missing coverage, and the remedy is to install the tool in this job (PyYAML and
+      # ShellCheck above are both that remedy). Letting it pass is how the lane quietly stops
+      # testing anything while staying green - the failure mode the bash-3.2 pin assertion guards
+      # against one step up. The distinction bought here is ATTRIBUTION: the log now says which of
+      # the two happened, so nobody debugs a BSD defect that does not exist.
+      - name: Shell self-tests on BSD userland
+        run: |
+          ran=0; failed=0; cannot=0
+          for t in bin/test-*.sh; do
+              [ -f "$t" ] || continue
+              ran=$((ran + 1))
+              rc=0; bash "$t" || rc=$?
+              case "$rc" in
+                  0)
+                      echo "ok:     $t" ;;
+                  2)
+                      echo "::error file=$t::CANNOT RUN on macOS (exit 2) - the suite refused to measure, almost always a tool missing from the runner image. Install it in this job, as the PyYAML and ShellCheck steps do; do not let the lane count this as tested."
+                      cannot=$((cannot + 1)) ;;
+                  *)
+                      echo "::error file=$t::self-test FAILS on macOS (exit $rc)"
+                      failed=$((failed + 1)) ;;
+              esac
+          done
+          echo "macOS self-tests: $ran run, $failed failed, $cannot could not run"
+          [ "$ran" -gt 0 ] || { echo "::error::no self-tests matched bin/test-*.sh - this step checked nothing"; exit 1; }
+          [ "$failed" -eq 0 ] && [ "$cannot" -eq 0 ] || exit 1
+
+      # Catches the bash 3.2 PARSER class across every tracked script, including the ones that have
+      # no self-test at all: an apostrophe or an unbalanced paren inside a `#` comment inside
+      # `$( ... )` stops 3.2 reading the file. bin/test-check-branch-self-reference.sh shipped
+      # exactly that and exited 2 before a single case ran, while showing 31 green on ubuntu - so a
+      # passing self-test suite is not evidence this sweep is redundant. Seconds to run.
+      - name: Every tracked script parses under bash 3.2
+        run: |
+          scanned=0; bad=0
+          while IFS= read -r f; do
+              scanned=$((scanned + 1))
+              /bin/bash -n "$f" || { echo "::error file=$f::does not parse under bash 3.2"; bad=$((bad + 1)); }
+          done < <(git ls-files -- '*.sh')
+          echo "parse sweep: $scanned scanned, $bad failed"
+          [ "$scanned" -gt 0 ] || { echo "::error::no scripts matched - the sweep checked nothing"; exit 1; }
+          [ "$bad" -eq 0 ] || exit 1

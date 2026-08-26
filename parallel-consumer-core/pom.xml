@@ -146,6 +146,38 @@
             <version>8.0.2.RELEASE</version>
             <scope>test</scope>
         </dependency>
+        <!-- Lincheck - scheduler-controlled concurrency testing (bounded model checking + stress).
+             CORE ONLY and TEST ONLY, deliberately: it is Mozilla Public License 2.0, which is
+             file-level copyleft and incompatible with shipping inside an Apache-2.0 artifact. As a
+             test-scope dependency it is never packaged, never on a consumer's classpath, and never in
+             the published pom's compile/runtime graph - the same position jUnit and Mockito hold.
+             It also drags in the Kotlin stdlib, kotlin-reflect, kotlinx-coroutines, ASM and
+             ByteBuddy; keeping it out of the other four modules keeps that graph in one place.
+             Evaluation and calibration result: docs/plans/2026-08-25-001-test-lincheck-poc-plan.md -->
+        <dependency>
+            <groupId>org.jetbrains.lincheck</groupId>
+            <artifactId>lincheck</artifactId>
+            <version>3.7</version>
+            <scope>test</scope>
+        </dependency>
+        <!-- ASM core, pinned FORWARD to match the asm-commons/asm-util/asm-analysis 9.9.1 that Lincheck
+             brings. Without this the build is green and Lincheck is blind.
+
+             wiremock-jre8 declares org.ow2.asm:asm 9.4 as a DIRECT dependency, so Maven's nearest-wins
+             put 9.4 on the test classpath beside Lincheck's 9.9.1 asm-commons. Lincheck's class-file
+             transformer then dies inside every transform with
+             NoSuchMethodError: org.objectweb.asm.Type.getArgumentCount(String) - a method that only
+             exists from ASM 9.6 - and CATCHES it per class, logs it, and carries on with the class
+             uninstrumented. The model checker therefore observes no shared-memory accesses, finds no
+             interleavings, and reports SUCCESS. A deliberately-buggy control probe passed clean until
+             this pin was added; that is how it was found, and it is why LincheckToolchainProbeTest
+             exists (docs/plans/2026-08-25-001-test-lincheck-poc-plan.md). -->
+        <dependency>
+            <groupId>org.ow2.asm</groupId>
+            <artifactId>asm</artifactId>
+            <version>9.9.1</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -159,6 +191,12 @@
                     <properties>
                         <configurationParameters>${junit.parallelism.configuration.parameters}</configurationParameters>
                     </properties>
+                    <!-- ${lincheck.jvm.args} opens the JDK internals Lincheck's MODEL CHECKING strategy needs;
+                         @{argLine} preserves whatever JaCoCo's prepare-agent put there, which a plain <argLine>
+                         would silently replace (and the coverage report would then be empty, with a green build).
+                         Root pom declares an empty argLine property so this still resolves under -Djacoco.skip.
+                         Why it is needed and what it costs: docs/plans/2026-08-25-001-test-lincheck-poc-plan.md -->
+                    <argLine>@{argLine} ${lincheck.jvm.args}</argLine>
                 </configuration>
             </plugin>
             <plugin>
