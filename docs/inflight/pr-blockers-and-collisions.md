@@ -6,11 +6,11 @@
 
 Blockers, collisions, and decisions someone is waiting on. Not a PR list - `gh` has that, and is right.
 
-- **Agreed merge order for the astubbs#322 split and what queues behind it: 323, 324, 325, 57, 322,
-  267, 29.** The first three have merged, so what remains is **57, 322, 267, 29**. Recorded here
-  because it outlived the note that held it - it lived only in astubbs#323's own note, which that
-  PR's merge deleted - and because an ordering is a standing coordination fact rather than one PR's
-  business.
+- **Agreed merge order for the astubbs#322 split and what queues behind it: 323, 324, 325, 57, 322, <!-- post-merge: checked - the merged/remaining tally was deleted rather than restated; it went stale at every merge in the list -->
+  267, 29.** Which of them are still open is `gh pr list -R astubbs/parallel-consumer`'s answer, not
+  this file's - the ORDER is the standing coordination fact, and it is recorded here because it
+  outlived the note that held it (it lived only in astubbs#323's own note, which that PR's merge
+  deleted).
 - **astubbs#29 and astubbs#31 target `master-confluent`**, the pinned pre-rebrand mirror, so merging either would
   land its fix where no user can reach it. Retarget to `master` - but not mechanically: astubbs#29's deadlock
   fix predates the internals astubbs#80 reshaped, so it needs reconciling rather than replaying.
