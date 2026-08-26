@@ -150,6 +150,37 @@ class ShardAvailableCountOwnershipTest {
     }
 
     /**
+     * The claim's <b>residency recheck</b> - the half of {@code ProcessingShard.countAsSelectable} that makes the
+     * claim-then-confirm order safe, and the only line in the design that defends against the two threads actually
+     * interleaving rather than merely running in the damaging order.
+     * <p>
+     * Reached through its production seam rather than a race: a revocation lands between
+     * {@code WorkManager.handleFutureResult}'s staleness check and {@code sm.onFailure}, so the controller counts a
+     * container selectable again after the poller has already taken it out of the shard. Without the recheck the
+     * claim sticks and the shard counts a container it no longer holds - an overcount that survives every later
+     * add, which is the same permanent drift with the opposite sign to the reported defect.
+     */
+    @Test
+    void countingBackInARecordThatHasAlreadyLeftTheShardMustHandTheUnitStraightBack() {
+        var revokedThenFailed = registerAndTake(100);
+        register(101);
+        assertCount("one taken, one still queued", 1);
+
+        // Poller thread: the revocation sweep removes the entry while the record is still out at a worker.
+        shard().remove(100);
+        assertCount("offset 100 has left the shard; offset 101 is untouched", 1);
+
+        revokedThenFailed.onUserFunctionFailure(new RuntimeException("failed at the worker"));
+        revokedThenFailed.endFlight();
+
+        // Controller thread: the result comes back a failure, so the shard is asked to count it selectable again.
+        sm.onFailure(revokedThenFailed);
+
+        assertCount("a container that is no longer resident cannot be awaiting selection in this shard, so the "
+                + "claim must be given back rather than left standing", 1);
+    }
+
+    /**
      * The invariant the design rests on, exercised over a sequence that mixes every accounting path. It is not
      * documentation: a counter that can disagree with the units actually held, or go negative, fails here.
      */
@@ -172,6 +203,10 @@ class ShardAvailableCountOwnershipTest {
         sm.onFailure(taken);
         assertCount("failure handling is idempotent", 3);
 
+        // Deliberately a FRESH container rather than the resident one, and the only coverage anywhere of the case:
+        // ProcessingShard#onSuccess removes by offset, so the object it uncounts is the one it actually removed,
+        // not the one passed. WorkContainer#equals is topic/partition/offset only, so the two compare equal and a
+        // future reader can swap in the resident container without any test going red - losing the coverage.
         sm.onSuccess(new WorkContainer<>(0, recordAt(101), mu.getModule()));
         assertCount("one succeeded and left the shard", 2);
 

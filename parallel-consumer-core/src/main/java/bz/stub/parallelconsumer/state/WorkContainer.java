@@ -93,8 +93,11 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      * record: exactly one caller can win each transition, and that caller - and only that caller - moves the
      * shard's counter. No site infers, and no clamp is needed to absorb the sites that got it wrong.
      * <p>
-     * There is no {@code @GuardedBy} to write for this field: the fix is an atomic rather than a lock, which is the
-     * carve-out stated in this tree's {@code AGENTS.md}.
+     * There is no {@code @GuardedBy} to write for this field: the annotation holds a single lock expression, and
+     * this fix is a compare-and-set rather than a lock, so there is no lock to name. That is the same reason this
+     * tree's {@code AGENTS.md} gives for {@code volatile} - and what it asks for instead is met here: "the rule is
+     * 'record the invariant you just established'", which this javadoc and {@link ProcessingShard}'s
+     * {@code availableWorkContainerCnt} do.
      *
      * @see ProcessingShard
      */

@@ -60,11 +60,20 @@ public class ProcessingShard<K, V> {
      * How many of this shard's entries are counted as awaiting selection.
      * <p>
      * <b>Invariant: this equals the number of resident entries holding a unit</b>
-     * ({@link #countHeldUnitsByScan()}), and is never negative. Both hold by construction rather than by clamping,
-     * because every adjustment is made by the winner of a compare-and-set on
+     * ({@link #countHeldUnitsByScan()}), and is non-negative. Both hold <em>between</em> operations rather than at
+     * every instant, and by construction rather than by clamping: every adjustment is made by the winner of a
+     * compare-and-set on
      * {@link WorkContainer#claimShardAvailableUnit()} / {@link WorkContainer#releaseShardAvailableUnit()} - so a
      * unit is spent exactly once, by the party that owns the transition, and no site has to infer from observable
      * state whether it was already spent. {@code ShardAvailableCountOwnershipTest} is the check.
+     * <p>
+     * "Between operations" is not a hedge: {@link #countAsSelectable(WorkContainer)} claims the unit and then
+     * increments, which is two atomics rather than one, so a reader interleaving there can see the scan one ahead
+     * of the counter - and, if a concurrent {@link #uncount(WorkContainer)} wins the release inside that window,
+     * can see the counter momentarily at -1. Every such interleaving still settles correct, and every consumer
+     * reads the aggregate in {@link ShardManager#getNumberOfWorkQueuedInShardsAwaitingSelection()}, which floors at
+     * zero. Collapsing the two atomics into one is the follow-up that arrives with astubbs/parallel-consumer#335's
+     * {@code Execution} transition.
      * <p>
      * Note this is <em>not</em> the count of entries for which {@link WorkContainer#isAvailableToTakeAsWork()} is
      * true: {@link #onFailure(WorkContainer)} counts a failed record back in before its retry delay has passed, and
@@ -165,7 +174,11 @@ public class ProcessingShard<K, V> {
         while (iterator.hasNext()) {
             Map.Entry<Long, WorkContainer<K, V>> entry = iterator.next();
             if (isWorkContainerStale(entry.getValue())) {
-                iterator.remove();  // Safe even on ConcurrentSkipListMap
+                // Safe to remove during iteration on a ConcurrentSkipListMap - but this removes by KEY, so a fresh
+                // container the controller put here since next() returned is what actually leaves, and the uncount
+                // below then releases the wrong object. Open, with the decision it needs, in
+                // docs/inflight/bug-stale-sweep-iterator-evicts-fresh-replacement.md.
+                iterator.remove();
                 uncount(entry.getValue());
                 staleContainers.add(entry.getValue());
             }
@@ -180,7 +193,6 @@ public class ProcessingShard<K, V> {
         var workTaken = new ArrayList<WorkContainer<K, V>>();
 
         var iterator = entries.entrySet().iterator();
-        boolean hasStaleWorkContainer = false;
         while (workTaken.size() < workToGetDelta && iterator.hasNext()) {
             var workContainer = iterator.next().getValue();
 
@@ -289,7 +301,13 @@ public class ProcessingShard<K, V> {
      * inferring "is this still mine to count" from a separate read is the mistake this class was fixed to remove.
      * If the container left the shard concurrently, the unit is handed straight back here - and if the removing
      * site's own release got there first, its compare-and-set lost and this one wins, so the unit is returned
-     * exactly once whichever way the two interleave.
+     * exactly once whichever way the two interleave. That branch therefore nets to zero rather than counting a
+     * departed container: the increment and the {@link #uncount(WorkContainer)} that follows it cancel, and the
+     * container leaves holding nothing.
+     * <p>
+     * Residency is tested by <b>reference</b> identity, not {@code equals}: {@link WorkContainer#equals(Object)} is
+     * topic/partition/offset only, so a fresh container that replaced a stale one at the same offset compares equal
+     * to it. Equality here would let a departed container keep the unit its replacement is now holding.
      */
     private void countAsSelectable(WorkContainer<?, ?> wc) {
         if (wc.claimShardAvailableUnit()) {
@@ -304,7 +322,8 @@ public class ProcessingShard<K, V> {
      * Stop counting {@code wc} as selectable, if it is still counted.
      * <p>
      * The compare-and-set is what makes the deduction owned: at most one caller can win it per unit, so the counter
-     * cannot go negative and needs no clamp. That matters beyond tidiness - the floor-at-zero clamp this replaces is
+     * settles non-negative and needs no clamp (see the field for the one transient this does not cover). That
+     * matters beyond tidiness - the floor-at-zero clamp this replaces is
      * what let a conditional-decrement defect sit here unnoticed, by absorbing exactly the drift that would have
      * exposed it.
      */

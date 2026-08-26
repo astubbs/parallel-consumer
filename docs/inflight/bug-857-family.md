@@ -1307,6 +1307,32 @@ the only thing separating the truncated download from the complete one was `unzi
 [`docs/ci.md`](../ci.md) needs its own completeness check: test the archive before believing a grep
 that came back quiet.
 
+## 2026-08-26, `NO_PROGRESS` on the branch that fixes the shard counter - a NEGATIVE result
+
+<!-- post-merge: checked-begin -->
+`Chaos Pain Suite` red on astubbs#373's head `e97aec924`
+([job 98180789172](https://github.com/astubbs/parallel-consumer/actions/runs/32969810703/job/98180789172)),
+`ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger`, the fleet-scoped arm this file has now seen
+several times. **Seed `8746139315096023802`.**
+
+    probe violations=[NO_PROGRESS: fleet consumed count stuck at 96912/100000 for 30s (bound 30s)]
+    peaks: rebalanceDwell=3300ms lagStagnation=104579ms
+
+**Why this one is worth its own entry rather than a row.** astubbs#373 fixed an accounting defect in
+`ProcessingShard` whose sign-reversed instance produces a permanent OVERcount of
+`availableWorkContainerCnt` - which keeps the poller's load gate closed, the shape this file has
+described as the 857 silent-stall signature. If that defect were what the `NO_PROGRESS` arm has been
+catching, this is the branch on which the arm should have stopped firing. **It fired anyway, on the
+branch's own head.** So the fix is necessary-not-sufficient: it closes a real way for the counter to
+drift, and it does not close this arm.
+<!-- post-merge: checked-end -->
+
+Consistent with every earlier sighting, the branch is not otherwise a suspect: the autopsy reports
+`violations (0)`, no ambient bound was crossed, and the other six scenarios in the same run passed.
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=8746139315096023802
+
 ## Delete when
 
 The `CLASS2_STALL` entries above are superseded by this section and kept only as the record of how a
