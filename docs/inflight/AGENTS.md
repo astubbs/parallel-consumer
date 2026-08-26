@@ -106,12 +106,24 @@ existing number by its prefix and check it; write new ones the way this section 
 ## Rules
 
 - **Track only what is currently OPEN**, plus cross-branch context a future branch should inherit.
-  When something closes, **`git rm` its file**. Do not rewrite it into a "FIXED/DONE" narrative:
-  making a stale entry *accurate* is the wrong move. If it leaves open follow-ups, shrink the file to
-  those and rename it.
-- **Work your current PR resolves is tracked by that PR - delete its file in that PR.** Never leave a
-  "delete this when #NN merges" marker on `master`. The merge is exactly when nobody is looking here,
-  so the marker outlives the work and the next reader inherits a stale note that reads as live.
+  Do not rewrite a closed item into a "FIXED/DONE" narrative: making a stale entry *accurate* is the
+  wrong move.
+- **When your PR resolves what a note tracks, that note has stopped describing reality - so bring it
+  back in touch, in that PR. Deleting is one of four outcomes, not the rule.** Take them in order:
+  - **Migrate what outlives the work, first.** A finding, a measurement, a decision or a rejected
+    alternative still true after this PR lands has a durable owner - `docs/refactoring.md` for a
+    deferred refactor small enough to be a line, `docs/solutions/` for a solved problem,
+    `CONCEPTS.md` for vocabulary, the topic doc for a rule. A note is where knowledge is *staged*,
+    not where it is buried.
+  - **Keep the note when live content remains**, shrunk to what is still open and renamed if its
+    area changed. A note is not obliged to die with the PR that prompted it.
+  - **Split when what remains is a different item** - open a new note for it and `git rm` the old
+    one, so one item per file survives the transition.
+  - **`git rm` it only when nothing left in it is both true and unowned elsewhere.**
+
+  Never leave a "delete this when #NN merges" marker on `master`. The merge is exactly when nobody
+  is looking here, so the marker outlives the work and the next reader inherits a stale note that
+  reads as live.
 - **Known problems with the code on this branch belong here**, even when a GitHub issue exists - link
   the issue and keep it short. An agent picking up work scans this directory; it will not read every
   issue on the tracker. An unrecorded defect is one the next session rediscovers, or ships on top of.
