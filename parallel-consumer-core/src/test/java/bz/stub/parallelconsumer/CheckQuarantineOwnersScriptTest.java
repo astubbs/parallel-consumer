@@ -61,8 +61,6 @@ class CheckQuarantineOwnersScriptTest extends AbstractQuarantineScriptTest {
                 ("class SomeQuarantinedIT {\n" +
                         "    @Quarantined(reason = \"d\", tracking = \"t\", fixedBy = \"PR #999999\")\n" +
                         "    void someMethod() {}\n}\n").getBytes(StandardCharsets.UTF_8));
-        // file-refs: N/A - a path inside the temporary fixture repo this test builds, not a path in
-        // this one; `module/` is the stand-in module name the fixture uses throughout.
         writeRegistry("- [ ] `SomeQuarantinedIT.someMethod` - diagnosed. **Owner: PR #999999**\n");
     }
 
