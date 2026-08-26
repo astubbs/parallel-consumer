@@ -1365,19 +1365,31 @@ run passed, including `ChaosRevokeUnderWorkIT`, both `ChaosRevokeUnderWorkCooper
   -Dexcluded.groups= -Dchaos.seed=7543483068749855826
 ```
 
-**What is new here, and it is the reason this one is worth more than another tally mark.** Every
-previous capture of this arm predates the dispatch ceiling. The ceiling landed on master hours
-before this run, and the commit that immediately follows it says in its own body that a leaked
-dispatch permit now takes the engine to a full stop rather than a stuck record - "enough of them and
-the ceiling reaches zero and the engine stops entirely". A member that has stopped answering the
-rebalance protocol is exactly what a wedged engine would look like from the outside. So this
-sighting cannot be assumed to be the old intermittency wearing its usual face: it is equally
-consistent with a new cause that produces the same autopsy, and the two are not distinguishable from
-the probe output alone.
+**Read against what this file has already settled, the ceiling is a question, not a rival
+explanation.** The eleventh sighting concluded these reds are seed-dependent rather than
+branch-dependent; the fourteenth caught three of them on a branch whose entire diff was markdown, a
+comment and one `iterations` value, with no `src/main` file anywhere - "provably cannot influence
+it" - and pointed at the box or at master; the runner-contention hypothesis was ruled out there on
+timing rather than left unreplayed; and the pair of runs one commit apart at the end of this file
+says outright that the trigger is the schedule, not the tree. A capture on a branch that merged
+master is exactly what all of that predicts, and nothing here contradicts it.
 
-Settling it needs the control the rest of this file keeps asking for and rarely gets: replay the
-seed above at the ceiling commit and at its parent. Same-seed-different-position is the arm that
-separates them, and nobody has run it.
+What is genuinely new is only that a variable changed underneath: every previous capture of this arm
+predates the dispatch ceiling, which landed on master hours before this run, and the commit
+immediately after it says in its own body that a leaked dispatch permit now takes the engine to a
+full stop rather than a stuck record. A member that has stopped answering the rebalance protocol is
+what that would look like from outside. So the ceiling is worth ruling out the way contention was
+ruled out - explicitly, with evidence - rather than being assumed either way. It is not a competing
+diagnosis; the standing one is better evidenced than any single capture, this one included.
+
+**The control is the same one every entry here asks for and none has run: replay the seed.** For the
+ceiling question specifically it is same-seed-different-position - replay at the ceiling commit and
+at its parent - which is the arm that separates a new cause from the standing intermittency. Nobody
+has replayed this seed either.
+
+**It did not block anything.** `Chaos Pain Suite` is not in master's required-checks ruleset, as the
+fourteenth sighting records, so this red gates no merge. It is written down because the log expires
+and the seed is the asset, not because it stopped work.
 
 **Not the observing PR's defect.** astubbs/parallel-consumer#205 adds MDC capture and scope entry
 around the worker submit and the engine terminal callbacks; it changes no locking, no rebalance
