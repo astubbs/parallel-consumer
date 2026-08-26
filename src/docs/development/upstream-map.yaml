@@ -154,6 +154,36 @@ branch_accounting:
   - {ref: upstream/DP-12547, tip: 87cdcf48c, state: mirrored, tag: archive/upstream-branch/DP-12547}
   - {ref: upstream/correct-failing-license-check, tip: e8c6ff5fa, state: mirrored, tag: archive/upstream-branch/correct-failing-license-check}
   - {ref: upstream/chore-service-bot-update, tip: "255916684", state: mirrored}
+  # --- deleted, deliberately, with the reasoning that made it safe --------------
+
+  # Each kept its own entry rather than one aggregate row: this section's contract is that a
+  # deleted branch keeps its TIP, and a glob in `ref` also defeats the ref-matching check the
+  # section exists to feed. Shared reasoning, stated once: mirrored 2026-08-20 and removed the
+  # same day once contents were checked - each was a single commit touching only pom.xml,
+  # bumping a dependency of UPSTREAM's tree, which has diverged from ours in both dependency set
+  # and package paths, so they would not apply here and will never merge upstream either. Not
+  # tagged, so upstream's copy is the last one; accepted, because a recreatable version bump is
+  # not work. The tips below make them addressable from upstream while it exists.
+  - {ref: upstream/dependabot/maven/junit.platform.version-6.0.0, tip: 9a25939d7, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/dependabot/maven/org.apache.maven.plugins-maven-gpg-plugin-3.2.8, tip: d38e3cc67, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/dependabot/maven/testcontainers.version-1.21.3, tip: 52540d9a1, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/dependabot/maven/vertx.version-5.0.5, tip: c1320b1f2, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/renovate/master-com.github.tomakehurst-wiremock-jre8-3.x, tip: 99e35fb7c, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/renovate/master-com.github.tomakehurst-wiremock-jre8-replacement, tip: f87d9e55a, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/renovate/master-io.smallrye.reactive-mutiny-3.x, tip: 2fa2a10c4, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/renovate/master-kafka.version, tip: 76a6a695f, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/renovate/master-logback.version, tip: cf4c4b59c, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/renovate/master-major-kafka, tip: 6d1fceb6e, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/renovate/master-major-testing-libraries, tip: 52d774b05, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/renovate/master-major-vertx.version, tip: 3f5a215a4, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/renovate/master-maven-org.assertj-assertj-core-vulnerability, tip: 78da8a5e7, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/renovate/master-maven-org.postgresql-postgresql-vulnerability, tip: ac48acadd, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/renovate/master-micrometer-core.version, tip: c37794713, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/renovate/master-minor+patch-dependencies, tip: 35608cae9, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/dependabot/maven/org.threeten-threeten-extra-1.8.0, tip: 5bbfea783, state: deleted, deleted: 2026-08-20,
+     see: ["docs/inflight/process-fork-branch-archaeology.md"],
+     note: "Recorded separately because it was NOT a bot branch despite the name. A maintainer pushed four commits onto it - semaphore CI java-home fix, missing licence headers, gitignore, and a master merge - on top of the threeten-extra bump. Read before deleting: the CI config is upstream's semaphore, which we do not use, and the licence headers are on io/confluent paths this fork renamed, so none of it applies here. Kept as its own entry because a prefix sweep would have taken human commits silently, which is the failure this whole section exists to prevent."}
+
   # --- our own branches, where a decision exists that the branch does not -----
 
   - {ref: presentation, state: ours, see: ["docs/inflight/handoff-fork-branch-audit.md", "docs/inflight/process-fork-branch-archaeology.md"],
