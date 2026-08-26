@@ -85,7 +85,21 @@ const LINE_OPT_OUT = /file-refs:\s*N\/?A\b\s*-\s*[A-Za-z]/i;
 // Matched at segment and stem boundaries so `bin/foo.sh`, `bin/check-foo.sh` and `docs/bar.md` are
 // all covered, while `parallel-consumer-examples/` - a real directory containing "example" - is
 // not. Deliberately a short, closed list: anything longer starts swallowing real filenames.
-const PLACEHOLDER = /(?:^|[/\-_.])(?:foo|bar|baz|qux|quux)(?:[/\-_.]|$)/i;
+//
+// A ONE-CHARACTER LOWERCASE FILENAME is the same thing without the word: `docs/x.md`, `docs/a.md`,
+// `docs/b.md` are how this repo writes "some document" when the identity of the document is not the
+// point - this module's own header does it twice ("a pointer for docs/a.md says nothing about
+// docs/b.md"), and the quarantine script tests embed `tracking = "docs/x.md"` inside java string
+// literals describing a synthetic repo. No tracked file has a single-character stem.
+//
+// LOWERCASE, and that is not cosmetic: a java file is named for its class and classes are
+// capitalised, so `.../internal/A.java` is a plausible real path while `docs/a.md` is not a
+// plausible real document. Anchored at the FILENAME rather than at any segment, so a short
+// DIRECTORY segment - `src/a/b/Thing.java` - is untouched.
+const PLACEHOLDER = new RegExp(
+  String.raw`(?:^|[/\-_.])(?:foo|bar|baz|qux|quux)(?:[/\-_.]|$)` +
+  String.raw`|/[a-z0-9]\.[a-z0-9]+$`,
+);
 
 // Tokens that are patterns rather than paths: globs, `<placeholders>`, shell/CI interpolation, and
 // the elided `.../` form docs use to shorten a long package path.
@@ -161,13 +175,28 @@ function isExempt(path) {
   return EXEMPT_PATHS.some((re) => re.test(path));
 }
 
-// Only text files carry citations, and only their added lines are this PR's responsibility. A .java
-// file's imports are the compiler's problem, not this gate's.
+// WHICH FILES CARRY CITATIONS. Prose does, whatever it is written in - and this list has now been
+// wrong twice in the same direction, so the rule is stated rather than the list.
+//
 // `.html` IS A CITING FILE. It was excluded, so a path inside one was never checked - and a rename
 // left `docs/ideation/2026-08-17-distributed-throttling-ideation.html` pointing at a note that no
 // longer existed, silently, because the gate could not see the file at all (astubbs#323 review).
 // The ideation documents cite notes and scripts the same way prose does; the format is not the point.
-const CITING_FILE = /\.(md|adoc|txt|html)$/i;
+//
+// `.java` IS A CITING FILE, for the same reason and against the same argument. The excuse for
+// leaving it out was that "a .java file's imports are the compiler's problem, not this gate's" -
+// and that does not survive contact with TOKEN. A Java import is a dotted package name,
+// `bz.stub.parallelconsumer.state.ShardKey`, with no `/` in it at all, so the two-segment rule
+// cannot fire on one; the exclusion bought nothing and cost the javadoc. Javadoc and comments cite
+// `docs/...` paths as prose exactly the way markdown does - astubbs/parallel-consumer#342 carries a
+// javadoc citing `docs/inflight/perf-throughput-regression-since-0-3.md`, a file that exists only
+// on another branch - and code cites them too, in `@Quarantined(tracking = "docs/...")` and in
+// `REPO_ROOT.resolve("bin/...")`. Nothing checked any of it.
+//
+// `.sh` is the remaining known gap, recorded in docs/inflight/ci-copyright-gate-review-leftovers.md
+// and deliberately not closed here: it wants its own pass over the shell corpus, not a third
+// one-off extension.
+const CITING_FILE = /\.(md|adoc|txt|html|java)$/i;
 
 function normalise(path) {
   const parts = [];
