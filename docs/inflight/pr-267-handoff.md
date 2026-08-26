@@ -1,7 +1,11 @@
 # astubbs#267 handoff
 
-Worktree `.claude/worktrees/pr267`, branch `fix/concurrent-listener-registration`, head `cf7ef75c6`.
-All checks green, 32/32 threads resolved, **31 behind master** (merge it first).
+<!-- inflight-type: task -->
+<!-- inflight-impact: coordination -->
+
+Branch `fix/concurrent-listener-registration`; `git worktree list` says which worktree holds it, and
+`gh pr view 267 -R astubbs/parallel-consumer` its head, checks and unresolved threads. Merge master
+before working on it - the branch is long-lived and the base moves under it.
 
 ## What it is
 
@@ -34,8 +38,8 @@ workstreams: the original collections fix, `ThrowableUtils` (`describeWithRootCa
 
 ## Parked, deliberately
 
-`docs/inflight/parked-blanket-safe-logging.md` (declined, with numbers),
-`next-archunit-main-code-rules.md` (the `getMessage()` rule, costed at one site),
+`docs/inflight/core-blanket-safe-logging.md` (declined, with numbers),
+`static-archunit-main-code-rules.md` (the `getMessage()` rule, costed at one site),
 `ci-duplication-report-can-fail-to-post.md` (a required check went red with its finding posted
 nowhere - the reason `.claude/hooks/after-push-check-ci.sh` exists).
 

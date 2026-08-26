@@ -1,5 +1,10 @@
 # Deferred follow-ups from the density-work review (astubbs#192)
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: throughput -->
+<!-- inflight-state: deferred - after v6, throughput only -->
+
+
 > Extracted from `origin/perf/192-offset-encoding-density` @2a31b0a74, `docs/inflight/perf-192-followups.md`.
 
 Findings the `lfg192-rev1` code-review run of the offset-encoding density branch

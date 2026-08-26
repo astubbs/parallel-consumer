@@ -275,10 +275,10 @@ the race needs — which makes PIT a *useful reproducer*, not merely a victim.
 
 | Path | Why |
 |---|---|
-| `parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/internal/ProducerManagerTest.java` | the failing test; the TODO comments in `producedRecordsCantBeInTransactionWithoutItsOffsetDirect` are the lead |
-| `parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/ProducerManager.java` | `preAcquireOffsetsToCommit`, `commitOffsets`, `acquireProduceLock`, `ProducingLock` |
-| `parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java` | `runUserFunction` / `runUserFunctionInternal` / `cleanUpContext` — the production ordering |
-| `parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/state/WorkContainer.java` | `onPostAddToMailBox`, the other `finishProducing` caller |
+| `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/internal/ProducerManagerTest.java` | the failing test; the TODO comments in `producedRecordsCantBeInTransactionWithoutItsOffsetDirect` are the lead |
+| `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/ProducerManager.java` | `preAcquireOffsetsToCommit`, `commitOffsets`, `acquireProduceLock`, `ProducingLock` |
+| `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java` | `runUserFunction` / `runUserFunctionInternal` / `cleanUpContext` — the production ordering |
+| `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/WorkContainer.java` | `onPostAddToMailBox`, the other `finishProducing` caller |
 | `docs/inflight.md` | the ledger entry for this flake — **update it as you go**. (Pointer repair: that single file became the directory [`docs/inflight/`](../inflight/) on 2026-08-04 and was deleted in `0de96fc` — `git show 0de96fc^:docs/inflight.md`, grep `producedRecordsCantBeInTransactionWithoutItsOffsetDirect`, for the entry as it stood. It was already marked FIXED by astubbs#110 there and did not carry into `docs/inflight/`, so nothing live succeeds it. Two look-alikes that are **not** this entry: [`docs/inflight/bug-producing-lock-double-release.md`](../inflight/bug-producing-lock-double-release.md), the separate open follow-up §11 raised, and the same test name in [`docs/inflight/test-untracked-ci-flakes.md`](../inflight/test-untracked-ci-flakes.md), a later `BlockedThreadAsserter` timing defect.) |
 
 ## 10. Context worth having

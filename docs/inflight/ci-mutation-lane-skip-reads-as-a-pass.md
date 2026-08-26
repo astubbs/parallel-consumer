@@ -1,5 +1,10 @@
 # The mutation lane's skip renders as a green tick - decision pending
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: misdirection -->
+<!-- inflight-state: deferred - after v6, rides with the mutation-lane widening -->
+
+
 **Open decision, not a bug.** The lane behaves exactly as designed and says so in its job summary.
 What is undecided is whether *the checks list* should keep showing a pass when the lane graded
 nothing. Raised off astubbs#296, whose only main-code file is
@@ -19,7 +24,14 @@ looks, and on this repo's shape it is cheaper than the status quo, not dearer.
 
 ## What actually fires, and how often
 
-Three exit paths in `bin/ci-mutation-test.sh`; two of them are skips and both exit 0.
+**The two skips no longer exit 0** - they exit `3`, PIT-ran-but-measured-nothing exits `2`, and the
+step reddens on the latter. That closes the half of this problem that was a *script* defect and
+leaves the half that is a *rendering* decision, which is what this file has always owned: a `3` is
+still a green row. The contract and the measurement behind it are in `bin/ci-mutation-test.sh`'s
+header and [`ci-mutation-testing.md`](ci-mutation-testing.md). The table below is unchanged and is
+still the frequency argument.
+
+Three exit paths in `bin/ci-mutation-test.sh`; two of them are skips.
 
 | Path | Log line | Last 100 merged PRs | Since the lane landed (astubbs#111) |
 |---|---|---|---|
@@ -51,6 +63,10 @@ told from a race that did not happen. astubbs#296 is the textbook case, a shutdo
 concurrency core. **Widening to `state.` would convert honest silence into unfalsifiable survivors**,
 and the plan already fixes the price of admission: a completed `state.` sweep, measured, not argued.
 
+**That price was paid on 2026-08-25 and `state.` did not meet it** - the sweep does not complete at
+all, let alone produce decidable survivors, where the same run against `offsets.` finishes in under a
+minute. Numbers and the control arm: [`ci-mutation-testing.md`](ci-mutation-testing.md).
+
 One nuance the package filter cannot express: `internal/Documentation.java` (astubbs#289) is pure
 constants, where mutants *would* be decidable and also worthless. The filter is a proxy for
 "hang-prone concurrency" and errs toward silence on a couple of harmless classes. Not worth fixing.
@@ -69,7 +85,7 @@ constants, where mutants *would* be decidable and also worthless. The filter is 
 - **Skip the job instead of passing it.** Split the decision into a cheap `mutation-scope` job that
   calls the existing script in a scope-only mode, then guard the real job with `if:` so the row
   renders grey. The check name can carry the reason via `${{ needs... }}` interpolation - the pattern
-  `.github/workflows/pr-highcpu-fast-feedback.yml` already uses for
+  the deleted self-hosted PR lane already used for
   `format('{0} (optional)', matrix.suite-name)`.
 
 ## Why the recommended option is cost-negative
@@ -83,7 +99,11 @@ fork the decidable regex away from `bin/ci-mutation-test.sh`, which must stay it
 Both skips collapse to one grey row, which is correct - "we graded nothing" is the reader's answer
 either way, and the summary still distinguishes them.
 
-## Do this first, regardless of the decision above
+## ~~Do this first, regardless of the decision above~~ DONE
+
+The warning that would have been deleted along with `AGENTS.md`'s temporary rename section now has a
+permanent home: [`docs/ci.md`](../ci.md), "A green mutation tick usually means measured nothing".
+The `AGENTS.md` bullet points at it and will go with the section it lives in. Original text:
 
 The only always-loaded agent-facing warning -
 `Confirm the mutation lane scored mutants rather than trusting its tick` in `AGENTS.md` - is the last

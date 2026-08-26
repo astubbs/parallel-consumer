@@ -5,6 +5,7 @@ status: active
 date: 2026-07-30
 origin: docs/plans/2026-07-30-001-feat-chaos-pain-suite-design-plan.md
 ---
+<!-- file-refs: N/A - the design plan it originated from was never committed to master -->
 
 # feat: Chaos Pain Suite Phase 1 - seeded churn storm with zombie-member probe
 
@@ -110,7 +111,7 @@ greens are trusted.
 - [ ] **Unit 1: ChaosConductor + action timeline**
 
 **Files:**
-- Create: `parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/chaostests/ChaosConductor.java`
+- Create: `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/chaostests/ChaosConductor.java`
 
 **Approach:** seeded `Random`; action enum {STOP_DRAIN, STOP_NO_DRAIN, RESTART, MEMBER_JOIN, MEMBER_LEAVE}
 with per-scenario weights; `tick()` loop on its own thread selecting a target instance + action via

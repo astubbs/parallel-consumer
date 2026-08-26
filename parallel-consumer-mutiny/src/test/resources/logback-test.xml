@@ -22,13 +22,14 @@
         </encoder>
     </appender>
 
-    <root level="warn">
+    <root level="${pc.log.level:-warn}">
         <!--    <root level="debug">-->
         <appender-ref ref="STDOUT"/>
     </root>
 
     <!-- primary -->
-    <logger name="bz.stub.parallelconsumer" level="info"/>
+    <!-- Raised from the command line, not by editing: -Dpc.log.level=debug|trace. See docs/testing.md. -->
+    <logger name="bz.stub.parallelconsumer" level="${pc.log.level:-warn}"/>
 
     <!-- Key classes -->
     <!--    <logger name="bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor" level="debug"/>-->

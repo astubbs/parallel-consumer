@@ -1,5 +1,8 @@
 # A duplication finding can fail to reach the PR, leaving only a red tick and a job log
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: misdirection -->
+
 `dups: clones` found a real clone on astubbs#267, failed the build for it, and **could not post it**.
 The finding existed only in the job log, and nobody opened the job log.
 
@@ -59,6 +62,6 @@ are wrong here. The finding was correct, specific, and lost in delivery. On astu
 duplication was eventually caught by a human reading the code, three review rounds after the check
 first went red for it.
 
-Related: [`next-archunit-main-code-rules.md`](next-archunit-main-code-rules.md) covers the other half
+Related: [`static-archunit-main-code-rules.md`](static-archunit-main-code-rules.md) covers the other half
 of the same question - what these mechanical checks structurally cannot police, as opposed to what
 they policed correctly and failed to tell anyone.

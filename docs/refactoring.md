@@ -125,6 +125,18 @@ diagnosing the mirror rather than while reading the file:
 Large, mostly interdependent, several **undecided**. Most trace to confluentinc#200.
 Do not start one casually.
 
+### The portable-mtime probe exists three times
+
+`hook_file_mtime` in `.claude/hooks/lib/hook-common.sh`, `_mtime` in
+`.claude/hooks/check-merge-outstanding-work.sh`, and `_mtime` in `bin/check-pr-ready.sh` are the same
+GNU-vs-BSD `stat` probe. The shared one was added for the two push hooks; the other two predate it.
+
+**The trap, so a consolidation does not introduce a bug while removing a duplicate:**
+`check-merge-outstanding-work.sh` runs under `set -e`, where a failing `stat` without `|| true`
+aborts the script instead of reaching its documented fail-closed branch. `hook_file_mtime` already
+carries `|| true` on both arms for exactly this, so it is safe to point the other two at - but point
+them, do not copy them back.
+
 ### Thread model: eliminate the separate poller thread (MASSIVE, UNDECIDED)
 *Mirror: [#142](https://github.com/astubbs/parallel-consumer/issues/142) · orphaned implementation in [confluentinc PR #270](https://github.com/confluentinc/parallel-consumer/pull/270), closed unmerged in the 2023-06-15 sweep.*
 - **confluentinc#200** - "Consider a shared-nothing architecture, to reduce thread
@@ -143,11 +155,37 @@ Do not start one casually.
   `origin/refactor/function-runner` @3fd8caac, `origin/massive-refactor` @f96e0bc4 (the umbrella attempt).
   Registered in the manifest as `refactor-thread-model-god-class` (this doc stays the editorial owner).
 
+### Annotate every fixed race with `@GuardedBy`, as you fix it
+
+- **Owned by
+  [`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md`](../parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md)**,
+  which arrives automatically when you edit a file in the engine - the moment the rule applies. A
+  backlog entry is consulted; that one fires. Kept here as a pointer only, because this list is where
+  somebody browsing debt will look for it.
+- The short version: Error Prone's `GuardedBy` check is on at ERROR and examines nothing, because the
+  codebase contains no annotation. Every detector here is discovery and none prevents regression, so
+  the annotation is what makes a fix permanent - write it with the fix.
+
+### `AbstractParallelEoSStreamProcessor.lastCommitTime` is read unsynchronised
+
+- Plain `Instant`, written in the commit path and read by `isTimeToCommitNow()` with no
+  happens-before edge. Found by RacerD 2026-08-25; **not previously in any ledger**. The poll thread
+  can read a stale value and mis-time a commit, on a codebase that already tracks commit-timeout
+  flakes. Not diagnosed further. Fix it with `@GuardedBy` per the policy above.
+
 ### Decompose the God class - `AbstractParallelEoSStreamProcessor` (1533 lines)
 - Control loop + lifecycle/state machine + commit orchestration + threading +
   rebalance listener + deprecated options in one class. Design ref: draft
   `confluentinc#488`. Branch `origin/refactor/state-machine` @8f90da8a (extract the lifecycle
   state machine). Do alongside the [confluentinc#200](https://github.com/confluentinc/parallel-consumer/issues/200) (mirror astubbs#142) work; high risk.
+- **Landing this unblocks whole-FILE static analysis, and it can be taken piecemeal.** The
+  new-code analysis profile is scoped to changed *lines* rather than changed *files* purely because
+  of size: touching a 1533-line class would otherwise inherit every latent finding in it. Line
+  scoping is the weaker choice - it misses a finding reported away from the edit that caused it - so
+  each file that comes down to a reviewable size can be promoted to file scoping on its own, without
+  waiting for the whole decomposition.
+  [`docs/inflight/static-analysis-rule-profiles.md`](inflight/static-analysis-rule-profiles.md) owns
+  the profiles and carries the promotion list.
 
 ### Actor / IPC message bus for commits & results
 - Replace shared-state coordination with a lightweight actor/mailbox. Design refs:
@@ -257,6 +295,38 @@ Do not start one casually.
 ### offsets/OffsetDecodingError.java
 - `TODO should extend java.lang.Error`: should it extend `java.lang.Error`?
   (exception-hierarchy design)
+
+### state/ShardKey.java
+
+- **`KeyOrderedKey`'s javadoc contradicts its constructor.** The doc describes topic-only scoping,
+  but the constructor builds `new TopicPartition(rec.topic(), rec.partition())` and the field is even
+  named `topicName`. The behaviour is the correct one - partition-scoped keys are what keep the
+  offset-keyed `entries` map free of cross-partition collisions in KEY ordering mode - so this is a
+  doc fix plus a field rename, not a behaviour change.
+
+### state/ProcessingShard.java
+
+- **`getWorkIfAvailable`'s inline stale removal orphans the `retryQueue` entry.** It does
+  `iterator.remove()` and decrements the counter, but never calls `retryQueue.remove` - whereas the
+  sweep does both, and says so: `// remove stale containers from both processingShards and retryQueue`
+  in `ShardManager.removeStaleContainers`, which maps `retryQueue::remove` over what the shard
+  returned. If the control thread's inline removal reaches a *failed* (retry-queue-resident) container
+  that has just gone stale before the poll thread's sweep does, that queue entry is orphaned
+  permanently, inflating `getQueueSizeAndNumberReadyToBeRetried` and therefore
+  `getNumberOfWorkQueuedInShardsAwaitingSelection`. Throttle-gate noise and a false "ready to retry"
+  signal - **not record loss**. Pre-existing and independent of astubbs#31.
+  **There is no test that would catch it**: the only retryQueue coverage is `ShardManagerTest`'s
+  `retryQueueOrdering`, `testRetryQueueOrdering` and `testRetryQueueOrderingMultipleTries`, all of
+  which test ordering only. Nothing asserts shard/retryQueue consistency after a stale removal by
+  either path.
+
+### state/RetryQueue.java
+
+- **Four `// visible for testing` accessors that no test calls.** `RetryQueue`'s `unique`, `sorted`
+  and `comparator` Lombok `@Getter(AccessLevel.PACKAGE)`s, and `ShardManager`'s `retryQueue` one,
+  have zero callers anywhere in the tree - main, test or integration. Delete them; the comment is
+  documenting an access route nobody uses, and an ArchUnit rule policing a dead accessor would pass
+  vacuously forever (see `docs/inflight/static-archunit-main-code-rules.md`).
 
 ### state/PartitionState.java (715 lines)
 - `Needs to be concurrent because`: concurrent commit-data collection exists only because
@@ -385,6 +455,19 @@ but not this.*
 
 ---
 
+### Test infrastructure - `MockConsumerTestBase` assumes one partition and one key
+
+- **Generalise the harness to take a partition count and a key supplier.** `MockConsumerTestBase`
+  hardcodes `new TopicPartition(topic, 0)` and a single record key, which is right for the six
+  scenarios on it today and wrong for any scenario whose subject is ordering or backlog:
+  `CommitResponseTimeoutSymptomTest` reproduces a reported workload of 1000 keys across 4 partitions
+  under `KEY` ordering, so it repeats the manual rebalance dance rather than inheriting it, and its
+  javadoc says why. Two smaller mismatches come with it: options are built once per class in
+  `@BeforeEach`, so a class needing two option sets must split into subclasses, and the teardown
+  asserts a null failure cause, which a scenario that expects PC to die must override. Doing this
+  means re-verifying the six classes already on the base, which is why it is here rather than folded
+  into the PR that noticed it (astubbs#204).
+
 ### Test infrastructure - timing-based waits
 
 - **`ParallelEoSStreamProcessorTest` waits on loop cycles, not events** - four markers:
@@ -489,7 +572,7 @@ Only the items needing a decision are listed here - do not restate the inventory
 - **Three deleted stubs are missing *features*, not missing tests** - record them as issues, never as
   test debt. `poisonPillGoesToDeadLetterQueue`: PC has no dead-letter-queue concept and never has
   (zero DLQ occurrences in any `src/main/java`); tracked as astubbs#149, and already the
-  most-demanded missing feature in `docs/inflight/next-candidates.md`. `maxPerPartition` and
+  most-demanded missing feature in `docs/inflight/process-candidate-ranking.md`. `maxPerPartition` and
   `maxPerTopic`: no per-partition or per-topic in-flight limit exists - `ParallelConsumerOptions` has
   only the global `maxConcurrency`, and `ShardKey` never keys by topic. Nearest tracked: astubbs#160
   and astubbs#236. **They were written as a trio with `maxOverall`, and only the global scope was
@@ -518,6 +601,21 @@ A generated `docs/INACTIVE_TESTS.md` with a `--check` gate (the `bin/todo-index.
 considered and **deliberately not built**: the previous audit was lost to invisibility, not drift, and
 such a gate would fail the PR Checklist job on any open PR touching a test annotation. Worth
 revisiting once the audit has been in use.
+<!-- file-refs: N/A - names a generated file this entry records as NOT built -->
+
+### Test infrastructure - a logback config nothing loads
+
+`parallel-consumer-examples/parallel-consumer-example-core/src/test/resources/logback-temp-test.xml`
+is dead. Logback loads `logback-test.xml` then `logback.xml`; nothing sets
+`logback.configurationFile`, and a repo-wide grep finds no reference to the file except the comment
+in `bin/check-test-log-config.sh` that records it as dead. So its settings - including
+`bz.stub.parallelconsumer` at `debug` - have never taken effect, and anyone editing it to change that
+module's test output is editing nothing.
+
+Either delete it, or rename it to `logback-test.xml` if its contents were the intent - which is a
+behaviour change for that module's test output and should be decided, not defaulted. Found while
+scoping `bin/check-test-log-config.sh`, which deliberately excludes the examples modules; noted here
+rather than fixed there so the gate's scope stayed one decision.
 
 ### Build - jacoco coverage under forked surefire
 

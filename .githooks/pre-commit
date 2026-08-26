@@ -50,6 +50,7 @@ set -euo pipefail
 # the three below reserves 1 for a real finding and 2 for "I could not run", so no violation can be
 # reclassified as soft by these entries:
 #   - check-issue-refs.sh        - 2 when `node` is absent
+#   - check-file-refs.sh         - 2 when `node` is absent, same module and same reason
 #   - check-docs-data.sh         - 2 for "no working Python 3 on PATH" and for "PyYAML is not
 #                                  installed"; 1 for structural violations
 #   - check-copyright-headers.sh - 2 when the fork-point commit is not in history (a shallow clone,
@@ -66,6 +67,7 @@ set -euo pipefail
 GATES=(
     "check-copyright-headers.sh:2"
     "check-issue-refs.sh:2"
+    "check-file-refs.sh:2"
     "check-docs-data.sh:2"
     "check-shell-sigpipe.sh:"
     "check-quarantine-registry.sh:"

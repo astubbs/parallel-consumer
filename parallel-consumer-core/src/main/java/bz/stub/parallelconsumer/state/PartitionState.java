@@ -280,6 +280,44 @@ public class PartitionState<K, V> {
         }
     }
 
+    /**
+     * First of THREE staleness checkpoints. Read this before concluding any one of them is broken -
+     * each is deliberately partial, and they are only sound together.
+     *
+     * <ol>
+     *   <li><b>Here, on register</b> - proactive and best-effort. Checked ONCE per poll batch, which is
+     *       correct rather than a shortcut: {@link EpochAndRecordsMap.RecordsAndEpoch} carries a single
+     *       {@code epochOfPartitionAtPoll} for its whole record list, so a per-record check would return
+     *       the identical answer.</li>
+     *   <li><b>On take</b> - {@link #couldBeTakenAsWork}, per container against LIVE state. This is the
+     *       authoritative one: nothing stale is ever executed, however it got into a shard.</li>
+     *   <li><b>On completion</b> - {@code WorkManager.handleFutureResult}, per container against live
+     *       state, so a result returning from work that went stale mid-flight is dropped.</li>
+     * </ol>
+     *
+     * <b>This checkpoint is knowingly racy, and that is not a defect.</b> The caller
+     * ({@code PartitionStateManager.maybeRegisterNewRecordAsWork}) looks this state up live and calls
+     * straight in, but a rebalance on the broker-poll thread can land between that lookup and the
+     * inserts this method then performs - registration runs on the control thread and nothing
+     * serialises the two. Inside that window the guard can pass wrongly, either because the epoch
+     * bumped after a correct check, or because this state object itself went stale (its
+     * {@code partitionsAssignmentEpoch} is a {@code final long} captured at construction, so a stale
+     * state compares its own old epoch against the batch's old epoch and they match). Either way
+     * old-epoch containers reach live shards. Checkpoint 2 is what makes that safe.
+     *
+     * <b>Do not "fix" this by re-checking per record, or by consulting the live epoch here.</b>
+     * Neither closes the window - both are still check-then-act against a concurrent rebalance - and
+     * the lock that would close it was deliberately removed in {@code 9a966860b} (confluentinc#219),
+     * on the grounds that epoch tracking replaced it. That reasoning holds for the scheme as a whole,
+     * not for this checkpoint alone.
+     *
+     * <b>What was genuinely broken</b> was never the admission of stale containers but what the shard
+     * did on a collision: it preferred a stale RESIDENT over a fresh ARRIVAL at the same offset and
+     * dropped the arrival, which is lost for good since checkpoint 2 only removes the resident.
+     * See {@code ProcessingShard.addWorkContainer} and confluentinc#909.
+     *
+     * @see #couldBeTakenAsWork
+     */
     private boolean epochIsStale(EpochAndRecordsMap<K, V>.RecordsAndEpoch recordsAndEpoch) {
         // do epochs still match? do a proactive check, but the epoch will be checked again at work completion as well
         var currentPartitionEpoch = getPartitionsAssignmentEpoch();
@@ -636,6 +674,13 @@ public class PartitionState<K, V> {
      * record is actually blocking our progress.
      *
      * @return true if this record be taken from its partition as work.
+     */
+    /**
+     * Second and AUTHORITATIVE of the three staleness checkpoints - per container, against live state.
+     * Nothing stale is ever executed, however it reached a shard, which is what lets checkpoint 1 be
+     * best-effort. {@link #epochIsStale} documents the scheme; do not duplicate it here.
+     *
+     * @see #epochIsStale
      */
     public boolean couldBeTakenAsWork(WorkContainer<K, V> workContainer) {
         if (checkIfWorkIsStale(workContainer)) {

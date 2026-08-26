@@ -1,5 +1,9 @@
 # Polyglot demo app — ideation done, direction not yet chosen
 
+<!-- inflight-type: feature -->
+<!-- inflight-state: deferred - after v6, direction not yet chosen -->
+
+
 > Extracted from `origin/docs/ideate-polyglot-demo` @205ddacc1, `docs/inflight/branch-polyglot-demo-ideation.md`.
 
 Branch `docs/ideate-polyglot-demo` (off `feats/proxy-requirements`, astubbs#242) carries Part 2 of

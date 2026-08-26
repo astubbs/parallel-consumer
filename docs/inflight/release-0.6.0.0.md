@@ -1,5 +1,9 @@
 # Release 0.6.0.0
 
+<!-- inflight-type: register -->
+<!-- inflight-impact: release-gate -->
+
+
 **Tracking issue: astubbs#197.** That issue is the linkable handle - from PRs, from mirrors, from upstream
 comments. This file is the detail behind it. Keep them in step: if a blocker is resolved here, tick it
 there.
@@ -92,6 +96,36 @@ At release, when the changelog section is regenerated, check both survived into 
 generation reads the commit log, so they are only as findable as those commit bodies. The rename side
 of that same check is in [`release-0600-blockers.md`](release-0600-blockers.md).
 
+## Public API change landing with astubbs#204: the commit give-up exception
+
+Not a breaking change to a *subclass* surface like the two above - this one is visible to every user
+of `PERIODIC_CONSUMER_SYNC`, so it needs its own line in the notes.
+
+**`ConsumerManager.commitSync` no longer rethrows Kafka's bare `TimeoutException` /
+`SaslAuthenticationException` when a commit exhausts its budget.** It throws
+`OffsetCommitBudgetExceededException` (new, in the public `bz.stub.parallelconsumer` package,
+extending `ParallelConsumerException`) with the broker's exception as the **cause**. Anyone catching
+the Kafka type directly around PC's failure surface - `getFailureCause()`, or a supervisor wrapping
+PC - stops matching, and must catch the PC type or unwrap `getCause()`.
+
+Why it earns the break on a stability release: the bare Kafka exception can say a commit timed out
+but not *which of PC's options bounded it*, what that option's relationship to the consumer's own
+timeouts is, or what to do about it. That gap is the whole subject of astubbs#177 /
+confluentinc#833 - two reporters, neither of whom could tell from the message where to look. The new
+message names the budget that ran out, its configured value, the knob to raise, and - when only one
+attempt was made - that `offsetCommitTimeout` is below the consumer's `default.api.timeout.ms`
+(**60000ms** by default, verified in kafka-clients 3.9.2) so no retry was reachable at all.
+
+Two behaviour changes ship alongside it and belong in the same note, because a reader meeting one
+will ask about the others:
+
+- **`offsetCommitTimeout` now bounds the whole commit, not each attempt.** It was captured inside the
+  retry loop, so every attempt reset it and the loop could retry forever. This makes PC give up where
+  it previously hung. Matches Kafka's own two-level model, where `default.api.timeout.ms` bounds a
+  call *including* its retries.
+- **`saslAuthenticationRetryTimeout` is measured from the first SASL failure**, not from the start of
+  the commit call, so a slow commit no longer spends an unrelated option's budget.
+
 ## Release gate: no disabled tests
 
 **0.6.0.0 does not ship while any test is disabled.** Tests currently carrying `@Disabled`:
@@ -178,6 +212,26 @@ All four now exist as data. Each keeps its planning note, which holds the reason
   `docs/plans/2026-08-10-004-docs-feature-catalogue-plan.md`.
 
 What does not exist yet is the rendered documentation an agent generates from all of it.
+
+## 0.5.3.3 was never released, by anyone
+
+Worth knowing before writing release copy or triaging a mirror: **`0.5.3.3` exists as a changelog
+section and a tag, and was never published as an artifact.** Upstream's last release on Maven Central
+is `0.5.3.2`; it was abandoned before cutting 0.5.3.3, and this fork has published nothing yet. Check
+with a Maven Central search for `g:io.confluent.parallelconsumer` rather than trusting the changelog,
+which lists 0.5.3.3 like any other section.
+
+Two consequences:
+
+- **Anything labelled `fixed-in/0.5.3.3` is unreachable today.** No user can consume those fixes, so
+  0.6.0.0 is their first delivery - which is why astubbs#182, astubbs#184 and astubbs#188 all carry
+  the `0.6.0.0` label despite naming an earlier fix version. That combination looks like a mistake
+  and is not.
+- **A user on `io.confluent...:0.5.3.2` is further behind than the changelog suggests**, by a whole
+  section's worth of fixes they never had access to.
+
+This is specific to 0.5.3.3. Every other `fixed-in/0.5.x` label names a version that really shipped,
+and those fixes are already in users' hands.
 
 ## Do at release: one sweep over the upstream mirrors
 

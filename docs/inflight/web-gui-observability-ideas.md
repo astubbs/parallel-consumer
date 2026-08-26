@@ -1,5 +1,9 @@
 # Web GUI / demo: retry-queue visibility and making offset encoding's advantage obvious
 
+<!-- inflight-type: feature -->
+<!-- inflight-state: deferred - after v6, direction not yet chosen -->
+
+
 > Extracted from `origin/perf/192-offset-encoding-density` @2a31b0a74, `docs/inflight/web-gui-observability-ideas.md`.
 
 Two user-raised ideas for the demo/GUI surface, parked 2026-08-18. The web GUI lives on the

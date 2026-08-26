@@ -69,9 +69,15 @@ that line, leave it in the code - it will show up here.
 - todo move into {@link WorkManager} as it's specific to WM having enough work?
 - todo can sleep for less than this time? is this lower bound required? given that if we're starved - the failed work will most likely be selected? And even if not selected - then we will no longer be starved.
 
+**`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/ConsumerManager.java`**
+
+- TODO(refactor): a user-facing failure wants a PC-named type - see
+
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/ConsumerOffsetCommitter.java`**
 
 - todo keep work in limbo until async response is received?
+- TODO(refactor): a user-facing failure wants a PC-named type, not "internal runtime" -
+- TODO(refactor): a user-facing failure wants a PC-named type - see
 
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/DynamicLoadFactor.java`**
 

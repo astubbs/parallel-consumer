@@ -87,7 +87,7 @@ Add an adaptive concurrency mode to the core engine: when enabled, a controller 
 Deferred for later (recorded future directions, not v1):
 
 - Async engines (Vert.x/Reactor/Mutiny) - follow the async timing fix (early investigation, separate work).
-- Instance-count recommendation (dimension 2) - staged design lives in `docs/inflight/next-auto-scaling.md`.
+- Instance-count recommendation (dimension 2) - staged design lives in `docs/inflight/core-auto-scaling.md`.
 - Predictive scaling, both flavours: learned history (in-memory, best-effort first; external state optional later) and schedule-configured known events.
 - Any distributed coordination substrate (no Redis/quota tokens in v1).
 - The structured rate-limit exception API itself - separate deliverable; R5 only reserves its socket.
@@ -105,9 +105,9 @@ This plan owns the per-instance adaptive controller. The surrounding breakdown i
   - **Enables** per-service discovered ceilings (R5's third signal). **Can proceed independently** - it improves retry UX standalone.
 - astubbs#155 load-factor hardening
   - **Shares** the buffer/pressure arithmetic this controller must coexist with (R6). Recommended to address before or alongside this work.
-- Instance-count recommendation (dimension 2, `docs/inflight/next-auto-scaling.md`)
+- Instance-count recommendation (dimension 2, `docs/inflight/core-auto-scaling.md`)
   - **Depends on** this plan: an instance can only vote +1/0/-1 once it knows its own plateau.
-- Distributed throttling strategy menu (`docs/inflight/next-distributed-throttling.md`)
+- Distributed throttling strategy menu (`docs/inflight/core-distributed-throttling.md`)
   - **Shares** the min-composition ceiling model (KD6) and the future SPI shape. **Still to decide:** whether the throttle ships standalone or as a signal into this controller.
 
 ### Dependencies / Assumptions
@@ -129,7 +129,7 @@ Deferred to planning:
 ### Sources / Research
 
 - `docs/ideation/2026-08-17-distributed-throttling-ideation.html` - idea 8 and the verified code map (dispatch seam, deferral mechanics, metrics conventions).
-- `docs/inflight/next-auto-scaling.md` - staged two-dimension design, positioning, earmarks.
+- `docs/inflight/core-auto-scaling.md` - staged two-dimension design, positioning, earmarks.
 - astubbs#227 (confluentinc#21), astubbs#155 (confluentinc#402), confluentinc#766.
 - Prior prototypes (design references, bitrotted): `features/dynamic-concurrency-control` @6f85eac41 (Gradient2Limit/SimpleLimiter/BlockingAdaptiveExecutor wired as the pool; `parallel-consumer-core-auto-scale` module extraction begun) and `feature/auto-tuning-pressure` @f4aa09788; upstream draft PR confluentinc#22.
 - Netflix concurrency-limits (Gradient2/Vegas control laws) - the math to port, not the dependency.

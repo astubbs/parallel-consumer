@@ -38,6 +38,15 @@ class PCMetricsTest extends ParallelEoSStreamProcessorTestBase {
 
     @Test
     @SneakyThrows
+    @Quarantined(
+            reason = "Asserts PARTITION_LAST_COMMITTED_OFFSET equals a COMPLETION counter while the suite runs "
+                    + "UNORDERED. Commits are contiguous and bounded by the lowest incomplete offset; completions "
+                    + "are not ordered. Workers call latch.await() BEFORE counter.incrementAndGet(), so a latched "
+                    + "worker's offset never completes and the gap is PERMANENT - the 120s atMost cannot close it, "
+                    + "it only makes the failure expensive (140s burnt per CI run). It passes only when the latched "
+                    + "workers happen to hold the highest offsets, so a pass proves nothing: flapping = true.",
+            tracking = "docs/inflight/bug-pcmetrics-committed-offset-vs-completion-count.md",
+            flapping = true)
     void metricsRegisterBinding() {
         final int quantityP0 = 1000;
         final int quantityP1 = 500;

@@ -1,14 +1,21 @@
 # `bin/check-quarantine-owners.sh` reaches the network inside the reviewer's grant
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: security -->
+
+
 `bin/AGENTS.md` states the rule for the two granted prefixes: **do not give that prefix to a script
 that writes, publishes, deploys, or reaches the network beyond `gh` reads.** One script breaks it.
 
-`bin/check-quarantine-owners.sh` fetches twice and reads through `FETCH_HEAD`:
+`bin/check-quarantine-owners.sh` fetches twice - the owning PR's base, and its merge preview - and
+reads each through `FETCH_HEAD`:
 
 ```
-if ! git fetch --quiet --depth=1 origin "$base" 2>/dev/null; then
-if ! git fetch --quiet --depth=1 origin "pull/$pr/merge" 2>/dev/null; then
+git --git-dir="$scratch_dir/preview" fetch --quiet --depth=1 --no-tags "$ORIGIN_URL" "$1"
 ```
+
+(That fetch used to target the working clone, which re-shallowed every worktree of it; fixed by
+routing it into a throwaway git dir. The *network* reach this note is about is unchanged.)
 
 It carries the `check-` prefix, so `Bash(bin/check-*.sh:*)` grants it to the reviewer in both
 `.github/workflows/claude.yml` and `.github/workflows/claude-code-review-dispatch.yml` - a job

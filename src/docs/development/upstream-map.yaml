@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
 # =============================================================================
 # upstream-map.yaml  --  fork <-> upstream tracking cache (SOURCE OF TRUTH)
 # =============================================================================
@@ -61,27 +63,140 @@ last_swept: 2026-08-06
 upstream_repo: confluentinc/parallel-consumer
 fork_repo: astubbs/parallel-consumer
 
-# Upstream BRANCH tips reachable from nothing on this fork (no origin branch, no tag),
-# pinned as annotated tags 2026-08-17 -- the branch-tip counterpart of
-# sweep-2023-admin-closure.preserved_heads, which covers swept PR heads. Same contract:
-# SHAs recorded here so the containment check can be redone without re-querying
-# upstream; a missing tag, or one no longer pointing at its SHA, means the copy is
-# gone. Re-verify with:
-#   git ls-remote --tags origin 'archive/upstream-branch/*'
-# Deliberately excluded: 18 dependabot/renovate/chore bot branches (recreatable
-# version bumps, not work) and upstream/HEAD (duplicates master).
-preserved_branch_tips:
-  - {branch: 0.5.3.x, sha: c097a3745, tag: archive/upstream-branch/0.5.3.x}
-  - {branch: DP-12547, sha: 87cdcf48c, tag: archive/upstream-branch/DP-12547}
-  - {branch: PL-176/DontDrainIssue, sha: 4869ccf65, tag: archive/upstream-branch/PL-176/DontDrainIssue}
-  - {branch: correct-failing-license-check, sha: e8c6ff5fa, tag: archive/upstream-branch/correct-failing-license-check}
-  - {branch: docs/back-pressure, sha: 50cd1cf01, tag: archive/upstream-branch/docs/back-pressure}
-  - {branch: features/batching, sha: 7e2607560, tag: archive/upstream-branch/features/batching}
-  - {branch: master, sha: 9b582c246, tag: archive/upstream-branch/master}
-  - {branch: python-cd-pipeline, sha: c3796a2fd, tag: archive/upstream-branch/python-cd-pipeline}
-  - {branch: v0.5.2.x-dev, sha: 5f5de9154, tag: archive/upstream-branch/v0.5.2.x-dev}
-  - {branch: v0.6.x, sha: 58159a0b9, tag: archive/upstream-branch/v0.6.x}
-preserved_branch_tips_checked: 2026-08-17
+# =============================================================================
+# BRANCH ACCOUNTING
+#
+# WHY THIS SECTION EXISTS
+#   This is the record of what we decided about a branch, and it must OUTLIVE the
+#   branch. It also carries the tag pinning each preserved tip, absorbing two
+#   earlier records (see below). The failure it
+#   prevents is specific - a branch is reviewed, judged worthless and deleted,
+#   its only trace was itself, and the next audit re-finds the absence, cannot
+#   tell a deliberate deletion from an accident, and redoes the work.
+#
+#   So a deleted branch KEEPS its entry, with its tip, its date and its reason.
+#   `state: deleted` is the case this section exists for.
+#
+# WHAT NOT TO PUT HERE
+#   Nothing a command answers. Open PRs are `gh pr list`; merged-ness is
+#   `git branch --merged`. Record the judgement, not the state.
+#
+# FIELDS
+#   ref    branch name as it exists on `fork_repo` (or `<remote>:<name>` if not ours)
+#   tip    short SHA at the time of the decision
+#   state  mirrored | ours | archived | deleted
+#   deleted  ISO date, required when state is `deleted`; the `note` carries the why
+#   tag    the annotated tag pinning that SHA, when one exists
+#   pr     the upstream PR this tip is the head of, when it is one
+#   see    where the reasoning lives - an inflight note, astubbs#NN, confluentinc#NN
+#   note   one line, only when it says something the fields do not
+#
+# THIS IS THE ONLY BRANCH RECORD, deliberately. Two others existed and recorded
+# the SAME COMMITS under different framings: `preserved_branch_tips` (branch tips
+# pinned as tags) and `sweep-2023-admin-closure.preserved_heads` (swept PR heads
+# pinned as tags). Every one of those PR heads is the tip of an upstream branch -
+# confluentinc#443 and the `pyallel-consumer` tip were two names for one SHA - so
+# they are folded in here as the `tag` and `pr` fields. Do not re-split them: a
+# corrected SHA fixed in one copy while another still reads as authoritative is
+# the drift this consolidation removes.
+#
+# Tags are kept alongside the mirrored branches rather than replaced by them. A
+# branch can be deleted or force-moved; an annotated tag is the record that a
+# specific commit was deliberately preserved. Verify without fetching:
+#   git ls-remote --tags origin 'archive/*'
+#
+# ENFORCED by `bin/check-upstream-map.sh` (via `scripts/upstream-map.py validate`): ref present and
+# unique, state in the closed set, a `deleted` entry carries an ISO date, and `tip` is a STRING - an
+# all-digit SHA otherwise parses as an integer and never compares equal to `git rev-parse` output.
+# The tip is required only for `deleted` and `archived`, because for a live branch it is one command
+# away and this section records nothing a command answers.
+#
+# A fork receives branches ONCE, at creation, and never again. This one dates
+# from 2020-11-11, so nothing upstream created afterwards ever arrived. That is
+# why the `upstream/*` mirror below exists rather than being redundant.
+# =============================================================================
+
+branch_accounting_checked: 2026-08-20
+branch_accounting:
+
+  # --- upstream branches mirrored onto this fork 2026-08-20, tips verified ----
+  # Namespaced deliberately: eight share a name with one of ours carrying divergent
+  # work (master, 0.5.3.x, features/dynamic-concurrency-control, features/retry-exception,
+  # improvements/commit-command-actor, improvements/lambda-actor-bus,
+  # improvements/rebalance-messages, improvements/remove-static), so pushing under
+  # their own names would have overwritten our history. Re-derive rather than trusting
+  # the list: compare `git ls-remote --heads origin` against `--heads upstream` by name
+  # and tip.
+
+  - {ref: upstream/pyallel-consumer, tip: 4533f6d8d, state: mirrored, tag: archive/upstream-pr-443, pr: confluentinc#443, see: [confluentinc#443, confluentinc#539, astubbs#293, "docs/inflight/process-fork-branch-archaeology.md"],
+     note: "Prior Python client. The strongest prior art for the proxy work in astubbs#242, and unread. Its PR head is also pinned at archive/upstream-pr-443."}
+  - {ref: upstream/python-cd-pipeline, tip: c3796a2fd, state: mirrored, tag: archive/upstream-branch/python-cd-pipeline, see: [confluentinc#539],
+     note: "Publishing pipeline for the Python client above. Named in no document before this entry."}
+  - {ref: upstream/master, tip: 9b582c246, state: mirrored, tag: archive/upstream-branch/master, see: ["docs/inflight/process-fork-branch-archaeology.md"],
+     note: "Upstream master. Two commits we do not carry, both README notices - the maintenance notice and the link to this fork - so the divergence is benign."}
+  - {ref: upstream/features/dynamic-concurrency-control, tip: ba6b71f10, state: mirrored, tag: archive/upstream-pr-22, pr: confluentinc#22, see: [astubbs#227],
+     note: "The one upstream branch that predates our fork and is absent by name here only because OUR branch of the same name diverged under our own work. Not a deletion."}
+  - {ref: upstream/features/batching, tip: 7e2607560, state: mirrored, tag: archive/upstream-branch/features/batching, see: ["docs/inflight/branch-audit-orphans.md"],
+     note: "Batching shipped upstream separately; the tip may predate what landed."}
+  - {ref: upstream/PL-176/DontDrainIssue, tip: 4869ccf65, state: mirrored, tag: archive/upstream-branch/PL-176/DontDrainIssue, see: ["docs/inflight/branch-audit-orphans.md"],
+     note: "Name suggests real drain-behaviour work; unread."}
+  - {ref: upstream/docs/back-pressure, tip: 50cd1cf01, state: mirrored, tag: archive/upstream-branch/docs/back-pressure, see: [confluentinc#508],
+     note: "Back-pressure notes. confluentinc#508 was closed inside a dependabot batch on a CLA technicality, never judged on merits."}
+  - {ref: upstream/0.5.3.x, tip: c097a3745, state: mirrored, tag: archive/upstream-branch/0.5.3.x}
+  - {ref: upstream/v0.5.2.x-dev, tip: 5f5de9154, state: mirrored, tag: archive/upstream-branch/v0.5.2.x-dev}
+  - {ref: upstream/v0.6.x, tip: 58159a0b9, state: mirrored, tag: archive/upstream-branch/v0.6.x}
+  - {ref: upstream/v0.6.x-dev, tip: 60fd76d50, state: mirrored}
+  - {ref: upstream/improvements/vertx-vertical, tip: 02ab32894, state: mirrored, tag: archive/upstream-pr-204, pr: confluentinc#204}
+  - {ref: upstream/improvements/rebalance-messages, tip: 007ae0906, state: mirrored, tag: archive/upstream-pr-270, pr: confluentinc#270}
+  - {ref: upstream/improvements/remove-static, tip: 77a021ee1, state: mirrored, tag: archive/upstream-pr-405, pr: confluentinc#405}
+  - {ref: upstream/improvements/commit-command-actor, tip: 7e117a5ca, state: mirrored}
+  - {ref: upstream/improvements/lambda-actor-bus, tip: 96114737a, state: mirrored}
+  - {ref: upstream/improvements/package-restructure, tip: d86a87ef0, state: mirrored}
+  - {ref: upstream/improvements/transaction-docs, tip: b2be8dac7, state: mirrored}
+  - {ref: upstream/refactor/actor-base-fixes, tip: 09a13d070, state: mirrored}
+  - {ref: upstream/refactor/interface, tip: 400643c87, state: mirrored}
+  - {ref: upstream/features/retry-exception, tip: 1b087e554, state: mirrored}
+  - {ref: upstream/fix-charts, tip: 33d93af09, state: mirrored, tag: archive/upstream-pr-506, pr: confluentinc#506}
+  - {ref: upstream/DP-12547, tip: 87cdcf48c, state: mirrored, tag: archive/upstream-branch/DP-12547}
+  - {ref: upstream/correct-failing-license-check, tip: e8c6ff5fa, state: mirrored, tag: archive/upstream-branch/correct-failing-license-check}
+  - {ref: upstream/chore-service-bot-update, tip: "255916684", state: mirrored}
+  # --- deleted, deliberately, with the reasoning that made it safe --------------
+
+  # Each kept its own entry rather than one aggregate row: this section's contract is that a
+  # deleted branch keeps its TIP, and a glob in `ref` also defeats the ref-matching check the
+  # section exists to feed. Shared reasoning, stated once: mirrored 2026-08-20 and removed the
+  # same day once contents were checked - each was a single commit touching only pom.xml,
+  # bumping a dependency of UPSTREAM's tree, which has diverged from ours in both dependency set
+  # and package paths, so they would not apply here and will never merge upstream either. Not
+  # tagged, so upstream's copy is the last one; accepted, because a recreatable version bump is
+  # not work. The tips below make them addressable from upstream while it exists.
+  - {ref: upstream/dependabot/maven/junit.platform.version-6.0.0, tip: 9a25939d7, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/dependabot/maven/org.apache.maven.plugins-maven-gpg-plugin-3.2.8, tip: d38e3cc67, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/dependabot/maven/testcontainers.version-1.21.3, tip: 52540d9a1, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/dependabot/maven/vertx.version-5.0.5, tip: c1320b1f2, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/renovate/master-com.github.tomakehurst-wiremock-jre8-3.x, tip: 99e35fb7c, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/renovate/master-com.github.tomakehurst-wiremock-jre8-replacement, tip: f87d9e55a, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/renovate/master-io.smallrye.reactive-mutiny-3.x, tip: 2fa2a10c4, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/renovate/master-kafka.version, tip: 76a6a695f, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/renovate/master-logback.version, tip: cf4c4b59c, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/renovate/master-major-kafka, tip: 6d1fceb6e, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/renovate/master-major-testing-libraries, tip: 52d774b05, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/renovate/master-major-vertx.version, tip: 3f5a215a4, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/renovate/master-maven-org.assertj-assertj-core-vulnerability, tip: 78da8a5e7, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/renovate/master-maven-org.postgresql-postgresql-vulnerability, tip: ac48acadd, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/renovate/master-micrometer-core.version, tip: c37794713, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/renovate/master-minor+patch-dependencies, tip: 35608cae9, state: deleted, deleted: 2026-08-20, see: ["docs/inflight/process-fork-branch-archaeology.md"]}
+  - {ref: upstream/dependabot/maven/org.threeten-threeten-extra-1.8.0, tip: 5bbfea783, state: deleted, deleted: 2026-08-20,
+     see: ["docs/inflight/process-fork-branch-archaeology.md"],
+     note: "Recorded separately because it was NOT a bot branch despite the name. A maintainer pushed four commits onto it - semaphore CI java-home fix, missing licence headers, gitignore, and a master merge - on top of the threeten-extra bump. Read before deleting: the CI config is upstream's semaphore, which we do not use, and the licence headers are on io/confluent paths this fork renamed, so none of it applies here. Kept as its own entry because a prefix sweep would have taken human commits silently, which is the failure this whole section exists to prevent."}
+
+  # --- our own branches, where a decision exists that the branch does not -----
+
+  - {ref: presentation, tip: ffda9c6a3, state: deleted, deleted: 2026-08-26, tag: archive/presentation, see: ["docs/inflight/handoff-fork-branch-audit.md", "docs/inflight/process-fork-branch-archaeology.md"],
+     note: "Carried Demo.java, the code behind the asciinema cast embedded in the README. Unmerged since 2021 and named in no ledger - the branch that triggered the whole audit. Archived and deleted 2026-08-26. Not merged, because the code is demo-grade and its own commits say so - one records an unfixed data race under load. Not dropped either, because the README still embeds the cast it produced, so the source behind a published artefact stays recoverable: git show archive/presentation."}
+  - {ref: bugs/prod-tx-manager-retries, state: ours, see: ["docs/inflight/core-241-tx-commit-failure-taxonomy.md", confluentinc#144],
+     note: "Attached to sweep-2023-tx-failure-taxonomy, and the prototype to start from rather than the older tx-commit-failure branch. Verified 2026-08-20, closing the open question in branch-audit-orphans.md."}
+
 
 entries:
 
@@ -127,6 +242,39 @@ entries:
       confluentinc PR #548 addressed the same deadlock as (1) but is CLOSED
       (unmerged); related issue #541 now CLOSED. User still weighing a larger
       poll+control single-thread refactor to kill the whole bug class.
+
+  - id: bug-833-commit-response-timeout
+    group: rebalance-stability
+    summary: "\"Timeout waiting for commit response\" is a symptom of a dead broker-poll thread -- report the real cause"
+    fork:
+      branches: [test/177-commit-response-timeout]
+      prs: [204]
+      fork_issue: 177
+      status: merged
+    upstream:
+      repo: confluentinc/parallel-consumer
+      issues: [833]
+      prs: []
+      related: [857, 803, 809]
+      status: open
+      last_checked: 2026-08-20
+    adoc_anchor: part3-cat1-stability
+    notes: >
+      ON RELEASE, say on the mirror that the reported message itself CHANGES: anyone
+      searching for the old "Timeout waiting for commit response PT30S" string will not
+      match what the fixed version emits, and PT30S was never real anyway (see below).
+      Verified 2026-08-05 that #100/#108 do fix the reported
+      TRIGGER (a rebalance-time commit rejection killing the poll thread), and that
+      the fix is unreleased. But the misleading SYMPTOM was never addressed: every
+      other way of killing that thread still produced the same message, which names
+      neither the failing subsystem nor the failure. This work reports the poller's
+      real exception on the commit-failure path, corrects the timeout the message
+      quotes (it interpolated a hard-coded 30s constant regardless of configuration,
+      so the reporter's "PT30S" was meaningless), and makes
+      ConsumerManager.commitSync's retry budget cumulative rather than per-attempt --
+      it reset every attempt, so a permanently-failing commit retried forever instead
+      of surfacing, stranding the poll thread and producing the same symptom from the
+      broker-down direction.
 
   - id: bug-859-pcmetrics-leak
     group: metrics-observability
@@ -180,8 +328,8 @@ entries:
     group: rebalance-stability
     summary: Accurate committed offset on partition assignment (carried upstream PR)
     fork:
-      branches: [cherry-pick/893-offset-reset, upstream-pr-893]
-      prs: [57]
+      branches: [cherry-pick/893-offset-reset, upstream-pr-893, fix/121-offset-accuracy-on-assignment]
+      prs: [337]
       status: pr-open
     upstream:
       repo: confluentinc/parallel-consumer
@@ -217,21 +365,27 @@ entries:
     group: rebalance-stability
     summary: Replace stale work container on rebalance (regression test + carry)
     fork:
-      branches: [fix/909-stale-container-replacement, pr-909-temp]
+      branches: [fix/909-stale-container-replacement]
       prs: [31]
-      status: pr-open
+      status: merged
     upstream:
       repo: confluentinc/parallel-consumer
       prs: [909]
       status: open
-      last_checked: 2026-07-28
+      last_checked: 2026-08-19
     adoc_anchor: part1-group-a-correctness
     notes: >
       confluentinc PR #909 (cserspring) replaces stale containers rather than
-      rejecting new ones, preventing record drops on rebalance. Upstream PR had
-      no tests; fork work adds a regression test for stale container at the same
-      offset. High priority but wants tests before merge. Fork PR #31 is open
-      (draft) but targets master-confluent, which is why it read as "no PR".
+      rejecting new ones, preventing record drops on rebalance. Upstream PR had no
+      tests; the fork carry adds four, every one proven RED against the pre-fix
+      behaviour, one of them driving the defect through the real registration path
+      rather than around it. Fork PR #31 merged 2026-08-19, with cserspring's
+      authorship preserved on the fix commit; it also narrows both addWorkContainer
+      overloads to package-private and documents the three staleness checkpoints in
+      PartitionState#epochIsStale. A deterministic broker-level reproduction
+      (RegistrationRaceStaleResidentIT) followed in a separate PR; why chance-based
+      chaos load could never find the race is recorded in
+      docs/solutions/logic-errors/909-needs-a-saturated-pipeline-the-third-precondition-2026-08-19.md.
 
   - id: java-17-baseline-kafka4
     group: java-baseline-kafka4
@@ -239,7 +393,6 @@ entries:
     fork:
       branches: [feat/java-17-baseline]
       prs: [53]
-      fork_issue: 181
       status: in-progress
     upstream:
       repo: confluentinc/parallel-consumer
@@ -251,7 +404,10 @@ entries:
       0.7.x line. The only reason to move off Java 8 is Kafka 4 (kafka-clients
       4.x require Java 11 -- target baseline Java 11). PR #53 is a DRAFT holding
       a provisional Jabel-removed / release=17 state plus Kafka 4 research docs.
-      Addresses confluentinc#862 (cannot run on Java 24). confluentinc PR #866 bumps
+      Does NOT address confluentinc#862 (cannot run on Java 24) - that is a runtime
+      question about what the shipped Java 8 jar can run on, settled by kafka-clients
+      3.9.1, and it is owned by java-24-security-manager-removal. The two only look
+      alike because both say "Java". confluentinc PR #866 bumps
       Kafka to v4 (NOTE: .adoc previously said v7 -- stale). confluentinc PR #920
       (found by the 2026-07-28 sweep) documents the JDK 17 build requirement +
       Jabel Java 8 bytecode -- overlaps our Java-baseline framing; compare before
@@ -271,9 +427,15 @@ entries:
     group: features
     summary: Support Virtual Threads (JDK 21+); synchronized -> ReentrantLock
     fork: {branches: [], prs: [], status: none}
-    upstream: {repo: confluentinc/parallel-consumer, issues: [896, 862, 78], prs: [908], related: [299], status: open, last_checked: 2026-07-28}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [896, 78], prs: [908], related: [299, 862], status: open, last_checked: 2026-08-20}
     adoc_anchor: part1-group-b-features
-    notes: Sequence behind the Java baseline branch; ReentrantLock migration may also help #862.
+    notes: >
+      Sequence behind the Java baseline branch. The earlier claim that the ReentrantLock
+      migration may also help confluentinc#862 is REFUTED (2026-08-20): this PR removes
+      virtual-thread pinning on synchronized, JDK 24 removed pinning anyway, and
+      confluentinc#862 was a kafka-clients SASL callback calling a Subject API that the
+      JDK withdrew. Different mechanism entirely. Fork PR astubbs#51 carries this work and
+      neither blocks nor closes astubbs#181. See java-24-security-manager-removal.
 
   - id: upstream-pr-866-kafka-v4
     group: deps-major
@@ -368,8 +530,8 @@ entries:
   # upstream's own refs/pull/<n>/head - it did not ask whether anything on THIS fork contained
   # them. The 2026-08-14 containment re-check asked that, and split the cohort: 29 are contained
   # by some origin/* branch here, and SIX are contained by no fork ref at all. Those six - not
-  # the whole cohort - are what the archive tags exist for (see preserved_heads below, and
-  # docs/upstream.md). Being contained by a fork branch is not the same as being raised from
+  # the whole cohort - are what the archive tags exist for (their tag and SHA are on the
+  # matching `branch_accounting` entries above, and the method is in docs/upstream.md). Being contained by a fork branch is not the same as being raised from
   # one, and is not permanent: deleting that branch re-orphans the head. Cite branch + SHA, not
   # just the PR number - and re-run the containment check rather than trusting this note, which
   # is a snapshot.
@@ -389,20 +551,8 @@ entries:
     fork: {branches: [docs/mirror-2023-admin-sweep], prs: [258], fork_issues: [227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254], status: pr-open}
     upstream: {repo: confluentinc/parallel-consumer, issues: [21, 24, 28, 29, 34, 40, 41, 48, 49, 50, 53, 57, 65, 119, 144, 154, 175, 183, 187, 191, 199, 203, 205, 246, 267, 319, 320, 372], prs: [22, 45, 46, 81, 106, 143, 179, 181, 204, 220, 270, 271, 291, 300, 303, 316, 325, 345, 346, 356, 366, 390, 405, 408, 441, 442, 443, 464, 473, 488, 492, 494, 496, 506, 524], status: closed, last_checked: 2026-08-07}
     adoc_anchor: null
-    # Swept PR heads that no ref on this fork contained, checked 2026-08-14. Pinned as
-    # annotated tags so they survive loss of the upstream branch or repository. The SHAs
-    # are recorded here, not only the PR numbers, so the containment check can be redone
-    # without re-querying upstream. Re-verify with:
-    #   git ls-remote --tags origin 'archive/upstream-pr-*'
-    # A missing tag, or one no longer pointing at the SHA below, means the copy is gone.
-    preserved_heads:
-      - {pr: 22, sha: ba6b71f10, tag: archive/upstream-pr-22}
-      - {pr: 204, sha: 02ab32894, tag: archive/upstream-pr-204}
-      - {pr: 270, sha: 007ae0906, tag: archive/upstream-pr-270}
-      - {pr: 405, sha: 77a021ee1, tag: archive/upstream-pr-405}
-      - {pr: 443, sha: 4533f6d8d, tag: archive/upstream-pr-443}
-      - {pr: 506, sha: 33d93af09, tag: archive/upstream-pr-506}
-    preserved_heads_checked: 2026-08-14
+    # Swept PR heads are pinned as archive/upstream-pr-* tags; the tag/SHA record lives
+    # once, in `branch_accounting` above, keyed by the branch whose tip each one is.
     notes: >
       Meta-entry for the cohort; the individual work items follow. All 28 issues were
       re-read in full (bodies + all 58 comments) and each verified against fork
@@ -580,18 +730,30 @@ entries:
 
   - id: sweep-2023-tx-failure-taxonomy
     group: rebalance-stability
-    summary: ProducerManager retries every transaction commit failure identically
-    fork: {branches: [tx-commit-failure], prs: [], fork_issues: [241], status: none}
-    upstream: {repo: confluentinc/parallel-consumer, issues: [144], prs: [], related: [112], status: closed, last_checked: 2026-08-07}
+    summary: Transaction commit failures are classified, but not by Kafka's own taxonomy and with no budget
+    fork: {branches: [bugs/prod-tx-manager-retries, tx-commit-failure], prs: [], fork_issues: [241], status: none}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [144], prs: [355], related: [112], status: closed, last_checked: 2026-08-20}
     adoc_anchor: null
     notes: >
-      commitOffsets still has one generic loop bounded by a constant literally named
-      arbitrarilyChosenLimitForArbitraryErrorSituation. ProducerFencedException is
-      singled out and rethrown; the rest (IllegalState, UnsupportedVersion,
-      Authorization, Kafka, Timeout, Interrupt) are undifferentiated despite having
-      different fatality. Design together with fork issue #225 (fencing should abort
-      and rejoin like Kafka Streams' TaskMigratedException) -- both are about giving
-      transaction failures a taxonomy. Upstream ideas on astubbs:tx-commit-failure.
+      SUPERSEDED PREMISE - both the issue and this entry's earlier note claimed one
+      generic retry loop treating every failure identically. That has been false since
+      confluentinc#355 (2022-09-29) replaced catch(Exception) with
+      catch(TimeoutException | InterruptException) plus a classifying comment block;
+      everything else now fails fast. What is genuinely open: the retry set contradicts
+      Kafka's own marker in both directions (TimeoutException IS a RetriableException,
+      InterruptException is NOT and is retried anyway without honouring the interrupt);
+      arbitrarilyChosenLimitForArbitraryErrorSituation is a count rather than a time
+      budget, and astubbs#204's offsetCommitTimeout covers only the consumer path, so
+      transactional mode has no user-visible commit budget; the retry arm can set
+      committed = true without having committed; and nothing tests any of it in any
+      module. Fencing also reaches the supervisor by two routes with two types - wrapped
+      InternalRuntimeException from sendOffsetsToTransaction but RAW from
+      commitTransaction - and astubbs#225 knows only the first. Start from
+      bugs/prod-tx-manager-retries (RetrySettings/FailureReaction, PCCommitFailedException,
+      PCTimeoutException), NOT tx-commit-failure, which is a 2021 WIP superseded by
+      confluentinc#355. That resolves the verify-before-attaching question in
+      docs/inflight/branch-audit-orphans.md: it attaches. Design with astubbs#225 and
+      astubbs#317. Detail in docs/inflight/core-241-tx-commit-failure-taxonomy.md.
 
   - id: sweep-2023-broker-disconnect-commit
     group: rebalance-stability
@@ -656,7 +818,7 @@ entries:
       (draft PR #22 @ba6b71f10 -- NB that SHA is the UPSTREAM branch tip; the fork's
       same-named branch features/dynamic-concurrency-control @6f85eac41 has DIVERGED
       from it and the upstream side is not preserved on origin -- see
-      docs/inflight/next-branch-audit-orphans.md). #24 distributed rate limiting: note internal.RateLimiter
+      docs/inflight/branch-audit-orphans.md). #24 distributed rate limiting: note internal.RateLimiter
       is unrelated (throttles status logging in tests). #119 Connect: reporter offered
       to do the work and was told there was no demand; maintainer later had working
       hacks both directions and judged "Connect sinks inside PC" publishable -- that
@@ -686,3 +848,220 @@ entries:
       invasive form. #199 is largely satisfied: failFast(String, Callable) is used
       across the suite, only the reason-from-failure-cause form is missing; check
       current Awaitility before starting.
+
+  # ---------------------------------------------------------------------------
+  # THE 2026-08-20 MIRROR TRIAGE COHORT
+  #
+  # Ten open `upstream-mirror` issues that had never been assessed against the
+  # fork's own tree. They were not untriaged: each carried a `## Fork status`
+  # section written when it was mirrored, and that section - not this file and
+  # not the .adoc - was where the only existing judgement lived. The triage
+  # verified those sections against HEAD. Most had drifted, several were wrong,
+  # and three verdicts in `upstream-pr-analysis.adoc` were refuted outright.
+  #
+  # Each entry below points at a note in `docs/inflight/` carrying the detail,
+  # the draft reporter-facing answer, and the decision awaiting a maintainer.
+  # ---------------------------------------------------------------------------
+
+  - id: batch-failure-granularity
+    group: features
+    summary: A poison record re-forms the identical batch on every retry; no per-record failure attribution
+    fork: {branches: [], prs: [], fork_issue: 189, status: none}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [887], prs: [], related: [266, 310, 196, 65], status: open, last_checked: 2026-08-20}
+    adoc_anchor: part1-group-b-features
+    notes: >
+      One user function failure marks every container in the batch failed, and because
+      shard selection is offset-ordered and the retry delay is a flat constant with no
+      jitter, the identical batch re-forms every second forever. There is no retry
+      ceiling, so the innocent records are re-executed indefinitely with their side
+      effects. runUserFunctionInternal declares intermediateResults, comments that it
+      captures each result against the input record, and never populates it, so batch
+      atomicity is an unfinished feature rather than a design invariant. The design
+      already exists in the 2026-08-17 batching ideation as a three-rung ladder
+      (retry jitter, poison-batch bisection, per-record manifest); only the first rung
+      needs a maintainer decision, because it changes retry timing for every existing
+      deployment. Detail in docs/inflight/core-189-batch-failure-granularity.md.
+
+  - id: java-24-security-manager-removal
+    group: deps-major
+    summary: Java 24 breakage was in kafka-clients, not in PC, and this tree is already past it
+    fork: {branches: [], prs: [], fork_issue: 181, status: merged}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [862], prs: [], related: [908, 920], status: open, last_checked: 2026-08-20}
+    adoc_anchor: part3-cat5-jdk
+    notes: >
+      REFUTES the .adoc's "confluentinc PR #908 may help". That PR migrates synchronized
+      to ReentrantLock for virtual-thread pinning, and JDK 24 removed pinning anyway, so
+      it is a different mechanism entirely. The real break: kafka-clients up to 3.9.0
+      calls Subject.getSubject(AccessController.getContext()) from its SASL callback
+      handlers. JDK 23 makes that throw unless a security manager is allowed, and JDK 24
+      removes that escape hatch, which is why the reporter drew the line at 24. Fixed in
+      kafka-clients 3.9.1 by KAFKA-19024; this tree is on 3.9.2. No main-code reference
+      to SecurityManager, AccessController, doPrivileged or sun.misc.Unsafe exists in any
+      module. Verified on a workstation only, and a MockConsumer cannot exercise SASL,
+      which is the one path that ever broke. Distinct from pr-53-java-baseline-kafka4,
+      which is about the build baseline for Kafka 4 rather than what the shipped Java 8
+      jar can run on. CI has no lane above Java 17 (astubbs#128, confluentinc#103), so
+      the claim is not yet publishable. Detail in docs/inflight/deps-181-java-24-compatibility.md.
+
+  - id: key-order-across-rebalance
+    group: rebalance-stability
+    summary: Same key on two worker threads across a rebalance - contract question plus a missing detector
+    fork: {branches: [], prs: [], fork_issue: 178, status: none}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [843], prs: [], related: [777, 909, 893, 623], status: open, last_checked: 2026-08-20}
+    adoc_anchor: part3-cat2-correctness
+    notes: >
+      REFUTES the .adoc's "confluentinc PR #909 likely root cause", on two independent
+      terms. Consequence: the confluentinc#909 defect DROPS the fresh container and
+      wedges the offset, which is loss and stall rather than duplication - astubbs#322's
+      reproduction counts lost records and no duplicates. Precondition: it needs a
+      rebalance landing inside the registration loop, and the reporter denies any
+      rebalance in the window. confluentinc#893 falls the same way. The triage did find
+      the one inspected route to the reported symptom, and it is rebalance-gated:
+      ProcessingShard.removeStaleWorkContainersFromShard tests staleness without
+      checking isInFlight, and PC does not drain on revoke, so a redelivered record can
+      execute concurrently with the still-running old-epoch one. Present in 0.5.3.0 via
+      confluentinc#623, not fork-introduced. The chaos suite's KeyOrderLedger would catch
+      it except its window key includes the epoch, so a cross-epoch overlap passes.
+      Blocked on a maintainer ruling on the KEY-ordering contract across a rebalance.
+      Detail in docs/inflight/core-178-key-order-across-a-rebalance.md.
+
+  - id: bug-809-commit-timeout-close-path-zombie
+    group: rebalance-stability
+    summary: Sporadic commit-response timeouts that then fail to close - state stays RUNNING with dead control threads
+    fork: {branches: [], prs: [100, 108, 204], fork_issue: 175, status: merged}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [809], prs: [818, 819], related: [833, 857, 803], status: open, last_checked: 2026-08-20}
+    adoc_anchor: part3-cat1-stability
+    notes: >
+      NOT a duplicate of confluentinc#833 despite the shared message, so the .adoc's
+      "investigate together" is right but its "same defect" reading is not.
+      confluentinc#833 exits; confluentinc#809's headline stack is the close path and it
+      fails to exit, leaving state RUNNING and isClosedOrFailed false with nothing for a
+      liveness probe to read. That half was fixed upstream by confluentinc#818 and is
+      already carried here - AbstractParallelEoSStreamProcessor's doClose still names the
+      issue in a comment. The poll-thread death is astubbs#108's CommitFailedException
+      arm, NOT astubbs#100's RebalanceInProgressException, so the mirror body credits the
+      wrong PR. astubbs#204 fixed the per-attempt retry budget introduced by
+      confluentinc#819, which the mirror cites as a partial fix for this same issue.
+      Remaining strand is the AB-BA wedge, astubbs#29. Nothing anywhere tests the
+      confluentinc#818 close-state guarantee, which arrived as a finally block.
+      Detail in docs/inflight/upstream-175-sporadic-commit-timeouts.md.
+
+  - id: bug-777-revocation-duplicates
+    group: rebalance-stability
+    summary: In-flight work at revocation is redelivered - at-least-once by design, not a defect
+    fork: {branches: [], prs: [], fork_issue: 173, status: none}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [777], prs: [], related: [857, 843, 893, 909], status: open, last_checked: 2026-08-20}
+    adoc_anchor: part3-cat2-correctness
+    notes: >
+      THE .adoc IS WRONG ABOUT THIS ONE, in three places (ranking row 6, the category 2
+      verdict, and the cross-reference matrix): "Fixed by merging confluentinc PR #893 +
+      #909". confluentinc#909 is already merged here as astubbs#31 and the behaviour is
+      unchanged - WorkManager.handleFutureResult still drops a result whose partition
+      moved, which is the reporter's step 3 verbatim. confluentinc#893 fixes a commit
+      running AHEAD of completion; this is the opposite shape, where the committed offset
+      is already correct and redelivery follows from that correctness. Upstream's own
+      maintainer answered in 2024-05, before either PR existed, that in-flight
+      reprocessing is expected and a real fix needs partition-scoped submission
+      suppression plus revoked-partition in-flight tracking.
+      DO NOT CLOSE confluentinc#777 WHEN astubbs#57 MERGES.
+      The mitigation is measured and it is not the obvious one: over 250,000 records,
+      eager assignment with no drain gives roughly six times the duplicates of
+      cooperative, while draining is second-order, because eager revokes every partition
+      from every member so the abandoned work was never the leaver's to drain. No
+      user-facing doc says this. astubbs#29's tryCommitOffsetsOnRevoke skips the
+      revocation commit under lock contention by design, so it moves this symptom the
+      wrong way. Detail in docs/inflight/upstream-173-revocation-duplicate-processing.md.
+
+  - id: serde-error-handling-poll-path
+    group: features
+    summary: No handler for a deserialization failure out of consumer.poll() - a poison record kills the instance
+    fork: {branches: [], prs: [], fork_issues: [163, 148, 153], status: none}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [550, 304, 391], prs: [], related: [195, 310, 718], status: open, last_checked: 2026-08-20}
+    adoc_anchor: null
+    notes: >
+      Distinct from sweep-2023-retry-lifecycle, and the distinction is load-bearing: a
+      record that fails to deserialize never becomes a WorkContainer, so no max-retry,
+      terminal-exception or DLQ trigger can ever fire on it. The DLQ brainstorm
+      (astubbs#313) files these under adjacent demand and its open question 6 asks
+      whether they ride along - on the mechanism they cannot, so answering that question
+      yes would settle live requirements work on a false premise. The contained fix is
+      also smaller than the mirror bodies suggest: a typed poll-error seam already exists
+      in ConsumerManager (a bounded SaslAuthenticationException retry, a WakeupException
+      catch), so a deserialization policy is a third arm of it rather than new
+      architecture. Nothing in any module, main or test, mentions SerializationException
+      or RecordDeserializationException. Detail in
+      docs/inflight/core-163-poll-path-has-no-error-seam.md.
+
+  - id: bug-546-bootstrap-truncation-warning
+    group: rebalance-stability
+    summary: The "Truncating state" warning on assignment - three defects behind one string, only one of them fixed
+    fork: {branches: [], prs: [], fork_issue: 162, status: none}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [546], prs: [563], related: [489, 545], status: open, last_checked: 2026-08-20}
+    adoc_anchor: null
+    notes: >
+      confluentinc PR #563 (RunLength decode returning base offset 0 after a no-progress
+      commit) is ALREADY IN this tree, guarded in OffsetRunLength and recorded in the
+      changelog. It does not close the issue: users reported the same warning on 0.5.2.7,
+      after that fix shipped, which is the most important fact in the upstream thread and
+      is absent from the mirror body. Two paths remain at HEAD. First,
+      PartitionState.maybeTruncateBelowOrAbove never checks whether commit data existed,
+      so a partition with no committed offset reports expecting 0 from loaded commit data
+      and truncates nothing - also the landing point for astubbs#217's metadata-decode
+      recovery, so a normal new consumer group gets a false warning. Second, the
+      below-expected reset branch was never diagnosed upstream; the untested hypothesis
+      is a commit and position read race at cooperative handoff. Neither is covered by
+      any test - nothing in the tree asserts on the warning at all. astubbs#106,
+      astubbs#306 and astubbs#207 touch this code and address neither. Detail in
+      docs/inflight/bug-162-offset-state-truncation.md.
+
+  - id: reactor-scheduler-rationale
+    group: features
+    summary: Reactor module's subscribeOn hop is deliberate, the opt-out exists, and none of it is documented
+    fork: {branches: [], prs: [303], fork_issue: 161, status: none}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [543, 793], prs: [798], related: [], status: mixed, last_checked: 2026-08-20}
+    adoc_anchor: null
+    notes: >
+      Half was already fixed: confluentinc#798 (fixing confluentinc#793, released
+      upstream in 0.5.3.0 and carried here) deleted the publishOn, leaving one
+      subscribeOn. The remaining hop is deliberate, but NOT for the reason the mirror
+      body gives - it says the Scheduler moves the user function off the control thread,
+      and it never was on the control thread. ExternalEngine.setupWorkerPool pins the
+      module to a single dispatch thread, so blocking before the publisher is returned
+      serialises dispatch of all in-flight work, which is a stronger reason to keep the
+      hop than the body gives. The opt-out already exists: the Supplier of Scheduler
+      constructor accepts Schedulers immediate. Undocumented everywhere - the word
+      scheduler appears nowhere in the README or its template. astubbs#303 covers most of
+      it in a per-module README but not the opt-out, so that sentence should land there
+      while the PR is open. Two unrecorded code findings ride along: the supplier is
+      resolved per work item rather than once (MutinyProcessor already does this
+      correctly), so a caller passing a factory leaks schedulers and their threads per
+      batch; and the two-argument constructor has no test.
+      Detail in docs/inflight/upstream-161-reactor-scheduler-rationale.md.
+
+  - id: api-thread-safety-contract
+    group: features
+    summary: Public API has no per-method thread-safety contract, and the run-state machine is unsafe from user threads
+    fork: {branches: [], prs: [226, 267, 268, 51], fork_issue: 139, status: in-progress}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [186], prs: [346], related: [187, 191, 200, 520, 908], status: mixed, last_checked: 2026-08-20}
+    adoc_anchor: null
+    notes: >
+      Split out of sweep-2023-consumer-api-exposure, which owns the FEATURE half
+      (exposing Consumer APIs safely, fork mirror astubbs#158). This entry owns the
+      BLOCKER half: the existing surface has no stated thread contract, so nothing can
+      clear the label. confluentinc#186 has zero substantive comments upstream, meaning
+      the mirror body is the only analysis that has ever existed. Live at HEAD: the state
+      field is non-volatile while pauseIfRunning, resumeIfPaused and close write it from
+      user threads and the control loop spins on it, so a pause racing a close can write
+      PAUSED over CLOSING; addLoopEndCallBack registers onto a plain ArrayList walked
+      every control pass; setLongPollTimeout is an instance method writing a static, so
+      one instance changes every instance in the JVM; and RetryQueue's javadoc claims
+      thread safety while size and isEmpty read a plain HashMap unlocked. Refuted
+      prediction worth recording: workRemaining, getFailureCause and getPausedPartitionSize
+      are all safe. astubbs#226 fixes visibility but not atomicity, astubbs#267 fixes the
+      listeners, astubbs#268 is the worked example of marshalling reads onto the control
+      thread, and astubbs#51 converts synchronized to ReentrantLock in the same class and
+      collides with all three - so the maintainer decision that unblocks everything is
+      which lock primitive wins, and in what merge order. confluentinc#346 is a design
+      reference for the subscribe half only, not a cherry-pick: closed unmerged, on
+      pre-rename packages, and predating the fork's actor work.
+      Done-definition in docs/inflight/core-139-public-api-thread-safety-contract.md.

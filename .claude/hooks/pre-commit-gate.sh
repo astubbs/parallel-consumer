@@ -81,6 +81,27 @@ if python3 - "$payload_file" <<'PYGATE'
 import json, re, shlex, sys
 
 OPERATORS = {"&&", "||", ";", ";;", "|", "&", "(", ")"}
+# An unquoted NEWLINE separates statements exactly like `;`, but shlex's default whitespace
+# swallows it - no token, no reset - so `at_command` carried over from wherever the previous line
+# left it and `git add -A<newline>git commit -m wip` counted ZERO commits: an ordinary two-line
+# payload silently exempted (found by review on this same PR). The lexer below therefore treats
+# `\n` as a punctuation char instead, and this predicate recognises the runs shlex gloms together
+# (a bare "\n", ";\n\n", "&&\n") which have no canonical spelling OPERATORS could enumerate.
+SEPARATOR_CHARS = set(";&|()\n")
+
+
+def is_separator(token):
+    return token in OPERATORS or ("\n" in token and set(token) <= SEPARATOR_CHARS)
+
+
+
+# Shell RESERVED WORDS that are FOLLOWED BY ANOTHER COMMAND, so command position survives them.
+# Without these, `if ok; then git commit -m x; fi` counted zero commits: `then` is not an operator,
+# so it consumed the command position and the commit behind it was invisible. That was harmless
+# while zero commits meant "run the gate anyway", and became a hole the moment zero commits meant
+# "skip" - see the exit-0 branch below. Recognised only when the word is ITSELF in command
+# position, so `echo do git commit` stays text rather than becoming a commit.
+COMMAND_INTRODUCERS = {"if", "then", "elif", "else", "while", "until", "do", "{", "!", "time"}
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 GIT_VALUE_FLAGS = {"-C", "-c", "--git-dir", "--work-tree"}
 
@@ -99,19 +120,31 @@ def commit_bypass_counts(line):
     `git commit -m first; git commit --no-verify -m second` used to exit 0 for both, so in a clone
     with no core.hooksPath the first commit landed with no gate run at all.
     """
-    lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+    # `\n` joins the default punctuation set and leaves `whitespace`, so a newline becomes a
+    # TOKEN the loop can reset command position on - see SEPARATOR_CHARS above. Quoted newlines
+    # are unaffected: quoting is resolved before either classification applies.
+    lexer = shlex.shlex(line, posix=True, punctuation_chars="();<>|&;\n")
+    lexer.whitespace = " \t\r"
     lexer.whitespace_split = True
     tokens = list(lexer)
     commits = bypassing = 0
     i, at_command = 0, True
     while i < len(tokens):
         token = tokens[i]
-        if token in OPERATORS:
+        if is_separator(token):
             at_command = True
             i += 1
             continue
-        if at_command and ASSIGNMENT.match(token):
+        if at_command and (token in COMMAND_INTRODUCERS or ASSIGNMENT.match(token)):
             i += 1
+            continue             # a reserved word or a var assignment; the command is still ahead
+        if at_command and token == "function":
+            # `function NAME { body; }`: the token after the keyword is the function's NAME, never
+            # a command, so skip both and leave command position OPEN for the `{` introducer (or
+            # the `()` operators) that follows. Without this the name consumed the position and the
+            # body's commits were invisible - the `foo() { ... }` spelling was only ever caught
+            # because its bare `()` are operator tokens that happen to reopen position.
+            i += 2
             continue
         if at_command and (token == "git" or token.endswith("/git")):
             j = i + 1
@@ -119,7 +152,7 @@ def commit_bypass_counts(line):
                 j += 2               # git global flags that consume a value
             if j < len(tokens) and tokens[j] == "commit":
                 end = j
-                while end < len(tokens) and tokens[end] not in OPERATORS:
+                while end < len(tokens) and not is_separator(tokens[end]):
                     end += 1
                 commits += 1
                 if "--no-verify" in tokens[j:end]:
@@ -138,8 +171,13 @@ try:
     # `--no-verify` in the MESSAGE TEXT - which meant `git commit -m "...\n--no-verify\n..."`
     # skipped the gate entirely. shlex handles the newlines; the line split never needed to.
     commits, bypassing = commit_bypass_counts(cmd)
-    # EVERY commit in the payload must ask for it. One that did not is gated, so the gate runs.
-    bypass = commits > 0 and commits == bypassing
+    # NO COMMIT AT ALL: skip. The registration's `if: Bash(git commit *)` is supposed to scope
+    # this hook, but the script must not lean on it - observed live (astubbs#324 babysit): with
+    # the gate red, a plain `ls` and a read-only `cat` of the gate itself were blocked with the
+    # gate's own error, because "no commit found" fell into "run the gate". Every other hook in
+    # this directory self-filters; this one does too.
+    # OTHERWISE every commit in the payload must ask for the bypass. One that did not is gated.
+    bypass = commits == 0 or commits == bypassing
 except ValueError:
     # Genuinely unbalanced quoting. Fail OPEN so a hook bug cannot jam the tool call shut, but do
     # not try to read the flag out of text we could not lex.

@@ -1,23 +1,87 @@
 # Flakes CI was hiding, none of them tracked when found
 
+<!-- inflight-type: register -->
+<!-- inflight-impact: misdirection -->
+
 Found 2026-08-07 by scanning surefire `Flakes:` markers across the 45 most recent CI runs (Integration
 and Unit lanes). 8 of 45 runs carried markers. None of these tests appear in any ledger.
 
 The retry that hid them is gone - that half is done and written up in
 [`docs/solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md`](../solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md),
-which also has the scan method. What is open is the tests themselves - one of the scan's three, plus
-one met later. The other two are fixed and out of this ledger (astubbs#260 and astubbs#265); where
-their diagnoses generalised, the rule is in [`docs/solutions/`](../solutions/).
+which also has the scan method. What is open is the tests themselves - the ones met after it. All
+three the scan found are fixed and out of this ledger: astubbs#260,
+astubbs#265, and `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing`
+(4/45, the most frequent), which asserted an offset that back pressure exists to stop advancing -
+written up in
+[`back-pressure-freezes-the-frontier-the-test-asserted-2026-08-24.md`](../solutions/test-flakiness/back-pressure-freezes-the-frontier-the-test-asserted-2026-08-24.md).
+Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutions/).
 
 | Test | Rate | Why it is worth attention |
 |---|---|---|
-| `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` | 4/45 | The most frequent. UNDIAGNOSED but quarantined by explicit rule-1 exception - see below. Backpressure area - compare `vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`, a *different* class in the same area, so rule it in or out rather than assuming |
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. Mechanism known and owned (astubbs#262), quarantined - see below |
-| `ReactorBatchTest.simpleBatchTest(ProcessingOrder)[3]` | 1 seen (2026-08-18) | Not from the original scan - found while babysitting astubbs#308 (docs-only branch, head `d930ca98d`). Awaitility `ConditionTimeout`, alias 'expected number of batches' (30s), in the shared `BatchTestMethods` lambda; passed on re-run at `bb5799df0`. UNDIAGNOSED - classify (contention vs product) before touching |
+| `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 3 seen (2026-08-18, 2026-08-19, 2026-08-25) | Not from the original scan - each found while babysitting a branch carrying **no main Java**. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third sighting carries the failing batch contents and they point at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
 
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
 door, and for the same reason: two of that family turned out to be real product bugs, and the third
 was neither tight nor a stall but a test that could not force its own trigger.
+
+### `simpleBatchTest` - three modules, one shared helper, and a lead nobody has tested
+
+2026-08-18 it was `ReactorBatchTest`. 2026-08-19 it was `MutinyBatchTest`, on
+astubbs/parallel-consumer#320 - and the failure is the same one, not a similar one: the alias, the
+30-second timeout and the lambda all come from `BatchTestMethods` in **core**, which both wrapper
+modules drive. One sighting looked like a Reactor flake. Two, in different modules, means the
+Reactor and Mutiny wrappers are not the variable.
+
+The 2026-08-19 assertion is the useful part, because it is off by exactly one in the direction that
+matters: **`Expected size: 3 but was: 4`** - grep `BatchTestMethods` for `expected number of
+batches`. The test received the right records in one batch too many, so this is a batch-BOUNDARY
+question, not a lost-work question. Two readings, and they need separating rather than assuming:
+
+- **Contention.** The runner is slow or loaded, so work arrives spread out and the batcher closes a
+  batch early. Test-side, and the honest fix is making the test drive the boundary it asserts
+  instead of racing it.
+- **Product.** The batcher can split a batch under a timing the library is supposed to tolerate,
+  in which case an over-eager boundary is a real defect and the test is right to complain.
+
+**No sighting is on a branch whose diff contains main Java**, which is what rules out "a PR broke
+it" and makes it master state - the same reasoning applied to `ProducerManagerTest` below. That is
+also why none was quarantined on the branch that met it: quarantine is master-state and needs a
+diagnosis, and no sighting has one.
+
+The 2026-08-18 sighting passed on re-run, and so did the 2026-08-25 one - three consecutive clean
+re-runs of the same test, so **1 failure in 4 local runs, not deterministic**. A re-run is diagnosis
+here, not a way to go green - it distinguishes flaky from deterministic - and AGENTS.md's ban is on
+the automatic `surefire.rerunFailingTestsCount` that hid this whole ledger, not on re-running a job
+to learn something.
+
+#### The 2026-08-25 sighting: a third module, and the first look at what was in the batches
+
+`VertxBatchTest`, KEY ordering, on a local macOS full unit run of the branch that added
+`ShardMapIsNeverReplacedArchTest` - one new core test class plus docs, no main Java. Same
+`Expected size: 3 but was: 4`. **Three modules now, so the wrapper is definitively not the
+variable.**
+
+What is new is the payload the assertion printed. The five records carried keys `29, 36, 36, 36,
+71` - a **three-way key collision** - and arrived as `{o0, o4}`, `{o1}`, `{o2}`, `{o3}`, so every
+key-36 record came alone. Meanwhile `simpleBatchTest` computes its expectation from the record count
+and nothing else: grep `BatchTestMethods` for `expectedNumOfBatches`, which is
+`ceil(numRecsExpected / batchSizeSetting)` for every ordering except PARTITION. **The keys are
+random** - `KafkaTestUtils.getRandomKey` draws from `defaultKeys`, a hundred integers - so the shard
+distribution the batcher works against varies run to run while the expected batch count does not.
+
+That is a third reading to separate, not a diagnosis, and it displaces neither of the two above:
+
+- **Expectation-versus-input.** The test randomises the key distribution and then asserts a batch
+  count that only holds for some distributions. A rare draw would explain a rare failure without any
+  contention or product defect at all.
+
+The experiment that settles it is cheap and has a control arm, and **nobody has run it**: pin the
+keys through the Lombok setter on `KafkaTestUtils`'s `defaultKeys`, force a three-way collision
+under KEY ordering, and predict a deterministic failure; then five distinct keys, and predict it
+always passes. If both hold, this is
+the test's own input and neither the runner nor the batcher. If the collision case passes, the draw
+is a red herring and contention-versus-product stands as before.
 
 ### `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` - a helper defect, not a test defect
 
@@ -95,8 +159,8 @@ head - with only `821a91af` failing.
 
 Re-running the identical job on the identical commit did not reproduce it. It failed at
 `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing`
-instead - `ConditionTimeout`, `expected: 139 but was: 136 within 30 seconds` - which is **row 1 of
-the table above**, the 4/45 entry.
+instead - `ConditionTimeout`, `expected: 139 but was: 136 within 30 seconds` - the 4/45 entry, since
+diagnosed and removed from this ledger (see the header).
 
 An earlier revision of this entry called that "the strongest evidence", on the reasoning that a code
 regression fails the same way twice and this did not. **That reasoning does not hold and is withdrawn.**
@@ -108,51 +172,3 @@ that AGENTS.md warns about, and left standing it would have licensed quarantinin
 What the rerun **does** establish: the failure is not deterministic, and the unit lane is currently
 producing red from more than one already-tracked test. What it is *not* is evidence about any one
 test's mechanism - that has always come from a source-level read, never from a rerun's landing spot.
-
-### `OffsetEncodingBackPressureTest.backPressure...` is NOT diagnosed - quarantined anyway, by explicit exception
-
-It was quarantined on astubbs#286 and **removed again in the same PR**, because the diagnosis was
-wrong. Recorded here so the mistake is not repeated.
-
-The failure was attributed to the retry section - "sleeps out the static retry delay instead of
-awaiting the retry event" - and owned by astubbs#265, which replaces that
-`sleepQuietly(DEFAULT_STATIC_RETRY_DELAY)` with an `await`. Review checked the line number instead of
-the narrative and found it does not fit:
-
-- The failure is at line 211 of the commit CI ran, which is the
-  `waitAtMost(defaultTimeout).untilAsserted(...)` block asserting the committed offset metadata -
-  specifically `Truth8.assertThat(incompletes.getHighestSeenOffset()).hasValue(expectedHighestSeen)`.
-  The `value of: optional.get()` in the failure text is that `Optional`.
-  (Citation repair: "the commit CI ran" is never named, so that 211 cannot be resolved by a reader,
-  and on master today it lands on a *different* `waitAtMost` block - the one asserting
-  `isBlocked()` - which is close enough to the description to be believed. The durable anchor is the
-  assertion already quoted: grep `hasValue(expectedHighestSeen)` in
-  `OffsetEncodingBackPressureTest`, exactly one hit. The number is left in place because it is what
-  the failure report said, not a pointer this note chose.)
-- That block runs **before** the retry section astubbs#265 rewrites. A change downstream of a failing
-  assertion cannot fix it.
-
-So the true cause is a timeout waiting for the high-water mark to reach `expectedHighestSeen`
-(actuals vary run to run - 136 and 132 have both been seen against an expected 139), and nothing
-currently explains why. Rule 1 - no quarantine without diagnosis - would keep it in the gating lane,
-but it fails often enough (4/45, the most frequent tracked flake) that leaving it red blocked every
-PR. **The repository owner decided to quarantine it anyway as an explicit rule-1 exception**: the
-registry entry carries no Owner (unowned, flagged advisory by the audit), `flapping = true`, and the
-diagnosis below remains the open task. The exception is a pressure-release, not a resolution - this
-entry stays open until the test is understood and fixed.
-
-**The open lead - an UNVERIFIED hypothesis, test it before acting on it.** The test computes
-`expectedHighestSeen = numberOfRecordsToPrimeWith + extraRecordsToBlockWithThresholdBlocks - 1`, and
-the extra records exist precisely to push the offset encoding past the size threshold that makes the
-partition block and stop taking records. If back-pressure engages before the last extra record is
-polled, the expectation is **unreachable rather than late** - matching the varying shortfall and the
-fact that a 30-second wait never rescues it. Falsification: if the actual value tracks the encoding
-block point, the hypothesis holds; if the high-water mark eventually reaches 139 given long enough,
-it is dead and this is a slowness problem. Compare
-`vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md` (same area, different test,
-`root_cause: test_design_bug`) - rule it in or out, don't assume.
-
-The general lesson is the one that produced the error: the fix PR was matched to the failure by
-**subject-matter resemblance** (both concern this test, both concern waiting) rather than by checking
-that the changed lines execute before the failing assertion. Match a `fixedBy` to a stack line, not
-to a theme.

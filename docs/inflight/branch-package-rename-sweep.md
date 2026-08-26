@@ -1,5 +1,9 @@
 # Package-rename grand sweep — plan and handoff
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: refactor -->
+
+
 **Status: planned, not started.** Two rehearsals are done and green; this is the execution plan for the
 real thing. Written to be picked up by a session with no memory of the rehearsals.
 
@@ -211,8 +215,10 @@ come after.
 
 ### The 38 branches
 
-Open PRs, excluding astubbs#1 (`codeql`, 2021) and astubbs#8 (`features/retry-dlq`, 2022) as too old, astubbs#277 (the rename
-plan itself) and astubbs#280 (the tooling).
+Open PRs, excluding astubbs#8 (`features/retry-dlq`, 2022) as too old, astubbs#277 (the rename
+plan itself) and astubbs#280 (the tooling). astubbs#1 (`codeql`) was on that too-old list until its
+branch was reset onto renamed master and repurposed as documentation, so it carries no Java and
+needs no sweep.
 
 | PR | head ref | PR | head ref |
 |---|---|---|---|
