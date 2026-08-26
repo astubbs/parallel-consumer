@@ -218,10 +218,38 @@ jobs:
             mode: adaptive-concurrency
             advisory: true
             timeout: 20
+          # EXPERIMENT: can the Chaos Pain Suite live here instead of on the self-hosted box?
+          #
+          # It is on `highcpu` because it was assumed to need many real cores to provoke anything.
+          # That assumption has never been tested on a hosted runner, and it is expensive: sharing
+          # one physical box is what made chaos measurements contend, and every scheduling
+          # contortion in pr-highcpu-fast-feedback.yml exists to manage that contention. A hosted
+          # runner gives each job its OWN VM, so the co-residency problem does not exist here at all.
+          #
+          # ADVISORY while the experiment runs (`optional: "true"` below) - it must not gate a merge
+          # until we know it is neither flaky nor timing out. Read the job's own timing summary
+          # ("Chaos suite timing") and its zero-tests-selected warning before trusting a green.
+          # bin/chaos-test.sh is already portable: it passes no forkCount and no -Dparallel-tests,
+          # so it runs here unmodified.
+          #
+          # IF IT WORKS: delete the Chaos Pain Suite entry from pr-highcpu-fast-feedback.yml, drop
+          # `optional` here, and the self-hosted lane is left carrying only the full mutation sweep.
+          # IF IT DOES NOT: record what failed (timeout, OOM, or scenarios that never fire without
+          # real parallelism) before reverting - "it needs the cores" is currently an assumption, and
+          # this is the measurement that settles it either way.
+          - suite: chaos
+            name: "Chaos Pain Suite (hosted, experimental)"
+            cmd: "bin/chaos-test.sh"
+            timeout: 60
+            optional: "true"
     name: "${{ matrix.name }}"
     runs-on: ubuntu-latest
-    # Advisory entries never gate merge - see the execution-mode note in this job's header comment.
-    continue-on-error: ${{ matrix.advisory == true }}
+    # TWO FLAGS, ONE MEANING, DELIBERATELY NOT UNIFIED HERE. `advisory` marks an execution-mode axis
+    # entry (see this job's header comment); `optional` marks the hosted-chaos experiment
+    # (astubbs/parallel-consumer#366). Both mean "must not gate a merge". Renaming either one in this
+    # merge would edit the other branch's vocabulary and re-conflict when it lands, so they are
+    # honoured side by side and collapsed to one name once the chaos experiment concludes.
+    continue-on-error: ${{ matrix.advisory == true || matrix.optional == 'true' }}
     timeout-minutes: ${{ matrix.timeout }}
     steps:
       - uses: actions/checkout@v6

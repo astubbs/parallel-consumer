@@ -79,7 +79,12 @@ class SessionEndTest {
                 client.poll(record -> {
                     processing.countDown();
                     // still executing when the stream dies - the case the finding names as the sharp one
-                    releaseProcessing.await(OBSERVE_BUDGET.getSeconds(), TimeUnit.SECONDS);
+                    // Named rather than discarded: a bare await() cannot be told from a call whose result nobody
+                    // needs. False means the release never came inside the budget, which the assertions below
+                    // surface - this thread must not throw, or the record fails for a reason the test is not
+                    // measuring.
+                    var ignoredReleasedInTime =
+                            releaseProcessing.await(OBSERVE_BUDGET.getSeconds(), TimeUnit.SECONDS);
                     return Outcome.success();
                 });
                 proxy.dispatch(0, "a-key", "a-value");
@@ -127,7 +132,10 @@ class SessionEndTest {
             var client = clientFor(proxy);
             client.poll(record -> {
                 processing.countDown();
-                releaseProcessing.await(OBSERVE_BUDGET.getSeconds(), TimeUnit.SECONDS);
+                // Named for the same reason as the site above - the park is released by the test, and a false
+                // result is surfaced by the assertions rather than by throwing on the worker thread.
+                var ignoredReleasedInTime =
+                        releaseProcessing.await(OBSERVE_BUDGET.getSeconds(), TimeUnit.SECONDS);
                 return Outcome.success();
             });
             proxy.dispatch(0, "a-key", "a-value");

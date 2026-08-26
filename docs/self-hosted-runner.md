@@ -171,7 +171,17 @@ from one that was never registered: the job queues.
 The heavy runner is a many-core Linux box running a Docker LXC with **several runner instances** (one per
 concurrent job), targeted by the [`highcpu`](../.github/workflows/pr-highcpu-fast-feedback.yml)
 workflow (`runs-on: [self-hosted, highcpu]`, same-repo-guarded, non-gating). **Performance** and the
-**Chaos Pain Suite** run there as separate matrix jobs in parallel. Provisioning it (OpenTofu + Ansible)
+**Chaos Pain Suite** run there as separate matrix jobs in parallel.
+
+> **The number of runner instances IS the box's concurrency limit, and it is the only one.** No
+> workflow caps how many jobs run here - jobs queue on the runners like any other GitHub Actions job,
+> so every queued job eventually runs. If the box is being overloaded (the tell is a job whose log
+> stops dead and which fails with no `BUILD FAILURE` and no stack trace - the process was killed),
+> **run fewer runner instances**; do not add a `concurrency` group to a workflow to simulate it. A
+> concurrency group keeps one run plus at most one pending and *discards* the rest, so it silently
+> deletes work instead of queueing it - measured at 26 of 32 jobs never starting while five of six
+> runners were idle. [`ci.md`](ci.md), "Why a `concurrency` group is not a mutex", owns that
+> reasoning. Provisioning it (OpenTofu + Ansible)
 and the on-demand power/boot control are generic infrastructure kept in a separate private infra repo,
 not here.
 
