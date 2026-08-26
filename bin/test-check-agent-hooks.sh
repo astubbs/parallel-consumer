@@ -370,6 +370,570 @@ assert "a 150 KB merge-prep prompt is still injected" YES "$(injected "$big_prom
 assert "the preamble points at the doc rather than restating it" pointer_only "$got"
 
 # ---------------------------------------------------------------------------------------------
+# warn-low-disk.sh
+#
+# This hook has an unusual failure mode: its correct behaviour on a healthy machine is to print
+# NOTHING, which is byte-identical to it being broken, misconfigured, or not running at all. So
+# almost every case here forces it to speak, and the one case that asserts silence pairs with a
+# case proving the same invocation can be made to talk.
+#
+# Every case pins PC_DISK_STATE_DIR into this test's own mktemp directory. Without that, the
+# throttle state is shared with the live session running the test, and cases would pass or fail
+# depending on whether a real warning had fired in the last ten minutes.
+#
+# The Docker Desktop cases pin PC_DISK_UNAME and a fake disk image, so they exercise the sparse-file
+# branch on a Linux CI runner too. They deliberately do NOT fake `stat`: the hook resolves stat
+# syntax from the real uname precisely because a forced platform would otherwise read filesystem
+# blocks instead of file blocks and get a wrong number rather than an error.
+# ---------------------------------------------------------------------------------------------
+
+DISK_HOOK="$HOOKS/warn-low-disk.sh"
+
+# EVERY case pins ALL FOUR thresholds, and each then raises exactly the one it is about. An earlier
+# version left the host thresholds at their defaults, so the cases silently depended on how much free
+# space the machine running them happened to have - and three of them flipped to failing mid-session
+# when this host dropped below the 25 GiB default warn line. A self-test for a disk warner must not
+# be a function of the disk. `env` applies assignments in order, so a caller's override wins.
+DISK_ALL_QUIET="PC_DISK_HOST_WARN_GIB=0 PC_DISK_HOST_CRIT_GIB=0 PC_DISK_VM_WARN_GIB=0 PC_DISK_VM_CRIT_GIB=0"
+
+disk_band() { # <VAR=value>... -> SILENT | WARN | CRITICAL | MALFORMED | BLOCKED:<rc>
+    local out rc state
+    state="$(mktemp -d "$TMP/disk.XXXXXX")"
+    out="$(echo '{"tool_input":{"command":"echo hi"}}' |
+        env PC_DISK_STATE_DIR="$state" $DISK_ALL_QUIET "$@" "$DISK_HOOK" 2>/dev/null)"
+    rc=$?
+    # A PreToolUse hook exiting non-zero can take the tool call away. This one never may.
+    [ "$rc" -ne 0 ] && { echo "BLOCKED:$rc"; return; }
+    [ -z "$out" ] && { echo SILENT; return; }
+    printf '%s' "$out" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)["hookSpecificOutput"]
+except Exception:
+    print("MALFORMED"); raise SystemExit
+if d.get("permissionDecision") != "allow":
+    print("NOT_ALLOW:" + str(d.get("permissionDecision"))); raise SystemExit
+ctx = d.get("additionalContext", "")
+if ctx.startswith("DISK CRITICAL."):
+    print("CRITICAL")
+elif ctx.startswith("Disk running low."):
+    print("WARN")
+else:
+    print("UNRECOGNISED:" + ctx[:40])
+'
+}
+
+disk_context() { # <VAR=value>... -> the additionalContext string, or empty
+    local state
+    state="$(mktemp -d "$TMP/disk.XXXXXX")"
+    echo '{"tool_input":{"command":"echo hi"}}' |
+        env PC_DISK_STATE_DIR="$state" $DISK_ALL_QUIET "$@" "$DISK_HOOK" 2>/dev/null |
+        python3 -c 'import json,sys
+try: print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"])
+except Exception: pass'
+}
+
+# A fake Docker Desktop: an empty disk image (so allocated rounds to 0 GiB) plus a settings file
+# naming the ceiling, which makes free-space arithmetic exact regardless of the host's real disk.
+make_fake_docker() { # <ceiling-MiB> -> directory
+    local dir; dir="$(mktemp -d "$TMP/dockerfake.XXXXXX")"
+    : >"$dir/Docker.raw"
+    printf '{"DiskSizeMiB": %s}\n' "$1" >"$dir/settings.json"
+    echo "$dir"
+}
+
+# The default state of a working machine. Paired with the forced cases below, which prove the same
+# call path can be made to speak - silence here is therefore a verdict, not an absence.
+assert "a disk above every threshold says nothing at all" SILENT "$(disk_band)"
+
+# Negative controls: the guard must be able to fire, in both bands.
+assert "host below the warn threshold warns" \
+    WARN "$(disk_band PC_DISK_HOST_WARN_GIB=99999999)"
+assert "host below the critical threshold escalates" \
+    CRITICAL "$(disk_band PC_DISK_HOST_CRIT_GIB=99999999)"
+
+# The single most important property: a disk warner that blocked Bash would remove the commands
+# needed to clear the disk. Asserted at the worst band, where the temptation to block would be
+# greatest.
+assert "even at critical it allows the call" \
+    CRITICAL "$(disk_band PC_DISK_HOST_CRIT_GIB=99999999)"
+
+# A bogus CLAUDE_PROJECT_DIR falls back to the working directory and still measures something real.
+# Asserted so the fallback is a documented decision rather than an accident nobody noticed.
+assert "a bogus project dir falls back to the working directory" \
+    WARN "$(disk_band CLAUDE_PROJECT_DIR=/nonexistent/path/that/cannot/exist PC_DISK_HOST_WARN_GIB=99999999)"
+
+# ...but when the disk CANNOT be read, silence is the only honest answer. The failure this rules
+# out is the dangerous one: a hook that fails to measure and therefore says nothing is byte-identical
+# to a hook reporting a healthy disk, so the guard must be the ABSENCE of a reading, never a default
+# of "fine". Shadowing `df` on PATH asks exactly that question - an earlier version of this case
+# emptied PATH entirely, which stopped `/usr/bin/env bash` finding an interpreter and tested only
+# that a script which never ran printed nothing.
+shadow_df() { # <body> -> a PATH prefix whose `df` behaves as given
+    local dir; dir="$(mktemp -d "$TMP/shadow.XXXXXX")"
+    { echo '#!/bin/sh'; echo "$1"; } >"$dir/df"
+    chmod +x "$dir/df"
+    echo "$dir"
+}
+
+for scenario in "exit 1::a df that fails" "echo garbage::a df that answers unparseably" "printf ''::a df that answers nothing"; do
+    body="${scenario%%::*}"; label="${scenario##*::}"
+    dir="$(shadow_df "$body")"
+    out="$(echo '{}' | env PATH="$dir:$PATH" \
+        PC_DISK_STATE_DIR="$(mktemp -d "$TMP/disk.XXXXXX")" $DISK_ALL_QUIET \
+        PC_DISK_HOST_WARN_GIB=99999999 "$DISK_HOOK" 2>/dev/null; echo "rc=$?")"
+    case "$out" in
+        "rc=0") got=silent_and_clean ;;
+        rc=*)   got="non-zero exit: $out" ;;
+        *)      got="claimed a reading it never took: $out" ;;
+    esac
+    assert "$label leaves it silent, exiting 0" silent_and_clean "$got"
+done
+
+# The positive control for the three above: the SAME stub mechanism with a plausible answer must
+# produce a warning. Without this, all three could be passing because the stub broke the invocation.
+dir_ok="$(shadow_df 'echo "Filesystem 1024-blocks Used Available Capacity Mounted"; echo "/dev/fake 100000000 99000000 1048576 99% /"')"
+out_ok="$(echo '{}' | env PATH="$dir_ok:$PATH" \
+    PC_DISK_STATE_DIR="$(mktemp -d "$TMP/disk.XXXXXX")" $DISK_ALL_QUIET \
+    PC_DISK_HOST_WARN_GIB=25 "$DISK_HOOK" 2>/dev/null)"
+case "$out_ok" in *'Host volume: 1 GiB free'*) got=read_the_stub ;; *) got="did not read it: $out_ok" ;; esac
+assert "a stubbed df reporting 1 GiB free does warn" read_the_stub "$got"
+
+# THE HIGH-WATER-MARK CORRECTION. Docker Desktop's disk image never shrinks, so after a prune it
+# still claims the space. Without this correction the hook nags for days about space that is free.
+# The image claims 18 of a 20 GiB ceiling, leaving 2 GiB - comfortably under a realistic 12 GiB
+# threshold, so the cheap signal trips. Docker then reports it is really holding 2 GiB, so there are
+# 18 GiB actually free and the alarm is stale.
+fake="$(make_fake_docker 20480)"                     # a 20 GiB ceiling
+state_pruned="$(mktemp -d "$TMP/disk.XXXXXX")"
+echo "2GB" >"$state_pruned/docker-df"                # ...of which docker really holds 2 GiB
+out_pruned="$(echo '{}' | env \
+    PC_DISK_STATE_DIR="$state_pruned" $DISK_ALL_QUIET PC_DISK_UNAME=Darwin \
+    PC_DISK_DESKTOP_RAW="$fake/Docker.raw" PC_DISK_DESKTOP_SETTINGS="$fake/settings.json" \
+    PC_DISK_VM_ALLOC_GIB=18 PC_DISK_VM_WARN_GIB=12 PC_DISK_VM_CRIT_GIB=5 "$DISK_HOOK" 2>/dev/null)"
+[ -z "$out_pruned" ] && got=suppressed || got="warned anyway"
+assert "a VM alarm that a prune already cleared is suppressed" suppressed "$got"
+
+# ...and the other half, which is what stops the correction from becoming a blanket mute.
+state_full="$(mktemp -d "$TMP/disk.XXXXXX")"
+echo "19GB" >"$state_full/docker-df"                 # docker really is holding 19 of 20 GiB
+out_full="$(echo '{}' | env \
+    PC_DISK_STATE_DIR="$state_full" $DISK_ALL_QUIET PC_DISK_UNAME=Darwin \
+    PC_DISK_DESKTOP_RAW="$fake/Docker.raw" PC_DISK_DESKTOP_SETTINGS="$fake/settings.json" \
+    PC_DISK_VM_ALLOC_GIB=18 PC_DISK_VM_WARN_GIB=12 PC_DISK_VM_CRIT_GIB=0 "$DISK_HOOK" 2>/dev/null)"
+case "$out_full" in *'~1 GiB headroom of 20 GiB'*) got=reported ;; *) got="not reported: $out_full" ;; esac
+assert "a VM genuinely near full still warns, with the corrected figure" reported "$got"
+
+# THE CEILING PARSE, against the shape the real file has. `settings-store.json` is a large object
+# with many keys, not the single-key fixture above, and the parse this replaced leaned on
+# `grep -o '[0-9]*$'` - a pattern that can also match the empty string at end of line, which is
+# implementation-defined territory. GNU grep 3.11 emits one match; ugrep 7.5.0 emits two, and the
+# trailing `awk` then ran its `printf` twice and concatenated "20" and "0" into "200". A ceiling ten
+# times too large is not a visible error: free space is DERIVED from it, so the hook simply stops
+# warning about the Docker disk. Nothing in the fixtures could see that, because the fixture had one
+# key and the box had GNU grep.
+fake_multi="$(mktemp -d "$TMP/dockerfake.XXXXXX")"
+: >"$fake_multi/Docker.raw"
+printf '%s\n' '{"AutoStart":false,"DiskSizeMiB":20480,"MemoryMiB":8192}' >"$fake_multi/settings.json"
+ctx_multi="$(disk_context PC_DISK_UNAME=Darwin \
+    PC_DISK_DESKTOP_RAW="$fake_multi/Docker.raw" PC_DISK_DESKTOP_SETTINGS="$fake_multi/settings.json" \
+    PC_DISK_VM_ALLOC_GIB=19 PC_DISK_VM_WARN_GIB=12 PC_DISK_VM_CRIT_GIB=0 PC_DISK_HOST_WARN_GIB=99999999)"
+case "$ctx_multi" in
+    *'~1 GiB headroom of 20 GiB'*) got=ceiling_20 ;;
+    *)                             got="wrong ceiling: $ctx_multi" ;;
+esac
+assert "the ceiling is read from a realistic multi-key settings line" ceiling_20 "$got"
+
+# `docker system df` reports logical sizes that double-count shared layers, so corrected usage can
+# exceed the ceiling. The user must never be shown a negative headroom.
+state_over="$(mktemp -d "$TMP/disk.XXXXXX")"
+echo "500GB" >"$state_over/docker-df"
+out_over="$(echo '{}' | env \
+    PC_DISK_STATE_DIR="$state_over" $DISK_ALL_QUIET PC_DISK_UNAME=Darwin \
+    PC_DISK_DESKTOP_RAW="$fake/Docker.raw" PC_DISK_DESKTOP_SETTINGS="$fake/settings.json" \
+    PC_DISK_VM_ALLOC_GIB=18 PC_DISK_VM_WARN_GIB=12 PC_DISK_VM_CRIT_GIB=5 "$DISK_HOOK" 2>/dev/null)"
+case "$out_over" in *-[0-9]*GiB*) got="negative headroom shown" ;; *) got=clamped ;; esac
+assert "over-reported docker usage cannot print negative headroom" clamped "$got"
+
+# THROTTLE. Firing on every Bash call is what makes the warning cheap to ignore.
+state_throttle="$(mktemp -d "$TMP/disk.XXXXXX")"
+first="$(echo '{}' | env PC_DISK_STATE_DIR="$state_throttle" $DISK_ALL_QUIET PC_DISK_HOST_WARN_GIB=99999999 "$DISK_HOOK" 2>/dev/null)"
+second="$(echo '{}' | env PC_DISK_STATE_DIR="$state_throttle" $DISK_ALL_QUIET PC_DISK_HOST_WARN_GIB=99999999 "$DISK_HOOK" 2>/dev/null)"
+[ -n "$first" ] && [ -z "$second" ] && got=throttled || got="first=${#first} second=${#second}"
+assert "the same band does not repeat on the next call" throttled "$got"
+
+# ...but getting worse must beat the throttle, or the escalation nobody wants to miss is the one
+# guaranteed to be swallowed.
+third="$(echo '{}' | env PC_DISK_STATE_DIR="$state_throttle" $DISK_ALL_QUIET PC_DISK_HOST_CRIT_GIB=99999999 "$DISK_HOOK" 2>/dev/null)"
+case "$third" in *'DISK CRITICAL.'*) got=escalated ;; *) got="swallowed" ;; esac
+assert "worsening from warn to critical speaks through the throttle" escalated "$got"
+
+# ...and never the other way round. After a critical warning, a reading that has merely eased back to
+# `warn` must stay quiet until the timer expires - re-announcing the same disk in gentler language
+# reads as "it got better", which is the one thing a figure this coarse must not be allowed to say.
+# Added because a mutant deleting exactly that arm of the throttle condition survived the whole
+# suite: every other case here drives the band UPWARD, so the downgrade rule was asserted nowhere.
+# `$state_throttle` now records `critical` from the case above, which is the state this needs.
+fourth="$(echo '{}' | env PC_DISK_STATE_DIR="$state_throttle" $DISK_ALL_QUIET PC_DISK_HOST_WARN_GIB=99999999 "$DISK_HOOK" 2>/dev/null)"
+[ -z "$fourth" ] && got=stayed_quiet || got="downgraded aloud: $fourth"
+assert "a downgrade from critical to warn stays quiet inside the window" stayed_quiet "$got"
+
+# PER-SESSION THROTTLE. The stamp was one file per UID, so every concurrent session shared it and the
+# first agent to notice silenced all the others for the whole window. In the incident this hook was
+# written for - eleven agents taking the host volume from ample to 8.8 GiB in about an hour - ten of
+# them could not have been told, while they were the ten still filling the disk. Two reviewers
+# flagged it independently, and the keying was settled as a product call: warn every session, and let
+# the OPERATOR be the gate against duplicate cleanups rather than the throttle. That only holds
+# because the message tells each agent to report and suggest - asserted below, because a regression
+# there is silent: the hook would still warn, and eleven agents would each start pruning.
+#
+# The session-less fallback is not re-asserted here; the cases above pipe `{}` and prove it, since an
+# absent `session_id` is what makes them share one stamp at all.
+state_sessions="$(mktemp -d "$TMP/disk.XXXXXX")"
+disk_session() { # <session-id> [VAR=value...] -> one invocation sharing $state_sessions
+    local sid="$1"; shift
+    printf '{"session_id":"%s","tool_input":{"command":"echo hi"}}' "$sid" |
+        env PC_DISK_STATE_DIR="$state_sessions" $DISK_ALL_QUIET "$@" "$DISK_HOOK" 2>/dev/null
+}
+a_first="$(disk_session sess-aaa PC_DISK_HOST_WARN_GIB=99999999)"
+b_first="$(disk_session sess-bbb PC_DISK_HOST_WARN_GIB=99999999)"
+a_again="$(disk_session sess-aaa PC_DISK_HOST_WARN_GIB=99999999)"
+[ -n "$a_first" ] && [ -n "$b_first" ] && [ -z "$a_again" ] &&
+    got=per-session || got="a1=${#a_first} b1=${#b_first} a2=${#a_again}"
+assert "a second session is warned while the first stays throttled" per-session "$got"
+
+# The id reaches a FILE PATH, so it is FILTERED rather than escaped or rejected - `tr -cd` deletes
+# the traversal and leaves a usable key. So this asserts both halves: the hook still speaks, and
+# nothing landed outside the state directory it has established it owns.
+esc_dir="$(mktemp -d "$TMP/disk.XXXXXX")"
+esc_out="$(printf '{"session_id":"../../pwned-%s","tool_input":{"command":"echo hi"}}' "$$" |
+    env PC_DISK_STATE_DIR="$esc_dir" $DISK_ALL_QUIET PC_DISK_HOST_WARN_GIB=99999999 "$DISK_HOOK" 2>/dev/null)"
+stray="$(find "$esc_dir/.." -maxdepth 1 -name 'pwned-*' 2>/dev/null | head -1)"
+[ -n "$esc_out" ] && [ -z "$stray" ] && got=contained || got="spoke=${#esc_out} stray=$stray"
+assert "a traversal in session_id cannot write outside the state dir" contained "$got"
+
+disk_ctx() { # <hook output> -> the additionalContext string
+    printf '%s' "$1" | python3 -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"])'
+}
+case "$(disk_ctx "$(disk_session sess-msg PC_DISK_HOST_WARN_GIB=99999999)")" in
+    *"Do NOT reclaim anything yourself"*"report and suggest, never act"*) got=defers_to_operator ;;
+    *) got="did not defer" ;;
+esac
+assert "the warn message tells the agent to report, not reclaim" defers_to_operator "$got"
+
+case "$(disk_ctx "$(disk_session sess-crit PC_DISK_HOST_CRIT_GIB=99999999)")" in
+    *"Do NOT run any reclaim command yourself"*"report and suggest, never act"*) got=defers_to_operator ;;
+    *) got="did not defer" ;;
+esac
+assert "the critical message tells the agent to report, not reclaim" defers_to_operator "$got"
+
+# SPEAK, THEN STAMP. Stamping first means a kill between the write and the message swallows that
+# warning for the whole window - likeliest exactly when the disk is full, which is this hook's entire
+# subject. No test can kill the hook mid-flight, so this asserts the ORDER IN THE SOURCE, which is
+# the thing that was actually wrong. Structural, like the settings.json cases further down, and for
+# the same reason: what it protects has no observable difference until the moment it matters.
+emit_line="$(grep -n '^printf' "$DISK_HOOK" | tail -1 | cut -d: -f1)"
+stamp_line="$(grep -n '^echo "\$now \$band"' "$DISK_HOOK" | tail -1 | cut -d: -f1)"
+[ -n "$emit_line" ] && [ -n "$stamp_line" ] && [ "$stamp_line" -gt "$emit_line" ] &&
+    got=stamps_after_speaking || got="emit=${emit_line:-none} stamp=${stamp_line:-none}"
+assert "the throttle stamp is written after the message, not before" stamps_after_speaking "$got"
+
+# CROSS-PLATFORM. A platform whose Docker layout is unknown still reports the host volume, and must
+# not invent or imply a Docker figure it never read.
+ctx_unknown="$(disk_context PC_DISK_UNAME=Plan9 PC_DISK_HOST_WARN_GIB=99999999)"
+case "$ctx_unknown" in
+    *'Host volume:'*'Docker'*) got="claims a docker reading" ;;
+    *'Host volume:'*)          got=host_only ;;
+    *)                         got="no host reading: $ctx_unknown" ;;
+esac
+assert "an unknown platform reports the host volume and no Docker figure" host_only "$got"
+
+# On Linux the engine writes into the host filesystem, so when that is the SAME mount the host
+# check already covers it and a second figure would be noise.
+#
+# Both paths are pinned INSIDE this test's own directory, as two DIFFERENT paths, so they share a
+# filesystem by construction on any host while still forcing the hook to compare devices rather than
+# strings. The first version left the project dir at the real one and pointed only the docker root at
+# `$TMP`, assuming `mktemp` lands on the project's filesystem. It does not wherever `/tmp` is a tmpfs
+# - this box included - so the case drove the SEPARATE-mount branch and asserted the opposite of its
+# own name. Right about what to check, wrong about its scope, with every sibling case green
+# throughout: the failure docs/agent-harness.md rule 3 was extended to ask about.
+same_mount="$(mktemp -d "$TMP/samemount.XXXXXX")"
+mkdir -p "$same_mount/project" "$same_mount/docker"
+ctx_linux_same="$(disk_context PC_DISK_UNAME=Linux CLAUDE_PROJECT_DIR="$same_mount/project" \
+    PC_DISK_DOCKER_ROOT="$same_mount/docker" PC_DISK_HOST_WARN_GIB=99999999)"
+case "$ctx_linux_same" in
+    *'Docker data filesystem'*) got="reported twice" ;;
+    *'Host volume:'*)           got=not_duplicated ;;
+    *)                          got="no host reading: $ctx_linux_same" ;;
+esac
+assert "Linux docker root on the project's own mount is not reported twice" not_duplicated "$got"
+
+# The GREEN half of that pair, and the reason the case above cannot stand alone: delete the Linux
+# branch from the hook entirely and "not reported twice" still passes. Which device a path sits on
+# cannot be arranged portably - `/tmp` is a tmpfs here and part of `/` elsewhere - so `df`'s device
+# column is stubbed rather than hunted for, and the stub answers per path.
+two_dev="$(shadow_df 'for p in "$@"; do last="$p"; done
+case "$last" in
+    *dockerroot*) dev=/dev/docker ;;
+    *)            dev=/dev/project ;;
+esac
+echo "Filesystem 1024-blocks Used Available Capacity Mounted on"
+echo "$dev 100000000 99000000 2097152 99% /"')"
+mkdir -p "$TMP/dockerroot"
+ctx_linux_split="$(disk_context PATH="$two_dev:$PATH" PC_DISK_UNAME=Linux \
+    PC_DISK_DOCKER_ROOT="$TMP/dockerroot" PC_DISK_HOST_WARN_GIB=99999999)"
+case "$ctx_linux_split" in
+    *'Host volume: 2 GiB free.'*'Docker data filesystem: 2 GiB free.'*) got=both_reported ;;
+    *) got="not reported separately: $ctx_linux_split" ;;
+esac
+assert "Linux docker root on a SEPARATE mount is reported alongside the host" both_reported "$got"
+
+# THE STATE FILE IS INPUT, NOT OUR OWN DATA. It sits at a predictable path in a shared /tmp and is
+# read back on a LATER run, so its content is untrusted in exactly the way a `df` answer is. Every
+# case above pins a fresh `PC_DISK_STATE_DIR`, so the stamp was always absent or hook-written and
+# this read was never exercised against anything else - which is why a green suite sat on top of an
+# arbitrary-command-execution bug and a broken never-exit-non-zero invariant.
+#
+# `last_at` reaches `$(( ))`, and bash arithmetic resolves a non-numeric operand as a variable NAME,
+# recursively - so a command substitution inside an array subscript RUNS. The shapes below are the
+# ones that mattered: hostile, merely garbled, from the future, and genuinely fine.
+stamp_case() { # <stamp-content> -> SILENT | WARNED | BLOCKED:<rc>
+    local dir out rc
+    dir="$(mktemp -d "$TMP/disk.XXXXXX")"
+    printf '%s\n' "$1" >"$dir/last-warning"
+    out="$(echo '{}' | env PC_DISK_STATE_DIR="$dir" $DISK_ALL_QUIET \
+        PC_DISK_HOST_WARN_GIB=99999999 "$DISK_HOOK" 2>/dev/null)"
+    rc=$?
+    [ "$rc" -ne 0 ] && { echo "BLOCKED:$rc"; return; }
+    [ -n "$out" ] && echo WARNED || echo SILENT
+}
+
+# THE PAYLOAD MUST BE SPACE-FREE, and that is the whole trick. `read -r last_at last_band` splits on
+# whitespace, so `band[$(touch /path)] warn` lands in `last_at` as `band[$(touch` - a truncated
+# subscript that is a syntax error rather than a command substitution, and it cannot execute whatever
+# the guard does. The first version of this case used exactly that and was therefore decorative: it
+# passed with both guards deleted. A redirect needs no space, so `id>FILE` is the shape that really
+# reaches the evaluator - it is the payload that executed against the unguarded hook.
+pwn_dir="$(mktemp -d "$TMP/disk.XXXXXX")"
+pwn_marker="$pwn_dir/EXECUTED"
+printf 'band[$(id>%s)] warn\n' "$pwn_marker" >"$pwn_dir/last-warning"
+echo '{}' | env PC_DISK_STATE_DIR="$pwn_dir" $DISK_ALL_QUIET PC_DISK_HOST_WARN_GIB=99999999 \
+    "$DISK_HOOK" >/dev/null 2>&1
+[ -e "$pwn_marker" ] && got="EXECUTED IT" || got=inert
+assert "a command substitution in the throttle stamp is not executed" inert "$got"
+
+# ...and the same payload must not take the Bash call away either. A `set -u` abort is a NON-ZERO
+# exit, the one thing this hook must never do - so this asserts the invariant against hostile STATE,
+# where every other never-block case asserts it only against readings the hook took itself. The
+# garbled variants need no attacker at all: a torn write is likeliest when the disk is full, which
+# is the condition this hook exists for.
+assert "a hostile throttle stamp still warns, exiting 0"   WARNED "$(stamp_case 'band[$(id)] warn')"
+assert "a garbled throttle stamp still warns, exiting 0"   WARNED "$(stamp_case 'garbage warn')"
+assert "a one-field throttle stamp still warns, exiting 0" WARNED "$(stamp_case 'warn')"
+# A stamp from the future - a clock step, an NTP correction, a resumed VM - makes the age negative,
+# which is always inside the window, holding the warner shut until wall-clock time catches up.
+assert "a future-dated throttle stamp is treated as stale" WARNED "$(stamp_case '9999999999 warn')"
+# The control that stops the four above from passing on a hook that ignores the stamp entirely.
+assert "a fresh same-band stamp still throttles"           SILENT "$(stamp_case "$(date +%s) warn")"
+
+# `mkdir -p` SUCCEEDS against a directory another user already owns, so it is not the check it looks
+# like - and everything in that directory is then read back by this hook. `/` stands in for a
+# pre-created state dir: it exists, `mkdir -p` returns 0 on it, and it is root-owned on every machine
+# this runs on. Skipped rather than silently inverted where that last assumption does not hold.
+if [ -O / ]; then
+    echo "skip: foreign state-dir case - this process owns /, so no foreign directory is available"
+else
+    out_foreign="$(echo '{}' | env PC_DISK_STATE_DIR=/ $DISK_ALL_QUIET \
+        PC_DISK_HOST_WARN_GIB=99999999 "$DISK_HOOK" 2>/dev/null; echo "rc=$?")"
+    case "$out_foreign" in
+        "rc=0") got=refused_silently ;;
+        rc=*)   got="non-zero exit: $out_foreign" ;;
+        *)      got="used a foreign state dir: $out_foreign" ;;
+    esac
+    assert "a state directory owned by another user is refused, exiting 0" refused_silently "$got"
+fi
+
+# `$HOME` is expanded on the Docker Desktop branch, and an unset one aborts under `set -u` - a
+# non-zero exit, which takes the Bash call away. `env -u` is the only way to reach it, so this case
+# cannot go through disk_context.
+out_nohome="$(echo '{}' | env -u HOME PC_DISK_STATE_DIR="$(mktemp -d "$TMP/disk.XXXXXX")" \
+    $DISK_ALL_QUIET PC_DISK_UNAME=Darwin PC_DISK_HOST_WARN_GIB=99999999 "$DISK_HOOK" 2>/dev/null)"
+rc_nohome=$?
+if [ "$rc_nohome" -eq 0 ] && [ -n "$out_nohome" ]; then got=warned_and_clean
+else got="rc=$rc_nohome bytes=${#out_nohome}"; fi
+assert "an unset HOME on the Docker Desktop branch still warns, exiting 0" warned_and_clean "$got"
+
+# THE COLUMN PARSE. `df -P` puts Available immediately before Capacity, but nothing guarantees the
+# DEVICE column is one word - macOS autofs reports `map auto_home`, and a CIFS share can carry a
+# space too. Counting fields from the left then read the USED column as free space: a confident
+# wrong number in the dangerous direction, since Used is largest exactly when free is smallest.
+dir_spaced="$(shadow_df 'echo "Filesystem 1024-blocks Used Available Capacity Mounted on"; echo "map auto_home 100000000 99000000 1048576 99% /home"')"
+ctx_spaced="$(disk_context PATH="$dir_spaced:$PATH" PC_DISK_HOST_WARN_GIB=99999999)"
+case "$ctx_spaced" in
+    *'Host volume: 1 GiB free'*)  got=read_available ;;
+    *'Host volume: 94 GiB free'*) got="read the USED column" ;;
+    *)                            got="unexpected: $ctx_spaced" ;;
+esac
+assert "a df device name containing a space does not shift the free-space column" read_available "$got"
+
+# ...and a well-formed line whose Available column is not a number must be silence, not zero. The
+# three `df`-unreadable cases above never emit a SECOND line, so this gate was never reached.
+dir_nan="$(shadow_df 'echo "Filesystem 1024-blocks Used Available Capacity Mounted on"; echo "/dev/fake 100000000 99000000 N/A 99% /"')"
+out_nan="$(echo '{}' | env PATH="$dir_nan:$PATH" \
+    PC_DISK_STATE_DIR="$(mktemp -d "$TMP/disk.XXXXXX")" $DISK_ALL_QUIET \
+    PC_DISK_HOST_WARN_GIB=99999999 "$DISK_HOOK" 2>/dev/null; echo "rc=$?")"
+case "$out_nan" in
+    "rc=0") got=silent_and_clean ;;
+    rc=*)   got="non-zero exit: $out_nan" ;;
+    *)      got="claimed a reading from a non-numeric column: $out_nan" ;;
+esac
+assert "a df whose Available column is not a number leaves it silent" silent_and_clean "$got"
+
+# THE CORRECTION MUST NOT TOUCH A LINUX READING. `vm_is_high_water` is set only on the Docker Desktop
+# sparse-image branch; Linux's figure is LIVE and needs no confirming. Nothing exercised that gate on
+# the branch it protects - delete it and only the Desktop cases notice. Asserted two ways: the figure
+# reported is the live one, and no `docker system df` cache is created at all.
+live_dev="$(shadow_df 'for p in "$@"; do last="$p"; done
+case "$last" in
+    *dockerroot*) dev=/dev/docker;  avail=1048576 ;;
+    *)            dev=/dev/project; avail=104857600 ;;
+esac
+echo "Filesystem 1024-blocks Used Available Capacity Mounted on"
+echo "$dev 209715200 104857600 $avail 50% /"')"
+state_live="$(mktemp -d "$TMP/disk.XXXXXX")"
+ctx_live="$(echo '{}' | env PATH="$live_dev:$PATH" PC_DISK_STATE_DIR="$state_live" \
+    $DISK_ALL_QUIET PC_DISK_UNAME=Linux PC_DISK_DOCKER_ROOT="$TMP/dockerroot" \
+    PC_DISK_VM_WARN_GIB=12 "$DISK_HOOK" 2>/dev/null |
+    python3 -c 'import json,sys
+try: print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"])
+except Exception: pass')"
+case "$ctx_live" in
+    *'Docker data filesystem: 1 GiB free'*) got=live_reading ;;
+    *)                                      got="not the live reading: $ctx_live" ;;
+esac
+assert "a Linux docker filesystem is reported from its live df reading" live_reading "$got"
+[ -e "$state_live/docker-df" ] && got="consulted docker" || got=no_docker_call
+assert "the high-water correction never runs for a Linux live reading" no_docker_call "$got"
+
+# THE REFRESH HALF OF THE CORRECTION. Every case above pre-seeds `docker-df`, so `command -v docker`,
+# the `docker system df` call and the cache write were all dead code as far as the suite knew. This
+# drives them: no cache, a stubbed `docker`, and the suppression can only happen if the stub ran.
+docker_stub="$(mktemp -d "$TMP/shadow.XXXXXX")"
+{ echo '#!/bin/sh'; echo 'echo 2GB'; } >"$docker_stub/docker"
+chmod +x "$docker_stub/docker"
+state_refresh="$(mktemp -d "$TMP/disk.XXXXXX")"
+out_refresh="$(echo '{}' | env PATH="$docker_stub:$PATH" PC_DISK_STATE_DIR="$state_refresh" \
+    $DISK_ALL_QUIET PC_DISK_UNAME=Darwin \
+    PC_DISK_DESKTOP_RAW="$fake/Docker.raw" PC_DISK_DESKTOP_SETTINGS="$fake/settings.json" \
+    PC_DISK_VM_ALLOC_GIB=18 PC_DISK_VM_WARN_GIB=12 "$DISK_HOOK" 2>/dev/null)"
+if [ -z "$out_refresh" ] && [ -s "$state_refresh/docker-df" ]; then got=refreshed_and_suppressed
+else got="cache=$([ -s "$state_refresh/docker-df" ] && echo written || echo missing) bytes=${#out_refresh}"; fi
+assert "an absent docker-df cache is refreshed from docker itself" refreshed_and_suppressed "$got"
+
+# A FULLY PRUNED DOCKER IS A READING, NOT AN ABSENCE. The correction used to fire only when the total
+# was ABOVE zero, which conflated "docker holds nothing" with "we could not read docker" - so the one
+# case where the sparse file is most wrong, an image emptied completely, was the one case the
+# correction refused to clear. It nagged until the file itself shrank, which it never does.
+state_pruned_zero="$(mktemp -d "$TMP/disk.XXXXXX")"
+printf '0B\n0B\n0B\n' >"$state_pruned_zero/docker-df"
+out_zero="$(echo '{}' | env PC_DISK_STATE_DIR="$state_pruned_zero" $DISK_ALL_QUIET \
+    PC_DISK_UNAME=Darwin PC_DISK_DESKTOP_RAW="$fake/Docker.raw" \
+    PC_DISK_DESKTOP_SETTINGS="$fake/settings.json" \
+    PC_DISK_VM_ALLOC_GIB=18 PC_DISK_VM_WARN_GIB=12 "$DISK_HOOK" 2>/dev/null)"
+[ -z "$out_zero" ] && got=suppressed || got="nagged about an empty image: $out_zero"
+assert "a fully pruned Docker clears the stale VM alarm" suppressed "$got"
+
+# ...and a reading we could NOT parse must not be treated as "docker holds nothing", which would
+# suppress a real warning. An unrecognised unit disqualifies the whole reading.
+state_unknown="$(mktemp -d "$TMP/disk.XXXXXX")"
+printf '19GB\nnonsense\n' >"$state_unknown/docker-df"
+out_unknown="$(echo '{}' | env PC_DISK_STATE_DIR="$state_unknown" $DISK_ALL_QUIET \
+    PC_DISK_UNAME=Darwin PC_DISK_DESKTOP_RAW="$fake/Docker.raw" \
+    PC_DISK_DESKTOP_SETTINGS="$fake/settings.json" \
+    PC_DISK_VM_ALLOC_GIB=18 PC_DISK_VM_WARN_GIB=12 "$DISK_HOOK" 2>/dev/null)"
+[ -n "$out_unknown" ] && got=warned_from_high_water || got="suppressed on an unreadable reading"
+assert "an unparseable docker-df row does not suppress the warning" warned_from_high_water "$got"
+
+# REGISTRATION. docs/agent-harness.md names "unregistered" as one of the three states byte-identical
+# to a healthy hook, and a self-test genuinely cannot prove the harness INVOKES one - but that the
+# tracked settings.json NAMES it is mechanically checkable, and nothing checked it. This asserts both
+# directions, so a hook added to either side without the other goes red, and it pins the disk hook's
+# two registration properties: present as a PreToolUse hook, and deliberately unfiltered.
+# NO HEREDOC INSIDE A COMMAND SUBSTITUTION - this ran as `$(python3 - <<REGCHECK ... )` and broke
+# bash 3.2, which macOS ships and which the shell: macos lane in .github/workflows/repo-hygiene.yml
+# pins on purpose. That parser scans a substitution for its closing paren treating the heredoc body
+# as SHELL TEXT, and it does not recognise `#` comments while doing it - so an ordinary apostrophe in
+# a python comment (a possessive, in a sentence about an earlier count) was the fifth and unbalancing
+# single quote in the body, and 3.2 then read to the end of the file looking for the close. It landed
+# as an unexpected-EOF error against the last line of the file and exit 2, after some sixty cases had
+# already run, so the lane said the suite could not run rather than naming a case - while bash 5
+# parses the same text correctly and every ubuntu lane and every local run stayed green.
+#
+# Three other python heredocs inside `$( ... )` survive on master - check-cve-exclusions.sh,
+# check-ossindex-audit.sh, check-shell-hazards.sh - which is not a counter-example, just bodies whose
+# quotes happen to balance when read as shell. Heredoc at top level into a file, then run the file:
+# the body is never scanned as shell at all, so no later edit to the python can bring this back. The
+# python itself is unchanged. bin/check-shell-hazards.sh is the right long-term home for the class;
+# a row there would report those three, so it is queued in the inflight note rather than done here.
+cat >"$TMP/regcheck.py" <<'REGCHECK'
+import json, re, sys, pathlib
+root = pathlib.Path(sys.argv[1])
+cfg = json.loads((root / ".claude/settings.json").read_text())
+registered = {h["command"].rsplit("/", 1)[-1].rstrip('"')
+              for groups in cfg["hooks"].values() for g in groups for h in g["hooks"]}
+# TWO SELF-TEST SHAPES COUNT, because the repo has two. Most hooks get a section in THIS suite,
+# referenced as `$HOOKS/<name>`. A hook may instead get its own `bin/test-<name>.sh` - the shape
+# master introduced with check-shallow-history.sh - and that is equally real coverage, because
+# `bin/check-all.sh --with-tests` globs `bin/test-*.sh`, so such a file runs in CI with no wiring.
+# Recognising only the first shape reported a genuinely self-tested hook as untested, which would
+# have pushed the next author to satisfy the assertion rather than the property.
+# A LEADING-COMMENT MENTION DOES NOT COUNT: `# Self-test for .claude/hooks/foo.sh` is prose, and
+# accepting it would let a hook buy coverage with a sentence. The path must appear in code.
+covered = set(re.findall(r"\$HOOKS/([a-z0-9-]+\.sh)",
+                         (root / "bin/test-check-agent-hooks.sh").read_text()))
+for selftest in sorted((root / "bin").glob("test-*.sh")):
+    code = "\n".join(l for l in selftest.read_text().splitlines()
+                     if not l.lstrip().startswith("#"))
+    covered |= set(re.findall(r"\.claude/hooks/([a-z0-9-]+\.sh)", code))
+disk = [h for g in cfg["hooks"].get("PreToolUse", []) for h in g["hooks"]
+        if h["command"].rstrip('"').endswith("warn-low-disk.sh")]
+problems = []
+registrations = sum(len(g["hooks"]) for groups in cfg["hooks"].values() for g in groups)
+# The doc states these in prose, and they have now drifted THREE times: it said "five" against seven
+# registered; this branch's own first pass incremented it to "six" against eight; and then master
+# split the sentence into SCRIPTS and REGISTRATIONS while this check still pinned the older wording,
+# so merging the two went red on the doc rather than on either change - which is the check working,
+# not failing. A number nobody verifies is a number that rots, so both are verified here rather than
+# trusted to the next editor, and both are needed because one script can be registered against
+# several events.
+WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+         "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12}
+doc = (root / "docs/agent-harness.md").read_text()
+m = re.search(r"`\.claude/settings\.json`\*\* - ([a-z]+) hook scripts across ([a-z]+) registrations", doc)
+if not m:
+    problems.append("docs/agent-harness.md no longer states the settings.json script and registration counts")
+else:
+    if WORDS.get(m.group(1)) != len(registered):
+        problems.append("docs/agent-harness.md says %s hook scripts; settings.json registers %d distinct"
+                        % (m.group(1), len(registered)))
+    if WORDS.get(m.group(2)) != registrations:
+        problems.append("docs/agent-harness.md says %s registrations; settings.json has %d"
+                        % (m.group(2), registrations))
+if registered - covered:
+    problems.append("registered but not self-tested: %s" % sorted(registered - covered))
+if covered - registered:
+    problems.append("self-tested but not registered: %s" % sorted(covered - registered))
+if not disk:
+    problems.append("warn-low-disk.sh is not registered as a PreToolUse hook")
+elif any("if" in h for h in disk):
+    problems.append("warn-low-disk.sh grew an `if` filter")
+print("; ".join(problems) if problems else "in_sync")
+REGCHECK
+registration="$(python3 "$TMP/regcheck.py" "$REPO_ROOT")"
+assert "every registered hook is self-tested, and the disk hook is registered unfiltered" in_sync "$registration"
+
+# ---------------------------------------------------------------------------------------------
 # inject-recorded-knowledge.sh
 #
 # It runs at session start with no input to parse, so the risks are different from the other three:
@@ -816,7 +1380,10 @@ NOTE
 # in shared /tmp - so a second concurrent run of this suite clears and rewrites the stamp between this
 # function's `rm` and its fire, and the reminder that should have appeared is throttled away. Measured
 # on a pristine master worktree: one run in three failed, on a different case each time, which is
-# exactly how a shared-state flake presents.
+# exactly how a shared-state flake presents - and seen twice as "an immediate second push is
+# throttled" reporting `repeated`, when a concurrent run removed the stamp the first invocation
+# had just written before the second could read it. Test-infra contention, not a hook bug: the
+# hook needs no seam for this, since it already honours TMPDIR.
 PUSH_TMPDIR="$(mktemp -d)"
 
 push_fire() { # <command> -> stdout of the hook
@@ -899,6 +1466,165 @@ rm -f docs/inflight/pr-90003-selftest.md
 rm -rf "$push_stub" "$PUSH_TMPDIR"
 
 echo
+# ---------------------------------------------------------------------------------------------
+# remind-master-drift-on-push.sh
+#
+# ADDED BY astubbs#339, not by the PR that wrote the hook. The registration check further down
+# reports every hook `settings.json` registers that nothing under `bin/` references, and this hook
+# was the first thing it caught. astubbs#357 tested the SHARED push detection thoroughly - chained
+# git calls, unspaced operators, and a negative control - through the sibling reminder's fixture, but
+# nothing exercised THIS hook's own contract, and master's copy of this suite already cites "the
+# drift section" that was never added. So these cases are the hook's own behaviour: what it reports,
+# when it stays quiet, and the throttle that decides between them.
+#
+# OFFLINE BY CONSTRUCTION. The hook only fetches when `MASTER_DRIFT_REF` contains a slash, so a local
+# branch standing in for `origin/master` skips that branch entirely and no case here touches the
+# network. Every case also pins a private TMPDIR and `MASTER_DRIFT_FETCH_FLOOR_SECONDS=0`: the stamp
+# path is derived from the branch NAME, so concurrent copies of this suite would collide on it -
+# the same shared-state flake the push-reminder section above documents - and the five-minute fetch
+# floor would otherwise silence every case after the first.
+# ---------------------------------------------------------------------------------------------
+
+echo
+echo "--- remind-master-drift-on-push.sh ---"
+
+# THE CWD IS INHERITED BY THE SECTION AFTER THIS ONE, so this section restores whatever it found.
+# `check-history-rewrite.sh` below documents that it runs from the push fixture's scratch repo,
+# reached only by inheriting the cwd, and that its enriched-refusal cases fail from the real tree
+# because the CI checkout is detached. A `cd "$REPO_ROOT"` here therefore turned that section red
+# on every runner while passing locally, where the checkout is on a branch - caught by CI, not by
+# this suite, which is the reason it is written down rather than just fixed.
+drift_prev_cwd="$PWD"
+DRIFT_HOOK="$HOOKS/remind-master-drift-on-push.sh"
+drift_repo="$(mktemp -d)"
+DRIFT_TMPDIR="$(mktemp -d)"
+# Identity on the FIXTURE REPO rather than per commit: `git merge` below also writes a commit,
+# and a `-c`-per-commit helper silently does not cover it.
+drift_commit() { git commit -qm "$1"; }
+(
+    cd "$drift_repo" || exit 1
+    git init -q .
+    git symbolic-ref HEAD refs/heads/basefix
+    git config user.email selftest@example.invalid
+    git config user.name selftest
+    printf 'base\n' >shared.txt
+    printf 'x\n' >untouched.txt
+    git add . && drift_commit "fixture root"
+    # The branch touches shared.txt and mine.txt; the stand-in master touches shared.txt and
+    # theirs.txt. So exactly ONE file is changed on both sides, which is what makes the overlap
+    # cases below assertions rather than coincidences.
+    git checkout -q -b feature
+    printf 'mine\n' >>shared.txt
+    printf 'm\n' >mine.txt
+    git add . && drift_commit "branch work"
+    git checkout -q basefix
+    printf 'theirs\n' >>shared.txt
+    printf 't\n' >theirs.txt
+    git add . && drift_commit "MASTER-SUBJECT-ONE"
+    git checkout -q feature
+)
+cd "$drift_repo" || exit 1
+
+drift_fire() { # [VAR=value...] -> stdout of the hook
+    printf '{"tool_name":"Bash","tool_input":{"command":"git push"}}' |
+        env TMPDIR="$DRIFT_TMPDIR" MASTER_DRIFT_REF=basefix MASTER_DRIFT_FETCH_FLOOR_SECONDS=0 \
+            "$@" bash "$DRIFT_HOOK" 2>/dev/null
+}
+drift_ctx() { # <hook output> -> the additionalContext string, or empty
+    [ -n "$1" ] || return 0
+    printf '%s' "$1" | python3 -c 'import json,sys; print(json.load(sys.stdin)["hookSpecificOutput"]["additionalContext"])'
+}
+
+# WHAT IT IS FOR: the subjects. A divergence count is what `git rev-list --left-right --count`
+# already answers; the reason this hook exists is that nobody reads the commit bodies, so naming the
+# commit is the assertion that matters most here.
+drift_first="$(drift_fire)"
+drift_report="$(drift_ctx "$drift_first")"
+case "$drift_report" in *MASTER-SUBJECT-ONE*) got=named_the_commit ;; *) got="did not name it" ;; esac
+assert "reports the subject of a commit the base ref gained" named_the_commit "$got"
+
+# OVERLAP, and its negative half in the same case. `shared.txt` is changed on both sides and must be
+# named; `theirs.txt` is changed only on the base side, so reporting it would turn "master has moved
+# under work this branch is doing" into a list of everything master did.
+case "$drift_report" in
+    *"changed on BOTH sides"*shared.txt*) got=named_overlap ;;
+    *) got="no overlap section" ;;
+esac
+assert "names the file changed on both sides" named_overlap "$got"
+case "${drift_report#*BOTH sides}" in *theirs.txt*) got="claimed a base-only file" ;; *) got=overlap_only ;; esac
+assert "does not report a base-only file as overlap" overlap_only "$got"
+
+# THROTTLED ON THE BASE SHA, not a clock: the same tip must be reported once however often you push.
+drift_second="$(drift_fire)"
+[ -z "$drift_second" ] && got=throttled || got="repeated"
+assert "the same base tip is not reported twice" throttled "$got"
+
+# ...and a base that MOVES reports again immediately, which is the half a clock-based throttle gets
+# wrong. Same push, same branch, one new commit on the stand-in master.
+( cd "$drift_repo" && git checkout -q basefix && printf 'more\n' >>theirs.txt && git add . && drift_commit "MASTER-SUBJECT-TWO" && git checkout -q feature )
+drift_moved="$(drift_ctx "$(drift_fire)")"
+case "$drift_moved" in *MASTER-SUBJECT-TWO*) got=reported_again ;; *) got="stayed quiet" ;; esac
+assert "a base ref that moved is reported again at once" reported_again "$got"
+
+# UNCOMMITTED WORK COUNTS AS THIS BRANCH'S, which the hook states as a deliberate choice: a file you
+# are editing right now is the one you most want to hear about. `untouched.txt` is in neither side's
+# history, so only a working-tree read can put it in the overlap.
+( cd "$drift_repo" && git checkout -q basefix && printf 'base edit\n' >>untouched.txt && git add . && drift_commit "MASTER-TOUCHES-UNTOUCHED" && git checkout -q feature )
+printf 'local edit\n' >>untouched.txt
+drift_dirty="$(drift_ctx "$(drift_fire)")"
+case "$drift_dirty" in *"BOTH sides"*untouched.txt*) got=counted_worktree ;; *) got="ignored the uncommitted edit" ;; esac
+assert "an uncommitted edit counts as this branch's side of the overlap" counted_worktree "$got"
+git checkout -q -- untouched.txt 2>/dev/null || true
+
+# SILENT WHEN THERE IS NOTHING TO INHERIT. Three separate exits, each of which would be a false
+# report: level with the base, pushing the base branch itself, and a command that is not a push.
+#
+# EACH ONE GETS A FRESH TMPDIR, and that is the whole point of these three cases rather than a
+# detail. The stamp already holds the current base SHA by now, so the SHA throttle alone would make
+# the hook silent - and a silence case that passes whether or not the exit it names exists asserts
+# nothing. A fresh stamp directory removes the throttle as an explanation and leaves only the exit
+# under test. Caught by this suite: the first version of the level-with-base case passed while the
+# repo sat in a broken merge state, which is exactly the false pass the fresh stamp rules out.
+#
+# `reset --hard` rather than a merge, because both sides appended to `shared.txt` and the catch-up
+# merge conflicted - leaving a repo whose index could not be read, which is what produced that pass.
+( cd "$drift_repo" && git reset --hard -q basefix )
+[ -z "$(drift_fire TMPDIR="$(mktemp -d)")" ] && got=silent || got=spoke
+assert "a branch level with the base ref stays silent" silent "$got"
+
+# NO OVERLAP takes the other branch of the report, and must not imply a merge is required. It has to
+# come AFTER the catch-up above: while the branch still carried its own edit to `shared.txt`, that
+# file was on both sides by construction, so this arm was unreachable and the case would have been
+# asserting the overlap arm under the wrong name.
+( cd "$drift_repo" && git checkout -q basefix && printf 'unrelated\n' >unrelated.txt && git add . && drift_commit "MASTER-UNRELATED" && git checkout -q feature )
+drift_none="$(drift_ctx "$(drift_fire)")"
+case "$drift_none" in
+    *"None of them touch a file this branch changes"*) got=said_nothing_forces_it ;;
+    *) got="wrong branch of the report" ;;
+esac
+assert "with no overlap it says nothing forces a merge today" said_nothing_forces_it "$got"
+( cd "$drift_repo" && git checkout -q basefix )
+[ -z "$(drift_fire TMPDIR="$(mktemp -d)")" ] && got=silent || got=spoke
+assert "pushing the base branch itself stays silent" silent "$got"
+( cd "$drift_repo" && git checkout -q feature )
+drift_nonpush="$(printf '{"tool_name":"Bash","tool_input":{"command":"git status"}}' |
+    env TMPDIR="$(mktemp -d)" MASTER_DRIFT_REF=basefix MASTER_DRIFT_FETCH_FLOOR_SECONDS=0 bash "$DRIFT_HOOK" 2>/dev/null)"
+[ -z "$drift_nonpush" ] && got=silent || got=spoke
+assert "a non-push git command stays silent" silent "$got"
+
+# IT MUST NEVER TAKE THE CALL AWAY. It emits no `permissionDecision` at all, so the assertion is on
+# the two things that could still do it: a non-zero exit, and a report on a repo it cannot read.
+( cd "$drift_repo" && git checkout -q basefix && printf 'z\n' >>unrelated.txt && git add . && drift_commit "MASTER-EXIT-CHECK" && git checkout -q feature )
+drift_fire >/dev/null 2>&1
+assert "reporting exits 0, so the Bash call survives" 0 "$?"
+drift_broken="$(cd "$DRIFT_TMPDIR" && printf '{"tool_name":"Bash","tool_input":{"command":"git push"}}' |
+    env TMPDIR="$DRIFT_TMPDIR" MASTER_DRIFT_REF=basefix MASTER_DRIFT_FETCH_FLOOR_SECONDS=0 bash "$DRIFT_HOOK" 2>/dev/null; echo "rc=$?")"
+case "$drift_broken" in *rc=0*) got=exited_zero ;; *) got="$drift_broken" ;; esac
+assert "outside a git repo it exits 0 rather than failing the call" exited_zero "$got"
+
+rm -rf "$drift_repo" "$DRIFT_TMPDIR"
+cd "$drift_prev_cwd" || exit 1
+
 echo "--- check-history-rewrite.sh ---"
 #
 # RUNS FROM THE PUSH FIXTURE'S SCRATCH REPO, inherited via the cwd - see the note at the top of the
