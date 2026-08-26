@@ -800,7 +800,23 @@ assert "an unparseable docker-df row does not suppress the warning" warned_from_
 # tracked settings.json NAMES it is mechanically checkable, and nothing checked it. This asserts both
 # directions, so a hook added to either side without the other goes red, and it pins the disk hook's
 # two registration properties: present as a PreToolUse hook, and deliberately unfiltered.
-registration="$(python3 - "$REPO_ROOT" <<'REGCHECK'
+# NO HEREDOC INSIDE A COMMAND SUBSTITUTION - this ran as `$(python3 - <<REGCHECK ... )` and broke
+# bash 3.2, which macOS ships and which the shell: macos lane in .github/workflows/repo-hygiene.yml
+# pins on purpose. That parser scans a substitution for its closing paren treating the heredoc body
+# as SHELL TEXT, and it does not recognise `#` comments while doing it - so an ordinary apostrophe in
+# a python comment (a possessive, in a sentence about an earlier count) was the fifth and unbalancing
+# single quote in the body, and 3.2 then read to the end of the file looking for the close. It landed
+# as an unexpected-EOF error against the last line of the file and exit 2, after some sixty cases had
+# already run, so the lane said the suite could not run rather than naming a case - while bash 5
+# parses the same text correctly and every ubuntu lane and every local run stayed green.
+#
+# Three other python heredocs inside `$( ... )` survive on master - check-cve-exclusions.sh,
+# check-ossindex-audit.sh, check-shell-hazards.sh - which is not a counter-example, just bodies whose
+# quotes happen to balance when read as shell. Heredoc at top level into a file, then run the file:
+# the body is never scanned as shell at all, so no later edit to the python can bring this back. The
+# python itself is unchanged. bin/check-shell-hazards.sh is the right long-term home for the class;
+# a row there would report those three, so it is queued in the inflight note rather than done here.
+cat >"$TMP/regcheck.py" <<'REGCHECK'
 import json, re, sys, pathlib
 root = pathlib.Path(sys.argv[1])
 cfg = json.loads((root / ".claude/settings.json").read_text())
@@ -845,7 +861,7 @@ elif any("if" in h for h in disk):
     problems.append("warn-low-disk.sh grew an `if` filter")
 print("; ".join(problems) if problems else "in_sync")
 REGCHECK
-)"
+registration="$(python3 "$TMP/regcheck.py" "$REPO_ROOT")"
 assert "every registered hook is self-tested, and the disk hook is registered unfiltered" in_sync "$registration"
 
 # ---------------------------------------------------------------------------------------------

@@ -61,6 +61,21 @@ high-water-mark correction stays unexercised. Treat a green macOS lane as eviden
 and the column layout, not for the sparse-image branch.
 <!-- post-merge: checked-end -->
 
+## Queued: a hazard row for heredoc-inside-command-substitution
+
+<!-- post-merge: checked-begin -->
+The `shell: macos` lane caught the self-test dying under bash 3.2 - `$(python3 - <<HEREDOC ... )`,
+whose body 3.2 reads as shell text without recognising `#` comments, so one apostrophe in a python
+comment sent it hunting for a closing quote to the end of the file. Fixed by writing the heredoc to
+a file at top level, so the body is never scanned as shell at all.
+
+`bin/check-shell-hazards.sh` is where that class belongs: silent, version-dependent, and invisible
+to ShellCheck, which is its stated admission test. It is not added here because three instances
+already exist on master - `check-cve-exclusions.sh`, `check-ossindex-audit.sh` and
+`check-shell-hazards.sh` itself - so a row would need those three triaged and marked in the same
+change, and each is a shared file another branch may be editing. Doing it needs its own PR.
+<!-- post-merge: checked-end -->
+
 ## Smaller, still open
 
 - `df` on the fast path has no timeout, so a hung NFS mount freezes the session. Portable bounding
