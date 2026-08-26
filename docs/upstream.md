@@ -14,7 +14,9 @@ re-derived from scratch:
 - [**`src/docs/development/upstream-map.yaml`**](../src/docs/development/upstream-map.yaml) - the
   **state tracker**, and the **source of truth** for the *facts*: which fork branch/PR maps to
   which upstream issue/PR, its work group, and current status. Its header documents the schema.
-  Validate and render with `scripts/upstream-map.py {validate,table,refs}`. Design follows Debian
+  Validate and render with `scripts/upstream-map.py {validate,table,refs}`;
+  `bin/check-upstream-map.sh` runs that validation as a gate, so a schema error fails a PR rather
+  than waiting for someone to run the script by hand. Design follows Debian
   DEP-3, Yocto `Upstream-Status:` and OpenShift's `UPSTREAM:` fork conventions.
 - [**`src/docs/development/upstream-pr-analysis.adoc`**](../src/docs/development/upstream-pr-analysis.adoc) -
   the **plan**: *editorial* analysis with rankings, verdicts, and the recommended merge order. When
@@ -44,10 +46,12 @@ the mirrors move on.
 **When you start work that maps to an upstream PR, add or update its entry in `upstream-map.yaml`**
 - do not just note it in prose. And **it does not stop at "start work"**.
 
-Nothing automated checks the *fork* side: `upstream-map.py validate` only checks the schema, and
+Nothing automated checks the *fork* side, and the gate above does not change that:
+`upstream-map.py validate` checks the SHAPE of an entry, never whether its claims are true, and
 `upstream-sweep.sh` only watches upstream - so a manifest that says `prs: []` while a fork PR is
 open still passes every check, and the mapping quietly rots (a 2026-08-04 audit found five such
-entries). Update the entry **at every lifecycle transition of your own work, in the same commit that
+entries). Read a green gate as "this file parses and its states are spelled correctly", nothing
+more. Update the entry **at every lifecycle transition of your own work, in the same commit that
 causes it**: opening a PR (`prs:` + `status: pr-open`), finishing on a branch without a PR
 (`status: ready`), merging (`merged`), releasing (`released`), abandoning
 (`superseded`/`wontfix`).
