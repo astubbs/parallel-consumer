@@ -29,11 +29,12 @@ Run the lane for the current state; read below for what each group *is*.
 | `AbstractParallelEoSStreamProcessor.lastCommitTime` | **New. In no ledger.** A plain `Instant`, written in one method and read unsynchronised by `isTimeToCommitNow()`. Checked: no inflight note, no `refactoring.md` entry - the only mention anywhere is a code excerpt in an unrelated solutions write-up. It sits on the commit-timing path, in a repo that tracks commit-timeout flakes. Unfixed, and the one genuinely new thing here; it wants a look on its own account rather than as a lint entry. |
 
 <!-- post-merge: checked-begin -->
-**What RacerD does NOT find, and why that is not a failure.** It missed all four of the named
-torn-read races - astubbs#345 and astubbs#346 are check-then-act on a map, astubbs#337 and
-astubbs#344 are two-read value divergence. RacerD models *unguarded access to shared state*, a
-different class. fb-contrib reached the first pair; nothing static reached the second. The four are
-named by their fixing PRs, which stay citable after each lands.
+**What RacerD does NOT find, and why that is not a failure.** None of the four torn-read races found
+by hand appears anywhere in its output - astubbs#345 and astubbs#346 are check-then-act on a map,
+astubbs#337 and astubbs#344 are two-read value divergence. RacerD models *unguarded access to shared
+state*, a different class, so which of the four are still unfixed does not move what it can see: the
+blind spot is the class, not the instances. fb-contrib reaches the first pair; nothing static reaches
+the second. The four are named by their fixing PRs, which stay citable after each lands.
 <!-- post-merge: checked-end -->
 
 ## `NULLPTR_DEREFERENCE` - Pulse, and two root causes rather than a long list
