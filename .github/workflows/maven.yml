@@ -89,8 +89,31 @@ jobs:
             name: "Performance Tests"
             cmd: "bin/performance-test.sh"
             timeout: 60
+          # Chaos Pain Suite - the per-PR ambient tripwire. It ran on the self-hosted `highcpu` box
+          # until 2026-08-26, on the premise that it needed many real cores to provoke anything.
+          # Measured head-to-head on the SAME commit (d8beb162f), that premise did not survive:
+          # hosted 13m59s vs self-hosted 12m16s, both green. 14% of wall-clock is not worth a shared
+          # physical machine, and the sharing was the root of every scheduling problem the highcpu
+          # lane had - a hosted runner gives each job its own VM, so co-residency cannot happen.
+          #
+          # bin/chaos-test.sh needed no change to move here, which is the tell that the premise was
+          # never load-bearing: it passes no forkCount and no -Dparallel-tests, so the suite was
+          # never configured to exploit those cores.
+          #
+          # GATING, like the suite it replaces: a chaos RED is a real finding, so this entry is
+          # deliberately NOT `optional`. bin/chaos-test.sh excludes @Quarantined scenarios (the
+          # Quarantine Lane owns them) and flags a zero-tests-selected window loudly in the job
+          # summary rather than impersonating a green - read that before trusting a pass.
+          # On-demand seeded hunts (specific seed/reps) stay in chaos-pain.yml.
+          - suite: chaos
+            name: "Chaos Pain Suite"
+            cmd: "bin/chaos-test.sh"
+            timeout: 60
     name: "${{ matrix.name }}"
     runs-on: ubuntu-latest
+    # NO continue-on-error: every suite in this matrix gates. If you add an advisory trial lane, give
+    # the entry an `optional` key and set `continue-on-error: ${{ matrix.optional == 'true' }}` -
+    # actionlint rejects a matrix property no entry defines, so the expression cannot sit here unused.
     timeout-minutes: ${{ matrix.timeout }}
     steps:
       - uses: actions/checkout@v6
@@ -107,6 +130,22 @@ jobs:
             setup-java-Linux-x64-maven-
       - name: ${{ matrix.name }}
         run: ${{ matrix.cmd }}
+
+      # CHAOS ONLY. The self-hosted lane used to upload these as
+      # `highcpu-fast-feedback-reports-Chaos Pain Suite-*`; moving chaos here would otherwise have
+      # dropped them silently - a regression nothing goes red for. They are load-bearing for
+      # diagnosis rather than a nicety: a chaos failure is read out of the failsafe XML, and
+      # docs/solutions/workflow-issues/gh-run-view-log-truncation.md exists because the job LOG is
+      # unreliable for this suite - the artifact survives where the log stream does not. Cited from
+      # docs/inflight/bug-857-family.md; keep the name greppable if you rename it.
+      - name: Upload chaos test reports
+        if: always() && matrix.suite == 'chaos'
+        uses: actions/upload-artifact@v7
+        with:
+          name: chaos-suite-reports-${{ github.run_number }}
+          path: '**/target/*-reports/*.xml'
+          retention-days: 14
+
       - name: Upload coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v5
