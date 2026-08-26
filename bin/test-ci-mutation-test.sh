@@ -23,8 +23,14 @@
 # each has a green near-miss one character away from it - the shape bin/test-check-shell-lint.sh
 # established on this branch.
 #
-# NO MAVEN RUNS HERE. Every case either exits before the build (the scoping arms) or feeds a
-# captured PIT log through PIT_DRY_RUN_LOG (the verdict arms). The whole file is seconds.
+# NO REAL MAVEN RUNS HERE, and note the word REAL - the earlier wording was "NO MAVEN RUNS HERE",
+# which described a blind spot as a feature. Every case used to either exit before the build (the
+# scoping arms) or feed a captured PIT log through PIT_DRY_RUN_LOG (the verdict arms), so NOTHING
+# exercised the branch that actually invokes Maven. A comment inside that invocation's backslash
+# continuation then truncated the command - dropping `-pl parallel-consumer-core -am` so the lane
+# mutated every module, dropping the exclusions, and exiting 127 from the orphaned argument - and
+# every arm in this file stayed green through it. The argv arms at the end close that: they run the
+# real branch against a STUB `./mvnw` that records what it was handed. Still seconds.
 
 set -euo pipefail
 
@@ -369,6 +375,87 @@ assert_verdict "green near-miss: the same 42, this time KILLED, passes" 0 "42" \
 # under - so the survivor table is the product and the exit code only answers "did it measure".
 assert_verdict "green: NO_COVERAGE counts as evaluated - it is a finding, not a failure" 0 "42" \
     "42 evaluated" "" "NO_COVERAGE"
+
+echo
+echo "=== Argv arms: the lane is only PR-scoped if the flags survive the invocation ==="
+
+# The only arms that reach the real `./mvnw` branch. They do not run Maven: the fixture drops an
+# executable `mvnw` stub at its root which records its argv and prints a canned statistics block, so
+# the run still reaches a verdict. What is under test is not PIT - it is whether the flags this lane
+# depends on arrive at all.
+#
+# $1 name, $2 the flag the recorded argv must contain, $3 optional following argv word.
+assert_mvn_argv() {
+    local name="$1" want="$2" want_next="${3:-}"
+    local tmp argv out rc
+    tmp="$(make_fixture)"
+    argv="$tmp/argv.txt"
+    (
+        cd "$tmp" || exit 1
+        printf '// edited\n' >> parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/offsets/RunLengthEncoder.java
+        git add -A
+        git -c user.email=t@t -c user.name=t commit -q -m change
+        cat > mvnw <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$PIT_STUB_ARGV"
+printf -- '- Statistics\n'
+printf '>> Generated 42 mutations Killed 42 (100%%)\n'
+STUB
+        chmod +x mvnw
+        mkdir -p parallel-consumer-core/target/pit-reports
+        printf '<mutations><mutation status="KILLED"/></mutations>\n' \
+            > parallel-consumer-core/target/pit-reports/mutations.xml
+    ) > /dev/null 2>&1
+
+    set +e
+    out="$(cd "$tmp" && env PIT_BASE_REF=master PIT_STUB_ARGV="$argv" bin/ci-mutation-test.sh 2>&1)"
+    rc=$?
+    set -e
+
+    if [ ! -s "$argv" ]; then
+        printf 'FAIL: %s (the stub mvnw was never invoked - the run never reached the build branch)\n%s\n' \
+            "$name" "$out"
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
+
+    local got=""
+    if grep -qxF -- "$want" "$argv"; then
+        if [ -z "$want_next" ]; then
+            got="yes"
+        elif grep -qxF -- "$want_next" <<< "$(grep -A1 -xF -- "$want" "$argv")"; then
+            got="yes"
+        fi
+    fi
+
+    if [ "$got" = "yes" ]; then
+        printf 'ok:   %s\n' "$name"
+        pass=$((pass + 1))
+    else
+        printf 'FAIL: %s (argv did not carry %s%s). Recorded argv:\n%s\n' \
+            "$name" "$want" "${want_next:+ followed by $want_next}" "$(cat "$argv")"
+        fail=$((fail + 1))
+    fi
+    rm -rf "$tmp"
+}
+
+# --- The flag whose loss made the lane mutate every module ----------------------------------------
+# Without this the run is not PR-scoped at all: it walks the whole reactor, spends ~24 minutes on
+# core and then dies in a module the PR never touched. That is what shipped.
+assert_mvn_argv "argv: the module scope reaches Maven" "-pl" "parallel-consumer-core"
+assert_mvn_argv "argv: -am reaches Maven so core's deps build" "-am"
+
+# --- The exclusions the truncated comment was describing ------------------------------------------
+# The comment explaining why the Lincheck harnesses are excluded is what deleted the exclusion.
+assert_mvn_argv "argv: the Lincheck test exclusions reach Maven" \
+    "-DexcludedTestClasses=bz.stub.parallelconsumer.integrationTests.*,bz.stub.parallelconsumer.state.*Lincheck*"
+
+# --- The rest of the tail, which went the same way ------------------------------------------------
+# These were dropped by the same truncation. Individually minor; collectively they are the evidence
+# that everything after the comment was gone, not just the next line.
+assert_mvn_argv "argv: the report formats reach Maven" "-DoutputFormats=XML,HTML"
+assert_mvn_argv "argv: the timeout factor reaches Maven" "-DtimeoutFactor=3.0"
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

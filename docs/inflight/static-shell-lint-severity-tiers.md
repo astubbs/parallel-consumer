@@ -37,9 +37,43 @@ right and only the existing corpus blocks it; `old` means it stays off everywher
 
 | Severity | Count | Profile | Why not gated | Turns on when |
 |---|--:|---|---|---|
-| `warning` | 14 | `new` | `SC2034` (unused variable, 6) is the largest group and includes shared-library exports the linter cannot see used across a `source` boundary. Then `SC2164` (`cd` without `\|\|`, 4) and `SC2155` (declare-and-assign masking a return value, 3). Real classes; none currently causing a defect. | Somebody works the fourteen off. This is the next floor to raise and the cheapest. |
+| `warning` | 14 | `new` | `SC2034` (unused variable, 6) is the largest group and includes shared-library exports the linter cannot see used across a `source` boundary. Then `SC2164` (`cd` without `\|\|`, 4) and `SC2155` (declare-and-assign masking a return value, 3). **"None currently causing a defect" stopped being true - see below.** | Somebody works the remainder off. This is the next floor to raise and the cheapest, and it now has an incident behind it rather than only tidiness. |
 | `info` | 40 | `new` except `SC2016`, which is `old` | Dominated by `SC2016` - single-quoted `$` in strings, overwhelmingly deliberate here because these scripts build awk programs and grep patterns - and `SC2001`, `sed` where parameter expansion would do. | Only after `warning` is clean, and probably never for `SC2016`. |
 | `style` | 18 | `old` | Preference. | Not planned. |
+
+## The warning floor has now missed a real defect: SC2215
+
+**`SC2215` is a `warning`, so the gate at `error` passed a script that had been silently broken for
+weeks.** `bin/ci-mutation-test.sh` carried a comment *inside* the backslash continuation of its
+`./mvnw` invocation. The continuation splices the `#` onto the command line, so the shell truncated
+the command there and every following line became a separate command. The lane therefore ran without
+`-pl parallel-consumer-core -am` (mutating every module instead of the PR's), without the Lincheck
+`-DexcludedTestClasses` the deleted comment was explaining, and without its output formats, timeouts
+and thread count - then exited 127 from the orphaned argument, whose `tee` also overwrote the PIT log
+the script parses for its verdict.
+
+ShellCheck names this exactly - *"This flag is used as a command name. Bad line break?"* - and
+`shellcheck --severity=error` does not report it. Reproduce the gap:
+
+```bash
+printf 'foo --a \\\n  --b \\\n  # comment\n  --c\n' > /tmp/probe.sh
+shellcheck /tmp/probe.sh                    # SC2215, exit 1
+shellcheck --severity=error /tmp/probe.sh   # silent, exit 0
+```
+
+**This did not become a per-code promotion, deliberately.** The one-knob rule above is the reason:
+the moment `--include=SC2215` is added, the next incident adds another code, and the list is the
+shape this repo has already removed from SpotBugs once. The floor is the knob. What this incident
+changes is the *argument* for raising it - the warning tier is no longer a tidiness backlog, it is a
+tier with a shipped defect in it.
+
+A whole-tree class sweep found **one** other instance of this exact shape: none. `SC2215` matched
+only the one site, across all 82 scripts in `bin/`, `.claude/hooks/` and `.github/`.
+
+The gap is covered behaviourally in the meantime: `bin/test-ci-mutation-test.sh` gained argv arms
+that run the real invocation branch against a stub `mvnw` and assert the flags arrive. They are
+proven red against the pre-fix script - 5 of them flip, the other 20 arms stay green either way,
+which is what shows the existing arms could never have caught it.
 
 ## Top 5 to turn back on whole-tree, ranked
 

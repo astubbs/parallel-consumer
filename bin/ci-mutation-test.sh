@@ -272,14 +272,21 @@ if [ -n "${PIT_DRY_RUN_LOG:-}" ]; then
   STATUS=0
 else
   set +e
+  # -DexcludedTestClasses below: the Lincheck harnesses are excluded as PIT TESTS (astubbs#347,
+  # inherited via master) - each asserts that a violation IS found, so using them as the suite PIT
+  # mutates against is meaningless and slow. They remain mutable TARGETS; this excludes them from
+  # the test set, not from the target set.
+  #
+  # KEEP COMMENTS OUT OF THE INVOCATION BELOW. A `#` line inside a backslash continuation does not
+  # comment out one line - the continuation splices it onto the command, the shell truncates the
+  # command there, and every remaining line becomes a SEPARATE command. That is not hypothetical:
+  # it shipped, and it silently dropped `-pl parallel-consumer-core -am` so the lane mutated every
+  # module, dropped the exclusions this very comment describes, and exited 127 from the orphaned
+  # `-DexcludedTestClasses` line. `bin/test-ci-mutation-test.sh` now pins the argv against it.
   ./mvnw --batch-mode -Pci test-compile org.pitest:pitest-maven:mutationCoverage \
     -Djacoco.skip=true \
     -DtargetClasses="${TARGET_CLASSES}" \
     -DtargetTests="${TARGET_TESTS}" \
-    # The Lincheck harnesses are excluded as PIT TESTS (astubbs#347, inherited via master):
-    # each asserts that a violation IS found, so using them as the suite PIT mutates against
-    # is meaningless and slow. They remain mutable TARGETS - this excludes them from the test
-    # set, not from the target set.
     -DexcludedTestClasses="bz.stub.parallelconsumer.integrationTests.*,bz.stub.parallelconsumer.state.*Lincheck*" \
     -DjvmArgs=-Xmx2g \
     -DoutputFormats=XML,HTML \
