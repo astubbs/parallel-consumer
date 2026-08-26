@@ -1403,6 +1403,75 @@ not rare enough to need a hunt to see, and that the verification the first 2026-
 for (replay a captured seed with astubbs#29's `tryLock()` applied, and read whether the poll thread
 is still found `BLOCKED` on the same monitor) now has four seeds to choose from.
 
+## 2026-08-26, fifth capture: the DRAIN arm, and the first capture whose frames were re-resolved
+
+**The four sections above are the same discriminator on the key-order, cooperative and eager
+revoke-under-work arms. This is the EAGER DRAIN arm - the last cell of the 2x2 that had not produced
+a clean one.** `Chaos Pain Suite`,
+`ChaosRevokeUnderWorkDrainIT.revokeUnderDrainingStopsStaysProtocolHonest`, the same correctness SLO
+`no instance may end the run with an unclassified failure cause`
+<!-- post-merge: checked-begin -->
+([run 33014328251](https://github.com/astubbs/parallel-consumer/actions/runs/33014328251), job
+98328649042), from astubbs/parallel-consumer#346 at head `f2acfcbab`:
+<!-- post-merge: checked-end -->
+
+```
+instance 44: RuntimeException: Error from poll control thread: Timeout waiting for commit response
+PT10S to request ConsumerOffsetCommitter.CommitRequest(id=6ce0e3c1-...) ...
+POLL THREAD AT TIMEOUT: BLOCKED - the poll thread is waiting to acquire a monitor, so this is
+contention or a lock-ordering defect, NOT a slow broker. Lock:
+java.util.concurrent.atomic.AtomicBoolean@783a3feb, held by: pc-control-PC-44.
+Top frames: [...commitOffsetsThatAreReady(AbstractParallelEoSStreamProcessor.java:1589),
+             ...onPartitionsRevoked(AbstractParallelEoSStreamProcessor.java:552),
+             ConsumerRebalanceListenerInvoker.invokePartitionsRevoked, ... ConsumerManager.poll]
+```
+
+**The frame numbers moved, and re-resolving them is the only new verification work here.** Every
+capture above reads `:1585` / `:548`; this one reads `:1589` / `:552`. The shift is master's, not the
+branch's - at `f2acfcbab`, `:1589` is the `synchronized (commitCommand)` acquisition inside
+`commitOffsetsThatAreReady` and `:552` is that method's call site inside `onPartitionsRevoked`, so
+the pair is identical to the first capture's once resolved rather than read off the text. Anyone
+matching future captures by line number will mis-file them; match by method and monitor. The AB-BA
+reasoning is in the first 2026-08-26 section and is not repeated.
+
+<!-- post-merge: checked-begin -->
+**The branch was not a suspect, and the ruling-out is unusually cheap.**
+astubbs/parallel-consumer#346 changed `WorkManager`, `PartitionStateManager` and `PartitionState`
+plus tests - it did not touch `AbstractParallelEoSStreamProcessor`, and the frames above prove that
+by resolving cleanly against master's copy of it. So this is a fifth not-PR-introduced control arm.
+<!-- post-merge: checked-end -->
+
+**It also rules out astubbs#335 for this signature, which was the live suspicion.** astubbs#335
+reworked the work-claim state machine into an atomic per-attempt transition and merged at
+2026-08-26T13:16Z; a revoke-under-work drain scenario exercises exactly that, so it was the natural
+candidate. But the first three captures ran at 05:10Z, 08:34Z and 11:52Z the same day - all before
+that merge existed on master - on the identical monitor, holder and method pair. The discriminator
+predates astubbs#335, so astubbs#335 cannot be what introduces it.
+
+**Class 2 did not fail this build, and that is worth recording as the demotion working.** The autopsy
+lists 26 `CLASS2_STALL/LAG_STAGNATION` observations, all in the familiar 154s-against-150s band, and
+`violations (0)` above them - the run died on the SLO assertion in `ChaosScenarioBase`'s
+`assertScenarioSlos`, not on any probe bound. A reader arriving at a 154s peak on this run should
+read the peaks line and stop there.
+
+**Seed `3198328355855848347`** - recorded before the log expires:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=3198328355855848347
+
+**Not replayed, and still not a rate.** Five seeds now exist for the verification the first
+2026-08-26 section asks for - replay one with astubbs#29's `tryLock()` applied and read whether the
+poll thread is still found `BLOCKED` on the same monitor. None of the five has been replayed, here or
+above; the write-up
+[`revoke-path-commit-deadlock-between-poll-and-control-threads.md`](../solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md)
+still records its verification status as Unproven, and this capture does not change that.
+
+**One retrieval note.** The failing scenario was not the first one in the job log:
+`ChaosRevokeUnderWorkCooperativeDrainIT` at seed `8977646436603470133` appears first and **passed**.
+Reading the replay line nearest the top of a chaos log picks the wrong seed. The failsafe artifact
+(`chaos-suite-reports-<n>`) names the failing class in one line - `failures="1"` is an attribute of
+the `testsuite` element - which is the route [`docs/ci.md`](../ci.md) already prescribes.
+
 ## Delete when
 
 The `CLASS2_STALL` entries above are superseded by this section and kept only as the record of how a
