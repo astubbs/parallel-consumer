@@ -17,6 +17,11 @@
 # control flow. The first category is GNU-vs-BSD coreutils divergence; the shape suits anything with
 # the same signature: silent, platform- or version-dependent, invisible to a linter.
 #
+# THE SECOND CATEGORY IS SHARED-GIT-STATE, and it is what the generic shape was for. `git fetch
+# --depth` is portable and correct on every platform; what it does silently is write the `shallow`
+# file in the shared --git-common-dir, truncating history for every worktree of the clone. Same
+# signature - no error, wrong answers elsewhere, unreachable by a linter - so it is a table row.
+#
 # check-shell-sigpipe.sh BELONGS IN HERE, and has not moved yet. It is the same class by every test
 # that matters: a silent wrong answer, invisible to ShellCheck, found the hard way. It predates this
 # file, which is the only reason it is separate - and this file is named for the class rather than
@@ -32,9 +37,11 @@
 # The corpus resolution both gates share already lives in bin/lib/shell-corpus.sh, so they cannot
 # drift about WHAT they scan while they remain separate. They already had.
 #
-# ZERO FINDINGS TODAY, ON PURPOSE. Every existing use in this repo is already correct: `stat` sits
-# behind a probe-then-choose, `sed -i` and `date -d` were deliberately avoided. This gate fixes
-# nothing; it stops the next script from re-learning it, which makes it free to adopt.
+# ZERO FINDINGS TODAY, ON PURPOSE - for the gnu-bsd rows. Every existing use in this repo is already
+# correct: `stat` sits behind a probe-then-choose, `sed -i` and `date -d` were deliberately avoided.
+# Those rows fix nothing; they stop the next script from re-learning it, which makes them free to
+# adopt. The shared-git-state row is the exception and had two live findings when it landed, both in
+# bin/check-quarantine-owners.sh, fixed in the same change.
 #
 # THE MARKER, not an allowlist in this file. A use that is genuinely correct carries
 # `hazard-ok: <reason>` on the line or the line above, so the reason travels with the code instead
@@ -61,6 +68,7 @@ gnu-bsd	(^|[^[:alnum:]_-])grep[[:space:]]+(-[[:alnum:]]+[[:space:]]+)*-P([[:spac
 gnu-bsd	(^|[^[:alnum:]_-])sort[[:space:]]+(-[[:alnum:]]+[[:space:]]+)*-V([[:space:]]|$)	`sort -V` is GNU; BSD sort has no version sort and treats it as an error.
 gnu-bsd	(^|[^[:alnum:]_-])base64[[:space:]]+(-[[:alnum:]]+[[:space:]]+)*-w[0-9]*([[:space:]]|$)	`base64 -w` is GNU; BSD base64 does not wrap and rejects -w.
 gnu-bsd	(^|[^[:alnum:]_-])sed[[:space:]]+(-[[:alnum:]]+[[:space:]]+)*-r([[:space:]]|$)	`sed -r` is GNU; -E works on both and means the same thing.
+shared-git-state	(^|[^[:alnum:]_-])git[[:space:]]+((-[^[:space:]]+)([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*(fetch|pull)([[:space:]]+[^[:space:]]+)*[[:space:]]+--(depth|shallow-since|shallow-exclude)	`git fetch --depth` (and `git pull --depth`) writes the `shallow` file, which lives in the SHARED --git-common-dir - so it truncates history for EVERY worktree of the clone at once, and merge-base and ahead/behind then answer confidently wrong instead of erroring. Fetch into a throwaway git dir and read FETCH_HEAD there; mark it hazard-ok when the fetch target really is disposable.
 HZ
 )
 
