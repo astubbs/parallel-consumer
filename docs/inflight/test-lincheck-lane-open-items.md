@@ -169,6 +169,32 @@ The other two harnesses inherit the same caveat: `ShardManagerLincheckTest` and
 `PartitionStateLincheckTest` hit 8 of 8 at a tenth of their committed bounds, but on the fast machine
 only.
 
+## The checkpoint-3 harness cannot be inverted yet, and another open defect is why
+
+<!-- post-merge: checked-begin -->
+`WorkManagerLincheckTest` asserts that the checkpoint-3 tear EXISTS, and its javadoc named
+astubbs#346 as the PR that inverts it. That fix landed and **the inversion is blocked - measured, not
+assumed**: `LINCHECK_TEST=WorkManagerLincheckTest bin/lincheck-test.sh` against the fixed tree still
+reports a violation, but a different one. The checkpoint-3 signature - `PartitionState.onSuccess`'s
+`assert removedFromIncompletes`, thrown out of `completeWork` - is gone. What surfaces instead is
+astubbs#345's `NullPointerException` from `ShardManager.removeWorkFromShardFor`, reached through the
+same `revokeAndReassign` operation.
+
+The harness is therefore green for the wrong reason, and its own assertion cannot tell the two apart:
+`assertThat(report).contains("completeWork")` matches the interleaving table, which names both
+operations whichever one threw.
+
+Neither move available works while astubbs#345 is open. Flipping to assert-no-violation goes red on
+astubbs#345's NPE, which is not this harness's bug. Tightening the assertion onto the checkpoint-3
+signature also goes red - correctly, since that tear is fixed - and would not be a durable pin
+anyway, because Lincheck stops at the FIRST violation and which of the two it reaches is not ordered.
+
+**Do it when astubbs#345 lands**, in that change: invert this harness to assert no violation, and
+invert `ShardManagerLincheckTest` beside it. Until then the harness detects astubbs#345's seam while
+wearing checkpoint 3's javadoc, which is why this is written down rather than left for whoever next
+reads a passing run.
+<!-- post-merge: checked-end -->
+
 ## Nothing runs the lane, so the tripwire it promises cannot fire
 
 `bin/lincheck-test.sh` is excluded from every gating suite by design, and no workflow invokes it. The

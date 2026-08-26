@@ -42,8 +42,12 @@ import static com.google.common.truth.Truth.assertThat;
  * {@link MockConsumer} rather than a Mockito mock, as {@code WorkManagerTest} does - which also keeps
  * Mockito's generated classes out of the instrumented object graph.
  * <p>
- * <b>Expected on this tree</b>: a violation, because master carries the defect unfixed. astubbs#346 carries
- * the fix, and when it lands this test goes red and must be inverted - see {@link ShardManagerLincheckTest}.
+ * <b>Expected on this tree</b>: a violation - but no longer THIS defect's. The checkpoint-3 tear is fixed, and
+ * the violation that now surfaces is astubbs#345's {@code NullPointerException} out of
+ * {@code ShardManager.removeWorkFromShardFor}, reached through the same {@code revokeAndReassign} operation.
+ * So this harness passes for a reason its assertion cannot distinguish, and it cannot be inverted until
+ * astubbs#345 lands - invert it beside {@link ShardManagerLincheckTest} in that change. Measurement and the
+ * two moves that do not work: {@code docs/inflight/test-lincheck-lane-open-items.md}.
  * <p>
  * STRESS only: {@code ShardKey} is unavoidable here (registering work goes through the shard manager), and
  * Lincheck 3.7 cannot model-check a Lombok {@code callSuper = true} value type - see

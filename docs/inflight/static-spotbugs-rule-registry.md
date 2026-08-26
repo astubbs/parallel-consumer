@@ -93,13 +93,15 @@ weaken the case for fb-contrib; it means this paragraph stops describing a live 
 describing history, and somebody should reword it rather than leave a reader hunting for a race that
 is fixed. This PR does not depend on astubbs#345, so the two can land in either order.
 
+<!-- post-merge: checked-begin -->
 This **narrows a standing claim** that both concurrency PoCs rest on. The evaluation note says "no
 static analysis the repo runs can see the class", which remains true - stock SpotBugs at max effort
 does not. But the register's stronger gloss, "nothing static does", is now measurably wrong for one
-member of the family. The honest rate is **one of the four known instances**: astubbs#346's seam is a
-stale-check followed by a lookup, not `containsKey` before `get`, so this detector does not fire on
-it, and the two torn-read value-divergence instances are outside what any check-then-act detector
-looks for.
+member of the family. The honest rate is **one of the four known instances**: the seam astubbs#346
+fixed was a stale-check followed by a lookup, not `containsKey` before `get`, so this detector never
+fired on it while it was there, and the two torn-read value-divergence instances are outside what any
+check-then-act detector looks for.
+<!-- post-merge: checked-end -->
 
 Also ON, each a single finding unless noted, all in code that matters:
 
