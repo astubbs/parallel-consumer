@@ -3,8 +3,8 @@
 # Copyright (C) 2026 Antony Stubbs and contributors
 #
 
-# Run the Chaos Pain Suite - shared by the per-PR highcpu lane (pr-highcpu-fast-feedback.yml,
-# check "highcpu / Chaos Pain Suite") and the on-demand chaos-pain.yml dispatch workflow.
+# Run the Chaos Pain Suite - shared by the per-PR gate (maven.yml, check "Chaos Pain Suite") and
+# the on-demand chaos-pain.yml dispatch workflow.
 #
 # Env (data, not code - workflow inputs must pass through env, never ${{ }} into scripts):
 #   CHAOS_SEED - optional seed (replays a schedule); empty = random, logged by the run

@@ -85,7 +85,7 @@ constants, where mutants *would* be decidable and also worthless. The filter is 
 - **Skip the job instead of passing it.** Split the decision into a cheap `mutation-scope` job that
   calls the existing script in a scope-only mode, then guard the real job with `if:` so the row
   renders grey. The check name can carry the reason via `${{ needs... }}` interpolation - the pattern
-  `.github/workflows/pr-highcpu-fast-feedback.yml` already uses for
+  the deleted self-hosted PR lane already used for
   `format('{0} (optional)', matrix.suite-name)`.
 
 ## Why the recommended option is cost-negative
