@@ -114,15 +114,27 @@ public class ReactorProcessor<K, V> extends ExternalEngine<K, V> {
                     .flatMapMany(it -> it)
                     .doOnNext(signal -> log.trace("doOnNext {}", signal))
                     .subscribeOn(getScheduler())
-                    .subscribe(
-                            ignore -> {
-                                try (var mdcScope = mdc.enter(schedulerContext)) {
-                                    onComplete(pollContext);
-                                }
-                            },
+                    // Three arguments, not two, and that is load-bearing. The two-argument overload has no
+                    // completion callback, so onComplete was wired as the ON NEXT consumer: a Publisher emitting
+                    // several elements retired its records once per element, and one completing EMPTY - Mono.empty(),
+                    // or a user function returning null - retired them never, leaving the record uncommitted, its
+                    // in-flight accounting leaked, and (since the dispatch ceiling landed) its dispatch permit gone
+                    // for the life of the process. Retiring on the terminal signal is once per flight in every case.
+                    // MutinyProcessor's subscribe().with(onItem, onFailure, onCompletion) already had this shape.
+                    //
+                    // Each TERMINAL callback runs under the caller's context - they execute on the Reactor
+                    // scheduler, not the worker thread that captured it. The element consumer is deliberately not
+                    // wrapped: it is neither the user's function nor terminal handling, which is the boundary this
+                    // propagation covers, and `doOnNext` above is unwrapped for the same reason.
+                    .subscribe(signal -> log.trace("Reactor element {}", signal),
                             throwable -> {
                                 try (var mdcScope = mdc.enter(schedulerContext)) {
                                     onError(pollContext, throwable);
+                                }
+                            },
+                            () -> {
+                                try (var mdcScope = mdc.enter(schedulerContext)) {
+                                    onComplete(pollContext);
                                 }
                             });
 
