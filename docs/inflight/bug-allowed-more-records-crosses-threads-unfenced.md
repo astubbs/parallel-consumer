@@ -1,7 +1,7 @@
 # `PartitionState.allowedMoreRecords` crosses threads with no fence
 
 <!-- inflight-type: bug -->
-<!-- inflight-impact: throughput -->
+<!-- inflight-impact: stall -->
 <!-- inflight-labels: concurrency -->
 
 The offset-encoding back-pressure flag is a plain `boolean`, written on the broker-poll thread and
@@ -44,13 +44,26 @@ edge, not a guaranteed one, and it is the shape this repository has been repeate
   stop. The incomplete set keeps growing, and the next encode is closer to `DefaultMaxMetadataSize`,
   where `updateBlockFromEncodingResult` strips the payload and records are replayed on rebalance.
 - **Stale `false` where the writer set `true`.** The partition takes no new work; only records
-  below `offsetHighestSucceeded` get through, via the `isBlockingProgress` arm. It clears whenever
-  the reader observes a later commit's write.
+  below `offsetHighestSucceeded` get through, via the `isBlockingProgress` arm.
 
-**Why `throughput` and not `stall`:** neither direction loses a record, and the blocked direction
-self-clears rather than staying stopped. Under the JMM the window is unbounded, so `stall` is
-defensible - the tag is a judgement, and the reasoning is here to be overridden rather than
-re-derived.
+**Why `stall`:** neither direction loses a record, but the blocked direction does not reliably
+self-clear, and the write that would clear it is not guaranteed to happen at all.
+
+Every write to this field is inside `tryToEncodeOffsets`, which `createOffsetAndMetadata` reaches
+only from `getCommitDataIfDirty` - and that returns early unless the partition is dirty. Take the
+clearing case where the writer sets `true` because `incompleteOffsets` emptied: that same commit
+then marks the partition clean. A control thread still holding the stale `false` admits nothing,
+because `isBlockingProgress` passes only offsets below `offsetHighestSucceeded` and an empty
+incomplete set puts every new record above it. So no record is taken, none succeeds, nothing calls
+`setDirty(true)`, the partition stays clean, and `tryToEncodeOffsets` never runs again.
+
+<!-- post-merge: checked-begin -->
+That is the distinction the earlier `throughput` tag missed: this is not an unbounded JMM window
+over a write that will eventually land, it is a partition that stops and stays stopped until the
+next rebalance re-creates the state. Corrected after `chatgpt-codex-connector` put the
+self-clearing argument against the code in review on astubbs/parallel-consumer#349; the original
+reasoning is recorded here rather than deleted, because it is the plausible-sounding version.
+<!-- post-merge: checked-end -->
 
 ## A scanner does see it; the recorded list does not
 
@@ -67,17 +80,14 @@ lane runs `spotbugs:check` with `-Dspotbugs.failOnError=false`, so the finding a
 blocks: the signal was present and the ledger was wrong about it, which is worse than the analyser
 having been silent.
 
-## Two more fields in the same class, same class of defect
+## Others in the same class
 
-Named because the sweep found them, not diagnosed here:
+Not restated here, deliberately: this note is deleted when **this** field is fenced, and anything
+recorded only inside it would go with it.
 
-- **`stateChangedSinceCommitStart`** is plain and written from BOTH threads - `setDirty` on the
-  control thread, and cleared in `getCommitDataIfDirty` on the poll thread - and read by `setClean`
-  on the poll thread. A missed control-thread write lets a commit be marked clean over state that
-  changed during the commit window, which is the burnt-commit-cycle shape `dirty` was fenced
-  against. This one is a lost-update risk as well as a visibility one, so `volatile` alone is not
-  obviously the fix.
-- **`bootstrapPhase`** is flagged by the same rule and has not been walked.
+`PartitionState.stateChangedSinceCommitStart` is independently actionable and has its own note -
+[`bug-state-changed-since-commit-start-written-from-both-threads.md`](bug-state-changed-since-commit-start-written-from-both-threads.md).
+For the rest, re-run the command above and read the report rather than trusting a list here.
 
 ## Settling it, and what not to do
 

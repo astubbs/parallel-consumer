@@ -124,8 +124,11 @@ public class PartitionState<K, V> {
      * preceding plain writes, and the acquire load on the read observes them. The {@code long}s stay
      * plain deliberately - fencing them too buys nothing the flag does not already provide, at extra
      * cost on every read. Evidence, re-runnable: the {@code jcstress-poc/} module
-     * (astubbs/parallel-consumer#348), whose {@code CommitPathVisibilityProbes} models this exact pair;
-     * measurements in docs/plans/2026-08-25-002-test-jcstress-poc-plain-long-visibility.md.
+     * (astubbs/parallel-consumer#348), whose {@code CommitPathVisibilityProbes} models this exact pair -
+     * the arm carrying that FORBIDDEN outcome is
+     * {@code CommitPathVisibilityProbes.VolatileDirtyPublishesPlainSucceeded}. What a probe's zero and its
+     * rate are each worth, with these figures in its results table:
+     * docs/solutions/best-practices/a-stress-probe-is-an-instrument-you-built-not-a-test.md.
      */
     @Setter(PRIVATE)
     @Getter(PACKAGE)

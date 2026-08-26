@@ -14,9 +14,11 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * Pins the {@code volatile} modifier on {@link PartitionState}'s {@code dirty} flag - the shape of the fix, because
  * the behaviour cannot be asserted in a unit test: the anomaly it prevents is a memory-model visibility effect
  * measured at ~1.4e-7 per sample on hardware, far below anything a JUnit run can observe. The behavioural evidence
- * lives in the jcstress probe module (docs/plans/2026-08-25-002-test-jcstress-poc-plain-long-visibility.md): as a
- * plain field the commit path could observe {@code dirty} set while the offsets it publishes were stale; with the
- * flag volatile the anomalous outcome was 0 in 4.29e9 samples, declared FORBIDDEN.
+ * lives in the {@code jcstress-poc/} probe module: as a plain field the commit path could observe {@code dirty}
+ * set while the offsets it publishes were stale; with the flag volatile the anomalous outcome was 0 in 4.29e9
+ * samples, declared FORBIDDEN. That arm is {@code CommitPathVisibilityProbes.VolatileDirtyPublishesPlainSucceeded},
+ * and what its zero is worth is
+ * docs/solutions/best-practices/a-stress-probe-is-an-instrument-you-built-not-a-test.md.
  * <p>
  * A modifier is exactly the kind of thing an unrelated refactor (or a Lombok annotation change) drops silently -
  * nothing goes red, the field still compiles, and the fix is gone. This is the tripwire.

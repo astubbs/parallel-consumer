@@ -96,15 +96,25 @@ the list** - read it there rather than from a copy, which is how a field fixed i
 being listed as plain in another.
 
 <!-- post-merge: checked-begin -->
-**The drift is no longer hypothetical - astubbs#349 caused the first instance.** Making
-`PartitionState.dirty` volatile leaves `CommitPathVisibilityProbes` describing a codebase that no
-longer exists: `PlainDirtyPublishesSucceeded` is annotated "Commit path **as shipped**" while the
-shipped path is now fenced, and `FaithfulOnSuccessVersusCommitCollection` models the same plain
-flag. What is now as-shipped is `VolatileDirtyPublishesPlainSucceeded`, still labelled a control
-arm. Nothing went red, which is the point of this section. Deliberately not corrected in
-astubbs#349 - relabelling arms is a change to the instrument and belongs with whoever builds the
-correspondence check, not bolted onto a one-field fix - but the arms must be re-labelled before the
-next reader takes "as shipped" at face value.
+It is currently incomplete in the other direction too: astubbs#349 found the analyser naming
+`PartitionState` fields that entry does not carry, so re-run the analyser rather than treating the
+entry as the full set.
+<!-- post-merge: checked-end -->
+
+<!-- post-merge: checked-begin -->
+**The drift is no longer hypothetical - astubbs#349 caused the first instance, and nothing went
+red.** Making `PartitionState.dirty` volatile left `CommitPathVisibilityProbes` describing a
+codebase that no longer existed: `PlainDirtyPublishesSucceeded` was annotated "Commit path **as
+shipped**" while the shipped path is now fenced, and the arm that had silently become as-shipped,
+`VolatileDirtyPublishesPlainSucceeded`, was still labelled a control. The `@Description` prose was
+corrected in that same PR - report text only, declaring a single `String value()` with no `Expect`
+and no outcome semantics, so no verdict could move and no `@Outcome`, `@State`, `@Actor` or class
+name was touched.
+
+**The relabelling closed the instance, not the hole.** A human reading the diff caught it; nothing
+in the build did, which is what this section is about. Prose is the recoverable case - the next
+drift will be a statement order or an access mode, where the arm goes on reporting a confident
+number about code that no longer matches it and no reader can see the difference.
 <!-- post-merge: checked-end -->
 
 ## Smaller, still open
@@ -130,8 +140,13 @@ next reader takes "as shipped" at face value.
 - **Priority tension, and how much of it astubbs#349 settled**: the plan defers this fix past the
   release; astubbs#349 shipped it anyway, against an unreleased snapshot. The plan doc is a dated
   record and is not rewritten to match ([`docs/citations.md`](../citations.md) owns that), so this
-  line is where the two reconcile. It settles **one** field - `PartitionState.dirty`. The three
-  sibling plain fields `docs/refactoring.md` names under the same defect class are still deferred,
-  so the tension survives for them, and so does the `core-control-thread-contract-debts.md` caution
-  that fixing piecemeal may conflict with the shared-nothing rework.
+  line is where the two reconcile. It settles exactly one field - `PartitionState.dirty` - and no
+  other. What remains under the same defect class is deliberately not counted here: regenerate it
+  with `./mvnw -o spotbugs:spotbugs -pl :parallel-consumer-core` and read the report.
+  [`docs/refactoring.md`](../refactoring.md)'s `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` entry owns the
+  recorded list - and `bug-allowed-more-records-crosses-threads-unfenced.md` records that the entry
+  is currently missing the `PartitionState` fields, so read the report, not just the entry. The
+  tension survives for whatever that leaves, and so does the
+  `core-control-thread-contract-debts.md` caution that fixing piecemeal may conflict with the
+  shared-nothing rework.
 <!-- post-merge: checked-end -->
