@@ -5,6 +5,12 @@
 
 # Fails if any shell script in bin/ pipes into `grep -q` while `pipefail` is set.
 #
+# THIS IS A HAZARD CATEGORY, NOT A GATE OF ITS OWN, and it should be folded into
+# bin/check-shell-hazards.sh - a silent wrong answer, invisible to ShellCheck, found the hard way,
+# which is that file's whole subject. It is separate only because it predates that file. Do not add
+# a second unrelated concern here to avoid the move; that is how the name starts lying.
+# Tracked in docs/inflight/ci-fold-sigpipe-into-shell-hazards.md.
+#
 # WHY THIS EXISTS
 #
 # `writer | grep -q PATTERN` under `set -o pipefail` inverts its own answer. `grep -q` exits the
@@ -37,23 +43,16 @@
 set -euo pipefail
 
 # Scans bin/ by default; takes a directory so the self-test can point it at fixtures.
-SCAN_DIR="${1:-}"
-# SCANS .claude/hooks/ AS WELL AS bin/. The hooks are shell that runs on every agent session with no
-# interactive user to notice breakage - exactly the population this guard exists for - and the gate
-# used to be blind to them. A live instance was found there by review, not by this check: the session
-# index piped into `grep -q` under pipefail, harmless only because its input was well under the 64KiB
-# pipe buffer that triggers the inversion.
-if [ -z "$SCAN_DIR" ]; then
-    cd "$(dirname "$0")/.."
-    SCAN_DIRS="bin .claude/hooks"
-else
-    SCAN_DIRS="$SCAN_DIR"
-fi
+# The corpus - both directories, and why - is bin/lib/shell-corpus.sh, shared with
+# check-shell-hazards.sh so the two gates cannot drift apart about what they scan. They already had.
+# shellcheck source=lib/shell-corpus.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/shell-corpus.sh" || exit 1
+shell_corpus_init "${1:-}" || exit 1
 
 self_name="$(basename "$0")"
 violations=0
 
-for f in $(for d in $SCAN_DIRS; do ls "$d"/*.sh 2>/dev/null; done); do
+for f in $(shell_corpus_files); do
     [ -e "$f" ] || continue
     # Two files must contain the anti-pattern as DATA rather than as code that runs: this script,
     # whose failure message shows the "wrong" half of a worked example, and its self-test, whose
@@ -108,4 +107,4 @@ EOF
     exit 1
 fi
 
-echo "ok:   no shell in $SCAN_DIRS pipes into grep -q under pipefail"
+echo "ok:   no shell in $SHELL_CORPUS_DIRS pipes into grep -q under pipefail"

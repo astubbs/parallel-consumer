@@ -92,7 +92,7 @@ whether the build exists in this repo today.
 
 ### Java core - not this note's
 
-Owned by [`docs/inflight/static-racerd-findings.md`](static-racerd-findings.md), which records that
+Owned by [`docs/inflight/static-infer-findings.md`](static-infer-findings.md), which records that
 the calibration was attempted and what it did and did not reach. Named here
 only because it is the third arm of the one-tool-three-languages argument - an argument the C# and
 C++ findings below substantially weaken.

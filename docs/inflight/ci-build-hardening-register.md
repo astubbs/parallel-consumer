@@ -34,7 +34,7 @@ below are the successors rather than an index:
 | SpotBugs detectors, the rule filter, `-Xlint` | [`static-spotbugs-rule-registry.md`](static-spotbugs-rule-registry.md) |
 | Error Prone and NullAway | [`static-error-prone-rule-registry.md`](static-error-prone-rule-registry.md) |
 | The PIT mutation lane | [`ci-mutation-testing.md`](ci-mutation-testing.md) |
-| RacerD | [`static-racerd-findings.md`](static-racerd-findings.md) |
+| RacerD | [`static-infer-findings.md`](static-infer-findings.md) |
 | The ShellCheck lane | [`static-shell-lint-severity-tiers.md`](static-shell-lint-severity-tiers.md) |
 | `forbidden-apis`, and the `parallelStream()` ban still to come | [`static-forbidden-apis-parallelstream.md`](static-forbidden-apis-parallelstream.md) |
 | The `dependencyConvergence` tail | [`deps-convergence-tail.md`](deps-convergence-tail.md) |

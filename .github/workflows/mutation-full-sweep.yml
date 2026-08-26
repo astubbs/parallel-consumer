@@ -74,6 +74,22 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # SAME group as every chaos run and the Performance suite. This job asks for 16 PIT minion JVMs at
+  # -Xmx2g each on the same physical box, so a dispatched sweep beside a chaos run contaminates that
+  # run's timing bounds far more thoroughly than the Performance suite this group was widened for.
+  # Being manual-only is not protection - it is the opposite: whoever dispatches a sweep is thinking
+  # about mutation scores, not about which PR is mid-chaos-measurement.
+  #
+  # THE COST, stated because it is larger here than anywhere else in this group: this job's timeout is
+  # 360 minutes, and GitHub keeps one running plus one pending per group. So a long sweep can mean PRs
+  # get no chaos measurement for hours - their runs queue and are discarded. That is the same trade
+  # the group already makes everywhere else ("no measurement beats a measurement taken under
+  # contention", docs/ci.md), just with a much wider window. If that window ever bites, the answer is
+  # the dedicated single-slot runner docs/self-hosted-runner.md describes, not dropping out of here.
+  group: highcpu-box-exclusive
+  cancel-in-progress: false   # a sweep is a measurement too - queue, never kill
+
 jobs:
   full-sweep:
     name: "Mutation (PIT, full sweep - manual)"

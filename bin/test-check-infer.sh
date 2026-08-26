@@ -2,7 +2,7 @@
 #
 # Copyright (C) 2026 Antony Stubbs and contributors
 #
-# Self-test for bin/racerd-test.sh.
+# Self-test for bin/infer-test.sh.
 #
 # WHY IT EXISTS, and why it is late. The other two gates this branch added shipped with self-tests;
 # this one did not, and it is the only one of the three that reached CI red. A code review found two
@@ -33,7 +33,7 @@ assert_guard() {
     local name="$1" want_rc="$2" want="$3"; shift 3
     local out rc
     set +e
-    out="$(cd "$repo_root" && env "$@" bin/racerd-test.sh 2>&1)"
+    out="$(cd "$repo_root" && env "$@" bin/infer-test.sh 2>&1)"
     rc=$?
     set -e
     if [ "$rc" != "$want_rc" ]; then
@@ -56,17 +56,25 @@ assert_guard "red: absent Infer exits 2, not 0" 2 "CANNOT RUN" \
     INFER_BIN=/nonexistent/infer
 
 # --- RED: a missing JDK is also cannot-run, and says which knob fixes it -------------------------
-assert_guard "red: absent JDK 17 exits 2 and names RACERD_JDK" 2 "RACERD_JDK" \
+assert_guard "red: absent JDK 17 exits 2 and names INFER_JDK" 2 "INFER_JDK" \
+    INFER_BIN=/bin/echo INFER_JDK=/nonexistent/jdk
+
+# --- RED (deprecated fallback): the old RACERD_JDK name must still resolve ------------------------
+# The rename kept RACERD_JDK as a fallback rather than breaking a knob a developer may already have
+# exported. Same invocation as the arm above but with only RACERD_JDK set (no INFER_JDK) - this is
+# the only thing that tests the back-compat claim rather than merely asserting it in a comment, since
+# it proves the fallback resolves to the *value*, reaching the same guard the primary name would.
+assert_guard "red: deprecated RACERD_JDK still resolves via the fallback" 2 "INFER_JDK" \
     INFER_BIN=/bin/echo RACERD_JDK=/nonexistent/jdk
 
 # --- GREEN NEAR-MISS: the JDK guard must not fire when the JDK is fine ---------------------------
-# Same invocation as the arm above with only RACERD_JDK corrected. If this went red the second arm
+# Same invocation as the arm above with only INFER_JDK corrected. If this went red the second arm
 # would be proving nothing - it would be failing on the absent Infer it shares, not on the JDK.
 #
 # RESOLVING THE JDK IS THE POINT OF THIS ARM, so it may not quietly give up. It used to try exactly
 # one path - a developer's own SDKMAN install - and `return` when it was absent, printing `skip` and
 # incrementing neither counter. `repo-hygiene.yml` runs this file on ubuntu-latest with no
-# `setup-java` and no `RACERD_JDK`, where that path never exists, so the arm proving a good JDK gets
+# `setup-java` and no `INFER_JDK`, where that path never exists, so the arm proving a good JDK gets
 # PAST the guard has never once run in CI while the job reported success. A green tick over an arm
 # that did not execute is the precise defect this whole branch is about, sitting inside its own
 # self-test. Found by an independent review.
@@ -77,22 +85,22 @@ assert_guard "red: absent JDK 17 exits 2 and names RACERD_JDK" 2 "RACERD_JDK" \
 # unresolvable JDK means the fixture is wrong, not that the check is unnecessary.
 jdk_near_miss() {
     local out rc real_jdk=""
-    for candidate in "${RACERD_JDK:-}" "${JAVA_HOME:-}" "$HOME/.sdkman/candidates/java/17.0.18-tem"; do
+    for candidate in "${INFER_JDK:-}" "${RACERD_JDK:-}" "${JAVA_HOME:-}" "$HOME/.sdkman/candidates/java/17.0.18-tem"; do
         if [ -n "$candidate" ] && [ -x "$candidate/bin/javac" ]; then real_jdk="$candidate"; break; fi
     done
     if [ -z "$real_jdk" ]; then
         if [ -n "${CI:-}" ]; then
-            printf 'FAIL: green near-miss found no JDK on a CI runner - set RACERD_JDK or add setup-java.\n'
+            printf 'FAIL: green near-miss found no JDK on a CI runner - set INFER_JDK or add setup-java.\n'
             printf '      A skipped arm is not a passed arm, and this one is the only proof the JDK guard\n'
             printf '      does not fire on a valid JDK.\n'
             fail=$((fail + 1))
             return
         fi
-        printf 'skip: green near-miss needs a JDK (tried RACERD_JDK, JAVA_HOME, the SDKMAN path)\n'
+        printf 'skip: green near-miss needs a JDK (tried INFER_JDK, RACERD_JDK, JAVA_HOME, the SDKMAN path)\n'
         return
     fi
     set +e
-    out="$(cd "$repo_root" && INFER_BIN=/nonexistent/infer RACERD_JDK="$real_jdk" bin/racerd-test.sh 2>&1)"
+    out="$(cd "$repo_root" && INFER_BIN=/nonexistent/infer INFER_JDK="$real_jdk" bin/infer-test.sh 2>&1)"
     rc=$?
     set -e
     if [ "$rc" = "2" ] && grep -qF "Infer is not installed" <<< "$out"; then
@@ -114,8 +122,9 @@ jdk_near_miss
 # printed `skip`; and when a report WAS supplied it printed `ok:` and incremented the pass counter
 # WITHOUT RUNNING ANY ARM, under this same comment claiming four were exercised. A green tick over an
 # assertion that does not exist is the exact defect this branch is about. The arms below are real,
-# they need no Infer run (bin/racerd-test.sh grew RACERD_DRY_RUN_REPORT for it), and they therefore
-# run everywhere - locally and on every hosted runner.
+# they need no Infer run (bin/infer-test.sh grew INFER_DRY_RUN_REPORT for it, née RACERD_DRY_RUN_REPORT
+# - the old name still works as a deprecated fallback), and they therefore run everywhere - locally
+# and on every hosted runner.
 #
 # The fixtures are built here rather than checked in: they must stay in step with the identity format
 # the ratchet computes (`<count> <bug_type> <Class.method>`), and a checked-in fixture drifts from it
@@ -145,7 +154,7 @@ json.dump(out, open(sys.argv[1],'w'))
         local name="$1" want_rc="$2" want="$3"; shift 3
         _report "$report" "$@"
         set +e
-        out="$(cd "$repo_root" && RACERD_DRY_RUN_REPORT="$report" RACERD_KNOWN="$known" bin/racerd-test.sh 2>&1)"
+        out="$(cd "$repo_root" && INFER_DRY_RUN_REPORT="$report" INFER_KNOWN="$known" bin/infer-test.sh 2>&1)"
         rc=$?
         set -e
         if [ "$rc" = "$want_rc" ] && { [ -z "$want" ] || grep -qF "$want" <<< "$out"; }; then

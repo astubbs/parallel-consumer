@@ -83,9 +83,12 @@ if [ -f "$stamp" ]; then
     # exiting 0, so the throttle silently read "no mtime". PROBE the platform once rather than
     # falling back arm to arm: on GNU, `stat -f %m FILE` exits 1 while PRINTING filesystem prose to
     # stdout, so a blind `-c || -f` returns a string, not a number.
+    # hazard-ok: this IS the platform probe - it asks whether GNU stat exists before anything uses it
     if stat -c %Y . >/dev/null 2>&1; then
+        # hazard-ok: the probe above already established GNU stat is present
         last="$(stat -c %Y "$stamp" 2>/dev/null)"   # GNU coreutils
     else
+        # hazard-ok: the probe above rejected GNU stat, so this is the BSD branch
         last="$(stat -f %m "$stamp" 2>/dev/null)"   # BSD / macOS
     fi
     # ANYTHING THAT IS NOT A TIMESTAMP MEANS REMIND, not stay silent - the safe direction for a
