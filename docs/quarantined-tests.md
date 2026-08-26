@@ -46,8 +46,9 @@ Rules (full discipline in [`docs/testing.md`](testing.md), AGENTS.md, and the `@
    master-state flaky - it simply has no root cause yet. Demanding one before quarantine leaves an
    undiagnosed red blocking every unrelated PR, which trains everyone to read red as normal; this
    repo already deleted surefire retries for hiding flakes, and a permanently-red gate destroys the
-   same signal more thoroughly. The tell that the old default was miscalibrated: its escape hatch was
-   an owner-granted exception, and the exception had become the routine path.
+   same signal more thoroughly. The tell that the old default was miscalibrated: its only escape
+   hatch was an owner-granted exception, so every undiagnosed red had to be escalated to the owner
+   or left blocking - the rule had no path a contributor could take on the evidence they had.
 
    The bar it does NOT lower: quarantine still defers rather than forgives. The lane keeps running
    the test, the registry keeps it loud, and rule 5 still blocks a release while the list is
