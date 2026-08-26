@@ -81,8 +81,7 @@ fi
 # The slug is derived from `origin`, never hardcoded and never left to gh; the lookup is bounded in
 # python3 rather than by `timeout(1)`, which is GNU-only. `.claude/hooks/check-history-rewrite.sh`
 # states the full reasoning in this tree, and `.claude/hooks/inject-branch-context.sh` states it at
-# "THE REPO IS DERIVED FROM `origin`" - but that file arrives with astubbs#350 and is not here yet,
-# so grep it on that branch. This is the same lookup in its smallest form.
+# "THE REPO IS DERIVED FROM `origin`". This is the same lookup in its smallest form.
 command -v python3 >/dev/null 2>&1 || exit 0
 lookup="$(python3 - "$branch" <<'PY'
 import re
