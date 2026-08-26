@@ -95,13 +95,15 @@ that it named this shape unaided, so the next instance is what it is there to ca
 below (`LincheckToolchainProbeTest`) is what proves it still fires.
 <!-- post-merge: checked-end -->
 
+<!-- post-merge: checked-begin -->
 This **narrows a standing claim** that both concurrency PoCs rest on. The evaluation note says "no
 static analysis the repo runs can see the class", which remains true - stock SpotBugs at max effort
 does not. But the register's stronger gloss, "nothing static does", is now measurably wrong for one
-member of the family. The honest rate is **one of the four known instances**: astubbs#346's seam is a
-stale-check followed by a lookup, not `containsKey` before `get`, so this detector does not fire on
-it, and the two torn-read value-divergence instances are outside what any check-then-act detector
-looks for.
+member of the family. The honest rate is **one of the four known instances**: the seam astubbs#346
+fixed was a stale-check followed by a lookup, not `containsKey` before `get`, so this detector never
+fired on it while it was there, and the two torn-read value-divergence instances are outside what any
+check-then-act detector looks for.
+<!-- post-merge: checked-end -->
 
 Also ON, each a single finding unless noted, all in code that matters:
 

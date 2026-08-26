@@ -257,8 +257,9 @@ two toolchain controls stay with them for that reason alone - they model nothing
 repeats it in its own hardcoded list - `QuarantinedAnnotationContractTest` is what fails when the two
 disagree, because a tag the pom excludes and a wrapper does not runs in the GATING suite.
 
-- **Run it**: `bin/lincheck-test.sh` (whole lane, well under a minute), or
-  `LINCHECK_TEST=ShardManagerLincheckTest bin/lincheck-test.sh` for one class. Do not hand-roll the
+- **Run it**: `bin/lincheck-test.sh` (whole lane, about two and a half minutes - almost all of it
+  `WorkManagerLincheckTest`, which since its inversion can never stop early and pays its whole bound
+  on every run), or `LINCHECK_TEST=ShardManagerLincheckTest bin/lincheck-test.sh` for one class. Do not hand-roll the
   `./mvnw` line - **five flags have to line up and each fails silently on its own**: the group filters
   (an include alone selects nothing, the same trap the performance lane documents), `-Plincheck` for
   the JDK module opens the model checker needs, `-Dparallel-tests=false` (Lincheck installs a
@@ -274,8 +275,16 @@ disagree, because a tag the pom excludes and a wrapper does not runs in the GATI
   silently: a classpath conflict once left it reporting SUCCESS having instrumented nothing. A
   deliberately broken probe with a known answer is the only thing that tells a real "no violations"
   from a tool that was not looking.
-- **Every harness currently asserts that a bug EXISTS.** They invert when the fixes land; each
-  javadoc names the PR that triggers it.
+- **A harness asserts a bug EXISTS only until its fix lands, and the flip is not always the clean
+  one the contract promised.** Three shapes are in the lane now, and each javadoc says which it is:
+  designed-red (`PartitionStateLincheckTest`, waiting on astubbs#344); inverted to Lincheck's own
+  linearizability check (`RetryQueueLincheckTest`, `WorkManagerLincheckTest`); and still expecting a
+  violation but asserting it is no longer the FIXED one (`ShardManagerLincheckTest`, which reports a
+  different defect through the same operations). **The reason for the third shape is the rule that
+  governs all of them: a harness pointed at one seam explores the others, so it can stop finding its
+  own bug without going quiet - and its next assertion is not derivable from its own diff.** Re-run
+  the whole lane when you land any fix it names, and re-check every harness, not just yours.
+  `docs/inflight/test-lincheck-lane-open-items.md` carries the measurements.
 - **Measure a new harness's hit rate across several runs before believing it.** An under-budgeted
   stress arm is a flake, and a flake fails this build with no retry, by design. Three green runs
   cannot tell a 0% miss rate from a 10% one, and `WorkManagerLincheckTest` shipped its first bound on

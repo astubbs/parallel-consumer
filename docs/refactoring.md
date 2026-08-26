@@ -337,6 +337,16 @@ them, do not copy them back.
 - `Instance reference to otherwise static state`: instance field working around static state -
   folds into static-state removal.
 
+### state/WorkManager.java
+- **Rename the `pm` and `sm` fields to `partitionManager` and `shardManager`** - raised by Antony in
+  review on astubbs/parallel-consumer#346. Two-letter names for the two collaborators the class
+  delegates almost everything to, and `pm` is ambiguous across core: it abbreviates
+  `PartitionStateManager` here and `ProducerManager` in `ParallelEoSStreamProcessor`. Not folded into
+  the PR that raised it, because both carry `@Getter(PUBLIC)`, so the rename changes `getPm()`/
+  `getSm()` too and reaches main, unit and integration sources - far outside the one-seam concurrency
+  fix under review there. Do it as its own change, where the diff is legible as a rename.
+  `// TODO(refactor):` markers sit on both fields.
+
 ### internal/AbstractParallelEoSStreamProcessor.java
 - God class (see cross-cutting). `todo move into {@link WorkManager}` (misplaced
   "enough work?" check). `LegacyKafkaConsumer`: brittle Kafka-consumer-by-classname string check

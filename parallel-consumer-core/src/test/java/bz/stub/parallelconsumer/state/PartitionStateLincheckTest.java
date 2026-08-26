@@ -43,9 +43,23 @@ import static com.google.common.truth.Truth.assertThat;
  * all the two real threads do, and the verifier is Lincheck's default linearizability check: a returned value
  * that no sequential order of the same operations could have produced.
  * <p>
- * <b>Expected on this tree</b>: a violation, because master carries both defects unfixed. When they are fixed
- * these tests go red and must be inverted - astubbs#337 carries the offset-to-commit fix and astubbs#344
- * the encoder one; see {@link ShardManagerLincheckTest} for the same note.
+ * <b>Expected on this tree</b>: a violation - but NO LONGER EITHER OF THE TWO ABOVE, and this arm's assertion
+ * cannot tell you that. astubbs#337 fixed the offset-to-commit tear and astubbs#344 the encoder one, so the
+ * javadoc that used to sit here - "master carries both defects unfixed", invert when they land - is spent. Run
+ * against a tree carrying both, Lincheck still reports a violation on every run, and the reports are not
+ * stable: an {@code ArrayIndexOutOfBoundsException} out of {@code ArrayList.add} (the plain-{@code ArrayList}
+ * defect astubbs#57 fixes, which this lane found unprompted - see
+ * {@code docs/inflight/bug-pcmetrics-registered-meters-is-a-plain-arraylist.md}), or
+ * {@code PartitionState.onSuccess}'s {@code assert} from two {@link #succeed} operations in parallel, which
+ * production cannot reach because only the control thread completes work.
+ * <p>
+ * So {@code assertThat(report).contains("commit()")} now passes on reports about neither tear: the
+ * interleaving table names {@code commit()} whatever threw. <b>Do not read this arm as pinning astubbs#337 or
+ * astubbs#344</b> - {@code PartitionStateCommitEncodeShift894Test} and
+ * {@code OffsetEncoderWidenedRangeRaceTest} are what pin those. What this arm should assert instead depends on
+ * whether a two-{@code succeed} scenario belongs in its operation set at all, which is the same open
+ * thread-model question {@link ShardManagerLincheckTest} parks over {@code addWork}; both are recorded in
+ * {@code docs/inflight/test-lincheck-lane-open-items.md} and neither is settled here.
  * <p>
  * <b>STRESS only, and this is the PoC's most expensive negative result.</b> The model checker is the strategy
  * that can put a thread switch between two named reads, and on one run it did exactly that here. It is not in

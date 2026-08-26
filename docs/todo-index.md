@@ -157,7 +157,9 @@ that line, leave it in the code - it will show up here.
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/WorkManager.java`**
 
 - todo make private
+- TODO(refactor): rename to partitionManager - `pm` also abbreviates ProducerManager elsewhere in core
 - todo make private
+- TODO(refactor): rename to shardManager - see the note beside `pm`; both getters are public API
 
 **`parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/BrokerIntegrationTest.java`**
 
