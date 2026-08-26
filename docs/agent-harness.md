@@ -304,8 +304,17 @@ grants stay in `settings.local.json`, still ignored.
   At session start it runs `git fetch --all --prune`, throttled on a stamp file, so every ref the
   session goes on to read is real; on a `git merge` or `git rebase` it **refuses** while
   `origin/<branch>` holds commits the checkout does not, and names them.
-  `BRANCH_FRESHNESS_OVERRIDE=1` is the documented override, read from the payload because a hook
-  does not inherit an env prefix the agent puts on its own command.
+  `BRANCH_FRESHNESS_OVERRIDE=1` is the documented override, honoured both as a genuinely exported
+  variable and as a **token** of the parsed command - never as a raw-payload substring, which review
+  showed any prose mentioning the variable could satisfy, including the agent-written `description`
+  field, on a guard whose own deny message teaches that exact string.
+  `BRANCH_FRESHNESS_FETCH_FLOOR` (default 300s) is the SessionStart fetch throttle, and exists so
+  the self-test can drive both sides of it.
+  **It exempts two things on purpose, and a guard that blocks its own remedy is why**: merging or
+  rebasing onto `origin/<this-branch>` (or `@{upstream}`/`FETCH_HEAD`) is the reconciliation it asks
+  for, and `--abort`/`--continue`/`--skip`/`--quit` are the way out of a conflicted tree. The first
+  version denied both - which on `master` meant denying `git merge origin/master` every time master
+  advanced.
   It denies where the other push hooks only report, and the line is the one this document already
   draws: a situation with no wrong answer gets `additionalContext`, and merging onto a ref you know
   is behind its published tip is not that - the result cannot be pushed without discarding somebody
