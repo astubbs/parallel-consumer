@@ -30,12 +30,19 @@ workstreams: the original collections fix, `ThrowableUtils` (`describeWithRootCa
 
 ## Outstanding
 
-1. **Merge master** (31 behind).
-2. **Antony's LGTM** - `reviewDecision` is empty. `CLEAN` is not approval. Do not merge without it.
-3. **Squash message** - not written; the PR title is current and correct, so let GitHub use it
+1. **Antony's LGTM** - `reviewDecision` is empty. `CLEAN` is not approval. Do not merge without it.
+2. **Squash message** - not written; the PR title is current and correct, so let GitHub use it
    (never pass `--subject`, it drops the `(#N)`).
-4. **Current head is unreviewed** - the gate last ran on `e3119abe`. Codex is rate-limited, so a
-   round would be Claude-only. Antony's call, not automatic.
+3. **The head moves faster than the review gate.** `bin/check-pr-analysis-surfaces.sh 267` and
+   `gh pr view 267 -R astubbs/parallel-consumer --json statusCheckRollup` say which commit the last
+   review actually ran on; do not assume the newest one. Codex is rate-limited, so a fresh round
+   would be Claude-only, and that is Antony's call rather than automatic.
+
+Master was merged on 2026-08-26. Two things it brought needed real work rather than a
+conflict resolution, and both are recorded in the merge commit and the `fix(merge)` commit after it:
+`ManagedPCInstance` was the last caller of the removed `getSuccessfulWorkListeners()`, and
+`bin/check-branch-self-reference.sh` now requires every mention of this PR in `docs/inflight/` to
+read correctly after it lands.
 
 ## Parked, deliberately
 
