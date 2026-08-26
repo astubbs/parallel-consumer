@@ -120,7 +120,22 @@ strip_spans() { sed 's/`[^`]*`/ /g' "$1"; }
 # UNTRACKED FILES COUNT. `git ls-files` alone reads the index, so a note you just wrote about your own
 # branch - the single commonest way to trip this gate - was invisible until you staged it, and the
 # local run this header advertises reported green on the exact case it exists for.
-mapfile -t candidates < <(
+#
+# NO `mapfile`. It is bash 4; macOS ships bash 3.2, where the line died with "mapfile: command not
+# found" and `set -e` took the script down with it - measured exit 127, a loud failure. An earlier
+# version of this comment said it "still exited 0"; that reading came from `... | tail`, which
+# reports tail's status rather than the script's, and the same mismeasurement is warned about for
+# git commands in the root AGENTS.md. Redirect to a file and read `$?` directly.
+#
+# The read loop below is the same portable idiom bin/check-inflight-tags.sh and
+# bin/check-copyright-headers.sh already use. A reintroduction is caught by the `shell: macos` job
+# in .github/workflows/repo-hygiene.yml: on bash 3.2 the self-test fails all 31 cases against a
+# mapfile version, where on ubuntu's bash 5 it passes all 31 and proves nothing.
+candidates=()
+while IFS= read -r doc; do
+    [ -n "$doc" ] || continue
+    candidates+=("$doc")
+done < <(
     {
         git ls-files -- 'docs/inflight/*.md' || true
         git ls-files --others --exclude-standard -- 'docs/inflight/*.md' || true
