@@ -69,3 +69,18 @@
   which is what makes the before/after comparison possible at all.
   <!-- file-refs: N/A - names the inflight note 025d0b7ea deleted, deliberately, as the record of
        where that question was answered -->
+
+- **A 2026-08-25 red was filed here and did not belong**, which is worth one line because the mistake
+  is cheap to repeat: run
+  [`32812259117`](https://github.com/astubbs/parallel-consumer/actions/runs/32812259117) looked like
+  this signature - logs apparently stopping dead 54 seconds in, no `BUILD FAILURE`, no `Tests run:` -
+  and was none of it. The log had been fetched with `gh run view --job --log`, which silently
+  returned 990 of ~5000 lines. The artifact showed eight chaos ITs green and
+  `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger` red on probe violations; it is recorded as
+  the fourteenth sighting in [`bug-857-family.md`](bug-857-family.md).
+
+  **The tell that distinguishes the two is the absence of `Tests run:` - and a truncated log has that
+  too.** So the counts that make this entry's signature are only evidence when read from a route that
+  cannot truncate.
+  [`gh-run-view-log-truncation.md`](../solutions/workflow-issues/gh-run-view-log-truncation.md) owns
+  the routes.
