@@ -91,11 +91,20 @@ not add subdirectories - the prefix is the grouping.
 - **Known problems with the code on this branch belong here**, even when a GitHub issue exists - link
   the issue and keep it short. An agent picking up work scans this directory; it will not read every
   issue on the tracker. An unrecorded defect is one the next session rediscovers, or ships on top of.
-- **Never write down what a command can answer.** Open PRs are `gh pr list`; branch divergence is
-  `git rev-list --left-right --count`; worktrees are `bin/worktree-status.sh`. Copying those here
-  creates a second tracker that is wrong within a day and that a reader cannot tell is wrong. Record
-  what no command knows: why something is parked, what blocks it, which decision is pending, what
-  collides.
+- **Never write down what a command can answer** - and that includes **counts of any kind**, not just
+  git facts. Open PRs are `gh pr list`; branch divergence is `git rev-list --left-right --count`;
+  worktrees are `bin/worktree-status.sh`; analyser findings are the ratchet file or a re-run; how many
+  notes carry a label is `grep -l ... | wc -l`. Copying those here creates a second tracker that is
+  wrong within a day and that a reader cannot tell is wrong.
+
+  **The counts case is the one that keeps slipping through**, because it fires while you are writing
+  up a measurement you just took - the number feels like the finding, so the rule reads as if it does
+  not apply. It applies hardest there. Name the shape and the command that yields the number:
+  "the largest group is null derefs, all from one method" plus a reproduce line beats a table of
+  totals that is wrong the first time someone fixes one. Rough language is correct, not lazy.
+
+  Record what no command knows: why something is parked, what blocks it, which decision is pending,
+  what collides.
 - **No committed index.** An index file would be edited by every PR, which is the problem this
   directory exists to solve. `ls docs/inflight/` and `grep -r` are the index. (`docs/todo-index.md` is
   the cautionary case: committed, generated, and stale until a reviewer caught it on astubbs#110.)
@@ -123,11 +132,12 @@ file when it fails) and the session index - so a value here and a value there mu
 change this table and that lib in the same commit.
 <!-- file-refs: N/A - the tag gate and its shared vocabulary lib ship in astubbs#324; this doc is their owner and lands first, so the notes it describes are never explained by a retired scheme -->
 
-Three fields, as HTML comments after the heading. Only `inflight-type` is always required:
+The fields are HTML comments after the heading. Only `inflight-type` is always required:
 
 ```markdown
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
+<!-- inflight-labels: concurrency -->
 <!-- inflight-state: closed - will not do -->
 ```
 
@@ -198,6 +208,31 @@ is "what does it cost me to not know?". An open PR is not its own impact: not kn
 you a collision, so it is `coordination`. This rule exists because the first draft added an
 `active-work` value and had to remove it. `candidate` and `decided-no` were removed for the same
 reason - the first is `type: feature`, the second is a `state`.
+
+- **`inflight-labels`** - what the note is about **mechanically**. Optional, space-separated,
+  multiple allowed, validated against a closed set. This is a third axis and deliberately neither of
+  the other two: the **filename prefix** says the AREA, the **impact** says the CONSEQUENCE, and
+  neither can answer *"show me the concurrency work"* - because concurrency notes live under `bug-`,
+  `core-`, `static-`, `test-` alike, and their consequences are already spread across `stall`,
+  `data-loss`, `crash` and `reliability`.
+
+  **The set is closed on purpose.** A free-text field becomes tag soup within a month and then
+  partitions nothing, which is the failure this whole scheme exists to prevent. Add a value by
+  reading the corpus and finding a group the existing values cannot express - the way the impacts
+  were derived - and put it in `bin/lib/inflight-tags.sh` AND this table in the same commit.
+  `bin/check-inflight-tags.sh` validates each value separately, so one typo names itself instead of
+  silently founding a group of one.
+
+  | Label | Means | Does NOT mean |
+  |---|---|---|
+  | `concurrency` | The note's subject is a race, a deadlock, memory visibility, lock discipline, or the tooling that hunts them | A note that merely says "blocked" or "blocker" - those are schedule words, and they are why an unqualified grep for `lock` overcounts this group by roughly eight times |
+
+  **Why it starts at one value.** One is what the corpus justifies: a small minority of notes are
+  concurrency-shaped, which is the band where a label partitions usefully rather than matching
+  everything. A second speculative value would be inventing a group and hoping, which the paragraph
+  above forbids. `grep -l 'inflight-labels:.*concurrency' docs/inflight/*.md | grep -v AGENTS` is the index - the
+  `grep -v` is not optional, because this file documents the label and so matches itself. It is the
+  count too, which is why none is written here.
 
 **Add a value when the corpus needs one, do not force a note into a poor fit** - the set was derived
 by reading the notes, not chosen in advance. Add it to this table AND to `bin/lib/inflight-tags.sh`

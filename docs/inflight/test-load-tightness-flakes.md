@@ -1,6 +1,7 @@
 # Load-tightness flake family (undiagnosed)
 
 <!-- inflight-type: bug -->
+<!-- inflight-labels: concurrency -->
 <!-- inflight-impact: blind-spot -->
 
 

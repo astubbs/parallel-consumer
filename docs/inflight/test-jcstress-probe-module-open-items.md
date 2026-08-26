@@ -2,6 +2,7 @@
 # The jcstress probe module: what is still open
 
 <!-- inflight-type: bug -->
+<!-- inflight-labels: concurrency -->
 <!-- inflight-impact: misdirection -->
 
 `jcstress-poc/` landed in astubbs#348. A review pass over it raised the findings below and that PR
@@ -89,10 +90,10 @@ hand-written probe per suspected field pair, which does not scale and rots silen
 before the check exists multiplies the exposure. A tree-wide check in the style of
 `bin/check-file-refs.sh` could assert the modelled fields are still non-volatile and each quoted
 snippet still greps in `PartitionState.java`, costing the main build nothing. Named unprobed
-candidates: the **three** sibling fields `docs/refactoring.md` records under
-`AT_STALE_THREAD_WRITE_OF_PRIMITIVE` with the same "volatile for the flags" fix -
-`AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled`, `ConsumerManager.commitRequested`
-and `RetryQueue.closed`, all three still plain in the current tree.
+candidates: the sibling fields `docs/refactoring.md` records under
+`AT_STALE_THREAD_WRITE_OF_PRIMITIVE` with the same "volatile for the flags" fix. **That entry owns
+the list** - read it there rather than from a copy, which is how a field fixed in one place goes on
+being listed as plain in another.
 
 ## Smaller, still open
 
