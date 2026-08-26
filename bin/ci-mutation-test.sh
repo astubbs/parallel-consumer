@@ -272,21 +272,34 @@ if [ -n "${PIT_DRY_RUN_LOG:-}" ]; then
   STATUS=0
 else
   set +e
-  ./mvnw --batch-mode -Pci test-compile org.pitest:pitest-maven:mutationCoverage \
-    -Djacoco.skip=true \
-    -DtargetClasses="${TARGET_CLASSES}" \
-    -DtargetTests="${TARGET_TESTS}" \
-    # The Lincheck harnesses are excluded as PIT TESTS (astubbs#347, inherited via master):
-    # each asserts that a violation IS found, so using them as the suite PIT mutates against
-    # is meaningless and slow. They remain mutable TARGETS - this excludes them from the test
-    # set, not from the target set.
-    -DexcludedTestClasses="bz.stub.parallelconsumer.integrationTests.*,bz.stub.parallelconsumer.state.*Lincheck*" \
-    -DjvmArgs=-Xmx2g \
-    -DoutputFormats=XML,HTML \
-    -DtimeoutConstant=30000 -DtimeoutFactor=3.0 \
-    -Dthreads="${THREADS}" \
-    -pl parallel-consumer-core -am \
-    "$@" 2>&1 | tee "$PIT_LOG"
+  # BUILT AS AN ARRAY, NOT A BACKSLASH CONTINUATION, AND THAT IS THE POINT. A `#` line inside a
+  # continuation does not comment out one line: the continuation splices it onto the command, the
+  # shell truncates the command there, and every remaining line runs as a SEPARATE command. That
+  # shipped here - it silently dropped `-pl parallel-consumer-core -am` so the lane mutated every
+  # module, dropped the exclusions, and exited 127 from the orphaned argument, whose `tee` then
+  # overwrote the log this script parses for its verdict.
+  #
+  # An array element cannot do that, because there is no continuation to splice through - so a
+  # comment may sit beside any element below, safely. This is a structural guard rather than a
+  # warning somebody has to remember: reintroducing the defect now requires converting this back
+  # to a continuation first. `bin/test-ci-mutation-test.sh` pins the argv either way.
+  pit_args=(
+    --batch-mode -Pci test-compile org.pitest:pitest-maven:mutationCoverage
+    -Djacoco.skip=true
+    -DtargetClasses="${TARGET_CLASSES}"
+    -DtargetTests="${TARGET_TESTS}"
+    # The Lincheck harnesses are excluded as PIT TESTS (astubbs#347, inherited via master): each
+    # asserts that a violation IS found, so using them as the suite PIT mutates against is
+    # meaningless and slow. They remain mutable TARGETS - this excludes them from the test set,
+    # not from the target set. This is the comment whose placement broke the lane; here it is inert.
+    -DexcludedTestClasses="bz.stub.parallelconsumer.integrationTests.*,bz.stub.parallelconsumer.state.*Lincheck*"
+    -DjvmArgs=-Xmx2g
+    "-DoutputFormats=XML,HTML"
+    -DtimeoutConstant=30000 -DtimeoutFactor=3.0
+    -Dthreads="${THREADS}"
+    -pl parallel-consumer-core -am
+  )
+  ./mvnw "${pit_args[@]}" "$@" 2>&1 | tee "$PIT_LOG"
   STATUS=${PIPESTATUS[0]}
   set -e
 fi
