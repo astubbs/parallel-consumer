@@ -1119,7 +1119,7 @@
                     <!-- Performance tests are excluded by default. There is no performance.yml and no
                          dedicated hardware: what actually runs them is the "Performance Tests" leg of
                          maven.yml (ubuntu-latest, a REQUIRED check on every PR, via bin/performance-test.sh)
-                         and the highcpu lane of pr-highcpu-fast-feedback.yml on the self-hosted runner.
+                         and chaos-pain.yml on the self-hosted runner.
                          Select them with BOTH -Dincluded.groups=performance AND -Dexcluded.groups= - which is
                          what bin/performance-test.sh does, and the reason to use it rather than a hand-rolled
                          mvnw line. The include alone selects nothing: exclusion beats inclusion in JUnit

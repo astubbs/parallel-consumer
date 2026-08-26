@@ -28,13 +28,12 @@ procedure or a steer. Why, and the gate's exact contract: [`docs/ci.md`](../../d
 | `copyright.yml` | Checks source headers against the fork policy on every push and PR. |
 | `dependency-audit.yml` | Scans the **whole** resolved dependency tree for CVEs - the only place OSS Index is switched on. Per-PR, on demand, and weekly, because a new advisory needs no push to arrive. |
 | `maven.yml` | The main build: unit, integration and performance suites, SpotBugs, duplicate detection, PIT, dependency scanning. |
-| `mutation-full-sweep.yml` | The whole-repo PIT mutation sweep, on demand - too slow for a PR. Self-hosted high-CPU lane. |
+| `mutation-full-sweep.yml` | The whole-repo PIT mutation sweep - nightly, plus on demand. Too slow for a PR. Self-hosted high-CPU lane, plus a hosted trial arm. |
 | `pr-checklist.yml` | Makes the PR template binding: the checklist must be present and every box resolved. |
-| `pr-highcpu-fast-feedback.yml` | Fast PR feedback on the self-hosted high-CPU runners, including the per-PR chaos tripwire. |
 | `publish.yml` | Publishes to Maven Central on every push to `master`; the pom version decides snapshot or release. |
 | `quarantine-lane.yml` | Runs the quarantined tests separately, so known-flaky tests neither block nor disappear. |
 | `release.yml` | Cuts a release. `workflow_dispatch`, and deliberately the most dangerous button here. |
-| `repo-hygiene.yml` | Small always-on repo checks - shell sigpipe traps, one pinned version per GitHub Action, and expiring the pom's temporary CVE exclusions. |
+| `repo-hygiene.yml` | Always-on repo checks - shell sigpipe traps, one pinned version per GitHub Action, and expiring the pom's temporary CVE exclusions - plus `shell: macos`, the one lane not on `ubuntu-latest`: it runs the shell self-tests and a `bash -n` sweep against Apple's bash 3.2, where GNU-only constructs fail silently. |
 
 ## One required check is not in this directory
 
