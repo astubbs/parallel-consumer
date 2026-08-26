@@ -22,6 +22,16 @@ So the annotation is the only thing that makes a fix permanent. **Write it with 
 follow-up: a locking decision is obvious while you are making it and archaeology a month later. The
 check goes from inert to load-bearing one annotation at a time, and no separate project is needed.
 
+**The one way it silently checks nothing: a `ReadWriteLock`.** `@GuardedBy` holds a single lock
+expression, and naming a `ReentrantReadWriteLock` *field* is accepted and then **not analysed** -
+`@GuardedBy("lock")` on `RetryQueue`'s state compiles clean while `size()` reads the map under no
+lock at all. Naming `lock.readLock()` does fire, but then every legitimate write-lock-held access
+becomes an error too (`instead found: 'this.lock.writeLock()'`), so neither spelling is correct.
+**Do not annotate ReadWriteLock-guarded state** - that is `RetryQueue` and `ProducerManager` here.
+Plain monitors and `Lock` fields are checked exactly as advertised. Measured both ways, with the
+per-site verdicts:
+`docs/inflight/static-guardedby-is-inert-on-readwritelock-guarded-state.md`.
+
 If the right fix is `volatile` or removing the sharing outright, there is no lock to name and no
 annotation to write. That is fine - the rule is "record the invariant you just established", not
 "add an annotation".
@@ -30,9 +40,11 @@ annotation to write. That is fine - the rule is "record the invariant you just e
 
 Do not re-derive these; they are measured and recorded.
 
-- **13 RacerD findings** across `state` (7), `metrics` (4) and `internal` (2) -
-  `docs/inflight/static-racerd-findings.md`. The CI ceiling is a number in `maven.yml`: fix one and
-  **lower `RACERD_MAX_FINDINGS`**, or the lane fails telling you to.
+- **RacerD findings** across `state`, `metrics` and `internal` -
+  `docs/inflight/static-infer-findings.md`. The ratchet is an **identity set, not a count** -
+  `config/infer-known-findings.txt`, keyed on bug type plus `Class.method`. Fix one and **delete its
+  line there**, or the lane fails telling you to. (There is no `RACERD_MAX_FINDINGS`; the bare count
+  ceiling was replaced precisely because fixing one race and introducing another left it unchanged.)
 - **The non-volatile offenders** `lastWorkRequestWasFulfilled`, `ConsumerManager.commitRequested`,
   `RetryQueue.closed`, and `AbstractParallelEoSStreamProcessor.lastCommitTime` -
   `docs/refactoring.md`.

@@ -360,6 +360,22 @@
             <version>${lombok.version}</version>
             <scope>provided</scope>
         </dependency>
+        <!-- Supplies @GuardedBy, which Error Prone's GuardedBy check (already enabled at ERROR, see
+             the annotationProcessorPaths below) reads to make a locking decision a compile error
+             rather than a comment. The CHECK ran long before this entry existed; the ANNOTATION did
+             not, and it resolved only in test scope - so writing one in src/main/java failed with
+             "package com.google.errorprone.annotations.concurrent does not exist", which reads as
+             "Error Prone is not set up" when the analysis was in fact wired correctly.
+             `provided` because @GuardedBy is CLASS-retention: javac needs it, nothing reads it at
+             runtime, and consumers of this library must not inherit it on their classpath.
+             The rule that makes this load-bearing:
+             parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md -->
+        <dependency>
+            <groupId>com.google.errorprone</groupId>
+            <artifactId>error_prone_annotations</artifactId>
+            <version>${error-prone.version}</version>
+            <scope>provided</scope>
+        </dependency>
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
