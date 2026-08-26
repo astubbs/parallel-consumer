@@ -37,7 +37,7 @@
 # TOKENS, NOT SUBSTRINGS, which is the whole point: `git commit -m "ready to push"` contains the
 # word and must not fire. git is matched by BASENAME so /usr/bin/git counts, and an unbalanced quote
 # makes shlex raise, which fails open.
-hook_git_subcommands() { # <payload-json>
+hook_git_invocations() { # <payload-json>
     printf '%s' "$1" | python3 -c '
 import json, shlex, sys
 try:
@@ -74,8 +74,63 @@ for i, t in enumerate(toks):
                 j += 1; continue
             rest.append(t); break
         if rest:
-            print(rest[0])
+            # ALSO THE ARGUMENTS, stopping at the next shell operator. `hook_git_subcommands` throws
+            # them away, but a caller that must tell `git rebase origin/x` from `git rebase --abort`
+            # cannot: the flag it needs was consumed by the loop above, and the ref it needs was
+            # never emitted. Re-tokenising in the caller is what this file exists to prevent, so the
+            # ONE tokeniser emits both and the two views below differ only in what they cut.
+            #
+            # STOP AT ANY OPERATOR TOKEN, not a hand-listed few. `punctuation_chars=True` makes shlex
+            # emit `> >> < << ( ) ; ;; | || & &&` as tokens of their own, and an earlier version
+            # named only the command SEPARATORS. That left redirections inside the argument list, so
+            # `git merge origin/master > out.log` walked args as ["origin/master", ">", "out.log"] -
+            # and a redirect target named like a control flag or a remedy ref could then spoof the
+            # exemption test in the consumer. Testing that every character is punctuation catches the
+            # whole family, including operators nobody has thought of, and cannot catch a real
+            # argument: refs, paths and flags all contain at least one non-operator character.
+            OPERATORS = set("();<>|&")
+            k, args = j + 1, []
+            while k < len(toks) and not (toks[k] and all(c in OPERATORS for c in toks[k])):
+                args.append(toks[k]); k += 1
+            print("\t".join([rest[0]] + args))
 ' 2>/dev/null || true
+}
+
+# Prints only the subcommand of each git invocation - the original contract, kept because both push
+# hooks and their fixtures depend on it verbatim.
+hook_git_subcommands() { # <payload-json>
+    hook_git_invocations "$1" | cut -f1
+}
+
+# True when the payload runs ANY of the named git subcommands. One tokeniser spawn for the whole
+# question: `hook_git_runs a || hook_git_runs b` paid python3 twice to walk the same token list.
+hook_git_runs_any() { # <payload-json> <subcommand>...
+    local payload="$1" sub want found=1
+    shift
+    while IFS= read -r sub; do
+        for want in "$@"; do
+            if [ "$sub" = "$want" ]; then found=0; fi
+        done
+    done <<EOF
+$(hook_git_subcommands "$payload")
+EOF
+    return "$found"
+}
+
+# True when <stamp> is missing, unreadable, or older than <seconds>.
+#
+# THE THROTTLE TRIAD, NOT JUST THE `stat`. `hook_file_mtime` already removed one copy of the
+# platform probe; the three lines that CONSUME it - now, mtime, numeric-shape guard, subtract,
+# compare - were then copied into every hook that needed a floor, which is the same defect class one
+# level up. The shape guard is load-bearing: without it a non-numeric answer aborts the arithmetic
+# under `set -u`, and the hook dies rather than throttling.
+hook_throttle_expired() { # <stamp-path> <seconds>
+    local last now floor="$2"
+    case "$floor" in ''|*[!0-9]*) floor=0 ;; esac
+    last="$(hook_file_mtime "$1")"
+    case "$last" in ''|*[!0-9]*) last=0 ;; esac
+    now="$(date +%s)"
+    [ $(( now - last )) -ge "$floor" ]
 }
 
 # True when the payload runs `git <subcommand>` ANYWHERE in its command, including after another git
@@ -116,9 +171,12 @@ hook_file_mtime() { # <path>
     fi
 }
 
-# Path of a per-branch throttle stamp, given a prefix. Branch names contain `/`, which is the only
-# real content here: the substitution keeps a path from a name, and doing it in one place stops the
-# two hooks from disagreeing about how a branch is spelled on disk.
-hook_stamp_path() { # <prefix> <branch>
+# Path of a throttle stamp, given a prefix and a KEY. The key is usually a branch name but need not
+# be - one caller keys by git-common-dir - and either way it contains `/`, which is the only real
+# content here: the substitution keeps a path from a name, and doing it in one place stops the hooks
+# from disagreeing about how a key is spelled on disk. A caller passing a PATH must make it absolute
+# first: `git rev-parse --git-common-dir` answers `.git` from a main checkout and an absolute path
+# from a linked worktree, so keying on it raw collides every clone on the machine onto one stamp.
+hook_stamp_path() { # <prefix> <key>
     printf '%s/%s-%s' "${TMPDIR:-/tmp}" "$1" "$(printf '%s' "$2" | tr '/' '_')"
 }

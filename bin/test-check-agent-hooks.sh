@@ -71,8 +71,10 @@ verdict() { # <bash-command> -> ALLOW | DENY, from $HOOK_UNDER_TEST
     # would die and the failure would read as the hook's.
     local out tmp
     tmp=$(mktemp)
-    printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.stdin.read()}}))' > "$tmp"
-    out=$("$HOOK_UNDER_TEST" < "$tmp" 2>/dev/null)
+    printf '%s' "$1" | VERDICT_EVENT="${VERDICT_EVENT:-PreToolUse}" python3 -c 'import json,os,sys; print(json.dumps({"tool_name":"Bash","hook_event_name":os.environ["VERDICT_EVENT"],"tool_input":{"command":sys.stdin.read()}}))' > "$tmp"
+    # VERDICT_CWD lets a section drive its hook from inside a fixture repo. Default `.` keeps every
+    # existing caller running exactly where it did.
+    out=$(cd "${VERDICT_CWD:-.}" && "$HOOK_UNDER_TEST" < "$tmp" 2>/dev/null)
     rm -f "$tmp"
     case "$out" in
         *'"deny"'*) echo DENY ;;
@@ -940,9 +942,10 @@ registrations = sum(len(g["hooks"]) for groups in cfg["hooks"].values() for g in
 # not failing. A number nobody verifies is a number that rots, so both are verified here rather than
 # trusted to the next editor, and both are needed because one script can be registered against
 # several events.
-# Runs past twenty because a word the map does not know reads as a MISMATCH rather than as an
-# unknown word - "says thirteen registrations; settings.json has 13" is what a missing entry looks
-# like, and it sends the reader to the doc that is already correct.
+# Runs to twenty because a table that stops at the current count turns the next hook into a
+# self-test failure whose message reads like the doc is wrong - which is how this list ended one
+# short of the number the doc had to state. The literal symptom is worth knowing, because it does
+# not look like a missing entry: "says thirteen registrations; settings.json has 13".
 WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
          "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
          "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
@@ -2343,6 +2346,183 @@ assert "...and the heading counts every commit, not just the listed ones" true_t
 
 bctx_clean_stamps
 rm -rf "$bctx_tmp" "$stub_pr" "$stub_nopr" "$stub_broken" "$stub_slow" "$BCTX_TMPDIR"
+
+
+# ---------------------------------------------------------------------------------------------
+# check-branch-behind-its-own-remote.sh
+#
+# The deny arm needs real git state, not just a parsed command line, so this builds a throwaway
+# origin plus a clone and drives the hook from inside it, via the shared verdict() harness with
+# VERDICT_CWD pointed at the fixture.
+#
+# THE NEGATIVE CONTROLS MATTER MORE THAN USUAL. A hook that exits 0 on every payload passes an
+# ALLOW-only suite perfectly, and that is exactly the shape this hook would fail into - every guard
+# in it exits silent when it cannot answer. So every ALLOW case below is paired with a DENY that
+# proves the same code path can still fire.
+#
+# The four cases marked "regression" each fail against the FIRST version of this hook, which review
+# caught: it denied its own remedy (including `git merge origin/master` on master, the commonest
+# command in the repo), it denied `--continue`/`--abort` and trapped a conflicted rebase, and its
+# override was a raw-payload substring that any prose mentioning the variable could satisfy.
+#
+# Reported through `assert`, not `expect`: `expect` counts into `fails`, which is folded into
+# `failures` far above this point, so a failure recorded here would be silently dropped.
+# ---------------------------------------------------------------------------------------------
+
+echo
+echo "--- check-branch-behind-its-own-remote.sh ---"
+
+bbr_tmp="$(mktemp -d)"
+bbr_git() { git -c user.email=selftest@example.invalid -c user.name=selftest "$@"; }
+
+# `outside a git repo` below is only a real case while $bbr_tmp is not itself inside one; a CI that
+# points TMPDIR into the workspace would silently turn it into something else.
+if git -C "$bbr_tmp" rev-parse --show-toplevel >/dev/null 2>&1; then
+    echo "FAIL: mktemp -d landed inside a git repo, so the outside-a-repo case tests nothing"
+    failures=$((failures + 1))
+fi
+
+(
+    set -e
+    bbr_git init -q --bare "$bbr_tmp/origin.git"
+    bbr_git clone -q "$bbr_tmp/origin.git" "$bbr_tmp/seed"
+    cd "$bbr_tmp/seed"
+    echo one > f.txt && bbr_git add f.txt && bbr_git commit -qm "chore(fixture): first"
+    bbr_git branch -M feat/thing
+    bbr_git push -q origin feat/thing
+    # A second branch, so the master case below is not the same ref under another name.
+    bbr_git branch -q master && bbr_git push -q origin master
+) >/dev/null 2>&1
+
+bbr_git clone -q "$bbr_tmp/origin.git" "$bbr_tmp/work" >/dev/null 2>&1
+(cd "$bbr_tmp/work" && bbr_git checkout -q feat/thing) >/dev/null 2>&1
+
+bbr_publish() { # <branch> - push a commit the clone has never seen
+    (
+        set -e
+        cd "$bbr_tmp/seed"
+        bbr_git checkout -q "$1"
+        echo "$1-$(wc -c < f.txt)" >> f.txt
+        bbr_git add f.txt
+        bbr_git commit -qm "chore(fixture): pushed to $1 by somebody else"
+        bbr_git push -q origin "$1"
+    ) >/dev/null 2>&1
+}
+
+bbr_expect() { # <expected> <name> <cwd> <command>
+    local got
+    got=$(HOOK_UNDER_TEST="$HOOKS/check-branch-behind-its-own-remote.sh" VERDICT_CWD="$3" verdict "$4")
+    assert "$2" "$1" "$got"
+}
+
+# UP TO DATE: nothing to say, whatever the command.
+bbr_expect ALLOW "up to date, merge allowed"        "$bbr_tmp/work" 'git merge origin/master'
+bbr_expect ALLOW "up to date, rebase allowed"       "$bbr_tmp/work" 'git rebase origin/master'
+
+bbr_publish feat/thing
+
+# THE INCIDENT'S SHAPE: merging something ELSE into a branch behind its own tip.
+bbr_expect DENY  "behind its own remote blocks merge"   "$bbr_tmp/work" 'git merge origin/master'
+bbr_expect DENY  "...and blocks rebase"                 "$bbr_tmp/work" 'git rebase origin/master'
+bbr_expect DENY  "...through a compound command"        "$bbr_tmp/work" 'git fetch origin master && git merge origin/master'
+bbr_expect DENY  "...and with a -C repo flag"           "$bbr_tmp/work" 'git -C . merge origin/master'
+
+# REGRESSION: the remedy the deny message prescribes must not itself be denied.
+bbr_expect ALLOW "merging its OWN published tip is the remedy, not a violation" \
+    "$bbr_tmp/work" 'git merge origin/feat/thing'
+bbr_expect ALLOW "...and rebasing onto it"              "$bbr_tmp/work" 'git rebase origin/feat/thing'
+bbr_expect ALLOW "...and @{upstream}"                   "$bbr_tmp/work" 'git merge @{upstream}'
+bbr_expect ALLOW "...and FETCH_HEAD"                    "$bbr_tmp/work" 'git merge FETCH_HEAD'
+
+# REGRESSION: finishing or abandoning an in-progress operation must never be blocked, or a
+# conflicted rebase becomes a trap with no exit.
+bbr_expect ALLOW "rebase --continue is never blocked"   "$bbr_tmp/work" 'git rebase --continue'
+bbr_expect ALLOW "rebase --abort is never blocked"      "$bbr_tmp/work" 'git rebase --abort'
+bbr_expect ALLOW "rebase --skip is never blocked"       "$bbr_tmp/work" 'git rebase --skip'
+bbr_expect ALLOW "merge --abort is never blocked"       "$bbr_tmp/work" 'git merge --abort'
+
+# THE FLAG WORD IS NOT A SUBCOMMAND, and `push` is deliberately not an arm.
+bbr_expect ALLOW "the word merge in a commit message"   "$bbr_tmp/work" 'git commit -m "explain the merge"'
+bbr_expect ALLOW "git push alone is not an arm"         "$bbr_tmp/work" 'git push origin feat/thing'
+# ...but a merge CHAINED with a push still denies, so the case above is not passing on the
+# pre-filter alone.
+bbr_expect DENY  "a merge chained with a push still denies" \
+    "$bbr_tmp/work" 'git merge origin/master && git push origin feat/thing'
+
+# A REDIRECTION IS AN OPERATOR, NOT AN ARGUMENT. `punctuation_chars=True` emits `>` as its own
+# token, and the arg walk once stopped only at command separators - so a redirect target could sit
+# in the argument list and spoof an exemption. Both cases below name a redirect target that is
+# EXACTLY a control flag / a remedy ref, which is the only way the confusion is observable.
+bbr_expect DENY  "a redirect target cannot spoof a control flag" \
+    "$bbr_tmp/work" 'git merge origin/master > --abort'
+bbr_expect DENY  "a redirect target cannot spoof the remedy ref" \
+    "$bbr_tmp/work" 'git merge origin/master > origin/feat/thing'
+
+# THE OVERRIDE IS A TOKEN. The first version matched the raw payload, so any prose mentioning the
+# variable let a merge straight through - and the deny message teaches the agent that exact string.
+bbr_expect ALLOW "override token lets a deliberate merge through" \
+    "$bbr_tmp/work" 'BRANCH_FRESHNESS_OVERRIDE=1 git merge origin/master'
+bbr_expect DENY  "REGRESSION: the override named in prose is NOT an override" \
+    "$bbr_tmp/work" 'git commit -m "note BRANCH_FRESHNESS_OVERRIDE=1" && git merge origin/master'
+
+# REGRESSION: on master, origin/<branch> IS origin/master, so the commonest command in the repo was
+# denied every time master advanced.
+(cd "$bbr_tmp/work" && bbr_git checkout -q master && bbr_git branch -q --set-upstream-to=origin/master) >/dev/null 2>&1
+bbr_publish master
+bbr_expect ALLOW "on master, merging origin/master is the remedy" \
+    "$bbr_tmp/work" 'git merge origin/master'
+bbr_expect DENY  "...but a stale master merging something else still denies" \
+    "$bbr_tmp/work" 'git merge origin/feat/thing'
+(cd "$bbr_tmp/work" && bbr_git checkout -q feat/thing) >/dev/null 2>&1
+
+# FAIL-OPEN PATHS, each documented in the hook's header and none previously tested.
+(cd "$bbr_tmp/work" && bbr_git checkout -q --detach) >/dev/null 2>&1
+bbr_expect ALLOW "detached HEAD, silent"                "$bbr_tmp/work" 'git merge origin/master'
+(cd "$bbr_tmp/work" && bbr_git checkout -q feat/thing) >/dev/null 2>&1
+
+(cd "$bbr_tmp/work" && bbr_git checkout -q -b local-only) >/dev/null 2>&1
+bbr_expect ALLOW "a branch with no origin/<branch>, silent" "$bbr_tmp/work" 'git merge origin/master'
+(cd "$bbr_tmp/work" && bbr_git checkout -q feat/thing) >/dev/null 2>&1
+
+bbr_expect ALLOW "outside a git repo, silent"           "$bbr_tmp" 'git merge origin/master'
+
+# A BROKEN GUARD MUST SAY SO. Without python3 the hook can answer nothing; the failure it must NOT
+# have is the silent one, which is byte-identical to a healthy quiet hook.
+bbr_nopy="$bbr_tmp/nopy"
+mkdir -p "$bbr_nopy"
+printf '#!/bin/sh\nexit 127\n' > "$bbr_nopy/python3"
+chmod +x "$bbr_nopy/python3"
+bbr_payload="$bbr_tmp/payload.json"
+printf '%s' 'git merge origin/master' | python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","hook_event_name":"PreToolUse","tool_input":{"command":sys.stdin.read()}}))' > "$bbr_payload"
+bbr_stderr="$(cd "$bbr_tmp/work" && PATH="$bbr_nopy:$PATH" "$HOOKS/check-branch-behind-its-own-remote.sh" < "$bbr_payload" 2>&1 >/dev/null)"
+case "$bbr_stderr" in *"CANNOT RUN"*) got=loud ;; *) got=silent ;; esac
+assert "a broken python3 says the guard cannot run, rather than going quiet" loud "$got"
+
+# ---- the SessionStart arm, which produces no output ever and is therefore the half most able to
+# stop working invisibly. Driven by event, and asserted on the tracking ref actually moving.
+bbr_session() { # <fetch-floor-seconds>
+    printf '%s' 'startup' | python3 -c 'import json,sys; print(json.dumps({"hook_event_name":"SessionStart","source":sys.stdin.read()}))' > "$bbr_tmp/session.json"
+    (cd "$bbr_tmp/work" && BRANCH_FRESHNESS_FETCH_FLOOR="$1" "$HOOKS/check-branch-behind-its-own-remote.sh" < "$bbr_tmp/session.json" >/dev/null 2>&1)
+}
+bbr_behind() { (cd "$bbr_tmp/work" && git rev-list --count HEAD..origin/feat/thing 2>/dev/null || echo unknown); }
+
+bbr_publish feat/thing
+bbr_before="$(bbr_behind)"
+bbr_session 0
+bbr_after="$(bbr_behind)"
+[ "$bbr_after" -gt "$bbr_before" ] 2>/dev/null && got=fetched || got=did-not-fetch
+assert "SessionStart fetches, so the tracking ref actually moves" fetched "$got"
+
+# THROTTLED: with a floor far in the future the second session start must NOT fetch, or the
+# stamp is doing nothing and a resumed session becomes a fetch loop.
+bbr_publish feat/thing
+bbr_before="$(bbr_behind)"
+bbr_session 86400
+bbr_after="$(bbr_behind)"
+[ "$bbr_after" = "$bbr_before" ] && got=throttled || got=fetched-anyway
+assert "...and a second start inside the floor is throttled" throttled "$got"
+
+rm -rf "$bbr_tmp"
 
 if [ "$failures" -eq 0 ]; then
     echo "All .claude/hooks self-tests passed"
