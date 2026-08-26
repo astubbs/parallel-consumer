@@ -237,7 +237,8 @@ racing-double seam tests can only re-prove seams somebody already found by hand.
 measurement the original "nothing static sees this class" framing rested on - one analyser,
 generalised to all of them. astubbs#356 measured fb-contrib's `MUI_CONTAINSKEY_BEFORE_GET` naming
 `ShardManager.removeWorkFromShardFor` - astubbs#345's `containsKey`/`get`/dereference seam -
-statically, in seconds, with no harness and no annotation. The other three stay out of reach:
+statically, in seconds, with no harness and no annotation. astubbs#345 has since removed that seam,
+so the rule reports zero there; the measurement stands, the live finding does not. The other three stay out of reach:
 astubbs#346's seam is a stale-check rather than `containsKey`-before-`get`, and the two
 value-divergence torn reads are not what a check-then-act detector looks for. The clause above
 survives intact, because the seam fb-contrib names is one somebody had already found by hand, while

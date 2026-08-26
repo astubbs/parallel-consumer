@@ -56,22 +56,26 @@ Not free coverage, and it should not be sold as such:
 Ranked by what each buys, not by effort. Prefer widening what an existing harness explores over
 adding a class with a narrow guess in it.
 
+<!-- post-merge: checked-begin -->
 1. **The work claim in `ProcessingShard#getWorkIfAvailable` - a check-then-act on two fields that
-   must move together.** Selection asked three terms via `isAvailableToTakeAsWork()` and acted via
-   `onQueueingForExecution()`, re-validating none of them. astubbs#335 replaces the plain
-   `boolean inFlight` and `Optional<Boolean> maybeUserFunctionSucceeded` with a single
-   `AtomicReference<ExecutionState>` so the check IS the act - a six-state CAS machine, which is the
-   shape bounded model checking is best at.
+   had to move together.** Selection asked three terms via `isAvailableToTakeAsWork()` and acted via
+   `onQueueingForExecution()`, re-validating none of them. astubbs#335 replaced the plain
+   `boolean inFlight` and `Optional<Boolean> maybeUserFunctionSucceeded` with a single atomic
+   holding one `ExecutionState` and the attempt it belongs to, so the check IS the act - a six-state
+   CAS machine, which is the shape bounded model checking is best at.
 
-   **Why this one first:** astubbs#335's own verification says the losing interleaving had to be
-   "played out by hand with no threads - the concurrent reproduction needed millions of completions
-   per occurrence" (4 in 14,400,000). That is the exact gap between *one bad schedule exists* and
-   *every schedule is safe*, and only a model checker closes it. It is also **time-sensitive**: the
-   gap is unreachable here only because the control loop is the sole selector, and astubbs#361 gives
-   every worker its own. Calibrate against pre-astubbs#335 master, where the defect still lives.
+   **Why this one first:** the verification that landed with astubbs#335 says the losing interleaving
+   had to be "played out by hand with no threads - the concurrent reproduction needed millions of
+   completions per occurrence" (4 in 14,400,000), and the same is true of the ABA that review found
+   on top of it. That is the exact gap between *one bad schedule exists* and *every schedule is
+   safe*, and only a model checker closes it. It is also **time-sensitive**: the gap is unreachable
+   on the shipped engine only because the control loop is the sole selector, and astubbs#361 gives
+   every worker its own. Calibrate against the merge base of astubbs#335, where the defect still
+   lives.
+<!-- post-merge: checked-end -->
 
    Same trigger, also worth a harness, and deliberately unfixed:
-   `bug-a-record-is-selectable-before-its-offset-is-registered.md` - registration order in
+   `bug-370-a-record-is-selectable-before-its-offset-is-registered.md` - registration order in
    `PartitionState#maybeRegisterNewPollBatchAsWork` makes a record selectable before its offset is
    registered, latent for the same single-selector reason.
 
@@ -240,6 +244,37 @@ settles it is cheap and specific:
 The other two harnesses inherit the same caveat: `ShardManagerLincheckTest` and
 `PartitionStateLincheckTest` hit 8 of 8 at a tenth of their committed bounds, but on the fast machine
 only.
+
+<!-- post-merge: checked-begin -->
+
+### Measured when astubbs#345 landed: the bound that held is a coin flip
+
+The lane re-run astubbs#345 owed - the obligation the "re-run the lane, never reason about it" rule
+above puts on whoever lands one of these four - produced **2 misses in 4 runs** of
+`WorkManagerLincheckTest.stressRediscoversTheCheckpointThreeTear`, on a third machine, at the
+committed `iterations(1_000)`. The runs are bimodal rather than merely slow: the two hits landed the
+violation in 9.1s and 13.4s, the two misses exhausted the full thousand iterations at 121.7s and
+123.9s.
+
+**That is not the machine-dependence above, and it is not sampling noise around 1-in-14.** The
+mechanism is astubbs#345's fix. Both prior hit rates - 2.33% and 0.69% per iteration - were measured
+on trees where the checkpoint-3 tear *and* astubbs#345's `NullPointerException` were reachable
+through the same `revokeAndReassign` operation, and Lincheck stops at the first violation it
+reaches. So those numbers were the rate of finding **either**, never the rate of finding
+checkpoint-3. Removing the NPE removed the cheaper of the two, and what is left is the harness's
+true hit rate on its named target.
+
+So `iterations(1_000)` was never calibrated against what this harness now has to find. **Do not
+raise it from this measurement either** - four runs on one more machine is the same unfounded
+precision the section above refuses, and the starve-and-count procedure it prescribes is still what
+settles it.
+
+**The prediction this creates, which must be re-run rather than reasoned about:** with astubbs#346's
+fix landed as well, both violations this harness can reach are gone, and it should fail every run -
+at which point it needs inverting, not re-bounding. Nothing here establishes that; no tree carrying
+both fixes has been run since astubbs#345's fix was measured this way.
+
+<!-- post-merge: checked-end -->
 
 ## Nothing runs the lane, so the tripwire it promises cannot fire
 

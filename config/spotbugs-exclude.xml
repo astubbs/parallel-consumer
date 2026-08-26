@@ -105,9 +105,10 @@
          lamp wired to nothing.
 
          Scoped to that ONE class, never to the rule. MUI_CONTAINSKEY_BEFORE_GET is the finding that
-         justified adopting fb-contrib in the first place - it names ShardManager.removeWorkFromShardFor,
-         a real defect - so switching it off globally to quieten a deliberate fixture would trade the
-         headline result for silence. Any other class tripping this rule still fails.
+         justified adopting fb-contrib in the first place - it named ShardManager.removeWorkFromShardFor,
+         a real defect, since fixed by astubbs#345 - so switching it off globally to quieten a
+         deliberate fixture would trade the headline result for silence, and blind the rule to the
+         next instance of the shape. Any other class tripping this rule still fails.
 
          Worth recording rather than just suppressing: the probe's own javadoc says SpotBugs reported
          NOTHING on this shape. That was measured with STOCK detectors, and it is why the javadoc is
