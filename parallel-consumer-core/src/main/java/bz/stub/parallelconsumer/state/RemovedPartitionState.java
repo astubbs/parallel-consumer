@@ -38,10 +38,6 @@ import java.util.SortedSet;
 public class RemovedPartitionState<K, V> extends PartitionState<K, V> {
 
     /**
-     * Shared by every partition and every PC in the JVM, so it has to actually be immutable - the name is not
-     * enforcement.
-     */
-    /**
      * What a <b>removed</b> partition answers when asked which of its offsets are still incomplete: nothing, because
      * the partition is gone and PC no longer tracks work for it.
      * <p>
@@ -50,8 +46,9 @@ public class RemovedPartitionState<K, V> extends PartitionState<K, V> {
      * shared constant rather than a fresh set per call matters because the offset encoders ask this on the commit
      * path, per partition.
      * <p>
-     * <b>Immutable, and that is load-bearing.</b> It was a {@code new TreeSet<>()} - a shared, mutable static
-     * behind a name promising the opposite. One caller mutating what it received would have corrupted what every
+     * <b>Immutable, and that is load-bearing.</b> Shared by every partition and every PC in the JVM, so the name is
+     * a promise something has to keep. It was a {@code new TreeSet<>()} - a shared, mutable static behind a name
+     * promising the opposite. One caller mutating what it received would have corrupted what every
      * other caller sees, for the life of the JVM, with the field name saying that could not happen. Every caller of
      * {@link #getIncompleteOffsetsBelowHighestSucceeded()} reads only, so making it genuinely immutable changes
      * nothing today and turns that silent corruption into an immediate {@code UnsupportedOperationException} if a

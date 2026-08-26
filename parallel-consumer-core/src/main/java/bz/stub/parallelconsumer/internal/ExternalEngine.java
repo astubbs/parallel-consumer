@@ -97,21 +97,6 @@ public abstract class ExternalEngine<K, V> extends AbstractParallelEoSStreamProc
     protected abstract boolean isAsyncFutureWork(List<?> resultsFromUserFunction);
 
     /**
-     * Records an async failure against every container in the batch and returns each to the mailbox - each container
-     * independent of the others, and all of it before the failure is rendered anywhere.
-     * <p>
-     * Record BEFORE rendering, because {@code throwable} is the user's own async failure: logging it runs their
-     * {@code getCause}/{@code getMessage} inside the logging binding's stack-trace walk, and if that throws, any
-     * container not yet completed stays marked in flight forever - the failure is the thing that must be recorded,
-     * the log line is the thing that can be lost. So callers log their fail signal AFTER this returns, guarded with
-     * {@link bz.stub.parallelconsumer.internal.utils.ThrowableUtils#logWithoutEscaping}.
-     * <p>
-     * Per container, independent of the others - the same shape core's {@code runUserFunction} loop uses, and for
-     * the same reason. {@link WorkContainer#onUserFunctionFailure} runs USER code (the retryDelayProvider, via
-     * updateFailureHistory), so one container's failure must not stop the batch: every container after it would
-     * then never reach {@link #addToMailbox} and would stay in flight forever.
-     */
-    /**
      * The whole async-failure path for a batch engine: record the failure against every container, then render it.
      * <p>
      * Reactor's and Mutiny's versions of this differed only by a log string and whether the framework's own wrapper
@@ -147,6 +132,21 @@ public abstract class ExternalEngine<K, V> extends AbstractParallelEoSStreamProc
         return throwable;
     }
 
+    /**
+     * Records an async failure against every container in the batch and returns each to the mailbox - each container
+     * independent of the others, and all of it before the failure is rendered anywhere.
+     * <p>
+     * Record BEFORE rendering, because {@code throwable} is the user's own async failure: logging it runs their
+     * {@code getCause}/{@code getMessage} inside the logging binding's stack-trace walk, and if that throws, any
+     * container not yet completed stays marked in flight forever - the failure is the thing that must be recorded,
+     * the log line is the thing that can be lost. So callers log their fail signal AFTER this returns, guarded with
+     * {@link bz.stub.parallelconsumer.internal.utils.ThrowableUtils#logWithoutEscaping}.
+     * <p>
+     * Per container, independent of the others - the same shape core's {@code runUserFunction} loop uses, and for
+     * the same reason. {@link WorkContainer#onUserFunctionFailure} runs USER code (the retryDelayProvider, via
+     * updateFailureHistory), so one container's failure must not stop the batch: every container after it would
+     * then never reach {@link #addToMailbox} and would stay in flight forever.
+     */
     protected void recordFailureAndReturnBatchToMailbox(PollContextInternal<K, V> pollContext, Throwable throwable) {
         pollContext.streamWorkContainers().forEach(wc -> {
             try {

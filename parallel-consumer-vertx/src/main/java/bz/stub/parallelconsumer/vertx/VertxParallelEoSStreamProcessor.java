@@ -228,7 +228,12 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
                 try {
                     wc.onUserFunctionFailure(h);
                 } catch (Throwable bookkeepingThrew) {
-                    // user code - the retryDelayProvider, via updateFailureHistory
+                    // Logged, not fatal, and bounded: what threw is USER code - the retryDelayProvider, reached via
+                    // updateFailureHistory - and onUserFunctionFailure sets maybeUserFunctionSucceeded in a finally,
+                    // so the container's state transition completes even on this path. What is lost is retry
+                    // METADATA for this one record (attempt count, retryDueAt), not the record: it is still mailboxed
+                    // on the next lines. Making it fatal would let a user callback stop the consumer, which is the
+                    // whole defect class this handler exists to close.
                     log.error("Failed to record the send failure against {} - the record is still returned to the " +
                             "mailbox below. Cause: {}", wc, describeWithRootCause(bookkeepingThrew));
                 }
@@ -244,6 +249,10 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
                 // for anything thrown without a message. Guarded, because h is the user's throwable and the
                 // logging binding walks its cause chain unbounded.
                 logWithoutEscaping(h, () -> {
+                    // DEBUG for a retriable failure, ERROR otherwise: PCRetriableException is the user's documented
+                    // way of saying "this one is expected, hand it back to me later", so it is a normal step in a
+                    // working retry loop rather than a fault. Logged at ERROR it would report healthy operation as
+                    // broken, and at the rate a retry loop runs it would bury the failures that are.
                     if (PCRetriableException.isPresentIn(h)) {
                         log.debug("Vert.x Vertical fail", h);
                     } else {
