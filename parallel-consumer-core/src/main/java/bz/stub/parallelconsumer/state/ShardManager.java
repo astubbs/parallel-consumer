@@ -27,6 +27,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
+import java.util.stream.LongStream;
 
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.KEY;
 import static java.util.Optional.empty;
@@ -95,6 +96,7 @@ public class ShardManager<K, V> {
     private Optional<ShardKey> iterationResumePoint = Optional.empty();
 
     private Gauge shardsSizeGauge;
+    private Gauge shardsMaxSizeGauge;
     private Gauge numberOfShardsGauge;
 
     private final PCMetrics pcMetrics;
@@ -298,10 +300,12 @@ public class ShardManager<K, V> {
     private void removeWorkFromShardFor(ConsumerRecord<K, V> consumerRecord) {
         ShardKey shardKey = computeShardKey(consumerRecord);
 
-        if (processingShards.containsKey(shardKey)) {
+        // single read - a check-then-get pair here tears against removeShardIfEmpty racing on the control thread
+        // (KEY ordering removes empty shards), NPE-ing out of the rebalance listener into consumer.poll
+        Optional<ProcessingShard<K, V>> shardOpt = getShard(shardKey);
+        if (shardOpt.isPresent()) {
             // remove the work
-            ProcessingShard<K, V> shard = processingShards.get(shardKey);
-            WorkContainer<K, V> removedWC = shard.remove(consumerRecord.offset());
+            WorkContainer<K, V> removedWC = shardOpt.get().remove(consumerRecord.offset());
 
             // remove if in retry queue
             // check null to avoid race condition
@@ -312,6 +316,8 @@ public class ShardManager<K, V> {
             // remove the shard if empty
             removeShardIfEmpty(shardKey);
         } else {
+            // covers both already-removed-before-the-sweep and removed-against-this-read; the third null
+            // on this path, after the shard's own long-standing guard and confluentinc#757's retryQueue one
             log.trace("Shard referenced by WC: {} with shard key: {} already removed", consumerRecord, shardKey);
         }
 
@@ -480,10 +486,28 @@ public class ShardManager<K, V> {
         }
     }
 
+    /**
+     * Per-shard queue depths, as a fresh stream. Only {@code SHARDS_MAX_SIZE} needs it: the total is the
+     * conservation figure, which is O(1) and cannot disagree with the shards the way a scan of drifting
+     * per-shard counters can.
+     */
+    private LongStream shardEntryCounts() {
+        return processingShards.values().stream().mapToLong(ProcessingShard::getCountOfWorkTracked);
+    }
+
     private void initMetrics() {
         shardsSizeGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.SHARDS_SIZE,
                 this, ShardManager::getNumberOfRecordsInShards);
+        // TODO(refactor): walks every shard queue, and ConcurrentSkipListMap.size() is O(n), so each
+        // scrape is O(total queued records). SHARDS_SIZE above no longer pays that - it reads the O(1)
+        // conservation figure - so this is now the only scan per scrape rather than one of two.
+        // Triaged as negligible; docs/refactoring.md owns the assessment and the fix under
+        // "state/ShardManager.java", with the upstream shard-count-caching design under "Performance".
+        // Do not restate the fix here - two copies of it had already drifted apart once.
+        shardsMaxSizeGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.SHARDS_MAX_SIZE,
+                this, shardManager -> shardManager.shardEntryCounts().max().orElse(0));
+
         numberOfShardsGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.NUMBER_OF_SHARDS,
-                this, shardManager -> shardManager.processingShards.keySet().size());
+                this, shardManager -> shardManager.processingShards.size());
     }
 }

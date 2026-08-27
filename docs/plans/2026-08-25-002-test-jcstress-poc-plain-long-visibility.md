@@ -39,7 +39,11 @@ Per AGENTS.md, before forming any hypothesis. Reported including the nothings.
 | `ls docs/inflight/`, grep | **Nothing on this branch's base** - `docs/inflight/test-lincheck-jcstress-evaluation.md` exists only on `fix/encoder-reads-highest-succeeded-after-the-snapshot`, alongside `bug-torn-read-family.md`. Both were read from that ref via `git show`. This work executes item 2 of that evaluation's scope early. |
 | `grep -rn jcstress` over the whole tree | **Nothing** - no pom, script, workflow or doc mentions it. Greenfield. |
 | Cross-thread readers of the two fields | Established by grep rather than assumed - see the correspondence section. |
-<!-- file-refs: N/A - docs/inflight/test-lincheck-jcstress-evaluation.md is named deliberately as a file on another branch, which is the point of the row -->
+<!-- file-refs: N/A - the evaluation note named in that row never reached master: it was deleted on
+     astubbs#344 once both its arms had executed, so no commit on master holds it and there is no history
+     pointer to give. Its scope survives in the successor notes it handed its open items to -
+     test-lincheck-lane-open-items.md and test-jcstress-probe-module-open-items.md - and the note's own text
+     is on astubbs/parallel-consumer#344. -->
 
 The evaluation note lives on another branch, so this branch cannot tick its item 2. Whoever merges
 second should update it there.

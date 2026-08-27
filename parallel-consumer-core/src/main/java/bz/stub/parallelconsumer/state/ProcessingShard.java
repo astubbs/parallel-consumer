@@ -140,6 +140,23 @@ public class ProcessingShard<K, V> {
         return entries.get(offset);
     }
 
+    /**
+     * Which container currently occupies an offset, if any.
+     * <p>
+     * <b>{@link Optional}, not a nullable reference.</b> "No container here" is an ordinary answer - the record
+     * succeeded and left the shard, or was swept as stale - so it is the return type's job to say so rather than
+     * the caller's job to remember (astubbs#335 review). This is the only accessor on the shard that can be
+     * legitimately empty, which is exactly why an implicit null here would not be noticed.
+     * <p>
+     * Read-only, and package-private for tests that need to assert WHICH container won a contested offset rather
+     * than merely how many are tracked. A read cannot break the invariants that keep {@link #entries} private -
+     * only a write can, which is why there is no corresponding setter and why {@link #addWorkContainer} remains
+     * the only way in.
+     */
+    Optional<WorkContainer<K, V>> getWorkContainerAt(long offset) {
+        return Optional.ofNullable(entries.get(offset));
+    }
+
     public void onSuccess(WorkContainer<?, ?> wc) {
         // remove work from shard's queue
         retireAlreadyDeducted(entries.remove(wc.offset()));
@@ -230,10 +247,15 @@ public class ProcessingShard<K, V> {
             var workContainer = iterator.next().getValue();
 
             if (pm.couldBeTakenAsWork(workContainer)) {
-                if (workContainer.isAvailableToTakeAsWork()) {
+                // ONE call, deliberately. This used to read `isAvailableToTakeAsWork()` and then call
+                // onQueueingForExecution() separately, and the gap between the two is what could let a record be
+                // delivered twice: the check read three terms and the act re-validated none of them, so a decision
+                // made before another worker completed the record could still win. onQueueingForExecution() now
+                // evaluates the whole decision and claims from the state it evaluated. Do not reintroduce a guard
+                // in front of it.
+                if (workContainer.onQueueingForExecution()) {
                     log.trace("Taking {} as work", workContainer);
 
-                    workContainer.onQueueingForExecution();
                     workTaken.add(workContainer);
                 } else {
                     log.trace("Skipping {} as work, not available to take as work", workContainer);

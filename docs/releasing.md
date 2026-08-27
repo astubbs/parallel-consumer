@@ -96,6 +96,22 @@ contained.
 This is a convenience, not the record. `CHANGELOG.adoc` and the commit log remain the source of
 truth, and a missing label never makes a release wrong - it makes it harder to audit.
 
+## Post the drafted issue responses before you freeze the section
+
+`docs/inflight/issue-response-<NNN>.md` files accumulate as PRs land - each one written by whoever
+did the work, at the time they still had the context. **One sweep posts them, together**, which is
+the point: read as a set, they get a common account of what shipped rather than N replies written
+weeks apart from re-mined commit logs.
+
+```bash
+ls docs/inflight/issue-response-*.md
+```
+
+Post each to its issue, then `git rm` it - **posting is what deletes a draft, not merging**, and
+`docs/inflight/AGENTS.md` owns that rule and the incident behind it. Re-read each one against what
+actually shipped before posting: a draft written against a PR can be overtaken by a later change,
+and this is the last point where that is cheap to notice.
+
 ## At release time
 
 **The mechanism is undecided, and this document should not pretend otherwise.** What is settled is

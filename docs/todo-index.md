@@ -148,7 +148,11 @@ that line, leave it in the code - it will show up here.
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/PartitionStateManager.java`**
 
 - todo remove static
-- OffsetMapCodecManager<K, V> om = new OffsetMapCodecManager<>(module); // todo remove throw away instance creation - confluentinc#233
+- TODO(refactor): decode-only + single-threaded today, so sharing one instance is safe; NOT
+
+**`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/ShardManager.java`**
+
+- TODO(refactor): walks every shard queue, as SHARDS_SIZE above does, and
 
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/WorkContainer.java`**
 
@@ -157,7 +161,9 @@ that line, leave it in the code - it will show up here.
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/WorkManager.java`**
 
 - todo make private
+- TODO(refactor): rename to partitionManager - `pm` also abbreviates ProducerManager elsewhere in core
 - todo make private
+- TODO(refactor): rename to shardManager - see the note beside `pm`; both getters are public API
 
 **`parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/BrokerIntegrationTest.java`**
 

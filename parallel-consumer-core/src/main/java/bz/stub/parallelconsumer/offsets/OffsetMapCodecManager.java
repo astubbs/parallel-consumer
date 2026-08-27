@@ -258,8 +258,12 @@ public class OffsetMapCodecManager<K, V> {
      * Can remove string encoding in favour of the boolean array for the `BitSet` if that's how things settle.
      */
     byte[] encodeOffsetsCompressed(long baseOffsetForPartition, PartitionState<K, V> partitionState) throws NoEncodingPossibleException {
-        var incompleteOffsets = partitionState.getIncompleteOffsetsBelowHighestSucceeded();
+        // Sample the high-water mark ONCE and derive both the incomplete-offsets snapshot and the encoder's range
+        // top from that single sample, so the two cannot disagree by construction. Two separate reads here raced
+        // concurrent completions into silent record loss - the full mechanism is on
+        // PartitionState#getIncompleteOffsetsBelow; guarded by OffsetEncoderWidenedRangeRaceTest.
         long highestSucceeded = partitionState.getOffsetHighestSucceeded();
+        var incompleteOffsets = partitionState.getIncompleteOffsetsBelow(highestSucceeded);
         if (log.isDebugEnabled()) {
             log.debug("Encoding partition {}, highest succeeded {}, incomplete offsets to encode {}",
                     partitionState.getTp(),

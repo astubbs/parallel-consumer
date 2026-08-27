@@ -213,7 +213,7 @@ merged as a no-op - `git ls-files | grep -c CLAUDE.md` returned **0**. The three
 negated individually rather than with a blanket `!CLAUDE.md`; the reasoning is in `.gitignore`
 itself, next to the rule.
 
-**`.claude/settings.json`** - eleven hook scripts across twelve registrations, and the file is
+**`.claude/settings.json`** - thirteen hook scripts across fifteen registrations, and the file is
 **tracked**. The entries below are the ones whose design decisions are worth recording here;
 `remind-inflight-on-push.sh` and `check-history-rewrite.sh` carry theirs in their own headers.
 The count is stated because it drifted: this said "five" while the file registered seven, which is
@@ -281,6 +281,16 @@ grants stay in `settings.local.json`, still ignored.
   (prefix the merge command with `MERGE_DESPITE_OUTSTANDING_WORK=1`) and the stated limits - a
   stalled agent writes nothing and is not detected; `bash -c` wrapping and REST-API merges are not
   seen - are documented in the hook's own header.
+- `PreToolUse` on `Bash`, **with no `if`**, same self-filtering shape - runs
+  `.claude/hooks/check-upstream-map-merged.sh`, which refuses a `gh pr merge <N>` while an entry in
+  `src/docs/development/upstream-map.yaml` naming that PR still says `status: pr-open`. The manifest
+  is meant to be written to `merged` on the branch, BEFORE the merge - there is no observable instant
+  where that is untrue, and doing it afterwards means a commit straight to master that nobody
+  remembers to make. It gates on the status rather than on mere mention, so it is silent once the
+  entry is right: a guard that fires on correct behaviour teaches people to route around it. Fails
+  open on every uncertainty - no PyYAML, unparseable manifest, no manifest in the CWD, no PR number
+  on the command line. Deliberately disposable: it exists only until the last upstream link is
+  closed out, and then it is one file to delete.
 - `PreToolUse` on `Bash`, **with no `if`** - runs `.claude/hooks/remind-inflight-on-push.sh`, which
   reminds you at PUSH time what this PR's own inflight note still lists as open. Push, not commit and
   not merge: commits are too frequent for a note that runs to dozens of lines, and the merge guard
@@ -298,6 +308,31 @@ grants stay in `settings.local.json`, still ignored.
   moves reports again immediately; the one clock is a floor on how often it fetches, so a push loop
   cannot become a fetch loop. It **fetches** before reading, because a stale `origin/master`
   under-reports, which is the exact failure it exists to prevent.
+- `SessionStart` **and** `PreToolUse` on `Bash` - runs
+  `.claude/hooks/check-branch-behind-its-own-remote.sh`, the mirror image of the drift hook above:
+  that one watches the base moving under you, this one watches **your own branch** moving under you.
+  At session start it runs `git fetch --all --prune`, throttled on a stamp file, so every ref the
+  session goes on to read is real; on a `git merge` or `git rebase` it **refuses** while
+  `origin/<branch>` holds commits the checkout does not, and names them.
+  `BRANCH_FRESHNESS_OVERRIDE=1` is the documented override, honoured both as a genuinely exported
+  variable and as a **token** of the parsed command - never as a raw-payload substring, which review
+  showed any prose mentioning the variable could satisfy, including the agent-written `description`
+  field, on a guard whose own deny message teaches that exact string.
+  `BRANCH_FRESHNESS_FETCH_FLOOR` (default 300s) is the SessionStart fetch throttle, and exists so
+  the self-test can drive both sides of it.
+  **It exempts two things on purpose, and a guard that blocks its own remedy is why**: merging or
+  rebasing onto `origin/<this-branch>` (or `@{upstream}`/`FETCH_HEAD`) is the reconciliation it asks
+  for, and `--abort`/`--continue`/`--skip`/`--quit` are the way out of a conflicted tree. The first
+  version denied both - which on `master` meant denying `git merge origin/master` every time master
+  advanced.
+  It denies where the other push hooks only report, and the line is the one this document already
+  draws: a situation with no wrong answer gets `additionalContext`, and merging onto a ref you know
+  is behind its published tip is not that - the result cannot be pushed without discarding somebody
+  else's commits, so no outcome was wanted. `git push` is deliberately not an arm, because git
+  refuses that case itself and legibly. Measured cost of not having it, on 2026-08-26: a session
+  fetched `origin/master`, never fetched astubbs#205's own two-week-stale ref, re-did a package
+  rename of 239 files, resolved 43 conflicts on top, and learned at the rejected push that all of it
+  was already published. Its own header owns the incident.
 - The push detection and the portable `stat` both live in `.claude/hooks/lib/hook-common.sh`, shared
   by the two push hooks. Each had been got wrong once in a way that made a hook *silently stop
   working* - `git -C <path> push` unmatched, `stat -c` unavailable on BSD - and a second copy hides

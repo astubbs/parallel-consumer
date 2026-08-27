@@ -56,22 +56,26 @@ Not free coverage, and it should not be sold as such:
 Ranked by what each buys, not by effort. Prefer widening what an existing harness explores over
 adding a class with a narrow guess in it.
 
+<!-- post-merge: checked-begin -->
 1. **The work claim in `ProcessingShard#getWorkIfAvailable` - a check-then-act on two fields that
-   must move together.** Selection asked three terms via `isAvailableToTakeAsWork()` and acted via
-   `onQueueingForExecution()`, re-validating none of them. astubbs#335 replaces the plain
-   `boolean inFlight` and `Optional<Boolean> maybeUserFunctionSucceeded` with a single
-   `AtomicReference<ExecutionState>` so the check IS the act - a six-state CAS machine, which is the
-   shape bounded model checking is best at.
+   had to move together.** Selection asked three terms via `isAvailableToTakeAsWork()` and acted via
+   `onQueueingForExecution()`, re-validating none of them. astubbs#335 replaced the plain
+   `boolean inFlight` and `Optional<Boolean> maybeUserFunctionSucceeded` with a single atomic
+   holding one `ExecutionState` and the attempt it belongs to, so the check IS the act - a six-state
+   CAS machine, which is the shape bounded model checking is best at.
 
-   **Why this one first:** astubbs#335's own verification says the losing interleaving had to be
-   "played out by hand with no threads - the concurrent reproduction needed millions of completions
-   per occurrence" (4 in 14,400,000). That is the exact gap between *one bad schedule exists* and
-   *every schedule is safe*, and only a model checker closes it. It is also **time-sensitive**: the
-   gap is unreachable here only because the control loop is the sole selector, and astubbs#361 gives
-   every worker its own. Calibrate against pre-astubbs#335 master, where the defect still lives.
+   **Why this one first:** the verification that landed with astubbs#335 says the losing interleaving
+   had to be "played out by hand with no threads - the concurrent reproduction needed millions of
+   completions per occurrence" (4 in 14,400,000), and the same is true of the ABA that review found
+   on top of it. That is the exact gap between *one bad schedule exists* and *every schedule is
+   safe*, and only a model checker closes it. It is also **time-sensitive**: the gap is unreachable
+   on the shipped engine only because the control loop is the sole selector, and astubbs#361 gives
+   every worker its own. Calibrate against the merge base of astubbs#335, where the defect still
+   lives.
+<!-- post-merge: checked-end -->
 
    Same trigger, also worth a harness, and deliberately unfixed:
-   `bug-a-record-is-selectable-before-its-offset-is-registered.md` - registration order in
+   `bug-370-a-record-is-selectable-before-its-offset-is-registered.md` - registration order in
    `PartitionState#maybeRegisterNewPollBatchAsWork` makes a record selectable before its offset is
    registered, latent for the same single-selector reason.
 
@@ -92,8 +96,15 @@ adding a class with a narrow guess in it.
    four registration paths). **The lane found this unprompted, during calibration, from a scenario
    aimed at something else** - which is the strongest single piece of evidence that the technique
    generalises beyond the seams it was pointed at, and the best answer available to "is this worth
-   expanding". astubbs#57 fixes it, so a harness here becomes a regression detector the moment that
-   lands. See `bug-pcmetrics-registered-meters-is-a-plain-arraylist.md`.
+   expanding".
+   <!-- post-merge: checked-begin -->
+   astubbs#57 fixed it - `registeredMeters` is a `LinkedHashSet` and every mutation of it is behind
+   a `metersLock` monitor - so a harness here is a regression detector against that fix rather than
+   a hunt for an open defect. The reproduction it produced is carried in `PCMetrics859Test`'s class
+   javadoc; the sibling defect the same harness found, the plain `HashMap` counter maps in
+   `WorkManager` and `PartitionStateManager`, is still open in
+   [`bug-metrics-counter-maps-are-plain-hashmaps.md`](bug-metrics-counter-maps-are-plain-hashmaps.md).
+   <!-- post-merge: checked-end -->
 3. **`ProducerManager`'s produce/commit lock pair - a known defect in a *named* protocol.** The pair
    is project vocabulary (`CONCEPTS.md`), which means the invariant is already written down in
    prose - the ideal case for a sequential specification. `producerTransactionLock` is a
@@ -132,6 +143,87 @@ adding a class with a narrow guess in it.
 §1.1, and they are still the wrong next step, because an invariant naming the retry queue is a hint
 and the value demonstrated here is what the tool finds *unaided*.
 
+
+<!-- post-merge: checked-begin -->
+## The inversion contract assumed one bug per harness, and the harnesses have disproved it
+
+astubbs#347 committed the lane with every harness asserting that Lincheck FINDS a race, and named
+the fixes that would invert them: astubbs#337 and astubbs#344 over `PartitionStateLincheckTest`,
+astubbs#345 over `ShardManagerLincheckTest`, astubbs#346 over `WorkManagerLincheckTest`. The
+contract itself is still right about what to do - flip the affected harness to assert-no-failure,
+never revert a fix, never loosen a bound. What it did not anticipate is that a harness pointed at
+one seam also explores the others, so **a harness can stop finding its own bug without becoming
+quiet**, and the two that have been run against a fixed tree failed to invert for two different
+reasons.
+
+**`ShardManagerLincheckTest`: the flip is red, and what it exposed is not the fixed bug.** With
+astubbs#345's torn `containsKey`/`get` pair gone, Lincheck still reports
+`= Invalid execution results =`, with no `NullPointerException` anywhere in it. Controlled both ways
+in one sitting - reverting only the main-code fix restores the NPE counterexample and a green
+harness, restoring the fix produces the new report - so the second violation was always present,
+masked because Lincheck stops at the first thing it finds. The counterexample is `revokeSweep(0)` in
+the sequential prefix, then `addWork(0)` against `addWork(0)` in parallel, landing on the
+`entries.get(key)` / `entries.put(key, wc)` + `availableWorkContainerCnt.incrementAndGet()`
+check-then-act in `ProcessingShard#addWorkContainer` - this lane's own "concurrent collection plus a
+derived counter" signature, verbatim.
+
+Two reasons not to call that a product defect yet, and they pull in opposite directions. Production
+registers work from the **control** thread alone, so two concurrent `addWork` calls are not an
+interleaving the library can take today - the harness declares an operation set wider than the real
+thread model. The broker poller does not register work itself: `BrokerPollSystem` calls
+`pc.registerWork`, which only enqueues onto `workMailBox`, and the control thread reaches
+`wm.registerWork` after `workMailBox.drainTo` inside `processWorkCompleteMailBox`. (An earlier
+revision of this paragraph named the broker-poll thread here. The conclusion is unchanged - one
+thread registers, so the interleaving is unreachable - but the thread was wrong, and which one it is
+decides what a future harness must model.) Against that, the same stops being
+obviously true once every worker selects its own work, which is the change item 1 above calls
+time-sensitive. Settle the thread-model question before writing a harness for it; if the operation
+set is the artefact, the fix is constraining this harness with a non-parallel group over `addWork`,
+not a change to `ProcessingShard`.
+
+**That narrows rather than overturns item 1's ruling that `availableWorkContainerCnt` is not a
+Lincheck target.** The ruling rests on astubbs#336 measuring the *drift* as single-threaded
+conditional mismatches, and it stands - nothing here re-opens the clamp question. What is new is a
+machine-produced interleaving over the same field, which is a different claim from "the drift is a
+race", and it arrived unaided from a harness pointed somewhere else.
+
+So that harness asserts the strongest thing the evidence supports - that no report over these
+operations mentions `NullPointerException` again - a real regression detector for astubbs#345's fix
+rather than the vacuous green an unexamined inversion would have produced.
+
+**`WorkManagerLincheckTest`: inverted, and the inversion is the one that went as the contract said it
+would.** The paragraph that used to sit here described a tree carrying astubbs#346's fix but not
+astubbs#345's, where the harness passed because Lincheck reached astubbs#345's
+`NullPointerException` out of `ShardManager.removeWorkFromShardFor` through the same
+`revokeAndReassign` operation, and `assertThat(report).contains("completeWork")` could not tell that
+from the checkpoint-3 tear. With both fixes in the same tree neither violation is reachable, the
+harness fails every run, and the only move left is the one astubbs#347 named. It is now
+`stressMustNotRediscoverTheCheckpointThreeTear`, asserting Lincheck's own linearizability check over
+the two operations, in the shape `RetryQueueLincheckTest` already uses.
+
+**What that inversion is worth, measured rather than assumed - and it is worth less than a green
+suggests.** The re-run below is the evidence for the flip, but on its own it is *weak* evidence of
+absence, because the control that re-introduces the defect misses most runs too. The proof the tear
+is gone is `WorkManagerStaleCheckDoubleLookupTest`, which forces the interleaving deterministically;
+this arm is a search. Whoever reads a pass here as a proof has mis-read it, which is why the
+harness's own javadoc now says so.
+
+**One prescription written here has already been falsified, which is the argument for the rule
+below.** The reading from `WorkManagerLincheckTest` alone was that astubbs#345's fix would let both
+harnesses invert together. Measured on a tree carrying that fix, `ShardManagerLincheckTest` does not
+invert at all - the paragraphs above are that measurement. A harness's next assertion is not
+derivable from its own diff, or from another harness's behaviour.
+
+**So: re-run the lane, never reason about it.** Each of these fixes changes what the OTHER harnesses
+find. `LINCHECK_TEST=<class> bin/lincheck-test.sh` is the check; it is no longer *cheap*, because
+the inverted `WorkManagerLincheckTest` can never stop early and now pays its whole bound on every
+run - the lane went from well under a minute to about two and a half. `PartitionStateLincheckTest`
+has now been run against a tree carrying both astubbs#337's and astubbs#344's fixes (the section
+below), and it does **not** invert - so every trigger the contract named has now fired, and no
+harness is waiting on a fix. What remains is the open thread-model question two harnesses now share.
+Re-run the whole lane and re-read every harness's assertion whenever anything in `state` moves, not
+only when a named fix lands.
+<!-- post-merge: checked-end -->
 
 ## A stress arm's hit rate is machine-dependent, so one machine cannot calibrate it
 
@@ -172,6 +264,128 @@ The other two harnesses inherit the same caveat: `ShardManagerLincheckTest` and
 `PartitionStateLincheckTest` hit 8 of 8 at a tenth of their committed bounds, but on the fast machine
 only.
 
+<!-- post-merge: checked-begin -->
+
+### Measured when astubbs#345 landed: the bound that held is a coin flip
+
+The lane re-run astubbs#345 owed - the obligation the "re-run the lane, never reason about it" rule
+above puts on whoever lands one of these four - produced **2 misses in 4 runs** of
+`WorkManagerLincheckTest.stressRediscoversTheCheckpointThreeTear` (renamed to
+`stressMustNotRediscoverTheCheckpointThreeTear` by the inversion in the section below), on a third
+machine, at the committed `iterations(1_000)`. The runs are bimodal rather than merely slow: the two hits landed the
+violation in 9.1s and 13.4s, the two misses exhausted the full thousand iterations at 121.7s and
+123.9s.
+
+**That is not the machine-dependence above, and it is not sampling noise around 1-in-14.** The
+mechanism is astubbs#345's fix. Both prior hit rates - 2.33% and 0.69% per iteration - were measured
+on trees where the checkpoint-3 tear *and* astubbs#345's `NullPointerException` were reachable
+through the same `revokeAndReassign` operation, and Lincheck stops at the first violation it
+reaches. So those numbers were the rate of finding **either**, never the rate of finding
+checkpoint-3. Removing the NPE removed the cheaper of the two, and what is left is the harness's
+true hit rate on its named target.
+
+So `iterations(1_000)` was never calibrated against what this harness now has to find. **Do not
+raise it from this measurement either** - four runs on one more machine is the same unfounded
+precision the section above refuses, and the starve-and-count procedure it prescribes is still what
+settles it.
+
+**The prediction this creates, which must be re-run rather than reasoned about:** with astubbs#346's
+fix landed as well, both violations this harness can reach are gone, and it should fail every run -
+at which point it needs inverting, not re-bounding. Nothing here establishes that; no tree carrying
+both fixes has been run since astubbs#345's fix was measured this way.
+
+<!-- post-merge: checked-end -->
+
+<!-- post-merge: checked-begin -->
+
+### Measured when astubbs#346 landed: the prediction held, and the control says why that is thin evidence
+
+The re-run astubbs#346 owed, on a tree carrying both fixes. The prediction above is **confirmed**:
+every valid run of `WorkManagerLincheckTest` exhausted the whole committed bound without a
+violation, none of them anywhere near the 9-13s a hit used to take, so the designed-red arm could
+not stay. It is inverted, and the class javadoc carries the numbers.
+
+**The part that is not confirmed is the inference everyone will draw from it.** The same sitting ran
+a control - the compiling mutant that re-resolves the partition state at `handleFutureResult`'s
+action sites, i.e. the checkpoint-3 tear put back and nothing else - and that control **misses most
+of its runs too**, hitting once in six at the same bound. So the misses on the fixed tree are not,
+by themselves, a measurement that the tear is gone: a control that finds a *present* defect one run
+in six cannot make a handful of clean runs mean much. What makes the flip safe is that
+`WorkManagerStaleCheckDoubleLookupTest` forces the interleaving deterministically and pins the fix;
+the Lincheck arm is a search running beside it.
+
+**Two things this settles that reasoning had got wrong.**
+
+- The one hit the control did produce is *exactly* the checkpoint-3 signature -
+  `AssertionError` at `PartitionState.onSuccess`, through `PartitionStateManager.onSuccess` and
+  `WorkManager.onSuccessResult` out of `handleFutureResult`, with `completeWork` racing
+  `revokeAndReassign` - and **no `NullPointerException` anywhere**, because astubbs#345 has landed.
+  So the harness still reaches the seam it was built for; it has not gone quiet, it is simply a poor
+  detector at this bound.
+- The section above put this arm's hit rate at a coin flip on 4 runs. Six more runs of a control
+  carrying the same defect put it lower. Neither sample is big enough to name a number, which is the
+  same conclusion as before: the starve-and-count procedure is still what settles it, and nothing
+  here licenses re-bounding in either direction.
+
+**The other harnesses, re-checked in the same sitting as the rule above requires.**
+
+- `ShardManagerLincheckTest` is **unchanged by astubbs#335 landing**. Same counterexample as the
+  section above records - `revokeSweep(0)` sequentially, then `addWork(0)` against `addWork(0)` -
+  so nothing in item 1's ranking moves on that evidence.
+- `PartitionStateLincheckTest` **has now been run against a tree carrying BOTH astubbs#337's and
+  astubbs#344's fixes - the two the inversion contract named - and it does NOT invert.** It reports
+  a violation on every run and its `assertThat(report).contains("commit()")` still passes, but on
+  reports about neither tear: the interleaving table names `commit()` whatever threw. The reports
+  are not stable between runs, and two shapes recur.
+
+  The first is an `ArrayIndexOutOfBoundsException` out of `ArrayList.add` - **item 2's
+  plain-`ArrayList` defect, now with a frame naming it rather than the frameless sighting an earlier
+  revision of this bullet recorded**, so the lane has re-found it a second time from a harness
+  pointed elsewhere. The second is `PartitionState.onSuccess`'s `assert` reached from two `succeed`
+  operations in parallel - which production cannot perform, since only the control thread completes
+  work.
+
+  **That second shape is the same artefact-or-defect question this note already parks over
+  `ShardManagerLincheckTest`'s `addWork`, arriving in a second harness**: an operation set declared
+  wider than the real thread model, found by a harness aimed at something else. If it is the
+  artefact, the fix is a non-parallel group over `succeed`, not a change to `PartitionState`. That
+  decision is open, it is what this arm's next assertion depends on, and **it should be taken for
+  both harnesses at once** rather than one at a time - which is the argument for settling the thread
+  model before writing any more harnesses.
+
+  **Take it AFTER astubbs#57 lands, and the ordering is not arbitrary.** Two shapes recur in this
+  arm's reports, and astubbs#57 removes one of them: the `ArrayIndexOutOfBoundsException` out of
+  `ArrayList.add` is the plain-`ArrayList` defect that PR fixes. Deciding while both shapes are live
+  means reasoning against a moving target - once astubbs#57 is in, only the parallel-`succeed` shape
+  remains, which is the question actually being asked. Nothing is gated on this: astubbs#346 does not
+  re-point the assertion, so it needs no dependency on astubbs#57; the ordering binds whoever takes
+  the decision, not the PRs.
+
+  Its javadoc has been corrected to say all of this, because until now it told readers the arm would
+  invert when astubbs#344 landed. **The contract's per-PR trigger list is now fully spent, and it
+  went 1 for 4** - which is worth stating precisely, because the one that held did so for a reason
+  the contract did not name. astubbs#345 and astubbs#337/#344 left their harnesses finding
+  something else entirely. `WorkManagerLincheckTest` did invert when astubbs#346 landed, but only
+  because astubbs#345 had removed the OTHER violation reachable through the same operation first -
+  had the two landed in the other order, that prediction would have failed too. What the
+  contract got right is the instruction; what it got wrong is the assumption of one bug per
+  harness.
+- `RetryQueueLincheckTest`, `LincheckToolchainProbeTest` and `LincheckSuperHashCodeProbeTest` are
+  green and unchanged - the model checker is still blocked on the Lombok `callSuper` defect, so
+  item 8's free arms are still not free.
+- **The lane is green, and one of those greens is vacuous.** `PartitionStateLincheckTest` passes an
+  assertion that no longer pins what it names. Nothing goes red to say so, which is exactly the
+  failure mode this note exists for, and it is the reason the re-run rule is written as *re-run and
+  re-read every harness's assertion*, not merely *re-run*.
+
+**What the inversion costs, which is now the lane's largest single number.** An inverted arm cannot
+stop at the first violation, so it pays its whole bound on every run. The whole lane used to finish
+well under a minute; it is now about two and a half, essentially all of it this one arm. That is a
+real trade against item 8 and against ever gating the lane, and it is the price of keeping the bound
+where it was measured rather than re-pricing it on thin evidence.
+
+<!-- post-merge: checked-end -->
+
 ## Nothing runs the lane, so the tripwire it promises cannot fire
 
 `bin/lincheck-test.sh` is excluded from every gating suite by design, and no workflow invokes it. The
@@ -207,15 +421,18 @@ The claim that core's `<argLine>@{argLine} ${lincheck.jvm.args}</argLine>` feeds
 `SurefireConfigConverter` logs `Replacing properties in argLine` and resolves it. No
 `-DparseSurefireArgLine=false` is warranted.
 
-## Cross-branch obligation this note now owns
+## Cross-branch obligation this note used to own - discharged
 
-`test-lincheck-jcstress-evaluation.md` scopes a two-tool evaluation - a Lincheck arm and a jcstress
-arm - and it lives on astubbs#344's branch, not on master, so it could not be updated from here. Its
-**Lincheck arm is executed**: the calibration ran against a pre-fix tree and refound four real races
-unaided, with the verdicts and cost tables in
-[`docs/plans/2026-08-25-001-test-lincheck-poc-plan.md`](../plans/2026-08-25-001-test-lincheck-poc-plan.md).
-Whoever lands astubbs#344 records that against the evaluation note and leaves the jcstress arm open;
-the `jcstress-poc` probe module carries it.
+<!-- post-merge: checked-begin -->
+The two-tool evaluation that scoped this lane and the jcstress probe was never updatable from here,
+because it lived only on astubbs#344. That PR settled it: both arms executed and were adopted - the
+Lincheck calibration ran against a pre-fix tree and refound four real races unaided, with the verdicts
+and cost tables in
+[`docs/plans/2026-08-25-001-test-lincheck-poc-plan.md`](../plans/2026-08-25-001-test-lincheck-poc-plan.md)
+- so the evaluation note was deleted rather than kept as a record of finished work. This note and
+[`test-jcstress-probe-module-open-items.md`](test-jcstress-probe-module-open-items.md) are its
+successors, and each names its own deletion condition.
+<!-- post-merge: checked-end -->
 
 This paragraph exists because the handoff note that used to carry the obligation was deleted at merge
 prep, as `docs/inflight/AGENTS.md` requires - a "delete this when it merges" marker must never reach

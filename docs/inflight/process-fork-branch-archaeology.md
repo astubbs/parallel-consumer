@@ -11,7 +11,9 @@ missed?"*
 The trigger is `origin/presentation`, found while scoping the per-language comparison demo on
 `feats/classic-vertx-demo` (its own entry, `branch-classic-comparison-demo.md`, lands with that
 branch). It carries `Demo.java`,
-the code that produced the asciinema cast embedded in `src/docs/README_TEMPLATE.adoc`. It was never
+the code that produced the asciinema cast embedded in `src/docs/README_TEMPLATE.adoc`. (The branch
+itself was archived as the tag `archive/presentation` and deleted on 2026-08-26; the account of it
+lives in `branch_accounting`, which is the point of that section.) It was never
 merged, is 3 ahead / 631 behind, and has been untouched since 2021.
 
 ## How it was missed: every audit was keyed on the tracker, never on the artifact store

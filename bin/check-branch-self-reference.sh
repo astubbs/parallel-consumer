@@ -114,6 +114,12 @@ fi
 
 # The PR number is optional: this runs locally before a PR exists, where the branch name alone is
 # still worth checking. Never `gh pr view` without -R here; a bare gh resolves to confluentinc.
+#
+# BUT A LOCAL PASS IS NOT A CI PASS WHEN THE TWO NAMES DIFFER. The lookup is by branch name, so in a
+# worktree whose local branch is not the PR's head ref - a `merge/NNN-...` branch pushing to
+# `fix/...`, which is how master merges are staged here - `gh pr list --head` finds nothing, the PR
+# arm never arms, and every `#NNN` mention passes locally and fails in CI, where GITHUB_HEAD_REF
+# resolves it. Run `PR_NUMBER=<n> bin/check-branch-self-reference.sh` from such a worktree.
 pr="${PR_NUMBER:-}"
 if [ -z "$pr" ] && command -v gh >/dev/null 2>&1; then
     pr="$(gh pr list -R astubbs/parallel-consumer --head "$branch" --json number --jq '.[0].number' 2>/dev/null || true)"
