@@ -218,6 +218,58 @@ What should happen on the issue instead: record that the deadlock is confirmed a
 remaining mechanisms by name, and correct the `## Fork status` sentence that still cites
 `RebalanceEoSDeadlockTest` as live evidence - that test is inverted and cannot support the claim.
 
+### The ledger's "three landed, one open" framing is badly out of date
+
+astubbs#119's `## Fork status` still says three defects landed (astubbs#100, astubbs#80,
+astubbs#108) and one remains. Reading the merged commit bodies on master, **at least six more
+857-family mechanisms have been fixed since that was written**, and none appears in the family's own
+accounting:
+
+- **astubbs#346** - `handleFutureResult`'s staleness checkpoint and its acting reads were two
+  separate `partitionStates.get(tp)` lookups, so a rebalance landing between them orphaned a
+  retry-queue entry and `workIsWaitingToBeProcessed()` then **read true forever**. Its own body names
+  this a confluentinc#857-family permanent stall. Both race arms red on the unfixed tree, green
+  fixed, mutation-tested.
+- **astubbs#345** - a `containsKey`-then-`get` pair in `ShardManager.removeWorkFromShardFor` raced a
+  concurrent shard removal and **NPEd on the broker-poll thread inside the rebalance listener**.
+  Poller death under KEY ordering is paused consumption by another name. 4/4 deterministic
+  reproduction, fix-applied/fix-reverted flip.
+- **astubbs#373** - the shard's available-count spend was inferred rather than owned; four
+  instances of one class, including a **sign-reversed overcount** its body calls the
+  "confluentinc#857 stall signature", reachable by revoking a failed record inside its retry delay.
+- **astubbs#336** - the load gate, described above.
+- **astubbs#344** - the offset encoder read `offsetHighestSucceeded` twice, so a completion landing
+  between the reads could **silently mark still-incomplete offsets as complete**.
+- **astubbs#349** - `PartitionState.dirty` written on the control thread and read unfenced on the
+  poll thread; jcstress-measured, 0 anomalies in 4.29e9 samples after the fix.
+
+**So the honest picture is not "one deadlock left". It is that the bucket has been drained steadily
+from several directions, and the ledger never re-totalled.** Any close-out on astubbs#119 has to
+account for these, and the issue's fork-status section has to be rewritten rather than appended to.
+
+### A testable hypothesis for the async churn-storm line, which is the last unexplained one
+
+The `ChaosChurnStormIT` sightings that nothing explains are all in
+`PERIODIC_CONSUMER_ASYNCHRONOUS` - the mode where the AB-BA cycle cannot close and the transactional
+wait cannot run, which is exactly why they were set aside as *"either a fourth defect or something
+outside the product"*.
+
+**astubbs#344's defect is live in that same mode and only that mode.** Its body says so: the
+double-read of `offsetHighestSucceeded` is reachable in `PERIODIC_CONSUMER_ASYNCHRONOUS`, and its
+consequence is offsets marked complete while still incomplete - which presents as records that are
+never reprocessed and a fleet that stops making progress against its expected count. That is the
+`NO_PROGRESS` shape.
+
+**Prediction, recorded before running it:** replay the async `NO_PROGRESS` seeds
+(`3086917415748208232`, `8603691233664838594`, `7543483068749855826`) on a tree that predates
+astubbs#344 and on one that includes it. If the mode match is the mechanism, the pre arm reproduces
+and the post arm does not. **If both reproduce, astubbs#344 is not it** and the fourth-defect
+hypothesis survives intact - say so here rather than quietly dropping this paragraph.
+
+Note the counter-example already on file, which is why this is a prediction and not a claim:
+astubbs#373 was tested against this same arm and **it fired anyway on that branch's own head**, so
+one plausible mode-matching fix has already failed to close this line.
+
 ### Cross-references not yet folded in
 
 PR astubbs#29's timeline carries cross-references to open mirrors that describe adjacent or possibly
