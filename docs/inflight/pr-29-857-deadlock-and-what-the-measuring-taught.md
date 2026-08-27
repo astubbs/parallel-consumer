@@ -218,6 +218,32 @@ What should happen on the issue instead: record that the deadlock is confirmed a
 remaining mechanisms by name, and correct the `## Fork status` sentence that still cites
 `RebalanceEoSDeadlockTest` as live evidence - that test is inverted and cannot support the claim.
 
+### The seed replay, 2026-08-27: first verification of the fix against a captured deadlock
+
+Seed `2867310537409227917` - the 2026-08-26 cooperative-arm capture, one of the six where a thread
+dump caught the poll thread `BLOCKED` on the `commitCommand` monitor - replayed on this branch, which
+carries the `tryLock()` fix, with `-Dchaos.seed=2867310537409227917
+-Dit.test=ChaosRevokeUnderWorkCooperativeIT`.
+
+**Result: green.** `probe violations=[]`, and **not one `BLOCKED` line in the whole run** - the
+signature that defined the capture did not recur.
+
+**This is one run, and it is not proof.** The ledger already records that this capture is
+intermittent: the commit immediately after one of the six passed with no code change at all, which is
+why it says *"the trigger is the schedule, not the tree"*. A single green on an intermittent failure
+is equally consistent with the schedule not landing on the window. What would settle it is repetition
+on this seed plus a control arm at the same seed on a tree WITHOUT the fix.
+
+**A pre-registered prediction held, and that is worth more than the green.** The recorded prediction
+was that Class 2 findings would **continue at roughly the same rate** after the fix, because they are
+the timing bound meeting the load and no deadlock fix touches that - *"If they instead drop off, this
+reading is wrong."* They continued: `CLASS2_STALL/LAG_STAGNATION` observations fired, all non-gating,
+all in the familiar band just past the 150s bound, while the run passed. The 2026-08-25 demotion
+survived its own test rather than being quietly vindicated by a clean run.
+
+**Next, in order of value:** repeat this seed; then the control arm without the fix; then the
+remaining five seeds. Only the control arm turns "did not recur" into "the mechanism is gone".
+
 ### The ledger's "three landed, one open" framing is badly out of date
 
 astubbs#119's `## Fork status` still says three defects landed (astubbs#100, astubbs#80,
