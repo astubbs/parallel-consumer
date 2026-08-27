@@ -270,14 +270,33 @@ Note the counter-example already on file, which is why this is a prediction and 
 astubbs#373 was tested against this same arm and **it fired anyway on that branch's own head**, so
 one plausible mode-matching fix has already failed to close this line.
 
-### Cross-references not yet folded in
+### The cross-references, resolved
 
-PR astubbs#29's timeline carries cross-references to open mirrors that describe adjacent or possibly
-identical symptoms, and none is accounted for in the family ledger: astubbs#183
-(confluentinc#875, *"Missing message in consumption and eventually pauses all consumption"*),
-astubbs#173 (confluentinc#777, duplicates on revocation), astubbs#177 (confluentinc#833, the
-commit-response timeout) and astubbs#44 (confluentinc#803, the transactional revoke wait). Whether
-any is the same defect is unassessed.
+Both timelines paged in full. Almost all `referenced` events are this fork's own commit-citation
+convention firing, not independent references. Three items actually matter:
+
+**Upstream's own fix for this issue merged, and did not fix it.** confluentinc#882 (sangreal, merged
+upstream 2025-08-07) reworked stale-container removal during partition reassignment. **This fork
+carries that logic** - `ProcessingShard.removeStaleWorkContainersFromShard` and
+`PartitionStateManager`'s `removeStaleContainers` are its shape. netroute-js reported on 2025-11-24,
+after upgrading past it, that *"the problem is still there... probability seems to be reduced"* -
+recurring after two months of uninterrupted traffic and triggered by a **broker leader election**,
+not a consumer-group rebalance. So the stale-container theory has been tried, shipped, and outlived.
+
+**confluentinc#875 / astubbs#183 is filed under this symptom on somebody's assumption, and looks
+like a different defect.** The reporter describes a **silently skipped offset** - delivered
+`[1,2,3,5,6,7...]` with 4 never arriving - lag then growing until consumption stops, and a restart
+making the missing message reappear. No rebalance is mentioned anywhere in the report. It was linked
+to confluentinc#857 by a third party (*"That's potentially the same issue"*), never by its own
+reporter. **A skipped-then-recoverable offset is the shape of the offset-completion defects**
+(astubbs#344 marking incomplete offsets complete; astubbs#108 recording a post-departure commit as
+successful), not of a lock. It should be assessed on its own before being counted here.
+
+**The no-rebalance case is genuinely rare, which makes dmironowicz's report more interesting, not
+less.** Across every duplicate report on both timelines, the pause ties to a rebalance, a redeploy
+or (once) a leader election. Only two exceptions exist: sangreal's July `pc_log` reading of *"not
+paused, but somehow polling 0 records"*, and dmironowicz on this PR. Two independent observations of
+a stall with no rebalance narrative is thin, but it is not nothing, and neither has ever been chased.
 
 ## What the PR is, in one line
 
