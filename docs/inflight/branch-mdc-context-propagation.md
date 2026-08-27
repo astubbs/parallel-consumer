@@ -29,9 +29,12 @@ broker-poller threads `adopt(..)` the context outright (they serve one instance 
 - **Default on.** Not propagating fails silently for everyone; propagating fails visibly (an extra key in a log
   line) and has an off switch. `propagateMdc=false` restores the old behaviour *exactly*, including the pre-existing
   leak of the user function's own `MDC.put` calls onto the pooled thread - that is deliberate, so the flag is a true
-  kill switch rather than a half-revert. **Default-on is the one decision here the maintainer may want to overrule**
-  - the residual risk (a request-scoped value pinned for the consumer's life) is real, and flipping the default to
-  off is a one-line change if that trade is judged the wrong way round.
+  kill switch rather than a half-revert. **Default-on was the one open decision here, and Antony confirmed it at
+  merge prep: "default on yes, its new feature why not."** So it is settled rather than merely proposed - the
+  residual risk (a request-scoped value pinned for the consumer's life) was put to him with the mitigation, and
+  taken. Do not reopen it on the strength of the risk alone; that was the thing decided. Flipping the default is
+  still a one-line change if evidence of the pinning actually biting ever turns up, which would be new information
+  rather than a re-reading of the same trade.
 - **The startup INFO line fires exactly once per instance.** `captureCallersDiagnosticContext()` is called only from
   `supervisorLoop`, which throws `IllegalStateException` if `poll*()` is called more than once - so it is structurally
   impossible for it to land on a per-poll or per-record path. Keep it that way; an INFO line on the hot path would be

@@ -91,6 +91,7 @@ duplicates. Two corrections:
 
 ## Next
 
+<!-- post-merge: checked -->
 The measurements are from the astubbs#57-family chaos work, seed `4734674029169027864`, recorded
 with the matrix in `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/chaostests/ChaosRevokeUnderWorkCooperativeDrainIT.java`.
 That javadoc records three cells and predicts the fourth rather than measuring it, so the
