@@ -27,10 +27,16 @@ import static org.awaitility.Awaitility.await;
 import static pl.tlinkowski.unij.api.UniLists.of;
 
 /**
- * MEASUREMENT PROBE, not intended to merge as-is: does {@code WorkManager#numberRecordsOutForProcessing} drift
- * (stay permanently above the true number of records out with the worker pool) after partitions are revoked while
- * records are in flight? See confluentinc#857 and
+ * Does {@code WorkManager#numberRecordsOutForProcessing} drift (stay permanently above the true number of records
+ * out with the worker pool) after partitions are revoked while records are in flight? It does not, and this is the
+ * measurement that settled it. See confluentinc#857 and
  * docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md.
+ * <p>
+ * <b>Green is the result, not a missing assertion.</b> astubbs/parallel-consumer#29 carried a revoke-time counter
+ * adjustment justified entirely by that drift leaving {@code isSufficientlyLoaded()} permanently true, so the poller
+ * never resumed. This probe drives the path and finds no drift, and the adjustment was deleted rather than landed.
+ * The reasoning behind it is intuitive and the stall it targeted is real and still open, so it will be proposed
+ * again - which is why the instrument lives here rather than in the branch that disproved it.
  * <p>
  * Method: block the user function on a gate so records are genuinely out with the pool, then drive the engine's own
  * rebalance-listener path ({@code onPartitionsRevoked} then {@code onPartitionsAssigned}, as the broker poll thread
