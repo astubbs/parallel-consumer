@@ -77,6 +77,156 @@ Context `gh` cannot give you about PR astubbs/parallel-consumer#29
 (`bugs/857-paused-consumption-multi-consumers-bug`). Delete this file when the PR merges, promoting
 anything below that is still wanted into `next-candidates.md`.
 
+## Does astubbs#119 close with this PR? Research in progress, 2026-08-27
+
+**Provisional answer: no, and the reason is that astubbs#119 is a symptom bucket rather than a
+defect.** This section records what has been established so far. It is not finished - the sighting
+inventory and the merged-PR mapping are still being gathered.
+
+### The reported symptoms are not one mechanism
+
+Read from upstream confluentinc#857's own comments rather than the mirror's summary, which does not
+carry them. At least four distinguishable behaviours are reported:
+
+1. **Paused subscription with growing lag** - the April 2025 log. sangreal reads it as stale
+   containers pausing the subscription.
+2. **Not paused, but polling zero records** - the July 2025 log, from the same reporter. sangreal
+   says so explicitly and in the same breath says he cannot find a cause: *"actually is not paused.
+   but somehow polling 0 records, which is weird"*. Nothing in this family explains it.
+3. **Out-of-range fetch position** - netroute-js, 2025-07-21: two records permanently stuck, a
+   redeploy no longer clearing it, and `Fetch position FetchPosition{offset=8, ...} is out for`.
+   That is offset territory, adjacent to confluentinc#894 / astubbs#121, not to a lock.
+4. **Lag that does not clear although the records were processed** - netroute-js, 2025-12-08. That
+   is the committed offset failing to advance, which is not consumption stopping at all.
+
+A fifth is reported on THIS PR and has never been chased: dmironowicz, 2026-07-24, has *"processing
+pauses for a small number of partitions... and resumes after few hours"*, and when asked directly
+whether a rebalance triggers the recovery answered *"I don't see any rebalancing activity around
+that time"*.
+
+**The deadlock this PR fixes cannot produce that.** The AB-BA cycle needs `onPartitionsRevoked` to be
+executing, so it needs a rebalance, and it is reachable only in `PERIODIC_CONSUMER_SYNC`.
+
+### The best candidate for the no-rebalance pause is the load gate, and it is already fixed
+
+Not the pause mirror, and not the paused-partition cache - both were checked:
+
+- The cache (`ConsumerManager.pausedPartitionSizeCache`) is refreshed in `updateCache()` on **every**
+  poll, and a paused consumer still polls (the paused long poll is the loop's sleep). So it does not
+  freeze while the consumer is paused, which is the shape a stale-cache stall would need.
+- The mirror is gone as of astubbs#376, and on master it was never reset on assignment anyway, so
+  the cooperative-retention failure needed a rebalance - which this symptom does not have.
+
+The gate that decides whether a paused poller is woken is `maybeWakeupPoller`:
+`!wm.isSufficientlyLoaded() && brokerPollSubsystem.isSubscriptionsPausedForBackPressure()`. **If the
+load term is stuck high, the second term stays true forever and nothing ever wakes the poller** - no
+rebalance required, no error logged, and the poller keeps long-polling on paused subscriptions so it
+looks alive throughout.
+
+That is precisely what astubbs#336 describes and fixes. Its own words: the drift *"did not
+misreport, it mis-gated record intake, and enough phantoms keep intake paused until a restart clears
+the counter"*, with both drifts reproducing **single-threaded**. astubbs#373 then took the shard's
+available-count spend to a compare-and-set.
+
+**Both landed on master after this branch's analysis was written, and neither is part of this PR.**
+So the reporter symptom this PR cannot explain may already be closed by work that is not in it.
+
+### What this means for closing astubbs#119
+
+Closing it on this PR would take the other four mechanisms with it. The issue's own `## Fork status`
+also needs correcting before anything is closed: it cites *"Live evidence it is still present:
+`RebalanceEoSDeadlockTest` failed once under a 20-run stress hunt"*, and this branch established that
+that test runs `PERIODIC_TRANSACTIONAL_PRODUCER` - a mode the cycle cannot close in - and counts a
+latch by overriding a method the fixed revoke path no longer calls. It is inverted: 5/5 on the defect
+arm, 5/5 failing on the fixed arm. The issue's headline evidence for "still open" is not evidence.
+
+### The reproducer nobody has measured
+
+amrynsky, 2026-01-11, on upstream: `MultiInstanceRebalanceTest.largeNumberOfInstances` is disabled by
+default and *"every other run of this test is failing"* with `No progress beyond 285591 records after
+11 rounds`. It is the closest thing to a repeatable in-repo instance of the reported symptom and it
+is switched off. `test-largenumberofinstances-residual-failures-unmeasured.md` concedes the claim
+that the residual failures are Kafka's has never been measured.
+
+### The experiment that would settle the no-rebalance pause
+
+Stated before running it: take the reporter's shape - back-pressure engaged, no rebalance - and drive
+the load gate to a phantom count on `master` **before** astubbs#336, then after. The prediction is
+that the pre-astubbs#336 arm strands with the poller paused and `isSufficientlyLoaded()` true against
+an empty pipeline, and the post arm does not. If the pre arm does NOT strand, the load gate is not
+this symptom's mechanism either and the reading above is wrong - say so here.
+
+### The sighting ledger, read end to end: the family is far smaller than its length suggests
+
+Twenty numbered sightings plus a dozen unnumbered captures. Sorted by what survives scrutiny:
+
+**Withdrawn or explained - not evidence of anything (roughly half the ledger).** The whole
+`CLASS2_STALL` line went on 2026-08-25, when the pre-declared discriminator finally ran and both
+nominated seeds **crossed the bound and then drained completely**: *"Every `CLASS2_STALL` entry above
+is a timing measurement, not a family sighting."* With it went the "~154s constant as corroboration"
+reading (*"That is arithmetic, not signal"*). Separately retired: the seventh (a test defect - an
+assertion comparing a commit offset to a completion counter), the fourth (astubbs#292's harness
+double-start), and the `ChaosKeyOrderIT` `ZOMBIE_MEMBER` (a calibration gap - the scenario does not
+inherit `disableRebalanceDwellViolation()`, and it overshoots by 2.7-4.4%).
+
+**Positively confirmed, and this is new.** Six independent thread-dump captures between 2026-08-26
+and 2026-08-27 show the poll thread **BLOCKED on the `commitCommand` monitor** held by the control
+thread, with frames resolving to `commitOffsetsThatAreReady` / `onPartitionsRevoked` - astubbs#29's
+AB-BA pair, observed rather than inferred. Across both the eager and cooperative arms, on five
+different PR branches including ones that compile no Java, and after per-PR VMs removed the last
+co-residency explanation. **The deadlock this PR fixes is real and is being hit.**
+
+**Still genuinely open, and none of it is astubbs#29's:**
+
+- The `ChaosChurnStormIT` `NO_PROGRESS` / `ZOMBIE_MEMBER` line in `PERIODIC_CONSUMER_ASYNCHRONOUS`,
+  where the AB-BA cycle cannot close and the transactional wait cannot run - *"either a fourth defect
+  or something outside the product"*. astubbs#373's shard-counter fix was tested against it directly
+  and **it fired anyway on that branch's own head**, so that fix is necessary-not-sufficient.
+- The unbounded transactional revoke wait, carrying astubbs#44 - the only issue upstream ever
+  labelled a verified bug. Its design decision is explicitly unsettled.
+- astubbs#175 and astubbs#177, two field reports of `Timeout waiting for commit response`, open for
+  months with no reproduction attempt and no owner.
+- The no-rebalance pause described above.
+
+### The verification this PR owes, and has not done
+
+**Six seeds now exist that captured the exact deadlock, and not one has been replayed with the fix
+applied.** The ledger names this as the outstanding step in its own words - *"What is wanted next is
+no longer a discriminator but a verification"* - and the seeds are on file:
+`7728704565782280867`, `2867310537409227917`, `3649400609451361367`, `1355976854716465757`,
+`3135248854766953145`, `3198328355855848347`, `818084281700661522`.
+
+That is the cheapest, highest-value experiment available to this PR, and it is worth more than any
+further chaos-suite runs: it converts "the A/B soak says the symptom stops" into "the mechanism we
+photographed is gone".
+
+**A prediction is already on record for after this lands**, and it must not be quietly dropped: the
+Class 2 findings should **continue at roughly the same rate**, because they are the bound meeting the
+load and no deadlock fix touches that. *"If they instead drop off, this reading is wrong"* - and the
+2026-08-25 section then needs revisiting.
+
+### Verdict on closing astubbs#119
+
+**Land this PR, verify it against a captured seed, and do NOT close astubbs#119 on it.**
+
+The issue is a symptom bucket. This PR closes one mechanism in it - now directly observed, which is
+much stronger ground than the ledger was on a week ago. Four others remain, at least one of which
+(the async churn-storm line) is unexplained by every known member of the family, and one of which is
+a reporter on this very PR whose symptom has no rebalance in it at all.
+
+What should happen on the issue instead: record that the deadlock is confirmed and fixed, list the
+remaining mechanisms by name, and correct the `## Fork status` sentence that still cites
+`RebalanceEoSDeadlockTest` as live evidence - that test is inverted and cannot support the claim.
+
+### Cross-references not yet folded in
+
+PR astubbs#29's timeline carries cross-references to open mirrors that describe adjacent or possibly
+identical symptoms, and none is accounted for in the family ledger: astubbs#183
+(confluentinc#875, *"Missing message in consumption and eventually pauses all consumption"*),
+astubbs#173 (confluentinc#777, duplicates on revocation), astubbs#177 (confluentinc#833, the
+commit-response timeout) and astubbs#44 (confluentinc#803, the transactional revoke wait). Whether
+any is the same defect is unassessed.
+
 ## What the PR is, in one line
 
 Fixes the AB-BA deadlock between the poll thread's `onPartitionsRevoked` and the control thread's
