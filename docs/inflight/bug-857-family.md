@@ -1717,10 +1717,11 @@ other six chaos classes in this very JVM passed. The cheap experiment nobody has
 one: re-run the chaos lane on the failing head and see whether the arm follows the tree or the seed.
 Every prior sighting says the seed.
 
+<!-- post-merge: checked-begin -->
 **A sixth BLOCKED-on-monitor capture rode in the same window, on a different PR, and is recorded here
 so it is not lost.** `ChaosRevokeUnderWorkDrainIT.revokeUnderDrainingStopsStaysProtocolHonest` on
 [run 33027475278](https://github.com/astubbs/parallel-consumer/actions/runs/33027475278) (job
-98372559908, `feat/mdc-context-propagation` at head `fdb9b0736`), ten minutes before the run above,
+98372559908, astubbs/parallel-consumer#205 at head `fdb9b0736`), ten minutes before the run above,
 died on the familiar SLO with `instance 56 ... POLL THREAD AT TIMEOUT: BLOCKED ... Lock:
 java.util.concurrent.atomic.AtomicBoolean@2ddab2c5, held by: pc-control-PC-56`, frames
 `commitOffsetsThatAreReady(AbstractParallelEoSStreamProcessor.java:1639)` /
@@ -1728,11 +1729,73 @@ java.util.concurrent.atomic.AtomicBoolean@2ddab2c5, held by: pc-control-PC-56`, 
 master's `:1589`/`:552`, because that branch edits `AbstractParallelEoSStreamProcessor` - so, exactly
 like the fourth capture's corroborating half, it corroborates the pair and is **not** a clean
 not-PR-introduced control. Match by method and monitor, never by line number.
+<!-- post-merge: checked-end -->
 
 **The pairing is what makes the window worth reading as a whole.** Two PRs' chaos jobs red inside ten
 minutes, on two arms this file treats as separate, on per-PR VMs where co-residency is structurally
 impossible - and master green between them. Neither seed has been replayed. Six seeds now exist for
 the verification the first 2026-08-26 section asks for; still none of them spent.
+
+<!-- post-merge: checked-begin -->
+**Twentieth sighting, 2026-08-26 - the `ZOMBIE_MEMBER` arm, and the first capture of it since the
+dispatch ceiling landed.** `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger` was killed
+fail-fast by the probe on astubbs/parallel-consumer#205, at a head that had just merged master.
+The autopsy names the same arm as the fourth, fifth and eighth sightings, in the same words:
+
+```
+ZOMBIE_MEMBER/REBALANCE_BLOCKED: group 'group-1-1533474291' dwelling in PreparingRebalance for 15s
+(bound 15s) - a member is not answering the rebalance (protocol-unresponsive)
+peaks: rebalanceDwell=15392ms lagStagnation=143274ms
+```
+
+Twenty-three partitions were reported frozen, stagnant for around 140s with lag from 56 up to 1132,
+so this is the whole assignment stopping rather than one shard. Every other chaos test in the same
+run passed, including `ChaosRevokeUnderWorkIT`, both `ChaosRevokeUnderWorkCooperative*` and
+`ChaosKeyOrderIT`.
+
+**Seed `7543483068749855826`, not replayed.** Replay with:
+
+```
+./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dincluded.groups=chaos \
+  -Dexcluded.groups= -Dchaos.seed=7543483068749855826
+```
+
+**Read against what this file has already settled, the ceiling is a question, not a rival
+explanation.** The eleventh sighting concluded these reds are seed-dependent rather than
+branch-dependent; the fourteenth caught three of them on a branch whose entire diff was markdown, a
+comment and one `iterations` value, with no `src/main` file anywhere - "provably cannot influence
+it" - and pointed at the box or at master; the runner-contention hypothesis was ruled out there on
+timing rather than left unreplayed; the fourth capture above closes the ambient half of
+that outright, since `Chaos Pain Suite` now runs one job per VM and co-residency is structurally
+impossible; and the pair of runs one commit apart at the end of this file says the trigger is the
+schedule, not the tree. A capture on a branch that merged
+master is exactly what all of that predicts, and nothing here contradicts it.
+
+What is genuinely new is only that a variable changed underneath: every previous capture of this arm
+predates the dispatch ceiling, which landed on master hours before this run, and the commit
+immediately after it says in its own body that a leaked dispatch permit now takes the engine to a
+full stop rather than a stuck record. A member that has stopped answering the rebalance protocol is
+what that would look like from outside. So the ceiling is worth ruling out the way contention was
+ruled out - explicitly, with evidence - rather than being assumed either way. It is not a competing
+diagnosis; the standing one is better evidenced than any single capture, this one included.
+
+**The control is the same one every entry here asks for and none has run: replay the seed.** For the
+ceiling question specifically it is same-seed-different-position - replay at the ceiling commit and
+at its parent - which is the arm that separates a new cause from the standing intermittency. Nobody
+has replayed this seed either.
+
+**Whether it gated anything is now contested, and master's reading wins.** The fourteenth sighting
+records `Chaos Pain Suite` as outside master's required-checks ruleset; the commit that added the
+fifth capture corrects that to required-and-gating. Either way this capture is written down for the
+seed, not because it stopped work. It is written down because the log expires
+and the seed is the asset, not because it stopped work.
+
+**Not the observing PR's defect.** astubbs/parallel-consumer#205 adds MDC capture and scope entry
+around the worker submit and the engine terminal callbacks; it changes no locking, no rebalance
+path, and no in-flight accounting. What it did bring in is master - including the ceiling above -
+which is why the capture is worth attributing to the merge rather than to the branch.
+
+<!-- post-merge: checked-end -->
 
 ## Delete when
 
