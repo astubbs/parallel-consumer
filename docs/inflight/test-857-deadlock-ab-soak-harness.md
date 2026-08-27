@@ -59,6 +59,36 @@ every control invocation. Harmless where the result is unambiguous; fix it befor
 for anything marginal, because a gate that misreads one arm is how a marginal result gets read
 backwards.
 
+## The overnight CI runs, read
+
+Three failures across both arms, and they separate cleanly:
+
+- **Both fix-branch failures are `ChaosChurnStormIT`**, the `PERIODIC_CONSUMER_ASYNCHRONOUS` line
+  nothing in the family explains - one with `NO_PROGRESS` on random seed `9086872209853284830`, the
+  other on random seed `6078190770998307147`. **Neither can be this deadlock**: the AB-BA cycle
+  cannot close in that mode, and the probe A/B rules it out independently. They are fresh sightings
+  of the open fourth mechanism, found by random-seed hunting rather than replay.
+- **The one control-branch failure is `ChaosRevokeUnderWorkCooperativeDrainIT` on seed
+  `2867310537409227917`** - which is BLOCKED-on-monitor capture #2. The same six captured seeds all
+  passed on the fix branch. That is a chaos-level A/B pointing the same way as the probe, on the
+  scenario family where the cycle lives.
+
+**Stated as corroboration, not proof.** Some control-arm runs were cancelled rather than completed,
+so this is not a clean six-versus-six; and a single chaos failure is not a rate. The probe A/B is the
+evidence. This is a second, independent needle pointing the same way.
+
+## Reading these artefacts is harder than it should be
+
+`gh run view --log-failed` returns truncated debug noise for these runs - the failure mode
+`docs/solutions/workflow-issues/gh-run-view-log-truncation.md` owns. The verdicts are in the run's
+uploaded reports artefact instead.
+
+**And the artefact carries several same-named XMLs per test class**, because `CHAOS_REPS > 1` makes
+every rep write `TEST-<class>.xml` again; `bin/chaos-test.sh` notes this. So a grep that picks "the"
+report picks an arbitrary rep, and two greps of the same artefact can disagree - which happened while
+reading these. Whoever does the chaos sharding should fix the collision at the same time, since
+sharding multiplies it.
+
 ## Still open
 
 The overnight CI chaos runs on both arms produced a small number of failures, on the fix branch as
