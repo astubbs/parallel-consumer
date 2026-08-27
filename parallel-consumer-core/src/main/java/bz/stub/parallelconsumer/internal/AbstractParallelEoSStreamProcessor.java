@@ -780,24 +780,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                             + "shutting down rather than continuing with work it may silently skip.", wc),
                     mailboxingThrew);
 
-            // LOUD ON PURPOSE, and the banner is the point. This can only fire on a PC bug, and its consequence -
-            // a record neither retried nor reported - leaves no other trace: no exception reaches the user, no lag
-            // anomaly appears, and the committed offsets look correct. A single ERROR line among a failure path's
-            // other ERROR lines is not enough to be found later, and being found later is the whole value. Same
-            // reasoning, and the same shape, as the AMBIENT PROBE AUTOPSY banner the test suites already use.
+            // ERROR with the consequence in it, because the consequence is the part that is not obvious: an
+            // unretired record leaves no exception, no lag anomaly and correct-looking committed offsets, so
+            // "could not mailbox" alone would not tell a reader why PC just stopped.
             logWithoutEscaping(failure, () -> log.error(
-                    "\n"
-                            + "================================================================================\n"
-                            + "  UNMAILBOXABLE RECORD - TERMINAL, SHUTTING DOWN\n"
-                            + "================================================================================\n"
-                            + "  {} could not be returned to the mailbox.\n"
-                            + "  This is PC's own bookkeeping, not user code, so this is a BUG IN PC.\n"
-                            + "  The record is now neither in flight nor completed: nothing will retry it and\n"
-                            + "  nothing will report it, so continuing risks committing past work that was\n"
-                            + "  never done - a silent skip, with no error and no lag anomaly to find it by.\n"
-                            + "  PC is shutting down rather than run on in that state.\n"
-                            + "  Cause: {}\n"
-                            + "================================================================================",
+                    "Could not return {} to the mailbox - shutting down. This is PC's own bookkeeping, so it is a "
+                            + "bug in PC. The record is neither in flight nor completed, so nothing retries it and "
+                            + "nothing reports it, and continuing risks committing past work that was never done. "
+                            + "Cause: {}",
                     wc, describeWithRootCause(mailboxingThrew)));
 
             // The call sites name PCInternalRuntimeException as the expected arm and keep a broad backstop, because
@@ -806,9 +796,8 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             // known invariant is the produce lock. docs/inflight/core-exception-hierarchy-cleanup.md owns the
             // wider cleanup that this and ProduceLockNotHeldException are two instances of.
             if (mailboxingThrew instanceof PCInternalRuntimeException) {
-                log.error("  ...and it is one of PC's OWN invariants that broke, not an unexpected runtime error. "
-                        + "The known route is the produce-lock release in onPostAddToMailBox - see "
-                        + "docs/inflight/bug-producing-lock-double-release.md.");
+                log.error("The cause above is one of PC's own invariants; the known route is the produce-lock "
+                        + "release in onPostAddToMailBox (docs/inflight/bug-producing-lock-double-release.md).");
             }
 
             if (this.failureReason == null) {
@@ -1945,6 +1934,26 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         wc.onUserFunctionSuccess();
     }
 
+    /**
+     * Hands a finished record back to the control thread.
+     * <p>
+     * <b>It can throw, and which routes are real is not obvious - that is why this is written down.</b> Callers guard
+     * it because a throw here leaves the record neither in flight nor completed; see
+     * {@link #failFatallyOnUnmailboxableRecord}.
+     *
+     * @throws ProduceLockNotHeldException the reachable route. {@link WorkContainer#onPostAddToMailBox} releases the
+     *                                     produce lock in transactional commit mode, and
+     *                                     {@code ProducerManager#finishProducing} rejects a release when the lock is
+     *                                     not held. {@code docs/inflight/bug-producing-lock-double-release.md} is an
+     *                                     open question about that invariant.
+     * @throws PCInternalRuntimeException  any other PC invariant reached through the same call.
+     * @implNote The queue add is NOT a meaningful throw route here, which is worth stating because
+     *         {@link java.util.Queue#add} documents four. {@link #workMailBox} is an unbounded
+     *         {@link java.util.concurrent.LinkedBlockingQueue}, so its {@code IllegalStateException} capacity clause
+     *         cannot fire; {@code ClassCastException} and {@code IllegalArgumentException} are for ordered and
+     *         bounded queues and it raises neither; and the element is never null. Copying that contract here would
+     *         document four exceptions that cannot happen while saying nothing about the one that can.
+     */
     protected void addToMailbox(PollContextInternal<K, V> pollContext, WorkContainer<K, V> wc) {
         String state = wc.isUserFunctionSucceeded() ? "succeeded" : "FAILED";
         log.trace("Adding {} {} to mailbox...", state, wc);
