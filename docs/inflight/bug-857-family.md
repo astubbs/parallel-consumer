@@ -640,7 +640,7 @@ than cleared - a later sighting on a branch that does not touch the commit path 
 **Ninth sighting, 2026-08-18 - the fleet-level `NO_PROGRESS` arm, twice in one night (this entry
 
 <!-- post-merge: checked -->
-> STATUS: **OPEN, AND NOW TRACTABLE** - ASYNC `NO_PROGRESS`. This line finally has a replayable seed (`9086872209853284830`, 2026-08-28) reproducing on unmodified master. See `test-857-churn-storm-async-stalls.md`.
+> STATUS: **LIKELY A TIMING PROXY, 2026-08-28** - ASYNC `NO_PROGRESS`. The seed `9086872209853284830` replays, and when the stall fires the backlog DRAINS: flat, then climbing past target. Same shape as `CLASS2_STALL`. One firing so far - see `test-857-churn-storm-async-stalls.md`.
 and the ninth below share a signature).** `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger`
 was killed fail-fast by `ProgressProbe` on
 [job 95579861648](https://github.com/astubbs/parallel-consumer/actions/runs/32093367999/job/95579861648),
@@ -677,7 +677,7 @@ console-log truncation trap is the same one recorded there.
 **Tenth sighting, 2026-08-18 - same test, same arm, four hours earlier, different branch.**
 
 <!-- post-merge: checked -->
-> STATUS: **OPEN** - same ASYNC `NO_PROGRESS` line as the ninth; same tractability now applies.
+> STATUS: **LIKELY A TIMING PROXY, 2026-08-28** - same ASYNC `NO_PROGRESS` line as the ninth; the discriminator shows it draining.
 `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger`, killed by the same fleet detector on
 [job 95584026682's run, attempt at head d96375053](https://github.com/astubbs/parallel-consumer/actions/runs/32078875110)
 (2026-08-17T23:04Z), on astubbs#308 - a docs-only branch (ideation/strategy/ledger files, zero

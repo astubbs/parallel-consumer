@@ -226,3 +226,30 @@ once the capability exists:
 
 Until then, **no entry in this file distinguishes "wedged" from "slow"**, and none should be read as
 if it did. That is the same error the Class 2 entries made for a year.
+
+## ANSWERED, 2026-08-28: it DRAINS. This line is a timing proxy, not a wedge.
+
+The discriminator ran, on the first firing. Consumed after the violation: flat at 94878 for three
+samples, then 99665, 100138, and on past the 100000 target - while inFlight fell from 114 to 67.
+**It stalled, held, recovered and completed.**
+
+So `NO_PROGRESS` on this scenario behaves exactly as `CLASS2_STALL` did: it measures how long the
+fleet takes, and a busy fleet crossing the bound is indistinguishable from a wedged one. The seed
+that reproduces most runs reproduces a SLOW run, not a stuck one.
+
+**What that costs this file.** Every entry here is a detector firing with no recovery observation,
+because until 2026-08-28 the scenario could not make one. On the evidence now available they are
+timing measurements, and the "either a fourth defect or something outside the product" framing does
+not survive as stated - the third option, which turned out to be the answer for Class 2, is that the
+detector is measuring the workload.
+
+**Held to one firing, deliberately.** The Class 2 demotion rested on two nominated seeds, both
+draining. This is one seed and one firing. It is strong because it is the seed the whole line's
+tractability rested on, and because the flat-then-climb shape is unambiguous - but a second firing,
+ideally on a different seed, is what would put it beyond argument. **Do not delete the entries above
+on the strength of this paragraph**; mark them and let a second run settle it.
+
+**What is NOT closed by this.** The detector stayed silent on a third of the failures in the
+astubbs#344 arms - that is a separate question and it is untouched here. A detector that both
+over-fires on slow runs AND misses real ones is worse than either alone, and the liveness claim rests
+on it.
