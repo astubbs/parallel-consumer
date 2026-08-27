@@ -253,3 +253,26 @@ on the strength of this paragraph**; mark them and let a second run settle it.
 astubbs#344 arms - that is a separate question and it is untouched here. A detector that both
 over-fires on slow runs AND misses real ones is worse than either alone, and the liveness claim rests
 on it.
+
+## The detector-silence worry does NOT reproduce, 2026-08-28
+
+Replayed the seed eight times and classified every FAILING run by what caught it
+(`bin/audit-stall-detector-silence.sh`). Five runs failed. **All five had `NO_PROGRESS` fire.** Not
+one failure occurred with the liveness detectors silent.
+
+So the "a third of failures went red with the detector quiet" observation, from the astubbs#344 arms,
+**is not supported here and should be treated as suspect until re-measured.** The likelier
+explanation is a measurement artefact on the observing side rather than a detector fault: those
+counts came from grepping a run log, and grepping the wrong file has produced a wrong answer twice
+already this week - the failsafe `.txt` that carries no log output, and a resources copy that was
+never refreshed.
+
+**What that changes.** The detector over-fires on merely-slow runs, which is established and is why
+this line is a timing proxy. It does not, on this evidence, also under-fire. That is a materially
+better position than "over-fires and under-fires", which would have made its silence worthless -
+and it means the gating liveness claim resting on it is not as compromised as it looked.
+
+**What would still settle it properly.** The original observation was on the pre-astubbs#344 tree,
+not this one. If it matters, re-run the audit there rather than assuming the trees behave alike. Do
+not close the question on this paragraph alone: it is one seed on one tree, and the claim being
+tested was made about another.
