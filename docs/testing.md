@@ -16,6 +16,38 @@ you have read this file.
   surefire and included in failsafe.
 - **Kafka version matrix**: CI tests against multiple Kafka versions via `-Dkafka.version=X.Y.Z`.
 
+- **A new test class is not running until you have watched it run.** `PCMetricsTest859` matched none of
+  Surefire's include patterns (`Test*`, `*Test`, `*Tests`, `*TestCase` - this repo declares no
+  `<includes>`, so the defaults apply), so its six regression tests were never collected, and sat
+  dormant across four commits while CI stayed green. Put the issue number *before* the suffix:
+  `PCMetrics859Test`. Prove it with `./mvnw -pl <module> -am test -Dtest=<Name> -DfailIfNoTests=true`
+  (which turns "matched nothing" into a failure instead of a silent no-op), or check that
+  `target/surefire-reports/<FQCN>.txt` exists - an absent report means the class never ran, and nothing
+  warns you. `TestConventionRules` now fails the build for this, but it is wired per module by a thin
+  `TestConventionsArchTest`, so **a new module has no guard until you add one**. Integration tests are
+  selected by package instead, so an `*IT` name there is correct.
+
+## A run that prints nothing is normal, and the flag that changes it
+
+`parallel-consumer-core/src/test/resources/logback-test.xml` sets the root logger to
+`${pc.log.level:-warn}`, so a passing run emits **nothing** from the library. That is deliberate - a
+suite that floods stdout hides the one failure worth reading - but it looks identical to a run that
+never executed, and the reflex is to start debugging the harness. Check
+`target/surefire-reports/<FQCN>.txt` before concluding anything: an absent report means the class
+really did not run.
+
+Turn it up per command, never by editing the file:
+
+```bash
+./mvnw test -Dtest=TheOneTest -Dpc.log.level=info    # the library's own progress
+./mvnw test -Dtest=TheOneTest -Dpc.log.level=debug   # per-record decisions
+./mvnw test -Dtest=TheOneTest -Dpc.log.level=trace   # everything PC emits
+```
+
+A committed logger at `debug` or `trace` is a separate failure this repo already gates - see
+`bin/check-test-log-config.sh`, which pins the four library modules to this harness and fails any
+such logger, because the resulting flood is silent in exactly the way an empty run is.
+
 ## The ambient probe: contention artifact, or genuine bug?
 
 Every broker integration test failure **emits** an `AMBIENT PROBE AUTOPSY` block (grep for
@@ -257,8 +289,9 @@ two toolchain controls stay with them for that reason alone - they model nothing
 repeats it in its own hardcoded list - `QuarantinedAnnotationContractTest` is what fails when the two
 disagree, because a tag the pom excludes and a wrapper does not runs in the GATING suite.
 
-- **Run it**: `bin/lincheck-test.sh` (whole lane, well under a minute), or
-  `LINCHECK_TEST=ShardManagerLincheckTest bin/lincheck-test.sh` for one class. Do not hand-roll the
+- **Run it**: `bin/lincheck-test.sh` (whole lane, about two and a half minutes - almost all of it
+  `WorkManagerLincheckTest`, which since its inversion can never stop early and pays its whole bound
+  on every run), or `LINCHECK_TEST=ShardManagerLincheckTest bin/lincheck-test.sh` for one class. Do not hand-roll the
   `./mvnw` line - **five flags have to line up and each fails silently on its own**: the group filters
   (an include alone selects nothing, the same trap the performance lane documents), `-Plincheck` for
   the JDK module opens the model checker needs, `-Dparallel-tests=false` (Lincheck installs a
@@ -274,8 +307,16 @@ disagree, because a tag the pom excludes and a wrapper does not runs in the GATI
   silently: a classpath conflict once left it reporting SUCCESS having instrumented nothing. A
   deliberately broken probe with a known answer is the only thing that tells a real "no violations"
   from a tool that was not looking.
-- **Every harness currently asserts that a bug EXISTS.** They invert when the fixes land; each
-  javadoc names the PR that triggers it.
+- **A harness asserts a bug EXISTS only until its fix lands, and the flip is not always the clean
+  one the contract promised.** Three shapes are in the lane now, and each javadoc says which it is:
+  designed-red (`PartitionStateLincheckTest`, waiting on astubbs#344); inverted to Lincheck's own
+  linearizability check (`RetryQueueLincheckTest`, `WorkManagerLincheckTest`); and still expecting a
+  violation but asserting it is no longer the FIXED one (`ShardManagerLincheckTest`, which reports a
+  different defect through the same operations). **The reason for the third shape is the rule that
+  governs all of them: a harness pointed at one seam explores the others, so it can stop finding its
+  own bug without going quiet - and its next assertion is not derivable from its own diff.** Re-run
+  the whole lane when you land any fix it names, and re-check every harness, not just yours.
+  `docs/inflight/test-lincheck-lane-open-items.md` carries the measurements.
 - **Measure a new harness's hit rate across several runs before believing it.** An under-budgeted
   stress arm is a flake, and a flake fails this build with no retry, by design. Three green runs
   cannot tell a 0% miss rate from a 10% one, and `WorkManagerLincheckTest` shipped its first bound on

@@ -47,10 +47,12 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     private final ParallelConsumerOptions<K, V> options;
 
     // todo make private
+    // TODO(refactor): rename to partitionManager - `pm` also abbreviates ProducerManager elsewhere in core
     @Getter(PUBLIC)
     final PartitionStateManager<K, V> pm;
 
     // todo make private
+    // TODO(refactor): rename to shardManager - see the note beside `pm`; both getters are public API
     @Getter(PUBLIC)
     private final ShardManager<K, V> sm;
 
@@ -160,14 +162,24 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     }
 
     public void onSuccessResult(WorkContainer<K, V> wc) {
+        onSuccessResult(wc, pm.getPartitionState(wc.getTopicPartition()));
+    }
+
+    private void onSuccessResult(WorkContainer<K, V> wc, PartitionState<K, V> partitionState) {
         log.trace("Work success ({}), removing from processing shard queue", wc);
 
         incrementCounterIfPresent(succeededRecordsCounters, wc.getTopicPartition());
 
         wc.endFlight();
 
-        // update as we go
-        pm.onSuccess(wc);
+        // update as we go - against the SAME state object the staleness checkpoint validated, never a second
+        // lookup. If a rebalance revoked the partition since that validation, this mutates an object already
+        // unlinked from the live map: invisible to the commit path, and the record is redelivered to the
+        // partition's next owner (at-least-once). A second lookup here instead dirties the freshly assigned
+        // state with a dead epoch's completion - which is the one production route into the bootstrap-reset
+        // commit tear (the torn-read family's candidates 3 and 1; both interleavings are pinned in
+        // WorkManagerStaleCheckDoubleLookupTest).
+        pm.onSuccess(wc, partitionState);
         sm.onSuccess(wc);
 
         // notify listeners
@@ -186,11 +198,30 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     }
 
     public void onFailureResult(WorkContainer<K, V> wc) {
+        onFailureResult(wc, pm.getPartitionState(wc.getTopicPartition()));
+    }
+
+    private void onFailureResult(WorkContainer<K, V> wc, PartitionState<K, V> partitionState) {
         // error occurred, put it back in the queue if it can be retried
         incrementCounterIfPresent(failedRecordsCounters, wc.getTopicPartition());
         wc.endFlight();
-        pm.onFailure(wc);
-        sm.onFailure(wc);
+        pm.onFailure(wc, partitionState);
+        // Re-validate against the LIVE map immediately before the retry re-queue - the staleness checkpoint's
+        // answer cannot carry this decision, because a rebalance can complete between there and here. The
+        // revoke sweep cleans the retry queue only through shard contents, so a stale add landing after the
+        // sweep is permanent: nothing can ever remove the entry, and once its retry delay elapses it reads as
+        // ready-to-retry forever - phantom waiting work that gates the broker poller (a confluentinc#857-family
+        // stall; the count mechanism is that ShardManager#getWorkableRecords subtracts the parked-for-retry
+        // figure from the shard population, so an orphan is subtracted from a total that no longer contains it,
+        // and the gate is told the system holds less than it does. The note that traced it is retired now that
+        // the other door into the same defect is shut - `git show
+        // a80f2bbd1:docs/inflight/bug-retry-queue-orphaned-by-inline-stale-removal.md`).
+        // Skipping the re-queue is the safe direction: the partition's next owner redelivers the record.
+        if (checkIfWorkIsStale(wc)) {
+            log.debug("Not re-queueing failed work for retry - its partition was revoked mid-flight, so the retry belongs to the partition's next owner. {}", wc);
+        } else {
+            sm.onFailure(wc);
+        }
         numberRecordsOutForProcessing--;
     }
 
@@ -224,6 +255,16 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         return pm.getPartitionState(workContainer).checkIfWorkIsStale(workContainer);
     }
 
+    /**
+     * As {@link #checkIfWorkIsStale(WorkContainer)}, but against a state the caller has ALREADY resolved - so
+     * the caller can go on to act against the exact state object the answer was computed from. Checkpoint 3
+     * ({@link #handleFutureResult}) depends on that: an answer computed on one lookup with actions running on
+     * another is a torn read whenever a rebalance swaps the map entry in between.
+     */
+    protected boolean checkIfWorkIsStale(PartitionState<K, V> partitionState, WorkContainer<K, V> workContainer) {
+        return partitionState.checkIfWorkIsStale(workContainer);
+    }
+
     public boolean shouldThrottle() {
         return isSufficientlyLoaded();
     }
@@ -233,20 +274,52 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      *         should be downloaded (or pipelined in the Consumer)
      */
     public boolean isSufficientlyLoaded() {
-        long awaitingSelection = getNumberOfWorkQueuedInShardsAwaitingSelection();
-        long outForProcessing = getNumberRecordsOutForProcessing();
-        long threshold = (long) options.getTargetAmountOfRecordsInFlight() * getLoadingFactor();
-        boolean loaded = (awaitingSelection + outForProcessing) > threshold;
-        // Silent-stall diagnostic (confluentinc#857): this gates the broker-poller pause/resume. If it stays true while no
-        // records are actually flowing, the poller never resumes and the PC stalls. A high outForProcessing with
-        // no awaitingSelection and no real progress is the numberRecordsOutForProcessing counter-drift signature.
+        // ONE read of the shards, and the log line below prints the very values it returned. Re-reading for
+        // the diagnostic would let it print an equation that never held - and telling a real stall apart
+        // from counter drift is the entire point of the line.
+        var records = sm.getWorkableRecords();
+        long workable = records.getWorkable();
+        int loadingFactor = getLoadingFactor();
+        long threshold = (long) options.getTargetAmountOfRecordsInFlight() * loadingFactor;
+        boolean loaded = workable > threshold;
+        // Silent-stall diagnostic (confluentinc#857): this gates the broker-poller pause/resume. If it stays true while
+        // no records are actually flowing, the poller never resumes and the PC stalls. Because the figure below is
+        // derived by conservation, "stays true with nothing flowing" now means records really are being held and not
+        // finished with - a leak in the shards - rather than possibly just a counter that has drifted.
         // See docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md
         if (log.isDebugEnabled()) {
-            log.debug("isSufficientlyLoaded={} (awaitingSelection={} + outForProcessing={} = {} vs target({})*loadingFactor({})={})",
-                    loaded, awaitingSelection, outForProcessing, awaitingSelection + outForProcessing,
-                    options.getTargetAmountOfRecordsInFlight(), getLoadingFactor(), threshold);
+            log.debug("isSufficientlyLoaded={} (inShards={} - parkedForRetry={} = {} vs target({})*loadingFactor({})={})",
+                    loaded, records.getInShards(), records.getParkedForRetry(), workable,
+                    options.getTargetAmountOfRecordsInFlight(), loadingFactor, threshold);
         }
         return loaded;
+    }
+
+    /**
+     * How many records the system is holding that it can actually make progress on - the figure that gates record
+     * intake from the broker.
+     * <p>
+     * <b>Derived by conservation, not counted.</b> The gate only ever wanted the <em>sum</em> of "queued in shards"
+     * and "out for processing", never the split, and that sum is simply "records inside the system": everything
+     * admitted from the broker that has not yet been finished with. {@link ShardManager} keeps that as
+     * {@code admitted - retired} over the one collection that holds the records, which is why it cannot drift the
+     * way the two separately-maintained counters it replaces could - a defect the previous implementation
+     * acknowledged with a clamp on one of them.
+     * <p>
+     * Records waiting out a retry delay are excluded: they occupy the buffer but no amount of worker capacity can
+     * advance them, so a consumer whose whole buffer is in back-off should keep fetching rather than idle.
+     * <p>
+     * The one thing this does <em>not</em> count, which the old expression did, is a record whose partition was
+     * revoked while it was still out at a worker. That record has been dropped from the shards and its result will
+     * be discarded on return, so counting it as loaded only ever delayed a fetch.
+     * <p>
+     * <b>The subtraction is {@link ShardManager}'s, not this class's</b> - it owns both operands, and
+     * {@link ShardManager#getWorkableRecords()} owns the statement of what the pair is and is not: reading the two
+     * figures closer together makes the decision and its log line agree, but it does not make them a consistent
+     * snapshot, and that method says exactly how far apart they can be and in which direction.
+     */
+    public long getNumberOfWorkableRecordsInSystem() {
+        return sm.getWorkableRecords().getWorkable();
     }
 
     private int getLoadingFactor() {
@@ -269,6 +342,13 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         return sm.getNumberOfWorkQueuedInShardsAwaitingSelection();
     }
 
+    /**
+     * @see ShardManager#getNumberOfRecordsInShards()
+     */
+    public long getNumberOfRecordsInShards() {
+        return sm.getNumberOfRecordsInShards();
+    }
+
     public boolean hasIncompleteOffsets() {
         return pm.hasIncompleteOffsets();
     }
@@ -281,7 +361,16 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         // Third of the three staleness checkpoints - see PartitionState#epochIsStale for the scheme.
         // Work that went stale mid-flight never reaches onSuccessResult/onFailureResult, which is what
         // stops a returning stale result removing a FRESH container that replaced it at the same offset.
-        if (checkIfWorkIsStale(wc)) {
+        //
+        // The partition state is resolved ONCE, and the check and the actions share that reference. Two
+        // separate lookups here used to be a torn read: a rebalance (broker-poll thread - nothing
+        // serialises it against this one, the lock went in confluentinc#219) completing in the gap meant
+        // the check validated the OLD state while the actions ran against its replacement. Since no epoch
+        // check here can ever be atomic with the actions, the actions are instead made safe by
+        // construction: the success path mutates only the validated state object, and the failure path
+        // re-validates against the live map at its re-queue decision (see onFailureResult).
+        var partitionState = pm.getPartitionState(wc.getTopicPartition());
+        if (checkIfWorkIsStale(partitionState, wc)) {
             // no op, partition has been revoked
             log.debug("Work result received, but from an old generation. Dropping work from revoked partition {}", wc);
             wc.endFlight();
@@ -290,9 +379,9 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
             Optional<Boolean> userFunctionSucceeded = wc.getMaybeUserFunctionSucceeded();
             if (userFunctionSucceeded.isPresent()) {
                 if (TRUE.equals(userFunctionSucceeded.get())) {
-                    onSuccessResult(wc);
+                    onSuccessResult(wc, partitionState);
                 } else {
-                    onFailureResult(wc);
+                    onFailureResult(wc, partitionState);
                 }
             } else {
                 throw new IllegalStateException("Work returned, but without a success flag - report a bug");

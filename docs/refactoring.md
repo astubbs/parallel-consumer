@@ -1,14 +1,21 @@
 # Refactoring backlog
 
-This doc owns the deferred-work backlog - internal refactors, the release-gated breaking-change
-queue, and `TODO`/`FIXME`/`XXX` triage. AGENTS.md routes here and keeps only the one-line rule.
+This doc owns the **lightweight** refactor list - refactors too small to deserve their own
+`docs/inflight/` note - plus the release-gated breaking-change queue and `TODO`/`FIXME`/`XXX`
+triage. AGENTS.md routes here and keeps only the one-line rule.
 
-Deferred internal refactors - improvements noticed while working that are too big
-or too risky to fold into the change at hand, to be picked up **when things are
-quiet**. This is a solo-maintainer backlog, not an issue tracker: entries live
-here (versioned, greppable, zero per-item ceremony) instead of as GitHub issues.
+An entry is a line or two: no owner, no tags, no state. Improvements noticed while working that are
+too big or too risky to fold into the change at hand, to be picked up **when things are quiet**. This
+is a solo-maintainer list, not an issue tracker: entries live here (versioned, greppable, zero
+per-item ceremony) instead of as GitHub issues.
 
-**This is the index for all refactor work.** It also catalogues the abandoned
+**The axis is weight, not timing.** The moment an entry acquires a decision, a blocker, or evidence
+worth keeping, it has outgrown this file: promote it to a `docs/inflight/` note and delete the line in
+the same commit - neither file may state it twice.
+[`docs/inflight/AGENTS.md`](inflight/AGENTS.md) owns that boundary. Being here says nothing about
+*when* the work happens, and work decided to happen later is **not** moved here from a note.
+
+**This is the index for the small refactor work, and for the archive below.** It also catalogues the abandoned
 draft branches and prior closed PRs so their ideas aren't lost - each with what it
 did, whether it's still relevant, and any linked issue. Why so many draft-looking
 branches? This fork was never meant to be the project's primary - it was astubbs's
@@ -274,6 +281,14 @@ them, do not copy them back.
   `question sneaky throws usage` / `enforce max uncommitted`: `sneaky throws` IO handling;
   missing `max-uncommitted < Short.MAX` bound.
 
+- **Not thread-safe if encoding is ever parallelised (latent, tied to confluentinc#200).**
+  Since confluentinc#892 / astubbs#57 the instance is *cached and shared* (per-partition
+  `PartitionState.om` for encoding; one `PartitionStateManager.offsetMapCodecManager` for
+  decode). That is correct *today* only because encoding runs single-threaded on the control
+  thread: `encodingCounters` is a plain `HashMap` mutated in `getCounterMeterForEncoding` on
+  the encode path. If the confluentinc#200 thread-model refactor ever parallelises encoding it
+  races - make it concurrent, or confine it. Not a bug in the current single-threaded design.
+
 ### offsets/OffsetSimultaneousEncoder.java
 - `TODO VERY large offset ranges is slow`: large offset ranges (→ `Integer.MAX_VALUE`) are slow -
   scans could be skipped by passing in the known incompletes map (draft:
@@ -332,10 +347,30 @@ them, do not copy them back.
   cached it (the `confluentinc#859` leak site), but the broader [confluentinc#233](https://github.com/confluentinc/parallel-consumer/issues/233)
   (mirror astubbs#117) refactor remains.
 
+### state/ShardManager.java
+- The confluentinc#905 `SHARDS_MAX_SIZE` gauge walks every shard queue
+  (`getCountOfWorkTracked()` is `entries.size()`, O(n) on a `ConcurrentSkipListMap`), so each metrics scrape
+  is O(total queued records). It used to duplicate a traversal `SHARDS_SIZE` did as well; `SHARDS_SIZE` now
+  reads the O(1) conservation figure, so this is the only scan left.
+  Negligible now; if it ever matters, a max cannot be conserved the way the total is, so it needs its own
+  design - see
+  **Shard-count caching** under [Performance](#performance) above for the upstream design draft
+  (`confluentinc#530`) and the three abandoned branches that attempted it.
+
 ### state/WorkContainer.java
 *Mirror: [#143](https://github.com/astubbs/parallel-consumer/issues/143) - and see the index above: the field is read by nobody, so deletion beats an enum.*
 - `Instance reference to otherwise static state`: instance field working around static state -
   folds into static-state removal.
+
+### state/WorkManager.java
+- **Rename the `pm` and `sm` fields to `partitionManager` and `shardManager`** - raised by Antony in
+  review on astubbs/parallel-consumer#346. Two-letter names for the two collaborators the class
+  delegates almost everything to, and `pm` is ambiguous across core: it abbreviates
+  `PartitionStateManager` here and `ProducerManager` in `ParallelEoSStreamProcessor`. Not folded into
+  the PR that raised it, because both carry `@Getter(PUBLIC)`, so the rename changes `getPm()`/
+  `getSm()` too and reaches main, unit and integration sources - far outside the one-seam concurrency
+  fix under review there. Do it as its own change, where the diff is legible as a rename.
+  `// TODO(refactor):` markers sit on both fields.
 
 ### internal/AbstractParallelEoSStreamProcessor.java
 - God class (see cross-cutting). `todo move into {@link WorkManager}` (misplaced
@@ -459,6 +494,13 @@ but not this.*
   asserts a null failure cause, which a scenario that expects PC to die must override. Doing this
   means re-verifying the six classes already on the base, which is why it is here rather than folded
   into the PR that noticed it (astubbs#204).
+
+### Test infrastructure - the `state` package's white-box harness is copied per class
+
+- **Four classes open with the same six lines** - `ShardManagerTest`, `ProcessingShardStaleReplacement909Test`,
+  `EpochAndRecordsMapRaceTest`, `ShardAvailableCountOwnershipTest`; grep
+  `PCModuleTestEnv module = mu.getModule()`. A base class or extension in `bz.stub.parallelconsumer.state` would
+  hold it once (noticed on astubbs#373).
 
 ### Test infrastructure - timing-based waits
 

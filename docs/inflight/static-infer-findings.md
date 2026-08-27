@@ -24,8 +24,10 @@ Run the lane for the current state; read below for what each group *is*.
 
 | Where | What it is |
 |---|---|
+<!-- post-merge: checked-begin -->
 | `PCMetrics.registeredMeters` | **Refinds a known defect** - the plain `ArrayList` mutated off two threads that the Lincheck PoC turned up unprompted, tracked in [`bug-shared-collections-across-the-poll-boundary.md`](bug-shared-collections-across-the-poll-boundary.md) and fixed by astubbs#57. RacerD names every mutating entry point statically. |
 | `RetryQueue` | **Ground nothing else covers.** `this.unique` read via `Map.size()`/`isEmpty()` racing with writes - **since fixed**, identities retired from the ratchet. What remains is `RetryQueueIterator.closed` read/write, a separate defect; `docs/refactoring.md` owns the offender list. The Lincheck lane's open-items note ranks `ProcessingShard` and `RetryQueue` as the next thing to model and says they are *not modelled at all*. |
+<!-- post-merge: checked-end -->
 | `AbstractParallelEoSStreamProcessor.lastCommitTime` | **New. In no ledger.** A plain `Instant`, written in one method and read unsynchronised by `isTimeToCommitNow()`. Checked: no inflight note, no `refactoring.md` entry - the only mention anywhere is a code excerpt in an unrelated solutions write-up. It sits on the commit-timing path, in a repo that tracks commit-timeout flakes. Unfixed, and the one genuinely new thing here; it wants a look on its own account rather than as a lint entry. |
 
 <!-- post-merge: checked-begin -->
@@ -45,10 +47,16 @@ the second. The four are named by their fixing PRs, which stay citable after eac
   which carries the open decision - fail open, or fail closed and fix the fixtures - and the evidence
   that it is a policy about the method rather than a question about one call site. Do not answer it
   here.
+<!-- post-merge: checked-begin -->
 - **`getEpochOfPartition` is documented nullable** - its javadoc says "or null if not yet assigned" -
-  and `OffsetMapCodecManager` dereferences the result on the next line. Tracked nowhere else, and
-  **the cheapest thing on this page**: no policy decision is needed, because the contract is already
-  written down and one caller ignores it. Start here.
+  and `OffsetMapCodecManager` unboxes the result into `PartitionState`'s primitive `long` parameter
+  on the next line. **It now has its own note,
+  [`bug-epoch-null-unboxes-on-partition-assignment.md`](bug-epoch-null-unboxes-on-partition-assignment.md),
+  because the ratchet stopped watching it**: the identity was retired on astubbs#57 after Infer
+  stopped reporting it, and the code it is about was not touched by that PR. Read that note before
+  concluding from a green lane that this is fixed. This entry's earlier claim that it needs no policy
+  decision was wrong - null means *not yet assigned*, so the caller has to choose what that means.
+<!-- post-merge: checked-end -->
 
 Why NullAway is silent on all of them: it reasons from annotations, and `getPartitionState` carries
 none, so it is assumed non-null and never questioned. Pulse infers across the program instead. **A
@@ -141,4 +149,12 @@ reported known findings as new. Both sides are now sorted with `LC_ALL=C sort`.
 ## Delete when
 
 Every group above is fixed and retired from the ratchet, or has its own note. `getEpochOfPartition`
-should go first and needs no decision from anybody.
+should still go first - it is the smallest - but it does need a decision, which its own note carries.
+
+<!-- post-merge: checked-begin -->
+**A retirement from the ratchet is not by itself evidence of a fix.** astubbs#57 retired five
+identities in one change: four `PCMetrics` `THREAD_SAFETY_VIOLATION`s that its `metersLock` work
+genuinely fixed, and one `NULLPTR_DEREFERENCE` that merely stopped being reachable for the analyser.
+`bin/infer-test.sh` cannot tell those apart - "no longer fires" is its only signal - so the check
+belongs to whoever shrinks the set: read the code the identity names before deleting its line.
+<!-- post-merge: checked-end -->

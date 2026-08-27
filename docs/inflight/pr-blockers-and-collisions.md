@@ -17,8 +17,14 @@ Blockers, collisions, and decisions someone is waiting on. Not a PR list - `gh` 
 - **astubbs#38 (JUnit 6) is blocked on something other than the version bump.** JUnit 6 needs Java 17, *and*
   `archunit-junit5` will not run on it with no `archunit-junit6` engine in existence. The ArchUnit
   tests must be rewired first. See `deps-deferred-majors.md`.
-- **astubbs#51 (virtual threads) collides with astubbs#57** - both edit `PCMetrics.java`. Sequence, don't parallelise.
-- **File ownership right now:** astubbs#57 owns metrics + partition state, astubbs#106 owns the offset encoders, and
-  astubbs#29 will want the poll/lifecycle internals astubbs#80 reshaped. Pick parallel work accordingly.
+<!-- post-merge: checked-begin -->
+- **astubbs#51 (virtual threads) collides with astubbs#57** - both edit `PCMetrics.java`. Sequence,
+  don't parallelise; whichever is still open rebases onto the other.
+- **File ownership:** metrics and `PartitionStateManager` are astubbs#57's, `PartitionState` is
+  astubbs#337's (the confluentinc#893 cherry-pick, split out of astubbs#57 on 2026-08-24), the
+  offset encoders are astubbs#106's, and astubbs#29 will want the poll/lifecycle internals
+  astubbs#80 reshaped. Pick parallel work accordingly - and check `gh pr list` for which of these
+  are still open, since a merged one's files are simply master's again.
+<!-- post-merge: checked-end -->
 - **astubbs#8 (`features/retry-dlq`, 2022) is an abandoned draft**, kept only because it is the sole
   DLQ code that exists. Close or finish it; it is not in flight.
