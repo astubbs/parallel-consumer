@@ -69,7 +69,7 @@ Three failures across both arms, and they separate cleanly:
   cannot close in that mode, and the probe A/B rules it out independently. They are fresh sightings
   of the open fourth mechanism, found by random-seed hunting rather than replay.
 - **The one control-branch failure is `ChaosRevokeUnderWorkCooperativeDrainIT` on seed
-  `2867310537409227917`** - which is BLOCKED-on-monitor capture #2. The same six captured seeds all
+  `2867310537409227917`** - which is the second of the six BLOCKED-on-monitor captures. The same six captured seeds all
   passed on the fix branch. That is a chaos-level A/B pointing the same way as the probe, on the
   scenario family where the cycle lives.
 

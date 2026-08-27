@@ -149,3 +149,36 @@ productive trap. Two replayable seeds with the same signature within four hours 
 single-arm evidence the ledger holds; whichever defect they belong to, the replays are now the
 cheapest next experiment the family has.
 
+## A REPLAYABLE seed, 2026-08-28 - the first this line has ever had
+
+Seed `9086872209853284830`, `ChaosChurnStormIT`, found by random-seed hunting in CI rather than by
+replaying anything. Replayed locally on two trees, twice each:
+
+- **fix branch: failed both times**; **master: passed, then failed.** Three of four runs reproduced.
+- Every failure is the same shape - `NO_PROGRESS`, the fleet reaching roughly 95% of its target and
+  stopping.
+- A second seed found in the same sweep, `6078190770998307147`, did **not** reproduce in any of four
+  runs. Recorded because it is the control that makes the first one mean something: seeds from this
+  line are mostly one-offs, and this is the one that is not.
+
+**It fires on master, so it is not branch-caused.** An n=1 reading of the first two runs suggested
+otherwise and was wrong - the master arm failed on its second attempt. That inference had already
+been ruled out for this line before: these sightings have appeared on branches carrying no Java at
+all, and astubbs#373 was tested against this arm on a mode-matching hypothesis and fired anyway on
+its own head.
+
+**Why this matters more than another sighting.** Every entry above names replay as its deciding
+experiment and none had ever been run - *"Not one of the five captured seeds has ever been
+replayed"*. This line now has a handle: a seed that reproduces on demand, on a laptop, in minutes,
+on unmodified master. That is what the deadlock needed and did not have until a purpose-built probe
+was written, and it is the difference between a ledger of sightings and a defect somebody can chase.
+
+**The obvious next experiment, stated before running it.** astubbs#344 fixed an offset-encoder
+double-read that is live in `PERIODIC_CONSUMER_ASYNCHRONOUS` and only there - the same mode as every
+entry in this file - whose consequence is offsets marked complete while still incomplete. Replay this
+seed either side of astubbs#344. If that is the mechanism, the pre arm reproduces and the post arm
+does not. **The post arm is current master, which already reproduces** - so on the face of it
+astubbs#344 is NOT the explanation, and the test is whether the pre arm reproduces harder. Say so
+here either way.
+
+Replay: `-Dchaos.seed=9086872209853284830 -Dit.test=ChaosChurnStormIT` with the chaos group included.
