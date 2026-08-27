@@ -321,7 +321,7 @@ permanently paused consumption after a cooperative rebalance.
 4. **Cluster 2, last and separately** - it is the largest, it is currently the reason the branch is
    red, and its fix is a design decision about consumer ownership rather than a patch.
 
-**Not carried forward:** the branch's `src/test-integration/resources/logback-test.xml` (collides with
+**Not carried forward:** the branch's integration logback profile (then at `src/test-integration/resources/logback-test.xml`; renamed to `logback-integration-test.xml` on 2026-08-28 and made property-driven - see `docs/logging.md`) (collides with
 master's `src/test/resources/logback-test.xml` - both copy to the same `target/test-classes/` path,
 making which wins timestamp-dependent, and it raises six per-record loggers to DEBUG module-wide; the
 chaos job log is 126 MB), `docs/BUG_857_INVESTIGATION.md (deleted 2026-08-18; retrieve with `git show 262629aab:docs/BUG_857_INVESTIGATION.md`)` (superseded, at the wrong path, cites
@@ -329,6 +329,7 @@ chaos job log is 126 MB), `docs/BUG_857_INVESTIGATION.md (deleted 2026-08-18; re
 already fixed better on master), and several dead methods
 (`ConsumerManager.getConsumerClass()`, `ModelUtils.createWorkFor(long,long)`,
 `BrokerIntegrationTest.resetKafkaContainer()`).
+<!-- file-refs: N/A - naming the path this file was renamed AWAY from is the point of the sentence -->
 
 ## What this does NOT resolve
 
