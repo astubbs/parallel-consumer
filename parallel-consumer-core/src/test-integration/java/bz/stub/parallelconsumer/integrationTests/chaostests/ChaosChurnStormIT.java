@@ -15,11 +15,10 @@ import org.junit.jupiter.api.Timeout;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
-
-import static org.awaitility.Awaitility.await;
 
 /**
  * Chaos Pain Suite - W1 "churn storm" (Phase 1 skateboard; origin design:
@@ -76,8 +75,26 @@ class ChaosChurnStormIT extends ChaosScenarioBase {
      * sits comfortably under LAG_STAGNATION_BOUND (150s). */
     private static final Duration HEAVY_SLEEP = Duration.ofSeconds(45);
 
+    /**
+     * This scenario's own prior art for {@link ChaosScenarioBase#DIAGNOSE_STALL_RECOVERY} - or rather,
+     * the lack of it: unlike {@code AbstractRevokeUnderWorkScenario}, the diagnostic has never engaged
+     * here before this override existed (the flag was silently ignored - see
+     * {@code docs/inflight/test-857-churn-storm-async-stalls.md}, "Why this line was never settled").
+     * So a "backlog drains" result here is a NEW finding, not a re-derivation of one already
+     * established - the opposite framing from the revoke-under-work family.
+     */
+    @Override
+    protected void logDiagnosticContext() {
+        log.warn("=== BEFORE INTERPRETING THIS RUN: this scenario's diagnostic mode has never engaged " +
+                "before (docs/inflight/test-857-churn-storm-async-stalls.md) - there is no prior " +
+                "'it recovers' result to re-derive here. Report whether the backlog drains or stays " +
+                "flat as a NEW finding. ===");
+    }
+
     @Test
     void churnStormMeetsSlosAndBalancesLedger() throws Exception {
+        // The @Timeout clock starts here, so effectiveDiagnosticQuietCap's time-remaining sum must too.
+        Instant methodStart = Instant.now();
         ChaosSeed seed = resolveSeed();
         log.info("=== CHAOS W1 churn storm: seed={} (replay: {}) ===", seed.getValue(), seed.replayCommand());
 
@@ -95,6 +112,7 @@ class ChaosChurnStormIT extends ChaosScenarioBase {
         FleetBootstrap fleet = bootstrapFleet(topic, pcConfig, EXPECTED_MESSAGES, PRE_PRODUCE_FRACTION,
                 INITIAL_FLEET, HEAVY_EVERY, HEAVY_SLEEP);
         AtomicLong totalConsumed = fleet.getTotalConsumed();
+        AtomicLong totalStarted = fleet.getTotalStarted();
         Queue<String> allConsumed = fleet.getAllConsumed();
         Set<String> expectedKeys = fleet.getExpectedKeys();
         ProgressProbe probe = fleet.getProbe();
@@ -109,13 +127,18 @@ class ChaosChurnStormIT extends ChaosScenarioBase {
         startRun(probe, conductor);
 
         try {
-            // the run: everything produced must be consumed by SOMEONE within the cap, chaos or not
-            await().alias("all messages consumed under churn")
-                    .atMost(RUN_CAP)
-                    .pollInterval(Duration.ofSeconds(2))
-                    .failFast("probe violation during run", probe::hasViolations)
-                    .until(() -> totalConsumed.get() >= EXPECTED_MESSAGES
-                            && allConsumedCovers(expectedKeys, allConsumed));
+            // the run: everything produced must be consumed by SOMEONE within the cap, chaos or not -
+            // or, under -Dchaos.diagnoseStallRecovery=true, watched PAST any violation instead of
+            // aborting on it, to see whether the backlog drains or consumption stays flat (see
+            // ChaosScenarioBase#diagnosableWait).
+            diagnosableWait("all messages consumed under churn", methodStart, RUN_CAP,
+                    "probe violation during run", probe)
+                    .until(() -> {
+                        boolean done = totalConsumed.get() >= EXPECTED_MESSAGES
+                                && allConsumedCovers(expectedKeys, allConsumed);
+                        logDiagnosticProgress("run", EXPECTED_MESSAGES, totalStarted, totalConsumed, probe, done);
+                        return done;
+                    });
         } finally {
             settleRun(conductor, probe, fleet.getProducerThread(), fleet.getPcExecutor(), totalConsumed);
         }
