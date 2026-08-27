@@ -233,13 +233,11 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      *         should be downloaded (or pipelined in the Consumer)
      */
     public boolean isSufficientlyLoaded() {
-        // Every operand is read ONCE, and the log line below prints those same values. Re-reading them for
-        // the diagnostic would let it print an equation that never held: the poll and control threads move
-        // all four while this runs, so a re-read can disagree with the numbers the decision was actually
-        // made on - and telling a real stall apart from counter drift is the entire point of the line.
-        long inShards = sm.getNumberOfRecordsInShards();
-        long parkedForRetry = sm.getNumberOfRecordsParkedForRetry();
-        long workable = inShards - parkedForRetry;
+        // ONE read of the shards, and the log line below prints the very values it returned. Re-reading for
+        // the diagnostic would let it print an equation that never held - and telling a real stall apart
+        // from counter drift is the entire point of the line.
+        var records = sm.getWorkableRecords();
+        long workable = records.getWorkable();
         int loadingFactor = getLoadingFactor();
         long threshold = (long) options.getTargetAmountOfRecordsInFlight() * loadingFactor;
         boolean loaded = workable > threshold;
@@ -250,7 +248,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         // See docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md
         if (log.isDebugEnabled()) {
             log.debug("isSufficientlyLoaded={} (inShards={} - parkedForRetry={} = {} vs target({})*loadingFactor({})={})",
-                    loaded, inShards, parkedForRetry, workable,
+                    loaded, records.getInShards(), records.getParkedForRetry(), workable,
                     options.getTargetAmountOfRecordsInFlight(), loadingFactor, threshold);
         }
         return loaded;
@@ -274,11 +272,13 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      * revoked while it was still out at a worker. That record has been dropped from the shards and its result will
      * be discarded on return, so counting it as loaded only ever delayed a fetch.
      * <p>
-     * {@link #isSufficientlyLoaded()} deliberately does not call this: it needs the two operands as well as the
-     * difference, and reading them twice is how the diagnostic there ends up printing an equation that never held.
+     * <b>The subtraction is {@link ShardManager}'s, not this class's</b> - it owns both operands, and
+     * {@link ShardManager#getWorkableRecords()} owns the statement of what the pair is and is not: reading the two
+     * figures closer together makes the decision and its log line agree, but it does not make them a consistent
+     * snapshot, and that method says exactly how far apart they can be and in which direction.
      */
     public long getNumberOfWorkableRecordsInSystem() {
-        return sm.getNumberOfRecordsInShards() - sm.getNumberOfRecordsParkedForRetry();
+        return sm.getWorkableRecords().getWorkable();
     }
 
     private int getLoadingFactor() {

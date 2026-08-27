@@ -223,13 +223,13 @@ class ProcessingShardStaleReplacement909Test {
         // insertion has to pair with a RecordPopulation admission, and a test that bypasses it drifts the counter
         shard.get().addWorkContainer(staleWc);
         assertWithMessage("PRECONDITION: the stale resident is in place")
-                .that(shard.get().getWorkContainerAt(700L).getEpoch()).isEqualTo(epoch0);
+                .that(shard.get().getWorkContainerAtOffset(700L).getEpoch()).isEqualTo(epoch0);
 
         addWork(epoch2, 700, "K_D");
 
         assertWithMessage("The fresh container must have REPLACED the stale resident, not been dropped. "
                 + "See https://github.com/confluentinc/parallel-consumer/pull/909")
-                .that(shard.get().getWorkContainerAt(700L).getEpoch()).isEqualTo(epoch2);
+                .that(shard.get().getWorkContainerAtOffset(700L).getEpoch()).isEqualTo(epoch2);
     }
 
     private ConsumerRecord<String, String> recordAt(long offset, String key) {

@@ -18,6 +18,7 @@ import io.micrometer.core.instrument.Gauge;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.Setter;
+import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
@@ -164,6 +165,78 @@ public class ShardManager<K, V> {
     public long getNumberOfRecordsParkedForRetry() {
         var sizeAndReady = retryQueue.getQueueSizeAndNumberReadyToBeRetried();
         return sizeAndReady.getLeft() - sizeAndReady.getRight();
+    }
+
+    /**
+     * The record-intake gate's figure, together with the two operands it is derived from, taken as close together
+     * as the two structures holding them allow.
+     * <p>
+     * The subtraction lives here because both operands do: {@link WorkManager} reaching across for
+     * {@link #getNumberOfRecordsInShards()} and {@link #getNumberOfRecordsParkedForRetry()} to do the arithmetic
+     * itself only spread one figure's definition across two classes. The operands come back as well as the
+     * difference so that the diagnostic in {@link WorkManager#isSufficientlyLoaded()} can print the equation the
+     * decision was actually made on, rather than re-reading and printing one that never held.
+     * <p>
+     * <b>This is NOT an atomic snapshot, and no arrangement of these two reads makes it one.</b>
+     * {@link #getNumberOfRecordsInShards()} reduces two {@link java.util.concurrent.atomic.LongAdder}s in
+     * {@link RecordPopulation}; {@link #getNumberOfRecordsParkedForRetry()} reads {@link RetryQueue} under that
+     * queue's own fair read/write lock. No lock spans both, and adding one would put the broker-poll thread's
+     * admission path behind the retry queue's fair lock - a redesign, not a tidy-up, and one this figure does not
+     * need. What follows is what the skew actually is.
+     * <p>
+     * <b>Retry-queue movement in the window costs nothing.</b> Parking a record for retry, and its delay
+     * expiring, both leave the population untouched - the container stays in its shard throughout. So a retry
+     * queue that moves between the two reads does not make the difference wrong: it is exactly right as of the
+     * later read.
+     * <p>
+     * <b>Population movement in the window is the whole of the skew.</b> Reading the population first makes it the
+     * stale operand, by however many records another thread admits or retires while the retry-queue read is in
+     * progress - a fair read-lock acquisition plus a scan of the queue's head, O(n) in the worst case. An
+     * admission missed this way reads the figure <em>low</em>, which fetches sooner than needed. A retirement
+     * missed this way reads it <em>high</em>, which is the direction that matters: high is what pauses the poller,
+     * and a poller that stays paused is the silent stall of confluentinc#857.
+     * <p>
+     * <b>It cannot accumulate, which is what makes it tolerable.</b> The gate is resampled every control-loop
+     * tick, and once mutation stops both figures are exact - so a skewed sample can only bring one fetch forward
+     * or hold it back by one tick, and never at a threshold distance that a tick of real work would not have
+     * crossed anyway. That is the difference between this and the defect this figure replaced: separately
+     * maintained counters drifted <em>permanently</em>, so the gate could sit wrong forever with nothing to
+     * reconcile it.
+     */
+    public WorkableRecords getWorkableRecords() {
+        // Population FIRST, retry queue second - see the class javadoc above for why the order is the one that
+        // makes retry-queue movement free rather than merely cheap.
+        long inShards = getNumberOfRecordsInShards();
+        long parkedForRetry = getNumberOfRecordsParkedForRetry();
+        return new WorkableRecords(inShards, parkedForRetry);
+    }
+
+    /**
+     * The load gate's figure and its two operands, from one call to {@link #getWorkableRecords()}.
+     * <p>
+     * It exists so a caller that needs the difference <em>and</em> the operands - the gate, which decides on one
+     * and logs the others - gets them from a single read rather than reading each twice.
+     */
+    @Value
+    public static class WorkableRecords {
+
+        /**
+         * @see ShardManager#getNumberOfRecordsInShards()
+         */
+        long inShards;
+
+        /**
+         * @see ShardManager#getNumberOfRecordsParkedForRetry()
+         */
+        long parkedForRetry;
+
+        /**
+         * @return records held that work capacity can actually advance - the figure the intake gate compares
+         *         against its threshold
+         */
+        public long getWorkable() {
+            return inShards - parkedForRetry;
+        }
     }
 
     /**

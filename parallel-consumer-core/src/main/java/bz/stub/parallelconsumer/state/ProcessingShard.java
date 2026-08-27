@@ -85,21 +85,21 @@ public class ProcessingShard<K, V> {
 
     void addWorkContainer(WorkContainer<K, V> wc) {
         long offset = wc.offset();
-        WorkContainer<K, V> resident = entries.get(offset);
-        if (resident != null && !isWorkContainerStale(resident)) {
+        WorkContainer<K, V> residentBeforePut = entries.get(offset);
+        if (residentBeforePut != null && !isWorkContainerStale(residentBeforePut)) {
             log.debug("Entry for {} already exists in shard queue, dropping record", wc);
             return;
         }
-        if (resident != null) {
+        if (residentBeforePut != null) {
             log.debug("Replacing stale entry (epoch {}) for offset {} with fresh one (epoch {})",
-                    resident.getEpoch(), offset, wc.getEpoch());
+                    residentBeforePut.getEpoch(), offset, wc.getEpoch());
         }
 
         // ADMIT FIRST, then let the map itself say what happened - never the read above.
         //
-        // By the time the insertion runs, `resident` is only advice: a stale sweep on the other thread can
+        // By the time the insertion runs, `residentBeforePut` is only advice: a stale sweep on the other thread can
         // have removed it and retired it in between, which turns what looks like a replacement into an
-        // insertion. Deciding from `resident` would then skip the admission for the only container now at
+        // insertion. Deciding from `residentBeforePut` would then skip the admission for the only container now at
         // this offset, while its eventual departure still retires - and the population sits permanently
         // below what the shards hold, with no clamp and nothing to reconcile it. Reading low
         // under-throttles, so the drift over-fetches from the broker rather than stalling it, but it never
@@ -136,7 +136,7 @@ public class ProcessingShard<K, V> {
      * {@link #entries} private - only a write can, which is why there is no corresponding setter and why
      * {@link #addWorkContainer} remains the only way in.
      */
-    WorkContainer<K, V> getWorkContainerAt(long offset) {
+    WorkContainer<K, V> getWorkContainerAtOffset(long offset) {
         return entries.get(offset);
     }
 
