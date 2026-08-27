@@ -159,15 +159,26 @@ public abstract class AbstractParallelEoSStreamProcessorTestBase {
      * {@code addToMailbox} threw and a caller may wrap it again.
      */
     private void failLoudlyIfARecordCouldNotBeMailboxed() {
-        for (Throwable t = parentParallelConsumer.getFailureCause(); t != null; t = t.getCause()) {
+        // BOUNDED BY IDENTITY AND BY DEPTH, and the first version of this was neither - it broke the suite.
+        //
+        // It had `if (t.getCause() == t) break;`, a self-reference check, which is exactly the check
+        // controlLoopSurvivesACyclicCauseChain's own javadoc says is defeated: initCause refuses A -> A, so the
+        // only cycle you can build is A -> B -> A, and a self-reference test walks it forever. That test builds
+        // one deliberately, so every run of this suite hung in teardown after it and the CI job died at its
+        // 15-minute cap - a hang, which is the one failure mode a stack trace after the fact cannot explain.
+        //
+        // ThrowableUtils owns this problem in main code and guards both ways for the same reason; this is test
+        // code and cannot reach its private walk, so the guard is repeated here rather than shared. Kept
+        // deliberately small, because a drifted copy of a cause walk is its own hazard.
+        var seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<Throwable, Boolean>());
+        Throwable t = parentParallelConsumer.getFailureCause();
+        for (int depth = 0; t != null && depth < 100 && seen.add(t); depth++) {
             if (t instanceof UnmailboxableRecordException) {
                 fail("PC TERMINATED: a record could not be returned to the mailbox, which is a bug in PC's own "
-                        + "bookkeeping and means a record was neither retried nor reported. This is the failure the "
-                        + "UNMAILBOXABLE RECORD banner describes - read it in this test's log. Cause: " + t);
+                        + "bookkeeping and means a record was neither retried nor reported. Read the terminal "
+                        + "error in this test's log. Cause: " + t);
             }
-            if (t.getCause() == t) {
-                break;
-            }
+            t = t.getCause();
         }
     }
 
