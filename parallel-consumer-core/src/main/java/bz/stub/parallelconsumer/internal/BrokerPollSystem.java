@@ -31,6 +31,7 @@ import static bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcess
 import static bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.MDC_INSTANCE_ID;
 import static bz.stub.parallelconsumer.internal.State.*;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.logWithoutEscaping;
 
 /**
  * Subsystem for polling the broker for messages.
@@ -60,19 +61,19 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      * {@code resume()} calls, and it could not be kept in step. Kafka clears its pause state for
      * every partition on an <b>eager</b> rebalance (the assignment map is replaced - see
      * {@code SubscriptionState.assignFromSubscribed}) but <b>keeps</b> it for partitions retained
-     * across a <b>cooperative</b> one. A mirror therefore had to model both protocols correctly and
-     * stay correct as Kafka changes; the version before this one reset the flag on every assignment,
-     * which is right for eager and leaves cooperative permanently paused - consumption stops with no
-     * error, which is confluentinc#857's own symptom, reintroduced by the code meant to fix it.
+     * across a <b>cooperative</b> one, because that method reuses the existing per-partition state
+     * object and {@code TopicPartitionState} holds the {@code paused} boolean. A mirror therefore had
+     * to model both protocols correctly and stay correct as Kafka changes.
      * <p>
      * Asking Kafka makes the protocol irrelevant and the logic self-correcting: after a cooperative
      * rebalance the retained partitions are still paused, so this reports true and
-     * {@link #resumeIfPaused()} resumes them; after an eager one Kafka has already cleared them, so
-     * this reports false and there is nothing to do. No reset hook is needed, which is why
-     * {@code onPartitionsAssigned()} is gone.
+     * {@link #resumeIfPaused(Set)} resumes them; after an eager one Kafka has already cleared them,
+     * so this reports false and there is nothing to do. No reset hook is needed on assignment, and
+     * adding one is the mistake this shape exists to prevent - it is right for eager and leaves
+     * cooperative permanently paused, which is consumption stopping with no error.
      * <p>
-     * <b>Poll thread only.</b> {@code consumer.paused()} is a consumer call, and the consumer is
-     * confined to the poll thread ({@code ThreadConfinedConsumer}). The control thread must use
+     * <b>Poll thread only.</b> {@code consumer.paused()} is a consumer call and {@code KafkaConsumer}
+     * is not thread-safe. The control thread must use
      * {@link #isSubscriptionsPausedForBackPressure()} instead, which reads the per-poll cache.
      */
     private boolean subscriptionsArePausedForBackPressure() {
@@ -83,10 +84,9 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      * As {@link #subscriptionsArePausedForBackPressure()}, but safe to call from the <b>control</b>
      * thread, which may not touch the consumer.
      * <p>
-     * Reads {@code ConsumerManager}'s paused-partition cache, refreshed once per poll. That staleness
-     * is acceptable here and only here: its one caller, {@code maybeWakeupPoller()}, is a heuristic
-     * that wakes a poller it believes is paused, and waking one that has already resumed costs
-     * nothing. Do not use it to decide whether to pause or resume.
+     * Reads {@link ConsumerManager}'s paused-partition cache, refreshed once per poll. That staleness
+     * is acceptable here and only here: its callers are heuristics - waking a poller that has already
+     * resumed costs nothing. Do not use it to decide whether to pause or resume.
      */
     public boolean isSubscriptionsPausedForBackPressure() {
         return consumerManager.getPausedPartitionSize() > 0;
@@ -173,7 +173,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
                 try {
                     booleanFuture.get();
                 } catch (Exception e) {
-                    throw new InternalRuntimeException("Error in " + BrokerPollSystem.class.getSimpleName() + " system.", e);
+                    throw new PCInternalRuntimeException("Error in " + BrokerPollSystem.class.getSimpleName() + " system.", e);
                 }
             }
         }
@@ -184,12 +184,13 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      */
     private boolean controlLoop() throws TimeoutException, InterruptedException {
         Thread.currentThread().setName("pc-broker-poll");
+        // this thread serves exactly one PC instance for its whole life, so adopt the caller's context outright
+        pc.getMdcPropagation().adopt(pc.callersDiagnosticContext);
         pc.getMyId().ifPresent(id -> {
             Thread.currentThread().setName("pc-broker-poll-" + id);
             MDC.put(MDC_INSTANCE_ID, id);
         });
         log.trace("Broker poll control loop start");
-        consumerManager.claimConsumerOwnership();
         committer.ifPresent(ConsumerOffsetCommitter::claim);
         try {
             while (runState != CLOSED) {
@@ -209,7 +210,11 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
             log.debug("Broker poller thread finished normally, returning OK (true) to future...");
             return true;
         } catch (Exception e) {
-            log.error("Unknown error", e);
+            // reachable with a USER-supplied throwable: a user rebalance listener that throws is wrapped in
+            // ExceptionInUserFunctionException and propagates out through consumer.poll() to here, so rendering it
+            // runs the user's getCause/getMessage inside the logging binding - and the notify below must happen
+            // whatever the logger does with it
+            logWithoutEscaping(e, () -> log.error("Unknown error", e));
             // This thread is the only producer of commit responses, so tell the committer before
             // unwinding: a control thread already blocked in ConsumerOffsetCommitter#commitAndWait
             // cannot discover this by waiting, and would otherwise wait out the whole
@@ -218,40 +223,20 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
             // own handling. See astubbs#177, confluentinc#833.
             committer.ifPresent(c -> c.notifyPollerDied(e));
             throw e;
-        } finally {
-            // This thread will never touch the consumer again - release ownership so the thread
-            // that performs the final consumer close (pc-control, in transactional mode) can take
-            // over via tryClaimOwnership(). Must be in a finally: a poll loop that dies by
-            // exception must also hand over, or the consumer can never be closed and no
-            // LeaveGroup is ever sent. The release happens-before closeAndWait()'s Future.get()
-            // returns, so the takeover is strictly sequential. See confluentinc#857.
-            consumerManager.releaseConsumerOwnership();
         }
     }
 
     private void handlePoll() {
-        // Guarded: the argument is a live consumer.paused() call now, not a volatile read, so an
-        // unguarded log statement pays for it on every loop iteration whether or not trace is on.
-        if (log.isTraceEnabled()) {
-            log.trace("Loop: Broker poller: ({}), pausedForBackPressure={}", runState, subscriptionsArePausedForBackPressure());
-        }
+        log.trace("Loop: Broker poller: ({})", runState);
         if (runState == RUNNING || runState == DRAINING) { // if draining - subs will be paused, so use this to just sleep
             var polledRecords = pollBrokerForRecords();
             int count = polledRecords.count();
             log.debug("Got {} records in poll result", count);
-            if (count == 0) {
-                log.trace("Poll returned 0 records. assignment={}, paused={}",
-                        consumerManager.getAssignmentSize(),
-                        consumerManager.getPausedPartitionSize());
-            }
 
             if (count > 0) {
-                log.trace("Loop: Register work - {} records from {} partitions",
-                        count, polledRecords.partitions().size());
+                log.trace("Loop: Register work");
                 pc.registerWork(polledRecords);
             }
-        } else {
-            log.trace("Not polling - runState={}", runState);
         }
     }
 
@@ -349,11 +334,6 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
     /**
      * Pause all assignments
      */
-    /**
-     * For callers outside the throttle loop - drain and close - which have no pass-scoped view to
-     * hand down. They run once per lifecycle rather than once per iteration, so fetching here costs
-     * nothing; only the hot path threads its already-read set through.
-     */
     private void doPause() {
         doPause(consumerManager.paused());
     }
@@ -385,7 +365,10 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
                 } catch (InterruptedException e) {
                     log.debug("Interrupted waiting for broker poller thread to finish", e);
                 } catch (ExecutionException | TimeoutException e) {
-                    log.error("Execution or timeout exception waiting for broker poller thread to finish", e);
+                    // same reachability one hop further out - e wraps whatever killed the poll thread, including the
+                    // user rebalance listener case above
+                    logWithoutEscaping(e, () ->
+                            log.error("Execution or timeout exception waiting for broker poller thread to finish", e));
                     throw e;
                 }
             }
@@ -426,11 +409,11 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
         // exactly the failure mode of the mirror this replaced. It is also strictly fewer calls than
         // before in the resume path, which used to fetch the set a second time to act on it.
         Set<TopicPartition> pausedNow = consumerManager.paused();
-        boolean throttle = shouldThrottle();
+        boolean shouldThrottle = shouldThrottle();
         if (log.isTraceEnabled()) {
-            log.trace("Need to throttle: {}, pausedForBackPressure={}, assignment={}", throttle, !pausedNow.isEmpty(), consumerManager.getAssignmentSize());
+            log.trace("Need to throttle: {}, pausedForBackPressure={}", shouldThrottle, !pausedNow.isEmpty());
         }
-        if (throttle) {
+        if (shouldThrottle) {
             doPauseMaybe(pausedNow);
         } else {
             resumeIfPaused(pausedNow);
@@ -485,13 +468,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
     }
 
     /**
-     * Wake the poller if it is currently parked on a paused subscription.
-     * <p>
-     * Called from the CONTROL thread ({@code maybeWakeupPoller}), so it reads the per-poll cache via
-     * {@link #isSubscriptionsPausedForBackPressure()} rather than asking the consumer directly - the
-     * consumer is confined to the poll thread. Staleness is harmless here: waking a poller that has
-     * already resumed costs one spurious wakeup, and {@code wakeup()} is the one consumer method
-     * Kafka documents as thread-safe.
+     * Wakeup if colling the broker
      */
     public void wakeupIfPaused() {
         if (isSubscriptionsPausedForBackPressure())
@@ -505,7 +482,6 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      * {@link bz.stub.parallelconsumer.internal.State#RUNNING running}, calling this method will be a no-op.
      * </p>
      */
-
     public void pausePollingAndWorkRegistrationIfRunning() {
         if (this.runState == RUNNING) {
             log.info("Transitioning broker poll system to state paused.");

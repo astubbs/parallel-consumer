@@ -104,8 +104,8 @@ class BrokerPollSystemCooperativeRebalancePauseTest extends ParallelEoSStreamPro
 
         // 1. Back pressure engages: with the user function parked, pipeline depth can only grow
         //    past the threshold, so the poll system pauses the assignment. Read the pause state
-        //    from the test's own MockConsumer reference - consumer methods must not be called
-        //    through PC from the test thread (ThreadConfinedConsumer).
+        //    from the test's own MockConsumer reference - KafkaConsumer is not thread-safe, so
+        //    consumer methods must not be called through PC from the test thread.
         //    The tight poll interval keeps detection latency small, so the whole
         //    callback-then-drain sequence below completes well inside the pause rate limiter's
         //    1s window (see the class javadoc for why that makes the defect arm deterministic).

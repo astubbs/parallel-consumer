@@ -5,7 +5,7 @@ package bz.stub.parallelconsumer.internal.utils;
  */
 
 import bz.stub.parallelconsumer.ExceptionInUserFunctionException;
-import bz.stub.parallelconsumer.internal.InternalRuntimeException;
+import bz.stub.parallelconsumer.internal.PCInternalRuntimeException;
 import lombok.experimental.UtilityClass;
 
 import java.util.Collections;
@@ -105,8 +105,10 @@ public class ThrowableUtils {
                 try {
                     reported.addSuppressed(loggingItFailed);
                 } catch (Throwable evenThatFailed) {
-                    // addSuppressed runs no user code, but a throwable built with suppression disabled ignores it
-                    // and a subclass may override it. Nothing left to do but not make it worse.
+                    // addSuppressed is final and checks its own null/identity preconditions, so it cannot be
+                    // overridden and no throw is constructible here - a throwable built with suppression disabled
+                    // silently ignores the call rather than failing. Kept as a belt-and-braces catch on the one
+                    // path whose entire contract is "never add a second failure to the one being reported".
                 }
             }
         }
@@ -204,7 +206,7 @@ public class ThrowableUtils {
      * its own. (Grep {@code new ExceptionInUserFunctionException} before trusting this - the claim is about all
      * sites, so one new site that wraps something else falsifies it.)
      * <p>
-     * <b>{@link InternalRuntimeException} deliberately does NOT qualify</b>, though it reads like a wrapper. Its
+     * <b>{@link PCInternalRuntimeException} deliberately does NOT qualify</b>, though it reads like a wrapper. Its
      * message is how callers tell distinct internal failures apart - {@code "Error encoding offsets"},
      * {@code "Error producing result message"}, {@code "Too many attempts taking commit responses"} - so peeling it
      * would let a retriable cause speak for a failure that is not retriable at all, and an offset-encoding error

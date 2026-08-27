@@ -220,6 +220,14 @@ plan itself) and astubbs#280 (the tooling). astubbs#1 (`codeql`) was on that too
 branch was reset onto renamed master and repurposed as documentation, so it carries no Java and
 needs no sweep.
 
+<!-- post-merge: checked-begin -->
+**This roster is the set of open PRs at the time the plan was written, not a live worklist** - the
+status above is "planned, not started", so a row whose PR has since merged records what the sweep
+was scoped to cover and needs no edit when that happens. `gh pr list` answers which are still open.
+<!-- post-merge: checked-end -->
+
+<!-- post-merge: checked-begin -->
+
 | PR | head ref | PR | head ref |
 |---|---|---|---|
 | 29 | `bugs/857-paused-consumption-multi-consumers-bug` | 226 | `feats/health-check-api` | <!-- post-merge: checked -->
@@ -242,6 +250,9 @@ needs no sweep.
 | 207 | `fix/offset-encoding-policy-bypass` | 290 | `test/apache-kafka-broker-image` |
 | | | 292 | `fix/chaos-harness-double-start-race` |
 | | | 293 | `feats/proxy-requirements` |
+<!-- post-merge: checked-end -->
+
+<!-- post-merge: checked-end -->
 
 **astubbs#266, astubbs#268, astubbs#269 and astubbs#271 touch the five near-identical
 `TestConventionsArchTest.java` files.** Neither rehearsal exercised a branch that genuinely edits them

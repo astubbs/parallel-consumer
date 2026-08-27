@@ -92,7 +92,7 @@ class WorkClaimStateMachineTest {
         var shard = sm.getShard(sm.computeShardKey(new ConsumerRecord<>(TOPIC, 0, offset, "the-key", "v")));
         assertWithMessage("the shard for offset %s must exist for this test to prove anything", offset)
                 .that(shard.isPresent()).isTrue();
-        var wc = shard.get().getWorkContainerAt(offset);
+        var wc = shard.get().getWorkContainerAtOffset(offset);
         assertWithMessage("the shard must still hold offset %s", offset).that(wc.isPresent()).isTrue();
         return wc.get();
     }

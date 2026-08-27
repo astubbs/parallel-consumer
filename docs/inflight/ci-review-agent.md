@@ -99,12 +99,16 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   exercises master's `claude.yml`, never the one on your branch. The tool grants and the
   `refresh-gate` added there are unverified in exactly the same way.
 
+<!-- post-merge: checked-begin -->
   **Both routes have since been exercised and measured**, and the result is closed, so it lives in
   [`docs/solutions/workflow-issues/the-two-review-routes-measured-2026-08-17.md`](../solutions/workflow-issues/the-two-review-routes-measured-2026-08-17.md)
   rather than here. The short version: the comment route posts, at both ends; the dispatch route can
   run for nine minutes, conclude success, and post nothing, leaving `claude-review` green on an older
-  comment. **What is still open is only the inline thread** - neither run had a blocking finding, so
-  neither had occasion to open one, and deciding it needs a PR that does.
+  comment. **The inline thread is now settled**: astubbs#267 was the PR with blocking findings, and
+  `@claude review this` opened **10** inline threads on one head and **2** more on re-review after
+  the head moved - real file-and-line threads that `resolveReviewThread` closed, not a summary
+  comment. So the mechanism the entry above infers from the event type is confirmed by observation.
+<!-- post-merge: checked-end -->
 
   **Reproduced again 2026-08-19 on astubbs/parallel-consumer#320**, and this sighting narrows it.
   Run `32218074377`: dispatched with a long, specific `-f focus` naming four areas, ran 5m47s,

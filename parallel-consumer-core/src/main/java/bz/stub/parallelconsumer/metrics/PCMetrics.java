@@ -10,6 +10,7 @@ import io.micrometer.core.instrument.Timer;
 import io.micrometer.core.instrument.composite.CompositeMeterRegistry;
 import io.micrometer.core.instrument.search.Search;
 import lombok.Getter;
+import lombok.Synchronized;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.*;
@@ -20,6 +21,18 @@ import static java.util.Collections.singleton;
 
 /**
  * Main metrics collection and initialization service. Singleton - makes it easier to add metrics throughout the code
+ *
+ * <p><b>Teardown is best-effort and never throws.</b> The meter registry is usually the <em>user's</em>, so every
+ * call into it is third-party code running on PC's critical paths: meter removal runs inside
+ * {@code onPartitionsRevoked} on the broker-poll thread, and {@link #close()} runs in
+ * {@code AbstractParallelEoSStreamProcessor.doClose()}'s {@code finally}. A throw from the first kills the only
+ * producer of commit responses, after which every commit blocks until it times out; a throw from the second
+ * replaces the exception already in flight and strands callers polling {@code isClosedOrFailed()}. Metrics are
+ * reporting, and must not be able to break consuming or shutting down - so every registry removal goes through
+ * {@link #removeQuietly(Meter.Id, String)}, and a leaked meter is accepted as the far smaller problem.
+ *
+ * <p>Registration is <em>not</em> covered by that contract - see
+ * {@code docs/inflight/bug-shutdown-teardown-race.md}.
  */
 @Slf4j
 public class PCMetrics {
@@ -32,9 +45,27 @@ public class PCMetrics {
     private MeterRegistry meterRegistry;
 
     /**
-     * Tracking of registered meters for removal from registry on shutdown.
+     * Named monitor used by {@code @Synchronized("metersLock")} (and the narrow {@link #track(Meter.Id)}
+     * add): guards {@link #registeredMeters} and the paired {@code meterRegistry} mutations that must be
+     * atomic with it. A private lock, not {@code synchronized(this)}, so external holders of a
+     * {@code PCMetrics} reference cannot interfere with the monitor.
      */
-    private List<Meter.Id> registeredMeters = new ArrayList<>();
+    private final Object metersLock = new Object();
+
+    /**
+     * Tracking of registered meters, for removal from the registry on shutdown.
+     *
+     * <p>A {@link LinkedHashSet} (not a {@link java.util.List}) so re-registering the same meter -
+     * which happens once per partition per assignment, so on every rebalance - doesn't accumulate
+     * duplicate entries. Micrometer's registry dedupes internally; only this tracking collection was growing,
+     * which was the memory leak (<a href="https://github.com/confluentinc/parallel-consumer/issues/859">confluentinc#859</a>).
+     *
+     * <p>All access is guarded by {@link #metersLock}: every add (via {@link #track(Meter.Id)}) and
+     * every remove/iterate ({@link #close()} / {@link #removeMeter(Meter)} /
+     * {@link #removeMetersByPrefixAndCommonTags(String)}) holds that lock - so a rebalance registering
+     * meters (broker-poll thread) cannot corrupt the set against a concurrent shutdown (control thread).
+     */
+    private final Set<Meter.Id> registeredMeters = new LinkedHashSet<>();
 
     /**
      * Common metrics tags added to all meters - for example PC instance. Configurable through Parallel Consumer
@@ -120,7 +151,7 @@ public class PCMetrics {
                 .tags(metricDef.getSubsystemAsTagsOrEmpty())
                 .tags(Arrays.asList(additionalTags))
                 .register(this.meterRegistry);
-        registeredMeters.add(counter.getId());
+        track(counter.getId());
         return counter;
     }
 
@@ -138,7 +169,7 @@ public class PCMetrics {
                 .tags(metricDef.getSubsystemAsTagsOrEmpty())
                 .tags(Arrays.asList(additionalTags))
                 .register(this.meterRegistry);
-        registeredMeters.add(timer.getId());
+        track(timer.getId());
         return timer;
     }
 
@@ -173,7 +204,7 @@ public class PCMetrics {
                 .tags(Arrays.asList(additionalTags))
                 .strongReference(true)
                 .register(this.meterRegistry);
-        registeredMeters.add(gauge.getId());
+        track(gauge.getId());
         return gauge;
     }
 
@@ -194,51 +225,103 @@ public class PCMetrics {
                 .tags(metricDef.getSubsystemAsTagsOrEmpty())
                 .tags(Arrays.asList(additionalTags))
                 .register(this.meterRegistry);
-        registeredMeters.add(distributionSummary.getId());
+        track(distributionSummary.getId());
         return distributionSummary;
+    }
+
+    /**
+     * Records a freshly-registered meter for cleanup on shutdown - or, if a concurrent {@link #close()}
+     * has already run, removes this late registration itself so it isn't orphaned in the registry.
+     *
+     * <p>Narrowly synchronized on {@link #metersLock} so the slow Micrometer {@code register()} call in
+     * the caller stays outside the lock. Because {@code register()} runs before this, a meter can be
+     * added to the registry on the broker-poll thread (a rebalance/commit) at the moment the control
+     * thread runs {@code close()} on a timeout/exception shutdown (the one path where the poll thread
+     * isn't joined first). Deciding the meter's fate here under the lock keeps register+track atomic
+     * w.r.t. close: either it's tracked (and close removes it), or close already ran and we undo the
+     * registration now. Without this the late meter would leak in the (often user-supplied) registry.
+     */
+    @Synchronized("metersLock")
+    private void track(Meter.Id meterId) {
+        if (this.isClosed.get()) {
+            // Racing a concurrent close(): close() has already swept the registry and won't run again,
+            // and register() ran outside this lock - so undo our late registration rather than orphan it.
+            removeQuietly(meterId, "undoing a late registration");
+            log.debug("Metrics subsystem closed; removed late-registered meter {}", meterId);
+            return;
+        }
+        registeredMeters.add(meterId);
     }
 
     /**
      * Closes PCMetrics object and cleans up all meters from registry - should be recreated before using it again.
      */
-    public synchronized void close() {
+    @Synchronized("metersLock")
+    public void close() {
         if (this.isClosed.getAndSet(true)) {
             //Instance already closed - warn and ignore.
             log.warn("Trying to close PCMetrics instance that is already closed.");
             return;
         }
         log.debug("Closing PCMetrics");
-        // clean up the instance resources
-        this.registeredMeters.forEach(this.meterRegistry::remove);
+        // clean up the instance resources. Same never-throws contract as removeMeter, and it has to
+        // be repeated here because this iterates the registry directly rather than going through it.
+        // Missing this was invisible while the only caller wrapped the call itself: doClose's finally
+        // catches, so the escape only appeared once the fix was lifted onto a branch without that
+        // wrapper. A contract that depends on every caller guarding it is not a contract.
+        // removeQuietly, not removeAndUntrack: this iterates registeredMeters, and clear() below empties it.
+        this.registeredMeters.forEach(meterId -> removeQuietly(meterId, "closing the metrics subsystem"));
         this.registeredMeters.clear();
         if (isNoop) {
-            this.meterRegistry.close();
+            // Only ever OUR CompositeMeterRegistry, never the user's - but guarded anyway, because
+            // the reason to guard is the caller's inability to recover, not the callee's identity.
+            try {
+                this.meterRegistry.close();
+            } catch (Exception e) {
+                log.warn("Failed to close the internal no-op meter registry. Continuing. Cause: {}",
+                        e.toString(), e);
+            }
         }
     }
 
     /**
-     * Removes the metric from the singletons meter registry.
-     * <p>
-     * Synchronized with close method to avoid concurrent modification race on shutdown between removal of partition
-     * meters on revocation and closing metrics subsystem
+     * Removes the metric from the singleton's meter registry. Delegates to the {@code metersLock}-guarded
+     * {@link #removeMeter(Meter.Id)}, which serialises removal against {@link #close()} to avoid a
+     * concurrent-modification race on shutdown (partition-meter removal on revocation vs closing the
+     * metrics subsystem).
      *
      * @param meter to remove.
      */
-    public synchronized void removeMeter(Meter meter) {
+    public void removeMeter(Meter meter) {
         if (meter != null) {
-            removeMeter(meter.getId());
+            // getId() is the user's code too - a custom MeterRegistry returns its own Meter
+            // implementations - and this runs on the revocation path via PartitionState and
+            // WorkManager, so it carries the same never-throws obligation as the removal itself.
+            Meter.Id meterId;
+            try {
+                meterId = meter.getId();
+            } catch (Exception e) {
+                log.warn("Failed to read the id of a meter being removed - it is left behind in the " +
+                        "registry and in the tracking set. Continuing: metrics teardown is reporting, " +
+                        "and must not be able to break consuming or shutting down. Cause: {}", e.toString(), e);
+                return;
+            }
+            removeMeter(meterId);
         }
     }
 
 
     /**
      * Removes a meter, and <b>never throws</b> - see the class-level note on why teardown is
-     * best-effort. Guarded HERE rather than at the call sites because there are eleven of them,
+     * best-effort. Guarded centrally - in {@link #removeQuietly} - rather than at the call sites,
+     * because there are eleven of them,
      * across {@link bz.stub.parallelconsumer.state.PartitionState},
      * {@link bz.stub.parallelconsumer.state.PartitionStateManager} and
      * {@link bz.stub.parallelconsumer.state.WorkManager}, and one missed site is enough to reproduce
      * the failure this prevents.
      */
+    // Self-locks on metersLock (via @Synchronized); do not rely on callers holding it.
+    @Synchronized("metersLock")
     private void removeMeter(Meter.Id meterId) {
         if (this.isClosed.get()) {
             //Already closed metrics subsystem - ignore
@@ -246,37 +329,89 @@ public class PCMetrics {
             return;
         }
         log.debug("Removing meter: {}", meterId);
+        removeAndUntrack(meterId, "deregistering a meter");
+    }
+
+    /**
+     * Removes one meter from the registry and <b>never throws</b> - the class-level teardown contract.
+     * Guarded here rather than at the eleven call sites across {@link bz.stub.parallelconsumer.state.PartitionState},
+     * {@link bz.stub.parallelconsumer.state.PartitionStateManager} and
+     * {@link bz.stub.parallelconsumer.state.WorkManager}, because one missed site reproduces the failure.
+     *
+     * @param context what the caller was doing, for the log line when the registry refuses.
+     * @implNote <b>Callers must already hold {@code metersLock}.</b> This does not self-lock, unlike the public
+     *         {@link #removeMeter(Meter.Id)} above it, whose comment says so explicitly - the asymmetry is easy to
+     *         miss when extending this removal family, and calling it unlocked races {@code registeredMeters}
+     *         against {@code track()}, which is the unguarded-mutation class confluentinc#859 was.
+     */
+    private void removeQuietly(Meter.Id meterId, String context) {
         try {
             this.meterRegistry.remove(meterId);
         } catch (Exception e) {
-            // The registry is usually the USER'S, so this is third-party code. A throw here escapes
-            // through PartitionState.deregisterMetrics into onPartitionsRevoked, which runs on the
-            // broker-poll thread inside poll() - killing the only producer of commit responses, so
-            // every later commit blocks until it times out. A leaked meter is a far smaller problem.
-            log.warn("Failed to remove meter {} from the registry - it may be left behind there. " +
-                    "Continuing: metrics teardown is reporting, and must not be able to break " +
-                    "consuming or shutting down. Cause: {}", meterId, e.toString(), e);
+            log.warn("Failed to remove meter {} from the registry while {} - it may be left behind there. " +
+                    "Continuing: metrics teardown is reporting, and must not be able to break consuming or " +
+                    "shutting down. Cause: {}", meterId, context, e.toString(), e);
         }
-        // Always dropped from OUR map, whatever the registry did, so a failing registry cannot also
-        // grow this collection without bound.
+    }
+
+    /**
+     * {@link #removeQuietly} plus dropping the id from our own tracking set - done whatever the registry did,
+     * so a failing registry cannot grow that collection without bound (the confluentinc#859 leak).
+     *
+     * @implNote <b>Callers must already hold {@code metersLock}.</b> This one MUTATES {@code registeredMeters},
+     *         so an unlocked call is not merely inconsistent - it races the set against {@code track()}. Every
+     *         current caller is inside an {@code @Synchronized("metersLock")} method; that is a property of the
+     *         callers, not of this method, and nothing enforces it.
+     */
+    private void removeAndUntrack(Meter.Id meterId, String context) {
+        removeQuietly(meterId, context);
         this.registeredMeters.remove(meterId);
     }
 
+    @Synchronized("metersLock")
     public void removeMetersByPrefixAndCommonTags(String meterNamePrefix) {
         if (this.isClosed.get()) {
             //Already closed metrics subsystem - ignore
             log.debug("Trying to remove meters when metrics subsystem is already closed.");
             return;
         }
+        // TWO guards, and they cover different failures - state them precisely, because the next editor
+        // will trust this comment rather than re-derive it.
+        //
+        // The inner one, inside removeAndUntrack, covers `remove()` THROWING: one meter the registry
+        // refuses to remove does not stop the rest being untracked, and that matters because the
+        // confluentinc#859 leak lives in registeredMeters, so a loop-level guard alone would leave its
+        // tail un-pruned.
+        //
+        // The outer one covers what removeAndUntrack cannot reach - enumerating the registry, and
+        // Meter.getId(). It is NOT per meter, so a meter whose getId() throws aborts this sweep and
+        // leaves the rest of the prefix un-swept for this call. That is deliberate rather than
+        // overlooked: Search.meters() must read every candidate's id to filter by name and tags, so a
+        // deterministically hostile getId() dies during enumeration however the forEach is written -
+        // a per-meter getId() guard would buy nothing. Confirmed against micrometer-core 1.13.15
+        // bytecode rather than assumed: Search.meterStream()'s filter lambdas call Meter.getId(),
+        // so the read happens inside Micrometer's own stream, upstream of anything we can wrap. Nothing escapes either way, and the meters left
+        // behind stay in registeredMeters, so the next full close() sweeps them.
+        String context = "removing meters with prefix '" + meterNamePrefix + "'";
         try {
             Search.in(meterRegistry).name(name -> name.startsWith(meterNamePrefix))
-                    .tags(commonTags).meters().forEach(meterRegistry::remove);
+                    .tags(commonTags).meters()
+                    .forEach(meter -> removeAndUntrack(meter.getId(), context));
         } catch (Exception e) {
-            // Same contract as removeMeter: never throw. This one runs inside doClose's finally,
-            // where an escape would replace the in-flight exception and skip the state transition.
-            log.warn("Failed to remove meters with prefix '{}' from the registry - they may be left " +
-                    "behind there. Continuing: metrics teardown must not be able to break shutting " +
-                    "down. Cause: {}", meterNamePrefix, e.toString(), e);
+            log.warn("Failed to enumerate meters while {} - some may be left behind in the registry and " +
+                    "tracked here. Continuing: metrics teardown must not be able to break shutting down. " +
+                    "Cause: {}", context, e.toString(), e);
         }
+    }
+
+    /**
+     * Number of currently-tracked meters (those this instance will remove from the registry on
+     * {@link #close()}). Primarily visible for testing the <a href="https://github.com/confluentinc/parallel-consumer/issues/859">confluentinc#859</a> leak fix: the leak lived in this
+     * tracking collection (Micrometer's own registry dedupes), so tests assert on this count rather
+     * than reflecting into the private field.
+     */
+    @Synchronized("metersLock")
+    public int registeredMeterCount() {
+        return registeredMeters.size();
     }
 }

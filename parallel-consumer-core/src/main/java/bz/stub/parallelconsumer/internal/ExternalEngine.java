@@ -22,7 +22,11 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
+import bz.stub.parallelconsumer.PCRetriableException;
+import bz.stub.parallelconsumer.internal.utils.ThrowableUtils;
+
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
+import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.describeWithRootCause;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
 /**
@@ -148,7 +152,8 @@ public abstract class ExternalEngine<K, V> extends AbstractParallelEoSStreamProc
      * through here, which is why the permit is returned here rather than in any one of them.
      */
     @Override
-    protected void addToMailbox(PollContextInternal<K, V> pollContext, WorkContainer<K, V> wc) {
+    protected void addToMailbox(PollContextInternal<K, V> pollContext, WorkContainer<K, V> wc)
+            throws PCInternalRuntimeException {
         try {
             super.addToMailbox(pollContext, wc);
         } finally {
@@ -221,5 +226,80 @@ public abstract class ExternalEngine<K, V> extends AbstractParallelEoSStreamProc
      */
     // TODO: Now that the modules don't use the internal threading systems at all, is this method redundant as all work from a module extension would return true
     protected abstract boolean isAsyncFutureWork(List<?> resultsFromUserFunction);
+
+    /**
+     * The whole async-failure path for a batch engine: record the failure against every container, then render it.
+     * <p>
+     * Reactor's and Mutiny's versions of this differed only by a log string and whether the framework's own wrapper
+     * needed peeling first, so they are one method with those two seams. Keeping two copies is how the ordering and
+     * the guard drift apart - which is exactly what happened to this code once already, when the record-before-render
+     * fix was applied to one engine and not its siblings.
+     * <p>
+     * Vert.x deliberately does not use this: it handles a single container per failure rather than a batch, so it has
+     * no loop to make independent and its own handler stays separate.
+     *
+     * @param failSignalMessage this engine's log message, passed rather than derived so the strings users may already
+     *                          grep for do not change
+     */
+    protected void onAsyncFailure(PollContextInternal<K, V> pollContext, Throwable throwable, String failSignalMessage) {
+        // record first, render after - the reasoning is on recordFailureAndReturnBatchToMailbox
+        recordFailureAndReturnBatchToMailbox(pollContext, throwable);
+        ThrowableUtils.logWithoutEscaping(throwable, () -> {
+            if (PCRetriableException.isPresentIn(unwrapFrameworkWrapper(throwable))) {
+                log.debug(failSignalMessage, throwable);
+            } else {
+                log.error(failSignalMessage, throwable);
+            }
+        });
+    }
+
+    /**
+     * Peels the framework's own wrapper before asking whether the failure underneath is one the user marked expected.
+     * <p>
+     * Identity by default. An engine whose framework repackages what it propagates overrides this with that
+     * framework's helper - core cannot name those wrapper types, so it cannot do the peeling itself.
+     */
+    protected Throwable unwrapFrameworkWrapper(Throwable throwable) {
+        return throwable;
+    }
+
+    /**
+     * Records an async failure against every container in the batch and returns each to the mailbox - each container
+     * independent of the others, and all of it before the failure is rendered anywhere.
+     * <p>
+     * Record BEFORE rendering, because {@code throwable} is the user's own async failure: logging it runs their
+     * {@code getCause}/{@code getMessage} inside the logging binding's stack-trace walk, and if that throws, any
+     * container not yet completed stays marked in flight forever - the failure is the thing that must be recorded,
+     * the log line is the thing that can be lost. So callers log their fail signal AFTER this returns, guarded with
+     * {@link bz.stub.parallelconsumer.internal.utils.ThrowableUtils#logWithoutEscaping}.
+     * <p>
+     * Per container, independent of the others - the same shape core's {@code runUserFunction} loop uses, and for
+     * the same reason. {@link WorkContainer#onUserFunctionFailure} runs USER code (the retryDelayProvider, via
+     * updateFailureHistory), so one container's failure must not stop the batch: every container after it would
+     * then never reach {@link #addToMailbox} and would stay in flight forever.
+     */
+    protected void recordFailureAndReturnBatchToMailbox(PollContextInternal<K, V> pollContext, Throwable throwable) {
+        pollContext.streamWorkContainers().forEach(wc -> {
+            try {
+                wc.onUserFunctionFailure(throwable);
+            } catch (Throwable bookkeepingThrew) {
+                log.error("Failed to record the user function failure against {} - the record is still returned to " +
+                        "the mailbox below. Cause: {}", wc, describeWithRootCause(bookkeepingThrew));
+            }
+            try {
+                addToMailbox(pollContext, wc);
+            } catch (PCInternalRuntimeException pcInvariantBroke) {
+                // The EXPECTED shape, named so the code says what it is guarding against: one of PC's own
+                // invariants, and the known route is ProduceLockNotHeldException out of the produce-lock release
+                // inside addToMailbox. Terminal either way - see failFatallyOnUnmailboxableRecord.
+                failFatallyOnUnmailboxableRecord(wc, pcInvariantBroke);
+            } catch (Throwable nothingElseIsExpected) {
+                // Backstop, and it stays broad on purpose: anything escaping this loop strands every container
+                // behind it, which is the stall this shape exists to prevent. Reaching here means a route nobody
+                // has enumerated, so it is worth telling apart from the arm above rather than merging them.
+                failFatallyOnUnmailboxableRecord(wc, nothingElseIsExpected);
+            }
+        });
+    }
 
 }

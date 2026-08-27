@@ -121,6 +121,7 @@ expect DENY  "leading --repo, --subject no (#N)"   'gh --repo astubbs/parallel-c
 expect DENY  "attached --repo=, --subject no (#N)" 'gh --repo=astubbs/parallel-consumer pr merge 2999 --squash --subject "foo"'
 expect DENY  "attached -RVALUE, squash body bare"  'gh -Rastubbs/parallel-consumer pr merge 2999 --squash --body "no trailer here"'
 expect ALLOW "leading -R, subject ends with (#N)"  'gh -R astubbs/parallel-consumer pr merge 2999 --squash --subject "foo (#2999)"'
+
 expect ALLOW "leading -R on a non-merge command"   'gh -R astubbs/parallel-consumer pr view 2999 --json title'
 # gh also accepts the flag BETWEEN `pr` and `merge` (`gh pr -R owner/repo merge`), and the first
 # global-flag fix only covered the leading position - found by the astubbs#324 review, live-proven
@@ -155,10 +156,79 @@ else
 fi
 
 # ---------------------------------------------------------------------------------------------
+# check-upstream-map-merged.sh
+#
+# Refuses `gh pr merge <N>` while upstream-map.yaml still records that PR as `status: pr-open`.
+# It reads the manifest from the CWD, so each case runs inside a fixture directory rather than
+# against the live manifest - a test whose expected verdict changes when someone edits the real
+# manifest is a test that will be deleted the first time it goes red for the wrong reason.
+#
+# It shipped with no self-test and reproduced two defects its siblings had already fixed: the
+# regex missed `gh -R owner/repo pr merge`, and the URL form fell open with the number in plain
+# sight. Those are the first cases below, and they are why this section exists.
+# ---------------------------------------------------------------------------------------------
+
+echo
+echo "--- check-upstream-map-merged.sh ---"
+
+HOOK_UNDER_TEST="$HOOKS/check-upstream-map-merged.sh"
+
+umm_fixture=$(mktemp -d)
+mkdir -p "$umm_fixture/src/docs/development"
+cat > "$umm_fixture/src/docs/development/upstream-map.yaml" <<'YAML'
+entries:
+  - id: still-open
+    fork:
+      prs: [2999]
+      status: pr-open
+  - id: already-merged
+    fork:
+      prs: [2998]
+      status: merged
+YAML
+umm_prev_pwd=$PWD
+cd "$umm_fixture"
+
+expect DENY  "bare form, entry still pr-open"      'gh pr merge 2999 --squash'
+expect DENY  "leading -R (the astubbs#324 gap)"    'gh -R astubbs/parallel-consumer pr merge 2999 --squash'
+expect DENY  "leading --repo long form"            'gh --repo astubbs/parallel-consumer pr merge 2999 --squash'
+expect DENY  "attached --repo= form"               'gh --repo=astubbs/parallel-consumer pr merge 2999 --squash'
+expect DENY  "-R between pr and merge"             'gh pr -R astubbs/parallel-consumer merge 2999 --squash'
+expect DENY  "PR URL instead of a bare number"     'gh pr merge https://github.com/astubbs/parallel-consumer/pull/2999 --squash'
+
+# The PR argument is the first POSITIONAL, not the first digit-shaped word: an unquoted numeric
+# flag value ahead of it used to win. Both directions of that bug are pinned - denying the wrong
+# PR, and quietly checking a PR nobody is merging.
+expect DENY  "numeric --body value before the PR"  'gh pr merge --body 2998 2999 --squash'
+expect ALLOW "numeric --body value, merged PR"     'gh pr merge --body 2999 2998 --squash'
+# Passes on the pre-fix code too - `--body=2998` is one token, so the old first-digit-wins scan
+# already skipped it. Kept as a guard on the attached form rather than as proof of this fix: a
+# future refactor that starts splitting `--flag=value` would break it, and this is where that shows.
+expect DENY  "attached --body= before the PR"      'gh pr merge --body=2998 2999 --squash'
+expect DENY  "-t value before the PR"              'gh pr merge -t 2998 2999 --squash'
+
+# Negative controls - each names the reason the hook must NOT fire, so a future change that makes
+# it deny everything shows up here rather than by jamming somebody's merge shut.
+expect ALLOW "entry already says merged"           'gh pr merge 2998 --squash'
+expect ALLOW "PR absent from the manifest"         'gh pr merge 2997 --squash'
+expect ALLOW "no PR number: current branch's PR"   'gh pr merge --squash'
+expect ALLOW "not a merge command at all"          'gh pr view 2999'
+expect ALLOW "merge in prose, not a gh command"    'echo "remember to merge 2999 later"'
+
+cd "$umm_prev_pwd"
+rm -rf "$umm_fixture"
+
+# Fails open rather than jamming the tool shut when it cannot know: no manifest in this directory.
+umm_empty=$(mktemp -d); umm_prev_pwd=$PWD; cd "$umm_empty"
+expect ALLOW "no manifest here - fails open"       'gh pr merge 2999 --squash'
+cd "$umm_prev_pwd"; rm -rf "$umm_empty"
+
+# ---------------------------------------------------------------------------------------------
 # pre-commit-gate.sh
 #
 # CLAUDE_PROJECT_DIR points at a fixture holding a stub `.githooks/pre-commit`, so the gate's
 # pass/fail is controlled by the test rather than by the state of the real tree.
+
 # ---------------------------------------------------------------------------------------------
 
 echo
@@ -371,6 +441,39 @@ assert "a 150 KB merge-prep prompt is still injected" YES "$(injected "$big_prom
 
 assert "the preamble points at the doc rather than restating it" pointer_only "$got"
 
+
+# ---------------------------------------------------------------------------
+# after-push-check-ci.sh - fires after a push that moved a ref, silent otherwise.
+#
+# The negative controls matter more than the positive one here: this hook runs on EVERY Bash call
+# (no `if:` matcher, because prefix matching would miss `cd worktree && git push`), so a leak means
+# every unrelated command carries a CI lecture and the reader learns to skim past it.
+# ---------------------------------------------------------------------------
+push_hook() { # <json payload> -> prints injected context, or nothing
+    printf '%s' "$1" | "$HOOKS/after-push-check-ci.sh" 2>/dev/null | tr -d '\n'
+}
+fired() { [ -n "$(push_hook "$1")" ] && echo fired || echo silent; }
+
+assert "a real push injects the CI reminder" fired \
+    "$(fired '{"tool_input":{"command":"git push -q origin b"},"tool_response":{"stderr":"To github.com:a/b.git\n   a1..b2  b -> b"}}')"
+
+assert "a push behind a cd still fires (the prefix trap this hook avoids)" fired \
+    "$(fired '{"tool_input":{"command":"cd /w/t && git push -q origin b"},"tool_response":{"stderr":"   a1..b2  b -> b"}}')"
+
+assert "a non-push Bash call is silent" silent \
+    "$(fired '{"tool_input":{"command":"git status"},"tool_response":{"stdout":"clean"}}')"
+
+assert "a push that moved nothing is silent" silent \
+    "$(fired '{"tool_input":{"command":"git push"},"tool_response":{"stderr":"Everything up-to-date"}}')"
+
+assert "a dry-run push is silent" silent \
+    "$(fired '{"tool_input":{"command":"git push --dry-run origin b"},"tool_response":{"stderr":"To github.com"}}')"
+
+assert "a REJECTED push is silent - no CI started" silent \
+    "$(fired '{"tool_input":{"command":"git push origin b"},"tool_response":{"stderr":" ! [rejected]  b -> b (fetch first)"}}')"
+
+assert "a malformed payload never breaks the tool call" silent \
+    "$(fired 'not json at all')"
 # ---------------------------------------------------------------------------------------------
 # warn-low-disk.sh
 #
@@ -911,7 +1014,8 @@ registrations = sum(len(g["hooks"]) for groups in cfg["hooks"].values() for g in
 # several events.
 # Runs to twenty because a table that stops at the current count turns the next hook into a
 # self-test failure whose message reads like the doc is wrong - which is how this list ended one
-# short of the number the doc had to state.
+# short of the number the doc had to state. The literal symptom is worth knowing, because it does
+# not look like a missing entry: "says thirteen registrations; settings.json has 13".
 WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
          "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
          "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,

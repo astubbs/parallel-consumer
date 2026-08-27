@@ -40,7 +40,7 @@ predates it by more than a year and nobody re-read the code afterwards.
 - **Nothing tests any of it.** No test in either source tree names `InterruptException`,
   `Retired too many times` or the retry limit. This is unasserted behaviour, not verified behaviour.
 - **Fencing arrives by two different routes with two different types**: wrapped in
-  `InternalRuntimeException` from `sendOffsetsToTransaction`, raw from `commitTransaction`.
+  `PCInternalRuntimeException` from `sendOffsetsToTransaction`, raw from `commitTransaction`.
   `core-recoverable-producer-fencing.md` and astubbs#225 describe only the first.
 
 ## Start from the better prototype, not the one the manifest names

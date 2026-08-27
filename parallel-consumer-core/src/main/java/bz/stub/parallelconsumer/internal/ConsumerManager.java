@@ -303,7 +303,7 @@ public class ConsumerManager<K, V> {
                     // sequence logs it and shuts down, which is true rather than quietly wrong.
                     // TODO(refactor): a user-facing failure wants a PC-named type - see
                     // docs/inflight/core-exception-hierarchy-cleanup.md
-                    throw new InternalRuntimeException(
+                    throw new PCInternalRuntimeException(
                             "Offset commit abandoned after {} attempt(s) because close began - these offsets were NOT " +
                                     "committed, so they must not be recorded as successful", null, tryCount);
                 }

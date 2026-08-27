@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentMatchers;
 import org.mockito.Mockito;
 import org.mockito.MockitoAnnotations;
@@ -38,6 +39,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static bz.stub.parallelconsumer.internal.utils.GeneralTestUtils.time;
@@ -50,7 +52,9 @@ import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.K
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
 import static java.time.Duration.ofSeconds;
 import static java.util.concurrent.TimeUnit.MINUTES;
+import static com.google.common.truth.Truth.assertWithMessage;
 import static org.assertj.core.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
@@ -630,6 +634,274 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
                 assertCommitLists(of(of(2), of(2, 3, 4))));
     }
 
+    /**
+     * A callback throwing an exception whose cause chain is a cycle must still shut the consumer down.
+     *
+     * <p>The failure path reads the cause chain to name the root cause in its message. Walking that chain by
+     * following {@code getCause} terminates for every chain a program means to build - but not for every chain it
+     * can build. {@code initCause} refuses self-causation, so {@code A -> A} is impossible and a
+     * self-reference check looks sufficient; {@code A -> B -> A} is not impossible, and defeats it.
+     *
+     * <p>What makes that worth a test rather than a code comment is where the walk happens: in the control loop's
+     * catch block, before {@code doClose}. A spin there is not a missing log line - the consumer never reaches
+     * shutdown and {@code closeDrainFirst} never returns, so the symptom is a hang, which is the one failure mode
+     * that cannot be diagnosed from a stack trace after the fact.
+     *
+     * <p>The timeout is the assertion. If the walk regresses this does not fail with a message, it hangs, and only
+     * the deadline distinguishes it from a slow test.
+     */
+    @Test
+    @Timeout(value = 30, unit = java.util.concurrent.TimeUnit.SECONDS)
+    void controlLoopSurvivesACyclicCauseChain() {
+        var head = new FakeRuntimeException("cycle head");
+        var tail = new RuntimeException("cycle tail", head);
+        head.initCause(tail); // head -> tail -> head, which no self-reference check catches
+
+        parallelConsumer.addLoopEndCallBack(() -> {
+            throw head;
+        });
+
+        parallelConsumer.poll(context -> log.debug("Processing {}", context.getSingleRecord().offset()));
+
+        // the outcome that matters is that this returns at all
+        var thrown = assertThrows(Exception.class, () -> parallelConsumer.closeDrainFirst(ofSeconds(defaultTimeoutSeconds)));
+
+        // asserted on the MESSAGE, not the throwable: both Truth and AssertJ walk the cause chain to render a
+        // throwable when an assertion fails (Truth via StackTraceCleaner, AssertJ via printStackTrace), so handing
+        // either one a deliberately hostile throwable replaces the assertion failure with the hostile exception -
+        // measured, not assumed. The message string is captured safely above and is what the test is about anyway.
+        assertWithMessage("the failure is reported rather than spun on")
+                .that(thrown.getMessage()).containsMatch("Error.*poll.*thread");
+    }
+
+    /**
+     * When rendering the failure fails, the reported failure must still be the ORIGINAL one.
+     *
+     * <p>The catch block hands the user's throwable to the logger, whose binding is also the user's, and both
+     * {@code getMessage} and {@code getCause} are overridable - so rendering it runs code that can throw. Guarding
+     * that with {@code finally} alone shuts down correctly but lets the logger's exception propagate in place of the
+     * assigned {@code failureReason}, so {@code closeDrainFirst} reports "the logger blew up" instead of what
+     * actually killed the consumer. The diagnosis is the whole point of this handler.
+     */
+    @Test
+    @Timeout(value = 30, unit = java.util.concurrent.TimeUnit.SECONDS)
+    void aFailureThatCannotBeLoggedIsStillReportedAsItself() {
+        var unloggable = new FakeRuntimeException("the failure that actually happened") {
+            @Override
+            public synchronized Throwable getCause() {
+                throw new UnsupportedOperationException("rendering me fails");
+            }
+        };
+
+        parallelConsumer.addLoopEndCallBack(() -> {
+            throw unloggable;
+        });
+
+        parallelConsumer.poll(context -> log.debug("Processing {}", context.getSingleRecord().offset()));
+
+        var thrown = assertThrows(Exception.class, () -> parallelConsumer.closeDrainFirst(ofSeconds(defaultTimeoutSeconds)));
+
+        // the message, not the throwable - see the note in controlLoopSurvivesACyclicCauseChain. It matters more
+        // here: this test's input is hostile by construction, so asserting on the throwable made a failure of THIS
+        // test surface as "UnsupportedOperationException: rendering me fails" with no sign of what was expected.
+        var message = thrown.getMessage();
+        assertWithMessage("the original failure, not whatever failed while trying to render it")
+                .that(message).containsMatch("Error.*poll.*thread");
+        assertWithMessage("the original failure, not whatever failed while trying to render it")
+                .that(message).contains("the failure that actually happened");
+    }
+
+    /**
+     * A user failure whose RENDERING throws must still be returned to the mailbox.
+     *
+     * <p>The highest-traffic render of a user-supplied throwable in the library: every user function failure passes
+     * through {@code runUserFunction}'s catch. It logged before marking the batch failed and re-mailboxing it, so a
+     * throwable whose {@code getCause} throws took the log call down and skipped the bookkeeping - the records stayed
+     * in flight forever. Silent, because logging is the thing that failed, and invisible to the future because the
+     * escape lands in the worker task nobody reads.
+     *
+     * <p>Retry is the observable proxy for "the failure was recorded": a container only comes back if
+     * {@code onUserFunctionFailure} and {@code addToMailbox} both ran.
+     *
+     * <p><b>A plain {@link RuntimeException}, deliberately not {@code FakeRuntimeException}.</b> That extends
+     * {@link PCRetriableException}, so it takes the {@code log.debug} branch - which is disabled at the suite's INFO
+     * level and therefore never renders the throwable at all. A hostile-rendering test built on it passes against
+     * the unfixed code while exercising nothing.
+     */
+    @Test
+    @Timeout(value = 30, unit = java.util.concurrent.TimeUnit.SECONDS)
+    void aUserFailureThatCannotBeLoggedIsStillReturnedToTheMailbox() {
+        var attempts = new AtomicInteger();
+
+        parallelConsumer.poll(context -> {
+            attempts.incrementAndGet();
+            throw new RuntimeException("hostile user failure") {
+                @Override
+                public synchronized Throwable getCause() {
+                    throw new UnsupportedOperationException("rendering me fails");
+                }
+            };
+        });
+
+        await().atMost(ofSeconds(20))
+                .untilAsserted(() -> assertWithMessage("record redelivered, so the failure was recorded before the render")
+                        .that(attempts.get()).isAtLeast(2));
+    }
+
+    /**
+     * A user-supplied {@code retryDelayProvider} that throws must not strand the record it is asked about.
+     *
+     * <p>{@code onUserFunctionFailure} calls {@code updateFailureHistory}, which asks
+     * {@code getRetryDelayConfig}, which calls the user's {@code retryDelayProvider} <b>unguarded</b>. That is user
+     * code running inside the failure bookkeeping, so it can throw - and it used to abort the whole batch loop,
+     * leaving every container after it with no {@code addToMailbox} and therefore in flight forever.
+     *
+     * <p>The same permanent stall the batch is being mailboxed to avoid, reached through a different door.
+     */
+    @Test
+    @Timeout(value = 30, unit = java.util.concurrent.TimeUnit.SECONDS)
+    void aThrowingRetryDelayProviderStillReturnsTheRecordToTheMailbox() {
+        var attempts = new AtomicInteger();
+        setupParallelConsumerInstance(ParallelConsumerOptions.<String, String>builder()
+                .consumer(consumerSpy)
+                .producer(producerSpy)
+                .retryDelayProvider(ignored -> {
+                    throw new FakeRuntimeException("your retry delay provider is broken");
+                })
+                .build());
+        primeFirstRecord(); // setupParallelConsumerInstance builds new clients, so the primed record is gone
+
+        parallelConsumer.poll(context -> {
+            attempts.incrementAndGet();
+            throw new RuntimeException("ordinary user failure");
+        });
+
+        await().atMost(ofSeconds(20))
+                .untilAsserted(() -> assertWithMessage("redelivered, so the container was mailboxed despite the "
+                        + "provider throwing").that(attempts.get()).isAtLeast(2));
+    }
+
+    /**
+     * A provider that RETURNS something unusable is worse than one that throws, so it gets its own coverage.
+     *
+     * <p>A throwing provider is caught. A provider that returns {@code null}, a negative delay, or one so large
+     * that {@code Instant.plus} overflows fails <em>after</em> that guard, in the arithmetic. The container
+     * survives - but {@code retryDueAt} is left unset, and unset reads as {@link java.time.Instant#MIN}, meaning
+     * "due now". The record is then retried immediately and forever, with no backoff and no warning: a hot loop
+     * against exactly the thing the user wrote a provider to back off from.
+     *
+     * <p>Asserted as an interval rather than a count: "it was retried" passes in the broken case too, because the
+     * broken case retries constantly. The distinguishing signal is that the retries are SPACED.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"null", "negative", "overflow"})
+    @Timeout(value = 60, unit = java.util.concurrent.TimeUnit.SECONDS)
+    void aRetryDelayProviderReturningRubbishStillBacksOff(String shape) {
+        var attemptTimes = new ConcurrentLinkedQueue<Long>();
+        setupParallelConsumerInstance(ParallelConsumerOptions.<String, String>builder()
+                .consumer(consumerSpy)
+                .producer(producerSpy)
+                .defaultMessageRetryDelay(ofSeconds(1))
+                .retryDelayProvider(ignored -> {
+                    switch (shape) {
+                        case "null":
+                            return null;
+                        case "negative":
+                            return ofSeconds(-5);
+                        default:
+                            return Duration.ofSeconds(Long.MAX_VALUE / 2); // Instant.plus cannot represent this
+                    }
+                })
+                .build());
+        primeFirstRecord();
+
+        parallelConsumer.poll(context -> {
+            attemptTimes.add(System.currentTimeMillis());
+            throw new RuntimeException("ordinary user failure");
+        });
+
+        await().atMost(ofSeconds(30)).until(() -> attemptTimes.size() >= 3);
+
+        var times = new ArrayList<>(attemptTimes);
+        long shortestGap = Long.MAX_VALUE;
+        for (int i = 1; i < times.size(); i++) {
+            shortestGap = Math.min(shortestGap, times.get(i) - times.get(i - 1));
+        }
+        assertWithMessage("retries are spaced by the fallback delay, not hot-looping (shape: %s)", shape)
+                .that(shortestGap).isAtLeast(500L);
+    }
+
+    /**
+     * One record's bookkeeping failing must not strand the rest of its batch.
+     *
+     * <p>{@code onUserFunctionFailure} runs user code - the {@code retryDelayProvider}, via
+     * {@code updateFailureHistory} - so in a batch of N, record 2 throwing used to abort the whole loop: records 3
+     * onward never reached {@code addToMailbox} and stayed in flight forever. Each iteration is now independent.
+     *
+     * <p>The provider throws for exactly ONE offset, so a passing run means the containers on either side of it
+     * were still processed. Asserting every record comes back - not merely that some did - is what makes the
+     * middle position meaningful.
+     *
+     * <p><b>This test does NOT discriminate the per-container guard, and that is worth knowing.</b> Ablated three
+     * ways - loop guard reverted, {@code WorkContainer.onUserFunctionFailure}'s {@code finally} reverted, and both
+     * reverted - it passes every time. So redelivery here does not depend on either: the mailbox is a
+     * notification channel, not the only route back, and something downstream recovers the container regardless.
+     *
+     * <p>That contradicts the premise both the review round and this PR's own commit messages argued from -
+     * "records stay in flight forever". <b>Unproven</b> for the batch loop. What IS proven, by tests that fail
+     * when reverted, is narrower: the {@code runUserFunction} reorder (a throwing render skipped the bookkeeping),
+     * and the {@code retryDelayProvider} return-value validation (a hot retry loop with no backoff).
+     *
+     * <p>The loop guards were kept anyway - cheap, correct, and consistent across four engines - but they are
+     * defence-in-depth rather than a demonstrated fix, and this javadoc says so rather than letting a green test
+     * imply otherwise. What this test genuinely pins is the batch-wide CONTRACT: whatever layer delivers it, one
+     * record's bookkeeping failing must never cost its neighbours.
+     */
+    @Test
+    @Timeout(value = 60, unit = java.util.concurrent.TimeUnit.SECONDS)
+    void oneRecordsBookkeepingFailingDoesNotStrandTheRestOfTheBatch() {
+        final long poisonOffset = 1L;
+        var seen = ConcurrentHashMap.<Long>newKeySet();
+        var redelivered = ConcurrentHashMap.<Long>newKeySet();
+        var poisonFired = new AtomicInteger();
+
+        setupParallelConsumerInstance(ParallelConsumerOptions.<String, String>builder()
+                .consumer(consumerSpy)
+                .producer(producerSpy)
+                .ordering(UNORDERED)
+                .batchSize(3)
+                .retryDelayProvider(rc -> {
+                    if (rc.getRecordId().getOffset() == poisonOffset) {
+                        poisonFired.incrementAndGet();
+                        throw new FakeRuntimeException("provider broken for offset " + poisonOffset);
+                    }
+                    return ofSeconds(1);
+                })
+                .build());
+
+        consumerSpy.addRecord(ktu.makeRecord("k0", "v0"));
+        consumerSpy.addRecord(ktu.makeRecord("k1", "v1"));
+        consumerSpy.addRecord(ktu.makeRecord("k2", "v2"));
+
+        parallelConsumer.poll(context -> {
+            context.getConsumerRecordsFlattened().forEach(cr -> {
+                if (!seen.add(cr.offset())) {
+                    redelivered.add(cr.offset());
+                }
+            });
+            throw new RuntimeException("whole batch fails");
+        });
+
+        await().atMost(ofSeconds(40))
+                .untilAsserted(() -> assertWithMessage("every record in the batch comes back, including the ones "
+                        + "after the offset whose bookkeeping threw")
+                        .that(redelivered).containsAtLeast(0L, 1L, 2L));
+
+        assertWithMessage("the scenario actually happened - the poison provider fired. Without this the assertion "
+                + "above could pass while never exercising a bookkeeping failure at all")
+                .that(poisonFired.get()).isAtLeast(1);
+    }
+
     @ParameterizedTest
     @EnumSource(CommitMode.class)
     void controlFlowException(CommitMode commitMode) {
@@ -653,6 +925,107 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         assertThatThrownBy(() -> {
             parallelConsumer.closeDrainFirst(ofSeconds(10));
         }).hasMessageContainingAll("Error", "poll", "thread", "fake control");
+    }
+
+    /**
+     * Registering a loop-end callback from a thread other than the control thread must not stop the consumer.
+     * <p>
+     * {@link AbstractParallelEoSStreamProcessor#addLoopEndCallBack} is public and documents no threading restriction,
+     * yet the control loop iterates that same list every cycle. A registration landing mid-iteration therefore breaks
+     * the iteration, and the failure escapes the control loop and takes the consumer down with it.
+     * <p>
+     * How the race is made deterministic, and why the assertion is on the outcome rather than the exception type, is
+     * documented on {@link #assertRegisteringFromAnotherThreadDoesNotStopTheConsumer}.
+     *
+     * @see <a href="https://github.com/astubbs/parallel-consumer/issues/252">astubbs#252 - the same defect class in
+     *         PartitionStateManager, where a plain HashMap of partition state was streamed while another thread
+     *         mutated it. Fixed there by making the collection concurrent; this field was missed.</a>
+     */
+    @Test
+    @SneakyThrows
+    void loopEndCallBackCanBeRegisteredFromAnotherThread() {
+        assertRegisteringFromAnotherThreadDoesNotStopTheConsumer(
+                "off-control-thread-registrar",
+                parallelConsumer::addLoopEndCallBack);
+    }
+
+    /**
+     * Shared harness for the two registration races - the subsystems differ, the race and the outcome that matters do
+     * not.
+     * <p>
+     * The latches make the race deterministic rather than hoping to land inside a window a few instructions wide: the
+     * first callback parks the iterating thread mid-iteration until the off-thread registration has provably landed.
+     * <p>
+     * <b>The assertion is on the observable outcome - the consumer keeps running and closes cleanly - not on the
+     * exception type.</b> What a user reports is "it stopped after a while"; a change that swapped one exception for
+     * another would still be that bug, and this test would still fail, which is the point.
+     *
+     * @param registrarThreadName names the registering thread, so a thread dump taken during a hang says which race it
+     *                            was - the stack of the parked control thread does not
+     * @param register            registers the given body with the subsystem under test, adapting it to whatever
+     *                            listener type that subsystem takes. Called twice: once for the callback that parks
+     *                            the iterating thread, then again off that thread while the iteration is held open
+     */
+    @SneakyThrows
+    private void assertRegisteringFromAnotherThreadDoesNotStopTheConsumer(String registrarThreadName,
+                                                                         Consumer<Runnable> register) {
+        var iterationIsInProgress = new CountDownLatch(1);
+        var registrationLanded = new CountDownLatch(1);
+        var parkedOnce = new AtomicBoolean(false);
+
+        register.accept(() -> {
+            if (parkedOnce.compareAndSet(false, true)) {
+                iterationIsInProgress.countDown();
+                awaitLatch(registrationLanded);
+            }
+        });
+
+        var registrar = new Thread(() -> {
+            awaitLatch(iterationIsInProgress);
+            register.accept(() -> log.trace("Registered off the iterating thread"));
+            registrationLanded.countDown();
+        }, registrarThreadName);
+        registrar.start();
+
+        parallelConsumer.poll(context -> log.debug("Processing {}", context.getSingleRecord().offset()));
+
+        // the registrar's last act is to count this down, so awaiting it is awaiting the thread - and it fails with
+        // the latch's remaining count rather than a bare "expected 0 but was 1"
+        awaitLatch(registrationLanded);
+
+        // the outcome that matters: the loop kept turning after the concurrent registration, rather than dying on it.
+        // failFast rather than awaitForOneLoopCycle(), because that helper only consults isClosedOrFailed AFTER its
+        // full 30s await - so the regression this test exists to catch would report a latch timeout, naming neither
+        // the consumer nor the exception, and taking 30s per test to say it
+        var loopsBefore = loopCountRef.get();
+        await().timeout(defaultTimeout)
+                .failFast("consumer stopped - the concurrent registration took the control loop down",
+                        () -> parallelConsumer.isClosedOrFailed())
+                .until(() -> loopCountRef.get() > loopsBefore);
+
+        parallelConsumer.closeDrainFirst(ofSeconds(defaultTimeoutSeconds));
+    }
+
+    /**
+     * The same defect class as {@link #loopEndCallBackCanBeRegisteredFromAnotherThread()}, one subsystem over.
+     * <p>
+     * {@link bz.stub.parallelconsumer.state.WorkManager#addSuccessfulWorkListener
+     * WorkManager.addSuccessfulWorkListener} can be called from any thread, while
+     * {@code WorkManager.onSuccessResult} iterates the listeners on the control thread. Plain-list iteration breaks
+     * when a registration lands mid-notify.
+     * <p>
+     * Registration is a real method rather than a {@code @Getter}-exposed list, so a search for the field finds its
+     * writers. A handed-out collection is mutated through the accessor's name, not the field's, which leaves the
+     * field reading as dead code to exactly the sweep that looks for this defect class.
+     */
+    @Test
+    @SneakyThrows
+    void successfulWorkListenerCanBeRegisteredFromAnotherThread() {
+        var wm = parallelConsumer.getWm();
+
+        assertRegisteringFromAnotherThreadDoesNotStopTheConsumer(
+                "off-thread-success-listener-registrar",
+                parkTheNotifyingThread -> wm.addSuccessfulWorkListener(work -> parkTheNotifyingThread.run()));
     }
 
     @ParameterizedTest()

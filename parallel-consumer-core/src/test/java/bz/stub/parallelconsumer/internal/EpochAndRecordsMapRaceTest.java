@@ -5,16 +5,11 @@ package bz.stub.parallelconsumer.internal;
  */
 
 import bz.stub.parallelconsumer.BrokerlessWorkManagerTestBase;
-import bz.stub.parallelconsumer.state.ModelUtils;
-import bz.stub.parallelconsumer.state.PartitionStateManager;
-import bz.stub.parallelconsumer.state.ShardManager;
 import bz.stub.parallelconsumer.state.WorkContainer;
-import bz.stub.parallelconsumer.state.WorkManager;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.common.TopicPartition;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import pl.tlinkowski.unij.api.UniLists;
 import pl.tlinkowski.unij.api.UniMaps;
@@ -33,12 +28,13 @@ import static com.google.common.truth.Truth.assertWithMessage;
  *   <li>Next poll creates valid work at the correct epoch</li>
  * </ol>
  * This race is more likely with Kafka 2.x's eager rebalance protocol.
+ * <p>
+ * Deliberately does NOT override {@link BrokerlessWorkManagerTestBase#assignPartitionsIfWanted()}:
+ * an unassigned partition at the start of each test is the race, so the base class's
+ * no-assignment default is load-bearing here rather than incidental.
  */
 @Slf4j
 class EpochAndRecordsMapRaceTest extends BrokerlessWorkManagerTestBase {
-
-    // Deliberately does NOT override assignPartitionsIfWanted(): the race under test is a poll
-    // arriving BEFORE onPartitionsAssigned, so assigning here would remove the thing being tested.
 
     /**
      * Core race scenario: poll returns records before onPartitionsAssigned fires.

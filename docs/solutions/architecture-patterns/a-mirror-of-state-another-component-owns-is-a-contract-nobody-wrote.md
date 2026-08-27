@@ -66,9 +66,8 @@ the consumer - is the shared-nothing refactor (astubbs#142, confluentinc#200), s
 That is not a refutation; it is the diagnosis. **A mirror is usually a threading constraint wearing
 a field's clothes.** The copy is evidence that some component cannot reach the authority from where
 it runs - which is itself the argument for fixing the reachability, not for keeping the copy. The
-seam that makes asking hard is the same seam the deadlocks live on
-([two-threads-one-consumer](two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md) owns
-that story).
+seam that makes asking hard is the same seam the deadlocks live on - the poll/control split over a
+consumer that is not thread-safe.
 
 ## Guidance
 
@@ -112,10 +111,12 @@ more cheaply than at diagnosis time.
 
 ## Related
 
-- [two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md](two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md) -
-  owns the thread-ownership seam that motivates every mirror above, the `metaCache` and
-  `pausedForThrottling` mechanisms in full, and the constraint that control must not read
-  `groupMetadata()` live.
+- `two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md` owns the thread-ownership seam
+  that motivates every mirror above, the `metaCache` and `pausedForThrottling` mechanisms in full,
+  and the constraint that control must not read `groupMetadata()` live. It arrives with
+  astubbs/parallel-consumer#29, which is where that seam is being changed; deliberately not linked
+  until it is in the tree, so this reference does not read as a pointer that resolves.
+  <!-- file-refs: N/A - naming a document that has not landed yet is the point of the sentence -->
 - [../runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md](../runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md) -
   the `commitCommand` monitor's two purposes and the AB-BA cycle they produced.
 - astubbs#80 - the shutdown-flag deletion: its PR body carries the full desync mechanism

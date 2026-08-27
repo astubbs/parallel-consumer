@@ -6,7 +6,7 @@ package bz.stub.parallelconsumer.offsets;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
-import bz.stub.parallelconsumer.internal.InternalRuntimeException;
+import bz.stub.parallelconsumer.internal.PCInternalRuntimeException;
 import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
 import lombok.Getter;
 import lombok.SneakyThrows;
@@ -98,7 +98,7 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
             case RunLengthV2 -> deserialiseBitSetWrap(data, v2);
             case RunLengthV2Compressed -> deserialiseBitSetWrap(data, v2);
             default ->
-                    throw new InternalRuntimeException("Invalid state"); // todo why is this needed? what's not covered?
+                    throw new PCInternalRuntimeException("Invalid state"); // todo why is this needed? what's not covered?
         };
         return binaryArrayString;
     }

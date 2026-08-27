@@ -77,6 +77,46 @@ end-to-end did, which is the only reason the guard is not now a second inert-con
 Both the comma list and a bare `*` are arms now. The end-to-end run after the fix scores the same
 **27 generated, 23 killed** as the pre-change script, so the restructuring changed no PIT behaviour.
 
+## The first non-skip run since that table, and it could not finish - 2026-08-26
+
+**The section above measured forty consecutive runs that scored nothing, every skip individually
+correct. This is what happened the first time the lane had something decidable to mutate: it hit
+`timeout-minutes: 30` and was cancelled.**
+<!-- post-merge: checked-begin -->
+Observed on astubbs/parallel-consumer#267,
+[run 32983026109](https://github.com/astubbs/parallel-consumer/actions/runs/32983026109), whose head
+had merged astubbs/parallel-consumer#371's fix for the truncated invocation that was silently
+dropping the `-pl` scope. The branch is incidental - it is where a decidable class happened to be
+changed - and the run link is the durable record.
+<!-- post-merge: checked-end -->
+
+**Scoping is not the problem - it worked.** The log names its own decisions: the decidable scope
+matched the tree, the PR-scoped target came out as `OffsetSimultaneousEncoder` plus its inner
+classes, and every other changed class was listed by name as `changed but NOT mutated (not
+decidable)`. PIT then reported `Created 1 mutation test units`. One class, as designed.
+
+**The cost is the coverage pass, not the mutation set.** PIT sent **388 test classes** to the minion
+and spent **367 seconds** calculating coverage before mutating anything - `RunLengthEncoderTest`'s
+`testSimultaneousWithOverflowErrors` alone took **141786 ms**, and PIT itself reported 26 tests over
+2000 ms. Mutation of that single unit then ran from the end of the coverage pass to the job
+timeout without reporting a result.
+
+So the shape to fix is the **test** side of the invocation rather than the class side. The class
+scope is already narrow; what is unbounded is the suite PIT measures coverage against, which for a
+class in `offsets.` drags in the slowest encoder tests in the module. `-DtargetTests` is the lever,
+and narrowing it is a different change from anything the ranked list below describes - those are all
+about which PACKAGES to widen to, and widening scope while the coverage pass is this expensive would
+make the timeout more likely rather than less.
+
+**This does not gate anything, which is why it can sit here.** The job is
+`continue-on-error: true` - advisory, never blocking a merge - so the cost of leaving it is a red
+row and no mutation signal, not a stuck PR.
+
+**It also qualifies a claim above.** The forty-run section says a scoped run "scores mutants
+normally", which was true of the scoped run it measured. On CI, against this module's real test
+suite, a correctly scoped run did not finish. Both are observations; neither generalises to the
+other, and the difference between them is the coverage pass rather than the scoping.
+
 ## Baseline - first completed sweep, 2026-08-05
 
 The `offsets.*` sweep **completes**, which the `internal.*` one it replaced never did in 42+ minutes on
@@ -142,6 +182,7 @@ the mistake `state.` was about to be.
    inside the 30-minute job timeout with a non-zero score. A regex for the non-recursive case is
    `^bz\.stub\.parallelconsumer\.[A-Z]`.
 2. **`metrics.`.** `PCMetricsDef` and friends are declarative, and metrics correctness has already
+   <!-- post-merge: checked -->
    cost this repo a leak (astubbs#57). Small, so the marginal cost over the 325s coverage pass is
    near zero. **Measure first:** same completion test. Lower than 1 only because the defect class is
    narrower.

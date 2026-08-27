@@ -23,6 +23,20 @@ do it. Grep is what agents do anyway - so a keyword sweep of `docs/` now surface
 too. The same argument already justifies the `docs/solutions/` title index that
 `.claude/hooks/inject-recorded-knowledge.sh` injects at session start.
 
+<!-- post-merge: checked-begin -->
+**The inverse failure is real too, and nothing above anticipated it: going to `gh` INSTEAD of this
+file.** That reads like the more rigorous move - the live tracker over a dated copy - and the
+checklist's "confirm with `gh issue view` before acting" encourages it. But the two answer different
+questions: this file is for FINDING, `gh issue view` is for confirming one row before you act on it.
+Reach for `gh` to do the finding and the natural query is `--json number,state,title`, which is this
+file **minus the column that does the work**. A title-keyword sweep misses an issue whose title
+contains none of your words; its labels do not. So if you go to `gh` for discovery, fetch
+`--json labels` as well, and search `area/*` - or just grep here first, which is cheaper and was the
+point. Observed on astubbs/parallel-consumer#267, where a keyword sweep of the live tracker missed
+astubbs#177 (`area/reliability`, and tagged for the release the search was for) that one grep of this
+file would have surfaced.
+<!-- post-merge: checked-end -->
+
 **Numbers here are this fork's.** Upstream's range overlaps ours, so a bare number is ambiguous
 everywhere else - see [`docs/issue-references.md`](../issue-references.md). A row whose title
 begins `confluentinc#NN:` is a mirror of that upstream issue; read the upstream original rather

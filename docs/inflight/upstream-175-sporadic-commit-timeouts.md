@@ -8,7 +8,7 @@ Mirror: [astubbs/parallel-consumer#175](https://github.com/astubbs/parallel-cons
 Upstream: [confluentinc/parallel-consumer#809](https://github.com/confluentinc/parallel-consumer/issues/809).
 
 **Read the upstream thread, not the mirror's summary.** The mirror describes the opening report
-(`InternalRuntimeException: Timeout waiting for commit response PT30S`, no diagnosis). The thread's
+(`PCInternalRuntimeException: Timeout waiting for commit response PT30S`, no diagnosis). The thread's
 substance is a *second* reporter, `gtassone`, who debugged it with JDWP, shipped a fix, and had it
 merged upstream. That work is already in this tree and the mirror does not say so.
 

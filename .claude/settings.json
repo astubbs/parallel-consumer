@@ -41,6 +41,15 @@
         "hooks": [
           {
             "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/check-upstream-map-merged.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/check-merge-outstanding-work.sh\""
           }
         ]
@@ -106,6 +115,17 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/inject-merge-checklist.sh\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/after-push-check-ci.sh\""
           }
         ]
       }
