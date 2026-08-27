@@ -50,6 +50,7 @@ import static org.awaitility.Awaitility.await;
 import static org.awaitility.Awaitility.waitAtMost;
 import static org.mockito.Mockito.*;
 import static pl.tlinkowski.unij.api.UniLists.of;
+import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.describeWithRootCause;
 import static org.junit.jupiter.api.Assertions.fail;
 
 /**
@@ -189,6 +190,20 @@ public abstract class AbstractParallelEoSStreamProcessorTestBase {
                 // Stopping is the correct answer rather than a concession: everything up to here has been checked,
                 // and a chain that cannot be read cannot be classified. The tests that build these throwables are
                 // asserting PC survives them, so teardown must survive them too.
+                //
+                // LOGGED, because a silent break makes this check quietly PARTIAL. Expected in the handful of
+                // tests that build a hostile throwable on purpose; anywhere else it means the chain stopped being
+                // readable for a reason nobody predicted, and that this guard may have walked past a real
+                // UnmailboxableRecordException deeper down. A guard whose whole point is to be loud must not exit
+                // quietly - that is the shape of the defect this suite exists to catch.
+                //
+                // describeWithRootCause rather than passing the throwable to the logger: handing it over would
+                // render it, which runs the getCause that just threw. That helper's contract is that it never
+                // throws, and it is the reason it exists.
+                log.warn("Could not finish reading the failure cause chain at depth {}, so the unmailboxable-record "
+                                + "check is incomplete for this test. Expected only where a test builds a hostile "
+                                + "throwable deliberately. Cause: {}",
+                        depth, describeWithRootCause(readingTheChainThrew));
                 break;
             }
         }
