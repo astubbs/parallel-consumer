@@ -44,7 +44,7 @@ public class ProcessingShard<K, V> {
      * mode).
      */
     @Getter
-    private final NavigableMap<Long, WorkContainer<K, V>> entries = new ConcurrentSkipListMap<>();
+    private final NavigableMap<Long, WorkContainer<K, V>> workMap = new ConcurrentSkipListMap<>();
 
 
     @Getter(PRIVATE)
@@ -56,35 +56,58 @@ public class ProcessingShard<K, V> {
 
     private final RateLimiter slowWarningRateLimit = new RateLimiter(5);
 
-    private final AtomicLong availableWorkContainerCnt = new AtomicLong(0);
+    /**
+     * How many of this shard's entries are counted as awaiting selection.
+     * <p>
+     * <b>Invariant: this equals the number of resident entries that hold a selection claim</b>
+     * ({@link #countSelectionClaimedByScan()}), and is non-negative. Both hold <em>between</em> operations rather
+     * than at every instant, and by construction rather than by clamping: every adjustment is made by the winner of
+     * a compare-and-set on
+     * {@link WorkContainer#claimSelection()} / {@link WorkContainer#releaseSelection()} - so a claim is taken
+     * exactly once, by the party that owns the transition, and no site has to infer from observable state whether
+     * it was already taken. {@code ShardAvailableCountOwnershipTest} is the check.
+     * <p>
+     * "Between operations" is not a hedge: {@link #includeInSelection(WorkContainer)} takes the claim and then
+     * increments, which is two atomics rather than one, so a reader interleaving there can see the scan one ahead
+     * of the counter - and, if a concurrent {@link #excludeFromSelection(WorkContainer)} wins the release inside
+     * that window, can see the counter momentarily at -1. Every such interleaving still settles correct, and every
+     * consumer that DRIVES ANYTHING reads the aggregate in
+     * {@link ShardManager#getNumberOfWorkQueuedInShardsAwaitingSelection()}, which floors at zero - that is the one
+     * behind {@code isSufficientlyLoaded()} and {@code drain()}. The single exception reads nothing: the
+     * under-served-retrieval diagnostic in {@link ShardManager#getWorkIfAvailable(int)} sums this counter unfloored
+     * behind {@code log.isDebugEnabled()}, so the transient can surface as {@code awaitingSelection=-1} in one debug
+     * line. Left unfloored deliberately - that line exists to show a human what the accounting actually says, and a
+     * clamp there would hide the very drift it was added to expose. Collapsing the two atomics into one is the
+     * follow-up that arrives with astubbs/parallel-consumer#335's {@code Execution} transition, and it removes the
+     * transient rather than masking it.
+     * <p>
+     * This counts a failed record back into selection before its retry delay has passed
+     * ({@link #onFailure(WorkContainer)}), so {@link ShardManager#getNumberOfWorkQueuedInShardsAwaitingSelection()}
+     * nets that out against the retry queue - only the aggregate is meaningful.
+     */
+    private final AtomicLong workAwaitingSelectionCount = new AtomicLong(0);
 
-    void addWorkContainer(WorkContainer<K, V> wc) {
-        long key = wc.offset();
-        WorkContainer<K, V> existing = entries.get(key);
-        if (existing != null) {
+    void addWorkContainer(WorkContainer<K, V> incomingWorkContainer) {
+        long key = incomingWorkContainer.offset();
+        WorkContainer<K, V> existingWorkContainer = workMap.get(key);
+        if (existingWorkContainer != null) {
             // Check if the existing entry is stale and should be replaced
-            if (isWorkContainerStale(existing)) {
+            if (isWorkContainerStale(existingWorkContainer)) {
                 log.debug("Replacing stale entry (epoch {}) for offset {} with fresh one (epoch {})",
-                        existing.getEpoch(), key, wc.getEpoch());
-                entries.put(key, wc);
-                // availableWorkContainerCnt stays the same since we're replacing, not adding. Two paths
-                // reach here having already spent this offset's decrement, and neither re-increments:
-                // the stale entry had been taken as work (getWorkIfAvailable() decremented at take time),
-                // or the poller's removeStaleContainers() sweep removed it between the get and this put.
-                // Either way the shard undercounts its available work, and NOT only "until the next add" -
-                // the next add increments for its own new entry, so the deficit survives it and can
-                // accumulate across replacements. It resyncs only when the shard drains far enough for the
-                // clamp in dcrAvailableWorkContainerCntByDelta() to floor the counter at zero, or when the
-                // shard is removed. That is a backpressure-gauge inaccuracy only, and it errs towards
-                // fetching sooner rather than starving: no record is lost, because getWorkIfAvailable()
-                // scans entries directly rather than gating on the count, and handleFutureResult() drops a
-                // stale in-flight result without touching the shard, so it cannot remove this fresh entry.
+                        existingWorkContainer.getEpoch(), key, incomingWorkContainer.getEpoch());
+                workMap.put(key, incomingWorkContainer);
+                // The stale entry has left the shard, so it gives back its claim - if it still holds one. It does
+                // not when it was already taken as work, and did when it was only ever queued; the counter now
+                // tells those apart from the container's own record instead of guessing, which is what used to
+                // leave this branch a claim short every time a taken entry was replaced.
+                excludeFromSelection(existingWorkContainer);
+                includeInSelection(incomingWorkContainer);
             } else {
-                log.debug("Entry for {} already exists in shard queue, dropping record", wc);
+                log.debug("Entry for {} already exists in shard queue, dropping record", incomingWorkContainer);
             }
         } else {
-            entries.put(key, wc);
-            availableWorkContainerCnt.incrementAndGet();
+            workMap.put(key, incomingWorkContainer);
+            includeInSelection(incomingWorkContainer);
         }
     }
 
@@ -97,50 +120,69 @@ public class ProcessingShard<K, V> {
      * legitimately empty, which is exactly why an implicit null here would not be noticed.
      * <p>
      * Read-only, and package-private for tests that need to assert WHICH container won a contested offset rather
-     * than merely how many are tracked. A read cannot break the invariants that keep {@link #entries} private -
+     * than merely how many are tracked. A read cannot break the invariants that keep {@link #workMap} private -
      * only a write can, which is why there is no corresponding setter and why {@link #addWorkContainer} remains
      * the only way in.
      */
     Optional<WorkContainer<K, V>> getWorkContainerAt(long offset) {
-        return Optional.ofNullable(entries.get(offset));
+        return Optional.ofNullable(workMap.get(offset));
     }
 
-    public void onSuccess(WorkContainer<?, ?> wc) {
+    public void onSuccess(WorkContainer<?, ?> successfulWork) {
         // remove work from shard's queue
-        entries.remove(wc.offset());
+        WorkContainer<K, V> removedContainer = workMap.remove(successfulWork.offset());
+        if (removedContainer != null) {
+            // Normally a no-op: the claim was taken when the record was taken as work. Done unconditionally anyway
+            // so that "a container that has left the shard holds no claim" is an invariant of every exit path
+            // rather than a property of the paths somebody remembered.
+            excludeFromSelection(removedContainer);
+        }
     }
 
-    public void onFailure() {
-        // increase available cnt first to let retry expired calculated later
-        availableWorkContainerCnt.incrementAndGet();
+    /**
+     * Idempotent - a failed record is selectable again (once its retry delay passes), so it re-joins the selection
+     * population. Calling this twice for the same container includes it once.
+     */
+    public void onFailure(WorkContainer<?, ?> failedWork) {
+        // include in selection first to let retry expired calculated later
+        includeInSelection(failedWork);
     }
 
 
     public boolean isEmpty() {
-        return entries.isEmpty();
+        return workMap.isEmpty();
     }
 
     public long getCountOfWorkAwaitingSelection() {
-        return availableWorkContainerCnt.get();
+        return workAwaitingSelectionCount.get();
     }
 
     public long getCountOfWorkTracked() {
-        return entries.size();
+        return workMap.size();
     }
 
     public long getCountWorkInFlight() {
-        return entries.values().stream()
+        return workMap.values().stream()
                 .filter(WorkContainer::isInFlight)
                 .count();
     }
 
-    public WorkContainer<K, V> remove(long offset) {
-        // from onPartitionsRemoved callback, need to deduce the available worker count for the revoked partition
-        WorkContainer<K, V> toRemovedWorker = entries.get(offset);
-        if (toRemovedWorker != null && toRemovedWorker.isAvailableToTakeAsWork()) {
-            dcrAvailableWorkContainerCntByDelta(1);
+    /**
+     * From the {@code onPartitionsRemoved} callback: the revoked record leaves the shard, and gives back its
+     * selection claim if it is still holding one.
+     * <p>
+     * This used to ask {@link WorkContainer#isAvailableToTakeAsWork()} whether to deduct, which is unanswerable:
+     * a record out at a worker whose stale result the controller has just dropped ({@code handleFutureResult} ->
+     * {@link WorkContainer#endFlight()}) reads as available again, and the shard would deduct a second time for a
+     * claim selection had already taken. The deficit was permanent, and hid later queued records from
+     * {@code WAITING_RECORDS} and from {@code drain()}'s check that nothing is still awaiting processing.
+     */
+    public WorkContainer<K, V> removeWorkAtOffset(long offset) {
+        WorkContainer<K, V> removed = workMap.remove(offset);
+        if (removed != null) {
+            excludeFromSelection(removed);
         }
-        return entries.remove(offset);
+        return removed;
     }
 
 
@@ -150,12 +192,16 @@ public class ProcessingShard<K, V> {
     // 2. will cause the consumer to paused consuming new messages indefinitely
     public List<WorkContainer<K, V>> removeStaleWorkContainersFromShard() {
         List<WorkContainer<K, V>> staleContainers = new ArrayList<>();
-        var iterator = entries.entrySet().iterator();
+        var iterator = workMap.entrySet().iterator();
         while (iterator.hasNext()) {
             Map.Entry<Long, WorkContainer<K, V>> entry = iterator.next();
             if (isWorkContainerStale(entry.getValue())) {
-                iterator.remove();  // Safe even on ConcurrentSkipListMap
-                dcrAvailableWorkContainerCntByDelta(1);
+                // Safe to remove during iteration on a ConcurrentSkipListMap - but this removes by KEY, so a fresh
+                // container the controller put here since next() returned is what actually leaves, and the
+                // excludeFromSelection below then releases the wrong object. Open, with the decision it needs, in
+                // docs/inflight/bug-stale-sweep-iterator-evicts-fresh-replacement.md.
+                iterator.remove();
+                excludeFromSelection(entry.getValue());
                 staleContainers.add(entry.getValue());
             }
         }
@@ -168,8 +214,7 @@ public class ProcessingShard<K, V> {
         var slowWork = new HashSet<WorkContainer<?, ?>>();
         var workTaken = new ArrayList<WorkContainer<K, V>>();
 
-        var iterator = entries.entrySet().iterator();
-        boolean hasStaleWorkContainer = false;
+        var iterator = workMap.entrySet().iterator();
         while (workTaken.size() < workToGetDelta && iterator.hasNext()) {
             var workContainer = iterator.next().getValue();
 
@@ -183,6 +228,11 @@ public class ProcessingShard<K, V> {
                 if (workContainer.onQueueingForExecution()) {
                     log.trace("Taking {} as work", workContainer);
 
+                    // Release this container's selection claim here, at the moment it stops being selectable -
+                    // and only for the caller that WON the claim above, which is why this sits inside the branch.
+                    // Only the caller that wins the release moves the counter, so a concurrent revocation removing
+                    // the same container cannot release it twice.
+                    excludeFromSelection(workContainer);
                     workTaken.add(workContainer);
                 } else {
                     log.trace("Skipping {} as work, not available to take as work", workContainer);
@@ -204,10 +254,10 @@ public class ProcessingShard<K, V> {
                 //  matter.
 
                 if (isWorkContainerStale(workContainer)) {
-                    // remove stale container and deduct on availableWorkContainerCnt
+                    // remove stale container and deduct on workAwaitingSelectionCount
                     log.debug("shard {} there are still stale work container, need to remove container : {}", this, workContainer);
-                    dcrAvailableWorkContainerCntByDelta(1);
                     iterator.remove();
+                    excludeFromSelection(workContainer);
                 } else {
                     log.trace("Partition for shard {} is blocked for work taking, stopping shard scan", this);
                     break;
@@ -224,8 +274,6 @@ public class ProcessingShard<K, V> {
         // Remove from retry queue as picked for submission to work pool - filter to only remove work containers that have
         // previously failed - as retry queue won't have any that didn't previously fail.
         retryQueue.removeAll(workTaken.stream().filter(WorkContainer::hasPreviouslyFailed).collect(Collectors.toList()));
-
-        dcrAvailableWorkContainerCntByDelta(workTaken.size());
 
         return workTaken;
     }
@@ -274,11 +322,50 @@ public class ProcessingShard<K, V> {
         return pm.getPartitionState(workContainer).checkIfWorkIsStale(workContainer);
     }
 
-    private void dcrAvailableWorkContainerCntByDelta(int ByNum) {
-        availableWorkContainerCnt.getAndAdd(-1 * ByNum);
-        // in case of possible race condition
-        if (availableWorkContainerCnt.get() < 0L) {
-            availableWorkContainerCnt.set(0L);
+    /**
+     * Include {@code wc} in selection, if it is not included already.
+     * <p>
+     * Takes the claim first and confirms residency second, deliberately: the reverse order is a check-then-act, and
+     * inferring "is this still mine to count" from a separate read is the mistake this class was fixed to remove.
+     * If the container left the shard concurrently, the claim is handed straight back here - and if the removing
+     * site's own release got there first, its compare-and-set lost and this one wins, so the claim is returned
+     * exactly once whichever way the two interleave. That branch therefore nets to zero rather than counting a
+     * departed container: the increment and the {@link #excludeFromSelection(WorkContainer)} that follows it
+     * cancel, and the container leaves holding nothing.
+     * <p>
+     * Residency is tested by <b>reference</b> identity, not {@code equals}: {@link WorkContainer#equals(Object)} is
+     * topic/partition/offset only, so a fresh container that replaced a stale one at the same offset compares equal
+     * to it. Equality here would let a departed container keep the claim its replacement is now holding.
+     */
+    private void includeInSelection(WorkContainer<?, ?> wc) {
+        if (wc.claimSelection()) {
+            workAwaitingSelectionCount.incrementAndGet();
+            if (workMap.get(wc.offset()) != wc) {
+                excludeFromSelection(wc);
+            }
         }
+    }
+
+    /**
+     * Exclude {@code wc} from selection, if it is still included.
+     * <p>
+     * The compare-and-set is what makes the deduction owned: at most one caller can win it per claim, so the
+     * counter settles non-negative and needs no clamp (see the field for the one transient this does not cover).
+     * That matters beyond tidiness - the floor-at-zero clamp this replaces is
+     * what let a conditional-decrement defect sit here unnoticed, by absorbing exactly the drift that would have
+     * exposed it.
+     */
+    private void excludeFromSelection(WorkContainer<?, ?> wc) {
+        if (wc.releaseSelection()) {
+            workAwaitingSelectionCount.decrementAndGet();
+        }
+    }
+
+    /**
+     * Ground truth for the counter, for tests: the containers resident in this shard that hold a selection claim.
+     * {@link #getCountOfWorkAwaitingSelection()} must always agree with this.
+     */
+    long countSelectionClaimedByScan() {
+        return workMap.values().stream().filter(WorkContainer::isSelectionClaimed).count();
     }
 }
