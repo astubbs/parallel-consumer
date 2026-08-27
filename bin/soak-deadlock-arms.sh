@@ -17,11 +17,15 @@
 #   FIXED   - the PR branch, revoke side declines with tryLock()
 #   CONTROL - identical tree, one term changed: the revoke side BLOCKS on the same lock
 #
-# Usage:  bin/soak-deadlock-arms.sh <reps> <seed> <fixed-worktree> <control-worktree> <tally-file>
+# Usage:  bin/soak-deadlock-arms.sh <reps> <seed> <fixed-wt> <control-wt> <tally> [scenario]
 set -euo pipefail
 
 REPS="${1:?reps}"; SEED="${2:?seed}"; FIXED="${3:?fixed worktree}"
 CONTROL="${4:?control worktree}"; TALLY="${5:?tally file}"
+# Scenario matters: the COOPERATIVE arm retains partitions, so onPartitionsRevoked rarely fires with
+# a pending commit and the window stays shut - measured 2026-08-27. The EAGER arm revokes the whole
+# assignment each rebalance, which is what opens it.
+SCENARIO="${6:-ChaosRevokeUnderWorkIT}"
 JDK="${JAVA_HOME_OVERRIDE:-/Users/astubbs/.sdkman/candidates/java/17.0.18-tem}"
 
 run_one() {
@@ -29,7 +33,7 @@ run_one() {
     log="$(mktemp)"
     if JAVA_HOME="$JDK" "$dir/mvnw" -f "$dir/pom.xml" -Pci -pl parallel-consumer-core -am verify \
          -DskipUTs=true -Dincluded.groups=chaos -Dexcluded.groups= \
-         -Dchaos.seed="$SEED" -Dit.test=ChaosRevokeUnderWorkCooperativeIT \
+         -Dchaos.seed="$SEED" -Dit.test="$SCENARIO" \
          -Dfailsafe.failIfNoSpecifiedTests=false -Dcopyright.skip=true -Djacoco.skip=true \
          > "$log" 2>&1; then verdict=PASS; else verdict=FAIL; fi
 
