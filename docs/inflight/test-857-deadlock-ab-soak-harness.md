@@ -1,0 +1,68 @@
+# The A/B soak harness for the confluentinc#857 revoke deadlock, and what it measured
+
+<!-- inflight-type: register -->
+
+Consulted rather than completed: this is how to re-run the deadlock A/B, and what it returned on
+2026-08-27/28. Kept because the setup is easy to get wrong in ways that produce a confident wrong
+answer, and this repo produced two of them in one day before it produced the right one.
+
+## The instrument, and why not chaos seeds
+
+`Rebalance857CommitSyncDeadlockProbeIT` forces the overlap by construction: a dwell inside
+`onPartitionsRevoked` against a much shorter commit interval, with enough slow-processing backlog
+that there is always something to commit. It is `@RepeatedTest`, so one invocation is many
+repetitions.
+
+**Replaying captured chaos seeds does not work and should not be attempted again.** Six seeds exist
+where a thread dump caught the poll thread BLOCKED on the `commitCommand` monitor, and replaying one
+on a laptop opened the window zero times - on the eager scenario as well as the cooperative one. The
+chaos suite finds this defect by luck; the probe finds it by construction.
+
+## Two settings that silently destroy the experiment
+
+- **Do not pass `-Pci`.** `surefire.forkCount` is 1 by default and `1C` under that profile, and
+  forking one broker per fork removes the window entirely - which is how the suite stayed green
+  while the deadlock sat untouched. The pom warns separately that `-DforkCount` is ignored; only
+  `-Dsurefire.forkCount` is read.
+- **Read the run log, not the failsafe `.txt`.** That file is a few lines of summary carrying no log
+  output, so grepping it for the decline line returns zero regardless of what happened.
+
+## The arms
+
+Two worktrees identical but for one term in `tryCommitOffsetsOnRevoke()`: `tryLock()` (FIXED) or a
+blocking `lock()` (CONTROL, the pre-fix AB-BA shape). Branch
+`experiment/857-deadlock-control-arm-do-not-merge` carries the control; it is knowingly defective and
+should be deleted once nobody needs the arm.
+
+Alternate the arms rather than running all of one then all of the other, so neither sits in
+systematically different box conditions - the same discipline the 2026-08-18 soak used.
+
+## What it returned
+
+Twelve invocations per arm, alternating, each invocation many repetitions:
+
+- **CONTROL failed every repetition**, with commit-response timeouts, and logged no declines.
+- **FIXED failed none**, and logged the contended-decline line in every invocation - the window
+  opened throughout.
+
+**The decline count is the load-bearing half.** A green FIXED arm on its own is indistinguishable
+from a probe that never opened the window. Zero declines on the CONTROL arm is equally correct: a
+blocking revoke never declines, it deadlocks.
+
+This reproduces the 2026-08-18 result independently, on different hardware.
+
+## Known defect in the harness
+
+The window gate counts `declines == 0` as NO-WINDOW, which is right for the FIXED arm and **wrong for
+the CONTROL arm**, where the window-evidence is the failures and timeouts instead. It mislabelled
+every control invocation. Harmless where the result is unambiguous; fix it before reusing the script
+for anything marginal, because a gate that misreads one arm is how a marginal result gets read
+backwards.
+
+## Still open
+
+The overnight CI chaos runs on both arms produced a small number of failures, on the fix branch as
+well as the control. They cannot be this deadlock - the probe result rules that out - so they are
+either the unexplained async line, a calibration overshoot, or something new. Unread at time of
+writing; `gh run view --log-failed` returns truncated noise for them, which is the failure mode
+`docs/solutions/workflow-issues/gh-run-view-log-truncation.md` already owns.
