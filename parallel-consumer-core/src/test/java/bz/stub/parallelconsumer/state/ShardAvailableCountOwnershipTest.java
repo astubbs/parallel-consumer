@@ -140,7 +140,7 @@ class ShardAvailableCountOwnershipTest {
         // ProcessingShardStaleReplacement909Test uses, and for the same reason: the poller's sweep is what
         // normally removes a stale resident, so a test that lets the sweep run never reaches this branch.
         register(101);
-        shard().getWorkMap().put(100L, takenThenStale);
+        shard().plantResident(takenThenStale);
         assertCount("only offset 101 is counted - the planted resident took its claim when it was taken", 1);
 
         register(100);
@@ -199,7 +199,7 @@ class ShardAvailableCountOwnershipTest {
         // Same white-box plant as the stale-replacement case, and for the same reason: a stale resident is
         // normally removed by this very sweep, so a test that lets it run first never reaches the branch.
         register(101);
-        shard().getWorkMap().put(100L, takenThenStale);
+        shard().plantResident(takenThenStale);
         assertCount("only offset 101 is counted - the planted resident took its claim when it was taken", 1);
 
         long swept = sm.removeStaleContainers();

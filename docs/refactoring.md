@@ -348,10 +348,12 @@ them, do not copy them back.
   (mirror astubbs#117) refactor remains.
 
 ### state/ShardManager.java
-- The confluentinc#905 `SHARDS_MAX_SIZE` gauge re-walks every shard queue
-  (`getCountOfWorkTracked()` is `entries.size()`, O(n) on a `ConcurrentSkipListMap`), duplicating the traversal
-  `SHARDS_SIZE` already does - so each metrics scrape walks the shard queues twice.
-  Negligible now; if it ever matters, derive both gauges from a single scan - see
+- The confluentinc#905 `SHARDS_MAX_SIZE` gauge walks every shard queue
+  (`getCountOfWorkTracked()` is `entries.size()`, O(n) on a `ConcurrentSkipListMap`), so each metrics scrape
+  is O(total queued records). It used to duplicate a traversal `SHARDS_SIZE` did as well; `SHARDS_SIZE` now
+  reads the O(1) conservation figure, so this is the only scan left.
+  Negligible now; if it ever matters, a max cannot be conserved the way the total is, so it needs its own
+  design - see
   **Shard-count caching** under [Performance](#performance) above for the upstream design draft
   (`confluentinc#530`) and the three abandoned branches that attempted it.
 
