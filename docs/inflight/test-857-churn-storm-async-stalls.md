@@ -200,3 +200,29 @@ astubbs#344 is NOT the explanation, and the test is whether the pre arm reproduc
 here either way.
 
 Replay: `-Dchaos.seed=9086872209853284830 -Dit.test=ChaosChurnStormIT` with the chaos group included.
+
+## Why this line was never settled: the discriminator does not exist for this scenario
+
+Attempted 2026-08-28 and it silently did nothing. `-Dchaos.diagnoseStallRecovery=true` - the flag
+that collapsed the entire `CLASS2_STALL` line by keeping the run watching instead of aborting, and
+showing the backlog drained - is implemented in `AbstractRevokeUnderWorkScenario`. **`ChaosChurnStormIT`
+extends `ChaosScenarioBase` and does not inherit it.** The flag is accepted and ignored.
+
+So the question that settled Class 2 has never been askable here. Every entry in this file records a
+detector firing; **not one records whether the fleet later recovered**, because nothing in this
+scenario can watch past the abort. That is not an oversight in the sightings - it is a missing
+capability, and it is why the line has stayed "either a fourth defect or something outside the
+product" for its whole life.
+
+**This is the highest-value next piece of work on this line, and it is small.** Lift the diagnostic
+quiet phase to `ChaosScenarioBase` (or give the churn scenario its own), then replay
+`9086872209853284830` with it engaged. The seed reproduces most runs, so an answer is minutes away
+once the capability exists:
+
+- **Backlog drains** - this is a timing proxy like Class 2 was, and this file collapses the same way.
+  Most of its entries then stop being evidence of anything.
+- **Consumption stays flat** - a real wedge, on unmodified master, reproducible on demand. That is
+  the fourth mechanism, finally caught.
+
+Until then, **no entry in this file distinguishes "wedged" from "slow"**, and none should be read as
+if it did. That is the same error the Class 2 entries made for a year.
