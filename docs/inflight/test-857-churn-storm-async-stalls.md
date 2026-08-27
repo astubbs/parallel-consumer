@@ -179,9 +179,17 @@ run**. The prediction recorded before the run said this was the likely outcome, 
 IS master and master already reproduced; the mode match was suggestive and wrong. Recorded as a
 refuted hypothesis rather than deleted, so nobody re-derives it from the same mode coincidence.
 
-One run on the pre arm failed with the `NO_PROGRESS` detector NOT firing, so it went red for a
-different reason. That is worth its own look: either a second signature on the same seed, or the
-detector missing an occurrence it should have caught.
+Completed at three reps per arm: the pre arm failed most runs, the post arm failed all of them. So
+master is no better than the tree before the fix, and at this sample size the direction between them
+is not a finding.
+
+**A third of the failures went red with `NO_PROGRESS` not firing at all** - one on each arm. That is
+the more interesting result of this experiment, and it is a separate question: either this seed
+produces a second signature, or the detector is missing occurrences it should catch. **It matters
+because the demotion of the Class 2 bound left `INSTANCE_STALL` and this detector carrying the
+gating liveness claim.** A detector whose silence cannot be trusted is worse than one that is absent,
+because the suite reports green on its say-so. Establish which before reading any future silence from
+it as evidence.
 
 **The superseded reasoning, kept because the mode coincidence will occur to the next reader too.** astubbs#344 fixed an offset-encoder
 double-read that is live in `PERIODIC_CONSUMER_ASYNCHRONOUS` and only there - the same mode as every
