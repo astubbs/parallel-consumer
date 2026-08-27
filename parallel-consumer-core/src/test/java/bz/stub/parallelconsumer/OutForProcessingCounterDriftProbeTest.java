@@ -65,32 +65,7 @@ class OutForProcessingCounterDriftProbeTest {
 
     @Test
     void revokeWhileRecordsInFlightDoesNotDriftTheCounter() {
-        mockConsumer = new MockConsumer<>(OffsetResetStrategy.EARLIEST);
-        var options = ParallelConsumerOptions.<String, String>builder()
-                .consumer(mockConsumer)
-                .ordering(UNORDERED) // several records in flight from the single partition
-                .maxConcurrency(4)
-                .build();
-        pc = new ParallelEoSStreamProcessor<>(options);
-        pc.subscribe(of(TOPIC));
-        // the manual rebalance dance MockConsumer requires - see MockConsumerTestBase
-        mockConsumer.rebalance(Collections.singletonList(TP));
-        pc.onPartitionsAssigned(of(TP));
-        mockConsumer.updateBeginningOffsets(Collections.singletonMap(TP, 0L));
-
-        pc.poll(context -> {
-            inUserFunction.incrementAndGet();
-            try {
-                gate.await();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            } finally {
-                inUserFunction.decrementAndGet();
-                processedCount.incrementAndGet();
-            }
-        });
-
-        WorkManager<String, String> wm = pc.getWm();
+        WorkManager<String, String> wm = startGatedPc();
         long offset = 0;
         List<String> cycleReports = new ArrayList<>();
         List<Integer> quiescedCounters = new ArrayList<>();
@@ -157,6 +132,39 @@ class OutForProcessingCounterDriftProbeTest {
      */
     @Test
     void revokeWithoutReassignStillBalancesTheCounter() {
+        WorkManager<String, String> wm = startGatedPc();
+        gate = new CountDownLatch(1);
+        for (int i = 0; i < RECORDS_PER_CYCLE; i++) {
+            mockConsumer.addRecord(new ConsumerRecord<>(TOPIC, 0, i, "k" + i, "v" + i));
+        }
+        await().atMost(Duration.ofSeconds(30)).until(() -> inUserFunction.get() > 0);
+        int counterBeforeRevoke = wm.getNumberRecordsOutForProcessing();
+
+        pc.onPartitionsRevoked(of(TP)); // revoke only - partition state is gone for good
+        gate.countDown();
+
+        int quiescedCounter = awaitQuiescenceAndReadCounter(wm);
+        log.warn("DRIFT-PROBE revoke-only: beforeRevoke counter={} | afterQuiesce counter={} trueInFlight={}",
+                counterBeforeRevoke, quiescedCounter, inUserFunction.get());
+
+        assertWithMessage("counter at quiescence after revoke-without-reassign (ground truth in-flight = 0)")
+                .that(quiescedCounter).isEqualTo(0);
+        assertWithMessage("PC control thread must survive the revoke")
+                .that(pc.getFailureCause()).isNull();
+    }
+
+    /**
+     * Starts a PC on a {@link MockConsumer} whose user function blocks on {@link #gate}, and returns its
+     * {@link WorkManager} - the shared arrangement both probes need, extracted because they had it identically and
+     * the duplicate-code check reported it on astubbs/parallel-consumer#375.
+     * <p>
+     * Two details here are load-bearing rather than incidental. {@code UNORDERED} is what lets several records from
+     * the single partition be in flight at once, which is the state whose accounting these probes measure - key or
+     * partition ordering would leave one record out and the counter trivially correct. And the
+     * rebalance/assign/beginning-offsets sequence is the manual dance {@code MockConsumer} requires before it will
+     * serve records, the same one {@code MockConsumerTestBase} performs.
+     */
+    private WorkManager<String, String> startGatedPc() {
         mockConsumer = new MockConsumer<>(OffsetResetStrategy.EARLIEST);
         var options = ParallelConsumerOptions.<String, String>builder()
                 .consumer(mockConsumer)
@@ -181,25 +189,7 @@ class OutForProcessingCounterDriftProbeTest {
             }
         });
 
-        WorkManager<String, String> wm = pc.getWm();
-        gate = new CountDownLatch(1);
-        for (int i = 0; i < RECORDS_PER_CYCLE; i++) {
-            mockConsumer.addRecord(new ConsumerRecord<>(TOPIC, 0, i, "k" + i, "v" + i));
-        }
-        await().atMost(Duration.ofSeconds(30)).until(() -> inUserFunction.get() > 0);
-        int counterBeforeRevoke = wm.getNumberRecordsOutForProcessing();
-
-        pc.onPartitionsRevoked(of(TP)); // revoke only - partition state is gone for good
-        gate.countDown();
-
-        int quiescedCounter = awaitQuiescenceAndReadCounter(wm);
-        log.warn("DRIFT-PROBE revoke-only: beforeRevoke counter={} | afterQuiesce counter={} trueInFlight={}",
-                counterBeforeRevoke, quiescedCounter, inUserFunction.get());
-
-        assertWithMessage("counter at quiescence after revoke-without-reassign (ground truth in-flight = 0)")
-                .that(quiescedCounter).isEqualTo(0);
-        assertWithMessage("PC control thread must survive the revoke")
-                .that(pc.getFailureCause()).isNull();
+        return pc.getWm();
     }
 
     /**
