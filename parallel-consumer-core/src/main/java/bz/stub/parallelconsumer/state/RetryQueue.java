@@ -6,7 +6,6 @@ package bz.stub.parallelconsumer.state;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumer;
-import lombok.AccessLevel;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import org.apache.kafka.common.utils.CloseableIterator;
@@ -32,12 +31,10 @@ import java.util.stream.Collectors;
  */
 public class RetryQueue {
 
-    @Getter(AccessLevel.PACKAGE) //visible for testing
+    // No accessors: these are lock-protected, and handing them out bypasses every lock in this class.
     private final Map<WorkContainerKey, WorkContainerSortKey> unique = new HashMap<>();
-    @Getter(AccessLevel.PACKAGE) //visible for testing
     private final NavigableMap<WorkContainerSortKey, WorkContainer<?, ?>> sorted;
 
-    @Getter(AccessLevel.PACKAGE) //visible for testing
     private final Comparator<WorkContainerSortKey> comparator = Comparator
             .comparing(WorkContainerSortKey::getRetryDueAt)
             .thenComparing(WorkContainerKey::getTopic)

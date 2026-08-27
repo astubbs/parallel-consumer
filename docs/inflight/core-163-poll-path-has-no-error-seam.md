@@ -71,7 +71,7 @@ of waiting out `offsetCommitTimeout`. The thread still dies and PC still closes;
 improved.
 
 **The death is wrapped twice** - `void supervise()` in `internal/BrokerPollSystem.java` into
-`InternalRuntimeException`, then `failureReason = new RuntimeException` in
+`PCInternalRuntimeException`, then `failureReason = new RuntimeException` in
 `internal/AbstractParallelEoSStreamProcessor.java` into a bare one. That is the complaint in
 `core-exception-hierarchy-cleanup.md` reaching a user-facing path, and it is why the draft says the
 cause is not something you can switch on.

@@ -30,10 +30,12 @@
 # Env (data, not code - workflow inputs must pass through env, never ${{ }} into scripts):
 #   LINCHECK_TEST - optional -Dtest= filter (e.g. ShardManagerLincheckTest); empty = the whole lane
 #
-# Runtime at the committed bounds is well under a minute for the whole lane (26-29s measured, build
-# included), but it grows superlinearly with threads/actorsPerThread - the bounds are stated in each
-# test method rather than here, and docs/plans/2026-08-25-001-test-lincheck-poc-plan.md records what
-# each one cost.
+# Runtime at the committed bounds is about 2m30s for the whole lane (2m32s-2m37s measured, build
+# included), and roughly two minutes of that is WorkManagerLincheckTest alone: an INVERTED arm cannot
+# stop at a first violation, so it always pays its whole bound, where a designed-red one stops as
+# soon as it hits. The lane was 26-29s while that arm was designed-red. It also grows superlinearly
+# with threads/actorsPerThread - the bounds are stated in each test method rather than here, and
+# docs/plans/2026-08-25-001-test-lincheck-poc-plan.md records what each one cost.
 
 set -euo pipefail
 
@@ -94,7 +96,7 @@ fi
 # expectation, and the two cancel to a green. A derived count could only ever catch the include
 # pattern, never the roster - so the hand-maintained number is not a compromise here, it is the only
 # version that can fail.
-EXPECTED_LINCHECK_CLASSES=5
+EXPECTED_LINCHECK_CLASSES=6
 if [ -z "${LINCHECK_TEST:-}" ] && [ "$selected" -ne "$EXPECTED_LINCHECK_CLASSES" ]; then
     printf 'Lincheck report files: %s, EXPECTED %s.\n' "$selected" "$EXPECTED_LINCHECK_CLASSES"
     printf 'The lane selected the wrong roster. Either a harness stopped being selected (a rename, a\n'

@@ -22,6 +22,7 @@ it were the fix the behaviour would be gone. It is not: `WorkManager.handleFutur
 verbatim the reporter's step 3. confluentinc#909 governs which container wins a *registration* race;
 it is silent about a result arriving after revocation.
 
+<!-- post-merge: checked-begin -->
 confluentinc#893 (carried in astubbs#337, split out of astubbs#57 on 2026-08-24) makes
 `getOffsetToCommit()` accurate so a commit cannot run
 *ahead* of completion. confluentinc#777 is the opposite shape: the offset committed at revocation is
@@ -29,7 +30,10 @@ already correct, the in-flight record is correctly encoded as incomplete, and th
 from that correctness. Nothing is lost.
 
 **So merging the confluentinc#893 cherry-pick must not be read as closing confluentinc#777.**
-Correcting the adoc entry is the one change here with a deadline, because astubbs#337 is open now.
+The adoc entry carrying that correction is already in place - `upstream-pr-analysis.adoc`, grep
+`Do not close confluentinc#777 when the confluentinc#893 cherry-pick merges` - so what remains here
+is the standing rule, not an open task.
+<!-- post-merge: checked-end -->
 
 ## Draft answer - postable as-is once a maintainer agrees with the closing rationale
 
@@ -71,7 +75,8 @@ Correcting the adoc entry is the one change here with a deadline, because astubb
 
 ## Also stale in the mirror body
 
-astubbs#173's `## Fork status` is otherwise sound - astubbs#29 is still open, `commitOffsetsThatAreReady`
+<!-- post-merge: checked -->
+astubbs#173's `## Fork status` is otherwise sound - it names astubbs#29 as the fork's work on this, `commitOffsetsThatAreReady`
 still takes the `synchronized (commitCommand)` monitor on master
 (`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java`,
 grep `Synchronizing on commitCommand` - the bare `synchronized (commitCommand)` appears four times in
@@ -81,12 +86,14 @@ duplicates. Two corrections:
 - *"Only the transactional (EOS) commit mode gives exactly-once"* contradicts our own README
   (`src/docs/README_TEMPLATE.adoc`, grep `does not prevent _duplicate message replay_`; the template
   is the source, `README.adoc` is generated). Offering it as the answer here is misleading.
+<!-- post-merge: checked -->
 - astubbs#29 is named as the closest fork work, which is true, but its `tryCommitOffsetsOnRevoke()`
   deliberately *skips* the revocation commit under lock contention, trading redelivery for killing
   the deadlock. It moves this symptom the wrong way, and the mirror reads as though it helps.
 
 ## Next
 
+<!-- post-merge: checked -->
 The measurements are from the astubbs#57-family chaos work, seed `4734674029169027864`, recorded
 with the matrix in `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/chaostests/ChaosRevokeUnderWorkCooperativeDrainIT.java`.
 That javadoc records three cells and predicts the fourth rather than measuring it, so the

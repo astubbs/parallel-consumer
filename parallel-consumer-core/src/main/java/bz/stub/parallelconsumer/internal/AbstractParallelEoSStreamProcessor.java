@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.internal;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.internal.utils.ThrowableUtils;
 import bz.stub.parallelconsumer.internal.utils.SupplierUtils;
 import bz.stub.parallelconsumer.internal.utils.TimeUtils;
 import bz.stub.parallelconsumer.*;
@@ -42,6 +43,8 @@ import java.util.stream.Collectors;
 
 import static bz.stub.parallelconsumer.internal.utils.BackportUtils.isEmpty;
 import static bz.stub.parallelconsumer.internal.utils.BackportUtils.toSeconds;
+import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.describeWithRootCause;
+import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.logWithoutEscaping;
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 import static bz.stub.parallelconsumer.internal.State.*;
 import static bz.stub.parallelconsumer.metrics.PCMetricsDef.USER_FUNCTION_EXECUTOR_PREFIX;
@@ -111,7 +114,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     @Getter(PROTECTED)
     private final Optional<ProducerManager<K, V>> producerManager;
 
-    private final org.apache.kafka.clients.consumer.Consumer<K, V> consumer;
+    /**
+     * All consumer access goes through ConsumerManager (which wraps with ThreadConfinedConsumer).
+     * No raw Consumer<K,V> reference is held — enforced by ArchUnit. See confluentinc#857.
+     */
+    private final ConsumerManager<K, V> consumerManager;
 
     /**
      * The pool which is used for running the users' supplied function
@@ -166,9 +173,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private final BrokerPollSystem<K, V> brokerPollSubsystem;
 
     /**
-     * Useful for testing async code
+     * Useful for testing async code.
+     * <p>
+     * Concurrent because {@link #addLoopEndCallBack} is public and callable from any thread, while the control loop
+     * iterates this list every cycle. A plain list breaks its own iteration when a registration lands mid-cycle, and
+     * the resulting {@link java.util.ConcurrentModificationException} escapes the control loop and stops the consumer.
+     * Writes are rare and iteration happens every loop, which is exactly what copy-on-write is for.
      */
-    private final List<Runnable> controlLoopHooks = new ArrayList<>();
+    private final List<Runnable> controlLoopHooks = new CopyOnWriteArrayList<>();
 
     /**
      * Reference to the control thread, used for waking up a blocking poll ({@link BlockingQueue#poll}) against a
@@ -207,6 +219,12 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Used to request a commit asap
      */
     private final AtomicBoolean commitCommand = new AtomicBoolean(false);
+
+    /**
+     * Lock for offset commit operations. Replaces synchronized(commitCommand) for commit execution
+     * to allow tryLock() semantics in rebalance callbacks, preventing the deadlock in confluentinc#857.
+     */
+    private final java.util.concurrent.locks.ReentrantLock commitLock = new java.util.concurrent.locks.ReentrantLock();
 
     /**
      * Multiple of {@link ParallelConsumerOptions#getMaxConcurrency()} to have in our processing queue, in order to make
@@ -253,9 +271,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     // transitions are driven from inside this class, and a subclass setting it arbitrarily is the shape of bug this
     // class has spent astubbs#296 hardening against. Reading is protected because a subclass may legitimately want
     // to know whether it is still running. Both are used only by this package's tests today.
+    // volatile because it is no longer read only by the thread that writes it: ExternalEngine's dispatch
+    // thread blocks on the external dispatch ceiling and reads this to learn that a close has begun. That is a
+    // plain flag with no lock to name, so `volatile` is the whole fix and there is no @GuardedBy to write - see
+    // parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md.
     @Setter(AccessLevel.PACKAGE)
     @Getter(PROTECTED)
-    private State state = State.UNUSED;
+    private volatile State state = State.UNUSED;
 
     /**
      * Wrapped {@link ConsumerRebalanceListener} passed in by a user that we can also call on events
@@ -271,6 +293,26 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     PCModule<K, V> module;
 
     /**
+     * Carries the caller's SLF4J diagnostic context across into the threads that run the user function.
+     *
+     * @see MdcPropagation
+     */
+    @Getter(PROTECTED)
+    private final MdcPropagation mdcPropagation;
+
+    /**
+     * Snapshot of the diagnostic context of the thread that called {@code poll*}, taken in
+     * {@link #supervisorLoop(Function, Consumer)}. {@code null} when that thread had no context, or when propagation is
+     * disabled.
+     * <p>
+     * Volatile because it is written by the caller's thread and read by the controller and broker-poller threads it
+     * then starts.
+     *
+     * @see MdcPropagation
+     */
+    volatile Map<String, String> callersDiagnosticContext;
+
+    /**
      * Control for stepping loading factor - shouldn't step if work requests can't be fulfilled due to restrictions.
      * (e.g. we may want 10, but maybe there's a single partition and we're in partition mode - stepping up won't
      * help).
@@ -282,6 +324,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private Gauge statusGauge;
 
     private Duration shutdownTimeout;
+
+    /**
+     * How the user asked us to close. Recorded so the close path can tell whether an uncommitted
+     * offset is the consequence of a choice they can change ({@link DrainingMode#DONT_DRAIN}) or
+     * something that happened despite draining - the difference between advice worth printing and
+     * noise.
+     */
+    private volatile DrainingMode requestedDrainMode = DrainingMode.DONT_DRAIN;
 
     private Duration drainTimeout;
 
@@ -300,17 +350,18 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     protected AbstractParallelEoSStreamProcessor(ParallelConsumerOptions<K, V> newOptions, PCModule<K, V> module) {
         requireNonNull(newOptions, "Options must be supplied");
         this.module = module;
+        this.mdcPropagation = module.mdcPropagation();
         options = newOptions;
         this.shutdownTimeout = options.getShutdownTimeout();
         this.drainTimeout = options.getDrainTimeout();
-        this.consumer = options.getConsumer();
+        this.consumerManager = module.consumerManager();
 
         validateConfiguration();
 
         module.setParallelEoSStreamProcessor(this);
 
         log.info("Confluent Parallel Consumer initialise... groupId: {}, Options: {}",
-                newOptions.getConsumer().groupMetadata().groupId(),
+                consumerManager.groupMetadata().groupId(),
                 newOptions);
         //Initialize global metrics - should be initialized before any of the module objects are created so that meters can be bound in them.
         pcMetrics = module.pcMetrics();
@@ -351,14 +402,20 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private void validateConfiguration() {
         options.validate();
 
-        checkGroupIdConfigured(consumer);
-        checkNotSubscribed(consumer);
-        checkAutoCommitIsDisabled(consumer);
+        checkGroupIdConfigured();
+        checkNotSubscribed(options.getConsumer());
+        checkAutoCommitIsDisabled(options.getConsumer());
     }
 
-    private void checkGroupIdConfigured(final org.apache.kafka.clients.consumer.Consumer<K, V> consumer) {
+    private void checkGroupIdConfigured() {
         try {
-            consumer.groupMetadata();
+            var metadata = consumerManager.groupMetadata();
+            if (metadata == null) {
+                throw new IllegalArgumentException("Error validating Consumer configuration - no group metadata - missing a " +
+                        "configured GroupId on your Consumer?");
+            }
+        } catch (IllegalArgumentException e) {
+            throw e; // rethrow our own
         } catch (RuntimeException e) {
             throw new IllegalArgumentException("Error validating Consumer configuration - no group metadata - missing a " +
                     "configured GroupId on your Consumer?", e);
@@ -505,27 +562,27 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     @Override
     public void subscribe(Collection<String> topics) {
         log.debug("Subscribing to {}", topics);
-        consumer.subscribe(topics, this);
+        consumerManager.subscribe(topics, this);
     }
 
     @Override
     public void subscribe(Pattern pattern) {
         log.debug("Subscribing to {}", pattern);
-        consumer.subscribe(pattern, this);
+        consumerManager.subscribe(pattern, this);
     }
 
     @Override
     public void subscribe(Collection<String> topics, ConsumerRebalanceListener callback) {
         log.debug("Subscribing to {}", topics);
         usersConsumerRebalanceListener = Optional.of(callback);
-        consumer.subscribe(topics, this);
+        consumerManager.subscribe(topics, this);
     }
 
     @Override
     public void subscribe(Pattern pattern, ConsumerRebalanceListener callback) {
         log.debug("Subscribing to {}", pattern);
         usersConsumerRebalanceListener = Optional.of(callback);
-        consumer.subscribe(pattern, this);
+        consumerManager.subscribe(pattern, this);
     }
 
     /**
@@ -544,13 +601,17 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         numberOfAssignedPartitions = numberOfAssignedPartitions - partitions.size();
 
         try {
-            // commit any offsets from revoked partitions BEFORE truncation
-            commitOffsetsThatAreReady();
+            // Try to commit offsets for revoked partitions, but don't block if the control
+            // thread is already mid-commit. Blocking here deadlocks: the poll thread (us)
+            // holds the rebalance callback, and the control thread's commitSync() needs the
+            // poll thread to be responsive. If we can't commit, it's safe — the offsets will
+            // be re-delivered to the new assignee. See confluentinc#857.
+            tryCommitOffsetsOnRevoke();
 
             // truncate the revoked partitions
             wm.onPartitionsRevoked(partitions);
         } catch (Exception e) {
-            throw new InternalRuntimeException("onPartitionsRevoked event error", e);
+            throw new PCInternalRuntimeException("onPartitionsRevoked event error", e);
         } finally {
             isRebalanceInProgress.set(false);
         }
@@ -559,6 +620,49 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             usersConsumerRebalanceListener.ifPresent(listener -> listener.onPartitionsRevoked(partitions));
         } catch (Exception e) {
             throw new ExceptionInUserFunctionException("Error from rebalance listener function after #onPartitionsRevoked", e);
+        }
+    }
+
+    /**
+     * Non-blocking attempt to commit offsets during partition revocation. Uses tryLock semantics
+     * on the commitCommand monitor to avoid deadlocking with the control thread.
+     * <p>
+     * If the lock is already held (control thread is mid-commit), we skip the commit. This is
+     * safe because Kafka will re-deliver uncommitted records to the new partition assignee.
+     * <p>
+     * See <a href="https://github.com/confluentinc/parallel-consumer/issues/857">#857</a> —
+     * the original synchronized(commitCommand) call in onPartitionsRevoked caused a deadlock
+     * between the poll thread and the control thread under rebalance churn.
+     */
+    private void tryCommitOffsetsOnRevoke() {
+        // CONTROL ARM - not for merge. The one term under test: the revoke side BLOCKS on the
+        // same lock instead of declining, restoring the pre-fix AB-BA shape.
+        commitLock.lock();
+        if (true) {
+            try {
+                log.debug("Acquired commitLock on revoke, committing offsets");
+                committer.retrieveOffsetsAndCommit();
+                clearCommitCommand();
+                this.lastCommitTime = Instant.now();
+            } catch (Exception e) {
+                // Restore the flag rather than swallowing the interrupt: this runs inside the poll
+                // thread's rebalance callback, and dropping it strands whatever is waiting on it.
+                if (e instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                }
+                // Pass the throwable, never e.getMessage(): the message alone drops the type, the
+                // cause chain and the stack, and an exception thrown without one renders as
+                // "...: null" - the exact complaint behind astubbs#177. describeWithRootCause is
+                // interpolated alongside it so a description survives even if the trace is elided.
+                ThrowableUtils.logWithoutEscaping(e, () ->
+                        log.warn("Failed to commit offsets during revoke: {}",
+                                ThrowableUtils.describeWithRootCause(e), e));
+            } finally {
+                commitLock.unlock();
+            }
+        } else {
+            log.info("Skipping offset commit during partition revocation — control thread is mid-commit. " +
+                    "Uncommitted offsets will be re-delivered to the new assignee. See confluentinc#857.");
         }
     }
 
@@ -572,6 +676,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         numberOfAssignedPartitions = numberOfAssignedPartitions + partitions.size();
         log.info("Assigned {} total ({} new) partition(s) {}", numberOfAssignedPartitions, partitions.size(), partitions);
         wm.onPartitionsAssigned(partitions);
+        // Reset the throttle flag — Kafka clears its internal pause state on reassignment,
+        // so our flag must match. Without this, shouldThrottle() may re-pause the new
+        // partitions immediately if stale shard counts make it think we're overloaded.
+        // See confluentinc#857.
         usersConsumerRebalanceListener.ifPresent(x -> x.onPartitionsAssigned(partitions));
         notifySomethingToDo();
     }
@@ -705,6 +813,90 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         closeDontDrainFirst();
     }
 
+    /**
+     * Terminates PC because a record could not be returned to the mailbox.
+     * <p>
+     * <b>This is not user code failing, it is PC's own bookkeeping failing</b>, and the consequence is that PC can
+     * no longer account for that record: it is neither in flight nor completed, so nothing will retry it and
+     * nothing will report it.
+     * <p>
+     * <b>The reachable route is the produce lock, not the queue - worth naming, because "a queue add cannot fail"
+     * reads as though this can never fire.</b> {@link #addToMailbox} also calls
+     * {@link WorkContainer#onPostAddToMailBox}, which in transactional commit mode releases the produce lock through
+     * {@code ProducerManager#finishProducing}; its {@code ensureProduceStarted} sanity check throws when the read
+     * hold count is below one. {@code docs/inflight/bug-producing-lock-double-release.md} records an open question
+     * about exactly that invariant - two paths release the same lock and nothing stops the second - on a path that
+     * has already produced two flakes. So this is a suspected-live route, which is the argument for making it loud
+     * rather than for assuming it is unreachable. The queue add itself only throws on a bounded queue that is full,
+     * or on {@code OutOfMemoryError}.
+     * <p>
+     * {@code Throwable} rather than {@code Exception} at the call sites, because an {@code Error} raised here would
+     * otherwise pass straight through the very guards this path exists to be. Continuing from there risks committing past work that was never done - a silent
+     * skip, with no error and no lag anomaly to find it by. Operator ruling on astubbs#267: a failure to post the
+     * letter is a terminal system failure, and continued operation under a suspected skip is not permitted.
+     * <p>
+     * <b>It signals rather than closing, and that is load-bearing twice over.</b> {@link #closeOnException} waits
+     * for the shutdown to finish, and every caller of this method is either a batch loop or an async completion
+     * handler - blocking one would hold up the very records still waiting to be mailboxed, and on vert.x it would
+     * hold the event loop. Throwing is equally unavailable: an exception escaping these sites skips every sibling
+     * container behind it, which is the stall this whole path exists to prevent. So the reason is recorded, the
+     * state is moved to CLOSING, and the control thread performs the shutdown on its own.
+     * <p>
+     * The reason is written BEFORE the state, because {@link #state} is volatile and its write is what publishes
+     * the reason to the control thread. That ordering is exact.
+     * <p>
+     * <b>The first-failure preference is best-effort, and deliberately not more than that.</b> The
+     * {@code failureReason == null} test and the write that follows it are not atomic, so two workers failing to
+     * mailbox at once can race and the later diagnosis can win. Left as a plain check because the cost is which of
+     * two genuine causes is reported, both of which are the same bug, while making it atomic would put a lock or a
+     * field-type change on a path whose contract is that it never blocks. Raised by review on astubbs#267, where an
+     * earlier version of this comment claimed an ordering it did not deliver.
+     *
+     * @param wc              the container that could not be returned
+     * @param mailboxingThrew what {@link #addToMailbox} threw
+     */
+    protected void failFatallyOnUnmailboxableRecord(WorkContainer<K, V> wc, Throwable mailboxingThrew) {
+        try {
+            var failure = new UnmailboxableRecordException(msg(
+                    "Could not return {} to the mailbox. PC can no longer account for this record, so it is "
+                            + "shutting down rather than continuing with work it may silently skip.", wc),
+                    mailboxingThrew);
+
+            // ERROR with the consequence in it, because the consequence is the part that is not obvious: an
+            // unretired record leaves no exception, no lag anomaly and correct-looking committed offsets, so
+            // "could not mailbox" alone would not tell a reader why PC just stopped.
+            logWithoutEscaping(failure, () -> log.error(
+                    "Could not return {} to the mailbox - shutting down. This is PC's own bookkeeping, so it is a "
+                            + "bug in PC. The record is neither in flight nor completed, so nothing retries it and "
+                            + "nothing reports it, and continuing risks committing past work that was never done. "
+                            + "Cause: {}",
+                    wc, describeWithRootCause(mailboxingThrew)));
+
+            // The call sites name PCInternalRuntimeException as the expected arm and keep a broad backstop, because
+            // anything escaping them strands the sibling records behind it. This second line is what the arm buys
+            // once it reaches here: a PC invariant break reads differently from an unenumerated route, and the
+            // known invariant is the produce lock. docs/inflight/core-exception-hierarchy-cleanup.md owns the
+            // wider cleanup that this and ProduceLockNotHeldException are two instances of.
+            if (mailboxingThrew instanceof PCInternalRuntimeException) {
+                log.error("The cause above is one of PC's own invariants; the known route is the produce-lock "
+                        + "release in onPostAddToMailBox (docs/inflight/bug-producing-lock-double-release.md).");
+            }
+
+            if (this.failureReason == null) {
+                this.failureReason = failure;
+            }
+            transitionToClosing();
+        } catch (Throwable escalationItselfThrew) {
+            // Never propagate: this runs on paths whose remaining work must still be returned to the mailbox, so
+            // an escape here would strand exactly the records the shutdown is being raised to protect.
+            try {
+                log.error("Failed to escalate an unmailboxable record", escalationItselfThrew);
+            } catch (Throwable ignored) {
+                // logging is what just failed
+            }
+        }
+    }
+
     @Override
     public void close(Duration timeout, DrainingMode drainMode) {
         shutdownTimeout = timeout;
@@ -719,6 +911,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         } else {
             log.info("Signaling to close...");
 
+            this.requestedDrainMode = drainMode;
             switch (drainMode) {
                 case DRAIN -> {
                     log.info("Will wait for all in flight to complete before");
@@ -753,6 +946,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         return brokerPollSubsystem.getPausedPartitionSize();
     }
 
+    /**
+     * Cached assignment size from the last poll. Safe to read from any thread.
+     */
+    public int getAssignmentSize() {
+        return consumerManager.getAssignmentSize();
+    }
+
     private void waitForClose(Duration timeout) throws TimeoutException, ExecutionException {
         log.info("Waiting on closed state...");
         while (!state.equals(CLOSED)) {
@@ -766,9 +966,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 // ignore
                 log.trace("Interrupted", e);
             } catch (ExecutionException | TimeoutException e) {
-                log.error("Execution or timeout exception while waiting for the control thread to close cleanly " +
-                        "(state was {}). Try increasing your time-out to allow the system to drain, or close without " +
-                        "draining.", state, e);
+                // e carries the control thread's failure - the reason the caller is here. Rendering it runs the
+                // thrower's getCause/getMessage inside the logging binding, and an escape would replace that
+                // diagnosis with a stack trace from inside the logger.
+                logWithoutEscaping(e, () ->
+                        log.error("Execution or timeout exception while waiting for the control thread to close cleanly " +
+                                "(state was {}). Try increasing your time-out to allow the system to drain, or close without " +
+                                "draining.", state, e));
                 throw e;
             }
             log.trace("Still waiting for system to close...");
@@ -781,11 +985,36 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         try {
             innerDoClose(timeout);
         } catch (Exception e) {
-            log.error("exception during close", e);
+            logWithoutEscaping(e, () -> log.error("exception during close", e));
             throw e;
         } finally {
-            deregisterMeters();
-            pcMetrics.close();
+            // Each step guarded separately, and NEITHER may escape. Both call into the MeterRegistry,
+            // which is usually the USER'S - so this is third-party code running inside PC's close.
+            // An exception thrown from a finally REPLACES the one already in flight, so an unguarded
+            // failure here would destroy the real shutdown error, skip the remaining teardown, and
+            // leave state short of CLOSED. Note the last one does NOT strand a caller polling
+            // isClosedOrFailed(): that method also returns true once this thread's future completes,
+            // which an escape from here does - exceptionally. The harm is the opposite and quieter,
+            // a premature true meaning "the control thread finished, somehow" rather than "closed
+            // cleanly", which no caller can tell apart. A metrics problem must not be able to do any
+            // of that: it is reporting, and it cannot be allowed to break shutting down.
+            try {
+                deregisterMeters();
+            } catch (Exception e) {
+                ThrowableUtils.logWithoutEscaping(e, () ->
+                        log.warn("Failed to de-register user-function meters during close - the metrics " +
+                                "registry is the user's, so meters may be left behind in it. Shutdown " +
+                                "continues; this cannot fail the close. Cause: {}",
+                                ThrowableUtils.describeWithRootCause(e), e));
+            }
+            try {
+                pcMetrics.close();
+            } catch (Exception e) {
+                ThrowableUtils.logWithoutEscaping(e, () ->
+                        log.warn("Failed to close the metrics subsystem during close - meters may be " +
+                                "left behind in the registry. Shutdown continues; this cannot fail the " +
+                                "close. Cause: {}", ThrowableUtils.describeWithRootCause(e), e));
+            }
             log.debug("Close complete.");
             this.state = CLOSED;
             if (this.getFailureCause() != null) {
@@ -813,22 +1042,41 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         log.debug("Awaiting worker pool termination...");
         awaitingInflightProcessingCompletionOnShutdown.getAndSet(true);
         boolean awaitingInflightCompletion = true;
+        boolean interruptedWhileAwaitingTermination = false;
         while (awaitingInflightCompletion) {
             log.debug("Still awaiting completion of inflight work");
             try {
                 boolean terminationFinishedWithoutTimeout = workerThreadPool.get().awaitTermination(toSeconds(timeout), SECONDS);
                 awaitingInflightCompletion = false;
                 if (!terminationFinishedWithoutTimeout) {
-                    log.warn("Thread execution pool termination await timeout ({})! Were any processing jobs dead locked (test latch locks?) or otherwise stuck? Forcing shutdown of workers.", timeout);
+                    // The user's function is what runs in this pool, so the actionable cause is theirs.
+                    log.warn("User functions did not finish within the shutdown timeout of {} - interrupting them. " +
+                            "Records still in flight will not be committed and will be redelivered on restart.", timeout);
+                    log.debug("Worker pool did not terminate in {}. Active: {}, queued: {}, state: {}. " +
+                                    "A user function blocking uninterruptibly, or a test latch, will do this.",
+                            timeout, workerThreadPool.get().getActiveCount(),
+                            workerThreadPool.get().getQueue().size(), state);
                     //Requesting threads shutdown immediately - inflight threads will be interrupted at this point.
                     workerThreadPool.get().shutdownNow();
                     //Give a second for any interrupt handling / resource cleanup in user functions
                     workerThreadPool.get().awaitTermination(toSeconds(Duration.ofSeconds(1)), SECONDS);
                 }
             } catch (InterruptedException e) {
-                log.error("InterruptedException", e);
+                // Do NOT restore the flag here: awaitTermination throws IMMEDIATELY while the flag is
+                // set, so restoring it inside this retry loop turns the loop into a 100% CPU livelock
+                // that never reaches shutdownNow() - the user function is never interrupted, the pool
+                // never terminates, and close() times out (executorThreadsInterruptedOnShutdownTimeout,
+                // ~24s, any commit mode, under parallel-suite load). The throw has already cleared the
+                // flag, so the retry below waits normally. Remember the interrupt and restore it once,
+                // after the loop, so callers of this thread still observe it.
+                interruptedWhileAwaitingTermination = true;
+                log.debug("Interrupted while awaiting worker pool termination; will keep awaiting", e);
                 awaitingInflightCompletion = true;
             }
+        }
+        if (interruptedWhileAwaitingTermination) {
+            // Restore the flag - swallowing it entirely strands anything waiting on this thread.
+            Thread.currentThread().interrupt();
         }
         awaitingInflightProcessingCompletionOnShutdown.getAndSet(false);
 
@@ -842,25 +1090,54 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
         //
         if (Thread.currentThread().isInterrupted()) {
-            log.warn("control thread interrupted - may lead to issues with transactional commit lock acquisition");
+            log.debug("Control thread carries an interrupt into the close sequence (state: {}, drain mode: {}). " +
+                    "If the transactional commit lock cannot be acquired below, this is the likely reason.",
+                    state, requestedDrainMode);
         }
         try {
             commitOffsetsThatAreReady();
         } catch (Exception e) {
-            log.warn("failed to commit during close sequence", e);
+            // One attempt only: ConsumerManager#commitSync stops retrying once the poll system is
+            // closing ("allow to try to commit at least once during close"), because retrying would
+            // stall shutdown while nothing is polling. Say so, rather than leaving the reader to
+            // wonder whether we gave up early.
+            if (requestedDrainMode == DrainingMode.DONT_DRAIN) {
+                ThrowableUtils.logWithoutEscaping(e, () ->
+                        log.warn("Could not commit offsets while closing, and close does not retry - these records " +
+                                "will be redelivered to the next consumer of these partitions. If you need offsets " +
+                                "committed before shutdown, close with closeDrainFirst() (or DrainingMode.DRAIN), " +
+                                "which finishes and commits in-flight work first. Cause: {}",
+                                ThrowableUtils.describeWithRootCause(e), e));
+            } else {
+                ThrowableUtils.logWithoutEscaping(e, () ->
+                        log.warn("Could not commit offsets while closing, despite draining first, and close does not " +
+                                "retry - these records will be redelivered to the next consumer of these " +
+                                "partitions. Cause: {}", ThrowableUtils.describeWithRootCause(e), e));
+            }
         }
         // only close consumer once producer has committed it's offsets (tx'l)
         log.debug("Closing and waiting for broker poll system...");
         try {
             brokerPollSubsystem.closeAndWait();
         } catch (Exception e) {
-            log.warn("failed to close brokerPollSubsystem during close sequence", e);
+            // We continue to the consumer close regardless: stopping here would leak the consumer
+            // entirely. But the poll loop may still be running, so the consumer close below may
+            // legitimately refuse - see ThreadConfinedConsumer.
+            ThrowableUtils.logWithoutEscaping(e, () ->
+                    log.warn("The broker poll system did not shut down cleanly - the consumer may not be closed, " +
+                            "in which case this member will not leave its consumer group promptly and the group's " +
+                            "next rebalance will be delayed by up to session.timeout.ms. Cause: {}",
+                            ThrowableUtils.describeWithRootCause(e), e));
         }
 
         try {
             maybeCloseConsumer();
         } catch (Exception e) {
-            log.warn("failed to maybeCloseConsumer during close sequence", e);
+            ThrowableUtils.logWithoutEscaping(e, () ->
+                    log.warn("Failed to close the Kafka consumer - this member will not send a LeaveGroup request, " +
+                            "so the group's next rebalance will be delayed by up to session.timeout.ms and these " +
+                            "partitions will stay assigned to this dead member until then. Cause: {}",
+                            ThrowableUtils.describeWithRootCause(e), e));
         }
 
         producerManager.ifPresent(x -> x.close(timeout));
@@ -879,7 +1156,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     private void maybeCloseConsumer() {
         if (isResponsibleForCommits()) {
-            consumer.close();
+            // shutdownTimeout, not a literal: the user configures how long close may take, and a
+            // hardcoded 10s both ignored a shorter budget and capped a longer one. master called
+            // consumer.close() with no timeout at all, so this is also the first time the value is
+            // the user's to set.
+            consumerManager.close(shutdownTimeout);
         }
     }
 
@@ -942,6 +1223,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             state = RUNNING;
         }
 
+        // snapshot the caller's diagnostic context before starting any thread, so every thread we go on to create -
+        // controller, broker poller, and through them the worker pool - inherits it
+        captureCallersDiagnosticContext();
+
         // broker poll subsystem
         brokerPollSubsystem.start(options.getManagedExecutorService());
 
@@ -951,6 +1236,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
         // run main pool loop in thread
         Callable<Boolean> controlTask = () -> {
+            mdcPropagation.adopt(callersDiagnosticContext);
             addInstanceMDC();
             log.info("Control loop starting up...");
             Thread controlThread = Thread.currentThread();
@@ -969,9 +1255,22 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                     if (Thread.interrupted()) { //clear interrupted flag
                         log.debug("Thread interrupted flag cleared in control loop error handling");
                     }
-                    log.error("Error from poll control thread, will attempt controlled shutdown, then rethrow. Error: " + e.getMessage(), e);
-                    failureReason = new RuntimeException("Error from poll control thread: " + e.getMessage(), e);
-                    doClose(shutdownTimeout); // attempt to close
+                    // Arm the failure, then log, then close - and close in a finally, because shutting down is the
+                    // part that must happen. describeWithRootCause never throws, but the logger renders the same
+                    // user-supplied throwable and its binding is the user's; if that throws, the consumer would
+                    // otherwise be left running with an already-failed control future, which is the state this
+                    // handler exists to avoid.
+                    var described = describeWithRootCause(e);
+                    failureReason = new RuntimeException("Error from poll control thread: " + described, e);
+                    try {
+                        // guarded, not just finally'd: an escaping logger failure would propagate INSTEAD of
+                        // failureReason, so the control future would report "the logger blew up" rather than what
+                        // actually killed the consumer
+                        logWithoutEscaping(failureReason, () ->
+                                log.error("Error from poll control thread, will attempt controlled shutdown, then rethrow. Error: " + described, e));
+                    } finally {
+                        doClose(shutdownTimeout); // attempt to close
+                    }
                     throw failureReason;
                 }
             }
@@ -990,6 +1289,24 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     /**
+     * Takes the snapshot of the caller's diagnostic context that all of PC's threads will run under.
+     * <p>
+     * Called from {@code poll*} (i.e. on the user's own thread) before any PC thread exists, because that is the only
+     * moment at which the user's context is reachable - none of PC's threads inherit it, the SLF4J MDC is not
+     * inheritable.
+     *
+     * @see MdcPropagation
+     */
+    private void captureCallersDiagnosticContext() {
+        this.callersDiagnosticContext = mdcPropagation.capture();
+        if (callersDiagnosticContext != null && !callersDiagnosticContext.isEmpty()) {
+            // keys only - the values are the user's data, and may be large or sensitive. Logged so that a context
+            // accidentally pinned for the life of the consumer (e.g. a request-scoped trace id) is discoverable.
+            log.info("Propagating caller's diagnostic context (MDC) keys {} into the processing threads", callersDiagnosticContext.keySet());
+        }
+    }
+
+    /**
      * Main control loop
      */
     protected <R> void controlLoop(Function<PollContextInternal<K, V>, List<R>> userFunction,
@@ -1000,6 +1317,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
         // make sure all work that's been completed are arranged ready for commit
         Duration timeToBlockFor = shouldTryCommitNow ? Duration.ZERO : getTimeToBlockFor();
+        log.trace("Control loop: blocking on mailbox for {}, shouldCommit={}, queuedInShards={}, outForProcessing={}",
+                timeToBlockFor, shouldTryCommitNow,
+                wm.getNumberOfWorkQueuedInShardsAwaitingSelection(),
+                wm.getNumberRecordsOutForProcessing());
         processWorkCompleteMailBox(timeToBlockFor);
 
         //
@@ -1011,9 +1332,21 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         // distribute more work
         retrieveAndDistributeNewWork(userFunction, callback);
 
-        // run call back
-        log.trace("Loop: Running {} loop end plugin(s)", controlLoopHooks.size());
-        this.controlLoopHooks.forEach(Runnable::run);
+        // run call back - counted from the iteration itself, because a separate size() read takes its own snapshot of
+        // the copy-on-write array and can report a number this loop never ran
+        int loopEndPluginsRun = 0;
+        try {
+            for (Runnable hook : this.controlLoopHooks) {
+                // user code, wrapped as everywhere else - Runnable::run is the Consumer<Runnable> that runs it, so
+                // a throwing hook is reported as user code rather than as an anonymous control-thread failure
+                UserFunctions.carefullyRun(Runnable::run, hook);
+                loopEndPluginsRun++;
+            }
+        } finally {
+            // in a finally so a hook that throws still leaves a record of how far the phase got - that trace line is
+            // the last breadcrumb before the control loop unwinds
+            log.trace("Loop: Ran {} loop end plugin(s)", loopEndPluginsRun);
+        }
 
         log.trace("Current state: {}", state);
         switch (state) {
@@ -1087,7 +1420,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private void commitOffsetsReportingPollerDeath() throws TimeoutException, InterruptedException {
         try {
             commitOffsetsThatAreReady();
-        } catch (InternalRuntimeException commitFailure) {
+        } catch (PCInternalRuntimeException commitFailure) {
             try {
                 brokerPollSubsystem.supervise();
             } catch (RuntimeException pollerFailure) {
@@ -1105,7 +1438,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     private void maybeWakeupPoller() {
         if (state == RUNNING) {
-            if (!wm.isSufficientlyLoaded() && brokerPollSubsystem.isPausedForThrottling()) {
+            if (!wm.isSufficientlyLoaded() && brokerPollSubsystem.isSubscriptionsPausedForBackPressure()) {
                 if (log.isDebugEnabled()) {
                     long inShards = wm.getNumberOfWorkQueuedInShardsAwaitingSelection();
                     long outForProcessing = wm.getNumberRecordsOutForProcessing();
@@ -1284,11 +1617,17 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                                               final List<WorkContainer<K, V>> batch) {
         // for each record, construct dispatch to the executor and capture a Future
         log.trace("Sending work ({}) to pool", batch);
+        // snapshot at submit time, on the controller thread - which is already running under the caller's context
+        final Map<String, String> submittersDiagnosticContext = mdcPropagation.capture();
         Future outputRecordFuture;
         try {
             outputRecordFuture = workerThreadPool.get().submit(() -> {
-                addInstanceMDC();
-                return runUserFunction(usersFunction, callback, batch);
+                // scoped, so the context is torn off the pooled thread when the batch finishes - both what we put on it
+                // and anything the user function added - rather than being inherited by the next, unrelated, batch
+                try (var mdcScope = mdcPropagation.enter(submittersDiagnosticContext)) {
+                    addInstanceMDC();
+                    return runUserFunction(usersFunction, callback, batch);
+                }
             });
         } catch (RejectedExecutionException e) {
             // Narrow on purpose, and safe to be: #requireRejectionIsVisible refuses any pool whose handler is not an
@@ -1436,6 +1775,22 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     private void transitionToClosing() {
         log.debug("Transitioning to closing...");
+        if (state == CLOSED) {
+            // CLOSED IS TERMINAL - you cannot un-close. Without this, a caller arriving after the control thread
+            // has finished writes CLOSING over CLOSED, and nothing is left alive to write it back: `state` reaches
+            // CLOSED only in doClose()'s finally, on a thread that exits immediately afterwards. A later close()
+            // then misses its `state == CLOSED` fast path and enters waitForClose(), whose loop re-reads an
+            // already-completed controlThreadFuture - so `get(timeout)` returns at once, every time, and the loop
+            // becomes a hot spin with no exit rather than a wait that times out.
+            //
+            // Reachable because failFatallyOnUnmailboxableRecord can fire from an async engine completion, which
+            // has no timing relationship to the control thread's lifetime: ExternalEngine's pool is sized 1 and
+            // only DISPATCHES, so awaitTermination in doClose() knows nothing about the vert.x event loop or a
+            // Reactor scheduler still holding an outstanding request. Raised by review on astubbs#267; the guard
+            // is here rather than at that one caller because the invariant belongs to this method.
+            log.debug("Already closed - not regressing the state");
+            return;
+        }
         if (state == State.UNUSED) {
             state = CLOSED;
         } else {
@@ -1581,12 +1936,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Visible for testing
      */
     protected void commitOffsetsThatAreReady() throws TimeoutException, InterruptedException {
-        log.trace("Synchronizing on commitCommand...");
-        synchronized (commitCommand) {
+        log.trace("Acquiring commitLock...");
+        commitLock.lock();
+        try {
             log.debug("Committing offsets that are ready...");
             committer.retrieveOffsetsAndCommit();
             clearCommitCommand();
             this.lastCommitTime = Instant.now();
+        } finally {
+            commitLock.unlock();
         }
     }
 
@@ -1625,24 +1983,86 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             }
             return Collections.emptyList();
         } catch (Exception e) {
-            // handle fail
-            var cause = e.getCause();
-            String msg = msg("Exception caught in user function running stage, registering WC as failed, returning to" +
-                    " mailbox. Context: {}", context, e);
-            if (cause instanceof PCRetriableException) {
-                log.debug("Explicit " + PCRetriableException.class.getSimpleName() + " caught, logging at DEBUG only. " + msg, e);
-            } else {
-                log.error(msg, e);
+            // Record the failures BEFORE rendering them, and guard the render. This is the highest-traffic render
+            // of a user-supplied throwable in the library - every user function failure passes here - and both
+            // building the message (which interpolates e) and handing e to the logger run the thrower's
+            // getMessage/getCause, the second inside the binding's own unbounded cause-chain walk. If either
+            // throws, the loop below never runs: the batch is never marked failed and never returns to the
+            // mailbox, so those records stay in flight forever - one stalls its shard under KEY ordering, and
+            // maxConcurrency of them stall the consumer. Nothing is logged, because logging is what failed.
+            // Per container, and each independent of the others. onUserFunctionFailure runs USER code -
+            // updateFailureHistory asks getRetryDelayConfig, which calls the user's retryDelayProvider
+            // unguarded - so one container's provider throwing used to abort this loop and strand every
+            // container after it in flight forever. That is the same stall this batch is being mailboxed
+            // to avoid, reached through a different door. addToMailbox is in a finally for the same
+            // reason: returning the record is the part that must happen.
+            Throwable bookkeepingFailed = null;
+            for (var wc : workContainerBatch) {
+                try {
+                    wc.onUserFunctionFailure(e);
+                } catch (Throwable userCodeThrew) {
+                    bookkeepingFailed = firstOrSuppress(bookkeepingFailed, userCodeThrew);
+                }
+                try {
+                    addToMailbox(context, wc); // always add on error
+                } catch (PCInternalRuntimeException pcInvariantBroke) {
+                    // The EXPECTED shape: one of PC's own invariants, reachable here as
+                    // ProduceLockNotHeldException from the produce-lock release inside addToMailbox.
+                    //
+                    // NOT a finally around the call above: an exception from a finally supersedes everything and
+                    // propagates straight out of this loop, so a single failure here would strand every container
+                    // AFTER it - reintroducing exactly the bug this loop is shaped to prevent. This is PC's own
+                    // code rather than the user's, so a throw is our bug, which is a reason to surface it, not a
+                    // reason to let it take the rest of the batch with it.
+                    bookkeepingFailed = firstOrSuppress(bookkeepingFailed, pcInvariantBroke);
+                    // ...and a reason to stop. Surfacing it to this caller is not enough: the record is now
+                    // unaccounted for, so PC shuts down rather than continue past a possible silent skip. The
+                    // loop still finishes first, so the containers behind this one are returned.
+                    failFatallyOnUnmailboxableRecord(wc, pcInvariantBroke);
+                } catch (Throwable nothingElseIsExpected) {
+                    // Backstop for a route nobody has enumerated - broad on purpose, for the same
+                    // must-not-escape reason as the arm above.
+                    bookkeepingFailed = firstOrSuppress(bookkeepingFailed, nothingElseIsExpected);
+                    failFatallyOnUnmailboxableRecord(wc, nothingElseIsExpected);
+                }
+            }
+            // attached rather than thrown: the user's own failure is what the caller needs to see, and
+            // it is already on its way out below. Nothing is swallowed - it travels with e.
+            if (bookkeepingFailed != null && bookkeepingFailed != e) {
+                e.addSuppressed(bookkeepingFailed);
             }
 
-            for (var wc : workContainerBatch) {
-                wc.onUserFunctionFailure(e);
-                addToMailbox(context, wc); // always add on error
-            }
+            logWithoutEscaping(e, () -> {
+                String msg = msg("Exception caught in user function running stage, registering WC as failed, returning to" +
+                        " mailbox. Context: {}", context, e);
+                if (PCRetriableException.isPresentIn(e)) {
+                    log.debug("Explicit " + PCRetriableException.class.getSimpleName() + " caught, logging at DEBUG only. " + msg, e);
+                } else {
+                    log.error(msg, e);
+                }
+            });
             throw e; // trow again to make the future failed
         } finally {
             cleanUpContext(context);
         }
+    }
+
+    /**
+     * Keeps the first failure and attaches every later one to it, so a second container failing the same way is not
+     * dropped without trace - which is what keeping only the first, on its own, would do.
+     */
+    private static Throwable firstOrSuppress(Throwable first, Throwable next) {
+        if (first == null) {
+            return next;
+        }
+        if (first != next) {
+            try {
+                first.addSuppressed(next);
+            } catch (Throwable ignored) {
+                // suppression disabled, or an override; nothing further to do
+            }
+        }
+        return first;
     }
 
     /**
@@ -1704,7 +2124,34 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         wc.onUserFunctionSuccess();
     }
 
-    protected void addToMailbox(PollContextInternal<K, V> pollContext, WorkContainer<K, V> wc) {
+    /**
+     * Hands a finished record back to the control thread.
+     * <p>
+     * <b>It can throw, and which routes are real is not obvious - that is why this is written down.</b> Callers guard
+     * it because a throw here leaves the record neither in flight nor completed; see
+     * {@link #failFatallyOnUnmailboxableRecord}.
+     * <p>
+     * <b>The {@code throws} clause is deliberate on an unchecked type.</b> Java does not require it and the compiler
+     * will not enforce it, but it is the difference between a caller that can reason about what goes wrong here and
+     * one that can only assume anything might - which is how the guards around this call came to be
+     * {@code catch (Throwable)} with nobody able to say what they were catching. Declared, a caller can narrow to
+     * the expected arm honestly and keep a backstop for the rest, rather than treating the two as the same thing.
+     *
+     * @throws ProduceLockNotHeldException the reachable route. {@link WorkContainer#onPostAddToMailBox} releases the
+     *                                     produce lock in transactional commit mode, and
+     *                                     {@code ProducerManager#finishProducing} rejects a release when the lock is
+     *                                     not held. {@code docs/inflight/bug-producing-lock-double-release.md} is an
+     *                                     open question about that invariant.
+     * @throws PCInternalRuntimeException  any other PC invariant reached through the same call.
+     * @implNote The queue add is NOT a meaningful throw route here, which is worth stating because
+     *         {@link java.util.Queue#add} documents four. {@link #workMailBox} is an unbounded
+     *         {@link java.util.concurrent.LinkedBlockingQueue}, so its {@code IllegalStateException} capacity clause
+     *         cannot fire; {@code ClassCastException} and {@code IllegalArgumentException} are for ordered and
+     *         bounded queues and it raises neither; and the element is never null. Copying that contract here would
+     *         document four exceptions that cannot happen while saying nothing about the one that can.
+     */
+    protected void addToMailbox(PollContextInternal<K, V> pollContext, WorkContainer<K, V> wc)
+            throws PCInternalRuntimeException {
         String state = wc.isUserFunctionSucceeded() ? "succeeded" : "FAILED";
         log.trace("Adding {} {} to mailbox...", state, wc);
         workMailBox.add(ControllerEventMessage.of(wc));
@@ -1745,6 +2192,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Plugin a function to run at the end of each main loop.
      * <p>
      * Useful for testing and controlling loop progression.
+     * <p>
+     * Safe to call from any thread, including while the consumer is running. The callback itself, however, runs on the
+     * control thread - so it must not block, and must not call back into this consumer in a way that waits on the
+     * control loop it is currently occupying.
+     * <p>
+     * <b>A callback that throws stops the consumer.</b> It is run through {@link UserFunctions}, as every other piece
+     * of user-supplied code is, so the failure is reported as coming from user code - but it is not swallowed.
      */
     public void addLoopEndCallBack(Runnable r) {
         this.controlLoopHooks.add(r);

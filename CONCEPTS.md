@@ -52,6 +52,36 @@ be committing its starting offset. That property is also what makes the frontier
 asserting about a commit: which intermediate offsets a partition commits on the way there depends on
 when the periodic commit happens to fire, but where it ends up does not.
 
+**Assignment epoch**
+A per-partition counter incremented each time the partition is assigned to this instance. Records
+are stamped with the partition's current epoch as they are polled and carry it through processing;
+work whose stamp no longer matches is stale — fetched under an assignment that has since been
+revoked — and is discarded rather than completed or committed. This is what stops work still in
+flight across a rebalance from acting on a partition the instance no longer owns.
+
+**Revoke path**
+The work an instance performs while the group is taking partitions away from it. It runs inside the
+consumer's revocation callback, which the broker poller executes as part of its own fetch call — so
+everything done there is charged against the interval the group allows between fetches, and an
+instance that dwells too long is judged dead and evicted. That budget is why the revoke path commits
+opportunistically rather than waiting: it prefers to let uncommitted work be redelivered to the new
+owner over risking the member's membership. It is also where several of this project's hardest
+defects have clustered, because it is the one place where rebalance handling, committing, and
+in-flight work meet on a thread that must not block.
+
+**Back-pressure pause**
+The broker poller pausing its own subscription because the engine's internal buffers are full —
+self-imposed, invisible to the user, and expected to release itself once processing catches up.
+The authority for whether a partition is paused this way is the Kafka consumer's own pause state;
+the engine asks it rather than keeping its own record, because rebalances alter that state in
+protocol-dependent ways no local copy can track.
+
+**User pause**
+The user-facing paused state of the whole engine: work stops being handed to the worker pool, but
+in-flight work completes, pending commits still happen, and polling may continue until buffers
+fill. Deliberately distinct from a back-pressure pause — it is an engine state, not a broker-level
+subscription pause.
+
 ## Transactional commit
 
 **Produce lock**
@@ -241,3 +271,7 @@ books, and here is the list you are expected to shorten".
   confusion.** It is told apart by asking whether what the test actually saw is *also correct*: the
   other three all mean the expected thing did not happen, while a tick-path assertion means something
   equally valid happened instead.
+- **"Paused" names three distinct things.** A user pause is an engine state; a back-pressure pause
+  is the poller pausing the broker subscription; and the Kafka consumer's own pause state is the
+  authority the back-pressure pause manipulates. A user report of "paused consumption" typically
+  describes none of them — a stall presenting as a pause — so the word alone attributes nothing.

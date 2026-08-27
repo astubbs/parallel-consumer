@@ -8,7 +8,7 @@ Mirror: [astubbs/parallel-consumer#175](https://github.com/astubbs/parallel-cons
 Upstream: [confluentinc/parallel-consumer#809](https://github.com/confluentinc/parallel-consumer/issues/809).
 
 **Read the upstream thread, not the mirror's summary.** The mirror describes the opening report
-(`InternalRuntimeException: Timeout waiting for commit response PT30S`, no diagnosis). The thread's
+(`PCInternalRuntimeException: Timeout waiting for commit response PT30S`, no diagnosis). The thread's
 substance is a *second* reporter, `gtassone`, who debugged it with JDWP, shipped a fix, and had it
 merged upstream. That work is already in this tree and the mirror does not say so.
 
@@ -28,7 +28,7 @@ Same symptom string, overlapping triggers, one extra defect that confluentinc#83
 | Poll thread killed some other way, symptom names neither subsystem nor cause | Fixed by astubbs#204. `notifyPollerDied` (declared in the same file, called from `internal/BrokerPollSystem.java`) releases the waiter with the poller's exception at the moment of death. |
 | `commitSync` retrying a broker outage forever, stranding the poll thread | Fixed by astubbs#204 (per-call rather than per-attempt budget). This is the closest match to gtassone's trigger: connectivity blips on a large shared cluster, one-second commit interval. |
 | Close path aborting before the state transition, leaving an undetectable zombie | Fixed **upstream**, by confluentinc#818, and this tree carries it: in `internal/AbstractParallelEoSStreamProcessor.java`, `doClose` wraps `innerDoClose` and sets the state from a `finally` - grep `this.state = CLOSED`, the only one in the tree, and the comment above the `try` still names the issue. Not fork work, and not astubbs#204's. |
-| Poll thread **alive but wedged** - the AB-BA cycle | Still reachable. Owned by astubbs#29 (draft, fix never observed working) and `docs/solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md`. |
+| Poll thread **alive but wedged** - the AB-BA cycle | Still reachable. Owned by astubbs#29 (whose fix had not been observed working when this was written) and `docs/solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md`. | <!-- post-merge: checked -->
 
 ## What a future session should actually do with this
 
@@ -36,7 +36,7 @@ Same symptom string, overlapping triggers, one extra defect that confluentinc#83
 `dumontxiong` on confluentinc#833 as the possible AB-BA case. gtassone is stronger evidence: he posts
 his configuration, and it is `PERIODIC_CONSUMER_SYNC` - the only mode in which the cycle can close -
 with 128 partitions, concurrency 64 and a user function running from 100ms to minutes. Anyone picking
-up astubbs#29 should read his comments before building a reproducer.
+up this cycle should read his comments before building a reproducer.
 
 **The mirror's `## Fork status` is stale in three ways**, and it is what a future reader trusts:
 it credits astubbs#100 alone and predates astubbs#204; it treats the two 0.5.3.1 changes as upstream

@@ -22,6 +22,8 @@ import pl.tlinkowski.unij.api.UniMaps;
 import java.util.ArrayList;
 import java.util.List;
 
+import static com.google.common.truth.Truth.assertWithMessage;
+
 @RequiredArgsConstructor
 public class ModelUtils {
 
@@ -33,9 +35,15 @@ public class ModelUtils {
     }
 
     public WorkContainer<String, String> createWorkFor(long offset) {
+        return createWorkFor(offset, 0);
+    }
+
+    public WorkContainer<String, String> createWorkFor(long offset, long epoch) {
         ConsumerRecord<String, String> mockCr = Mockito.mock(ConsumerRecord.class);
-        WorkContainer<String, String> workContainer = new WorkContainer<>(0, mockCr, module);
         Mockito.doReturn(offset).when(mockCr).offset();
+        Mockito.doReturn(topic).when(mockCr).topic();
+        Mockito.doReturn(0).when(mockCr).partition();
+        WorkContainer<String, String> workContainer = new WorkContainer<>(epoch, mockCr, module);
         return workContainer;
     }
 
@@ -93,6 +101,32 @@ public class ModelUtils {
             recs.add(record);
         }
         return recs;
+    }
+
+    /**
+     * Registers ONE record on {@code tp} through the production path - assignment, {@code registerWork}, then a
+     * real selection - and returns the container the work manager handed out.
+     * <p>
+     * Shared rather than copied because two concurrency reproductions need exactly this fixture, and a drifted
+     * copy would quietly change what each one proves: {@link ShardManagerRevokeSweepNpeTest} (astubbs#345) arms
+     * its race against the container this returns, and {@link WorkManagerStaleCheckDoubleLookupTest}
+     * (astubbs#346) completes it. The size assertion is part of the fixture, not of either test - a scenario
+     * that silently registered zero selectable records would make both of them vacuous.
+     * <p>
+     * Static, and taking the work manager rather than reading {@link #module}, because both callers install a
+     * test double in place of the module's own {@link WorkManager}.
+     */
+    public static WorkContainer<String, String> registerOneRecordAndTakeIt(WorkManager<String, String> wm, TopicPartition tp) {
+        wm.onPartitionsAssigned(UniLists.of(tp));
+
+        var record = new ConsumerRecord<>(tp.topic(), tp.partition(), 0, "key-0", "value");
+        var records = new ConsumerRecords<>(UniMaps.of(tp, UniLists.of(record)));
+        wm.registerWork(new EpochAndRecordsMap<>(records, wm.getPm()));
+
+        List<WorkContainer<String, String>> taken = wm.getWorkIfAvailable();
+        assertWithMessage("fixture: exactly the one registered container must be selectable")
+                .that(taken).hasSize(1);
+        return taken.get(0);
     }
 
 }

@@ -31,6 +31,7 @@ import static bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcess
 import static bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.MDC_INSTANCE_ID;
 import static bz.stub.parallelconsumer.internal.State.*;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.logWithoutEscaping;
 
 /**
  * Subsystem for polling the broker for messages.
@@ -53,12 +54,43 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
     private Optional<Future<Boolean>> pollControlThreadFuture = Optional.empty();
 
     /**
-     * While {@link bz.stub.parallelconsumer.internal.State#PAUSED paused} is an externally controlled state that
-     * temporarily stops polling and work registration, the {@code paused} flag is used internally to pause
-     * subscriptions if polling needs to be throttled.
+     * Whether we currently have the consumer's partitions paused for back pressure - <b>derived from
+     * Kafka, never mirrored</b>.
+     * <p>
+     * This used to be a {@code boolean} field kept in step with {@code consumer.pause()} /
+     * {@code resume()} calls, and it could not be kept in step. Kafka clears its pause state for
+     * every partition on an <b>eager</b> rebalance (the assignment map is replaced - see
+     * {@code SubscriptionState.assignFromSubscribed}) but <b>keeps</b> it for partitions retained
+     * across a <b>cooperative</b> one, because that method reuses the existing per-partition state
+     * object and {@code TopicPartitionState} holds the {@code paused} boolean. A mirror therefore had
+     * to model both protocols correctly and stay correct as Kafka changes.
+     * <p>
+     * Asking Kafka makes the protocol irrelevant and the logic self-correcting: after a cooperative
+     * rebalance the retained partitions are still paused, so this reports true and
+     * {@link #resumeIfPaused(Set)} resumes them; after an eager one Kafka has already cleared them,
+     * so this reports false and there is nothing to do. No reset hook is needed on assignment, and
+     * adding one is the mistake this shape exists to prevent - it is right for eager and leaves
+     * cooperative permanently paused, which is consumption stopping with no error.
+     * <p>
+     * <b>Poll thread only.</b> {@code consumer.paused()} is a consumer call and {@code KafkaConsumer}
+     * is not thread-safe. The control thread must use
+     * {@link #isSubscriptionsPausedForBackPressure()} instead, which reads the per-poll cache.
      */
-    @Getter
-    private volatile boolean pausedForThrottling = false;
+    private boolean subscriptionsArePausedForBackPressure() {
+        return !consumerManager.paused().isEmpty();
+    }
+
+    /**
+     * As {@link #subscriptionsArePausedForBackPressure()}, but safe to call from the <b>control</b>
+     * thread, which may not touch the consumer.
+     * <p>
+     * Reads {@link ConsumerManager}'s paused-partition cache, refreshed once per poll. That staleness
+     * is acceptable here and only here: its callers are heuristics - waking a poller that has already
+     * resumed costs nothing. Do not use it to decide whether to pause or resume.
+     */
+    public boolean isSubscriptionsPausedForBackPressure() {
+        return consumerManager.getPausedPartitionSize() > 0;
+    }
 
     private final AbstractParallelEoSStreamProcessor<K, V> pc;
 
@@ -141,7 +173,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
                 try {
                     booleanFuture.get();
                 } catch (Exception e) {
-                    throw new InternalRuntimeException("Error in " + BrokerPollSystem.class.getSimpleName() + " system.", e);
+                    throw new PCInternalRuntimeException("Error in " + BrokerPollSystem.class.getSimpleName() + " system.", e);
                 }
             }
         }
@@ -152,6 +184,8 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      */
     private boolean controlLoop() throws TimeoutException, InterruptedException {
         Thread.currentThread().setName("pc-broker-poll");
+        // this thread serves exactly one PC instance for its whole life, so adopt the caller's context outright
+        pc.getMdcPropagation().adopt(pc.callersDiagnosticContext);
         pc.getMyId().ifPresent(id -> {
             Thread.currentThread().setName("pc-broker-poll-" + id);
             MDC.put(MDC_INSTANCE_ID, id);
@@ -176,7 +210,11 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
             log.debug("Broker poller thread finished normally, returning OK (true) to future...");
             return true;
         } catch (Exception e) {
-            log.error("Unknown error", e);
+            // reachable with a USER-supplied throwable: a user rebalance listener that throws is wrapped in
+            // ExceptionInUserFunctionException and propagates out through consumer.poll() to here, so rendering it
+            // runs the user's getCause/getMessage inside the logging binding - and the notify below must happen
+            // whatever the logger does with it
+            logWithoutEscaping(e, () -> log.error("Unknown error", e));
             // This thread is the only producer of commit responses, so tell the committer before
             // unwinding: a control thread already blocked in ConsumerOffsetCommitter#commitAndWait
             // cannot discover this by waiting, and would otherwise wait out the whole
@@ -229,7 +267,9 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
 
         checkStateForPausingSubscriptions();
 
-        log.debug("Subscriptions are paused: {}", pausedForThrottling);
+        if (log.isDebugEnabled()) {
+            log.debug("Subscriptions are paused: {}", subscriptionsArePausedForBackPressure());
+        }
 
         boolean pollTimeoutNormally = runState == RUNNING || runState == DRAINING;
         Duration thisLongPollTimeout = pollTimeoutNormally ? BrokerPollSystem.longPollTimeout
@@ -272,14 +312,14 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
 
     private final RateLimiter pauseLimiter = new RateLimiter(1);
 
-    private void doPauseMaybe() {
+    private void doPauseMaybe(Set<TopicPartition> pausedNow) {
         // idempotent
-        if (pausedForThrottling) {
+        if (!pausedNow.isEmpty()) {
             log.trace("Already paused");
         } else {
             if (pauseLimiter.couldPerform()) {
                 pauseLimiter.performIfNotLimited(() -> {
-                    doPause();
+                    doPause(pausedNow);
                 });
             } else {
                 if (log.isDebugEnabled()) {
@@ -295,8 +335,11 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      * Pause all assignments
      */
     private void doPause() {
-        if (!pausedForThrottling) {
-            pausedForThrottling = true;
+        doPause(consumerManager.paused());
+    }
+
+    private void doPause(Set<TopicPartition> pausedNow) {
+        if (pausedNow.isEmpty()) {
             log.debug("Pausing subs");
             Set<TopicPartition> assignment = consumerManager.assignment();
             consumerManager.pause(assignment);
@@ -322,7 +365,10 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
                 } catch (InterruptedException e) {
                     log.debug("Interrupted waiting for broker poller thread to finish", e);
                 } catch (ExecutionException | TimeoutException e) {
-                    log.error("Execution or timeout exception waiting for broker poller thread to finish", e);
+                    // same reachability one hop further out - e wraps whatever killed the poll thread, including the
+                    // user rebalance listener case above
+                    logWithoutEscaping(e, () ->
+                            log.error("Execution or timeout exception waiting for broker poller thread to finish", e));
                     throw e;
                 }
             }
@@ -352,27 +398,39 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      * make sure we maintain the keep alive with the broker so as not to cause a rebalance.
      */
     private void managePauseOfSubscription() {
-        boolean throttle = shouldThrottle();
-        log.trace("Need to throttle: {}", throttle);
-        if (throttle) {
-            doPauseMaybe();
+        // Read Kafka's pause state ONCE per pass and hand it down, rather than each check asking
+        // again. Deriving the answer from the consumer instead of mirroring it in a field is what
+        // makes the rebalance protocols irrelevant (see subscriptionsArePausedForBackPressure), but
+        // consumer.paused() is a real call on the poll thread's hot path, and this method plus the
+        // three below were making three to five of them per loop iteration.
+        //
+        // A PARAMETER rather than a field on purpose: a local cannot outlive the pass, so there is
+        // no invalidation to get wrong and nothing that can go stale between iterations - which is
+        // exactly the failure mode of the mirror this replaced. It is also strictly fewer calls than
+        // before in the resume path, which used to fetch the set a second time to act on it.
+        Set<TopicPartition> pausedNow = consumerManager.paused();
+        boolean shouldThrottle = shouldThrottle();
+        if (log.isTraceEnabled()) {
+            log.trace("Need to throttle: {}, pausedForBackPressure={}", shouldThrottle, !pausedNow.isEmpty());
+        }
+        if (shouldThrottle) {
+            doPauseMaybe(pausedNow);
         } else {
-            resumeIfPaused();
+            resumeIfPaused(pausedNow);
         }
     }
 
     /**
      * Has no flap limit, always resume if we need to
      */
-    private void resumeIfPaused() {
-        // idempotent
-        if (pausedForThrottling) {
+    private void resumeIfPaused(Set<TopicPartition> pausedNow) {
+        // idempotent, and self-correcting: whatever Kafka still has paused is what gets resumed,
+        // whether we paused it or it survived a cooperative rebalance.
+        if (!pausedNow.isEmpty()) {
             log.debug("Resuming consumer, waking up");
-            Set<TopicPartition> pausedTopics = consumerManager.paused();
-            consumerManager.resume(pausedTopics);
+            consumerManager.resume(pausedNow);
             // trigger consumer to perform a new poll without the assignments paused, otherwise it will continue to long poll on nothing
             consumerManager.wakeup();
-            pausedForThrottling = false;
         }
     }
 
@@ -413,7 +471,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      * Wakeup if colling the broker
      */
     public void wakeupIfPaused() {
-        if (pausedForThrottling)
+        if (isSubscriptionsPausedForBackPressure())
             consumerManager.wakeup();
     }
 

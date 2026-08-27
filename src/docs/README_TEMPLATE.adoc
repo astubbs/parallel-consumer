@@ -1061,6 +1061,12 @@ Gauge `pc.shards.size{subsystem=shardmanager}`
 
 Number of records queued for processing across all shards
 
+**Shards Max Size**
+
+Gauge `pc.shards.max.size{subsystem=shardmanager}`
+
+Maximum number of records queued in any single shard (the most-loaded shard) - useful for spotting hot-key shards under KEY ordering
+
 ==== Work Manager
 
 **Inflight Records**
@@ -1478,6 +1484,81 @@ This is not an _exactly once guarantee_, as message replay cannot be prevented a
 CAUTION: Note that Kafka's Exactly Once Semantics (EoS) (transactional processing) also does not prevent _duplicate message replay_ - it *presents* an _effectively once_ result messages in Kafka topics.
 Messages may _still_ be replayed when using `EoS`.
 This is an important consideration when using it, especially when integrating with thrid party systems, which is a very common pattern for utilising this project.
+
+[[reducing-duplicate-replay]]
+==== Reducing duplicate replay: choose the cooperative assignor, and drain on close
+
+Two settings dominate how many messages get replayed when your consumer group changes membership, and
+neither is specific to this library -- they are ordinary Kafka consumer behaviour. They are called out
+here because the effect is large, it is easy to leave on the worse setting by accident, and the cost
+lands as duplicate work in *your* processing function.
+
+. *Use `CooperativeStickyAssignor`.* Under the default eager protocol, *any* membership change revokes
+*every* partition from *every* member, so all in-flight work everywhere is abandoned and redelivered --
+including on members that were not joining or leaving. Cooperative rebalancing keeps existing
+assignments and moves only what must move.
+. *Close by draining* (`closeDrainFirst()`), not `close()`. `close()` is
+`closeDontDrainFirst()`: it abandons in-flight work rather than finishing it, so that work is
+redelivered to whoever picks the partition up. Draining lets it finish and commit first.
+
+The ordering matters: the assignor is the larger effect by far, because it governs work abandoned on
+*every* member, while the close mode only governs the work of the instance actually shutting down.
+
+.Duplicate deliveries under deliberate rebalance churn, 250,000 records
+[cols="2,1,1", options="header"]
+|===
+| Configuration | Duplicates | Share of total
+
+| Eager assignor, `close()`
+| 2,421
+| ~1.0%
+
+| Eager assignor, `closeDrainFirst()`
+| 2,007
+| ~0.8%
+
+| `CooperativeStickyAssignor`, `close()`
+| 405
+| ~0.16%
+
+| `CooperativeStickyAssignor`, `closeDrainFirst()`
+| 369
+| ~0.15%
+|===
+
+CAUTION: *Where these numbers come from, and what they are not.* They were measured on 2026-08-19 by
+this project's *chaos test suite* -- `ChaosRevokeUnderWorkIT` and its cooperative and draining
+variants -- on a single seed, `4734674029169027864`, one run per configuration. That suite stops and
+restarts fleet members every few hundred milliseconds for a solid minute while deliberately slow
+records are in flight, and is built to be far more hostile than production precisely so effects like
+this are visible at all.
++
+So: *do not read these as rates you should expect.* A normally-operating deployment rebalances
+rarely and would see a small fraction of this, and one run per cell is a direction rather than a
+precise figure. The *relative* ordering between the four configurations is the part that carries
+over, and it is large enough that a single run establishes it.
++
+To regenerate them, run the four cells against the same seed and count deliveries beyond the
+expected record total:
++
+[source,bash]
+----
+./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+  -Dincluded.groups=chaos -Dexcluded.groups= \
+  -Dchaos.seed=4734674029169027864 \
+  -Dit.test='ChaosRevokeUnderWorkIT'                  # eager, close()
+# then ChaosRevokeUnderWorkDrainIT, ChaosRevokeUnderWorkCooperativeIT,
+# ChaosRevokeUnderWorkCooperativeDrainIT for the other three cells
+----
++
+NOTE: A forthcoming demonstration application will supersede this table by running these
+configurations interactively -- against your own topic and your own processing function, which
+answers the question a published table never can.
+
+None of this makes replay impossible, and nothing can: as stated above, replay across failure cannot
+be prevented, so a processing function that must not repeat side effects still needs to be idempotent
+or externally deduplicated. These settings reduce how often you pay that cost, not whether you must
+handle it.
 
 As mentioned previously, offsets are always committed in the correct order and only once all previous messages have been successfully processed; regardless of <<ordering-guarantees,ordering mode>> selected.
 We call this the "highest committable offset".

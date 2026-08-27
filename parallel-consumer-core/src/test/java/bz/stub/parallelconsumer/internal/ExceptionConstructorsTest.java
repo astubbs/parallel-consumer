@@ -22,7 +22,7 @@ import static com.google.common.truth.Truth.assertThat;
 /**
  * Guards the hand-written constructors on the exception classes that used to carry Lombok's
  * {@code @StandardException}. They were converted to hand-written constructors to remove a flaky
- * annotation-processing compile race (see {@link InternalRuntimeException} for the full explanation), and
+ * annotation-processing compile race (see {@link PCInternalRuntimeException} for the full explanation), and
  * then trimmed to only the {@code Throwable}-shaped constructors each class actually needs (to keep the near
  * -identical boilerplate below the duplication-detector threshold).
  * <p>
@@ -42,7 +42,7 @@ class ExceptionConstructorsTest {
             PCRetriableException.class,
             ParallelConsumerException.class,
             ExceptionInUserFunctionException.class,
-            InternalRuntimeException.class,
+            PCInternalRuntimeException.class,
             InternalException.class,
             EncodingNotSupportedException.class,
             BitSetEncodingNotSupportedException.class,

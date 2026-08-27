@@ -135,3 +135,7 @@ release.properties
 # under target/, so the documented repo-root command leaves them beside the source tree
 jcstress-results-*.bin.gz
 /results/
+
+# Error Prone dumps the failing javac invocation beside the module when a check crashes, rather
+# than under target/, so a crash leaves an untracked file the next `git add -A` would commit
+javac.*.args

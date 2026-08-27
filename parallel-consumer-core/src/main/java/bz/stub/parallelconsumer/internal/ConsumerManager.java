@@ -19,6 +19,7 @@ import pl.tlinkowski.unij.api.UniMaps;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
@@ -35,7 +36,7 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 @RequiredArgsConstructor
 public class ConsumerManager<K, V> {
 
-    private final Consumer<K, V> consumer;
+    private final ThreadConfinedConsumer<K, V> consumer;
 
     private final Duration offsetCommitTimeout;
 
@@ -66,15 +67,41 @@ public class ConsumerManager<K, V> {
      * Since Kakfa 2.7, multi-threaded access to consumer group metadata was blocked, so before and after polling, save
      * a copy of the metadata.
      *
+     * <p>
+     * <b>volatile</b> because it is written by the poll thread in {@code updateCache()} and read from
+     * other threads via {@code groupMetadata()}, with no other happens-before edge. It carries the
+     * generation and member IDs, which the control thread hands to
+     * {@code producer.sendOffsetsToTransaction(...)}, where the broker uses them to fence zombies - a
+     * stale read is the wrong answer to "is this member still legitimate?". Its two neighbours here
+     * were already volatile; this one was missed because the SpotBugs detector that found them,
+     * {@code AT_STALE_THREAD_WRITE_OF_PRIMITIVE}, cannot fire on an object reference and no
+     * {@code _OF_REFERENCE} variant exists. Safe as a plain reference publish because
+     * {@link ConsumerGroupMetadata} is immutable - all fields final, no setters.
+     *
      * @since 2.7.0
      */
-    private ConsumerGroupMetadata metaCache;
+    private volatile ConsumerGroupMetadata metaCache;
 
     private volatile int pausedPartitionSizeCache = 0;
 
     private int erroneousWakups = 0;
     private int correctPollWakeups = 0;
     private int noWakeups = 0;
+
+    /**
+     * Prime the metadata cache so that groupMetadata() returns a valid value before the poll
+     * thread starts. Must be called after construction, before any thread claims ownership.
+     * <p>
+     * Silently handles errors (e.g., missing group.id) — validation happens later in
+     * the PC constructor's checkGroupIdConfigured().
+     */
+    void init() {
+        try {
+            updateCache();
+        } catch (Exception e) {
+            log.trace("Could not prime cache during init (will be validated later): {}", e.getMessage());
+        }
+    }
     private boolean commitRequested;
 
     ConsumerRecords<K, V> poll(Duration requestedLongPollTimeout) {
@@ -87,8 +114,7 @@ public class ConsumerManager<K, V> {
                 commitRequested = false;
             }
             pollingBroker.set(true);
-            updateCache();
-            log.debug("Poll starting with timeout: {}", timeoutToUse);
+            log.trace("Poll starting with timeout: {}, assignment size: {}", timeoutToUse, assignmentSizeCache);
             Instant pollStarted = Instant.now();
             long tryCount = 0;
             boolean polledSuccessfully = false;
@@ -126,7 +152,6 @@ public class ConsumerManager<K, V> {
                 }
                 pendingRequests.addAndGet(-1L);
             }
-            updateCache();
         } catch (WakeupException w) {
             correctPollWakeups++;
             log.debug("Awoken from broker poll");
@@ -135,12 +160,28 @@ public class ConsumerManager<K, V> {
         } finally {
             pollingBroker.set(false);
         }
+        // Update the cache after pollingBroker is cleared, so wakeup() from another thread
+        // won't call consumer.wakeup() while we're calling consumer.groupMetadata()/paused().
+        // This fixes ConcurrentModificationException when close() races against poll().
+        // Always update (not just when records > 0) so assignment cache stays current after rebalances.
+        // See https://github.com/confluentinc/parallel-consumer/issues/857
+        updateCache();
         return records != null ? records : new ConsumerRecords<>(UniMaps.of());
     }
+
+    private volatile int assignmentSizeCache = 0;
 
     protected void updateCache() {
         metaCache = consumer.groupMetadata();
         pausedPartitionSizeCache = consumer.paused().size();
+        assignmentSizeCache = consumer.assignment().size();
+    }
+
+    /**
+     * Cached assignment size, safe to read from any thread. Updated during poll.
+     */
+    public int getAssignmentSize() {
+        return assignmentSizeCache;
     }
 
     /**
@@ -262,7 +303,7 @@ public class ConsumerManager<K, V> {
                     // sequence logs it and shuts down, which is true rather than quietly wrong.
                     // TODO(refactor): a user-facing failure wants a PC-named type - see
                     // docs/inflight/core-exception-hierarchy-cleanup.md
-                    throw new InternalRuntimeException(
+                    throw new PCInternalRuntimeException(
                             "Offset commit abandoned after {} attempt(s) because close began - these offsets were NOT " +
                                     "committed, so they must not be recorded as successful", null, tryCount);
                 }
@@ -336,6 +377,23 @@ public class ConsumerManager<K, V> {
         return metaCache;
     }
 
+    /**
+     * Claim the underlying consumer for the current thread. After this, any consumer method
+     * (except wakeup) called from a different thread will throw immediately with a clear message.
+     */
+    void claimConsumerOwnership() {
+        consumer.claimOwnership();
+    }
+
+    /**
+     * Release the poll thread's claim on the underlying consumer. Called from the poll loop's
+     * finally block once that thread will never touch the consumer again, so the closing thread
+     * can take over. See {@link ThreadConfinedConsumer#releaseOwnership()}.
+     */
+    void releaseConsumerOwnership() {
+        consumer.releaseOwnership();
+    }
+
     public void close(final Duration defaultTimeout) {
         long deadline = System.currentTimeMillis() + defaultTimeout.toMillis();
         log.debug("Consumer Manager Closing...");
@@ -350,6 +408,23 @@ public class ConsumerManager<K, V> {
             }
         }
         log.debug("ConsumerManager close wait completed.");
+        // Take over ownership for the final close. Non-stealing: succeeds only if the poll loop
+        // has released (its loop exited - normally or by exception) or this IS the poll thread.
+        // If the poll loop is somehow still live (closeAndWait timed out and the close sequence
+        // proceeded anyway), the claim fails and the guarded close below throws - closing a
+        // consumer another thread is actively using must never be legalised.
+        boolean claimedForClose = consumer.tryClaimOwnership();
+        if (!claimedForClose) {
+            // Named and logged rather than branched on. Skipping the close here would swallow the
+            // report: the guarded close throws, doClose catches it, and THAT is where the user
+            // learns the consequence - no LeaveGroup, so the group's next rebalance waits out
+            // session.timeout.ms. This line only makes the cause legible first, so an expected
+            // shutdown race does not arrive as a bare guard exception that reads like a defect.
+            log.warn("Could not take consumer ownership for the final close - the broker-poll thread " +
+                    "is still alive and holds it, which means an earlier step in the close sequence " +
+                    "did not complete. The close below will refuse; the warning that follows explains " +
+                    "the cost.");
+        }
         consumer.close(defaultTimeout);
         log.debug("ConsumerManager closed");
     }
@@ -368,6 +443,22 @@ public class ConsumerManager<K, V> {
 
     public int getPausedPartitionSize() {
         return pausedPartitionSizeCache;
+    }
+
+    void subscribe(Collection<String> topics, ConsumerRebalanceListener listener) {
+        consumer.subscribe(topics, listener);
+    }
+
+    void subscribe(java.util.regex.Pattern pattern, ConsumerRebalanceListener listener) {
+        consumer.subscribe(pattern, listener);
+    }
+
+    /**
+     * Returns the raw consumer class type for reflection-based checks (e.g., auto-commit detection).
+     * Does not access the consumer's Kafka methods, just the class object.
+     */
+    Class<?> getConsumerClass() {
+        return consumer.getClass();
     }
 
     public void resume(final Set<TopicPartition> pausedTopics) {

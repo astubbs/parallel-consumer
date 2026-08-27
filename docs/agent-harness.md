@@ -54,6 +54,44 @@ The rule existed, was correct, and was linked from the root `AGENTS.md`. It was 
 The lesson generalises: **if a rule must not be missed, it cannot live only in a doc an agent chooses
 to read.** It needs a layer that fires on its own.
 
+## The same layer carries KNOWLEDGE, not only rules
+
+A rule is the obvious use of a mechanism that fires on its own, and it is not the only one. **Write
+the code so a future agent can use it correctly without doing research**, by having the code say what
+it needs to know at the moment it is used - startup log, failure message, hook output, gate note.
+Where a rule needs a gate that can fail, knowledge needs only delivery, so this is cheaper and
+applies far more widely.
+
+The distinction that makes it worth stating separately: a rule protects the repo from the agent, and
+you can test whether it fires. Knowledge protects the agent from wasted work, and **nothing goes red
+when it fails to arrive** - the cost is silent, paid as an experiment repeated, a constraint
+rediscovered, or a symptom misread. So there is no feedback telling you the delivery was needed. You
+have to decide it in advance, when you write the thing.
+
+Two incidents, one day apart, are the worked examples:
+
+- **Prior art that the documented route could not reach.** `ChaosRevokeUnderWorkIT`'s class javadoc
+  records that a recovery diagnostic was already run at an earlier scenario shape, and what it
+  established. An agent ran all six of `AGENTS.md`'s prior-art checks correctly and still repeated
+  the experiment - because those six search plans, solutions, inflight notes, PRs and issues, and
+  **none of them reaches a class javadoc**. The fix was not "read more carefully": the diagnostic
+  mode now prints the earlier result and the remaining question when it starts, so the prior art
+  arrives at the moment it is about to be repeated.
+- **State no agent can see.** `/tmp` on the dev box reached 99%, and the visible effects were a chaos
+  log truncated mid-run - which read as a test ending early, and cost real diagnosis time - plus
+  another session's watcher dying on ENOSPC. Both agents were behaving correctly and neither had any
+  way to notice. `.githooks/pre-commit` now carries a disk advisory that is silent below 75%.
+
+**Silence below the threshold is part of the design, not a detail.** Advisory output competes for
+attention with every rule in `AGENTS.md`, and the file already warns that attention, not tokens, is
+the scarce resource. A notice that prints on every commit is one an agent learns to skip, which
+costs more than it delivers - so an advisory earns its place by being rare enough that its
+appearance means something.
+
+**When you add a flag, mode, or tool an agent might misuse**, ask what it must know at the moment of
+use, and have the code say it then - rather than only adding a line to a document someone must first
+decide to open.
+
 ## What actually loads, and what does not
 
 Verified against Claude Code **2.1.223**. This is the part most people get wrong:
@@ -112,8 +150,21 @@ agents read it directly, and `CLAUDE.md` is only the adapter that makes Claude C
 | Nested `CLAUDE.md` | file in that dir is touched | yes | no | Claude Code |
 | `SessionStart` / `UserPromptSubmit` hooks | session start / each prompt | **yes** | `UserPromptSubmit` only | Claude Code |
 | `PreToolUse` hook | before a matched tool call | **yes**, per tool call | **yes** | Claude Code |
+| `PostToolUse` hook | after a matched tool call | **yes**, per tool call | no - it already ran | Claude Code |
 | Git hook (`core.hooksPath`) | `git commit`, `git push` | no | **yes** | **everyone** |
 | CI gate | push / PR | no | **yes** | everyone, authoritatively |
+
+**`PostToolUse` is the layer for "you just did X, now go and check Y".** It cannot block - the call
+has happened - so it is only worth using when the thing to say could not have been said earlier.
+`after-push-check-ci.sh` is the case that earned it: CI does not exist until the push lands, and the
+window that matters is between the push and the agent moving on. Its `additionalContext` works the
+same way as `PreToolUse`'s and is verified by `bin/test-check-agent-hooks.sh` rather than assumed.
+
+The reason it exists is worth knowing before adding a second one: a required duplication check went
+red on astubbs#267 with its finding posted **nowhere** - GitHub rejected the inline annotation - so
+the only record was a job log nobody opened, and a later push cleared the red without fixing the
+duplication ([`docs/inflight/ci-duplication-report-can-fail-to-post.md`](inflight/ci-duplication-report-can-fail-to-post.md)).
+No earlier layer can carry that: at prompt time there is no push to talk about.
 
 Two properties decide where a rule belongs:
 
@@ -179,7 +230,13 @@ as intended, not a hole - see *Known gaps*.
 ## What is wired up today
 
 **`.githooks/pre-commit`** - runs the fast read-only gates (~1.5s total): copyright headers, issue
-references, docs data, shell sigpipe, quarantine registry, action versions. Enable per clone, once:
+references, docs data, shell sigpipe, quarantine registry, action versions. It also carries one
+**advisory** that blocks nothing: a disk check that is silent below 75% and otherwise tells the
+agent which filesystem is tight and that tidying its own `/tmp` scratch files is part of finishing a
+task. That is the layer being used for what it is uniquely good at - not enforcement, but putting a
+fact into an agent's context that nothing else would. An agent cannot notice a filesystem filling
+up; it only meets the consequence, as a truncated log or an ENOSPC in something unrelated. Enable
+per clone, once:
 
 ```
 git config core.hooksPath .githooks
@@ -213,7 +270,7 @@ merged as a no-op - `git ls-files | grep -c CLAUDE.md` returned **0**. The three
 negated individually rather than with a blanket `!CLAUDE.md`; the reasoning is in `.gitignore`
 itself, next to the rule.
 
-**`.claude/settings.json`** - eleven hook scripts across twelve registrations, and the file is
+**`.claude/settings.json`** - fourteen hook scripts across sixteen registrations, and the file is
 **tracked**. The entries below are the ones whose design decisions are worth recording here;
 `remind-inflight-on-push.sh` and `check-history-rewrite.sh` carry theirs in their own headers.
 The count is stated because it drifted: this said "five" while the file registered seven, which is
@@ -281,6 +338,16 @@ grants stay in `settings.local.json`, still ignored.
   (prefix the merge command with `MERGE_DESPITE_OUTSTANDING_WORK=1`) and the stated limits - a
   stalled agent writes nothing and is not detected; `bash -c` wrapping and REST-API merges are not
   seen - are documented in the hook's own header.
+- `PreToolUse` on `Bash`, **with no `if`**, same self-filtering shape - runs
+  `.claude/hooks/check-upstream-map-merged.sh`, which refuses a `gh pr merge <N>` while an entry in
+  `src/docs/development/upstream-map.yaml` naming that PR still says `status: pr-open`. The manifest
+  is meant to be written to `merged` on the branch, BEFORE the merge - there is no observable instant
+  where that is untrue, and doing it afterwards means a commit straight to master that nobody
+  remembers to make. It gates on the status rather than on mere mention, so it is silent once the
+  entry is right: a guard that fires on correct behaviour teaches people to route around it. Fails
+  open on every uncertainty - no PyYAML, unparseable manifest, no manifest in the CWD, no PR number
+  on the command line. Deliberately disposable: it exists only until the last upstream link is
+  closed out, and then it is one file to delete.
 - `PreToolUse` on `Bash`, **with no `if`** - runs `.claude/hooks/remind-inflight-on-push.sh`, which
   reminds you at PUSH time what this PR's own inflight note still lists as open. Push, not commit and
   not merge: commits are too frequent for a note that runs to dozens of lines, and the merge guard
@@ -298,6 +365,31 @@ grants stay in `settings.local.json`, still ignored.
   moves reports again immediately; the one clock is a floor on how often it fetches, so a push loop
   cannot become a fetch loop. It **fetches** before reading, because a stale `origin/master`
   under-reports, which is the exact failure it exists to prevent.
+- `SessionStart` **and** `PreToolUse` on `Bash` - runs
+  `.claude/hooks/check-branch-behind-its-own-remote.sh`, the mirror image of the drift hook above:
+  that one watches the base moving under you, this one watches **your own branch** moving under you.
+  At session start it runs `git fetch --all --prune`, throttled on a stamp file, so every ref the
+  session goes on to read is real; on a `git merge` or `git rebase` it **refuses** while
+  `origin/<branch>` holds commits the checkout does not, and names them.
+  `BRANCH_FRESHNESS_OVERRIDE=1` is the documented override, honoured both as a genuinely exported
+  variable and as a **token** of the parsed command - never as a raw-payload substring, which review
+  showed any prose mentioning the variable could satisfy, including the agent-written `description`
+  field, on a guard whose own deny message teaches that exact string.
+  `BRANCH_FRESHNESS_FETCH_FLOOR` (default 300s) is the SessionStart fetch throttle, and exists so
+  the self-test can drive both sides of it.
+  **It exempts two things on purpose, and a guard that blocks its own remedy is why**: merging or
+  rebasing onto `origin/<this-branch>` (or `@{upstream}`/`FETCH_HEAD`) is the reconciliation it asks
+  for, and `--abort`/`--continue`/`--skip`/`--quit` are the way out of a conflicted tree. The first
+  version denied both - which on `master` meant denying `git merge origin/master` every time master
+  advanced.
+  It denies where the other push hooks only report, and the line is the one this document already
+  draws: a situation with no wrong answer gets `additionalContext`, and merging onto a ref you know
+  is behind its published tip is not that - the result cannot be pushed without discarding somebody
+  else's commits, so no outcome was wanted. `git push` is deliberately not an arm, because git
+  refuses that case itself and legibly. Measured cost of not having it, on 2026-08-26: a session
+  fetched `origin/master`, never fetched astubbs#205's own two-week-stale ref, re-did a package
+  rename of 239 files, resolved 43 conflicts on top, and learned at the rejected push that all of it
+  was already published. Its own header owns the incident.
 - The push detection and the portable `stat` both live in `.claude/hooks/lib/hook-common.sh`, shared
   by the two push hooks. Each had been got wrong once in a way that made a hook *silently stop
   working* - `git -C <path> push` unmatched, `stat -c` unavailable on BSD - and a second copy hides
@@ -323,6 +415,9 @@ grants stay in `settings.local.json`, still ignored.
   and narrow on nouns: a false positive costs a few hundred tokens, a false negative costs the thing
   it exists to prevent.
 
+- `PostToolUse` on `Bash` runs `.claude/hooks/after-push-check-ci.sh`, the only registration on that
+  event. Why it has to be there rather than any earlier layer is above, under `PostToolUse`; it is
+  listed here so the registry is not silent about an event the rest of the file never uses.
 - `SessionStart` runs `.claude/hooks/inject-recorded-knowledge.sh`, which lists the **titles** of
   every `docs/solutions/` write-up, the open items in `docs/inflight/`, and the size of
   `docs/plans/`. Titles only, once per session, no bodies - the length tracks the corpus, so no

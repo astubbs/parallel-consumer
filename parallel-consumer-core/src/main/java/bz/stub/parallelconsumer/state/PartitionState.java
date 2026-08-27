@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.state;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.ParallelConsumer;
 import bz.stub.parallelconsumer.internal.BrokerPollSystem;
 import bz.stub.parallelconsumer.internal.EpochAndRecordsMap;
 import bz.stub.parallelconsumer.internal.PCModule;
@@ -112,10 +113,27 @@ public class PartitionState<K, V> {
     /**
      * Cache view of the state of the partition. Is set dirty when the incomplete state of any offset changes. Is set
      * clean after a successful commit of the state.
+     * <p>
+     * {@code volatile} because it crosses threads with no other fence: written on the control thread
+     * ({@code onSuccess} via the mailbox), read on the broker-poll thread by the commit path's
+     * dirty-partition collection in the default {@code PERIODIC_CONSUMER_ASYNCHRONOUS} mode. As a plain
+     * field, jcstress measured the reader observing {@code dirty} set while {@code offsetHighestSucceeded}
+     * was still stale at ~1.4e-7 per sample even with the real surrounding {@code ConcurrentSkipListMap}
+     * accesses on both sides - a burnt commit cycle, which on a partition that then goes idle holds the
+     * committed offset back until the next rebalance. With only this flag volatile the anomaly was 0 in
+     * 4.29e9 samples with the outcome declared FORBIDDEN: the release store on the write publishes the
+     * preceding plain writes, and the acquire load on the read observes them. The {@code long}s stay
+     * plain deliberately - fencing them too buys nothing the flag does not already provide, at extra
+     * cost on every read. Evidence, re-runnable: the {@code jcstress-poc/} module
+     * (astubbs/parallel-consumer#348), whose {@code CommitPathVisibilityProbes} models this exact pair -
+     * the arm carrying that FORBIDDEN outcome is
+     * {@code CommitPathVisibilityProbes.VolatileDirtyPublishesPlainSucceeded}. What a probe's zero and its
+     * rate are each worth, with these figures in its results table:
+     * docs/solutions/best-practices/a-stress-probe-is-an-instrument-you-built-not-a-test.md.
      */
     @Setter(PRIVATE)
     @Getter(PACKAGE)
-    private boolean dirty;
+    private volatile boolean dirty;
 
     /**
      * The highest seen offset for a partition.
@@ -291,8 +309,13 @@ public class PartitionState<K, V> {
      *       the identical answer.</li>
      *   <li><b>On take</b> - {@link #couldBeTakenAsWork}, per container against LIVE state. This is the
      *       authoritative one: nothing stale is ever executed, however it got into a shard.</li>
-     *   <li><b>On completion</b> - {@code WorkManager.handleFutureResult}, per container against live
-     *       state, so a result returning from work that went stale mid-flight is dropped.</li>
+     *   <li><b>On completion</b> - {@code WorkManager.handleFutureResult}, per container against state
+     *       resolved ONCE: the staleness answer and the acting reads share a single lookup, and the
+     *       success action mutates exactly the state object that was validated (two lookups were a torn
+     *       read - a rebalance in the gap meant validating the old state and acting on its replacement).
+     *       The failure path additionally re-validates against the live map immediately before its retry
+     *       re-queue, whose target structures the revoke sweep cleans. A result returning from work that
+     *       went stale mid-flight is dropped.</li>
      * </ol>
      *
      * <b>This checkpoint is knowingly racy, and that is not a defect.</b> The caller
@@ -328,6 +351,14 @@ public class PartitionState<K, V> {
 
     public void maybeRegisterNewPollBatchAsWork(@NonNull EpochAndRecordsMap<K, V>.RecordsAndEpoch recordsAndEpoch) {
         if (epochIsStale(recordsAndEpoch)) {
+            // Expected during any rebalance: a rebalance between poll() and registration means these
+            // records belong to an assignment we no longer hold, and their new owner will receive
+            // them. This is the epoch fencing working as designed, so it stays at debug.
+            //
+            // It was briefly a WARN calling itself "the primary suspect for the silent stall". The
+            // same investigation disproved that (see "Verified: epoch mismatch is NOT the cause" in
+            // docs/BUG_857_INVESTIGATION.md (deleted 2026-08-18; retrieve with `git show 262629aab:docs/BUG_857_INVESTIGATION.md`)), and the 2026-08-18 A/B soak established the commit-path
+            // deadlock as the cause instead. A WARN on every rebalance buries the lines worth acting on.
             log.debug("Inbound record of work has epoch ({}) not matching currently assigned epoch for the applicable partition ({}), skipping",
                     recordsAndEpoch.getEpochOfPartitionAtPoll(), getPartitionsAssignmentEpoch());
             return;
@@ -449,8 +480,11 @@ public class PartitionState<K, V> {
 
     // visible for testing
     protected OffsetAndMetadata createOffsetAndMetadata() {
-        Optional<String> payloadOpt = tryToEncodeOffsets();
-        long nextOffset = getOffsetToCommit();
+        // use tuple to make sure getOffsetToCommit is invoked only once to avoid dirty read
+        // and commit the wrong offset
+        ParallelConsumer.Tuple<Optional<String>, Long> tuple = tryToEncodeOffsets();
+        Optional<String> payloadOpt = tuple.getLeft();
+        long nextOffset = tuple.getRight();
         return payloadOpt
                 .map(encodedOffsets -> new OffsetAndMetadata(nextOffset, encodedOffsets))
                 .orElseGet(() -> new OffsetAndMetadata(nextOffset));
@@ -459,7 +493,8 @@ public class PartitionState<K, V> {
     /**
      * Next offset expected to be polled, upon freshly connecting to a broker.
      * <p>
-     * Defined as the offset, one below the highest sequentially succeeded offset.
+     * Defined as the offset one ABOVE the highest sequentially succeeded offset - Kafka commits the next
+     * offset to read, not the last one processed.
      */
     // visible for testing
     protected long getOffsetToCommit() {
@@ -478,9 +513,24 @@ public class PartitionState<K, V> {
      * @return incomplete offsets which are lower than the highest succeeded
      */
     public SortedSet<Long> getIncompleteOffsetsBelowHighestSucceeded() {
-        long highestSucceeded = getOffsetHighestSucceeded();
+        return getIncompleteOffsetsBelow(getOffsetHighestSucceeded());
+    }
+
+    /**
+     * The bounded filter behind {@link #getIncompleteOffsetsBelowHighestSucceeded()}, taking the bound as a parameter
+     * so a caller that also needs the bound itself can sample it <em>once</em> and use the same value for both -
+     * {@code OffsetMapCodecManager#encodeOffsetsCompressed} must, because its encoder marks every offset in
+     * {@code [base, bound]} that is absent from this set as completed, so deriving set and bound from two separate
+     * reads of the moving {@code offsetHighestSucceeded} let a concurrent completion above the mark widen the range
+     * around a stale set (see {@code OffsetEncoderWidenedRangeRaceTest}).
+     *
+     * @param highestSucceededBound the exclusive upper bound - a caller's single sample of
+     *                              {@link #getOffsetHighestSucceeded()}
+     * @return incomplete offsets which are lower than the given bound
+     */
+    public SortedSet<Long> getIncompleteOffsetsBelow(long highestSucceededBound) {
         return incompleteOffsets.keySet().parallelStream()
-                .filter(x -> x < highestSucceeded)
+                .filter(x -> x < highestSucceededBound)
                 .collect(toTreeSet());
     }
 
@@ -518,31 +568,35 @@ public class PartitionState<K, V> {
      * encodings are possible ({@link NoEncodingPossibleException}. Encoding may not be possible of - see
      * {@link OffsetMapCodecManager#makeOffsetMetadataPayload}.
      *
-     * @return if possible, the String encoded offset map
+     * @return the encoded offset map if one was possible, paired with the offset it was encoded
+     *         against. The two travel together deliberately: committing the payload against a
+     *         later offset than the one it describes is the confluentinc#893 defect, so the caller
+     *         must never re-derive the offset.
      */
-    private Optional<String> tryToEncodeOffsets() {
+    private ParallelConsumer.Tuple<Optional<String>, Long> tryToEncodeOffsets() {
+        long offsetOfNextExpectedMessage = getOffsetToCommit();
+
         if (incompleteOffsets.isEmpty()) {
             setAllowedMoreRecords(true);
-            return empty();
+            return ParallelConsumer.Tuple.pairOf(empty(), offsetOfNextExpectedMessage);
         }
 
         try {
             // todo refactor use of null shouldn't be needed. Is OffsetMapCodecManager stateful? remove null - confluentinc#233
-            long offsetOfNextExpectedMessage = getOffsetToCommit();
             var offsetRange = getOffsetHighestSucceeded() - offsetOfNextExpectedMessage;
             String offsetMapPayload = om.makeOffsetMetadataPayload(offsetOfNextExpectedMessage, this);
             ratioPayloadUsedDistributionSummary.record(offsetMapPayload.length() / (double) offsetRange);
             ratioMetadataSpaceUsedDistributionSummary.record(offsetMapPayload.length() / (double) OffsetMapCodecManager.DefaultMaxMetadataSize);
             boolean mustStrip = updateBlockFromEncodingResult(offsetMapPayload);
             if (mustStrip) {
-                return empty();
+                return ParallelConsumer.Tuple.pairOf(empty(), offsetOfNextExpectedMessage);
             } else {
-                return of(offsetMapPayload);
+                return ParallelConsumer.Tuple.pairOf(of(offsetMapPayload), offsetOfNextExpectedMessage);
             }
         } catch (NoEncodingPossibleException e) {
             setAllowedMoreRecords(false);
             log.warn("No encodings could be used to encode the offset map, skipping. Warning: messages might be replayed on rebalance.", e);
-            return empty();
+            return ParallelConsumer.Tuple.pairOf(empty(), offsetOfNextExpectedMessage);
         }
     }
 

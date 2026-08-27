@@ -1,14 +1,21 @@
 # Refactoring backlog
 
-This doc owns the deferred-work backlog - internal refactors, the release-gated breaking-change
-queue, and `TODO`/`FIXME`/`XXX` triage. AGENTS.md routes here and keeps only the one-line rule.
+This doc owns the **lightweight** refactor list - refactors too small to deserve their own
+`docs/inflight/` note - plus the release-gated breaking-change queue and `TODO`/`FIXME`/`XXX`
+triage. AGENTS.md routes here and keeps only the one-line rule.
 
-Deferred internal refactors - improvements noticed while working that are too big
-or too risky to fold into the change at hand, to be picked up **when things are
-quiet**. This is a solo-maintainer backlog, not an issue tracker: entries live
-here (versioned, greppable, zero per-item ceremony) instead of as GitHub issues.
+An entry is a line or two: no owner, no tags, no state. Improvements noticed while working that are
+too big or too risky to fold into the change at hand, to be picked up **when things are quiet**. This
+is a solo-maintainer list, not an issue tracker: entries live here (versioned, greppable, zero
+per-item ceremony) instead of as GitHub issues.
 
-**This is the index for all refactor work.** It also catalogues the abandoned
+**The axis is weight, not timing.** The moment an entry acquires a decision, a blocker, or evidence
+worth keeping, it has outgrown this file: promote it to a `docs/inflight/` note and delete the line in
+the same commit - neither file may state it twice.
+[`docs/inflight/AGENTS.md`](inflight/AGENTS.md) owns that boundary. Being here says nothing about
+*when* the work happens, and work decided to happen later is **not** moved here from a note.
+
+**This is the index for the small refactor work, and for the archive below.** It also catalogues the abandoned
 draft branches and prior closed PRs so their ideas aren't lost - each with what it
 did, whether it's still relevant, and any linked issue. Why so many draft-looking
 branches? This fork was never meant to be the project's primary - it was astubbs's
@@ -73,6 +80,17 @@ These change the public, user-visible surface, so they still may not be folded i
 patch** - that is what release-gating means, and it is the only thing it means. Unlike the internal
 refactors below, which are non-breaking and can land at any point in any line.
 
+- **DONE, landed in astubbs/parallel-consumer#267: `InternalRuntimeException` renamed to
+  `PCInternalRuntimeException`.** A user-visible break - it is what arrives from
+  `getFailureCause()`, and it is the type named in upstream's own report text
+  (`...internal.InternalRuntimeException: Timeout waiting for commit response PT30S`,
+  confluentinc#833). Renamed because the old name reads like a JDK type: in a stack trace or an IDE
+  exception picker that prints simple names, `InternalRuntimeException` could belong to anything, and
+  the `PC` prefix says whose it is at a glance. Recorded here rather than only in the commit, because
+  this section is what the release notes are assembled from.
+  [`docs/inflight/core-exception-hierarchy-cleanup.md`](inflight/core-exception-hierarchy-cleanup.md)
+  owns the rest of the naming work - `InternalException` and the two spellings of the PC prefix are
+  untouched, so a later pass will be a second break unless it is done in this same release.
 - **Remove the deprecated `commitInterval` options** - `public void setTimeBetweenCommits` /
   `public Duration getTimeBetweenCommits` in `internal/AbstractParallelEoSStreamProcessor.java`.
 - **Remove the accreting deprecated `ParallelConsumerOptions` fields**
@@ -152,7 +170,12 @@ them, do not copy them back.
   (extract-controller's base - MockConsumer-with-PC demonstration; missed by every earlier
   catalogue, added by the 2026-08-17 branch audit), `origin/refactor/infinite-retry` @80feb470
   (move timeout-retry into the controller; poller just forwards the error),
-  `origin/refactor/function-runner` @3fd8caac, `origin/massive-refactor` @f96e0bc4 (the umbrella attempt).
+  `origin/refactor/function-runner` @3fd8caac, `origin/massive-refactor` @f96e0bc4 (the umbrella attempt),
+  `origin/move-cons-to-pc` @9dc92e51c ("Move consumer back to PC wrapped for thread safety, so commits
+  are in line with control" - 2020-12-03, **the earliest attempt**, three weeks after the mode split;
+  comments out `BrokerPollSystem`'s `committer`, `maybeCloseConsumer` and `isResponsibleForCommits` so
+  control commits directly. Surfaced by the 2026-08-18 archaeology; missed by the 2026-08-17 branch
+  audit. The record does not say why it stopped).
   Registered in the manifest as `refactor-thread-model-god-class` (this doc stays the editorial owner).
 
 ### Annotate every fixed race with `@GuardedBy`, as you fix it
@@ -172,6 +195,28 @@ them, do not copy them back.
   happens-before edge. Found by RacerD 2026-08-25; **not previously in any ledger**. The poll thread
   can read a stale value and mis-time a commit, on a codebase that already tracks commit-timeout
   flakes. Not diagnosed further. Fix it with `@GuardedBy` per the policy above.
+
+### Make the commit/close ownership polymorphism official - an interface, not a rename (SMALL, do any time)
+*Independent of the thread-model work below/above. No behaviour change, but do not file this as
+cosmetic - see the last bullet.*
+- `isResponsibleForCommits()` exists on **both** `BrokerPollSystem` and
+  `AbstractParallelEoSStreamProcessor`, with identical javadoc, and they are an **XOR over commit
+  mode**: `committer.isPresent()` is true iff consumer-commit mode, `committer instanceof
+  ProducerManager` is true iff transactional. Exactly one thread closes the consumer.
+- **Both ask the same question** - "am I the component that commits, and therefore closes the
+  consumer?" - and only the answer differs per component. That is polymorphism, expressed as two
+  unrelated private methods that happen to share a name. Nothing declares them halves of one decision.
+- **Fix: give them a common interface** - one method, one javadoc, two implementors - so the
+  relationship is declared rather than inferred. A rename alone only documents the trap more loudly.
+- **Then enforce the invariant instead of describing it**: with a shared type, "exactly one
+  implementor returns true for a given configuration" becomes assertable at construction. Today it is
+  a property nobody can state, which is precisely how it survived unexamined since 2020.
+- **Why this is not cosmetic.** A 2026 investigation read the two as contradictory, concluded the
+  subsystems disagreed, and proposed "reconciling" them - a fix to a non-bug. They have never
+  disagreed and neither has been edited since 2020. Names are the interface that humans *and coding
+  agents* read to infer intent; a misleading one produced a wrong plan before any code was touched.
+- Background and the full commit record:
+  `docs/solutions/architecture-patterns/two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md`.
 
 ### Decompose the God class - `AbstractParallelEoSStreamProcessor` (1533 lines)
 - Control loop + lifecycle/state machine + commit orchestration + threading +
@@ -243,6 +288,36 @@ them, do not copy them back.
   - `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` (3) - primitive written in one thread may not
     be visible to another: `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled`,
     `ConsumerManager.commitRequested`, `RetryQueue.closed`.
+  - **`AT_STALE_THREAD_WRITE` on an OBJECT reference, which no detector fired on - FIXED 2026-08-18
+    on the astubbs#119 branch:**
+    `ConsumerManager.metaCache` (`private ConsumerGroupMetadata metaCache;`) is written by the poll
+    thread in `updateCache()` and read from other threads via `groupMetadata()`, with **no `volatile`
+    and no other happens-before edge**. Its two neighbours in the same class *are* volatile
+    (`pausedPartitionSizeCache`, and `assignmentSizeCache` which astubbs#29 adds), so the omission
+    reads as an oversight rather than a decision. The SpotBugs entry above is
+    `AT_STALE_THREAD_WRITE_OF_**PRIMITIVE**`, which cannot fire on an object reference - which is
+    exactly why this one was never listed.
+    **Why it matters more than the primitives:** `ConsumerGroupMetadata` carries the generation and
+    member IDs, and the control thread passes it to `producer.sendOffsetsToTransaction(...)`, where
+    the broker uses it for **zombie fencing**. A stale generation is the wrong answer to "is this
+    member still legitimate?". In practice the two threads synchronise incidentally through the
+    commit queues and locks, so an edge usually exists - but it is not guaranteed by design.
+    Pre-existing on `master` (from `a3378ed58`, 2021, the AK 2.7 concurrent-access fix); **not**
+    introduced by astubbs#29. Fix is one `volatile`; worth its own small change rather than riding
+    an unrelated PR.
+  - **No SpotBugs rule can be turned on to catch the object-reference case - checked, not assumed.**
+    The full `AT_*` family in spotbugs 4.10.3 is `AT_NONATOMIC_OPERATIONS_ON_SHARED_VARIABLE`,
+    `AT_OPERATION_SEQUENCE_ON_CONCURRENT_ABSTRACTION`, `AT_UNSAFE_RESOURCE_ACCESS_IN_THREAD` and
+    `AT_STALE_THREAD_WRITE_OF_PRIMITIVE`; there is no `..._OF_REFERENCE`. `IS2_INCONSISTENT_SYNC`
+    needs the field to be synchronised *some* of the time (it never is here, so there is no
+    inconsistency to find) and `UG_SYNC_SET_UNSYNC_GET` needs a synchronised setter. Raising
+    `<threshold>` from `Medium` to `Low` cannot surface a detector that does not exist, and
+    `<effort>` is already `Max`. For object references SpotBugs cannot separate "shared across
+    threads, unsynchronised" from an ordinary single-threaded field without escape analysis.
+    **Enforcement option that would work here: an ArchUnit rule** - e.g. every non-final instance
+    field of a class whose values are published for cross-thread reads must be `volatile`, `final`,
+    or an atomic type. The repo already runs ArchUnit (`ArchitectureTest`, `TestConventionRules`), so
+    this is the cheap way to make the invariant fire instead of documenting it.
 - Fix = `AtomicInteger`/`AtomicLong` for the counters and `volatile` for the flags -
   **or** let the thread-model rework above absorb them, since several sit in exactly
   the poll/control-thread coordination it reshapes. Fixing piecemeal now may conflict.
@@ -274,6 +349,14 @@ them, do not copy them back.
   `question sneaky throws usage` / `enforce max uncommitted`: `sneaky throws` IO handling;
   missing `max-uncommitted < Short.MAX` bound.
 
+- **Not thread-safe if encoding is ever parallelised (latent, tied to confluentinc#200).**
+  Since confluentinc#892 / astubbs#57 the instance is *cached and shared* (per-partition
+  `PartitionState.om` for encoding; one `PartitionStateManager.offsetMapCodecManager` for
+  decode). That is correct *today* only because encoding runs single-threaded on the control
+  thread: `encodingCounters` is a plain `HashMap` mutated in `getCounterMeterForEncoding` on
+  the encode path. If the confluentinc#200 thread-model refactor ever parallelises encoding it
+  races - make it concurrent, or confine it. Not a bug in the current single-threaded design.
+
 ### offsets/OffsetSimultaneousEncoder.java
 - `TODO VERY large offset ranges is slow`: large offset ranges (→ `Integer.MAX_VALUE`) are slow -
   scans could be skipped by passing in the known incompletes map (draft:
@@ -295,14 +378,6 @@ them, do not copy them back.
 ### offsets/OffsetDecodingError.java
 - `TODO should extend java.lang.Error`: should it extend `java.lang.Error`?
   (exception-hierarchy design)
-
-### state/ShardKey.java
-
-- **`KeyOrderedKey`'s javadoc contradicts its constructor.** The doc describes topic-only scoping,
-  but the constructor builds `new TopicPartition(rec.topic(), rec.partition())` and the field is even
-  named `topicName`. The behaviour is the correct one - partition-scoped keys are what keep the
-  offset-keyed `entries` map free of cross-partition collisions in KEY ordering mode - so this is a
-  doc fix plus a field rename, not a behaviour change.
 
 ### state/ProcessingShard.java
 
@@ -340,10 +415,30 @@ them, do not copy them back.
   cached it (the `confluentinc#859` leak site), but the broader [confluentinc#233](https://github.com/confluentinc/parallel-consumer/issues/233)
   (mirror astubbs#117) refactor remains.
 
+### state/ShardManager.java
+- The confluentinc#905 `SHARDS_MAX_SIZE` gauge walks every shard queue
+  (`getCountOfWorkTracked()` is `entries.size()`, O(n) on a `ConcurrentSkipListMap`), so each metrics scrape
+  is O(total queued records). It used to duplicate a traversal `SHARDS_SIZE` did as well; `SHARDS_SIZE` now
+  reads the O(1) conservation figure, so this is the only scan left.
+  Negligible now; if it ever matters, a max cannot be conserved the way the total is, so it needs its own
+  design - see
+  **Shard-count caching** under [Performance](#performance) above for the upstream design draft
+  (`confluentinc#530`) and the three abandoned branches that attempted it.
+
 ### state/WorkContainer.java
 *Mirror: [#143](https://github.com/astubbs/parallel-consumer/issues/143) - and see the index above: the field is read by nobody, so deletion beats an enum.*
 - `Instance reference to otherwise static state`: instance field working around static state -
   folds into static-state removal.
+
+### state/WorkManager.java
+- **Rename the `pm` and `sm` fields to `partitionManager` and `shardManager`** - raised by Antony in
+  review on astubbs/parallel-consumer#346. Two-letter names for the two collaborators the class
+  delegates almost everything to, and `pm` is ambiguous across core: it abbreviates
+  `PartitionStateManager` here and `ProducerManager` in `ParallelEoSStreamProcessor`. Not folded into
+  the PR that raised it, because both carry `@Getter(PUBLIC)`, so the rename changes `getPm()`/
+  `getSm()` too and reaches main, unit and integration sources - far outside the one-seam concurrency
+  fix under review there. Do it as its own change, where the diff is legible as a rename.
+  `// TODO(refactor):` markers sit on both fields.
 
 ### internal/AbstractParallelEoSStreamProcessor.java
 - God class (see cross-cutting). `todo move into {@link WorkManager}` (misplaced
@@ -377,7 +472,7 @@ them, do not copy them back.
   lock-hygiene: a dedicated private lock is safer (same idea as the PCMetrics `confluentinc#859`
   fix); low priority, separate concern. `alternatives to this brute force approach`:
   brute-force transaction-commit retry.
-- **`InternalRuntimeException` names the wrong thing at the produce-callback site**, and the cost is
+- **`PCInternalRuntimeException` names the wrong thing at the produce-callback site**, and the cost is
   rediscovery. `sendCallback` throws it when a send fails in non-transactional mode, but that is an
   **expected operational state**, not an internal fault. Two different questions decide the scope
   here, and conflating them has been the recurring error:
@@ -400,15 +495,15 @@ them, do not copy them back.
   before they can conclude it is ordinary failure handling. It was verified from source and
   kafka-clients bytecode during astubbs#261 review, and nothing in the code records the answer.
   - **Preferred, non-breaking:** throw a specific subclass - e.g. `RecordPublishFailedException
-    extends InternalRuntimeException` - so existing `catch (InternalRuntimeException)` keeps
-    working while the type states the situation. Renaming `InternalRuntimeException` itself would
+    extends PCInternalRuntimeException` - so existing `catch (PCInternalRuntimeException)` keeps
+    working while the type states the situation. Renaming `PCInternalRuntimeException` itself would
     be user-visible and belongs in
     [Breaking changes](#breaking-changes-queued-for-next-major-version) instead; the subclass avoids
     needing that.
     - **The subclass alone is not enough, and this is the part that is easy to get wrong.** A
       synchronous callback failure escapes `produceMessages` into
       `ParallelEoSStreamProcessor#processAndProduceResults`, whose `catch (Exception e)` immediately
-      rethrows `new InternalRuntimeException("Error while waiting for produce results", e)`. The
+      rethrows `new PCInternalRuntimeException("Error while waiting for produce results", e)`. The
       specific type would survive only as a nested cause, so a caller still could not catch it and
       the observable failure type would be exactly as generic as today. The refactor has to preserve
       the subtype through that outer wrapper too - rethrow it unchanged, or introduce the specific
@@ -467,6 +562,17 @@ but not this.*
   asserts a null failure cause, which a scenario that expects PC to die must override. Doing this
   means re-verifying the six classes already on the base, which is why it is here rather than folded
   into the PR that noticed it (astubbs#204).
+
+### Test infrastructure - the `state` package's white-box harness is copied per class
+
+- **The base class now exists; three classes still open with the same lines instead of extending it** -
+  `ShardManagerTest`, `ProcessingShardStaleReplacement909Test`, `ShardAvailableCountOwnershipTest`; grep
+  `PCModuleTestEnv module = mu.getModule()`. `BrokerlessWorkManagerTestBase` holds that wiring once - it
+  lives in `bz.stub.parallelconsumer` with protected fields, so the `state` package extends it fine - and
+  `ShardManagerStaleContainerTest` and `EpochAndRecordsMapRaceTest` are on it (astubbs#375). The three left
+  are not deletions: `ShardAvailableCountOwnershipTest` names its topic constant `TOPIC`, and
+  `ShardManagerTest` also builds a `PartitionState` and declares no `sm`/`pm`, so each needs its own small
+  reconciliation (noticed on astubbs#373).
 
 ### Test infrastructure - timing-based waits
 
@@ -631,6 +737,18 @@ rather than fixed there so the gate's scope stayed one decision.
   defect, copy-pasted four times. Not ours to fix, but the duplication is: fold it into one shared
   test helper so it has a single home and disappears in one edit. Re-check on the Kafka 4.x upgrade -
   the behaviour may already have changed.
+
+### The offset-decode test helper, copy-pasted x7
+
+- `deserialiseIncompleteOffsetMapFromBase64` is wrapped by a near-identical private `decode` helper in
+  seven test files across two packages: `OffsetEncoderWidenedRangeRaceTest`,
+  `PartitionStateCommitEncodeShift894Test`, `PartitionStateCommitShiftCompounding894Test`,
+  `PartitionStateLincheckTest`, `OffsetEncodingBackPressureTest`,
+  `WorkManagerOffsetMapCodecManagerTest` and `CommitHistory`. Each is a call plus a debug log. Fold
+  into one shared helper. Surfaced by the duplicate-code bot flagging one pair of them; the pair is
+  not the finding, the seven are. Related but distinct from the racing-double unification tracked in
+  `docs/inflight/bug-torn-read-family.md`, which is about the two `Racing*State` doubles rather than
+  this helper.
 
 ### Cross-module test clones (the file-similarity backlog behind astubbs#40)
 
