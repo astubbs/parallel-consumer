@@ -42,8 +42,13 @@ public class ProcessingShard<K, V> {
      * <p>
      * Is a Map because need random access into collection, as records don't always complete in order (i.e. UNORDERED
      * mode).
+     * <p>
+     * <b>Deliberately not exposed.</b> Every insertion and removal has to be paired with a
+     * {@link RecordPopulation} admission or retirement, and that pairing is only enforceable while this class is
+     * the only thing that can touch the map. Read-only totals are available through
+     * {@link #getCountOfWorkTracked()}; a test that needs a resident planted white-box goes through
+     * {@link #plantResident(WorkContainer)}, which keeps the pairing.
      */
-    @Getter
     private final NavigableMap<Long, WorkContainer<K, V>> workMap = new ConcurrentSkipListMap<>();
 
 
@@ -53,6 +58,19 @@ public class ProcessingShard<K, V> {
     private final ParallelConsumerOptions<?, ?> options;
 
     private final PartitionStateManager<K, V> pm;
+
+    /**
+     * The conservation-derived count of records held across <em>all</em> shards, which this shard contributes its
+     * admissions and retirements to. Shared instance, owned by {@link ShardManager}.
+     * <p>
+     * <b>Independent of {@link #workAwaitingSelectionCount} below, and the two must not be conditioned on each
+     * other.</b> This one counts what the shard <em>holds</em> and is driven by the map's own mutations - the
+     * value {@code put} displaced, the value {@code remove} gave up. That one counts what is <em>selectable</em>
+     * and is driven by the compare-and-set on a container's selection claim. A record can leave the selection
+     * population without leaving the shard (it was taken as work) and can leave the shard while holding no claim
+     * (it was revoked at a worker), so neither figure is derivable from the other.
+     */
+    private final RecordPopulation population;
 
     private final RateLimiter slowWarningRateLimit = new RateLimiter(5);
 
@@ -73,7 +91,9 @@ public class ProcessingShard<K, V> {
      * that window, can see the counter momentarily at -1. Every such interleaving still settles correct, and every
      * consumer that DRIVES ANYTHING reads the aggregate in
      * {@link ShardManager#getNumberOfWorkQueuedInShardsAwaitingSelection()}, which floors at zero - that is the one
-     * behind {@code isSufficientlyLoaded()} and {@code drain()}. The single exception reads nothing: the
+     * behind {@code drain()}. It is no longer the one behind {@link WorkManager#isSufficientlyLoaded()}: the load
+     * gate now reads {@link ShardManager#getWorkableRecords()}, which is derived from {@link #population} and
+     * never touches this counter. The single exception reads nothing: the
      * under-served-retrieval diagnostic in {@link ShardManager#getWorkIfAvailable(int)} sums this counter unfloored
      * behind {@code log.isDebugEnabled()}, so the transient can surface as {@code awaitingSelection=-1} in one debug
      * line. Left unfloored deliberately - that line exists to show a human what the accounting actually says, and a
@@ -88,27 +108,68 @@ public class ProcessingShard<K, V> {
     private final AtomicLong workAwaitingSelectionCount = new AtomicLong(0);
 
     void addWorkContainer(WorkContainer<K, V> incomingWorkContainer) {
-        long key = incomingWorkContainer.offset();
-        WorkContainer<K, V> existingWorkContainer = workMap.get(key);
-        if (existingWorkContainer != null) {
-            // Check if the existing entry is stale and should be replaced
-            if (isWorkContainerStale(existingWorkContainer)) {
-                log.debug("Replacing stale entry (epoch {}) for offset {} with fresh one (epoch {})",
-                        existingWorkContainer.getEpoch(), key, incomingWorkContainer.getEpoch());
-                workMap.put(key, incomingWorkContainer);
-                // The stale entry has left the shard, so it gives back its claim - if it still holds one. It does
-                // not when it was already taken as work, and did when it was only ever queued; the counter now
-                // tells those apart from the container's own record instead of guessing, which is what used to
-                // leave this branch a claim short every time a taken entry was replaced.
-                excludeFromSelection(existingWorkContainer);
-                includeInSelection(incomingWorkContainer);
-            } else {
-                log.debug("Entry for {} already exists in shard queue, dropping record", incomingWorkContainer);
-            }
-        } else {
-            workMap.put(key, incomingWorkContainer);
-            includeInSelection(incomingWorkContainer);
+        long offset = incomingWorkContainer.offset();
+        WorkContainer<K, V> residentBeforePut = workMap.get(offset);
+        if (residentBeforePut != null && !isWorkContainerStale(residentBeforePut)) {
+            log.debug("Entry for {} already exists in shard queue, dropping record", incomingWorkContainer);
+            return;
         }
+        if (residentBeforePut != null) {
+            log.debug("Replacing stale entry (epoch {}) for offset {} with fresh one (epoch {})",
+                    residentBeforePut.getEpoch(), offset, incomingWorkContainer.getEpoch());
+        }
+
+        // ADMIT FIRST, then let the map itself say what happened - never the read above.
+        //
+        // By the time the insertion runs, `residentBeforePut` is only advice: a stale sweep on the other thread
+        // can have removed it and retired it in between, which turns what looks like a replacement into an
+        // insertion. Deciding from `residentBeforePut` would then skip the admission for the only container now
+        // at this offset, while its eventual departure still retires - and the population sits permanently below
+        // what the shards hold, with no clamp and nothing to reconcile it. Reading low under-throttles, so the
+        // drift over-fetches from the broker rather than stalling it, but it never self-corrects.
+        //
+        // Admitting before the put also preserves RecordPopulation's ordering invariant - a retirement can never
+        // be observed against an admission that has not been committed yet - which is what lets getInSystem() be
+        // non-negative by construction instead of by clamp.
+        population.onAdmitted();
+        WorkContainer<K, V> displaced = workMap.put(offset, incomingWorkContainer);
+
+        // The claim protocol is separate accounting, and deliberately reads NOTHING from the branch above: the
+        // arrival is offered a claim because it is now resident, and the displaced container gives one back
+        // because it is not. Each is settled by its own compare-and-set, so neither can double-count when the
+        // other thread reaches the same container first. includeInSelection also rechecks residency, which is
+        // what covers the arrival being swept between the put and here.
+        includeInSelection(incomingWorkContainer);
+        if (displaced != null) {
+            // A real replacement after all: one container left the map as this one entered it, so the
+            // speculative admission is balanced by the displaced container's retirement and the shard's
+            // population is unchanged.
+            population.onRetired();
+            // The displaced container gives back its claim IF it still holds one. It does not when it was
+            // already taken as work, and does when it was only ever queued - the compare-and-set tells those
+            // apart from the container's own record instead of guessing, which is what used to leave this
+            // branch a claim short every time a taken entry was replaced.
+            excludeFromSelection(displaced);
+        }
+    }
+
+    /**
+     * Plants a container as a resident of this shard, paired with its {@link RecordPopulation} admission but
+     * <em>without</em> offering it a selection claim.
+     * <p>
+     * For white-box tests that need a resident already in place - typically a stale one, which the poller's sweep
+     * normally removes, so a test that lets the sweep run never reaches the branch it is aiming at. It exists
+     * rather than a getter for {@link #workMap} because a raw map handle lets a test insert without admitting,
+     * which drifts the population silently and fails nothing.
+     * <p>
+     * No claim is offered because the containers planted this way have generally already spent theirs by being
+     * taken as work; offering one here would count a container the shard is asserting is uncounted. Use
+     * {@link #addWorkContainer} for anything modelling a genuine arrival.
+     */
+    // visible for testing
+    void plantResident(WorkContainer<K, V> wc) {
+        population.onAdmitted();
+        workMap.put(wc.offset(), wc);
     }
 
     /**
@@ -121,22 +182,16 @@ public class ProcessingShard<K, V> {
      * <p>
      * Read-only, and package-private for tests that need to assert WHICH container won a contested offset rather
      * than merely how many are tracked. A read cannot break the invariants that keep {@link #workMap} private -
-     * only a write can, which is why there is no corresponding setter and why {@link #addWorkContainer} remains
-     * the only way in.
+     * only a write can, which is why there is no corresponding setter and why {@link #addWorkContainer} and
+     * {@link #plantResident} are the only ways in.
      */
-    Optional<WorkContainer<K, V>> getWorkContainerAt(long offset) {
+    Optional<WorkContainer<K, V>> getWorkContainerAtOffset(long offset) {
         return Optional.ofNullable(workMap.get(offset));
     }
 
     public void onSuccess(WorkContainer<?, ?> successfulWork) {
         // remove work from shard's queue
-        WorkContainer<K, V> removedContainer = workMap.remove(successfulWork.offset());
-        if (removedContainer != null) {
-            // Normally a no-op: the claim was taken when the record was taken as work. Done unconditionally anyway
-            // so that "a container that has left the shard holds no claim" is an invariant of every exit path
-            // rather than a property of the paths somebody remembered.
-            excludeFromSelection(removedContainer);
-        }
+        retire(workMap.remove(successfulWork.offset()));
     }
 
     /**
@@ -178,8 +233,33 @@ public class ProcessingShard<K, V> {
      * {@code WAITING_RECORDS} and from {@code drain()}'s check that nothing is still awaiting processing.
      */
     public WorkContainer<K, V> removeWorkAtOffset(long offset) {
-        WorkContainer<K, V> removed = workMap.remove(offset);
+        return retire(workMap.remove(offset));
+    }
+
+    /**
+     * The one exit path: whatever the map actually gave up is retired from the population and gives back its
+     * selection claim.
+     * <p>
+     * <b>Both halves are driven by the map's own return value, never by the container the caller is holding.</b>
+     * Three removal paths run across two threads - the revocation sweep, the epoch-change stale sweep, and
+     * {@link #getWorkIfAvailable}'s last-resort one - and when two of them collide on the same offset only one
+     * removes anything. Retiring on both retires a single admission twice, and since {@link RecordPopulation} has
+     * no clamp and nothing reconciles it against the shards, the deficit is permanent: the load gate then
+     * believes fewer records are held than really are, and over-fetches for the life of the consumer.
+     * <p>
+     * The claim release is unconditional rather than predicated on the container's observable state, and normally
+     * a no-op - the claim was already given back when the record was taken as work. Done anyway so that "a
+     * container that has left the shard holds no claim" is an invariant of every exit path rather than a property
+     * of the paths somebody remembered; only the caller that wins the compare-and-set moves the counter.
+     * <p>
+     * A value-conditional {@code workMap.remove(offset, container)} would not do instead.
+     * {@link WorkContainer#equals(Object)} is topic, partition and offset only, so a <em>fresh</em> container
+     * that replaced this one at the same offset compares equal to it and would be removed as though it were the
+     * stale one.
+     */
+    private WorkContainer<K, V> retire(WorkContainer<K, V> removed) {
         if (removed != null) {
+            population.onRetired();
             excludeFromSelection(removed);
         }
         return removed;
@@ -192,17 +272,22 @@ public class ProcessingShard<K, V> {
     // 2. will cause the consumer to paused consuming new messages indefinitely
     public List<WorkContainer<K, V>> removeStaleWorkContainersFromShard() {
         List<WorkContainer<K, V>> staleContainers = new ArrayList<>();
-        var iterator = workMap.entrySet().iterator();
-        while (iterator.hasNext()) {
-            Map.Entry<Long, WorkContainer<K, V>> entry = iterator.next();
+        for (Map.Entry<Long, WorkContainer<K, V>> entry : workMap.entrySet()) {
             if (isWorkContainerStale(entry.getValue())) {
-                // Safe to remove during iteration on a ConcurrentSkipListMap - but this removes by KEY, so a fresh
-                // container the controller put here since next() returned is what actually leaves, and the
-                // excludeFromSelection below then releases the wrong object. Open, with the decision it needs, in
+                // Not iterator.remove(): it discards the map's return value, so it cannot tell "this call removed
+                // the record" from "another thread had already removed it" - and both the retirement and the
+                // claim release have to know which. See retire().
+                //
+                // This still removes by KEY, so a fresh container the controller put here since next() returned
+                // is what actually leaves. Accounting for what LEFT rather than for what was inspected is half of
+                // that defect closed: the population and the claim now follow the evicted object, and the caller
+                // is handed it rather than the container the sweep was looking at. The eviction of the fresh
+                // record itself is untouched and still open, with the decision it needs, in
                 // docs/inflight/bug-stale-sweep-iterator-evicts-fresh-replacement.md.
-                iterator.remove();
-                excludeFromSelection(entry.getValue());
-                staleContainers.add(entry.getValue());
+                WorkContainer<K, V> removed = removeWorkAtOffset(entry.getKey());
+                if (removed != null) {
+                    staleContainers.add(removed);
+                }
             }
         }
         return staleContainers;
@@ -254,10 +339,17 @@ public class ProcessingShard<K, V> {
                 //  matter.
 
                 if (isWorkContainerStale(workContainer)) {
-                    // remove stale container and deduct on workAwaitingSelectionCount
+                    // last-resort sweep, for a container that went stale without either epoch-change sweep having
+                    // reached it - it still has to be retired and released like every other departure, and taken
+                    // out of the retry queue like ShardManager.removeStaleContainers() does. Leaving the queue
+                    // entry behind orphans it forever: nothing else removes an entry whose container is no longer
+                    // in any shard, and the workable figure the load gate reads subtracts a parked-for-retry
+                    // count that would then include a record the population no longer does.
                     log.debug("shard {} there are still stale work container, need to remove container : {}", this, workContainer);
-                    iterator.remove();
-                    excludeFromSelection(workContainer);
+                    WorkContainer<K, V> removed = removeWorkAtOffset(workContainer.offset());
+                    if (removed != null) {
+                        retryQueue.remove(removed);
+                    }
                 } else {
                     log.trace("Partition for shard {} is blocked for work taking, stopping shard scan", this);
                     break;

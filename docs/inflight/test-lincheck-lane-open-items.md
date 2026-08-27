@@ -79,15 +79,23 @@ adding a class with a narrow guess in it.
    `PartitionState#maybeRegisterNewPollBatchAsWork` makes a record selectable before its offset is
    registered, latent for the same single-selector reason.
 
-   **`ProcessingShard.availableWorkContainerCount` (renamed from `availableWorkContainerCnt`) is NOT a Lincheck target, and this list said it was.**
-   The `AtomicLong`-must-track-`ConcurrentSkipListMap` signature fits, and the clamp in
-   `dcrAvailableWorkContainerCntByDelta` is commented `// in case of possible race condition`, so the
-   drift reads as a race. astubbs#336 measured it and it is not one: both drift paths are conditional
-   mismatches **reproducible on a single thread**, the clamp's comment is wrong, and that PR deletes
-   the clamp. Lincheck finds interleavings; this needs none, and astubbs#336 already has the
-   single-threaded tests. Recorded rather than quietly dropped, because the wrong inference here was
-   made twice - reading a comment claiming a race instead of measuring - which is the same error this
+   <!-- post-merge: checked-begin -->
+   **`ProcessingShard.workAwaitingSelectionCount` (once `availableWorkContainerCnt`) is NOT a Lincheck
+   target, and this list said it was.** The `AtomicLong`-must-track-`ConcurrentSkipListMap` signature
+   fits, and the clamp that used to sit on it carried the comment `// in case of possible race
+   condition`, so the drift read as a race. It was measured and it was not one: the drift paths were
+   conditional mismatches **reproducible on a single thread**, the comment was wrong, and the clamp is
+   gone. Lincheck finds interleavings; that needed none, and the tests that hold the fix in place are
+   single-threaded. Recorded rather than quietly dropped, because the wrong inference here was made
+   twice - reading a comment claiming a race instead of measuring - which is the same error this
    lane's own calibration caught in itself.
+
+   The counter is now owned by a compare-and-set on each container's selection claim rather than
+   inferred from its observable state, so the remaining question is not "does it drift" but the
+   two-atomics transient the claim protocol accepts deliberately - the claim and the count move
+   separately, and `ProcessingShard.workAwaitingSelectionCount`'s own javadoc names the one reader
+   that can see it. That IS interleaving-shaped, and is the version of this candidate worth a harness.
+   <!-- post-merge: checked-end -->
 2. **`PCMetrics.registeredMeters` - a plain `ArrayList` written from two threads.** Not a concurrent
    collection at all (`private List<Meter.Id> registeredMeters = new ArrayList<>()`, added to from
    four registration paths). **The lane found this unprompted, during calibration, from a scenario
