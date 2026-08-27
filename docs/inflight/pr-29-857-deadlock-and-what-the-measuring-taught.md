@@ -59,6 +59,31 @@ true on 2026-08-18, and two of its four clusters have moved since (cluster 3 del
 cluster 4 resolved by deleting the mirror rather than gating it). Read it with this paragraph beside
 it.
 
+## NEXT TASKS, in order
+
+1. **Settle whether the stall detector MISSES real failures.** Across the astubbs#344 arms a third of
+   the failing runs went red with `NO_PROGRESS` not firing at all. This is top of the list because
+   the 2026-08-25 Class 2 demotion left the gating liveness claim resting on this detector, and
+   2026-08-28 then showed it ALSO over-fires on merely-slow runs. A detector that over-fires and
+   under-fires is worse than no detector, because the suite goes green on its silence.
+   `bin/audit-stall-detector-silence.sh` classifies every failing run by what actually caught it;
+   the case that matters is a failure with no detector firing at all.
+
+2. **Confirm the drain result on a second seed.** The async line was demoted to a timing proxy on one
+   firing. The Class 2 demotion used two. Cheap, and it is what makes the demotion safe to act on.
+
+3. **Migrate the records out of this note, then fix this PR's title and body.** The note is deleted
+   when the PR lands and it holds the week's findings; the title claims the symptom rather than the
+   mechanism, and the body is stale in four ways.
+
+4. **The transactional revoke wait - NOT YET.** It carries astubbs#44, the only issue upstream ever
+   labelled a verified bug, but astubbs#257 and astubbs#262 are open over the same area.
+   astubbs#262 sets out to prove or falsify every documented transactional guarantee, which will
+   likely reframe the question. Chasing it first means resolving against a moving target.
+
+5. **The two unreproduced field reports** (astubbs#175, astubbs#177). astubbs#352, the commit-failure
+   seam, addresses their shape and is already open.
+
 **Still owed at merge:** merge-strategy recommendation and squash message (100+ commits; `e81ac20fe`
 is mislabelled `docs(inflight)` but carries 584 lines of detector code); the one-line `stage_detail`
 fix in `docs/data/roadmap.yaml` (`known-defects-cleared` still says "mitigation drafted on
