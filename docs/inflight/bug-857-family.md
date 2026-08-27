@@ -208,6 +208,9 @@ under `## Delete when` at the end.)
 <!-- post-merge: checked-end -->
 
 **Second live confirmation, 2026-08-11: the chaos probe caught the stall directly.**
+
+<!-- post-merge: checked -->
+> STATUS: **SUPERSEDED** - `CLASS2_STALL`. The 2026-08-25 discriminator replayed this class of seed and the backlog DRAINED. Timing proxy, not a family sighting.
 `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` (the **eager** variant) was killed
 fail-fast by `ProgressProbe` with five simultaneous violations, on
 [job 93666671951](https://github.com/astubbs/parallel-consumer/actions/runs/31454939035/job/93666671951):
@@ -236,6 +239,9 @@ suite randomises its seed per run, so other branches passing the same day only m
 did not draw this interleaving.
 
 **Third sighting, 2026-08-12 - the COOPERATIVE variant went red, and this one is NOT confirmed as
+
+<!-- post-merge: checked -->
+> STATUS: **UNRESOLVED** - no probe verdict; a shutdown-path timeout that nothing distinguishes from a real stall. Never replayed.
 the stall.** `ChaosRevokeUnderWorkCooperativeIT.revokeUnderWorkStaysProtocolHonestWithCooperativeAssignor`
 failed on [job 93954713987](https://github.com/astubbs/parallel-consumer/actions/runs/31544745175/job/93954713987).
 **Replay seed `3986919097693415295`** - captured because it is the part no command can recover once
@@ -286,6 +292,9 @@ suite randomises its seed per run, so other branches passing the same day only m
 not draw this interleaving.
 
 **Fourth sighting, 2026-08-12 - the `ZOMBIE_MEMBER` arm, and the probe genuinely fired.**
+
+<!-- post-merge: checked -->
+> STATUS: **RETIRED** - not a product defect. astubbs#292 found a harness double-start race; two PCs for one instance. Never evidence about anything.
 `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger` was killed fail-fast by `ProgressProbe` on
 [job 94014375262](https://github.com/astubbs/parallel-consumer/actions/runs/31564815332/job/94014375262),
 on astubbs#289 at head `976f88c65`. The failing wait is the `await()` in `ChaosChurnStormIT` aliased
@@ -358,6 +367,9 @@ exist. This generalises beyond the entry - it belongs in the ambient-probe secti
 the block, and that file was owned by another branch when this was written.
 
 **Fifth sighting, 2026-08-13 - the same `ZOMBIE_MEMBER` signature, with astubbs#292 present and no
+
+<!-- post-merge: checked -->
+> STATUS: **OPEN** - `ZOMBIE_MEMBER`, ASYNC mode, harness double-start ruled out by counting. Unexplained by every known family member.
 double-start anywhere in the log.** This is the one that matters, because it is what the fourth
 sighting's attribution does *not* cover.
 `ChaosChurnStormIT` on [job 94333179847](https://github.com/astubbs/parallel-consumer/actions/runs/31663523870/job/94333179847),
@@ -401,6 +413,9 @@ weakens the second sighting's "whatever remains is eager-protocol-specific" read
 cooperative side, without settling it.
 
 **Sixth sighting, 2026-08-13 - the eager `CLASS2_STALL` again, and the first time both arms fired in
+
+<!-- post-merge: checked -->
+> STATUS: **PART SUPERSEDED** - the `CLASS2_STALL` half falls with the 2026-08-25 demotion. The `ZOMBIE_MEMBER` co-occurrence is still unexplained.
 one run.** `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` (the **eager** variant) was
 killed by `ProgressProbe` on
 [job 94355941379](https://github.com/astubbs/parallel-consumer/actions/runs/31671178444/job/94355941379),
@@ -506,6 +521,9 @@ saturates the cores.
 ---
 
 **Seventh sighting, 2026-08-14 - local, not CI, and the first one bisected against a clean
+
+<!-- post-merge: checked -->
+> STATUS: **SUPERSEDED - NOT A FAMILY SIGHTING.** A test defect: the assertion compared a contiguous commit offset to an out-of-order completion counter. Do not count it.
 baseline.** `PCMetricsTest.metricsRegisterBinding` failed a full multi-module unit run with
 `expected: 205.0 but was: 203.0 within 2 minutes` - two records that never completed. That is the
 family's signature, not a new one, and it appeared while landing astubbs#296's work-return path -
@@ -580,6 +598,9 @@ turns "probably a flake" into an answer. Do that before attributing - or dismiss
 this signature, especially on a branch whose subject matter would explain it.
 
 **Eighth sighting, 2026-08-17 - the `ZOMBIE_MEMBER` arm again, and its seed replays clean.**
+
+<!-- post-merge: checked -->
+> STATUS: **UNRESOLVED** - replayed and does not reproduce; uncontended, all three scenarios passed. Cleared as evidence, not as a question.
 `ChaosRevokeUnderWorkCooperativeIT.revokeUnderWorkStaysProtocolHonestWithCooperativeAssignor` on
 [job 95308176649](https://github.com/astubbs/parallel-consumer/actions/runs/32002566427/job/95308176649),
 on astubbs#204 at head `85a3646d8`. Same arm as the fourth sighting, on the revoke-under-work
@@ -617,6 +638,9 @@ killing the `highcpu` lane on three other branches with the no-verdict signature
 than cleared - a later sighting on a branch that does not touch the commit path would settle it.
 
 **Ninth sighting, 2026-08-18 - the fleet-level `NO_PROGRESS` arm, twice in one night (this entry
+
+<!-- post-merge: checked -->
+> STATUS: **OPEN, AND NOW TRACTABLE** - ASYNC `NO_PROGRESS`. This line finally has a replayable seed (`9086872209853284830`, 2026-08-28) reproducing on unmodified master. See `test-857-churn-storm-async-stalls.md`.
 and the ninth below share a signature).** `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger`
 was killed fail-fast by `ProgressProbe` on
 [job 95579861648](https://github.com/astubbs/parallel-consumer/actions/runs/32093367999/job/95579861648),
@@ -651,6 +675,9 @@ attempt) - a second retrieval route alongside the fourth sighting's report-artif
 console-log truncation trap is the same one recorded there.
 
 **Tenth sighting, 2026-08-18 - same test, same arm, four hours earlier, different branch.**
+
+<!-- post-merge: checked -->
+> STATUS: **OPEN** - same ASYNC `NO_PROGRESS` line as the ninth; same tractability now applies.
 `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger`, killed by the same fleet detector on
 [job 95584026682's run, attempt at head d96375053](https://github.com/astubbs/parallel-consumer/actions/runs/32078875110)
 (2026-08-17T23:04Z), on astubbs#308 - a docs-only branch (ideation/strategy/ledger files, zero
@@ -681,6 +708,9 @@ single-arm evidence the ledger holds; whichever defect they belong to, the repla
 cheapest next experiment the family has.
 
 **Eleventh sighting, 2026-08-19 - the eager `CLASS2_STALL` again, and the first seed in this family
+
+<!-- post-merge: checked -->
+> STATUS: **WITHDRAWN, explicitly** - its master arm does not survive as evidence. Crossing a timing bound on master means master was slow on that schedule, not wedged.
 that replays RED on demand, with a master control arm proving it is not branch-caused.**
 `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` killed by `ProgressProbe` on
 [job 95962195275](https://github.com/astubbs/parallel-consumer/actions/runs/32217696441), at head
@@ -742,6 +772,9 @@ with `-Dit.test=ChaosRevokeUnderWorkIT` needs `-Dfailsafe.failIfNoSpecifiedTests
 The unnarrowed command above has neither problem.
 
 **Twelfth sighting, 2026-08-20 - three `Chaos Pain Suite` reds inside twenty minutes across two
+
+<!-- post-merge: checked -->
+> STATUS: **PART SUPERSEDED** - `CLASS2_STALL` entries fall with the demotion (this is the seed the discriminator used). The `ChaosKeyOrderIT` zombie was later diagnosed as calibration.
 branches, and the first one is on the DRAIN control arm.** Four scenarios fired between 01:05 and
 01:21Z. All the numbers below come from the uploaded failsafe artifacts, per the retrieval note
 above, not from the console.
@@ -850,6 +883,9 @@ green: whatever draws this signature is drawn per seed, and no tree-content expl
 pair. Every prior entry asserts seed-dependence from branch subject matter; this one measures it.
 
 **Thirteenth sighting, 2026-08-20 - the first chaos run with the new detectors, and none of them
+
+<!-- post-merge: checked -->
+> STATUS: **SUPERSEDED** - `CLASS2_STALL`, timing proxy.
 fired.** `Chaos Pain Suite` on astubbs/parallel-consumer#325's merged head `283202eb5`
 ([run 32334089543](https://github.com/astubbs/parallel-consumer/actions/runs/32334089543)), 8 of 9
 chaos ITs green, `ChaosRevokeUnderWorkDrainIT.revokeUnderDrainingStopsStaysProtocolHonest` red at
@@ -879,6 +915,9 @@ Recorded as unresolved.
 
 <!-- post-merge: checked-begin -->
 **Fourteenth sighting, 2026-08-25 - THREE reds on a docs-and-comments branch, fresh seeds each time,
+
+<!-- post-merge: checked -->
+> STATUS: **PART SUPERSEDED** - `CLASS2_STALL` entries fall; the `NO_PROGRESS` entry belongs to the open ASYNC line.
 and the contention explanation does NOT fit.** `Chaos Pain Suite` failed at three consecutive heads
 while astubbs#347 was in review - `22826761a`, `5f9fa4088` (run `32803999735`) and `7753777c3` (run
 `32805270339`) - having passed at `257c4173a`, an earlier head of the same work. Three of the four
@@ -924,6 +963,9 @@ measurement, not a correctness verdict" - and a `-Dchaos.diagnoseStallRecovery=t
 master's required-checks ruleset, so neither red blocked the PR.
 <!-- post-merge: checked-begin -->
 **Fifteenth sighting, 2026-08-24 - the eager `CLASS2_STALL` again, on a branch that added no reactor
+
+<!-- post-merge: checked -->
+> STATUS: **SUPERSEDED** - `CLASS2_STALL` tally marks. Its `NO_PROGRESS` entry belongs to the open ASYNC line.
 code at all.** Numbered after the fourteenth although it happened a day *earlier*: both were written
 while their PRs were open and astubbs#347 merged first. The numbers are recording order, not
 chronology, and renumbering a merged entry would break every citation of it.
@@ -1014,6 +1056,9 @@ Entries in this ledger that lean on a clean autopsy are worth re-checking agains
 
 <!-- post-merge: checked-begin -->
 **Sixteenth sighting, 2026-08-25 - the drain arm again, and a SECOND same-day timing rule-out of
+
+<!-- post-merge: checked -->
+> STATUS: **SUPERSEDED** - `CLASS2_STALL`. Its value is the same-day timing rule-outs of runner contention, which stand.
 contention.** `Chaos Pain Suite` on astubbs/parallel-consumer#353's head `c1f423e4a`
 ([run 32807910210](https://github.com/astubbs/parallel-consumer/actions/runs/32807910210/job/97681493424)),
 <!-- post-merge: checked-end -->
@@ -1062,6 +1107,9 @@ recording order, not chronology - and all three are `CLASS2_STALL`, so the closu
 them the moment they land. Cite the seed, never the ordinal.
 
 **Seventeenth sighting, 2026-08-19 - the eager `CLASS2_STALL` arm, with astubbs#209's fix already
+
+<!-- post-merge: checked -->
+> STATUS: **SUPERSEDED** - `CLASS2_STALL`, timing proxy.
 merged in.** `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest`, killed by `ProgressProbe`
 on [job 95906973285](https://github.com/astubbs/parallel-consumer/actions/runs/32198410456/job/95906973285),
 on astubbs#57 at head `5b1e7b099`. **Replay seed `7964289159858266180`**:
@@ -1093,6 +1141,9 @@ and the cooperative arm's expected rebalance churn is exactly what a truncated r
 failure.
 
 **Eighteenth sighting, 2026-08-19 - same test, same arm, two hours later, and two partitions breached
+
+<!-- post-merge: checked -->
+> STATUS: **SUPERSEDED** - `CLASS2_STALL`. The partition-match observation against the seventeenth was never revisited.
 at coordinates identical to the seventeenth.**
 `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` again, on
 [job 96004301277](https://github.com/astubbs/parallel-consumer/actions/runs/32232211120/job/96004301277),
@@ -1126,6 +1177,9 @@ holds, the seed matters less to this family than the ledger has assumed - which 
 the sightings whose seeds replay clean.
 
 **Nineteenth sighting, 2026-08-21 - both revoke-under-work arms in a single run, and a prose-only
+
+<!-- post-merge: checked -->
+> STATUS: **SUPERSEDED** - `CLASS2_STALL`, timing proxy.
 diff that stayed red.** One `Chaos Pain Suite` red on astubbs#57 at 03:06Z, seven scenarios run, two
 errored. Numbers from the uploaded failsafe artifacts, per the retrieval note above - the console
 log truncated (see `docs/solutions/workflow-issues/gh-run-view-log-truncation.md`), so the artifact
@@ -1894,6 +1948,9 @@ the verification the first 2026-08-26 section asks for; still none of them spent
 
 <!-- post-merge: checked-begin -->
 **Twentieth sighting, 2026-08-26 - the `ZOMBIE_MEMBER` arm, and the first capture of it since the
+
+<!-- post-merge: checked -->
+> STATUS: **UNRESOLVED** - `ZOMBIE_MEMBER`, not replayed.
 dispatch ceiling landed.** `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger` was killed
 fail-fast by the probe on astubbs/parallel-consumer#205, at a head that had just merged master.
 The autopsy names the same arm as the fourth, fifth and eighth sightings, in the same words:

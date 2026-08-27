@@ -1,4 +1,7 @@
 <!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
     INTEGRATION-TEST logging profile. NOT loaded by default.
 
     Select it explicitly at runtime:
