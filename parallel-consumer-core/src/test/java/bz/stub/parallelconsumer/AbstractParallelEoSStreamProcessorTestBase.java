@@ -178,7 +178,19 @@ public abstract class AbstractParallelEoSStreamProcessorTestBase {
                         + "bookkeeping and means a record was neither retried nor reported. Read the terminal "
                         + "error in this test's log. Cause: " + t);
             }
-            t = t.getCause();
+            try {
+                t = t.getCause();
+            } catch (Throwable readingTheChainThrew) {
+                // THIRD GUARD, and it is not paranoia - it is what this suite deliberately builds.
+                // aFailureThatCannotBeLoggedIsStillReportedAsItself installs a throwable whose getCause() throws,
+                // so WALKING the chain runs the thrower's code. Unguarded, that exception escapes @AfterEach and
+                // fails a test that had already passed, blaming the wrong thing.
+                //
+                // Stopping is the correct answer rather than a concession: everything up to here has been checked,
+                // and a chain that cannot be read cannot be classified. The tests that build these throwables are
+                // asserting PC survives them, so teardown must survive them too.
+                break;
+            }
         }
     }
 
