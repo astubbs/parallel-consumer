@@ -767,8 +767,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * state is moved to CLOSING, and the control thread performs the shutdown on its own.
      * <p>
      * The reason is written BEFORE the state, because {@link #state} is volatile and its write is what publishes
-     * the reason to the control thread. The FIRST failure wins - a later one would overwrite the diagnosis that
-     * started the shutdown with a consequence of it.
+     * the reason to the control thread. That ordering is exact.
+     * <p>
+     * <b>The first-failure preference is best-effort, and deliberately not more than that.</b> The
+     * {@code failureReason == null} test and the write that follows it are not atomic, so two workers failing to
+     * mailbox at once can race and the later diagnosis can win. Left as a plain check because the cost is which of
+     * two genuine causes is reported, both of which are the same bug, while making it atomic would put a lock or a
+     * field-type change on a path whose contract is that it never blocks. Raised by review on astubbs#267, where an
+     * earlier version of this comment claimed an ordering it did not deliver.
      *
      * @param wc              the container that could not be returned
      * @param mailboxingThrew what {@link #addToMailbox} threw
@@ -1604,6 +1610,22 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     private void transitionToClosing() {
         log.debug("Transitioning to closing...");
+        if (state == CLOSED) {
+            // CLOSED IS TERMINAL - you cannot un-close. Without this, a caller arriving after the control thread
+            // has finished writes CLOSING over CLOSED, and nothing is left alive to write it back: `state` reaches
+            // CLOSED only in doClose()'s finally, on a thread that exits immediately afterwards. A later close()
+            // then misses its `state == CLOSED` fast path and enters waitForClose(), whose loop re-reads an
+            // already-completed controlThreadFuture - so `get(timeout)` returns at once, every time, and the loop
+            // becomes a hot spin with no exit rather than a wait that times out.
+            //
+            // Reachable because failFatallyOnUnmailboxableRecord can fire from an async engine completion, which
+            // has no timing relationship to the control thread's lifetime: ExternalEngine's pool is sized 1 and
+            // only DISPATCHES, so awaitTermination in doClose() knows nothing about the vert.x event loop or a
+            // Reactor scheduler still holding an outstanding request. Raised by review on astubbs#267; the guard
+            // is here rather than at that one caller because the invariant belongs to this method.
+            log.debug("Already closed - not regressing the state");
+            return;
+        }
         if (state == State.UNUSED) {
             state = CLOSED;
         } else {

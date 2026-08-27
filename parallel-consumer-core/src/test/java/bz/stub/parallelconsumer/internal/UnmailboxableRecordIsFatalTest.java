@@ -86,6 +86,33 @@ class UnmailboxableRecordIsFatalTest {
     }
 
     /**
+     * CLOSED is terminal: a late escalation must not regress it.
+     * <p>
+     * <b>The failure this pins is a hot spin, not a stale field.</b> `state` reaches CLOSED only in `doClose`'s
+     * finally, on a thread that exits straight afterwards - so if a straggling async completion writes CLOSING over
+     * it, nothing is left to write it back. A later `close()` then misses its `state == CLOSED` fast path and enters
+     * `waitForClose`, whose loop re-reads an already-completed `controlThreadFuture`; `get(timeout)` returns at once
+     * every time, so the loop spins rather than timing out.
+     * <p>
+     * Reachable because this escalation fires from engine completions that have no timing relationship to the
+     * control thread's lifetime. Found by review on astubbs#267 by reading, which is the argument for pinning it:
+     * nothing else here would have gone red.
+     */
+    @Test
+    void aLateEscalationDoesNotRegressAClosedProcessor() {
+        var pc = pc();
+
+        // the terminal state, reached the way the control thread reaches it
+        pc.failFatallyOnUnmailboxableRecord(NO_CONTAINER, new IllegalStateException("first"));
+        assertThat(pc.getState()).isEqualTo(State.CLOSED);
+
+        // a straggler arriving after the control thread has gone
+        pc.failFatallyOnUnmailboxableRecord(NO_CONTAINER, new IllegalStateException("a late async completion"));
+
+        assertThat(pc.getState()).isEqualTo(State.CLOSED);
+    }
+
+    /**
      * A batch can fail to mailbox more than one record, and the later ones are consequences of the first. Keeping the
      * first is what leaves a diagnosis rather than a symptom.
      */
