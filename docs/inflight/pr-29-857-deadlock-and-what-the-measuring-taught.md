@@ -244,6 +244,37 @@ survived its own test rather than being quietly vindicated by a clean run.
 **Next, in order of value:** repeat this seed; then the control arm without the fix; then the
 remaining five seeds. Only the control arm turns "did not recur" into "the mechanism is gone".
 
+### RETRACTED, same day: the replay above proves nothing, and the control arm is why
+
+The green run recorded above was reported as "the signature did not recur". **That reading is
+withdrawn.** A control arm was then run on an identical tree with exactly one term changed - the
+revoke side made to BLOCK on `commitLock` instead of declining, restoring the pre-fix AB-BA shape.
+
+**Prediction, recorded before the run: the control would stall. It did not.** It passed green, with
+no blocked lines, on the same seed.
+
+Two arms, opposite on the one term that is supposed to decide the outcome, both green. So the
+experiment has no discriminating power as configured, and the fixed arm's green was never evidence.
+
+**The tell was available in the fixed arm's own log and I did not check it before reporting.** Neither
+`Skipping offset commit during partition revocation` (the declined path - the arm that IS the fix) nor
+`Acquired commitLock on revoke` (the uncontended path) appears even once. `tryCommitOffsetsOnRevoke()`
+did not execute at all, so the revoke-with-pending-commit window never opened on this box.
+
+This is the exact failure
+`docs/plans/2026-08-18-002-fix-857-revoke-path-cluster-decomposition-plan.md` warned about in
+advance: *"A clean fixed arm with a zero skip-count would be indistinguishable from a probe that
+never opened the window, which is exactly how this fix looked unproven for four months."*
+
+**Consequence for any future soak: a rep in which the window did not open is not a data point.** It
+must be counted separately, never folded into a pass rate - otherwise twenty reps manufacture the
+same false green as one did here, with twenty times the confidence. The signature to gate on is the
+execution of the revoke commit path, not the test's exit code.
+
+One thing does survive: the Class 2 observations continued in the fixed arm while the run passed,
+which is what the pre-registered prediction said would happen. That prediction concerns the timing
+bound and not the deadlock, so it is unaffected by this retraction.
+
 ### The ledger's "three landed, one open" framing is badly out of date
 
 astubbs#119's `## Fork status` still says three defects landed (astubbs#100, astubbs#80,
