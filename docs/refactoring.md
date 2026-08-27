@@ -495,6 +495,13 @@ but not this.*
   means re-verifying the six classes already on the base, which is why it is here rather than folded
   into the PR that noticed it (astubbs#204).
 
+### Test infrastructure - the `state` package's white-box harness is copied per class
+
+- **Four classes open with the same six lines** - `ShardManagerTest`, `ProcessingShardStaleReplacement909Test`,
+  `EpochAndRecordsMapRaceTest`, `ShardAvailableCountOwnershipTest`; grep
+  `PCModuleTestEnv module = mu.getModule()`. A base class or extension in `bz.stub.parallelconsumer.state` would
+  hold it once (noticed on astubbs#373).
+
 ### Test infrastructure - timing-based waits
 
 - **`ParallelEoSStreamProcessorTest` waits on loop cycles, not events** - four markers:

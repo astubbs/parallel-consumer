@@ -29,7 +29,7 @@ view against an independently computed truth** - not against itself, and not aga
 1. **Shard and queue depth** - `getNumberOfWorkQueuedInShardsAwaitingSelection()` no longer feeds
    `isSufficientlyLoaded()`, which reads the conservation figure `getWorkableRecords()` instead, but it
    still sums the per-shard counters for the `WAITING_RECORDS` metric and the shutdown drain check, and
-   those remain approximations - see `bug-available-work-counter-is-still-an-approximation.md`. Same
+   the aggregate still nets the shard counters against the retry queue rather than a shard doing so. Same
    failure mode available, one consumer of it removed.
 2. **Incomplete-offset tracking** - the offset map decides what gets committed and therefore what is
    redelivered. Truth is derivable from what the harness produced and what the user function saw.

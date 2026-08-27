@@ -133,7 +133,18 @@ public class ShardManager<K, V> {
         // all available container count - (still pending for running retry containers count)
         // => all_available_count - (retryCnt - all_expired_retry_cnt)
         // order matters as there is a race between getting those numbers and state updates - we should err on the higher
-        // number - so read retry queue size before shards size (as normally retry queue is updated before shard counters are on work taken).
+        // number - so read retry queue size before shards size.
+        //
+        // The write order this reads against CHANGED when the shard counter stopped being adjusted in one batch at
+        // the end of ProcessingShard#getWorkIfAvailable and started being released per container inside its selection
+        // loop: the shard counter now drops FIRST and retryQueue.removeAll runs afterwards, so the window a reader
+        // can land in spans the rest of the shard scan rather than two statements. The read order above is still the
+        // right one, but no longer for the reason previously written here ("retry queue is updated before shard
+        // counters"). Re-derived for a previously-failed container being taken, where S is the shard sum, Q the retry
+        // size and r the ready-to-retry count: a reader that sees the retry queue still holding it and the shard sum
+        // already without it computes (r+1) + max(0, S-(Q+1)), which equals the settled r + max(0, S-Q) when
+        // S-Q >= 1, and exceeds it by one otherwise. So the skew is either nil or high - never low, which is the
+        // direction that matters, because reading low is what closes drain() early.
         // it can still be negative due to race between marking containers inflight, updating counters in shards and updates to retryQueue
         // this value should not be used in isolation though - but as part of overall buffer size calculation - which takes into account
         // this number and number of work containers queued in work thread pool.
@@ -305,7 +316,7 @@ public class ShardManager<K, V> {
         Optional<ProcessingShard<K, V>> shardOpt = getShard(shardKey);
         if (shardOpt.isPresent()) {
             // remove the work
-            WorkContainer<K, V> removedWC = shardOpt.get().remove(consumerRecord.offset());
+            WorkContainer<K, V> removedWC = shardOpt.get().removeWorkAtOffset(consumerRecord.offset());
 
             // remove if in retry queue
             // check null to avoid race condition
@@ -392,7 +403,7 @@ public class ShardManager<K, V> {
         var shardOptional = getShard(key);
 
         if (shardOptional.isPresent()) {
-            shardOptional.get().onFailure();
+            shardOptional.get().onFailure(wc);
             this.retryQueue.add(wc);
         }
 
@@ -506,6 +517,7 @@ public class ShardManager<K, V> {
         // Do not restate the fix here - two copies of it had already drifted apart once.
         shardsMaxSizeGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.SHARDS_MAX_SIZE,
                 this, shardManager -> shardManager.shardEntryCounts().max().orElse(0));
+
 
         numberOfShardsGauge = pcMetrics.gaugeFromMetricDef(PCMetricsDef.NUMBER_OF_SHARDS,
                 this, shardManager -> shardManager.processingShards.size());

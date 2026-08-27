@@ -117,7 +117,7 @@ class ShardPopulationRaceTest {
 
         // THE INTERLEAVING: the revocation sweep removes and retires the container while the stale sweep is
         // between yielding it and removing it, so the stale sweep's own removal takes nothing out
-        onNextStalenessCheck(seam, () -> shard.remove(20L));
+        onNextStalenessCheck(seam, () -> shard.removeWorkAtOffset(20L));
 
         var swept = shard.removeStaleWorkContainersFromShard();
 
@@ -157,7 +157,7 @@ class ShardPopulationRaceTest {
         assertThat(shard.getWorkIfAvailable(10, retryQueue)).containsExactly(container);
         container.onUserFunctionFailure(new RuntimeException("deliberate"));
         container.endFlight();
-        shard.onFailure();
+        shard.onFailure(container);
         retryQueue.add(container);
         assertWithMessage("PRECONDITION: the failed record is parked in the retry queue")
                 .that(retryQueue.contains(container)).isTrue();

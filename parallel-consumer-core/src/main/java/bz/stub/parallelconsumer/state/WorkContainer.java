@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -306,6 +307,33 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     private final AtomicReference<Execution> state = new AtomicReference<>(Execution.initial());
 
     /**
+     * Whether this container currently holds the {@link ProcessingShard}'s claim on selection - i.e. whether it is
+     * one of the containers currently counted in the shard's {@code workAwaitingSelectionCount}.
+     * <p>
+     * That count has to be adjusted by whichever site takes a container out of - or puts it back into - the
+     * selection population, and those sites run on both the broker-poll and the controller threads. Deciding
+     * "have I already counted this one?" from the container's observable state cannot work, however carefully the
+     * read is fenced: the state at an instant records what the container <em>is</em>, never who took its claim. A
+     * revoked record whose stale result has just been dropped, for instance, reads exactly like a record that was
+     * never taken - {@link #isNotInFlight()} is true for both.
+     * <p>
+     * So the answer is held explicitly here and changed only by compare-and-set. The CAS outcome is the ownership
+     * record: exactly one caller can win each transition, and that caller - and only that caller - moves the
+     * shard's counter. No site infers, and no clamp is needed to absorb the sites that got it wrong.
+     * <p>
+     * There is no {@code @GuardedBy} to write for this field: the annotation holds a single lock expression, and
+     * this fix is a compare-and-set rather than a lock, so there is no lock to name. That is the same reason this
+     * tree's {@code AGENTS.md} gives for {@code volatile} - and what it asks for instead is met here: "the rule is
+     * 'record the invariant you just established'", which this javadoc and {@link ProcessingShard}'s
+     * {@code workAwaitingSelectionCount} do.
+     *
+     * @see ProcessingShard
+     * @see ProcessingShard#includeInSelection
+     * @see ProcessingShard#excludeFromSelection
+     */
+    private final AtomicBoolean selectionClaimed = new AtomicBoolean(false);
+
+    /**
      * How many times this record has been handed to a worker. Incremented only by a WON claim, so a refused
      * claim leaves it untouched - which is one of the properties {@code WorkClaimStateMachineTest} pins.
      * <p>
@@ -458,6 +486,35 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
 
     public boolean isInFlight() {
         return state.get().state().isInFlight();
+    }
+
+    /**
+     * Take the owning shard's claim on selection.
+     *
+     * @return true if <em>this</em> call took the claim, false if the container already held it
+     * @see #selectionClaimed
+     */
+    boolean claimSelection() {
+        return selectionClaimed.compareAndSet(false, true);
+    }
+
+    /**
+     * Give back the owning shard's claim on selection.
+     *
+     * @return true if <em>this</em> call gave the claim back, false if the container was not holding it
+     * @see #selectionClaimed
+     */
+    boolean releaseSelection() {
+        return selectionClaimed.compareAndSet(true, false);
+    }
+
+    /**
+     * @return true if this container currently holds a claim on selection - i.e. is counted in its shard's
+     *         work-awaiting-selection count
+     * @see #selectionClaimed
+     */
+    boolean isSelectionClaimed() {
+        return selectionClaimed.get();
     }
 
     /**

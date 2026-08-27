@@ -80,16 +80,21 @@ adding a class with a narrow guess in it.
    registered, latent for the same single-selector reason.
 
    <!-- post-merge: checked-begin -->
-   **`ProcessingShard.availableWorkContainerCnt` is NOT a Lincheck target, and this list said it was.**
-   The `AtomicLong`-must-track-`ConcurrentSkipListMap` signature fits, and the clamp in
-   `dcrAvailableWorkContainerCntByDelta` carried the comment `// in case of possible race condition`,
-   so the drift read as a race. astubbs#336 measured it and it was not one: both drift paths were
-   conditional mismatches **reproducible on a single thread**, the comment was wrong, and the clamp
-   is gone. Lincheck finds interleavings; that needed none, and the single-threaded tests shipped with
-   the fix. Recorded rather than quietly dropped, because the wrong inference here was made twice -
-   reading a comment claiming a race instead of measuring - which is the same error this lane's own
-   calibration caught in itself. What *is* a Lincheck-shaped target in the same class is what remains
-   after that fix - see `bug-available-work-counter-is-still-an-approximation.md`.
+   **`ProcessingShard.workAwaitingSelectionCount` (once `availableWorkContainerCnt`) is NOT a Lincheck
+   target, and this list said it was.** The `AtomicLong`-must-track-`ConcurrentSkipListMap` signature
+   fits, and the clamp that used to sit on it carried the comment `// in case of possible race
+   condition`, so the drift read as a race. It was measured and it was not one: the drift paths were
+   conditional mismatches **reproducible on a single thread**, the comment was wrong, and the clamp is
+   gone. Lincheck finds interleavings; that needed none, and the tests that hold the fix in place are
+   single-threaded. Recorded rather than quietly dropped, because the wrong inference here was made
+   twice - reading a comment claiming a race instead of measuring - which is the same error this
+   lane's own calibration caught in itself.
+
+   The counter is now owned by a compare-and-set on each container's selection claim rather than
+   inferred from its observable state, so the remaining question is not "does it drift" but the
+   two-atomics transient the claim protocol accepts deliberately - the claim and the count move
+   separately, and `ProcessingShard.workAwaitingSelectionCount`'s own javadoc names the one reader
+   that can see it. That IS interleaving-shaped, and is the version of this candidate worth a harness.
    <!-- post-merge: checked-end -->
 2. **`PCMetrics.registeredMeters` - a plain `ArrayList` written from two threads.** Not a concurrent
    collection at all (`private List<Meter.Id> registeredMeters = new ArrayList<>()`, added to from
@@ -163,7 +168,7 @@ in one sitting - reverting only the main-code fix restores the NPE counterexampl
 harness, restoring the fix produces the new report - so the second violation was always present,
 masked because Lincheck stops at the first thing it finds. The counterexample is `revokeSweep(0)` in
 the sequential prefix, then `addWork(0)` against `addWork(0)` in parallel, landing on the
-`entries.get(key)` / `entries.put(key, wc)` + `availableWorkContainerCnt.incrementAndGet()`
+`workMap.get(key)` / `workMap.put(key, incomingWorkContainer)` + `availableWorkContainerCount.incrementAndGet()` (was `entries`/`availableWorkContainerCnt`)
 check-then-act in `ProcessingShard#addWorkContainer` - this lane's own "concurrent collection plus a
 derived counter" signature, verbatim.
 
@@ -181,7 +186,7 @@ time-sensitive. Settle the thread-model question before writing a harness for it
 set is the artefact, the fix is constraining this harness with a non-parallel group over `addWork`,
 not a change to `ProcessingShard`.
 
-**That narrows rather than overturns item 1's ruling that `availableWorkContainerCnt` is not a
+**That narrows rather than overturns item 1's ruling that `availableWorkContainerCount` (then `availableWorkContainerCnt`) is not a
 Lincheck target.** The ruling rests on astubbs#336 measuring the *drift* as single-threaded
 conditional mismatches, and it stands - nothing here re-opens the clamp question. What is new is a
 machine-produced interleaving over the same field, which is a different claim from "the drift is a
