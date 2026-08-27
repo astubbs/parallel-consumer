@@ -1657,6 +1657,14 @@ independent evidence about cause. The fourth capture already draws this distinct
 astubbs#267; the same reading applies here.
 <!-- post-merge: checked-end -->
 
+**The fix is astubbs#29, still open and still draft**, which replaces the
+`synchronized (commitCommand)` acquisition in the frames above with
+`ReentrantLock.tryLock()` - so the pair this capture records is exactly what it targets. The seed
+below therefore joins the set this file has been accumulating for the verification declared before
+the fact: replay it with astubbs#29's `tryLock()` applied and read whether the poll thread is still
+found BLOCKED on that monitor. That is a test of the fix rather than a demonstration of it, which is
+the whole reason the prediction was written down first.
+
 **Seed `818084281700661522`**:
 
     ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
