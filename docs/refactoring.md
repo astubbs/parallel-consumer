@@ -497,10 +497,14 @@ but not this.*
 
 ### Test infrastructure - the `state` package's white-box harness is copied per class
 
-- **Four classes open with the same six lines** - `ShardManagerTest`, `ProcessingShardStaleReplacement909Test`,
-  `EpochAndRecordsMapRaceTest`, `ShardAvailableCountOwnershipTest`; grep
-  `PCModuleTestEnv module = mu.getModule()`. A base class or extension in `bz.stub.parallelconsumer.state` would
-  hold it once (noticed on astubbs#373).
+- **The base class now exists; three classes still open with the same lines instead of extending it** -
+  `ShardManagerTest`, `ProcessingShardStaleReplacement909Test`, `ShardAvailableCountOwnershipTest`; grep
+  `PCModuleTestEnv module = mu.getModule()`. `BrokerlessWorkManagerTestBase` holds that wiring once - it
+  lives in `bz.stub.parallelconsumer` with protected fields, so the `state` package extends it fine - and
+  `ShardManagerStaleContainerTest` and `EpochAndRecordsMapRaceTest` are on it (astubbs#375). The three left
+  are not deletions: `ShardAvailableCountOwnershipTest` names its topic constant `TOPIC`, and
+  `ShardManagerTest` also builds a `PartitionState` and declares no `sm`/`pm`, so each needs its own small
+  reconciliation (noticed on astubbs#373).
 
 ### Test infrastructure - timing-based waits
 
