@@ -401,11 +401,11 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
         // exactly the failure mode of the mirror this replaced. It is also strictly fewer calls than
         // before in the resume path, which used to fetch the set a second time to act on it.
         Set<TopicPartition> pausedNow = consumerManager.paused();
-        boolean throttle = shouldThrottle();
+        boolean shouldThrottle = shouldThrottle();
         if (log.isTraceEnabled()) {
-            log.trace("Need to throttle: {}, pausedForBackPressure={}", throttle, !pausedNow.isEmpty());
+            log.trace("Need to throttle: {}, pausedForBackPressure={}", shouldThrottle, !pausedNow.isEmpty());
         }
-        if (throttle) {
+        if (shouldThrottle) {
             doPauseMaybe(pausedNow);
         } else {
             resumeIfPaused(pausedNow);
