@@ -1273,7 +1273,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     private void maybeWakeupPoller() {
         if (state == RUNNING) {
-            if (!wm.isSufficientlyLoaded() && brokerPollSubsystem.isPausedForThrottling()) {
+            if (!wm.isSufficientlyLoaded() && brokerPollSubsystem.isSubscriptionsPausedForBackPressure()) {
                 if (log.isDebugEnabled()) {
                     long inShards = wm.getNumberOfWorkQueuedInShardsAwaitingSelection();
                     long outForProcessing = wm.getNumberRecordsOutForProcessing();
