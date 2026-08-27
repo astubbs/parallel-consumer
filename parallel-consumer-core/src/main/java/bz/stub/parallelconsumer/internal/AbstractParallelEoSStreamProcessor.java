@@ -1962,6 +1962,12 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * <b>It can throw, and which routes are real is not obvious - that is why this is written down.</b> Callers guard
      * it because a throw here leaves the record neither in flight nor completed; see
      * {@link #failFatallyOnUnmailboxableRecord}.
+     * <p>
+     * <b>The {@code throws} clause is deliberate on an unchecked type.</b> Java does not require it and the compiler
+     * will not enforce it, but it is the difference between a caller that can reason about what goes wrong here and
+     * one that can only assume anything might - which is how the guards around this call came to be
+     * {@code catch (Throwable)} with nobody able to say what they were catching. Declared, a caller can narrow to
+     * the expected arm honestly and keep a backstop for the rest, rather than treating the two as the same thing.
      *
      * @throws ProduceLockNotHeldException the reachable route. {@link WorkContainer#onPostAddToMailBox} releases the
      *                                     produce lock in transactional commit mode, and
@@ -1976,7 +1982,8 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      *         bounded queues and it raises neither; and the element is never null. Copying that contract here would
      *         document four exceptions that cannot happen while saying nothing about the one that can.
      */
-    protected void addToMailbox(PollContextInternal<K, V> pollContext, WorkContainer<K, V> wc) {
+    protected void addToMailbox(PollContextInternal<K, V> pollContext, WorkContainer<K, V> wc)
+            throws PCInternalRuntimeException {
         String state = wc.isUserFunctionSucceeded() ? "succeeded" : "FAILED";
         log.trace("Adding {} {} to mailbox...", state, wc);
         workMailBox.add(ControllerEventMessage.of(wc));

@@ -152,7 +152,8 @@ public abstract class ExternalEngine<K, V> extends AbstractParallelEoSStreamProc
      * through here, which is why the permit is returned here rather than in any one of them.
      */
     @Override
-    protected void addToMailbox(PollContextInternal<K, V> pollContext, WorkContainer<K, V> wc) {
+    protected void addToMailbox(PollContextInternal<K, V> pollContext, WorkContainer<K, V> wc)
+            throws PCInternalRuntimeException {
         try {
             super.addToMailbox(pollContext, wc);
         } finally {
