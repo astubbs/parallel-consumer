@@ -45,8 +45,10 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
  * KEY ordering removes empty shards), so the shard-present guard passes and the add goes through. Nothing can
  * ever remove it: {@code removeStaleContainers} only cleans retry-queue entries it finds via shard contents, and
  * the sweep already emptied the shard. The orphan permanently inflates the ready-to-retry count that feeds
- * {@code workIsWaitingToBeProcessed} and the poller gate - the same consequence family as
- * docs/inflight/bug-retry-queue-orphaned-by-inline-stale-removal.md, reached by a different door.</li>
+ * {@code workIsWaitingToBeProcessed} and the poller gate - the same consequence family as the inline stale
+ * eviction that leaked a retry-queue entry, reached by a different door. That one is fixed and its note
+ * retired; the trace is at
+ * {@code git show a80f2bbd1:docs/inflight/bug-retry-queue-orphaned-by-inline-stale-removal.md}.</li>
  * <li><b>Success path</b> (revoke + reassign in the gap): {@code pm.onSuccess} acts on the freshly assigned
  * state. The offset is absent from the fresh state's incompletes, so {@code PartitionState.onSuccess}'s
  * {@code assert removedFromIncompletes} fires under {@code -ea} - an {@link AssertionError} out of the control

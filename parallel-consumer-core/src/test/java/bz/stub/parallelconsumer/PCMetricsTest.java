@@ -220,8 +220,9 @@ class PCMetricsTest extends ParallelEoSStreamProcessorTestBase {
             // records in any single shard - here each partition is its own shard, so it is the larger of the
             // two per-partition remainders. Exact equality is right for this one where it was wrong for the
             // commit watermark above: a shard's depth IS quantity-minus-completed, with no contiguity
-            // requirement to be defeated by a hole, and it reads the same single counter snapshot SHARDS_SIZE
-            // does on this attempt.
+            // requirement to be defeated by a hole. It is derived differently from SHARDS_SIZE above - a scan
+            // of the per-shard counters, against SHARDS_SIZE's O(1) conservation figure - and the two agree
+            // here because nothing completes while these assertions run.
             assertThat(registeredGaugeValueFor(PCMetricsDef.SHARDS_MAX_SIZE))
                     .isEqualTo(Math.max(quantityP0 - completedP0, quantityP1 - completedP1));
             // non partition specific metrics

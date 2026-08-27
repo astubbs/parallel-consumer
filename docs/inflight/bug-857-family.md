@@ -7,6 +7,19 @@
 
 Three distinct defects sit behind upstream's one "paused consumption after rebalance" symptom.
 
+**Candidate fourth mechanism, 2026-08-24 - the broker-poller load gate drifts high across
+rebalances.** `ProcessingShard.availableWorkContainerCnt` had two conditional decrements whose
+conditions did not match the increment's; the reproducible one is exactly rebalance-shaped: revoking
+a record parked in retry back-off left its increment behind permanently, in the direction nothing
+corrected (the clamp only caught the low side). The sum feeds `WorkManager.isSufficientlyLoaded()`,
+which decides whether the broker poller pauses - so enough phantom "awaiting selection" records keep
+intake paused indefinitely, and a restart clears it because the counter is in-memory. That matches
+this family's symptom signature (halts after rebalance, resumes on restart), and possibly
+astubbs#183 (confluentinc#875) as well. **Hypothesis, not a diagnosis**: no reporter's instance has
+been tied to the counter, and the mirror's primary mechanism (the lost-partition skip) is different.
+The fix - deriving the gate by conservation - lands independently of this attribution; if reports
+persist after it ships, this mechanism is ruled out for them, which is also information.
+
 **Landed:** astubbs#100 (a mid-rebalance commit threw `RebalanceInProgressException`, which nothing caught,
 permanently killing the broker-poll thread) and astubbs#80 (a draining consumer never called
 `consumer.poll()` - ~10kHz busy-spin plus a rebalance-unresponsive member zombie-holding its
@@ -1624,6 +1637,105 @@ still records its verification status as Unproven, and this capture does not cha
 Reading the replay line nearest the top of a chaos log picks the wrong seed. The failsafe artifact
 (`chaos-suite-reports-<n>`) names the failing class in one line - `failures="1"` is an attribute of
 the `testsuite` element - which is the route [`docs/ci.md`](../ci.md) already prescribes.
+
+## 2026-08-27: the `ZOMBIE_MEMBER` arm on the branch that rewrites the shard accounting - and why it is still not that branch
+
+**Not a BLOCKED-on-monitor capture, and saying so first matters, because five of the six sections
+above are.** `Timeout waiting for commit response` and `POLL THREAD AT TIMEOUT` both grep **zero**
+across this job's captured system-out, and the gating verdict is a probe fail-fast rather than the
+`no instance may end the run with an unclassified failure cause` SLO those captures die on. This is
+the `ZOMBIE_MEMBER/REBALANCE_BLOCKED` arm - the fourth sighting's signature, on the fourth and
+ninth/tenth sightings' scenario. `Chaos Pain Suite`,
+`ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger`
+([run 33028012298](https://github.com/astubbs/parallel-consumer/actions/runs/33028012298), job
+98373973225):
+
+```
+=== AMBIENT PROBE AUTOPSY (test failed): churnStormMeetsSlosAndBalancesLedger() ===
+failure: TerminalFailureException: probe violation during run
+violations (1):
+  - ZOMBIE_MEMBER/REBALANCE_BLOCKED: group 'group-1-1012447776' dwelling in PreparingRebalance
+    for 15s (bound 15s) - a member is not answering the rebalance (protocol-unresponsive)
+observations, non-gating (0):
+peaks: rebalanceDwell=15502ms lagStagnation=93673ms
+frozen partitions (committed stagnant >= 10s with lag >= 1):   [23 of them, 92-97s, lag 56-1132]
+  - ...-21: committed=91   end=1223 lag=1132 stagnant=97s
+  - ...-33: committed=47   end=1175 lag=1128 stagnant=97s
+  - ...-73: committed=1227 end=1283 lag=56   stagnant=97s
+```
+
+**Seed `8468027865395802787`** - recorded before the log expires:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=8468027865395802787
+
+<!-- post-merge: checked-begin -->
+**This is the first capture whose PR cannot be dismissed on "it touches no main Java", so the
+ruling-out is done on mechanism instead - which is weaker, and is stated as such.** Every earlier
+section clears its branch by pointing at a diff of markdown and shell.
+astubbs/parallel-consumer#336 rewrites `ProcessingShard`, `ShardManager` and `WorkManager`, adds
+`RecordPopulation`, and had just merged astubbs#373's compare-and-set claim protocol into that
+accounting. Four things carry the ruling-out instead, and the third is the load-bearing one:
+<!-- post-merge: checked-end -->
+
+- **The detector is keyed on group-protocol unresponsiveness, and no shard-side count can reach
+  it.** `ProgressProbe`'s `REBALANCE_DWELL_BOUND` javadoc says so explicitly - it fires on the group
+  dwelling in `PREPARING_REBALANCE`, *"NOT on 'member holds partitions with zero consumption'"*. The
+  only path from the load gate to the protocol is `BrokerPollSystem.managePauseOfSubscription`,
+  which pauses *partitions* while the poll loop keeps calling `consumer.poll()` - the paused long
+  poll **is** that loop's sleep, and `drain()`'s comment states outright that *"polling is what keeps
+  this member rebalance-responsive"*. A drifted `availableWorkContainerCount`, in either direction,
+  therefore cannot stop a member answering a rebalance. It can only produce a stall.
+- **The stall-shaped detectors, which a broken count WOULD trip, did not fire.** `violations (1)`:
+  no fleet-level `NO_PROGRESS` (30s bound - the arm that fired on astubbs#373's own head, recorded
+  above as a negative result), no `INSTANCE_STALL`, no `DRAIN_BOUND` breach. All six `STOP_DRAIN`
+  draws completed, in 11-12s each against a 150s bound. And the fleet finished the work:
+  `settleRun` reports `consumed=100262` against 100000 expected, after the kill. Intake never
+  wedged, which is the only symptom the changed code is capable of producing.
+- **The arm predates the branch on this exact scenario.** `ChaosChurnStormIT` +
+  `ZOMBIE_MEMBER/REBALANCE_BLOCKED` is the fourth sighting (astubbs#289, one `String` constant of
+  main code), and the same test's fleet arm is the ninth and tenth (both docs-only branches).
+- **The harness is excluded by the fifth sighting's own counting rule**: 21 `run()` invocations
+  across 16 instances, **0** pairs of `Running consumer instance N` on different pool workers within
+  2s (the closest same-instance repeat is 8.6s apart and is a `RESTART` draw), **0**
+  `ConcurrentModificationException`, **0** `settleFleet` close errors.
+
+**What is genuinely new, and what it is not.** Three drains overlap end-to-end across the dwell
+window - instance 34 (`t=+3287ms` to `+15528ms`), 33 (`+6592ms` to `+18035ms`) and 36 (`+13517ms` to
+`+24550ms`), each 11-12s - and the dwell clock started around `+8s`, inside that chain. The bound was
+calibrated against a *single* drain's freeze (`REBALANCE_DWELL_BOUND`'s javadoc: healthy peak 6.7s,
+defect peak 20.1s, *"the freeze is drain-duration-bounded"*), and a chain of three overlapping drains
+is not that shape. **This is an observation to test, not a diagnosis** - the identical move on the
+`CLASS2_STALL` arm took fourteen sightings to settle, and what settled it was the discriminating
+replay in the 2026-08-25 section, not the argument. Do not write the bound off on the strength of
+this paragraph.
+
+**No same-tree control exists yet, and the near-miss is a trap.** The same branch ran this suite
+**green** twenty-five minutes earlier
+([run 33026198894](https://github.com/astubbs/parallel-consumer/actions/runs/33026198894)) - but at
+head `c74880065`, which is *before* the astubbs#373 merge, so it is not a control for the composed
+accounting. Master ran green at `8000926f3` in the same window
+([run 33027002218](https://github.com/astubbs/parallel-consumer/actions/runs/33027002218)), and the
+other six chaos classes in this very JVM passed. The cheap experiment nobody has run is the obvious
+one: re-run the chaos lane on the failing head and see whether the arm follows the tree or the seed.
+Every prior sighting says the seed.
+
+**A sixth BLOCKED-on-monitor capture rode in the same window, on a different PR, and is recorded here
+so it is not lost.** `ChaosRevokeUnderWorkDrainIT.revokeUnderDrainingStopsStaysProtocolHonest` on
+[run 33027475278](https://github.com/astubbs/parallel-consumer/actions/runs/33027475278) (job
+98372559908, `feat/mdc-context-propagation` at head `fdb9b0736`), ten minutes before the run above,
+died on the familiar SLO with `instance 56 ... POLL THREAD AT TIMEOUT: BLOCKED ... Lock:
+java.util.concurrent.atomic.AtomicBoolean@2ddab2c5, held by: pc-control-PC-56`, frames
+`commitOffsetsThatAreReady(AbstractParallelEoSStreamProcessor.java:1639)` /
+`onPartitionsRevoked(...:573)`. **Seed `818084281700661522`.** Its frames read `:1639`/`:573` against
+master's `:1589`/`:552`, because that branch edits `AbstractParallelEoSStreamProcessor` - so, exactly
+like the fourth capture's corroborating half, it corroborates the pair and is **not** a clean
+not-PR-introduced control. Match by method and monitor, never by line number.
+
+**The pairing is what makes the window worth reading as a whole.** Two PRs' chaos jobs red inside ten
+minutes, on two arms this file treats as separate, on per-PR VMs where co-residency is structurally
+impossible - and master green between them. Neither seed has been replayed. Six seeds now exist for
+the verification the first 2026-08-26 section asks for; still none of them spent.
 
 ## Delete when
 

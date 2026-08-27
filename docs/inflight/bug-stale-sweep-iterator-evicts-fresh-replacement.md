@@ -51,5 +51,12 @@ Either way it wants a deterministic white-box test first: take the entry-set ite
 and assert both what is resident and that `getCountOfWorkAwaitingSelection()` agrees with the units
 actually held.
 
-Adjacent and NOT this: `docs/inflight/bug-retry-queue-orphaned-by-inline-stale-removal.md` - an
-unpaired removal between two structures, same neighbourhood, different defect.
+Adjacent and NOT this: the inline stale eviction that removed a container from its shard while
+leaving its retry-queue entry behind - an unpaired removal between two structures, same
+neighbourhood, different defect. It is fixed and its note retired; the trace is at
+`git show a80f2bbd1:docs/inflight/bug-retry-queue-orphaned-by-inline-stale-removal.md`.
+
+The sweep described above now accounts for what the map actually gave up rather than for the entry
+it inspected - the population retirement and the claim release both follow the evicted object, and
+the caller is handed it - so what is left open here is the eviction of the fresh record itself,
+not the accounting around it.
