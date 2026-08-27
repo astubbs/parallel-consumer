@@ -202,6 +202,18 @@ public class PCModule<K, V> {
         return TimeUtils.getClock();
     }
 
+    private MdcPropagation mdcPropagation;
+
+    /**
+     * @see ParallelConsumerOptions#isPropagateMdc()
+     */
+    public MdcPropagation mdcPropagation() {
+        if (mdcPropagation == null) {
+            mdcPropagation = new MdcPropagation(options().isPropagateMdc());
+        }
+        return mdcPropagation;
+    }
+
     private PCMetrics pcMetrics;
 
     public PCMetrics pcMetrics() {

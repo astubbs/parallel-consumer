@@ -10,6 +10,7 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.PollContext;
 import bz.stub.parallelconsumer.PollContextInternal;
 import bz.stub.parallelconsumer.internal.ExternalEngine;
+import bz.stub.parallelconsumer.internal.MdcPropagation;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -24,6 +25,7 @@ import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -84,7 +86,15 @@ public class ReactorProcessor<K, V> extends ExternalEngine<K, V> {
      */
     public void react(Function<PollContext<K, V>, Publisher<?>> reactorFunction) {
 
+        final MdcPropagation mdc = getMdcPropagation();
+
         Function<PollContextInternal<K, V>, List<Object>> wrappedUserFunc = pollContext -> {
+
+            // this wrapper runs on the worker thread, where the caller's context is established; the user's function
+            // and the terminal signals below run on the Reactor scheduler, so the context is carried explicitly.
+            // Note: this covers the invocation of the user's function and our own completion handling - propagation
+            // through the operators of the Publisher they return is Reactor's own concern (io.micrometer:context-propagation)
+            final Map<String, String> schedulerContext = mdc.capture();
 
             if (log.isTraceEnabled()) {
                 log.trace("Record list ({}), executing void function...",
@@ -98,7 +108,11 @@ public class ReactorProcessor<K, V> extends ExternalEngine<K, V> {
             pollContext.streamWorkContainers()
                     .forEach(x -> x.setWorkType(REACTOR_TYPE));
 
-            Disposable flux = Mono.fromCallable(() -> carefullyRun(reactorFunction, pollContext.getPollContext()))
+            Disposable flux = Mono.fromCallable(() -> {
+                        try (var mdcScope = mdc.enter(schedulerContext)) {
+                            return carefullyRun(reactorFunction, pollContext.getPollContext());
+                        }
+                    })
                     .flatMapMany(it -> it)
                     .doOnNext(signal -> log.trace("doOnNext {}", signal))
                     .subscribeOn(getScheduler())
@@ -109,9 +123,22 @@ public class ReactorProcessor<K, V> extends ExternalEngine<K, V> {
                     // in-flight accounting leaked, and (since the dispatch ceiling landed) its dispatch permit gone
                     // for the life of the process. Retiring on the terminal signal is once per flight in every case.
                     // MutinyProcessor's subscribe().with(onItem, onFailure, onCompletion) already had this shape.
+                    //
+                    // Each TERMINAL callback runs under the caller's context - they execute on the Reactor
+                    // scheduler, not the worker thread that captured it. The element consumer is deliberately not
+                    // wrapped: it is neither the user's function nor terminal handling, which is the boundary this
+                    // propagation covers, and `doOnNext` above is unwrapped for the same reason.
                     .subscribe(signal -> log.trace("Reactor element {}", signal),
-                            throwable -> onError(pollContext, throwable),
-                            () -> onComplete(pollContext));
+                            throwable -> {
+                                try (var mdcScope = mdc.enter(schedulerContext)) {
+                                    onError(pollContext, throwable);
+                                }
+                            },
+                            () -> {
+                                try (var mdcScope = mdc.enter(schedulerContext)) {
+                                    onComplete(pollContext);
+                                }
+                            });
 
             log.trace("asyncPoll - user function finished ok.");
             return UniLists.of(flux);
