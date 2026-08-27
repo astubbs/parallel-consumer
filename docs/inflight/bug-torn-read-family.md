@@ -181,14 +181,24 @@ The candidates above are settled but their sections stay open until the fixes la
 not derivable from this note alone:
 
 - **astubbs#345** - merged; candidate 2 closed.
-- **astubbs#346 merges** - candidates 3 and 1 both close (1 is 3's downstream stage, so 3's fix shuts
-  its only door).
+<!-- post-merge: checked-begin -->
+- **astubbs#346** - merged; candidates 3 and 1 both close (1 is 3's downstream stage, so 3's fix
+  shuts its only door). Their sections stay, as candidate 2's did when astubbs#345 landed - this
+  note is the hunt's durable summary, and it remains open for the out-of-family stragglers, the
+  astubbs#57 trigger below, and the next iteration.
+<!-- post-merge: checked-end -->
 <!-- post-merge: checked-begin -->
 - **astubbs#337 and astubbs#344** - astubbs#337 landed first, so astubbs#344 carried the seam re-hook
   described under "Related" above. Discharged; it is not owed again.
 <!-- post-merge: checked-end -->
-- **astubbs#57 merges** - the unprompted-Lincheck-find note carried on astubbs#347's branch becomes
-  deletable.
+<!-- post-merge: checked-begin -->
+- **astubbs#57** - the unprompted-Lincheck-find note that arrived on astubbs#347's branch,
+  `bug-pcmetrics-registered-meters-is-a-plain-arraylist.md`, is deleted in that PR, as its own last
+  section instructed. Discharged, and not simply dropped: the reproduction moved into
+  `PCMetrics859Test`'s class javadoc as the reason `metersLock` exists, and the half astubbs#57 does
+  not fix - the plain `HashMap` counter maps in `WorkManager` and `PartitionStateManager` - has its
+  own note, [`bug-metrics-counter-maps-are-plain-hashmaps.md`](bug-metrics-counter-maps-are-plain-hashmaps.md).
+<!-- post-merge: checked-end -->
 
 ## Closing this note
 

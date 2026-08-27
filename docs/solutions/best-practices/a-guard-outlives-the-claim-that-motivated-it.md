@@ -34,7 +34,8 @@ related:
 
 # A guard outlives the claim that motivated it
 
-> Extracted from `docs/inflight/pr-267-handoff.md`, which is deleted when astubbs#267 merges.
+> Extracted from astubbs/parallel-consumer#267's handoff note, which was renamed to
+> `docs/inflight/core-user-code-throw-sweep.md` once the PR stopped being the thing it described.
 
 ## Context
 

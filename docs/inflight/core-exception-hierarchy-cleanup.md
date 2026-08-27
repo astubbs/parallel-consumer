@@ -9,6 +9,29 @@
 (`docs/refactoring.md` - `0.6.0.0` is the major being cut and already carries a `=== Breaking`
 section), so it can land now rather than waiting for a bump.
 
+## The cost, observed: a generic catch hides which routes are reachable
+
+<!-- post-merge: checked-begin -->
+**Operator's diagnosis, 2026-08-27, and it is the sharpest argument in this note.** The mailbox
+guards astubbs#267 added were written as `catch (Throwable)`. Asked what could actually make
+`addToMailbox` throw, nobody could answer from the code - the catch names nothing, so the reachable
+route has to be rediscovered by reading three call levels down. It turned out to be
+`WorkContainer#onPostAddToMailBox` releasing the produce lock, where `ProducerManager`'s
+`ensureProduceStarted` throws `InternalRuntimeException` if the hold count is below one - the same
+invariant [`bug-producing-lock-double-release.md`](bug-producing-lock-double-release.md) has an open
+question about.
+<!-- post-merge: checked-end -->
+
+**Had PC thrown, and caught, its own specific types, that would have been legible at the call site**:
+a catch naming a produce-lock exception says what can happen and roughly why. `Throwable` says only
+that the author was being careful. So the hierarchy work below is not only about giving users one
+type to catch - it is about making PC's own guards state what they are guarding against.
+
+The tension to resolve when doing it: these guards must still catch broadly, because anything
+escaping them strands the sibling records behind it. The answer is to catch broadly and **classify**,
+not to narrow the catch - `failFatallyOnUnmailboxableRecord` does that now, and reads much better for
+it than the bare log line it replaced.
+
 ## What is wrong
 
 Six exception types, three unrelated roots:

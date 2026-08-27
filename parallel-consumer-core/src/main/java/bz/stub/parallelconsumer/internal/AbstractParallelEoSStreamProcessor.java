@@ -716,6 +716,95 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         closeDontDrainFirst();
     }
 
+    /**
+     * Terminates PC because a record could not be returned to the mailbox.
+     * <p>
+     * <b>This is not user code failing, it is PC's own bookkeeping failing</b>, and the consequence is that PC can
+     * no longer account for that record: it is neither in flight nor completed, so nothing will retry it and
+     * nothing will report it.
+     * <p>
+     * <b>The reachable route is the produce lock, not the queue - worth naming, because "a queue add cannot fail"
+     * reads as though this can never fire.</b> {@link #addToMailbox} also calls
+     * {@link WorkContainer#onPostAddToMailBox}, which in transactional commit mode releases the produce lock through
+     * {@code ProducerManager#finishProducing}; its {@code ensureProduceStarted} sanity check throws when the read
+     * hold count is below one. {@code docs/inflight/bug-producing-lock-double-release.md} records an open question
+     * about exactly that invariant - two paths release the same lock and nothing stops the second - on a path that
+     * has already produced two flakes. So this is a suspected-live route, which is the argument for making it loud
+     * rather than for assuming it is unreachable. The queue add itself only throws on a bounded queue that is full,
+     * or on {@code OutOfMemoryError}.
+     * <p>
+     * {@code Throwable} rather than {@code Exception} at the call sites, because an {@code Error} raised here would
+     * otherwise pass straight through the very guards this path exists to be. Continuing from there risks committing past work that was never done - a silent
+     * skip, with no error and no lag anomaly to find it by. Operator ruling on astubbs#267: a failure to post the
+     * letter is a terminal system failure, and continued operation under a suspected skip is not permitted.
+     * <p>
+     * <b>It signals rather than closing, and that is load-bearing twice over.</b> {@link #closeOnException} waits
+     * for the shutdown to finish, and every caller of this method is either a batch loop or an async completion
+     * handler - blocking one would hold up the very records still waiting to be mailboxed, and on vert.x it would
+     * hold the event loop. Throwing is equally unavailable: an exception escaping these sites skips every sibling
+     * container behind it, which is the stall this whole path exists to prevent. So the reason is recorded, the
+     * state is moved to CLOSING, and the control thread performs the shutdown on its own.
+     * <p>
+     * The reason is written BEFORE the state, because {@link #state} is volatile and its write is what publishes
+     * the reason to the control thread. The FIRST failure wins - a later one would overwrite the diagnosis that
+     * started the shutdown with a consequence of it.
+     *
+     * @param wc              the container that could not be returned
+     * @param mailboxingThrew what {@link #addToMailbox} threw
+     */
+    protected void failFatallyOnUnmailboxableRecord(WorkContainer<K, V> wc, Throwable mailboxingThrew) {
+        try {
+            var failure = new UnmailboxableRecordException(msg(
+                    "Could not return {} to the mailbox. PC can no longer account for this record, so it is "
+                            + "shutting down rather than continuing with work it may silently skip.", wc),
+                    mailboxingThrew);
+
+            // LOUD ON PURPOSE, and the banner is the point. This can only fire on a PC bug, and its consequence -
+            // a record neither retried nor reported - leaves no other trace: no exception reaches the user, no lag
+            // anomaly appears, and the committed offsets look correct. A single ERROR line among a failure path's
+            // other ERROR lines is not enough to be found later, and being found later is the whole value. Same
+            // reasoning, and the same shape, as the AMBIENT PROBE AUTOPSY banner the test suites already use.
+            logWithoutEscaping(failure, () -> log.error(
+                    "\n"
+                            + "================================================================================\n"
+                            + "  UNMAILBOXABLE RECORD - TERMINAL, SHUTTING DOWN\n"
+                            + "================================================================================\n"
+                            + "  {} could not be returned to the mailbox.\n"
+                            + "  This is PC's own bookkeeping, not user code, so this is a BUG IN PC.\n"
+                            + "  The record is now neither in flight nor completed: nothing will retry it and\n"
+                            + "  nothing will report it, so continuing risks committing past work that was\n"
+                            + "  never done - a silent skip, with no error and no lag anomaly to find it by.\n"
+                            + "  PC is shutting down rather than run on in that state.\n"
+                            + "  Cause: {}\n"
+                            + "================================================================================",
+                    wc, describeWithRootCause(mailboxingThrew)));
+
+            // CLASSIFY rather than narrow the catch. The call sites must keep catching broadly - anything escaping
+            // them strands the sibling records behind it - but a bare `catch (Throwable)` names nothing, so the
+            // reachable route has to be rediscovered by reading three levels down. Naming our own type here is the
+            // part that was missing: an InternalRuntimeException means a PC invariant was violated, and the known
+            // route is the produce lock. docs/inflight/core-exception-hierarchy-cleanup.md owns the general fix.
+            if (mailboxingThrew instanceof InternalRuntimeException) {
+                log.error("  ...and it is one of PC's OWN invariants that broke, not an unexpected runtime error. "
+                        + "The known route is the produce-lock release in onPostAddToMailBox - see "
+                        + "docs/inflight/bug-producing-lock-double-release.md.");
+            }
+
+            if (this.failureReason == null) {
+                this.failureReason = failure;
+            }
+            transitionToClosing();
+        } catch (Throwable escalationItselfThrew) {
+            // Never propagate: this runs on paths whose remaining work must still be returned to the mailbox, so
+            // an escape here would strand exactly the records the shutdown is being raised to protect.
+            try {
+                log.error("Failed to escalate an unmailboxable record", escalationItselfThrew);
+            } catch (Throwable ignored) {
+                // logging is what just failed
+            }
+        }
+    }
+
     @Override
     public void close(Duration timeout, DrainingMode drainMode) {
         shutdownTimeout = timeout;
@@ -1694,6 +1783,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                     // code rather than the user's, so a throw is our bug, which is a reason to surface it, not a
                     // reason to let it take the rest of the batch with it.
                     bookkeepingFailed = firstOrSuppress(bookkeepingFailed, mailboxingThrew);
+                    // ...and a reason to stop. Surfacing it to this caller is not enough: the record is now
+                    // unaccounted for, so PC shuts down rather than continue past a possible silent skip. The
+                    // loop still finishes first, so the containers behind this one are returned.
+                    failFatallyOnUnmailboxableRecord(wc, mailboxingThrew);
                 }
             }
             // attached rather than thrown: the user's own failure is what the caller needs to see, and

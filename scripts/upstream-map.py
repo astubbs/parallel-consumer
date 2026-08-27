@@ -69,6 +69,20 @@ def validate(d):
         grp = e.get("group")
         if grp not in GROUPS:
             errs.append(f"{eid}: bad group '{grp}' (allowed: {sorted(GROUPS)})")
+        # `pr-open` with no PR number is unenforceable, not merely untidy.
+        # .claude/hooks/check-upstream-map-merged.sh denies a merge only when the PR being merged
+        # appears in fork.prs AND the entry still says pr-open. With prs empty, `N in []` is false
+        # for every N, so the guard cannot fire on the entry that most needs it - and the state is
+        # reachable in one step: split work onto a new branch, and the entry names a status whose
+        # own PR does not exist yet. Caught here rather than left to the hook, which by design
+        # stays silent when it has nothing to match.
+        fork = e.get("fork") or {}
+        if fork.get("status") == "pr-open" and not (fork.get("prs") or []):
+            errs.append(
+                f"{eid}: fork.status is 'pr-open' but fork.prs is empty - the merge guard matches on "
+                f"the PR number, so it can never fire for this entry. Set fork.prs when the PR is "
+                f"opened, or use 'ready' until then."
+            )
     errs.extend(validate_branches(d))
     return errs
 

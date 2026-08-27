@@ -288,8 +288,10 @@ public abstract class ExternalEngine<K, V> extends AbstractParallelEoSStreamProc
             try {
                 addToMailbox(pollContext, wc);
             } catch (Throwable mailboxingThrew) {
-                log.error("Failed to return {} to the mailbox - it may stay in flight. Cause: {}", wc,
-                        describeWithRootCause(mailboxingThrew));
+                // Terminal, not merely logged: the record is now unaccounted for. Escalation only signals, so the
+                // remaining containers in this batch are still returned below - see
+                // failFatallyOnUnmailboxableRecord for why it must neither throw nor block here.
+                failFatallyOnUnmailboxableRecord(wc, mailboxingThrew);
             }
         });
     }

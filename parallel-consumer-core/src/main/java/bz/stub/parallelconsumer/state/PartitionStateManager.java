@@ -82,10 +82,20 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
 
     private final PCMetrics pcMetrics;
 
+    /**
+     * Cached instance — creating throwaway OffsetMapCodecManagers on every partition assignment
+     * leaked metrics (each instance registered duplicate timers/counters). See <a href="https://github.com/confluentinc/parallel-consumer/issues/859">confluentinc#859</a>, <a href="https://github.com/confluentinc/parallel-consumer/issues/233">confluentinc#233</a>.
+     */
+    // TODO(refactor): decode-only + single-threaded today, so sharing one instance is safe; NOT
+    // thread-safe if confluentinc#200 parallelises encoding. Broader confluentinc#233 (split encode/decode, de-static) remains: https://github.com/confluentinc/parallel-consumer/issues/233
+    // See docs/refactoring.md.
+    private final OffsetMapCodecManager<K, V> offsetMapCodecManager;
+
     public PartitionStateManager(PCModule<K, V> module, ShardManager<K, V> sm) {
         this.sm = sm;
         this.module = module;
         this.pcMetrics = module.pcMetrics();
+        this.offsetMapCodecManager = new OffsetMapCodecManager<>(module);
         initMetrics();
     }
 
@@ -126,8 +136,7 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
         incrementPartitionAssignmentEpoch(assignedPartitions);
 
         try {
-            OffsetMapCodecManager<K, V> om = new OffsetMapCodecManager<>(module); // todo remove throw away instance creation - confluentinc#233
-            var partitionStates = om.loadPartitionStateForAssignment(assignedPartitions);
+            var partitionStates = offsetMapCodecManager.loadPartitionStateForAssignment(assignedPartitions);
             this.partitionStates.putAll(partitionStates);
             initPartitionCounters(assignedPartitions);
 
@@ -313,13 +322,20 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
         return getPartitionState(tp).getOffsetHighestSeen();
     }
 
-    public void onSuccess(WorkContainer<K, V> wc) {
-        PartitionState<K, V> partitionState = getPartitionState(wc.getTopicPartition());
+    /**
+     * Applies the completion to the given, ALREADY-RESOLVED state - the caller resolves the state once, checks
+     * staleness against it, and passes the same reference here, so the state a staleness check validated can
+     * never diverge from the state the completion then mutates. Resolving again here was half of the
+     * checkpoint-3 torn read (see {@code WorkManager#handleFutureResult}).
+     */
+    public void onSuccess(WorkContainer<K, V> wc, PartitionState<K, V> partitionState) {
         partitionState.onSuccess(wc.offset());
     }
 
-    public void onFailure(WorkContainer<K, V> wc) {
-        PartitionState<K, V> partitionState = getPartitionState(wc.getTopicPartition());
+    /**
+     * Same single-resolution contract as {@link #onSuccess(WorkContainer, PartitionState)}.
+     */
+    public void onFailure(WorkContainer<K, V> wc, PartitionState<K, V> partitionState) {
         partitionState.onFailure(wc);
     }
 

@@ -240,8 +240,11 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
                 try {
                     addToMailbox(context, wc);
                 } catch (Throwable mailboxingThrew) {
-                    log.error("Failed to return {} to the mailbox - it may stay in flight. Cause: {}", wc,
-                            describeWithRootCause(mailboxingThrew));
+                    // Terminal, not merely logged - operator ruling: if the record cannot be posted, PC can no
+                    // longer account for it, and continuing risks a silent skip. Escalation only records the
+                    // reason and moves the state, because throwing here would skip vert.x's remaining listeners
+                    // and strand the sibling containers, and blocking here would hold the event loop.
+                    failFatallyOnUnmailboxableRecord(wc, mailboxingThrew);
                 }
 
                 // the throwable rather than its message: this is the only record of why a send failed, and

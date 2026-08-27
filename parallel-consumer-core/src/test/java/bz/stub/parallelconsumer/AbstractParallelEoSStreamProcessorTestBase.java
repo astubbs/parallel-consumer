@@ -12,6 +12,7 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.model.CommitHistory;
+import bz.stub.parallelconsumer.internal.UnmailboxableRecordException;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import bz.stub.parallelconsumer.state.WorkManager;
 import bz.stub.parallelconsumer.truth.CommitHistorySubject;
@@ -49,6 +50,7 @@ import static org.awaitility.Awaitility.await;
 import static org.awaitility.Awaitility.waitAtMost;
 import static org.mockito.Mockito.*;
 import static pl.tlinkowski.unij.api.UniLists.of;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * @author Antony Stubbs
@@ -144,8 +146,35 @@ public abstract class AbstractParallelEoSStreamProcessorTestBase {
                 .ordering(UNORDERED);
     }
 
+    /**
+     * Fails the test if PC terminated because a record could not be returned to the mailbox.
+     * <p>
+     * <b>Operator requirement: if this ever happens, it happens HERE and it is loud.</b> The defect it reports is
+     * invisible by construction - the record is neither retried nor reported, no exception reaches the user, and the
+     * committed offsets look correct - so a run that hit it and stayed green would be the worst outcome available.
+     * The existing teardown only logs {@code "PC has error - test failed"} and closes, which does not fail anything.
+     * <p>
+     * Matched on TYPE rather than on the log banner, because a harness that matched the text would be one reword
+     * away from silently never firing again. Checked as a cause chain, since the escalation wraps what
+     * {@code addToMailbox} threw and a caller may wrap it again.
+     */
+    private void failLoudlyIfARecordCouldNotBeMailboxed() {
+        for (Throwable t = parentParallelConsumer.getFailureCause(); t != null; t = t.getCause()) {
+            if (t instanceof UnmailboxableRecordException) {
+                fail("PC TERMINATED: a record could not be returned to the mailbox, which is a bug in PC's own "
+                        + "bookkeeping and means a record was neither retried nor reported. This is the failure the "
+                        + "UNMAILBOXABLE RECORD banner describes - read it in this test's log. Cause: " + t);
+            }
+            if (t.getCause() == t) {
+                break;
+            }
+        }
+    }
+
     @AfterEach
     public void close() {
+        failLoudlyIfARecordCouldNotBeMailboxed();
+
         // Reset Awaitility's global thread-local timeout state so per-test overrides
         // (e.g. setDefaultTimeout) don't leak into other tests under non-deterministic
         // test order (PIT baseline/mutations surface this; surefire's default ordering

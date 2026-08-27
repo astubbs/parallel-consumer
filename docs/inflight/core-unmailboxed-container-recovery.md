@@ -36,8 +36,12 @@ should that catch be fatal - and the options below are the ones weighed there. W
 went, the question this note holds is unchanged, because none of the three can be chosen without it:
 <!-- post-merge: checked-end -->
 
-1. **Leave it and state the bound in the comment.** `addToMailbox` is PC's own code - a queue `add`
-   plus `onPostAddToMailBox` - so a throw means something is already badly wrong.
+1. **Leave it and state the bound in the comment.** `addToMailbox` is PC's own code, so a throw means
+   something is already badly wrong. **Note this is not merely a queue add**: `onPostAddToMailBox`
+   releases the produce lock in transactional mode, and `ProducerManager`'s `ensureProduceStarted`
+   throws when the hold count is below one - see
+   [`bug-producing-lock-double-release.md`](bug-producing-lock-double-release.md), which is an open
+   question about that same invariant.
 2. **Route the failure to the control thread's own failure path**, so an un-mailboxed record surfaces
    as a PC failure rather than a silent stall. A new escalation path in core and all three engines.
 3. **Mark the container so a sweep recovers it** - which presupposes the sweep this note is asking
