@@ -1623,6 +1623,59 @@ Reading the replay line nearest the top of a chaos log picks the wrong seed. The
 the `testsuite` element - which is the route [`docs/ci.md`](../ci.md) already prescribes.
 
 <!-- post-merge: checked-begin -->
+## 2026-08-26, sixth capture: the DRAIN arm again, and a CORROBORATING one rather than a control
+
+**Same discriminator, same arm as the fifth capture, and deliberately filed as weaker evidence.**
+`Chaos Pain Suite`, `ChaosRevokeUnderWorkDrainIT.revokeUnderDrainingStopsStaysProtocolHonest`, the
+same correctness SLO `no instance may end the run with an unclassified failure cause`
+<!-- post-merge: checked-begin -->
+([run 33027475278](https://github.com/astubbs/parallel-consumer/actions/runs/33027475278), job
+98372559908), from astubbs/parallel-consumer#205 at head `fdb9b0736`:
+<!-- post-merge: checked-end -->
+
+```
+instance 56: RuntimeException: Error from poll control thread: Timeout waiting for commit response
+PT10S to request ConsumerOffsetCommitter.CommitRequest(id=79e899c8-...) ...
+POLL THREAD AT TIMEOUT: BLOCKED - the poll thread is waiting to acquire a monitor, so this is
+contention or a lock-ordering defect, NOT a slow broker. Lock:
+java.util.concurrent.atomic.AtomicBoolean@2ddab2c5, held by: pc-control-PC-56.
+Top frames: [...commitOffsetsThatAreReady(AbstractParallelEoSStreamProcessor.java:1639),
+             ...onPartitionsRevoked(AbstractParallelEoSStreamProcessor.java:573),
+             ConsumerRebalanceListenerInvoker.invokePartitionsRevoked, ... ConsumerManager.poll]
+```
+
+<!-- post-merge: checked-begin -->
+**Why this is corroboration and not a control arm.** The frames read `:1639` / `:573` rather than
+master's `:1585` / `:548`, and this time the shift IS the branch's: astubbs#205 edits
+`AbstractParallelEoSStreamProcessor` to wrap the pool submit in an MDC scope, which moves everything
+below it. Resolved against that branch's copy, `:1639` is the `synchronized (commitCommand)`
+acquisition inside `commitOffsetsThatAreReady` and `:573` is that method's call site inside
+`onPartitionsRevoked` - the identical pair, matched by method and monitor as the fifth capture
+instructs, not by line number. But a branch that edits the file cannot rule itself out the way
+astubbs#346 and astubbs#374 could, so this entry adds a fifth arm-and-holder match and **no**
+independent evidence about cause. The fourth capture already draws this distinction for
+astubbs#267; the same reading applies here.
+<!-- post-merge: checked-end -->
+
+**Seed `818084281700661522`**:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=818084281700661522
+
+**What it is NOT.** It is not the `ZOMBIE_MEMBER` arm recorded as a sighting below, which the same
+branch also produced on an earlier head - different probe, different failure mode, and that one has
+a standing seed-dependent explanation this does not share. Reading a red `Chaos Pain Suite` on this
+branch as "the flake" would merge the two; the discriminator is the live defect, and only the
+monitor-and-holder match tells them apart.
+
+**Retrieval note, because it decided what this entry says.** The job log for this run is large, and
+`docs/solutions/workflow-issues/gh-run-view-log-truncation.md` records three occasions where a
+truncated fetch produced a published-and-wrong diagnosis. This autopsy was taken from the uploaded
+`chaos-suite-reports-*` artifact - route 1 in that document, the one that survives server-side
+stream truncation because the autopsy is `system-out` inside the failsafe XML - and the seed and
+both frames came out of it intact.
+
+<!-- post-merge: checked-begin -->
 **Twentieth sighting, 2026-08-26 - the `ZOMBIE_MEMBER` arm, and the first capture of it since the
 dispatch ceiling landed.** `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger` was killed
 fail-fast by the probe on astubbs/parallel-consumer#205, at a head that had just merged master.
