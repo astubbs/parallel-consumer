@@ -275,6 +275,41 @@ One thing does survive: the Class 2 observations continued in the fixed arm whil
 which is what the pre-registered prediction said would happen. That prediction concerns the timing
 bound and not the deadlock, so it is unaffected by this retraction.
 
+### VERIFIED, 2026-08-27: the fix holds against a red control, on the deterministic instrument
+
+The chaos-seed replays earlier in this section could not open the window and were retracted. This is
+the experiment that discriminates. Instrument: `Rebalance857CommitSyncDeadlockProbeIT`, which forces
+the overlap by construction rather than waiting for a schedule to land on it - a 4s dwell in
+`onPartitionsRevoked` against a 1s commit interval, 500 records at 25ms to keep the manager dirty.
+`@RepeatedTest(20)`. Two trees differing by exactly one term: the revoke side declines with
+`tryLock()` (FIXED) or blocks on `lock()` (CONTROL).
+
+| Arm | Failures | `Skipping offset commit during partition revocation` | `Timeout waiting for commit response` |
+|---|---|---|---|
+| CONTROL - revoke blocks | **all repetitions** | 0 | present, several per failure |
+| FIXED - revoke declines | **none** | **fired, ~2 per repetition** | 0 |
+
+**The skip-log count is what makes the green arm mean anything.** It is the INFO line on the
+contended `tryLock` branch - the arm that IS the fix - so a non-zero count proves the window opened
+and the fix declined it, rather than the probe never reaching the contended state. Zero on the
+control is also correct: a blocking revoke never declines, it deadlocks.
+
+This reproduces the 2026-08-18 A/B soak's result independently, on different hardware, and it is the
+verification this branch has owed since April.
+
+**Run it unforked.** `surefire.forkCount` is 1 by default but `1C` under `-Pci`, and forking one
+broker per fork removes the window - which is how the suite went green while the deadlock sat
+untouched. The pom warns separately that `-DforkCount` is silently ignored; only
+`-Dsurefire.forkCount` works. So a run of this probe under `-Pci` produces a meaningless green.
+
+**Read the run log, not the failsafe `.txt`.** That file is a few lines of summary and carries no log
+output, so grepping it for the skip-log returns zero whatever happened. That mistake was made twice
+here in one day and both times the zero looked like a closed window.
+
+**What is still not established.** This proves the mechanism is closed under a forced overlap. It does
+not establish a rate in the wild, and none of the six captured chaos seeds has been shown to refire
+or not refire against the fix - those runs are dispatched but unread.
+
 ### The ledger's "three landed, one open" framing is badly out of date
 
 astubbs#119's `## Fork status` still says three defects landed (astubbs#100, astubbs#80,
