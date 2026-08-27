@@ -21,6 +21,8 @@ import pl.tlinkowski.unij.api.UniLists;
 
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 
 import static java.lang.Boolean.TRUE;
@@ -68,15 +70,28 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     private int numberRecordsOutForProcessing = 0;
     private PCModule<K, V> module;
     /**
-     * Useful for testing
+     * Useful for testing. Register with {@link #addSuccessfulWorkListener}.
+     * <p>
+     * Concurrent because registration can happen on any thread, while {@link #onSuccessResult} iterates it on the
+     * control thread. A plain list breaks its own iteration when a registration lands mid-notify, and the resulting
+     * {@link java.util.ConcurrentModificationException} escapes into the control loop and stops the consumer.
      */
-    @Getter(PUBLIC)
-    private final List<Consumer<WorkContainer<K, V>>> successfulWorkListeners = new ArrayList<>();
+    private final List<Consumer<WorkContainer<K, V>>> successfulWorkListeners = new CopyOnWriteArrayList<>();
 
     private Gauge waitingRecordsNumberGauge;
     private Gauge inflightRecordsNumberGauge;
-    private Map<TopicPartition, Counter> succeededRecordsCounters = new HashMap<>();
-    private Map<TopicPartition, Counter> failedRecordsCounters = new HashMap<>();
+    /**
+     * Concurrent because the writes and the reads are on different threads: entries are put on partition assignment
+     * and removed on revoke, both of which arrive on the broker-poll thread as rebalance callbacks, while
+     * {@link #incrementCounterIfPresent} reads them on the control thread for every record that completes.
+     * <p>
+     * Not a {@link java.util.ConcurrentModificationException} risk - nothing iterates these. Quieter than that: a
+     * {@code get} racing another thread's resize can miss an entry that is present, so the counter under-counts
+     * during a rebalance. astubbs#267 judged these safe on the iteration argument alone; this is why that was too
+     * narrow.
+     */
+    private final Map<TopicPartition, Counter> succeededRecordsCounters = new ConcurrentHashMap<>();
+    private final Map<TopicPartition, Counter> failedRecordsCounters = new ConcurrentHashMap<>();
 
     private final PCMetrics pcMetrics;
 
@@ -161,6 +176,35 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         return work;
     }
 
+    /**
+     * Register a listener to be notified after each work container succeeds.
+     * <p>
+     * Safe to call from any thread, including while the consumer is running. When PC delivers a success, the listener
+     * runs on the <b>control thread</b> - the worker pool only hands the finished {@link WorkContainer} to the
+     * mailbox, and the control loop is what drains it to here. So a listener that blocks does not slow one worker, it
+     * stalls the control loop, and with it commits, polling, and every other listener. Do the work elsewhere and
+     * return.
+     * <p>
+     * Every success from the next one onwards is delivered. Whether the listener also sees a success that was
+     * <b>already being notified</b> when it registered is <b>undefined</b>, and deliberately left so: the iteration
+     * runs over the copy-on-write snapshot taken at the instant it starts, which is later than the start of
+     * {@link #onSuccessResult}, so a registration landing in between is included and one landing after is not. The
+     * caller cannot tell which side it landed on, so do not count that record either way - if a listener needs an
+     * exact tally, register it before processing starts.
+     * <p>
+     * <b>A listener that throws stops the consumer.</b> It is run through {@link UserFunctions}, as every other piece
+     * of user-supplied code is, so the failure is reported as coming from user code - but it is not swallowed. Catch
+     * what you can handle.
+     * <p>
+     * Notification means the user function returned, <b>not</b> that the offset is committed - listeners fire from the
+     * control loop before the next commit. If the consumer dies in between, the record is redelivered on restart and
+     * the listener sees it again, so listeners must tolerate at-least-once delivery exactly as processing functions
+     * must.
+     */
+    public void addSuccessfulWorkListener(Consumer<WorkContainer<K, V>> listener) {
+        successfulWorkListeners.add(listener);
+    }
+
     public void onSuccessResult(WorkContainer<K, V> wc) {
         onSuccessResult(wc, pm.getPartitionState(wc.getTopicPartition()));
     }
@@ -182,10 +226,17 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         pm.onSuccess(wc, partitionState);
         sm.onSuccess(wc);
 
-        // notify listeners
-        successfulWorkListeners.forEach(c -> c.accept(wc));
-
-        numberRecordsOutForProcessing--;
+        // notify listeners - user code, so run it through the same wrapper every other user function goes through.
+        // It still propagates and still stops the consumer; what changes is that the failure arrives named
+        // ("Error occurred in code supplied by user") instead of surfacing as "Error from poll control thread: null"
+        // in a finally for the same reason the loop-end hooks count in one: the listener is user code that can
+        // throw, and the in-flight count is this class's own bookkeeping, not the listener's. Leaving it
+        // un-decremented is the counter drift this file documents as the silent-stall signature
+        try {
+            successfulWorkListeners.forEach(c -> UserFunctions.carefullyRun(c, wc));
+        } finally {
+            numberRecordsOutForProcessing--;
+        }
     }
 
     /**
@@ -410,12 +461,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
     private void initTopicPartitionSpecificMetrics(Collection<TopicPartition> partitions) {
         partitions.forEach(topicPartition -> {
-            if (!succeededRecordsCounters.containsKey(topicPartition)) {
-                succeededRecordsCounters.put(topicPartition, pcMetrics.getCounterFromMetricDef(PCMetricsDef.PROCESSED_RECORDS, getWorkManagerCounterTags(topicPartition)));
-            }
-            if (!failedRecordsCounters.containsKey(topicPartition)) {
-                failedRecordsCounters.put(topicPartition, pcMetrics.getCounterFromMetricDef(PCMetricsDef.FAILED_RECORDS, getWorkManagerCounterTags(topicPartition)));
-            }
+            succeededRecordsCounters.computeIfAbsent(topicPartition,
+                    tp -> pcMetrics.getCounterFromMetricDef(PCMetricsDef.PROCESSED_RECORDS, getWorkManagerCounterTags(tp)));
+            failedRecordsCounters.computeIfAbsent(topicPartition,
+                    tp -> pcMetrics.getCounterFromMetricDef(PCMetricsDef.FAILED_RECORDS, getWorkManagerCounterTags(tp)));
         });
     }
 

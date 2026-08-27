@@ -9,6 +9,7 @@ import com.google.common.truth.Truth;
 import bz.stub.parallelconsumer.internal.utils.KafkaTestUtils;
 import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
 import bz.stub.parallelconsumer.internal.utils.Range;
+import bz.stub.parallelconsumer.ExceptionInUserFunctionException;
 import bz.stub.parallelconsumer.FakeRuntimeException;
 import bz.stub.parallelconsumer.ManagedTruth;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
@@ -42,6 +43,7 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 import static com.google.common.truth.Truth.assertWithMessage;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.*;
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -88,7 +90,7 @@ public class WorkManagerTest {
         module = new PCModuleTestEnv(optsOverride);
 
         wm = module.workManager();
-        wm.getSuccessfulWorkListeners().add((work) -> {
+        wm.addSuccessfulWorkListener((work) -> {
             log.debug("Heard some successful work: {}", work);
             successfulWork.add(work);
         });
@@ -172,6 +174,36 @@ public class WorkManagerTest {
         //
         gottenWork = wm.getWorkIfAvailable();
         assertThat(gottenWork).isEmpty();
+    }
+
+    /**
+     * A listener that throws must not take the in-flight count with it.
+     * <p>
+     * The count is this class's own bookkeeping, not the listener's, and it gates the broker poller's pause/resume.
+     * Leaving it un-decremented is the counter drift this file documents as the silent-stall signature - a listener
+     * failure would be paid for by a consumer that stops fetching, which is a far worse outcome than the failure.
+     */
+    @Test
+    void aThrowingSuccessListenerStillDecrementsTheInFlightCount() {
+        setupWorkManager(ParallelConsumerOptions.builder()
+                .ordering(UNORDERED)
+                .build());
+        registerSomeWork();
+
+        wm.addSuccessfulWorkListener(work -> {
+            throw new FakeRuntimeException("listener blew up");
+        });
+
+        var gottenWork = wm.getWorkIfAvailable();
+        int inFlightBefore = wm.getNumberRecordsOutForProcessing();
+
+        var thrown = assertThrows(Throwable.class, () -> wm.onSuccessResult(gottenWork.get(0)));
+        assertWithMessage("the listener failure still propagates - it is not swallowed")
+                .that(thrown).isInstanceOf(ExceptionInUserFunctionException.class);
+
+        assertWithMessage("in-flight count after a throwing listener")
+                .that(wm.getNumberRecordsOutForProcessing())
+                .isEqualTo(inFlightBefore - 1);
     }
 
     @Test

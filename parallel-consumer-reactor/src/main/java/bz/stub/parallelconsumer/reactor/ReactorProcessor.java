@@ -18,6 +18,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.reactivestreams.Publisher;
 import pl.tlinkowski.unij.api.UniLists;
 import reactor.core.Disposable;
+import reactor.core.Exceptions;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
@@ -31,6 +32,7 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import static bz.stub.parallelconsumer.internal.UserFunctions.carefullyRun;
+import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.logWithoutEscaping;
 
 /**
  * Adapter for using Project Reactor as the asynchronous execution engine
@@ -156,15 +158,16 @@ public class ReactorProcessor<K, V> extends ExternalEngine<K, V> {
     }
 
     private void onError(PollContextInternal<K, V> pollContext, Throwable throwable) {
-        if (throwable instanceof PCRetriableException) {
-            log.debug("Reactor fail signal", throwable);
-        } else {
-            log.error("Reactor fail signal", throwable);
-        }
-        pollContext.streamWorkContainers().forEach(wc -> {
-            wc.onUserFunctionFailure(throwable);
-            addToMailbox(pollContext, wc);
-        });
+        onAsyncFailure(pollContext, throwable, "Reactor fail signal");
+    }
+
+    /**
+     * Reactor repackages what it propagates, and core cannot name reactor's wrapper types - so peel with reactor's
+     * own helper before the retriable classification looks at what is underneath.
+     */
+    @Override
+    protected Throwable unwrapFrameworkWrapper(Throwable throwable) {
+        return Exceptions.unwrap(throwable);
     }
 
     private Scheduler getScheduler() {

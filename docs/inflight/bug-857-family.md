@@ -1544,13 +1544,16 @@ could not reach the chaos engine. Every other scenario in that same JVM passed.
     ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
       -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=1355976854716465757
 
+<!-- post-merge: checked-begin -->
 **The corroborating capture, and why it is weaker.** `ChaosRevokeUnderWorkDrainIT` on
 [run 32975169315](https://github.com/astubbs/parallel-consumer/actions/runs/32975169315)
 (astubbs/parallel-consumer#267, `fix/concurrent-listener-registration`, seed
-<!-- post-merge: checked-begin -->
 `3135248854766953145`, instance 56, monitor held by `pc-control-PC-56`) is the same monitor reached
 through the same two methods - but its frames read `:1621` and `:555`, because that branch edits
-`AbstractParallelEoSStreamProcessor` and shifts the line numbers. So it corroborates the pair, and it
+`AbstractParallelEoSStreamProcessor` and shifts the line numbers. It is worth one line for its ARM
+rather than its evidential weight: the drain stop-mode under the eager assignor, which no capture
+above covers, so between them the cycle has now been seen under both assignors and both stop-modes,
+always entered through `onPartitionsRevoked`. So it corroborates the pair, and it
 is **not** a second not-PR-introduced control arm. Take the astubbs#374 capture as the clean one.
 <!-- post-merge: checked-end -->
 

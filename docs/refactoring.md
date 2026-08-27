@@ -80,6 +80,17 @@ These change the public, user-visible surface, so they still may not be folded i
 patch** - that is what release-gating means, and it is the only thing it means. Unlike the internal
 refactors below, which are non-breaking and can land at any point in any line.
 
+- **DONE, landed in astubbs/parallel-consumer#267: `InternalRuntimeException` renamed to
+  `PCInternalRuntimeException`.** A user-visible break - it is what arrives from
+  `getFailureCause()`, and it is the type named in upstream's own report text
+  (`...internal.InternalRuntimeException: Timeout waiting for commit response PT30S`,
+  confluentinc#833). Renamed because the old name reads like a JDK type: in a stack trace or an IDE
+  exception picker that prints simple names, `InternalRuntimeException` could belong to anything, and
+  the `PC` prefix says whose it is at a glance. Recorded here rather than only in the commit, because
+  this section is what the release notes are assembled from.
+  [`docs/inflight/core-exception-hierarchy-cleanup.md`](inflight/core-exception-hierarchy-cleanup.md)
+  owns the rest of the naming work - `InternalException` and the two spellings of the PC prefix are
+  untouched, so a later pass will be a second break unless it is done in this same release.
 - **Remove the deprecated `commitInterval` options** - `public void setTimeBetweenCommits` /
   `public Duration getTimeBetweenCommits` in `internal/AbstractParallelEoSStreamProcessor.java`.
 - **Remove the accreting deprecated `ParallelConsumerOptions` fields**
@@ -404,7 +415,7 @@ them, do not copy them back.
   lock-hygiene: a dedicated private lock is safer (same idea as the PCMetrics `confluentinc#859`
   fix); low priority, separate concern. `alternatives to this brute force approach`:
   brute-force transaction-commit retry.
-- **`InternalRuntimeException` names the wrong thing at the produce-callback site**, and the cost is
+- **`PCInternalRuntimeException` names the wrong thing at the produce-callback site**, and the cost is
   rediscovery. `sendCallback` throws it when a send fails in non-transactional mode, but that is an
   **expected operational state**, not an internal fault. Two different questions decide the scope
   here, and conflating them has been the recurring error:
@@ -427,15 +438,15 @@ them, do not copy them back.
   before they can conclude it is ordinary failure handling. It was verified from source and
   kafka-clients bytecode during astubbs#261 review, and nothing in the code records the answer.
   - **Preferred, non-breaking:** throw a specific subclass - e.g. `RecordPublishFailedException
-    extends InternalRuntimeException` - so existing `catch (InternalRuntimeException)` keeps
-    working while the type states the situation. Renaming `InternalRuntimeException` itself would
+    extends PCInternalRuntimeException` - so existing `catch (PCInternalRuntimeException)` keeps
+    working while the type states the situation. Renaming `PCInternalRuntimeException` itself would
     be user-visible and belongs in
     [Breaking changes](#breaking-changes-queued-for-next-major-version) instead; the subclass avoids
     needing that.
     - **The subclass alone is not enough, and this is the part that is easy to get wrong.** A
       synchronous callback failure escapes `produceMessages` into
       `ParallelEoSStreamProcessor#processAndProduceResults`, whose `catch (Exception e)` immediately
-      rethrows `new InternalRuntimeException("Error while waiting for produce results", e)`. The
+      rethrows `new PCInternalRuntimeException("Error while waiting for produce results", e)`. The
       specific type would survive only as a nested cause, so a caller still could not catch it and
       the observable failure type would be exactly as generic as today. The refactor has to preserve
       the subtype through that outer wrapper too - rethrow it unchanged, or introduce the specific

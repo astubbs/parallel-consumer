@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.state;
  */
 
 import bz.stub.parallelconsumer.PollContextInternal;
+import bz.stub.parallelconsumer.internal.utils.ThrowableUtils;
 import bz.stub.parallelconsumer.RecordContext;
 import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.internal.ProducerManager;
@@ -440,14 +441,79 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     /**
      * @return the delay between retries e.g. retry after 1 second
      */
+    /**
+     * When this record next becomes eligible, defended against every shape a user's provider can hand back.
+     * <p>
+     * Guarding only the provider that <em>throws</em> was not enough, and the gap was worse than the hole it
+     * left: a provider returning {@code null}, a negative {@code Duration}, or one large enough to overflow
+     * {@link Instant#plus} throws <b>after</b> that guard, from the arithmetic here. The caller's own guards then
+     * catch it and the container survives - but {@code retryDueAt} is left unset, and unset reads as
+     * {@link Instant#MIN}, which means "due now". The record is retried immediately, forever, with no backoff and
+     * no warning: a hot loop against whatever the user was trying to back off from.
+     */
+    private Instant computeRetryDueAt(Instant failedAt) {
+        Duration delay = getRetryDelayConfig(); // never throws
+        try {
+            return failedAt.plus(delay);
+        } catch (RuntimeException notRepresentable) {
+            // a Duration large enough that failedAt + it falls outside Instant's range
+            warnBrokenRetryDelayProvider("returned a delay that cannot be applied (" + delay + ")",
+                    notRepresentable);
+            return failedAt.plus(module.options().getDefaultMessageRetryDelay());
+        }
+    }
+
     public Duration getRetryDelayConfig() {
         var options = module.options();
         var retryDelayProvider = options.getRetryDelayProvider();
-        if (retryDelayProvider != null) {
-            return retryDelayProvider.apply(new RecordContext<>(this));
-        } else {
+        if (retryDelayProvider == null) {
             return options.getDefaultMessageRetryDelay();
         }
+        try {
+            Duration theirs = retryDelayProvider.apply(new RecordContext<>(this));
+            if (theirs == null) {
+                warnBrokenRetryDelayProvider("returned null", null);
+                return options.getDefaultMessageRetryDelay();
+            }
+            if (theirs.isNegative()) {
+                // would make the record due before it failed - same hot-retry outcome as an unset retryDueAt
+                warnBrokenRetryDelayProvider("returned a negative delay (" + theirs + ")", null);
+                return options.getDefaultMessageRetryDelay();
+            }
+            return theirs;
+        } catch (Throwable theirProviderThrew) {
+            warnBrokenRetryDelayProvider("threw", theirProviderThrew);
+            return options.getDefaultMessageRetryDelay();
+        }
+    }
+
+    /**
+     * One message for every way a {@code retryDelayProvider} can be broken, because they all cost the same thing.
+     * <p>
+     * The provider runs in the MIDDLE of this container's failure bookkeeping - via {@code updateFailureHistory},
+     * from {@link #onUserFunctionFailure}. Whatever it does wrong, PC falls back to the configured default so the
+     * transition stays total and the record keeps moving; what the user loses is the backoff they asked for.
+     * <p>
+     * <b>Rate limited</b>, because this is a CODING error rather than a transient: a provider broken once is
+     * almost certainly broken every time, and this runs per failed record per attempt - so an unlimited warning
+     * turns one bad lambda into thousands of identical lines, burying the message that explains them.
+     *
+     * @param whatItDid  the shape of the breakage, completing "Your retryDelayProvider ..."
+     * @param theirs     the throwable if it threw, otherwise null - it returned something unusable instead
+     */
+    private void warnBrokenRetryDelayProvider(String whatItDid, Throwable theirs) {
+        var options = module.options();
+        var limiter = module.brokenRetryDelayProviderWarnLimiter();
+        limiter.performIfNotLimited(() ->
+                ThrowableUtils.logWithoutEscaping(theirs, () ->
+                        log.warn("Your retryDelayProvider {} - falling back to defaultMessageRetryDelay ({}) while " +
+                                        "it keeps happening. Records are unaffected and still retried, but your " +
+                                        "intended backoff is NOT being applied, so a struggling downstream will be " +
+                                        "retried harder than you configured. Fix the provider. This warning is rate " +
+                                        "limited to once per {}. First seen on {}.{}",
+                                whatItDid, options.getDefaultMessageRetryDelay(), limiter.getRate(), this,
+                                theirs == null ? "" : " Cause: " + ThrowableUtils.describeWithRootCause(theirs),
+                                theirs)));
     }
 
     @Override
@@ -629,9 +695,25 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     public void onUserFunctionFailure(Throwable cause) {
         log.trace("Failing {}", this);
 
-        updateFailureHistory(cause);
-
-        recordVerdict(false);
+        try {
+            updateFailureHistory(cause);
+        } finally {
+            // In a finally so the transition is TOTAL - not because one specific line above was found to throw,
+            // but because this method must never leave the container half transitioned. The verdict is what ends
+            // the record's in-flight state, so a container that misses it is never retried, never released and
+            // never redelivered: a permanent stall, and a silent one. Guarding the individual known hazards
+            // instead was tried and is not enough - computeRetryDueAt closes both of today's (a retryDelayProvider
+            // that throws, and one that returns a Duration Instant.plus cannot represent), but enumerating them
+            // means being right about every future line added above. This does not.
+            //
+            // It does NOT weaken recordVerdict's ordering contract: the history is still written first on every
+            // path that completes, so the state write still publishes it. What changes is only the throwing path,
+            // where the choice is between publishing FAILED beside a retry deadline from the previous attempt -
+            // one skipped backoff, and the record still makes progress - and not publishing at all, which strands
+            // the record and blocks its shard for the life of the process. The stall is strictly worse, and it is
+            // the defect class this whole change exists to close.
+            recordVerdict(false);
+        }
     }
 
     /**
@@ -658,8 +740,7 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
         numberOfFailedAttempts.incrementAndGet();
         lastFailedAt = of(Instant.now(module.clock()));
         lastFailureReason = Optional.ofNullable(cause);
-        Duration retryDelay = getRetryDelayConfig();
-        retryDueAt = of(lastFailedAt.get().plus(retryDelay));
+        retryDueAt = of(computeRetryDueAt(lastFailedAt.get()));
     }
 
     /**

@@ -31,6 +31,7 @@ import static bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcess
 import static bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.MDC_INSTANCE_ID;
 import static bz.stub.parallelconsumer.internal.State.*;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.logWithoutEscaping;
 
 /**
  * Subsystem for polling the broker for messages.
@@ -141,7 +142,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
                 try {
                     booleanFuture.get();
                 } catch (Exception e) {
-                    throw new InternalRuntimeException("Error in " + BrokerPollSystem.class.getSimpleName() + " system.", e);
+                    throw new PCInternalRuntimeException("Error in " + BrokerPollSystem.class.getSimpleName() + " system.", e);
                 }
             }
         }
@@ -178,7 +179,11 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
             log.debug("Broker poller thread finished normally, returning OK (true) to future...");
             return true;
         } catch (Exception e) {
-            log.error("Unknown error", e);
+            // reachable with a USER-supplied throwable: a user rebalance listener that throws is wrapped in
+            // ExceptionInUserFunctionException and propagates out through consumer.poll() to here, so rendering it
+            // runs the user's getCause/getMessage inside the logging binding - and the notify below must happen
+            // whatever the logger does with it
+            logWithoutEscaping(e, () -> log.error("Unknown error", e));
             // This thread is the only producer of commit responses, so tell the committer before
             // unwinding: a control thread already blocked in ConsumerOffsetCommitter#commitAndWait
             // cannot discover this by waiting, and would otherwise wait out the whole
@@ -324,7 +329,10 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
                 } catch (InterruptedException e) {
                     log.debug("Interrupted waiting for broker poller thread to finish", e);
                 } catch (ExecutionException | TimeoutException e) {
-                    log.error("Execution or timeout exception waiting for broker poller thread to finish", e);
+                    // same reachability one hop further out - e wraps whatever killed the poll thread, including the
+                    // user rebalance listener case above
+                    logWithoutEscaping(e, () ->
+                            log.error("Execution or timeout exception waiting for broker poller thread to finish", e));
                     throw e;
                 }
             }

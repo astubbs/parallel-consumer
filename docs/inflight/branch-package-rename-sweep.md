@@ -250,6 +250,7 @@ was scoped to cover and needs no edit when that happens. `gh pr list` answers wh
 | 207 | `fix/offset-encoding-policy-bypass` | 290 | `test/apache-kafka-broker-image` |
 | | | 292 | `fix/chaos-harness-double-start-race` |
 | | | 293 | `feats/proxy-requirements` |
+<!-- post-merge: checked-end -->
 
 <!-- post-merge: checked-end -->
 

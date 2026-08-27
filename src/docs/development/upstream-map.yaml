@@ -791,7 +791,7 @@ entries:
       transactional mode has no user-visible commit budget; the retry arm can set
       committed = true without having committed; and nothing tests any of it in any
       module. Fencing also reaches the supervisor by two routes with two types - wrapped
-      InternalRuntimeException from sendOffsetsToTransaction but RAW from
+      PCInternalRuntimeException from sendOffsetsToTransaction but RAW from
       commitTransaction - and astubbs#225 knows only the first. Start from
       bugs/prod-tx-manager-retries (RetrySettings/FailureReaction, PCCommitFailedException,
       PCTimeoutException), NOT tx-commit-failure, which is a 2021 WIP superseded by

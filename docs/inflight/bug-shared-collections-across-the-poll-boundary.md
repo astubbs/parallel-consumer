@@ -18,11 +18,13 @@ exists to guarantee. The consumer is then stuck short of closed and the group wa
 timeout instead of getting a prompt departure. A cleanup failure surfacing as a stall in an
 unrelated subsystem is the kind nobody traces back.
 
+<!-- post-merge: checked-begin -->
 **A fix exists and is not proposed anywhere.** Branch `fix/concurrent-collection-sweep` sweeps six
 such sites as a follow-up to astubbs#267, with a reproduction and a deterministic regression test,
 and then fixes the leak the first fix created - walk-then-clear silently discarded meters registered
 *during* the walk, so `close()` now drains. Read `git log master..fix/concurrent-collection-sweep`;
 the bodies carry the whole diagnosis. **It has no PR**, which is the part no command will tell you.
+<!-- post-merge: checked-end -->
 
 <!-- post-merge: checked-begin -->
 **The undecided part is sequencing, not the fix.** It touches files astubbs#57 also changes -
@@ -34,7 +36,8 @@ file collides with astubbs#337 (`fix/121-offset-accuracy-on-assignment`) instead
 that placed astubbs#57 is in
 [`pr-blockers-and-collisions.md`](pr-blockers-and-collisions.md), which took it over from
 astubbs#323's own note when that PR merged. Whoever opens the PR decides
-whether it goes before or after, or folds into astubbs#267.
+whether it goes before or after astubbs#57. It builds on astubbs#267's guards, so it cannot land
+ahead of that one.
 <!-- post-merge: checked-end -->
 
 ## Delete when

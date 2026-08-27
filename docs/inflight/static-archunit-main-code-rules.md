@@ -47,8 +47,9 @@ fires. That is one invariant. The class it guards has several more that nothing 
 
 Each needs its own judgement about whether it is true today; a rule that fails on arrival needs the
 code fixed or the rule narrowed, not a suppression. Read the granularity limits below before
-costing any of them - one of the four is not expressible in ArchUnit at all.
+costing any of them - one of them is not expressible in ArchUnit at all.
 
+<!-- post-merge: checked-begin -->
 - **Dependency direction** between `internal`, `state`, `offsets` and the public API package - state
   should not reach back into the controller.
 - **No raw `Thread` / executor construction outside the places that own lifecycle**, so the
@@ -63,6 +64,16 @@ costing any of them - one of the four is not expressible in ArchUnit at all.
   SpotBugs `IS2_INCONSISTENT_SYNC` is the detector for that class.
 - **Public API surface** - what may be `public` outside the documented API packages, which would have
   caught the `// todo make private` in `WorkManager` before it became a `todo`.
+- **Only `ThrowableUtils` may call `Throwable.getMessage()`** - turns "do not log bare messages" into
+  "go through the utility", which is the enforceable form. `e.getMessage()` alone drops the type, the
+  cause chain and the stack, and prints `null` for a message-less throwable; that was the original
+  complaint behind astubbs#267, and a fresh instance appeared on astubbs#29's revoke path while that
+  PR was in draft - which is the argument for a rule rather than vigilance. **Costed, not estimated:**
+  8 `getMessage()` occurrences in main, 4 of them comments, 3 inside `ThrowableUtils`, leaving exactly
+  **one** genuine call site elsewhere (`ProducerManager`, grep `lastErrorSavedForRethrow`) to exempt
+  or migrate. `StringUtils` calls it on an SLF4J `FormattingTuple` rather than a `Throwable`, so an
+  owner-typed rule excludes it for free.
+<!-- post-merge: checked-end -->
 
 ## What ArchUnit's granularity rules out, measured
 
@@ -89,6 +100,16 @@ ArchUnit is not.**
 
 What ArchUnit could still pin about the same field is who may replace it, and that is what
 `ShardMapIsNeverReplacedArchTest` does.
+
+<!-- post-merge: checked-begin -->
+**Statement ordering inside a method is out of reach too.** ArchUnit's model is classes, methods,
+calls and dependencies - it cannot see that a log call happens *before* the bookkeeping that must not
+be skipped. That is the shape of the worst defect astubbs#267 fixed (`runUserFunction`, grep
+`Exception caught in user function running stage`), and it is invisible to any rule expressible here.
+Only a test catches it, which is why that PR added one. Worth stating because "add an ArchUnit rule"
+is a tempting answer to a class of problem it provably cannot address, and the candidate list above
+reads as though the tool is general.
+<!-- post-merge: checked-end -->
 
 ## Pin the names the rules depend on
 

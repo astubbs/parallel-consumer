@@ -112,8 +112,21 @@ agents read it directly, and `CLAUDE.md` is only the adapter that makes Claude C
 | Nested `CLAUDE.md` | file in that dir is touched | yes | no | Claude Code |
 | `SessionStart` / `UserPromptSubmit` hooks | session start / each prompt | **yes** | `UserPromptSubmit` only | Claude Code |
 | `PreToolUse` hook | before a matched tool call | **yes**, per tool call | **yes** | Claude Code |
+| `PostToolUse` hook | after a matched tool call | **yes**, per tool call | no - it already ran | Claude Code |
 | Git hook (`core.hooksPath`) | `git commit`, `git push` | no | **yes** | **everyone** |
 | CI gate | push / PR | no | **yes** | everyone, authoritatively |
+
+**`PostToolUse` is the layer for "you just did X, now go and check Y".** It cannot block - the call
+has happened - so it is only worth using when the thing to say could not have been said earlier.
+`after-push-check-ci.sh` is the case that earned it: CI does not exist until the push lands, and the
+window that matters is between the push and the agent moving on. Its `additionalContext` works the
+same way as `PreToolUse`'s and is verified by `bin/test-check-agent-hooks.sh` rather than assumed.
+
+The reason it exists is worth knowing before adding a second one: a required duplication check went
+red on astubbs#267 with its finding posted **nowhere** - GitHub rejected the inline annotation - so
+the only record was a job log nobody opened, and a later push cleared the red without fixing the
+duplication ([`docs/inflight/ci-duplication-report-can-fail-to-post.md`](inflight/ci-duplication-report-can-fail-to-post.md)).
+No earlier layer can carry that: at prompt time there is no push to talk about.
 
 Two properties decide where a rule belongs:
 
@@ -213,7 +226,7 @@ merged as a no-op - `git ls-files | grep -c CLAUDE.md` returned **0**. The three
 negated individually rather than with a blanket `!CLAUDE.md`; the reasoning is in `.gitignore`
 itself, next to the rule.
 
-**`.claude/settings.json`** - thirteen hook scripts across fifteen registrations, and the file is
+**`.claude/settings.json`** - fourteen hook scripts across sixteen registrations, and the file is
 **tracked**. The entries below are the ones whose design decisions are worth recording here;
 `remind-inflight-on-push.sh` and `check-history-rewrite.sh` carry theirs in their own headers.
 The count is stated because it drifted: this said "five" while the file registered seven, which is
@@ -358,6 +371,9 @@ grants stay in `settings.local.json`, still ignored.
   and narrow on nouns: a false positive costs a few hundred tokens, a false negative costs the thing
   it exists to prevent.
 
+- `PostToolUse` on `Bash` runs `.claude/hooks/after-push-check-ci.sh`, the only registration on that
+  event. Why it has to be there rather than any earlier layer is above, under `PostToolUse`; it is
+  listed here so the registry is not silent about an event the rest of the file never uses.
 - `SessionStart` runs `.claude/hooks/inject-recorded-knowledge.sh`, which lists the **titles** of
   every `docs/solutions/` write-up, the open items in `docs/inflight/`, and the size of
   `docs/plans/`. Titles only, once per session, no bodies - the length tracks the corpus, so no

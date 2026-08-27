@@ -30,6 +30,7 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import static bz.stub.parallelconsumer.internal.UserFunctions.carefullyRun;
+import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.logWithoutEscaping;
 
 /**
  * Adapter for using Mutiny as the asynchronous execution engine.
@@ -157,14 +158,6 @@ public class MutinyProcessor<K, V> extends ExternalEngine<K, V> {
     }
 
     private void onError(PollContextInternal<K, V> pollContext, Throwable throwable) {
-        if (throwable instanceof PCRetriableException) {
-            log.debug("Mutiny fail signal", throwable);
-        } else {
-            log.error("Mutiny fail signal", throwable);
-        }
-        pollContext.streamWorkContainers().forEach(wc -> {
-            wc.onUserFunctionFailure(throwable);
-            addToMailbox(pollContext, wc);
-        });
+        onAsyncFailure(pollContext, throwable, "Mutiny fail signal");
     }
 }

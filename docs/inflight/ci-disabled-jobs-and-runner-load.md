@@ -5,6 +5,7 @@
 <!-- inflight-state: deferred - after v6, runner capacity rather than release correctness -->
 
 
+<!-- post-merge: checked-begin -->
 - **`Kafka Compat (experimental 4.x)` is disabled** (`if: false` in `maven.yml`) - it cannot compile
   under kafka-clients 4.x until the 0.7.x migration. Re-enable with
   `if: github.event_name == 'pull_request'` when that work starts (see `pr-53-java-baseline-kafka4.md`).
@@ -26,6 +27,7 @@
   `docs/inflight-note-currency` - while *succeeding* on two of those same branches minutes either
   side. Failures on unrelated branches with interleaved successes is master-state under rule 2, not
   any PR's doing.
+<!-- post-merge: checked-end -->
 
   The signature is the one this entry already names, not a test failure: in run
   [`32010207847`](https://github.com/astubbs/parallel-consumer/actions/runs/32010207847) the
