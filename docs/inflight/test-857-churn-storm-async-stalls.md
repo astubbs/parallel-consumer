@@ -173,7 +173,17 @@ replayed"*. This line now has a handle: a seed that reproduces on demand, on a l
 on unmodified master. That is what the deadlock needed and did not have until a purpose-built probe
 was written, and it is the difference between a ledger of sightings and a defect somebody can chase.
 
-**The obvious next experiment, stated before running it.** astubbs#344 fixed an offset-encoder
+**RUN, 2026-08-28: astubbs#344 is NOT the explanation.** Seed `9086872209853284830` replayed either
+side of the encoder fix - `1cebce8fd` (pre) and current master (post) - failed on **both arms, every
+run**. The prediction recorded before the run said this was the likely outcome, because the post arm
+IS master and master already reproduced; the mode match was suggestive and wrong. Recorded as a
+refuted hypothesis rather than deleted, so nobody re-derives it from the same mode coincidence.
+
+One run on the pre arm failed with the `NO_PROGRESS` detector NOT firing, so it went red for a
+different reason. That is worth its own look: either a second signature on the same seed, or the
+detector missing an occurrence it should have caught.
+
+**The superseded reasoning, kept because the mode coincidence will occur to the next reader too.** astubbs#344 fixed an offset-encoder
 double-read that is live in `PERIODIC_CONSUMER_ASYNCHRONOUS` and only there - the same mode as every
 entry in this file - whose consequence is offsets marked complete while still incomplete. Replay this
 seed either side of astubbs#344. If that is the mechanism, the pre arm reproduces and the post arm
