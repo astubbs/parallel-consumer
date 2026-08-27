@@ -35,6 +35,65 @@ under the 20-run stress hunt (see `test-load-tightness-flakes.md`, where it is e
 member). astubbs#29 has since been retargeted onto `master`; `pr-blockers-and-collisions.md` carries the
 coordination state.
 
+**THE FAMILY'S OWN ACCOUNTING WAS OUT OF DATE - re-totalled 2026-08-27/28.** This file, and
+astubbs#119's `## Fork status`, both said three defects landed and one remained. **At least six more
+have landed since**, none of them counted here: astubbs#346 (a rebalance between a staleness
+checkpoint and its acting read orphaned a retry entry, after which `workIsWaitingToBeProcessed()` read
+true FOREVER - its own commit calls that a family permanent stall), astubbs#345 (a
+`containsKey`-then-`get` race NPE'd the broker-poll thread inside the rebalance listener - poller
+death under KEY ordering), astubbs#373 (a sign-reversed overcount its body names the family's stall
+signature), astubbs#336 (the load gate, whose phantom counts keep intake paused until a restart),
+astubbs#344 (the offset encoder marking still-incomplete offsets complete) and astubbs#349 (a
+cross-thread `dirty` flag, jcstress-measured). The bucket has been drained from several directions
+and nobody re-totalled. **Do not read the "Landed / Still open" summary above as current.**
+
+**THE ORIGINAL DEADLOCK IS NOW VERIFIED, not merely diagnosed.** The six thread-dump captures below
+identified the mechanism; an A/B on `Rebalance857CommitSyncDeadlockProbeIT` has now closed it. Two
+trees differing by ONE term - the revoke side declining with `tryLock()` or blocking on `lock()` -
+run twelve invocations each, alternating: **the control failed every repetition with commit-response
+timeouts; the fix failed none, and logged the contended-decline line throughout**, so the window was
+open and the fix refused it. Method, the two settings that silently void the experiment, and the
+harness are in
+[`test-857-deadlock-ab-soak-harness.md`](test-857-deadlock-ab-soak-harness.md).
+
+**REPLAYING CAPTURED SEEDS DOES NOT REPRODUCE THIS DEADLOCK - stop trying.** Replayed locally, on both
+assignor arms, the captured seeds opened the window ZERO times. The chaos suite finds this defect by
+luck; only a purpose-built probe finds it by construction. Two write-ups were retracted the same day
+for reading a green replay as evidence when the mechanism had never executed.
+
+**THE ASYNC LINE NOW HAS A REPLAYABLE SEED - the first this family has ever had.**
+`9086872209853284830` on `ChaosChurnStormIT` reproduces `NO_PROGRESS` in most runs on unmodified
+master, in minutes, on a laptop. Found by RANDOM-SEED HUNTING in CI, not by replaying anything.
+astubbs#344 was the obvious candidate - same commit mode, right symptom shape - and is **refuted**:
+both arms either side of it fail. Details in
+[`test-857-churn-storm-async-stalls.md`](test-857-churn-storm-async-stalls.md).
+
+**A DETECTOR SILENCE PROBLEM, and it bears on everything below.** Across the astubbs#344 arms, **a
+third of the failures went red with `NO_PROGRESS` not firing at all**. Since the 2026-08-25 demotion
+moved the Class 2 bound to non-gating, the liveness claim rests on `INSTANCE_STALL` and this
+detector. **A detector whose silence cannot be trusted is worse than one that is absent**, because
+the suite goes green on its say-so. Settle it before reading any quiet run from it as evidence.
+
+**THE SYMPTOM IS A BUCKET, and this file only ever covered part of it.** Read from upstream's own
+comments rather than the mirror's summary: at least four distinguishable behaviours are reported,
+and upstream's maintainer separated two of them in one sentence - the April log is a paused
+subscription, the July one from the same reporter is *"not paused, but somehow polling 0 records"*.
+Also on file: an out-of-range fetch position with records stuck through redeploys, and lag that will
+not clear although the records were processed. A fifth is on astubbs#29 itself and was never chased -
+a reporter whose partitions pause and resume after hours with **no rebalance in the logs at all**.
+The best candidate for that one is the load gate astubbs#336 fixed, which is not in astubbs#29.
+
+**UPSTREAM'S OWN FIX SHIPPED AND DID NOT HOLD.** confluentinc#882 (stale-container rework) merged
+upstream 2025-08-07 and this fork carries that logic. The reporter came back after upgrading past it:
+the problem persisted, recurring after two months of uninterrupted traffic, triggered by a **broker
+leader election** rather than a consumer-group rebalance. Worth stating because stale containers are
+the theory most likely to be re-proposed.
+
+**confluentinc#875 IS FILED HERE ON A THIRD PARTY'S ASSUMPTION.** Its reporter describes a silently
+SKIPPED offset with no rebalance mentioned; somebody else said "potentially the same issue", the
+reporter never did. Skipped-then-recoverable is the shape of the offset-completion defects, not of a
+lock. Assess it on its own before counting it here.
+
 **READ BEFORE RESUMING astubbs#29, and before reading any `CLASS2_STALL` entry below.** On
 2026-08-25 the discriminating replay this file had been asking for since the twelfth sighting was
 finally run, and it establishes that **the chaos suite's `CLASS2_STALL` reds are a timing proxy, not

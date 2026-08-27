@@ -165,8 +165,13 @@ external scaler, the container topology, and the reaping described above.
 ## Later, if it earns it
 
 Scale the rig out with OpenTofu against cloud instances, once the harness is worth running at a size
-a laptop and one box cannot reach. Deliberately last: a distributed rig multiplies the reaping
-problem, and reaping is what decides whether any of this is worth running.
+one box cannot reach. **Deliberately last, and the preference for one beefier box is not just
+sequencing.** A distributed rig multiplies the reaping problem that decides whether any of this is
+worth running, and Docker on a single host gives for free what a fleet of instances makes work:
+log shipping is already central, and any "machine" in the fleet can be inspected AT RUNTIME - exec
+into it, take a thread dump, read its state while it is still wedged. That last one matters more here
+than anywhere: every sighting in this family that became a mechanism did so because something
+captured the process while it was still stuck, and every one that stayed a signature did not.
 
 ## What this still is not
 
