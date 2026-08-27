@@ -83,7 +83,7 @@ if its author is the *user*. User code enters through several doors:
 | a user **serializer**, wrapped at `ParallelEoSStreamProcessor`, grep `Error while waiting for produce results` | 1 |
 
 **Count the render sites, not the doors** - the doors converge. The serializer case is the worked
-example: it is wrapped in an `InternalRuntimeException` and thrown from inside the user function's
+example: it is wrapped in an `PCInternalRuntimeException` and thrown from inside the user function's
 own execution, so it arrives at `runUserFunction`'s catch, which astubbs#267 guards. Enumerating
 sources is how you end up believing there are more unguarded sites than there are.
 

@@ -19,7 +19,7 @@ package bz.stub.parallelconsumer.internal;
  *
  * @see AbstractParallelEoSStreamProcessor#failFatallyOnUnmailboxableRecord
  */
-public class UnmailboxableRecordException extends InternalRuntimeException {
+public class UnmailboxableRecordException extends PCInternalRuntimeException {
 
     public UnmailboxableRecordException(String message, Throwable cause) {
         super(message, cause);

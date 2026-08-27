@@ -142,7 +142,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
                 try {
                     booleanFuture.get();
                 } catch (Exception e) {
-                    throw new InternalRuntimeException("Error in " + BrokerPollSystem.class.getSimpleName() + " system.", e);
+                    throw new PCInternalRuntimeException("Error in " + BrokerPollSystem.class.getSimpleName() + " system.", e);
                 }
             }
         }

@@ -25,7 +25,7 @@ are style or the visible edge of this blind spot.
 
 Lombok's `@SneakyThrows` is used here to keep checked exceptions out of lambda bodies and functional
 interfaces, which is a real constraint rather than laziness - the alternative at most sites is a
-wrapper exception, and the codebase already has `InternalRuntimeException` for that. So the work is
+wrapper exception, and the codebase already has `PCInternalRuntimeException` for that. So the work is
 a judgement per site, not a sweep:
 
 - where the sneaky throw crosses a **public API boundary**, it is a contract question, not a tidy-up;

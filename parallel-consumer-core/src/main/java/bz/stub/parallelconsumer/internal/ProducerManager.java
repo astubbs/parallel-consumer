@@ -94,7 +94,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
      * path in the first place - when a send fails asynchronously, Kafka's own {@code ProducerBatch} catches and logs
      * whatever a callback throws, so it was already inert there in both modes.
      */
-    // TODO(refactor): InternalRuntimeException misnames a failed send; throw a specific subclass and rename `exception` to `sendFailure`
+    // TODO(refactor): PCInternalRuntimeException misnames a failed send; throw a specific subclass and rename `exception` to `sendFailure`
     //  The whole summary must stay on the TODO line itself: bin/todo-index.sh indexes only that physical
     //  line, so anything wrapped onto a continuation is dropped from docs/todo-index.md.
     //  Detail, including why the subclass alone is not enough: docs/refactoring.md, internal/ProducerManager.java.
@@ -113,7 +113,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
             if (exception != null) {
                 log.error("Error producing result message", exception);
                 if (!usingTransactions) {
-                    throw new InternalRuntimeException("Error producing result message", exception);
+                    throw new PCInternalRuntimeException("Error producing result message", exception);
                 }
             }
         };
@@ -211,7 +211,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
         try {
             lockAcquired = readLock.tryLock(produceLockTimeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
-            throw new InternalRuntimeException("Interrupted while waiting to get produce lock (timeout was set to {})", e, produceLockTimeout);
+            throw new PCInternalRuntimeException("Interrupted while waiting to get produce lock (timeout was set to {})", e, produceLockTimeout);
         }
 
         if (lockAcquired) {
@@ -277,7 +277,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
         } catch (ProducerFencedException e) {
             // todo consider wrapping all client calls with a catch and new exception in the ProducerWrapper, so can get stack traces
             //  see APIException#fillInStackTrace
-            throw new InternalRuntimeException(e);
+            throw new PCInternalRuntimeException(e);
         }
 
         // see {@link KafkaProducer#commit} this can be interrupted and is safe to retry
@@ -289,7 +289,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
             if (retryCount > arbitrarilyChosenLimitForArbitraryErrorSituation) {
                 String msg = msg("Retired too many times ({} > limit of {}), giving up. See error above.", retryCount, arbitrarilyChosenLimitForArbitraryErrorSituation);
                 log.error(msg, lastErrorSavedForRethrow);
-                throw new InternalRuntimeException(msg, lastErrorSavedForRethrow);
+                throw new PCInternalRuntimeException(msg, lastErrorSavedForRethrow);
             }
             try {
                 if (producerWrapper.isMockProducer()) {

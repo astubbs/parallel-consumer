@@ -6,7 +6,7 @@ package bz.stub.parallelconsumer.offsets;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
-import bz.stub.parallelconsumer.internal.InternalRuntimeException;
+import bz.stub.parallelconsumer.internal.PCInternalRuntimeException;
 import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
@@ -151,7 +151,7 @@ public class OffsetMapCodecManager<K, V> {
             }
             attempts++;
             if (attempts > 10) // shouldn't need more than 1 ever
-                throw new InternalRuntimeException("Failed to get partition assignment - continuously woken up.", lastWakeupException);
+                throw new PCInternalRuntimeException("Failed to get partition assignment - continuously woken up.", lastWakeupException);
         }
 
         var partitionStates = new HashMap<TopicPartition, PartitionState<K, V>>();
@@ -277,7 +277,7 @@ public class OffsetMapCodecManager<K, V> {
             simultaneousEncoder = new OffsetSimultaneousEncoder(baseOffsetForPartition, highestSucceeded, incompleteOffsets);
             offsetEncodingTimer.recordCallable(simultaneousEncoder::invoke);
         } catch (Exception e) {
-            throw new InternalRuntimeException("Error encoding offsets", e);
+            throw new PCInternalRuntimeException("Error encoding offsets", e);
         }
 
         //

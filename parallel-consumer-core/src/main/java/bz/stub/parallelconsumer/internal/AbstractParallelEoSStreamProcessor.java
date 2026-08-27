@@ -561,7 +561,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             // truncate the revoked partitions
             wm.onPartitionsRevoked(partitions);
         } catch (Exception e) {
-            throw new InternalRuntimeException("onPartitionsRevoked event error", e);
+            throw new PCInternalRuntimeException("onPartitionsRevoked event error", e);
         } finally {
             isRebalanceInProgress.set(false);
         }
@@ -779,12 +779,12 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                             + "================================================================================",
                     wc, describeWithRootCause(mailboxingThrew)));
 
-            // The call sites name InternalRuntimeException as the expected arm and keep a broad backstop, because
+            // The call sites name PCInternalRuntimeException as the expected arm and keep a broad backstop, because
             // anything escaping them strands the sibling records behind it. This second line is what the arm buys
             // once it reaches here: a PC invariant break reads differently from an unenumerated route, and the
             // known invariant is the produce lock. docs/inflight/core-exception-hierarchy-cleanup.md owns the
             // wider cleanup that this and ProduceLockNotHeldException are two instances of.
-            if (mailboxingThrew instanceof InternalRuntimeException) {
+            if (mailboxingThrew instanceof PCInternalRuntimeException) {
                 log.error("  ...and it is one of PC's OWN invariants that broke, not an unexpected runtime error. "
                         + "The known route is the produce-lock release in onPostAddToMailBox - see "
                         + "docs/inflight/bug-producing-lock-double-release.md.");
@@ -1216,7 +1216,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private void commitOffsetsReportingPollerDeath() throws TimeoutException, InterruptedException {
         try {
             commitOffsetsThatAreReady();
-        } catch (InternalRuntimeException commitFailure) {
+        } catch (PCInternalRuntimeException commitFailure) {
             try {
                 brokerPollSubsystem.supervise();
             } catch (RuntimeException pollerFailure) {
@@ -1776,7 +1776,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 }
                 try {
                     addToMailbox(context, wc); // always add on error
-                } catch (InternalRuntimeException pcInvariantBroke) {
+                } catch (PCInternalRuntimeException pcInvariantBroke) {
                     // The EXPECTED shape: one of PC's own invariants, reachable here as
                     // ProduceLockNotHeldException from the produce-lock release inside addToMailbox.
                     //

@@ -19,7 +19,7 @@ import bz.stub.parallelconsumer.internal.utils.ThrowableUtils;
  *
  * @author Antony Stubbs
  */
-// Hand-written ctors (not Lombok @StandardException) - see InternalRuntimeException for why.
+// Hand-written ctors (not Lombok @StandardException) - see PCInternalRuntimeException for why.
 public class PCRetriableException extends RuntimeException {
 
     public PCRetriableException() {

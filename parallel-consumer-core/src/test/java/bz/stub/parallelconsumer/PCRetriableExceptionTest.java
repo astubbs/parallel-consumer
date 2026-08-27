@@ -4,7 +4,7 @@ package bz.stub.parallelconsumer;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.internal.InternalRuntimeException;
+import bz.stub.parallelconsumer.internal.PCInternalRuntimeException;
 import org.junit.jupiter.api.Test;
 
 import static com.google.common.truth.Truth.assertThat;
@@ -35,7 +35,7 @@ class PCRetriableExceptionTest {
     }
 
     /**
-     * {@link InternalRuntimeException} reads like a pass-through wrapper and is not one.
+     * {@link PCInternalRuntimeException} reads like a pass-through wrapper and is not one.
      * <p>
      * Its message is how callers tell distinct internal failures apart - {@code "Error encoding offsets"},
      * {@code "Error producing result message"}, {@code "Too many attempts taking commit responses"}. Peeling it would
@@ -47,7 +47,7 @@ class PCRetriableExceptionTest {
      */
     @Test
     void anInternalFailureCarryingARetriableIsNotExpected() {
-        var internal = new InternalRuntimeException("Error encoding offsets", new PCRetriableException("retry me"));
+        var internal = new PCInternalRuntimeException("Error encoding offsets", new PCRetriableException("retry me"));
 
         assertThat(PCRetriableException.isPresentIn(internal)).isFalse();
     }
@@ -58,7 +58,7 @@ class PCRetriableExceptionTest {
     @Test
     void anInternalFailureBeneathTheUserWrapperIsNotExpected() {
         var wrapped = new ExceptionInUserFunctionException("Error occurred in code supplied by user",
-                new InternalRuntimeException("Error producing result message", new PCRetriableException("retry me")));
+                new PCInternalRuntimeException("Error producing result message", new PCRetriableException("retry me")));
 
         assertThat(PCRetriableException.isPresentIn(wrapped)).isFalse();
     }

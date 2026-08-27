@@ -10,6 +10,7 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.PollContext;
 import bz.stub.parallelconsumer.PollContextInternal;
 import bz.stub.parallelconsumer.internal.ExternalEngine;
+import bz.stub.parallelconsumer.internal.PCInternalRuntimeException;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
@@ -239,7 +240,7 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
                 }
                 try {
                     addToMailbox(context, wc);
-                } catch (InternalRuntimeException pcInvariantBroke) {
+                } catch (PCInternalRuntimeException pcInvariantBroke) {
                     // The EXPECTED shape - one of PC's own invariants, reachable here as
                     // ProduceLockNotHeldException from the produce-lock release inside addToMailbox. Terminal, per
                     // the operator ruling: if the record cannot be posted, PC can no longer account for it, and

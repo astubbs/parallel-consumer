@@ -10,7 +10,7 @@ package bz.stub.parallelconsumer.internal;
  * <b>A named type because the generic one hid this route.</b> The mailbox guards on astubbs#267 were written as
  * {@code catch (Throwable)} against {@code addToMailbox}, and nobody could say from the code what could actually throw
  * there - the answer was three levels down, in {@link ProducerManager#finishProducing}'s
- * {@code ensureProduceStarted} check, raised as a bare {@link InternalRuntimeException} carrying a sentence. A catch
+ * {@code ensureProduceStarted} check, raised as a bare {@link PCInternalRuntimeException} carrying a sentence. A catch
  * naming this type says what it is guarding against; a catch naming {@code Throwable} says only that the author was
  * being careful.
  * <p>
@@ -21,7 +21,7 @@ package bz.stub.parallelconsumer.internal;
  * <p>
  * {@code docs/inflight/core-exception-hierarchy-cleanup.md} owns the wider cleanup this is one instance of.
  */
-public class ProduceLockNotHeldException extends InternalRuntimeException {
+public class ProduceLockNotHeldException extends PCInternalRuntimeException {
 
     public ProduceLockNotHeldException(String message) {
         super(message);
