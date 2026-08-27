@@ -779,11 +779,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                             + "================================================================================",
                     wc, describeWithRootCause(mailboxingThrew)));
 
-            // CLASSIFY rather than narrow the catch. The call sites must keep catching broadly - anything escaping
-            // them strands the sibling records behind it - but a bare `catch (Throwable)` names nothing, so the
-            // reachable route has to be rediscovered by reading three levels down. Naming our own type here is the
-            // part that was missing: an InternalRuntimeException means a PC invariant was violated, and the known
-            // route is the produce lock. docs/inflight/core-exception-hierarchy-cleanup.md owns the general fix.
+            // The call sites name InternalRuntimeException as the expected arm and keep a broad backstop, because
+            // anything escaping them strands the sibling records behind it. This second line is what the arm buys
+            // once it reaches here: a PC invariant break reads differently from an unenumerated route, and the
+            // known invariant is the produce lock. docs/inflight/core-exception-hierarchy-cleanup.md owns the
+            // wider cleanup that this and ProduceLockNotHeldException are two instances of.
             if (mailboxingThrew instanceof InternalRuntimeException) {
                 log.error("  ...and it is one of PC's OWN invariants that broke, not an unexpected runtime error. "
                         + "The known route is the produce-lock release in onPostAddToMailBox - see "
@@ -1776,17 +1776,25 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 }
                 try {
                     addToMailbox(context, wc); // always add on error
-                } catch (Throwable mailboxingThrew) {
+                } catch (InternalRuntimeException pcInvariantBroke) {
+                    // The EXPECTED shape: one of PC's own invariants, reachable here as
+                    // ProduceLockNotHeldException from the produce-lock release inside addToMailbox.
+                    //
                     // NOT a finally around the call above: an exception from a finally supersedes everything and
                     // propagates straight out of this loop, so a single failure here would strand every container
                     // AFTER it - reintroducing exactly the bug this loop is shaped to prevent. This is PC's own
                     // code rather than the user's, so a throw is our bug, which is a reason to surface it, not a
                     // reason to let it take the rest of the batch with it.
-                    bookkeepingFailed = firstOrSuppress(bookkeepingFailed, mailboxingThrew);
+                    bookkeepingFailed = firstOrSuppress(bookkeepingFailed, pcInvariantBroke);
                     // ...and a reason to stop. Surfacing it to this caller is not enough: the record is now
                     // unaccounted for, so PC shuts down rather than continue past a possible silent skip. The
                     // loop still finishes first, so the containers behind this one are returned.
-                    failFatallyOnUnmailboxableRecord(wc, mailboxingThrew);
+                    failFatallyOnUnmailboxableRecord(wc, pcInvariantBroke);
+                } catch (Throwable nothingElseIsExpected) {
+                    // Backstop for a route nobody has enumerated - broad on purpose, for the same
+                    // must-not-escape reason as the arm above.
+                    bookkeepingFailed = firstOrSuppress(bookkeepingFailed, nothingElseIsExpected);
+                    failFatallyOnUnmailboxableRecord(wc, nothingElseIsExpected);
                 }
             }
             // attached rather than thrown: the user's own failure is what the caller needs to see, and

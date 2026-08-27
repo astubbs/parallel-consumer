@@ -239,12 +239,18 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
                 }
                 try {
                     addToMailbox(context, wc);
-                } catch (Throwable mailboxingThrew) {
-                    // Terminal, not merely logged - operator ruling: if the record cannot be posted, PC can no
-                    // longer account for it, and continuing risks a silent skip. Escalation only records the
-                    // reason and moves the state, because throwing here would skip vert.x's remaining listeners
-                    // and strand the sibling containers, and blocking here would hold the event loop.
-                    failFatallyOnUnmailboxableRecord(wc, mailboxingThrew);
+                } catch (InternalRuntimeException pcInvariantBroke) {
+                    // The EXPECTED shape - one of PC's own invariants, reachable here as
+                    // ProduceLockNotHeldException from the produce-lock release inside addToMailbox. Terminal, per
+                    // the operator ruling: if the record cannot be posted, PC can no longer account for it, and
+                    // continuing risks a silent skip. Escalation only records the reason and moves the state,
+                    // because throwing would skip vert.x's remaining listeners and strand the sibling containers,
+                    // and blocking would hold the event loop.
+                    failFatallyOnUnmailboxableRecord(wc, pcInvariantBroke);
+                } catch (Throwable nothingElseIsExpected) {
+                    // Backstop for a route nobody has enumerated. Broad on purpose, for the same reason the arm
+                    // above must not rethrow.
+                    failFatallyOnUnmailboxableRecord(wc, nothingElseIsExpected);
                 }
 
                 // the throwable rather than its message: this is the only record of why a send failed, and

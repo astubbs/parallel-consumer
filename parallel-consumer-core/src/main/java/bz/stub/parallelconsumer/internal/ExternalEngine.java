@@ -287,11 +287,16 @@ public abstract class ExternalEngine<K, V> extends AbstractParallelEoSStreamProc
             }
             try {
                 addToMailbox(pollContext, wc);
-            } catch (Throwable mailboxingThrew) {
-                // Terminal, not merely logged: the record is now unaccounted for. Escalation only signals, so the
-                // remaining containers in this batch are still returned below - see
-                // failFatallyOnUnmailboxableRecord for why it must neither throw nor block here.
-                failFatallyOnUnmailboxableRecord(wc, mailboxingThrew);
+            } catch (InternalRuntimeException pcInvariantBroke) {
+                // The EXPECTED shape, named so the code says what it is guarding against: one of PC's own
+                // invariants, and the known route is ProduceLockNotHeldException out of the produce-lock release
+                // inside addToMailbox. Terminal either way - see failFatallyOnUnmailboxableRecord.
+                failFatallyOnUnmailboxableRecord(wc, pcInvariantBroke);
+            } catch (Throwable nothingElseIsExpected) {
+                // Backstop, and it stays broad on purpose: anything escaping this loop strands every container
+                // behind it, which is the stall this shape exists to prevent. Reaching here means a route nobody
+                // has enumerated, so it is worth telling apart from the arm above rather than merging them.
+                failFatallyOnUnmailboxableRecord(wc, nothingElseIsExpected);
             }
         });
     }
