@@ -3,11 +3,14 @@
 <!-- inflight-type: feature -->
 <!-- inflight-impact: blind-spot -->
 
-Nobody runs this library for hours under sustained churn, because nobody here has a production
-deployment to run it in. The defects this project keeps finding are the ones that need time and load.
-A long soak against real containers is the nearest available substitute - and it is the only way to
-exercise autoscaling behaviour at all, since that is a response to load over time and cannot be
-observed in a minutes-long test.
+**The goal is to break PC, and to capture the moment of the break with the context that led to it.**
+Not to demonstrate that it works.
+
+The defects this project finds are the ones that need time and load to appear, and the current suite
+gets minutes of both. A long soak against real containers buys the hours, and it is the only way to
+exercise autoscaling at all, since adaptive concurrency is a response to load over time and cannot be
+observed in a short test. It also gives the project something it has never had: a standing rig that
+exercises PC the way a deployment would, continuously, rather than a suite that runs and stops.
 
 ## Shape
 
@@ -33,9 +36,25 @@ observed in a minutes-long test.
 A three-day run that fails once and buries the evidence costs three days and produces a rumour. Every
 lesson this repo has already paid for points at capture rather than duration.
 
-- **Split the logs by concern at the logback level**, so analysis is opening the right file rather
-  than grepping a huge one. An autoscaling decision trace, a commit/offset trace and a
-  rebalance/lifecycle trace are three different questions and should be three different files.
+- **Silo the logs by concern at the logback level, aggressively.** Keep the master
+  everything-in-one-place log, and ROUTE COPIES to per-concern files - this is additive, so nothing
+  is lost and each question gets a file small enough to read. Worth its own stream: each stall probe
+  and detector; runtime state analysis that exists to aid testing rather than to run the product;
+  the test harness's own output; and each PC subsystem - commit/offset, rebalance/lifecycle,
+  shard/work state, autoscaling decisions. The rule that makes this easy to apply: **anything
+  tangential to running the product gets its own file**, because during analysis it is either the
+  only thing you want or the only thing in the way.
+
+- **Two permanent, never-truncated streams: every ERROR, and every WARN.** The ring buffer below is
+  for volume, and volume is the wrong thing to apply to a warning from two days ago - which is
+  precisely the line you will want when something fails on day three. These stay for the whole run.
+
+- **Classify errors, so that an unexpected one is a finding.** An error the system EXPECTS - a
+  retriable failure, a deliberately induced fault - is not an error, it is the harness working. The
+  useful signal is an error nobody forced, and it is invisible while both kinds share a stream.
+  `PCRetriableException.isPresentIn` already splits expected from unexpected on the processing path
+  and the close and revoke paths never ask; the same split is what makes a soak's error log
+  actionable. **A genuine, unforced error in a soak is a bug until shown otherwise.**
 - **Emit the autoscaling track record as structured data, not prose.** What the admission target was,
   what drove the change, what the in-flight count and downstream latency were. A chart answers "did
   it track the load" in seconds; a log does not answer it at all.
@@ -96,12 +115,19 @@ currently exercises.
 **Testcontainers** is already a dependency and can orchestrate a multi-container topology including
 compose, so the container story does not need new tooling either.
 
-**Pumba** for container-level chaos (kill, pause, netem) if killing worker nodes is wanted - which is
-the crash fidelity the suite explicitly cannot model today, since every stop it performs is an
-orderly close.
+**Pumba** for container-level chaos (kill, pause, netem). This is the direct unblock for
+[`test-chaos-crash-fidelity-variant.md`](test-chaos-crash-fidelity-variant.md), which is parked
+precisely because every stop the conductor performs is an orderly `close()` - the fleet shares one
+JVM, so a real crash cannot be modelled. Containers make it possible: `SIGKILL` a worker and the
+member stops heartbeating with its assignment still held, which is the shape most field reports
+describe and the one the suite has never produced.
 
-**Prometheus and Grafana** for the time series. PC already exposes micrometer, so this is
-configuration rather than code, and it turns "did the admission target track the load" into a chart.
+**Prometheus and Grafana** for the time series - worth it for the SOAK specifically, and not for the
+PR suite. The failures here are temporal: "the fleet reached 95% and stopped" is a time-series
+question, and the Class 2 demotion turned on whether a frozen watermark later moved, which a chart
+answers instantly and a log does not answer at all. PC already exposes micrometer, so this is
+configuration rather than code. The cheap first step is dumping metrics to a file and analysing
+offline; Grafana earns its place when a human is watching a run that lasts days.
 
 **Logback already does the log routing**: `SiftingAppender` to split streams by logger or MDC, and
 `CyclicBufferAppender` for the ring-buffer-flush-on-failure pattern. No new dependency, and
@@ -111,8 +137,36 @@ configuration rather than code, and it turns "did the admission target track the
 worth stealing outright: generator, nemesis, checker. That is precisely conductor, chaos schedule and
 correctness ledger, and this repo has all three already.
 
+### Two decisions worth making deliberately, not by drift
+
+**Do NOT scrap the chaos harness for Trogdor.** Trogdor's workload and fault specs are about Kafka -
+produce this, consume that, break this node. It has no notion of the properties this project exists
+to defend: per-key ordering held under concurrency within one incarnation, partition and assignment
+epoch; duplicates bounded per disturbance; a watermark that is frozen versus one that is merely slow.
+`ProgressProbe` and `KeyOrderLedger` encode those, and their CALIBRATION is the expensive asset - the
+Class 2 demotion is what miscalibration cost, measured in a year of sightings that turned out to be a
+bound meeting a workload. **Take Trogdor for the layer we lack** - multi-node orchestration, fault
+injection and long-run coordination - and keep our detectors as the oracle it reports to. Evaluate,
+do not adopt wholesale.
+
+**Add `kafka-verifiable-producer` alongside our own accounting, not instead of it.** The argument for
+it is not that it is better; it is that it is INDEPENDENT. Every correctness claim in this project
+currently comes from PC counting its own work, and this codebase has repeatedly found bugs in exactly
+that counting - drifted in-flight counters, an encoder marking incomplete offsets complete, a
+sign-reversed shard count. A verifier that shares no code with PC is a second opinion those bugs
+cannot corrupt. The produce side is the easy win: sequence-numbered records, reconciled against what
+PC reports consuming. **`kafka-verifiable-consumer` mostly does not fit**, because it wants to BE the
+consumer, and here PC is - and it checks plain consumer semantics, which is the guarantee PC
+deliberately does not offer. So it cannot replace `KeyOrderLedger` and should not be asked to.
+
 **So the genuinely new work is narrow**: the downstream-latency schedule that drives autoscaling, the
 external scaler, the container topology, and the reaping described above.
+
+## Later, if it earns it
+
+Scale the rig out with OpenTofu against cloud instances, once the harness is worth running at a size
+a laptop and one box cannot reach. Deliberately last: a distributed rig multiplies the reaping
+problem, and reaping is what decides whether any of this is worth running.
 
 ## What this still is not
 
