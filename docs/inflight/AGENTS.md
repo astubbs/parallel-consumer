@@ -156,10 +156,25 @@ existing number by its prefix and check it; write new ones the way this section 
   Regenerate with `bin/issue-index.sh`; the script's header records why it has no `--check` gate.
 - **A note that maps to a GitHub issue carries a DRAFT response to that issue before its PR merges**
   (operator ruling, 2026-08-25). The agents who did the work hold the best context at merge time; by
-  release time it has to be re-mined from commit logs. Draft in the branch (a `pr-NN-issue-response-`
-  file, or a section of the PR's note), post only on explicit instruction - the never-post-unasked
-  rule is untouched - and delete the drafts with the note. The aspiration behind it: every GitHub
-  issue should have a mapped inflight note, so no issue's resolution moment passes uncaptured.
+  release time it has to be re-mined from commit logs. Draft in the branch as an
+  `issue-response-<NNN>.md` file, and **post only on explicit instruction** - the never-post-unasked
+  rule is untouched. The aspiration behind it: every GitHub issue should have a mapped inflight note,
+  so no issue's resolution moment passes uncaptured.
+
+  **A DRAFT IS NOT DELETED WITH ITS PR. It is deleted when it is posted, and not before** - the
+  drafts accumulate here and are consumed by one sweep before a release, which posts them together
+  with a common view of what shipped. This entry read "delete the drafts with the note" until
+  2026-08-26, and that plus "post only on explicit instruction" meant a draft nobody was asked about
+  before the merge was destroyed **at the merge** - the exact moment nobody is looking, which is the
+  failure this whole directory is organised against, and the one
+  [`the four outcomes`](#what-belongs-here-and-what-belongs-in-docsrefactoringmd) above was written
+  to stop. It cost three separate rounds of an agent asking the owner to post-or-lose a draft that
+  was never meant to be at risk.
+
+  **The name carries the ISSUE number, not the PR's**, for the same reason: the draft outlives the PR
+  that wrote it, so a `pr-NN-` prefix would name something gone by the time anyone posts it. It is
+  also the exception to "the prefix names an area": `issue-response-` names a *lifecycle stage* with
+  exactly one exit, and the sweep is what empties it.
 - **If you are given new guidance about how these notes are written, update this file too**, so other
   sessions inherit the rule instead of rediscovering it.
 

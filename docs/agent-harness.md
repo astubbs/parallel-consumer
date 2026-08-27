@@ -213,7 +213,7 @@ merged as a no-op - `git ls-files | grep -c CLAUDE.md` returned **0**. The three
 negated individually rather than with a blanket `!CLAUDE.md`; the reasoning is in `.gitignore`
 itself, next to the rule.
 
-**`.claude/settings.json`** - twelve hook scripts across fourteen registrations, and the file is
+**`.claude/settings.json`** - thirteen hook scripts across fifteen registrations, and the file is
 **tracked**. The entries below are the ones whose design decisions are worth recording here;
 `remind-inflight-on-push.sh` and `check-history-rewrite.sh` carry theirs in their own headers.
 The count is stated because it drifted: this said "five" while the file registered seven, which is
@@ -281,6 +281,16 @@ grants stay in `settings.local.json`, still ignored.
   (prefix the merge command with `MERGE_DESPITE_OUTSTANDING_WORK=1`) and the stated limits - a
   stalled agent writes nothing and is not detected; `bash -c` wrapping and REST-API merges are not
   seen - are documented in the hook's own header.
+- `PreToolUse` on `Bash`, **with no `if`**, same self-filtering shape - runs
+  `.claude/hooks/check-upstream-map-merged.sh`, which refuses a `gh pr merge <N>` while an entry in
+  `src/docs/development/upstream-map.yaml` naming that PR still says `status: pr-open`. The manifest
+  is meant to be written to `merged` on the branch, BEFORE the merge - there is no observable instant
+  where that is untrue, and doing it afterwards means a commit straight to master that nobody
+  remembers to make. It gates on the status rather than on mere mention, so it is silent once the
+  entry is right: a guard that fires on correct behaviour teaches people to route around it. Fails
+  open on every uncertainty - no PyYAML, unparseable manifest, no manifest in the CWD, no PR number
+  on the command line. Deliberately disposable: it exists only until the last upstream link is
+  closed out, and then it is one file to delete.
 - `PreToolUse` on `Bash`, **with no `if`** - runs `.claude/hooks/remind-inflight-on-push.sh`, which
   reminds you at PUSH time what this PR's own inflight note still lists as open. Push, not commit and
   not merge: commits are too frequent for a note that runs to dozens of lines, and the merge guard

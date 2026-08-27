@@ -142,6 +142,7 @@ the mistake `state.` was about to be.
    inside the 30-minute job timeout with a non-zero score. A regex for the non-recursive case is
    `^bz\.stub\.parallelconsumer\.[A-Z]`.
 2. **`metrics.`.** `PCMetricsDef` and friends are declarative, and metrics correctness has already
+   <!-- post-merge: checked -->
    cost this repo a leak (astubbs#57). Small, so the marginal cost over the 325s coverage pass is
    near zero. **Measure first:** same completion test. Lower than 1 only because the defect class is
    narrower.

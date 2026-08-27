@@ -128,7 +128,7 @@ set +e
 "$INFER_BIN" run --results-dir "$work/infer-out" \
     --annotation-reachability --bufferoverrun --cost --loop-hoisting --scope-leakage \
     -- \
-    "$JDK/bin/javac" -cp "$(cat "$work/cp.txt")" -d "$work/classes" -proc:full "@$work/srcs.txt" \
+    "$JDK/bin/javac" -encoding UTF-8 -cp "$(cat "$work/cp.txt")" -d "$work/classes" -proc:full "@$work/srcs.txt" \
     > "$work/infer.log" 2>&1
 rc=$?
 set -e
