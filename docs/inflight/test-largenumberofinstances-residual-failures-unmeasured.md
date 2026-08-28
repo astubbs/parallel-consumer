@@ -62,15 +62,15 @@ Ten consecutive runs of `largeNumberOfInstances` on this tree, on an M2 Mac Pro:
 failures, not one "No progress beyond N records" line.** amrynsky's January report of "every other
 run of this test is failing" does not reproduce.
 
-**Do not read that as the defect being gone.** The instrument changed underneath the claim. Since
-that report the test has been split - `da175a206` separated a deterministic correctness gate from a
-capacity measurement, and `a8b4e196e` made the capacity profiles **dialled to the hardware** so the
-gate no longer follows them. The instance count is now a function of the machine.
+**Correction, same day: those ten runs WERE at the historical configuration.** An earlier version of
+this entry said the profile had been dialled away and the measurement therefore answered nothing.
+That was wrong. `-Dperf.scale` multiplies the baseline and, absent, is 1.0 - which its own commit
+states "reproduces every historical number exactly". So the runs were at 500k records, 80 partitions
+and 12 instances: amrynsky's configuration. **Ten green at the historical size is real evidence that
+the January rate does not reproduce here**, on this hardware.
 
-So the test that went ten-for-ten here is not the test that failed every other run in January, and a
-pass on a fast desktop says nothing about what a CI runner picks. **The failure rate is no longer a
-property of the code alone**, which means "what is the rate" is not a well-formed question until the
-profile is pinned.
+What it still cannot separate is hardware from code. A fast desktop is not a CI runner, and the
+residual this note is about was reported on one.
 
 **What would actually answer it**, in order of cost:
 
