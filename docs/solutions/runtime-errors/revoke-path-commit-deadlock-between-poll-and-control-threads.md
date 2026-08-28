@@ -141,7 +141,7 @@ symptom that decomposes is the normal case for concurrency bugs in a two-thread 
 **Also worth stating: the upstream fix that looked adjacent was not this.** confluentinc#882 fixed
 stale work-container cleanup in `ProcessingShard.getWorkIfAvailable()`. It is correct and necessary,
 and it addresses stale containers blocking new work after a *clean* rebalance. It does not touch
-the lock cycle (`docs/BUG_857_INVESTIGATION.md`).
+the lock cycle (`docs/BUG_857_INVESTIGATION.md (deleted 2026-08-18; retrieve with `git show 262629aab:docs/BUG_857_INVESTIGATION.md`)`).
 
 **Making the test suite green by isolating the tests.** astubbs#68 reworked integration testing to
 fork one JVM (and one TestContainers broker) per fork, `-DforkCount=4`
@@ -152,7 +152,7 @@ each test an uncontended broker removes the window, so the test goes green **wit
 fixed**. The repo's own ledger states this plainly:
 
 > "astubbs#68 made the integration suite reliable by *forking* per broker (`forkCount=4`), which
-> sidesteps the deadlock rather than proving it gone" - `docs/inflight/bug-857-family.md`
+> sidesteps the deadlock rather than proving it gone" - `docs/inflight/test-857-parallel-integration-proof.md`
 
 Note the honest tension in the record: the CI config comment at `.github/workflows/maven.yml:82-85`
 argues the opposite, "without masking anything (each test runs on an uncontended broker)". Both were

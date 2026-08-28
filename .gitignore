@@ -139,3 +139,4 @@ jcstress-results-*.bin.gz
 # Error Prone dumps the failing javac invocation beside the module when a check crashes, rather
 # than under target/, so a crash leaves an untracked file the next `git add -A` would commit
 javac.*.args
+target/pc-logs/

@@ -2,7 +2,9 @@
 
 How to prove a cause rather than accept a fix that appears to work. AGENTS.md carries the prior-art
 checks you run *before* forming a hypothesis, because an agent mid-debug will not think to open a
-document about investigating. This is the method for what comes after.
+document about investigating. This is the method for what comes after. One step earlier still -
+proving the problem exists at all before a fix is written for it - is owned by
+[`prove-the-problem-exists-before-writing-the-fix.md`](solutions/workflow-issues/prove-the-problem-exists-before-writing-the-fix.md).
 
 Promoted here from
 [`docs/plans/2026-08-03-001-investigate-transactional-commit-flake.md`](plans/2026-08-03-001-investigate-transactional-commit-flake.md)
@@ -41,6 +43,28 @@ the output before believing any instrumented result. Two traps have each voided 
 Use `./mvnw -pl parallel-consumer-core -am verify` (what `bin/soak-test.sh` runs) and confirm
 `BUILD SUCCESS` on the compile step. Better, assert the setting in the run's own output - PC logs
 its full options at INFO on init, so the arm proves itself.
+
+## Designing a liveness check
+
+Promoted from the confluentinc#857 chaos-probe work (astubbs#29), where each of these was learned
+from an *instrument* being wrong rather than the product - which is why they generalise:
+
+- **Assert the property; report the timing.** A correctness suite that gates on a duration turns
+  every slow-but-correct run into a red build and every threshold into an argument: on 2026-08-19,
+  three of four fully-draining chaos arms tripped the 150s lag-stagnation bound. Gate on completion,
+  loss, duplicates and ordering; publish recovery times and peaks as measurements. The probe says
+  this about itself - `CLASS2_INTERPRETATION` in `ProgressProbe` ("a TIMING measurement, not a
+  correctness verdict") ships the interpretation with every violation.
+- **Measure both ends of anything you count.** A completion counter alone cannot distinguish
+  "nothing is finishing" from "nothing is happening" - a fleet inside a 20s user function reads as a
+  flat line while fully busy. Counting entry as well as exit turns an apparent stall into an obvious
+  back-pressure pause; `outForProcessing` beside returned work results in
+  `ProgressProbe.InstanceProgressView` is the worked shape.
+- **Granularity is part of a liveness check's correctness.** A fleet-wide "while work remains,
+  completions must advance" check has the right shape and still lets one wedged shard hide behind
+  seventy-nine healthy ones. A check at the wrong granularity is not a weak check - it is a check
+  for a different property. The granularity trade (per-instance as the reachable approximation of
+  per-shard) is reasoned in full at `INSTANCE_STALL_BOUND`'s javadoc.
 
 ## Worked example of the prior-art rule
 

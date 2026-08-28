@@ -11,9 +11,13 @@ Blockers, collisions, and decisions someone is waiting on. Not a PR list - `gh` 
   this file's - the ORDER is the standing coordination fact, and it is recorded here because it
   outlived the note that held it (it lived only in astubbs#323's own note, which that PR's merge
   deleted).
-- **astubbs#29 and astubbs#31 target `master-confluent`**, the pinned pre-rebrand mirror, so merging either would
-  land its fix where no user can reach it. Retarget to `master` - but not mechanically: astubbs#29's deadlock
-  fix predates the internals astubbs#80 reshaped, so it needs reconciling rather than replaying.
+<!-- post-merge: checked-begin -->
+- **The `master-confluent` retarget is done.** astubbs#29 and astubbs#31 were both cut against the
+  pinned pre-rebrand mirror, where a merge would have landed the fix somewhere no user could reach
+  it; both now target `master`, and astubbs#31 has merged. The reconciliation that made it
+  non-mechanical is the part worth keeping: astubbs#29's deadlock fix predates the internals
+  astubbs#80 reshaped, so it had to be reconciled rather than replayed.
+<!-- post-merge: checked-end -->
 - **astubbs#38 (JUnit 6) is blocked on something other than the version bump.** JUnit 6 needs Java 17, *and*
   `archunit-junit5` will not run on it with no `archunit-junit6` engine in existence. The ArchUnit
   tests must be rewired first. See `deps-deferred-majors.md`.
