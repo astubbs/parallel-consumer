@@ -46,8 +46,8 @@ The AB-BA revoke deadlock is **fixed and verified** - see below. What remains un
   `test-857-churn-storm-async-stalls.md`.
 - **The `CLASS2_STALL` line was demoted the same way** on 2026-08-25. Roughly half the family ledger
   is superseded; every sighting now carries a STATUS line saying which.
-- **Six more family defects landed than astubbs#119's status counts** - astubbs#346, #345, #373,
-  #336, #344, #349. The issue's `## Fork status` needs rewriting, not appending to.
+- **Six more family defects landed than astubbs#119's status counts** - astubbs#346, astubbs#345,
+  astubbs#373, astubbs#336, astubbs#344 and astubbs#349. The issue's `## Fork status` needs rewriting, not appending to.
 - **`largeNumberOfInstances` does not reproduce here** - 19 green across three scales. But that is
   evidence about an M2 desktop, not about the code.
 

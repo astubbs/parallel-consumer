@@ -18,7 +18,7 @@
 #   * the UNBOUNDED REVOKE WAIT in transactional mode - the only issue upstream ever labelled a
 #     verified bug (astubbs#44 / confluentinc#803). The chaos suite barely exercises
 #     PERIODIC_TRANSACTIONAL_PRODUCER, so this rotation deliberately weights it.
-#   * COMMIT-RESPONSE TIMEOUTS reported in the field twice and never reproduced (astubbs#175, #177).
+#   * COMMIT-RESPONSE TIMEOUTS reported in the field twice and never reproduced (astubbs#175, astubbs#177).
 #   * DATA SKIP - confluentinc#875 describes an offset silently never delivered, lag growing, and a
 #     restart making it reappear. That is not a liveness failure and no liveness detector will see
 #     it, so cycles assert delivery completeness, not just progress.
