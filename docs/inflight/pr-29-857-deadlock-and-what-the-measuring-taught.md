@@ -61,7 +61,7 @@ it.
 
 ## NEXT TASKS, in order
 
-1. **~~Settle whether the stall detector MISSES real failures~~ - MEASURED 2026-08-28, it does not.** Eight replays, five failures, all five detected. The original observation is suspect and probably a measurement artefact; if it matters, re-run on the pre-astubbs#344 tree where it was seen. Formerly top of this list on the grounds that a detector which over-fires AND under-fires is worse than none - it over-fires only. Across the astubbs#344 arms a third of
+1. **~~Settle whether the stall detector MISSES real failures~~ - CLOSED 2026-08-28.** It does not miss. Re-measured on the pre-astubbs#344 tree where the silence was seen: five failures, none with all detectors quiet, and one caught by a DIFFERENT detector while `NO_PROGRESS` sat at zero. The original observation counted only `NO_PROGRESS` hits, so a failure caught elsewhere read as a failure caught by nothing. The detector over-fires on slow runs and that is the whole of its fault. Formerly top of this list on the grounds that a detector which over-fires AND under-fires is worse than none. Eight replays, five failures, all five detected. The original observation is suspect and probably a measurement artefact; if it matters, re-run on the pre-astubbs#344 tree where it was seen. Formerly top of this list on the grounds that a detector which over-fires AND under-fires is worse than none - it over-fires only. Across the astubbs#344 arms a third of
    the failing runs went red with `NO_PROGRESS` not firing at all. This is top of the list because
    the 2026-08-25 Class 2 demotion left the gating liveness claim resting on this detector, and
    2026-08-28 then showed it ALSO over-fires on merely-slow runs. A detector that over-fires and

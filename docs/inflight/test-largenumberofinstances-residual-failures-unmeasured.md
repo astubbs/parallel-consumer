@@ -114,3 +114,22 @@ question "does the rate move with scale" is answerable; this sweep did not answe
 
 **Unchanged by all of this:** ten runs plus three at scale 1, the historical configuration, all
 passed. That result stands and is the one worth carrying forward.
+
+## The valid scale sweep, 2026-08-28: no failures at any sane scale
+
+Re-ran at 0.25 and 0.5 - the documented laptop baseline and double it - three runs each. **All six
+passed.** With the thirteen earlier runs at scale 1, that is nineteen green across three scales on
+this hardware, and no failure to compute a rate from.
+
+**"Does the rate move with scale" therefore has no answer here, because there is no rate.** That is a
+different and weaker result than "the rate is flat", and it is stated that way on purpose: flat would
+have pointed at PC, and this points nowhere. What it does establish is that amrynsky's January
+"every other run" does not reproduce on this machine at any scale it is documented to run at.
+
+**What still separates the hypotheses** is the bare-consumer control arm this note has always asked
+for, or the same sweep on hardware that actually fails. A desktop that never fails cannot tell a
+coordinator problem from a PC problem.
+
+Runtime, for whoever plans the next one: roughly 70 seconds a run at 0.25 and under two minutes at
+0.5. Cheap enough to run in bulk, which is the argument for hunting on the constrained containers the
+soak-harness note proposes rather than on a fast desktop that passes everything.

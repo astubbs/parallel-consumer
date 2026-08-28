@@ -276,3 +276,27 @@ and it means the gating liveness claim resting on it is not as compromised as it
 not this one. If it matters, re-run the audit there rather than assuming the trees behave alike. Do
 not close the question on this paragraph alone: it is one seed on one tree, and the claim being
 tested was made about another.
+
+## The detector "silence" is EXPLAINED, 2026-08-28 - it was a different detector, and my grep
+
+Re-ran the audit on the pre-astubbs#344 tree, where the silence was originally observed. Five failing
+runs. **Not one had all detectors silent.** Four fired `NO_PROGRESS`; the fifth fired a DIFFERENT
+detector - dozens of hits across the zombie-member / instance-stall / key-order family - with
+`NO_PROGRESS` at zero.
+
+**That fifth run is the whole explanation.** The original observation counted `NO_PROGRESS` hits and
+nothing else, so a failure caught by a different detector read as a failure caught by none. The
+detector was not silent; **I was only listening on one channel.**
+
+So the claim "a third of failures went red with the detector quiet" is withdrawn. There is no
+under-firing problem. The detector over-fires on merely-slow runs - established, and why this line is
+a timing proxy - and that is the whole of its fault.
+
+**The lesson is the same one, in a fourth costume.** A measurement is only as good as what it looked
+at: the failsafe `.txt` with no log output, the resources copy never refreshed, the test reshaped
+between claim and measurement, and now a grep narrower than the question. Every one produced a
+confident wrong answer, and every one cost one command to check.
+
+**Kept as a finding: this seed produces more than one signature.** Four runs of one shape, one of
+another, same seed and tree. Anything that classifies these failures by a single detector will
+mis-file the minority case - which is exactly what happened here.
