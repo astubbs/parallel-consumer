@@ -55,3 +55,32 @@ harness. Correctness profiles deliberately cannot read the factor, and a guard e
 - `docs/solutions/architecture-patterns/two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md` -
   the astubbs/parallel-consumer#68 precedent, where an infrastructure change made a suite green
   without fixing anything
+
+## Measured 2026-08-28 - and the measurement does not answer the question
+
+Ten consecutive runs of `largeNumberOfInstances` on this tree, on an M2 Mac Pro: **ten passes, no
+failures, not one "No progress beyond N records" line.** amrynsky's January report of "every other
+run of this test is failing" does not reproduce.
+
+**Do not read that as the defect being gone.** The instrument changed underneath the claim. Since
+that report the test has been split - `da175a206` separated a deterministic correctness gate from a
+capacity measurement, and `a8b4e196e` made the capacity profiles **dialled to the hardware** so the
+gate no longer follows them. The instance count is now a function of the machine.
+
+So the test that went ten-for-ten here is not the test that failed every other run in January, and a
+pass on a fast desktop says nothing about what a CI runner picks. **The failure rate is no longer a
+property of the code alone**, which means "what is the rate" is not a well-formed question until the
+profile is pinned.
+
+**What would actually answer it**, in order of cost:
+
+- Pin the capacity profile explicitly rather than letting it dial, and re-run. Ten passes at a fixed,
+  stated load is a result; ten passes at a load the machine chose is not.
+- Run it on the constrained hardware the soak harness note argues for - one CPU, 4GB - which is far
+  closer to what a CI runner or a pod gets than this desktop is.
+- Only then compare against January's claim, and say which profile each side was running.
+
+**The general lesson, which is the same one three times this week.** A green run is only evidence
+about the thing that actually ran. The reproducer was inverted; the deadlock probe's window never
+opened; and here the test itself was reshaped between the claim and the measurement. Checking what
+ran costs one `git log` and it has changed the answer every single time.
