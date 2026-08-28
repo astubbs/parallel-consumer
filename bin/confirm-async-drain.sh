@@ -9,8 +9,10 @@
 # was the wrong instrument. What the question needs is more FIRINGS, and the known seed already
 # fires most runs. Collect every firing's recovery trajectory instead of looking for new seeds.
 #
-# Runs on both trees, because a drain on one says nothing about the other and the pre-astubbs#344
-# tree is where five of six runs failed.
+# ONE TREE ONLY unless the diagnostic is backported. The pre-astubbs#344 worktree predates the lift
+# of the recovery diagnostic into ChaosScenarioBase, so the flag is accepted and does nothing there:
+# its runs FAIL (errors=1 in the failsafe report) but emit no telemetry, and a grep for violations
+# reads that as 'did not fire'. Comparing trees needs the lift backported first.
 #
 #   consumed climbing after the violation -> DRAINED. Timing proxy, as Class 2 turned out to be.
 #   consumed flat, inFlight stuck         -> WEDGE. A real defect, and the family's fourth mechanism.
@@ -36,9 +38,13 @@ for tree in pr29 pre-344; do
       continue
     fi
     # First and last consumed reading after the violation. Climbing = drained.
-    traj=$(awk '/violations=[1-9]/{f=1} f' "$lg" | grep -oE 'consumed=[0-9]+' | sed -n '1p;$p' | paste -sd'->' -)
-    first=$(printf '%s' "$traj" | sed 's/->.*//;s/consumed=//')
-    last=$(printf '%s'  "$traj" | sed 's/.*->//;s/consumed=//')
+    # Read the two numbers SEPARATELY. An earlier version joined them with `paste -sd'->'`, where
+    # -d is a character LIST not a string, so it joined with '-'; the sed then looked for '->',
+    # matched nothing, and the integer test failed silently into the else branch - labelling four
+    # runs that plainly drained as FLAT. The data was right and every verdict was wrong.
+    first=$(awk '/violations=[1-9]/{f=1} f' "$lg" | grep -oE 'consumed=[0-9]+' | head -1 | cut -d= -f2)
+    last=$(awk '/violations=[1-9]/{f=1} f' "$lg" | grep -oE 'consumed=[0-9]+' | tail -1 | cut -d= -f2)
+    traj="${first:-?}->${last:-?}"
     if [ -n "$first" ] && [ -n "$last" ] && [ "$last" -gt "$first" ] 2>/dev/null; then v=DRAINED; else v=FLAT-OR-UNCLEAR; fi
     printf '%s\t%s\trun=%s\tFIRED\t%s\ttrajectory=%s\n' "$(date -u +%FT%TZ)" "$tree" "$i" "$v" "$traj" >> "$T/tally.tsv"
   done

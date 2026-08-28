@@ -300,3 +300,34 @@ confident wrong answer, and every one cost one command to check.
 **Kept as a finding: this seed produces more than one signature.** Four runs of one shape, one of
 another, same seed and tree. Anything that classifies these failures by a single detector will
 mis-file the minority case - which is exactly what happened here.
+
+## CONFIRMED, 2026-08-28: it drains every time. The demotion is safe to act on.
+
+Five further firings of seed `9086872209853284830`, each replayed with the recovery diagnostic. **All
+five drained**, with consumption climbing from roughly 95,000 to past the 100,000 target every time.
+With the original firing that is six for six, zero flat.
+
+The demotion rested on one observation and now rests on six. **`NO_PROGRESS` on this scenario is a
+timing proxy**, exactly as `CLASS2_STALL` turned out to be: it measures how long the fleet takes, and
+a busy fleet crossing the bound is indistinguishable from a wedged one.
+
+**The right instrument was more firings, not more seeds.** An earlier attempt hunted eight random
+seeds for a second reproducer and found none. That was the wrong question - the known seed fires most
+runs, so every replay is a data point, and five arrived in the time eight fruitless hunts had taken.
+Worth remembering the next time a result needs strengthening: ask what a data point IS before
+scaling up the search.
+
+## Two instrument defects found while doing it, both mine
+
+**The classifier called every drained run FLAT.** `paste -sd'->'` treats `-d` as a character LIST, so
+it joined the readings with `-`; the `sed` then looked for `->`, matched nothing, and the integer
+comparison failed silently into the else branch. Four runs whose trajectories plainly climbed were
+labelled `FLAT-OR-UNCLEAR`. The data was right and every verdict was wrong - which is the more
+dangerous direction, because a wrong verdict on a right number reads as a finding. Fixed to read the
+two numbers separately.
+
+**The second tree could never have answered anything.** The pre-astubbs#344 worktree predates the
+lift of the recovery diagnostic into `ChaosScenarioBase`, so the flag is accepted and does nothing
+there. Those runs DID fail - `errors="1"` in the failsafe report - but emitted no telemetry, and the
+grep read that silence as "did not fire". **Comparing the trees needs the lift backported first**;
+until then that arm is void, not negative.
