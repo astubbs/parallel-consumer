@@ -84,3 +84,33 @@ residual this note is about was reported on one.
 about the thing that actually ran. The reproducer was inverted; the deadlock probe's window never
 opened; and here the test itself was reshaped between the claim and the measurement. Checking what
 ran costs one `git log` and it has changed the answer every single time.
+
+## The scale sweep, 2026-08-28 - CONFOUNDED, and the confound is instructive
+
+Ran scales 1, 2 and 4 on a desktop, three runs each. Scale 1 passed three times; scales 2 and 4
+failed every run. A rate rising that sharply with size would, on its face, be the coordinator
+struggling to converge.
+
+**It is not evidence of that, because the sweep was run past the machine's documented capacity.**
+The test's own javadoc gives the intended scales: `0.25` for a laptop, `4` for the 32-core highcpu
+runner. So the laptop's baseline is a QUARTER, and running a desktop at 4 is roughly sixteen times
+its intended load. The failures are overload.
+
+The failure mode confirms it: the higher-scale runs did not trip the `No progress beyond N records`
+assertion at all. They timed out waiting for the workload to finish - expecting 1,000,000 records at
+scale 2 and 2,000,000 at scale 4 - with `TimeoutException` counts climbing steeply between them.
+That is a machine not finishing in time, not a fleet failing to converge.
+
+**Which puts a question against an assumption in the test itself.** Its javadoc states that a timeout
+here "is a NO_PROGRESS verdict (a genuine stall), never 'the machine was slow'". This run is a
+counter-example: the machine WAS slow, because it was deliberately overloaded, and the result was
+timeouts. The claim may hold at the intended scale and clearly does not hold generally, so it is
+worth narrowing before a future run reads an overload timeout as a stall.
+
+**What a valid version of this experiment needs.** Hold the machine's relative load constant and vary
+only what is under test - which means running the sweep on hardware sized for each scale, or scaling
+down to `0.25` and comparing `0.25` against `0.5` on this desktop rather than `1` against `4`. The
+question "does the rate move with scale" is answerable; this sweep did not answer it.
+
+**Unchanged by all of this:** ten runs plus three at scale 1, the historical configuration, all
+passed. That result stands and is the one worth carrying forward.
