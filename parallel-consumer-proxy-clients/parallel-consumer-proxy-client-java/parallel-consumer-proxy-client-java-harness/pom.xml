@@ -42,9 +42,16 @@
         branch hosts no Parallel Consumer engine - it binds, admits a connection and refuses every
         session with UNIMPLEMENTED - so the only thing that can be proved end to end is the
         handshake: that the gRPC transport's own connect path reaches a real server's real service
-        and reports what it was told. That is this module's whole test tree. The engine-backed
-        conformance run, and the compile-scope harness classpath a JVM client declares to spawn a
-        sidecar as a child process, arrive with the conformance rung stacked above this one.
+        and reports what it was told.
+
+        THE ENGINE-BACKED CONFORMANCE RUN IS NOT HERE, AND IT IS NOT THE CONFORMANCE RUNG'S EITHER.
+        This comment used to say it arrived with the rung stacked above; that rung has landed the
+        suite, the scenarios, the core control arm and the java-direct cell, and could not land this
+        one - the gRPC cell needs an engine to dispatch, and writing a stand-in for it would make
+        every binding's agreement a statement about a stub. So it waits on the engine, and
+        TheEngineArrivingMustBringTheGrpcCellTest in this module's test tree fails the build if the
+        engine arrives without it. The compile-scope harness classpath a JVM client declares to spawn
+        a sidecar as a child process waits on the same rung.
 
         This module publishes nothing (the clients aggregator skips deploy and install for the whole
         tree) and has no main sources: it is a classpath and a test tree, deliberately.

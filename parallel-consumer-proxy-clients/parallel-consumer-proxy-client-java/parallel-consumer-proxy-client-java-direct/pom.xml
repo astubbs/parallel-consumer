@@ -43,6 +43,20 @@
             <artifactId>parallel-consumer-core</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!--
+            The transport-parameterised conformance suite - the same test classes every other Java
+            transport runs, from the api module's test-jar (KTD20). The suite is the constant and
+            the transport is the only variable, so the subclass here is a fixture and nothing else.
+            Test-jar rather than a copied suite: two copies of "correct" is precisely what a shared
+            conformance suite exists to prevent.
+        -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-client-java-api</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
         <!-- LongPollingMockConsumer: core's mock-clients pattern, so the fixture stays broker-free -->
         <dependency>
             <groupId>bz.stub.parallelconsumer</groupId>

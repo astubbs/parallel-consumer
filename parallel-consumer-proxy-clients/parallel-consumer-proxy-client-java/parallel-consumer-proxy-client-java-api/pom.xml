@@ -23,13 +23,16 @@
         api <- grpc), and nothing here may depend on core, the protocol module, protobuf or gRPC.
         Transport types must never appear on this surface; the direct sibling's bannedDependencies
         rule is what makes that checkable - a transport type leaking in here fails THAT module's
-        build. The test tree is bound by the same rule, because a test-jar published from here would
-        land on the direct module's test classpath.
+        build. The test tree is bound by the same rule, because the test-jar lands on the direct
+        module's test classpath.
 
-        The transport-parameterised conformance suite belongs in this module's test tree and is NOT
-        here yet: it arrives with the conformance rung, which stacks on this one. What is here is
-        the surface's own tests - the ArchUnit rules over the surface, and Outcomes' exception
-        bridge.
+        THE TRANSPORT-PARAMETERISED CONFORMANCE SUITE LIVES IN THIS MODULE'S TEST TREE, and it lives
+        here rather than beside either transport for the reason the abstraction exists: the suite is
+        the constant and the transport is the only variable. Each transport module supplies a
+        subclass whose whole content is a SpikeFixture, so a behavioural difference between two runs
+        is the transport's bug and never the suite's ambiguity. The suite is engine-free and
+        transport-free by construction, which this module's dependency-free classpath is the proof
+        of - a transport type reaching SpikeFixture would fail the direct sibling's build.
     -->
 
     <build>

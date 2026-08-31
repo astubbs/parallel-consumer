@@ -42,6 +42,13 @@
         <module>parallel-consumer-proxy-client-java</module>
         <module>parallel-consumer-proxy-client-kotlin</module>
         <module>parallel-consumer-proxy-client-scala</module>
+        <!--
+            The shared conformance suite. LAST, and it must stay last among the JVM modules: it is a
+            leaf that test-depends on the clients it drives, so the reactor has to have built them
+            before it runs. Its own pom carries what it drives today and what it deliberately does
+            not.
+        -->
+        <module>parallel-consumer-proxy-conformance</module>
     </modules>
 
     <!--

@@ -219,8 +219,55 @@ module_evidence:
       NO RECORD HAS CROSSED THE WIRE. The sidecar on this branch hosts no engine, so every gRPC
       assertion past the handshake is against a proxy the test itself scripts - which can prove how
       the transport reacts, and cannot prove that a real engine would ever behave that way. Nothing
-      here has run against a broker, in either transport. The cross-language conformance suite, which
-      is what makes the two transports answerable to the SAME scenarios, is not on this branch.
+      here has run against a broker, in either transport. The shared conformance suite IS here now and
+      the direct transport answers it, both through the transport-parameterised suite in the api
+      module's test-jar and as a binding of the cross-binding matrix; what is still missing is the
+      half that makes the two transports answerable to the SAME scenarios, because the gRPC cell needs
+      an engine to dispatch and has none - see proxy-conformance-suite.
+  - id: proxy-conformance-suite
+    artifact: parallel-consumer-proxy-conformance
+    coverage: >-
+      The shared conformance suite itself, its core control arm, and its own negative controls. Five
+      scenarios are wired and pass for TWO BINDINGS - Parallel Consumer driven by a plain Java
+      function, and java-direct, the shared client API bound in-process to core - against an engine
+      hosted in the suite's own JVM over mock Kafka clients, with no broker and no Docker, asserting
+      engine-side truth no client can see: a processed record advances the committed offset; an
+      unreported record holds the commit back; a failed record is redelivered with attempt 2 and the
+      previous reason verbatim; a held record admits a concurrent dispatch on another key while
+      fencing its own; and the in-flight ceiling bounds unresolved records, which is the only scenario
+      that constrains how many may be outstanding at once. THE ENGINE IS ONE OF THE BINDINGS and it is
+      the control arm - a scenario red against a plain Java function is a wrong scenario rather than a
+      broken client, and it runs in every selection so that answer arrives in the same job as the
+      client that went red. THE PRESCRIPTION IS NOT RELAXED for an in-process binding: the control arm
+      and the client binding execute one shared implementation of the runner contract, so no assertion
+      can be written to suit either. EVERY SCENARIO WAS PROVEN ABLE TO FAIL by breaking the
+      engine-side behaviour it pins - a redelivery carrying a reason the worker never gave reddened
+      that scenario's two cells and nothing else; a worker pool wider than the declared ceiling
+      reddened the ceiling scenario's two and nothing else; key ordering that stopped sharding by key
+      reddened the ordering and ceiling scenarios; a success never recorded reddened eight cells and
+      left the negative control's two GREEN, while counting a record complete at dispatch reddened the
+      negative control - the two arms together are what say it is a control. The fixture is proven
+      load-bearing the same way: seeding nothing into the embedded-client lane reddened all five
+      java-direct cells and left all five core cells green.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-conformance/README.md
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-conformance/src/test/java/bz/stub/parallelconsumer/conformance/CoreBinding.java
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-conformance/src/test/java/bz/stub/parallelconsumer/conformance/ConformanceScenarios.java
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-conformance/src/test/java/bz/stub/parallelconsumer/conformance/SelectorMatchingNothingFailsTest.java
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-conformance/src/test/java/bz/stub/parallelconsumer/conformance/TranscriptOverlapTest.java
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-conformance/src/test/java/bz/stub/parallelconsumer/conformance/TheEngineArrivingMustBringTheGrpcBindingTest.java
+    limitation: >-
+      TWO BINDINGS, NOT THIRTEEN, and the missing ones are named rather than approximated. The
+      java-grpc cell needs a sidecar with a dispatch engine behind it and the sidecar hosts none, so it
+      is ABSENT RATHER THAN STUBBED - a stand-in would make agreement between bindings a statement
+      about the stand-in - and a guard test in each affected module fails the build if the engine ever
+      arrives without it. The ten foreign clients and the machinery that spawns their runners are a
+      separate extraction. Five scenarios of the twelve named in the client-authoring guide, because
+      the harness serves only those five: the liveness lease, the manifest reconnect, worker death,
+      terminal outcomes and the shutdown drain are un-negotiated rather than passing. The mock lane
+      only - committed offsets are read from a mock consumer's commit history, not from a broker
+      through the Admin API. And the suite is deliberately bounded to the client/sidecar contract: it
+      does not re-test engine internals, which are covered far more cheaply from inside the JVM.
   - id: streams-alpha
     artifact: parallel-consumer-streams-spike
     coverage: Planned alpha evidence must exercise the release artifact's opt-in boundary, comparison switch and supported topology/recovery claims.
