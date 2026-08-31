@@ -52,3 +52,12 @@ application redesign); and that virtualizing physical topology creates less corr
 complexity than the value it removes. Surviving those makes the case; assuming them does not.
 This is the repo's own falsification discipline
 ([`docs-research-program.md`](docs-research-program.md)) applied to the architecture itself.
+
+**Upgraded by the cross-model review (2026-08-31, finding 4, [`2026-08-31-codex-adversarial-review.md`](../ideation/2026-08-31-codex-adversarial-review.md)): names are not
+preregistration.** Each falsifier needs a null arm, a metric, a rejection threshold and a stop
+rule - and the sequencing becomes a **falsification staircase** instead of navigator-then-broad-
+lighthouse: (1) a local admission A/B against a conventional limiter, (2) the twenty-node lease
+conservation test under churn (measuring overshoot bounds, per the corrected safety claim), (3)
+one *stateless* frontier cutover with failure injection. The twelve-dimension lighthouse is built
+only if all three rungs survive, so a failure isolates to its rung instead of hiding in a
+composite.

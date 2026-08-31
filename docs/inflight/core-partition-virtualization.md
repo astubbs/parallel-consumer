@@ -65,4 +65,7 @@ distributing Prescience capacity across nodes, partition count has become a
 Vanilla Kafka-compatible applications keep normal Kafka semantics - aggressive virtualization
 only where the runtime owns both endpoints, and **internal Streams repartition/changelog topics
 are the safest first target** (their physical form is already runtime-generated, not an external
-contract; co-partitioning and state/task affinity must survive).
+contract; co-partitioning and state/task affinity must survive). Added by the cross-model review
+(2026-08-31, finding 2, [`2026-08-31-codex-adversarial-review.md`](../ideation/2026-08-31-codex-adversarial-review.md)): **generation cutover needs producer epoch fencing and
+old-generation sealing** - without it, an old producer keeps writing to the retired generation
+after cutover and the stable-logical-stream guarantee silently breaks.

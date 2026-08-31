@@ -77,3 +77,15 @@ conceptual split: **a Kafka consumer group is a mechanism for acquiring portions
 engine execution group is fault-tolerant authority over outstanding obligations.** The original
 thesis extended one more step - partition assignment stops meaning execution ownership and
 becomes merely log-acquisition ownership.
+
+## Corrected by the cross-model adversarial review (2026-08-31, finding 2)
+
+**A scalar offset F is incompatible with the engine's own sparse execution model** (review
+preserved at [`2026-08-31-codex-adversarial-review.md`](../ideation/2026-08-31-codex-adversarial-review.md)). "Offset F-1 runs on v7, offset F runs on v8" quietly assumes
+offset-contiguous execution - the exact assumption PC exists to break: at cutover, v7 can still
+be running an earlier record whose ordering domain has work beyond F, and across partitions
+there is no single F at all. The protocol therefore needs a **partition-vector frontier plus
+per-ordering-domain completion transfer**, and for stateful handlers "never speculatively
+execute" conflicts with arriving at F warm - so **start with stateless handlers**, and test with
+injected concurrent old/new producers, delayed retries, transactions and failover during
+cutover. The optimistic barrier survives; the scalar-F simplicity does not.

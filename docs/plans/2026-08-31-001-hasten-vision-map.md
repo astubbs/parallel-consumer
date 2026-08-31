@@ -107,14 +107,22 @@ it; the cost model says where attention goes.
 
 ## Sequencing, in one line each
 
-v6 and the open PR stack are untouched by all of the above. The first built thing is the
-navigator micro-MVP (beat 4), then the lighthouse spike (beat 8), which exists to attempt the
-four falsifiers before the vision earns more investment. STRATEGY.md adoption waits for the
-owner's triage and the ce-strategy run.
+v6 and the open PR stack are untouched by all of the above. The build order is the
+**falsification staircase** the cross-model review substituted for navigator-then-lighthouse
+([`2026-08-31-codex-adversarial-review.md`](../ideation/2026-08-31-codex-adversarial-review.md), finding 4): (1) a local admission A/B against a conventional limiter, (2) the
+twenty-node lease-conservation test under churn measuring overshoot bounds, (3) one stateless
+frontier cutover with failure injection - each rung with a null arm, metric, threshold and stop
+rule; the twelve-dimension lighthouse only if all three survive. The navigator micro-MVP is the
+*candidate* first rung, not a scheduled build: it remains gated on the two decisions
+[`core-distributed-throttling.md`](../inflight/core-distributed-throttling.md) says gate any
+build (the review caught this map stating it as settled while the owning note says unchosen).
+STRATEGY.md adoption waits for the owner's triage and the ce-strategy run.
 
 ## Risks register
 
-Recorded at capture time so future sessions can correct course, not just admire the map. Each
+Recorded at capture time so future sessions can correct course, not just admire the map. A
+cross-model adversarial review ran 2026-08-31 (preserved at [`2026-08-31-codex-adversarial-review.md`](../ideation/2026-08-31-codex-adversarial-review.md)); its eight findings
+are folded into the owning notes and reflected below. Each
 entry: the risk, the tell that it is materialising, and the correction already on the record (or
 named here for the first time). Consult this before expanding any track.
 
@@ -124,9 +132,13 @@ named here for the first time). Consult this before expanding any track.
   Prescience-as-PC-feature) is grounded in shipped code; the global half (fleet, economics,
   demand shaping) is pure derivation with materially lower survival odds, and the notes give both
   equal typographic confidence. *Tell:* global-half notes accumulating detail while no falsifier
-  has run. *Correction:* the lighthouse falsifiers gate investment
-  ([`core-lighthouse-mvp.md`](../inflight/core-lighthouse-mvp.md)); treat derivation and
-  measurement as different grades of claim.
+  has run. *Correction, upgraded by the cross-model review (finding 3): use THREE evidence grades* -
+  **shipped** (the dispatch seam, key independence, sparse completion, accounting), **locally
+  testable extension** (admission, attribution, lease mechanics, Prescience read path), and
+  **distributed hypothesis** (fleet, economics, frontier migration) - because "grounded local
+  half" was itself too generous: shipped code grounds the seam, not lease conservation or
+  exhaustive lookahead. The staircase in Sequencing gates investment
+  ([`core-lighthouse-mvp.md`](../inflight/core-lighthouse-mvp.md)).
 - **Shipping displacement.** The vision makes everything feel connected, so everything feels
   worth doing - in a repo that already accumulates open PRs faster than it lands releases.
   *Tell:* another strategy weekend before the navigator demo exists; v6 slipping for any
@@ -136,7 +148,8 @@ named here for the first time). Consult this before expanding any track.
 - **Identity fusion resists falsification.** The owner has named this work as a career
   culmination; pre-registered falsifiers are emotionally easy to write and hard to honour.
   *Tell:* a falsifier outcome reframed as "needs more work" rather than accepted; benchmarks
-  chosen after seeing results. *Correction:* the falsifiers are written down before building;
+  chosen after seeing results. *Correction:* names are not preregistration (cross-model review, finding 4) - each falsifier
+  carries a null arm, metric, rejection threshold and stop rule per the staircase in Sequencing;
   the research-program discipline (publish refuted hypotheses,
   [`docs-research-program.md`](../inflight/docs-research-program.md)) applies to the architecture
   itself; the measurement campaign that withdrew its own headline claims is the precedent to keep.
@@ -189,6 +202,23 @@ named here for the first time). Consult this before expanding any track.
   reader assumes. *Correction:* this binder owns no content; the file-refs gate polices links;
   verify-before-citing caveats are already in the notes and must be honoured, not tidied away;
   the owner's triage pass is the scheduled cleanup.
+- **Contract fidelity and control-plane trust** (added by the cross-model review, finding 3).
+  Admission, attribution and Spice all consume *declared* metadata - resource requirements,
+  priorities, tenant identity - and declarations can be incomplete, stale, wrong or malicious;
+  garbage in corrupts admission and attribution long before any fleet layer exists. *Tell:*
+  attribution blaming a resource the handler never calls; a tenant quota bypassed by an
+  undeclared dependency. *Correction:* measure declaration recall against observed calls (the
+  declared-vs-observed feedback loop in
+  [`core-prescience-and-spice.md`](../inflight/core-prescience-and-spice.md)), keep a safe
+  opaque-work lane for undeclared handlers, and treat control metadata as an authorization
+  surface, not trusted input.
+- **The two hard-mode features, ring-fenced by the owner's ruling (2026-08-31).** The review's
+  two deepest findings - hard global rate ceilings (lease fencing against external services) and
+  frontier-based cutover (scalar F vs sparse execution) - may be unachievable as originally
+  stated. The owner's recorded position: *if those two never work, the remainder still stands on
+  its own.* *Tell:* another track's design quietly depending on a hard ceiling or a seamless
+  cutover. *Correction:* both notes now carry the corrected, weaker promises (bounded overshoot;
+  stateless-first vector frontiers - [`2026-08-31-codex-adversarial-review.md`](../ideation/2026-08-31-codex-adversarial-review.md)); no other note may assume the strong forms.
 - **Positioning misread as abandonment.** To an outside user, "PC is now the kernel of a
   scheduler runtime" can read as "the consumer library is deprecated". *Tell:* issues or comments
   asking whether PC is still maintained; v6 messaging leading with the vision. *Correction:* v6

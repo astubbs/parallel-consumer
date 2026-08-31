@@ -78,7 +78,15 @@ The handoff supplement (sections 11-17) firms this up in five ways, detail there
 - **Minimal Spice is just `ordering key -> outstanding offsets`** - which alone yields domain
   depth, heads, and independent-work counts, making **100% Prescience a plausible standalone
   Parallel Consumer feature today**, before any of the rest of the runtime exists. At that point
-  PC is a semantic queue over Kafka on its own.
+  PC is a semantic queue over Kafka on its own. **Downgraded to hypothesis by the cross-model
+  review (2026-08-31, finding 5, [`2026-08-31-codex-adversarial-review.md`](../ideation/2026-08-31-codex-adversarial-review.md)): this prices the postings list and ignores the
+  system around it** - Kafka still transfers and decompresses whole batches; an index needs
+  ownership, checkpoints, freshness, retention-loss behaviour, rebalance recovery and a hydration
+  protocol; rebuilding a "disposable" full index can take hours or become impossible after source
+  retention expires. Likely the first supposedly-local feature to become operationally expensive:
+  prototype the read path and measure the full curve (broker bytes, decode allocation, rebuild
+  time, refetch amplification, useful-throughput gain vs a bounded buffer) before "100%" is a
+  feature rather than a target.
 - **`targetPrescience(100%)` as an elastic runtime SLO**: extend the local store, then add nodes
   for *knowledge* capacity (not CPU), then spread ownership - and if partition count prevents
   distribution, partition count has become a knowledge-distribution constraint
