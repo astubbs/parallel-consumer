@@ -20,9 +20,13 @@ that workload under stock dispatch and under PC dispatch and prints both sets of
 Needs Docker; it starts its own Kafka. On a warm build the whole command below took 26s, of which the demo
 itself reported 17s (3.6s of that starting the broker). A first run also builds the reactor from scratch
 and pulls the Kafka image, so budget several minutes. About 8s of the demo is deliberate sleeping: four
-arms, each with a 1500ms blocker and 24 records of 25ms. Expect some build noise first (`Jabel:
-initialized`, `apply-patch: applied 33 hunk(s)`) - that is the build generating the patched Kafka classes,
-which is normal.
+arms, each with a 1500ms blocker and 24 records of 25ms.
+
+Two bits of expected noise, neither a problem. Before the demo starts you will see build output (`Jabel:
+initialized`, `apply-patch: applied 33 hunk(s)`) - that is the build generating the patched Kafka classes.
+Then three `SLF4J(W): No SLF4J providers were found` lines, because the module deliberately ships no
+logging binding: SLF4J with no provider is a no-op, so Kafka's own logging stays out of the report
+entirely. The pom says why, and why re-adding one would be a regression.
 
 ## Run it
 

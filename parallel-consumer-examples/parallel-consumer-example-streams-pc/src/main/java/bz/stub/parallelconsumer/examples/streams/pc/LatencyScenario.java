@@ -4,6 +4,8 @@ package bz.stub.parallelconsumer.examples.streams.pc;
  */
 
 import java.util.Locale;
+import java.util.Optional;
+import java.util.OptionalLong;
 
 /**
  * A {@link DemoSection} that runs the same workload twice, varying only the dispatch seam, and prints the
@@ -134,10 +136,10 @@ final class LatencyScenario implements DemoSection {
      * the same order. Their difference is therefore pure run-to-run variance, measured inside this very run
      * - which is the only honest way to say whether a small difference elsewhere means anything.
      *
-     * @return null if this section has not run
+     * @return empty if this section has not run
      */
-    Long stockMedianMillis() {
-        return stockResult == null ? null : stockResult.latencies().p50();
+    OptionalLong stockMedianMillis() {
+        return stockResult == null ? OptionalLong.empty() : OptionalLong.of(stockResult.latencies().p50());
     }
 
     @Override
@@ -204,12 +206,10 @@ final class LatencyScenario implements DemoSection {
         // another way would be the demo telling the reader what it wanted to find, so the measurement is
         // checked against the expectation first.
         double medianRatio = stock.p50() / (double) Math.max(1, pc.p50());
-        String unexpected = contradiction(expectation, medianRatio);
-        if (unexpected != null) {
-            Console.wrapped("    !! ", "UNEXPECTED: " + unexpected + " The fixed reading below describes the "
-                    + "result this arm was predicted to give, and this run did not give it. Trust the "
-                    + "numbers above, not the sentence below.");
-        }
+        contradiction(expectation, medianRatio).ifPresent(unexpected ->
+                Console.wrapped("    !! ", "UNEXPECTED: " + unexpected + " The fixed reading below describes "
+                        + "the result this arm was predicted to give, and this run did not give it. Trust "
+                        + "the numbers above, not the sentence below."));
         Console.wrapped("    => ", verdict);
     }
 
@@ -235,22 +235,22 @@ final class LatencyScenario implements DemoSection {
      * never runs it at all - this decision would otherwise have no coverage anywhere. That is exactly how
      * its first version shipped a threshold a broken run could satisfy.
      *
-     * @return null when the run is consistent with the expectation
+     * @return empty when the run is consistent with the expectation
      */
-    static String contradiction(final Expectation expectation, final double medianRatio) {
+    static Optional<String> contradiction(final Expectation expectation, final double medianRatio) {
         switch (expectation) {
             case PC_MUCH_FASTER:
-                return medianRatio >= MUCH_FASTER_THRESHOLD ? null
-                        : String.format(Locale.ROOT, "this section's median ratio was %.2fx, short of the "
-                        + "%.1fx this claim needs - and a ratio near 1.00x is what a run with the seam "
-                        + "switched off looks like, so check the dispatch counters above first.",
-                        medianRatio, MUCH_FASTER_THRESHOLD);
+                return medianRatio >= MUCH_FASTER_THRESHOLD ? Optional.empty()
+                        : Optional.of(String.format(Locale.ROOT, "this section's median ratio was %.2fx, "
+                        + "short of the %.1fx this claim needs - and a ratio near 1.00x is what a run with "
+                        + "the seam switched off looks like, so check the dispatch counters above first.",
+                        medianRatio, MUCH_FASTER_THRESHOLD));
             case NO_MATERIAL_DIFFERENCE:
-                return Math.abs(medianRatio - 1.0) <= NO_DIFFERENCE_BAND ? null
-                        : String.format(Locale.ROOT, "this section's median ratio was %.2fx, further from "
-                        + "parity than the %.0f%% this control tolerates - in EITHER direction, because "
-                        + "either would mean something is acting here that key concurrency cannot explain.",
-                        medianRatio, NO_DIFFERENCE_BAND * 100);
+                return Math.abs(medianRatio - 1.0) <= NO_DIFFERENCE_BAND ? Optional.empty()
+                        : Optional.of(String.format(Locale.ROOT, "this section's median ratio was %.2fx, "
+                        + "further from parity than the %.0f%% this control tolerates - in EITHER "
+                        + "direction, because either would mean something is acting here that key "
+                        + "concurrency cannot explain.", medianRatio, NO_DIFFERENCE_BAND * 100));
             default:
                 throw new IllegalStateException("Unhandled expectation " + expectation);
         }

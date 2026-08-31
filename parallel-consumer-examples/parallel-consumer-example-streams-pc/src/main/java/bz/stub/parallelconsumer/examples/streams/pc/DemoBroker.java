@@ -75,8 +75,9 @@ final class DemoBroker implements AutoCloseable {
                 .withReuse(true);
 
         long startedAt = System.nanoTime();
-        // Testcontainers' own progress logging is turned down (see logback.xml) because at INFO it buries
-        // the report. That leaves a cold image pull looking like a hang, so the wait reports itself.
+        // Testcontainers logs its own progress through SLF4J, which this module leaves unbound, so none of
+        // it reaches the terminal. That keeps the report readable and leaves a cold image pull looking like
+        // a hang, so the wait reports itself.
         Thread ticker = startProgressTicker(startedAt);
         try {
             container.start();

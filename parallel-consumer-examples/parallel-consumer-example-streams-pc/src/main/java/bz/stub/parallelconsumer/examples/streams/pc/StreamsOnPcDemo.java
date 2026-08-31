@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.OptionalLong;
 
 /**
  * Runnable demonstration that Parallel Consumer can drive a Kafka Streams topology, and that doing so
@@ -96,11 +97,13 @@ public final class StreamsOnPcDemo {
      * noisy, and only a floor derived from the same run could say so.
      */
     private static void printNoiseFloor(final LatencyScenario headOfLine, final LatencyScenario singleKey) {
-        Long first = headOfLine.stockMedianMillis();
-        Long second = singleKey.stockMedianMillis();
-        if (first == null || second == null) {
+        OptionalLong firstMedian = headOfLine.stockMedianMillis();
+        OptionalLong secondMedian = singleKey.stockMedianMillis();
+        if (!firstMedian.isPresent() || !secondMedian.isPresent()) {
             return;
         }
+        long first = firstMedian.getAsLong();
+        long second = secondMedian.getAsLong();
         double ratio = Math.max(first, second) / (double) Math.max(1, Math.min(first, second));
 
         Console.line("");

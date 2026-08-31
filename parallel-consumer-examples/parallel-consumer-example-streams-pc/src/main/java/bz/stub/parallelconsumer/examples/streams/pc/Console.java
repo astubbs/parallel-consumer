@@ -10,9 +10,12 @@ import java.util.Locale;
  * <em>is</em> the deliverable.
  * <p>
  * A logger would prefix every line with a timestamp, level and thread, wrap the report in whatever pattern
- * the ambient logback config happens to use, and interleave it with Kafka's own logging. The measurements
- * would still be correct and nobody would be able to read them. Kafka and Streams stay on SLF4J and are
- * turned down to WARN in {@code logback.xml}, so the two do not compete for the terminal.
+ * the ambient logging config happens to use, and interleave it with Kafka's own logging. The measurements
+ * would still be correct and nobody would be able to read them.
+ * <p>
+ * Nothing competes for the terminal, because the module ships <b>no SLF4J binding at all</b> - Kafka and
+ * Streams keep logging through SLF4J, which with no provider is a no-op. The pom says why that is
+ * deliberate rather than an omission.
  *
  * @author Antony Stubbs
  */

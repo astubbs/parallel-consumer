@@ -34,13 +34,13 @@ class LatencyScenarioTest {
     @Test
     void aRatioBarelyAboveParityDoesNotSatisfyTheHeadlineClaim() {
         assertThat(contradiction(PC_MUCH_FASTER, 1.01))
-                .isNotNull()
-                .contains("1.01x");
+                .isPresent();
+        assertThat(contradiction(PC_MUCH_FASTER, 1.01).get()).contains("1.01x");
     }
 
     @Test
     void pcLosingOutrightContradictsTheHeadlineClaim() {
-        assertThat(contradiction(PC_MUCH_FASTER, 0.85)).isNotNull();
+        assertThat(contradiction(PC_MUCH_FASTER, 0.85)).isPresent();
     }
 
     /**
@@ -49,15 +49,15 @@ class LatencyScenarioTest {
      */
     @Test
     void aRealHeadOfLineResultSatisfiesTheHeadlineClaim() {
-        assertThat(contradiction(PC_MUCH_FASTER, 13.27)).isNull();
+        assertThat(contradiction(PC_MUCH_FASTER, 13.27)).isEmpty();
     }
 
     /** Both sides of parity pass, because which arm wins a tie is decided by the machine. */
     @Test
     void theControlAcceptsEitherSideOfParity() {
-        assertThat(contradiction(NO_MATERIAL_DIFFERENCE, 0.99)).isNull();
-        assertThat(contradiction(NO_MATERIAL_DIFFERENCE, 1.01)).isNull();
-        assertThat(contradiction(NO_MATERIAL_DIFFERENCE, 1.19)).isNull();
+        assertThat(contradiction(NO_MATERIAL_DIFFERENCE, 0.99)).isEmpty();
+        assertThat(contradiction(NO_MATERIAL_DIFFERENCE, 1.01)).isEmpty();
+        assertThat(contradiction(NO_MATERIAL_DIFFERENCE, 1.19)).isEmpty();
     }
 
     /**
@@ -67,7 +67,7 @@ class LatencyScenarioTest {
      */
     @Test
     void theControlFlagsALargeDifferenceInEitherDirection() {
-        assertThat(contradiction(NO_MATERIAL_DIFFERENCE, 1.60)).isNotNull();
-        assertThat(contradiction(NO_MATERIAL_DIFFERENCE, 0.60)).isNotNull();
+        assertThat(contradiction(NO_MATERIAL_DIFFERENCE, 1.60)).isPresent();
+        assertThat(contradiction(NO_MATERIAL_DIFFERENCE, 0.60)).isPresent();
     }
 }

@@ -20,6 +20,30 @@
         <demo.mainClass>bz.stub.parallelconsumer.examples.streams.pc.StreamsOnPcDemo</demo.mainClass>
     </properties>
 
+    <dependencyManagement>
+        <dependencies>
+            <!-- Ahead of the 1.24.0 that testcontainers resolves, and module-local for the same reason
+                 example-streams pins jackson locally rather than in the root pom: this is the only
+                 module that puts testcontainers on a NON-test classpath, so a root pin would change
+                 what every other module's tests run against to fix a problem only this one has.
+
+                 1.24.0 carries CVE-2024-25710 and CVE-2024-26308, both denial-of-service on malformed
+                 archives and both first fixed in 1.26.0. Neither is reachable here - testcontainers
+                 uses this to build Docker contexts and copy files in, never to parse an archive this
+                 demo did not create - but `deps: whole-tree CVE scan` audits the RUNTIME scope, and
+                 this module's compile-scope testcontainers is what first puts it there. A fixed
+                 version is available and pinning costs nothing, so it is pinned rather than argued
+                 about in an exclusion entry.
+
+                 Retire this when testcontainers itself resolves 1.26.0 or newer. -->
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-compress</artifactId>
+                <version>1.28.0</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
     <dependencies>
         <!-- MUST BE FIRST, and org.apache.kafka:kafka-streams MUST NOT be declared here at all.
              This is the whole mechanism. parallel-consumer-streams ships patched copies of the Apache
@@ -60,22 +84,37 @@
             <scope>compile</scope>
         </dependency>
 
-        <!-- Same trap, different dependency, and it bites harder here. The root pom manages logback at
-             <scope>test</scope> in dependencyManagement, so re-declaring it WITHOUT a scope - which is
-             what parallel-consumer-example-metrics does - still inherits test. That is fine for a module
-             that only logs in tests, but this module's main() then runs with no SLF4J binding at all and
-             prints "No SLF4J providers were found" instead of honouring src/main/resources/logback.xml,
-             leaving Kafka's INFO logging to bury the report. Hence the explicit compile scope. -->
+        <!-- THERE IS DELIBERATELY NO SLF4J BINDING HERE, and re-adding one would be a regression.
+
+             This module used to declare logback at compile scope, on the reasoning that without a
+             binding main() prints "No SLF4J providers were found" and Kafka's INFO logging then
+             buries the report. The second half of that is wrong, and it was worth measuring rather
+             than believing: SLF4J 2.x with no provider is a NO-OP, not a fallback to console, so a
+             run without logback emits three warning lines at startup and then not one further log
+             line between the classpath check and the summary. Removing it made the report cleaner,
+             not noisier.
+
+             It also removed a finding. `deps: whole-tree CVE scan` audits the RUNTIME scope, so a
+             compile-scope logback in this module was the first thing in the tree to put it there -
+             everywhere else in this repo logback is test scope and invisible to that gate.
+
+             If you want Kafka's logs while debugging the demo, add a binding on YOUR machine rather
+             than to this pom, and check the CVE gate before proposing it back. -->
+
+        <!-- Tests. The core test-jar is here for one class - TestConventionRules, which
+             TestConventionsArchTest points ArchUnit at. Every module with test sources needs its own such
+             test, because ArchUnit imports from the classpath of the module it runs in and a parent
+             package named by a sibling module does not reach this one; EveryModuleWiresUpArchUnitTest in
+             core is what fails the build when one is missing. Test scope, so it cannot reach the demo's
+             runtime classpath and disturb the ordering the block at the top of this file depends on. -->
         <dependency>
-            <groupId>ch.qos.logback</groupId>
-            <artifactId>logback-core</artifactId>
-            <scope>compile</scope>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
         </dependency>
-        <dependency>
-            <groupId>ch.qos.logback</groupId>
-            <artifactId>logback-classic</artifactId>
-            <scope>compile</scope>
-        </dependency>
+
     </dependencies>
 
     <!-- The demo is run by activating this profile, NOT by invoking exec:java from the command line.
