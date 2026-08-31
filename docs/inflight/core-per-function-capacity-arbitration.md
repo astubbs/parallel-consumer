@@ -21,12 +21,23 @@ process    arbitrates shared capacity across functions   (THIS NOTE - reallocate
 fleet      delta-vote instance recommendation            (dimension 2)
 ```
 
-External scaling becomes last-resort and evidence-based: ask for an instance only when a function
-has exhausted what internal reallocation can give it AND still has profitable parallelism. That is
-not a new signal - it is the strongest form of the existing +1 delta vote, reached through one more
-layer of "tried everything cheaper first". The endpoint claim, candidate thesis material: a Kafka
-application stops having a meaningful configured size - partition count, thread count and replica
-count all become implementation constraints around an engine discovering where useful work exists.
+The allocator's question, in the conversation's sharpest form: *where does the next unit of
+concurrency produce the greatest marginal benefit?* Give 100 spare operations to a
+downstream-saturated function and get nothing; to a CPU-saturated one and get worse; to a
+key-starved one and get nothing; to the one function with headroom and get +30%. An economic
+allocator inside the process, fed by the regimes the controller already classifies
+([`core-bottleneck-attribution.md`](core-bottleneck-attribution.md)).
+
+External scaling becomes last-resort and evidence-based: **scale-out is the consequence of failing
+to satisfy profitable internal demand**, and scale-in of every function's marginal return
+collapsing. That is not a new signal - it is the strongest form of the existing +1 delta vote,
+reached through one more layer of "tried everything cheaper first". The endpoint claim, candidate
+thesis material: a Kafka application stops having a meaningful configured size, and "Kafka
+application" stops being a scheduling concept at all - the scheduling entities are functions and
+their ordering domains, while the process is merely where some of them execute, the pod a capacity
+envelope, the partition an ownership boundary, and the language where the user's function happens
+to be written. PC decoupled ordering from partitions; this track decouples execution from
+everything Kafka traditionally used as a proxy for it.
 
 ## The budget is measured, not configured (corrected 2026-08-31)
 
@@ -50,10 +61,13 @@ it cannot move.
 
 ## Prerequisites, promoted from earmark to load-bearing
 
-The many-functions process does not exist in PC today - one instance, one function. This idea
-stands on astubbs#254 (per-topic processing functions, confluentinc#372) and astubbs#245 (runtime
-subscription change), which [`core-auto-scaling.md`](core-auto-scaling.md) carries only as
-earmarks; the Streams flavour additionally stands on astubbs#255. Dimension 1 itself is no longer
+The many-functions process does not exist in PC's own API today - one instance, one function. The
+plain-consumer route stands on astubbs#254 (per-topic processing functions, confluentinc#372) and
+astubbs#245 (runtime subscription change), which [`core-auto-scaling.md`](core-auto-scaling.md)
+carries only as earmarks. But the *nearest existing* multi-function process is a Kafka Streams
+topology under astubbs#255 / astubbs#271 - its operators are exactly the many functions with
+radically different concurrency->useful-work curves, so the Streams work is the likelier first
+host for this layer, not the later one. Dimension 1 itself is no longer
 a blocker - astubbs#333 implements it. If the multi-function work never lands, this note reduces
 to "dimension 1, run once".
 
