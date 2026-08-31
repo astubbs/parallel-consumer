@@ -39,5 +39,14 @@ Key facts the ideation verified (so nobody re-derives them): the framework prope
 but lambda-actor-bus's interface is a strict superset of poller-bus-actor's; the blocking
 `futureSend.get` that confluentinc#356 targets is still in master source.
 
+**Seventh candidate direction, from the owner's side of the 2026-08-29/30 follow-up: the revival
+can be product-facing, not only internal.** An Akka/Pekko *persistent mailbox* backed by Kafka
+Streams (not a clone of either framework - their mailbox SPI, our durability), or a
+Streams-backed layer under this project's own micro-actor framework, giving complete control of
+both halves. The multiplier recorded in
+[`core-internal-machinery-as-features.md`](core-internal-machinery-as-features.md) applies with
+full force here: an actor bus built for the engine's internals, exposed through the shared
+polyglot boundary, is a durable actor system in every bound language.
+
 Open decision: which survivor (or sequence) to take first. The doc's top pick is 1 (cheapest,
 falsifies both verdicts before any architectural bet); the real fork in the road is 3 vs 5.

@@ -19,6 +19,8 @@ audience that does not yet care about the project, and all roads lead back to on
 - *Do you really need more Kafka partitions?* - partition-count planning is a universally
   recognised annoyance.
 - *Why adding consumers sometimes does absolutely nothing.*
+- The owner's compact form of the whole split (2026-08-29/30): *the broker schedules partitions;
+  PC schedules keys* - orchestration at the granularity the ecosystem missed.
 - From the 2026-08-29/30 follow-up ([`core-partition-advisor.md`](core-partition-advisor.md)):
   *Choose partitions for Kafka. Let PC choose parallelism for your application* - and the
   conference-slide form, *"How many partitions will you need in three years?" Wrong question.*
@@ -89,7 +91,10 @@ llingr, and [`next-reclaim-the-category.md`][next-reclaim-the-category] rules th
 *"won by building, never by attacking anyone else's work"*. A rename is the owner's call and is not
 otherwise tracked here. Noting for the record: the 2026-08-29/30 follow-up conversation used
 "Hasten" throughout as though the rename had happened, and closed on the same tagline - an
-assumption in a transcript, not a decision.
+assumption in a transcript, not a decision. The owner's own position, stated in the same
+conversation: run under a working codename (referred to as "W2") so the product name stays
+adjustable - "I think hasten nails it but it takes the pressure off". Leading candidate,
+deliberately uncommitted.
 
 <!-- These notes live on `research/market-analysis-recut`, not master. Pinned to a commit
      so the links keep resolving after the branch moves or merges. -->

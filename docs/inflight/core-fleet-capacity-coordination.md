@@ -43,7 +43,12 @@ marks the boundaries - because fiction is where scope creep hides best.
 7. **The coordination architecture.** A small control plane *over Kafka* - application records
    never transit it, every runtime decides locally, collectively one scheduler, no cluster to
    operate. Embedded-not-cluster extended to the fleet layer, and the only form of claim 1 that
-   survives the positioning.
+   survives the positioning. The owner added the dogfooding requirement: the coordination topic's
+   pulse frequency is itself dynamic, governed by the same contract system, **because the broker
+   is a shared resource too** - a scheduler that exempts its own traffic from its scheduling has
+   not understood its thesis. And the positioning line worth keeping: the fleet layer is *Kafka's
+   child at the edge* - completing client-side what the broker's partition-level orchestration
+   starts, never replacing it.
 8. **The definition and the adoption mechanics.** One sentence - *"coordinates how your company
    spends execution capacity"* - and a rollout that happens by dependency bump and import change
    ([`core-ecosystem-adapters.md`](core-ecosystem-adapters.md) dramatised). Plus one genuinely new

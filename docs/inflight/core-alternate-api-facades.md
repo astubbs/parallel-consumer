@@ -13,7 +13,16 @@ KafkaConsumer  ->  PC KafkaConsumer facade  ->  PC ShareConsumer facade  ->  PC 
 ```
 
 Each step exposes more PC capability without forcing a day-one rewrite; the engine underneath never
-changes. The strategic consequence, stated in the review's words: *the public API is becoming
+changes. The owner's side of the 2026-08-29/30 follow-up restated the ladder as *descending
+commitment* across the whole product, each rung a complete stopping point: not convinced by the
+global cost-optimising scheduler? take the parallel consumer for your language. Not that? the
+Kafka Streams wrapper. Or just the web GUI to observe and send commands. Or only the distributed
+rate limiting, acting on horizontal-scaling signals while ignoring vertical ones until confident.
+Or, at minimum, the KafkaConsumer-shaped wrapper for better performance. Nobody is asked to buy
+the vision to use a rung. Adjacent evidence for the bottom rungs: kwq
+(https://github.com/bluemonk3y/kwq, unexamined beyond its premise) - an independent "Kafka is
+already a work queue" take, supporting the argument that users should not have to adapt to a third
+system to get queue semantics. The strategic consequence, stated in the review's words: *the public API is becoming
 interchangeable - the execution engine is the product.*
 
 ## The KafkaConsumer-shaped facade: mostly already tracked, reframed
