@@ -1800,6 +1800,28 @@ which is why the capture is worth attributing to the merge rather than to the br
 
 <!-- post-merge: checked-end -->
 
+## 2026-08-31, CHAOS lane: the BLOCKED-on-monitor discriminator again, on the COOPERATIVE DRAIN arm
+
+Recorded for the seed, since the log expires and no replay has been run.
+
+`ChaosRevokeUnderWorkCooperativeDrainIT.revokeUnderDrainingStopsWithCooperativeAssignorStaysProtocolHonest`,
+seed **`1159274055608047297`**. Replay:
+
+```
+./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=1159274055608047297
+```
+
+Same discriminator as the captures above, not a new one: instance 12 ended with
+`Timeout waiting for commit response PT10S`, and the probe classified the poll thread as **BLOCKED -
+waiting to acquire a monitor**, on an `AtomicBoolean` held by `pc-control-PC-12`, whose top frame is
+`commitOffsetsThatAreReady` reached from `onPartitionsRevoked`. The instrumentation states the
+disjunction it was written to settle: contention or a lock-ordering defect, **not** a slow broker.
+
+**Not the observing PR's defect.** astubbs/parallel-consumer#379 adds an unpublished Kafka Streams
+build-machinery module and touches no core Java, no locking, no rebalance path and no in-flight
+accounting - its diff outside `parallel-consumer-streams/` is the root pom's module line, `NOTICE`,
+three `bin/` gates and docs. Same crossing as the entries above: what it brought in is master.
+
 ## Delete when
 
 The `CLASS2_STALL` entries above are superseded by this section and kept only as the record of how a
