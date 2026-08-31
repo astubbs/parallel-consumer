@@ -483,7 +483,10 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
             // U4: a dispatch ends any open deferral episode - CAS true->false so the count is decremented
             // exactly once, whichever thread's claim wins the race against a concurrent attribution read.
             if (resourceDeferralAttributed.compareAndSet(true, false)) {
-                navigator.onDeferralEpisodeEnded();
+                // U5: derived exactly as ShardManager#computeShardKey derives the shard's own key, so the
+                // per-shard breakdown decrements the same entry the episode's start incremented. Computed only
+                // on this transition (a formerly-deferred record's dispatch), never on the ordinary claim path.
+                navigator.onDeferralEpisodeEnded(ShardKey.of(this, module.options().getOrdering()));
             }
         }
         return true;

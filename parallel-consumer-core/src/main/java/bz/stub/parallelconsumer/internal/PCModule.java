@@ -7,6 +7,7 @@ package bz.stub.parallelconsumer.internal;
 
 import bz.stub.parallelconsumer.internal.admission.AdmissionController;
 import bz.stub.parallelconsumer.internal.navigator.NavigatorParticipant;
+import bz.stub.parallelconsumer.internal.navigator.NavigatorView;
 import bz.stub.parallelconsumer.internal.navigator.ResourceAllocator;
 import bz.stub.parallelconsumer.internal.utils.TimeUtils;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
@@ -253,6 +254,26 @@ public class PCModule<K, V> {
             navigatorParticipant.initMetrics(pcMetrics(), clock());
         }
         return navigatorParticipant;
+    }
+
+    @GuardedBy("this")
+    private NavigatorView navigatorView;
+
+    /**
+     * The navigator's observed-state surface (U5, R18): {@link #navigatorParticipant()} bound to the module
+     * clock as a {@link NavigatorView}, resolved ONCE and handed to every {@code PollContextInternal} at its
+     * construction sites - the processor exposes this NARROW view to user code, never the module itself.
+     * Side-effect-free to read, by that interface's contract (AE6).
+     * <p>
+     * <b>{@code synchronized} for {@link #navigatorParticipant()}'s reason</b>, and reentrant over the same
+     * monitor, so the delegation below is safe. First touch is the first user-function batch dispatch, on a
+     * worker thread; the memoised handle makes every later call one uncontended acquire and one field read.
+     */
+    public synchronized NavigatorView navigatorView() {
+        if (navigatorView == null) {
+            navigatorView = NavigatorView.of(navigatorParticipant(), clock());
+        }
+        return navigatorView;
     }
 
     /**

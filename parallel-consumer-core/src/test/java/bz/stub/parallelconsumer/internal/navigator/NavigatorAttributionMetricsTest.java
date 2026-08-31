@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.internal.navigator;
 
 import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
+import bz.stub.parallelconsumer.state.ShardKey;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
@@ -37,6 +38,12 @@ class NavigatorAttributionMetricsTest {
     private final MutableClock clock = MutableClock.epochUTC();
     private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
     private PCMetrics pcMetrics;
+
+    /** Any stable shard key - the episode transitions now carry one for U5's per-shard breakdown. */
+    private static ShardKey someShardKey() {
+        return ShardKey.ofTopicPartition(
+                new org.apache.kafka.clients.consumer.ConsumerRecord<>("metrics-test-topic", 0, 0, "k", "v"));
+    }
 
     @AfterEach
     void closeRegistry() {
@@ -85,7 +92,7 @@ class NavigatorAttributionMetricsTest {
         var deferral = new ResourceDeferral(API_A, java.util.Optional.empty());
         var decision = NavigatorDecision.of(UniLists.of(deferral), false);
 
-        participant.onDeferralEpisodeStarted(decision);
+        participant.onDeferralEpisodeStarted(decision, someShardKey());
 
         assertThat(gauge(PCMetricsDef.NAVIGATOR_DEFERRED_RECORDS)).isEqualTo(1.0);
         assertThat(gauge(PCMetricsDef.NAVIGATOR_DEFERRAL_REASON))
@@ -101,8 +108,8 @@ class NavigatorAttributionMetricsTest {
         var participant = instrumented(API_A);
         var decision = NavigatorDecision.of(UniLists.of(new ResourceDeferral(API_A, java.util.Optional.empty())), false);
 
-        participant.onDeferralEpisodeStarted(decision);
-        participant.onDeferralEpisodeEnded();
+        participant.onDeferralEpisodeStarted(decision, someShardKey());
+        participant.onDeferralEpisodeEnded(someShardKey());
 
         assertThat(gauge(PCMetricsDef.NAVIGATOR_DEFERRED_RECORDS)).isEqualTo(0.0);
         // the reason gauge is "most recent", so it is NOT reset by the episode ending

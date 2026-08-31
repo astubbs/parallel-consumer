@@ -527,7 +527,9 @@ public class ProcessingShard<K, V> {
         }
         NavigatorDecision decision = maybeDecision.get();
         if (workContainer.markResourceDeferralAttributedIfNew()) {
-            navigator.onDeferralEpisodeStarted(decision);
+            // U5: the shard key rides along so the participant's per-shard breakdown moves at the SAME
+            // exactly-once transition as the total - the marker CAS above is the dedup for both.
+            navigator.onDeferralEpisodeStarted(decision, getKey());
             log.info(NavigatorParticipant.LOG_PREFIX + " ({}): record {} entered resource deferral - {} - "
                             + "blocked by: {}{}.",
                     navigator.memberId(), workContainer, decision.getReason(),
@@ -548,7 +550,10 @@ public class ProcessingShard<K, V> {
      */
     private void closeAnyOpenDeferralEpisode(WorkContainer<?, ?> workContainer, NavigatorParticipant navigator) {
         if (workContainer.clearResourceDeferralAttributionIfSet()) {
-            navigator.onDeferralEpisodeEnded();
+            // this shard's own key is, by construction, the key the episode was started under - both sides of
+            // the transition happen on the shard holding the record (or derive the identical key, see
+            // WorkContainer#onQueueingForExecution)
+            navigator.onDeferralEpisodeEnded(getKey());
         }
     }
 

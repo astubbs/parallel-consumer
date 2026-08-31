@@ -2485,7 +2485,9 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
         handleStaleWork(staleWorkContainers);
 
-        final PollContextInternal<K, V> context = new PollContextInternal<>(activeWorkContainers);
+        // U5: the module's NARROW navigator view rides into the context, so the user function can read the
+        // observed state (R18) - never the module itself
+        final PollContextInternal<K, V> context = new PollContextInternal<>(activeWorkContainers, module.navigatorView());
 
         try {
             if (!activeWorkContainers.isEmpty()) {
@@ -2519,7 +2521,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * @param workContainerBatch
      */
     protected void handleStaleWork(final List<WorkContainer<K, V>> staleWorkContainers) {
-        final PollContextInternal<K, V> internalContext = new PollContextInternal<>(staleWorkContainers);
+        final PollContextInternal<K, V> internalContext = new PollContextInternal<>(staleWorkContainers, module.navigatorView());
         try {
             if (!staleWorkContainers.isEmpty()) {
                 // when epoch's change, we can't remove them from the executor pool queue, so we just have to skip them when we find them

@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.internal.navigator;
 
 import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
+import bz.stub.parallelconsumer.state.ShardKey;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Tag;
 
@@ -13,6 +14,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -95,6 +97,18 @@ public final class NavigatorParticipant {
      * permanently empty for {@link #inert()}.
      */
     private final Map<NavigatorDecisionReason, Counter> deferralEpisodeCounters = new ConcurrentHashMap<>();
+
+    /**
+     * U5's per-ordering-shard breakdown of {@link #deferredRecordCount} (KTD9, R18): how many records are
+     * currently resource-deferred, keyed by the engine's own {@link ShardKey}. Maintained at the same
+     * exactly-once episode transitions as the total - never incremented per evaluation pass - and read as a
+     * weakly-consistent snapshot by {@link #resourceIneligibleCountByShardSnapshot()}, so the user-function
+     * thread never scans the controller-owned shard map itself. An entry that reaches zero is REMOVED (a
+     * long-lived KEY-ordered instance would otherwise accrete an entry per key forever); an unpaired decrement
+     * therefore leaves a visible negative entry rather than being clamped away (the counter-clamp learning).
+     * Final reference to a self-guarding type, like its siblings above - no {@code @GuardedBy} to name (KTD11).
+     */
+    private final ConcurrentHashMap<ShardKey, Long> resourceDeferredCountByShard = new ConcurrentHashMap<>();
 
     private NavigatorParticipant(ResourceAllocator allocator, List<String> resourceTags, String memberId) {
         this.allocator = allocator;
@@ -237,13 +251,18 @@ public final class NavigatorParticipant {
     /**
      * Called exactly once per deferral episode, at the transition INTO resource-deferred (the caller - the
      * shard-walk refusal branch - deduplicates via the record's own CAS-guarded marker; this method trusts that
-     * it is only called on a genuine transition). Bumps the deferred-count gauge, records the reason as the
-     * latest-reason gauge value, and increments that reason's episode counter. A no-op counter map entry (before
-     * {@link #initMetrics} runs, or for {@link #inert()}, which never reaches here) is silently skipped rather
-     * than thrown - metrics registration is best-effort observability, never load-bearing for the decision.
+     * it is only called on a genuine transition). Bumps the deferred-count gauge and the record's shard's entry
+     * in the per-shard breakdown (U5), records the reason as the latest-reason gauge value, and increments that
+     * reason's episode counter. A no-op counter map entry (before {@link #initMetrics} runs, or for
+     * {@link #inert()}, which never reaches here) is silently skipped rather than thrown - metrics registration
+     * is best-effort observability, never load-bearing for the decision.
+     *
+     * @param shardKey the ordering shard holding the deferred record - the key the paired
+     *                 {@link #onDeferralEpisodeEnded(ShardKey)} must later present
      */
-    public void onDeferralEpisodeStarted(NavigatorDecision decision) {
+    public void onDeferralEpisodeStarted(NavigatorDecision decision, ShardKey shardKey) {
         deferredRecordCount.increment();
+        adjustShardCount(shardKey, 1);
         lastReasonValue.set(decision.getReason().getValue());
         Counter counter = deferralEpisodeCounters.get(decision.getReason());
         if (counter != null) {
@@ -256,14 +275,69 @@ public final class NavigatorParticipant {
      * (the credit spend site) or the record leaving the shard while still deferred (revocation, a stale sweep).
      * Never touches the allocator's conservation counters (KTD10: revocation is a credit no-op) - this is a
      * SEPARATE, purely observational count.
+     *
+     * @param shardKey the same ordering shard the episode's {@link #onDeferralEpisodeStarted} named - engine
+     *                 callers all derive it the way {@code ShardManager#computeShardKey} does
+     *                 ({@code ShardKey.of(record, ordering)}), so the pairing cannot drift
      */
-    public void onDeferralEpisodeEnded() {
+    public void onDeferralEpisodeEnded(ShardKey shardKey) {
         deferredRecordCount.decrement();
+        adjustShardCount(shardKey, -1);
+    }
+
+    /**
+     * One shard's deferred-count entry moved by one episode transition: zero entries are removed rather than
+     * kept (no accretion under KEY ordering), negatives are kept rather than clamped (a pairing bug must show
+     * as a wrong number - the counter-clamp learning, same stance as {@link #deferredRecordCount}).
+     */
+    private void adjustShardCount(ShardKey shardKey, long delta) {
+        resourceDeferredCountByShard.compute(shardKey, (key, current) -> {
+            long next = (current == null ? 0L : current) + delta;
+            return next == 0 ? null : next;
+        });
     }
 
     /** The deferred-count gauge's live value (U4) - the {@link PCMetrics} extractor target. */
     public long currentlyDeferredCount() {
         return deferredRecordCount.sum();
+    }
+
+    /**
+     * U5's per-shard read (KTD9): an immutable, weakly-consistent snapshot of the currently-resource-deferred
+     * count per ordering shard. A copy, deliberately - the caller (the {@link NavigatorView} on the
+     * user-function thread) must never hold a live view of a map the controller is mutating, and shards with
+     * nothing deferred are absent rather than zero. Pure: reads the navigator-owned breakdown, never the
+     * controller-owned shard map.
+     */
+    public Map<ShardKey, Long> resourceIneligibleCountByShardSnapshot() {
+        if (resourceDeferredCountByShard.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        return Collections.unmodifiableMap(new HashMap<>(resourceDeferredCountByShard));
+    }
+
+    /**
+     * Pure read for the view (U5, R18's global half): {@code resourceName}'s declared policy rate in credits
+     * per second. Callers gate on {@link #isActive()} - the inert participant answers {@code 0.0} rather than
+     * touching an allocator it does not have.
+     */
+    public double globalRatePerSecond(String resourceName) {
+        if (!isActive()) {
+            return 0.0;
+        }
+        return allocator.globalRatePerSecond(resourceName);
+    }
+
+    /**
+     * Pure read for the view (U5, R18's instance-local half): the rate currently available to THIS member
+     * against {@code resourceName} under current membership, in credits per second. {@code 0.0} when not
+     * currently a member, or (callers gate on {@link #isActive()}) when inert.
+     */
+    public double localRatePerSecond(String resourceName, Instant now) {
+        if (!isActive()) {
+            return 0.0;
+        }
+        return allocator.localRatePerSecond(memberId, resourceName, now);
     }
 
     /** The latest-reason gauge's live value (U4, KTD6) - {@link NavigatorDecisionReason#NO_DEFERRAL_VALUE} before any episode. */
