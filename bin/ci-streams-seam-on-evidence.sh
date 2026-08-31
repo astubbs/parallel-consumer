@@ -67,13 +67,20 @@ rm -rf "${SEAM_OFF_REPORTS}" "${SEAM_ON_REPORTS}" "${LANE_REPORT}"
 # -Dincluded.groups is the documented way to keep this module's OWN tests (including the broker-backed
 # arms, which want Docker) out of a run that is only interested in Kafka's suite. It filters the
 # default-test execution alone: both Kafka executions override the group filters, so they are
-# unaffected - which is exactly why -Dtest= must not be used for the same job.
+# unaffected - which is exactly why -Dtest= must not be used for the same job. It also does the same
+# job for parallel-consumer-core, which -am pulls into the reactor.
+#
+# -am, NOT `-pl .,parallel-consumer-streams`. This module depends on parallel-consumer-core's jar AND
+# its tests jar, and a developer box has them installed while a fresh CI runner does not - so the
+# narrower form works locally and fails on the first CI run with an unresolved snapshot. Same shape as
+# bin/chaos-test.sh. -am brings the parent in as well, so the enforcer's reactor-convergence rule is
+# satisfied without naming the root explicitly.
 #
 # `set -e` would take the exit here and never print the report, which is the one artefact a reader
 # wants when the lane is red - so the status is captured rather than propagated immediately.
 status=0
 ./mvnw --batch-mode \
-  -pl .,"${MODULE}" \
+  -pl "${MODULE}" -am \
   test \
   -Dseam.on.upstream.skip=false \
   -Dseam.off.upstream.failure.ignore=true \
