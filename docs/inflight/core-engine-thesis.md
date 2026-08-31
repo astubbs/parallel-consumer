@@ -64,7 +64,6 @@ admin-then-producer wrapping - which master's copy does not have at all. The gap
 remains in the *newest* version; against master's copy they are strictly larger, and points 2 and 5
 do not apply there yet because the section they are about has not landed.
 
-
 1. **No Kafka Streams presence at all** - while
    [`next-what-survives-share-groups.md`][next-what-survives-share-groups] concludes the Streams
    work "moves up the priority list" and
@@ -95,10 +94,22 @@ do not apply there yet because the section they are about has not landed.
   then Streams) is a re-derivation of the sequencing the open PRs already imply, not a correction
   to it. Ranking stays owned by [`process-candidate-ranking.md`](process-candidate-ranking.md).
 
-## Delete when
+## When this note ends
 
-STRATEGY.md carries the thesis section (or the owner rejects it) and the five gaps are either
-reflected or explicitly declined. The satellite notes have their own lifecycles.
+Deletion is the last of the four outcomes in [`AGENTS.md`](AGENTS.md), not the default, so what
+outlives this note moves to its owner first.
+
+- **Migrate first.** If `STRATEGY.md` takes the thesis section, the four-decision model and the
+  embedded-not-cluster positioning have reached their durable owner and stop being open work here.
+  The integration filter - *what unnecessary coupling does this remove?* - is a standing test rather
+  than a proposal, so it belongs to `STRATEGY.md` or `CONCEPTS.md` and not to this note's lifetime.
+- **Keep, shrunk**, while any of the five gaps is neither reflected nor explicitly declined.
+- **Do not delete this with the rest**: "What the review got wrong" is the only record that those
+  three claims were checked and refuted, and it has no owner elsewhere. It goes to
+  `docs/solutions/` before this file goes anywhere - an external review's confident wrong answers
+  are precisely what a later session re-imports.
+- **`git rm`** only once both of those hold and the satellite notes, which carry their own
+  lifecycles, no longer point here.
 
 <!-- These notes live on `research/market-analysis-recut`, not master. Pinned to a commit
      so the links keep resolving after the branch moves or merges. -->
