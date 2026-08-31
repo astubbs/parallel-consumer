@@ -31,6 +31,19 @@ audience that does not yet care about the project, and all roads lead back to on
 - *Virtual threads don't tell you how much concurrency you can afford* - cheap concurrency vs
   useful concurrency; reaches well beyond Kafka.
 
+**Scaling unit** (from the follow-up conversation, 2026-08-29/30 -
+[`core-per-function-capacity-arbitration.md`](core-per-function-capacity-arbitration.md) is the
+feature behind these):
+- *Stop scaling your whole Kafka application because one part of it is busy* - the strongest
+  headline of the follow-up: scaling the pod duplicates every cold consumer to feed one hot one.
+- *Your application is not a scaling unit* / *Every function deserves its own concurrency.*
+- *Stop provisioning concurrency. Start discovering it.*
+- The polyglot reframe belongs with these: not eleven SDKs but one runtime replacing eleven
+  ecosystems' worth of concurrency machinery - a sharper form of the "engine every language
+  re-implements badly" line already in [`core-auto-scaling.md`](core-auto-scaling.md).
+- Broadest, candidate positioning rather than a post title: *Kafka tells us what work we own.
+  Parallel Consumer figures out how to run it.*
+
 **Boundary engineering** (reaches native-interop people):
 - *Why we didn't port Parallel Consumer to Python* - "we gave Python PC by refusing to implement
   PC in Python".

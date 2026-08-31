@@ -68,6 +68,15 @@ partition-count cap. The client-side vantage is exactly what makes the distincti
 recommendation stronger than "tell infrastructure when more would help" - the signal no external
 autoscaler can construct.
 
+**Addition from the follow-up conversation, 2026-08-29/30: a loop below these two.** When one
+process hosts many processing functions, each runs dimension 1 independently and the process
+reallocates shared capacity between them before any instance vote is raised - reallocate before
+you replicate.
+[`core-per-function-capacity-arbitration.md`](core-per-function-capacity-arbitration.md) owns it,
+including the caveat about what resource is actually arbitrable; what binds here is only the
+composition: the +1 vote gains a precondition - internal reallocation exhausted first - which
+makes the recommendation stronger, not different.
+
 Lifecycle rules:
 
 - **Post-rebalance cooldown, per instance.** Any membership or assignment change invalidates
