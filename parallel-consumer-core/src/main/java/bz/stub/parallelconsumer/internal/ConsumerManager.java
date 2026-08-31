@@ -113,6 +113,20 @@ public class ConsumerManager<K, V> {
                 timeoutToUse = Duration.ofMillis(1);// disable long poll, as commit needs performing
                 commitRequested = false;
             }
+            // Refresh the caches ON ENTRY, after the caller's pause/resume decision and BEFORE the
+            // long poll they describe. The control thread's back-pressure wakeup
+            // (maybeWakeupPoller -> BrokerPollSystem#isSubscriptionsPausedForBackPressure) reads
+            // pausedPartitionSizeCache precisely while this thread is asleep inside a PAUSED long
+            // poll - with only the exit refresh below, the cache reports every pause one poll late,
+            // reading "not paused" for the whole paused sleep, so the wakeup never fires and each
+            // pause costs the full long-poll timeout with the pipeline drained. That was the 4-10x
+            // transactional throughput regression on the confluentinc#857 branch
+            // (ConsumerManagerPauseCacheTest holds the contract).
+            //
+            // Deliberately BEFORE pollingBroker is set: wakeup() only forwards to consumer.wakeup()
+            // while pollingBroker is true, so these consumer calls cannot race a wakeup - the same
+            // property the exit refresh relies on (see the comment there).
+            updateCache();
             pollingBroker.set(true);
             log.trace("Poll starting with timeout: {}, assignment size: {}", timeoutToUse, assignmentSizeCache);
             Instant pollStarted = Instant.now();
