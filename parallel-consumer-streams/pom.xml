@@ -26,9 +26,11 @@
         THE SEAM IS OFF BY DEFAULT - this is an opt-in preview. Turn it on for a JVM with
         -Dpc.streams.dispatch.enabled=true. Joins, windows, suppression, versioned and session stores
         and EOS are unsupported and are now REFUSED by name, at build time and at task construction,
-        rather than allowed to return silently wrong answers. What the default is waiting on now is
-        task lifecycle: with the seam on, Kafka's own task-corruption recovery revives a task whose
-        dispatcher was closed with it, and the loud-failure floor there leaves the StreamThread.
+        rather than allowed to return silently wrong answers. Task lifecycle no longer holds it either:
+        a revived task rebuilds its dispatcher, and a task changing partitions in a cooperative
+        rebalance carries PC's assignment with it. What the default is waiting on now is exception
+        surfacing - a TaskCorruptedException raised inside a processor is wrapped and delivered late,
+        so Kafka's recovery never fires and a recoverable failure becomes a fatal one.
         PcDispatchSwitch's javadoc owns that decision and the measurement behind it.
 
         Build machinery: the named classes are unpacked from the published kafka-streams sources jar,

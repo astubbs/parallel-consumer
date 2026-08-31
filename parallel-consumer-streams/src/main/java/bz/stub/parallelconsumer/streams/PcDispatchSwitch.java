@@ -17,31 +17,41 @@ package bz.stub.parallelconsumer.streams;
  * Turn it on for a whole JVM with {@code -Dpc.streams.dispatch.enabled=true}, or per test with
  * {@link #enable(int)}.
  * <p>
- * <b>The reason WAS a missing refusal. That gap is now closed, and the default still does not move -
- * because measuring it turned up a second reason the first one was hiding.</b> Joins, windows, suppression,
- * versioned and session stores and exactly-once are now refused, loudly and by name, at build time and at
- * task construction ({@link PcUnsupportedConstruct}, {@link PcSupportedEnvelope}); stream-time punctuation is
- * not yet, and is the one item of the original list still outstanding. The promise written here was to
- * restore the on-by-default the day refusal landed. <b>That promise is superseded rather than forgotten,
- * and the new trigger is task lifecycle and rebalance</b> - the unit that gives {@link PcTaskDispatcher} a
- * life beyond the task instance it was constructed with.
+ * <b>Two reasons have been closed and the default still has not moved. Each time, the measurement that
+ * closed one uncovered the next.</b> The reason was originally a missing refusal: joins, windows,
+ * suppression, versioned and session stores and exactly-once are now refused, loudly and by name, at build
+ * time and at task construction ({@link PcUnsupportedConstruct}, {@link PcSupportedEnvelope}). The reason
+ * then became revival: {@code StreamTask.revive()} threw rather than rebuilding the dispatcher that went
+ * down with the task, and the throw left Kafka's run loop uncaught. <b>Both are now closed. The trigger is
+ * a third thing, and it is the one this class is waiting on:</b> a typed control-flow exception raised
+ * <em>inside the processor chain</em> - {@code TaskCorruptedException}, {@code TaskMigratedException} - does
+ * not reach Kafka's recovery machinery, so a recoverable event still becomes a fatal one.
  * <p>
- * <b>The evidence, because "it felt risky" is not a reason.</b> Run Apache Kafka's own suite against the
- * patched classes with the seam <em>on</em>, and {@code StreamThreadTest} reaches
- * {@code StreamTask.revive()} through Kafka's ordinary task-corruption recovery: a
- * {@code TaskCorruptedException} closes the task dirty and then revives the same instance, whose dispatcher
- * is final and was closed on the way down. {@code revive()} throws its loud-failure {@code
- * IllegalStateException}, nothing catches it, and it leaves the run loop as an uncaught exception on the
- * StreamThread. That is not an exotic path: {@code TaskCorruptedException} is what Kafka raises when a
- * consumer's offset falls outside the topic's retained range, which happens to ordinary applications.
- * The same run on the rung below this one produces the identical revival failures and zero refusals, so
- * the two things are independent: this unit changed what a refused construct does and changed nothing at
- * all about revival.
+ * <b>The evidence for closing the revival reason, because "it looks fixed now" is not one.</b> Run Apache
+ * Kafka's own suite against the patched classes with the seam <em>on</em>, before and after the task
+ * lifecycle unit, changing nothing else. Before, {@code StreamThreadTest} reached {@code revive()} through
+ * ordinary task-corruption recovery - {@code TaskCorruptedException} is what Kafka raises when a consumer's
+ * offset falls outside the topic's retained range - and the loud-failure {@code IllegalStateException}
+ * there left the run loop uncaught on the StreamThread, three times over. After, revival rebuilds the
+ * dispatcher, {@code shouldRecoverFromInvalidOffsetExceptionOnRestoreAndFinishRestore} passes on every
+ * parameter, no exception leaves any StreamThread at all, and <b>nothing that passed before regressed</b> -
+ * five {@code StreamTaskTest} close/checkpoint cases went green with it, because the same unit taught
+ * {@code validateClean} to see work that is still running.
  * <p>
- * So a refused surface is safe to have on; a thrown lifecycle event mid-recovery is not, and the second is
- * what the default is now waiting on. When the dispatcher can be recreated on revival, this becomes a real
- * choice again rather than a hedge - and whoever makes it should re-run that seam-on measurement first,
- * rather than trusting this paragraph.
+ * <b>What is still red, and why it holds the default.</b> {@code shouldReinitializeRevivedTasksInAnyState}
+ * fails identically before and after, so this unit neither caused nor fixed it: a
+ * {@code TaskCorruptedException} thrown by a <em>processor</em> is caught by the worker, surfaced one or
+ * more pump cycles later, and wrapped in a {@code StreamsException}. Kafka's {@code TaskManager} therefore
+ * never sees the type it dispatches recovery on, and an application that stock Streams would have recovered
+ * shuts down instead. That is the same shape as the reason just closed - a recoverable event turned fatal -
+ * arriving by the other route, and it is unrefusable, because it is a property of the exception rather than
+ * of the topology. It belongs to the error-surfacing unit, along with
+ * astubbs/parallel-consumer#271's open thread on a worker failure being committed past. <b>Stream-time
+ * punctuation is a separate outstanding item</b>, recorded in {@code docs/inflight/}; it was already priced
+ * in when the refusal reason was closed, and is not what this paragraph is about.
+ * <p>
+ * Whoever flips this next should re-run the seam-on measurement rather than trusting these paragraphs, and
+ * should expect the pattern to repeat: three times now, the measurement has named the next reason.
  * <p>
  * <b>This reverses an inherited decision, and the argument it reverses was a different one.</b> The seam
  * defaulted <em>on</em> in the feasibility study (astubbs#271) on the grounds that depending on a separate,
@@ -52,9 +62,11 @@ package bz.stub.parallelconsumer.streams;
  * every user of the artifact, and it is not being paid for here - the arms below still state their
  * requirement at each site. What the artifact-is-the-opt-in argument does not cover is a user who opts in
  * to <em>per-key concurrency</em> and gets <em>silently altered semantics</em> on a topology shape nobody
- * refused. That objection is now answered by the refusal envelope above; the revival one is not, which is
- * why the default is where it is. Do not restore on-by-default merely because these paragraphs look like
- * timidity - restore it when revival works, and say so with a measurement.
+ * refused. That objection is now answered by the refusal envelope above, and the revival one by the
+ * lifecycle unit; what is not answered is the exception-type route named above, which is why the default is
+ * where it is. Do not restore on-by-default merely because these paragraphs look like timidity - restore it
+ * when a corruption signal raised inside a topology still reaches Kafka's recovery, and say so with a
+ * measurement.
  * <p>
  * Tests that want the stock path still say so explicitly with {@link #disable()} rather than leaning on the
  * default, because a control arm that is only a control by default stops being one the moment the default
