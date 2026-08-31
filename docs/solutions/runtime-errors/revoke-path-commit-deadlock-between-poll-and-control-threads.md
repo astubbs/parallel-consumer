@@ -28,7 +28,7 @@ tags:
   - offset-commit
   - trylock
   - poll-thread
-  - unverified-fix
+  - verified-by-controlled-ab
   - issue-857
 ---
 
@@ -36,13 +36,40 @@ tags:
 
 > Extracted from `origin/docs/session-learnings-857-family` @94bb98a9d, `docs/solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md`.
 
-> **Status: diagnosis verified, fix implemented, fix UNPROVEN and probably insufficient.** The lock
-> cycle described below is confirmed by reading the code on both `master` and the branch. The
-> `tryLock()` change has **never been observed working**. PR astubbs#29 is a **draft**, unmerged,
-> with `Integration Tests`, `Performance Tests` and `PR Checklist` red, and the one test written to
-> prove this fix - `RebalanceEoSDeadlockTest.noDeadlockOnRevoke` - fails **5 of 5 repetitions** in
-> CI. Do not read this document as a fix report. It is a diagnosis report with an unlanded candidate
-> fix attached.
+> **Status: diagnosis verified, and the fix is now verified too - by a controlled A/B, on both
+> assignors.** The lock cycle described below is confirmed by reading the code on `master`. The
+> `tryLock()` change is no longer merely implemented and hoped for: it has been measured against a
+> control that differs from it by one term.
+>
+> The instrument is `Rebalance857CommitSyncDeadlockProbeIT`, which does not wait for the race to
+> happen by chance - it forces the window open, dwelling in the revoke callback against a
+> one-second commit interval. The control was cut from the fix branch's own HEAD with
+> `if (commitLock.tryLock())` replaced by `commitLock.lock()` - blocking rather than declining,
+> restoring the pre-fix pair - so the two trees differ in nothing else. Four cells, twenty
+> repetitions each, 2026-08-31:
+>
+> | arm | assignor | result | revoke-path declines |
+> |---|---|---|---|
+> | fix | eager | every repetition passes | 23 |
+> | fix | cooperative | every repetition passes | 20 |
+> | pre-fix control | eager | **every repetition fails** | 0 |
+> | pre-fix control | cooperative | **every repetition fails** | 0 |
+>
+> Every cell logged which assignor it resolved, so none of them is a silently-unread property. The
+> decline counts are the load-bearing column: they are the evidence that the revoke path actually
+> raced the control thread, rather than the run quietly missing the race and returning a green that
+> means nothing. That exact false negative voided an earlier seed-replay attempt at this same
+> question - see `docs/inflight/test-857-revoke-under-work-sightings.md`.
+>
+> **The pre-fix arm deadlocks under the cooperative assignor as well as the eager one**, so the
+> cycle is not eager-specific. That is consistent with the family's twentieth capture, which is a
+> cooperative revoke, and it is why the fix's coverage of that path is now a measurement rather than
+> an inference from where the fix sits.
+>
+> **What this does not cover** is stated plainly, because the arms measured one thing: the
+> transactional revoke wait is untouched by this fix, and `RebalanceEoSDeadlockTest` runs a mode in
+> which this cycle cannot close at all, so its results are not evidence about this change in either
+> direction. Both are expanded below.
 >
 > **Read the mode caveat before anything else.** The cycle described here can only close in
 > `PERIODIC_CONSUMER_SYNC`. The reproducer test runs `PERIODIC_TRANSACTIONAL_PRODUCER`, where the

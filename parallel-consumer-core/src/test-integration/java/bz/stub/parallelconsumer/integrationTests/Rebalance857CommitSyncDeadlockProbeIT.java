@@ -75,6 +75,22 @@ import static org.hamcrest.number.OrderingComparison.greaterThan;
  * "Skipping offset commit during partition revocation" and all assertions pass.
  */
 @Slf4j
+/**
+ * <b>Calibration status</b>, 2026-08-31 - read this before running, so a result already established
+ * is not re-derived. Run as four cells against a control cut from this branch's HEAD with
+ * {@code commitLock.tryLock()} replaced by {@code commitLock.lock()} (blocking rather than
+ * declining), twenty repetitions each:
+ * <ul>
+ *   <li>fix + eager - every repetition passes, 23 revoke-path declines</li>
+ *   <li>fix + cooperative - every repetition passes, 20 declines</li>
+ *   <li>pre-fix control + eager - every repetition FAILS</li>
+ *   <li>pre-fix control + cooperative - every repetition FAILS</li>
+ * </ul>
+ * So the AB-BA cycle is not eager-specific, and the fix holds on both assignors. The declines are
+ * what make a green cell mean anything: they prove the window opened. Run with
+ * {@code -Dpc.log.level=info} or the revoke fork's two log lines are filtered out and every cell
+ * reports zero declines - which reads exactly like a run in which the race never happened.
+ */
 class Rebalance857CommitSyncDeadlockProbeIT extends BrokerIntegrationTest<String, String> {
 
     /**
