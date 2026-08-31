@@ -17,11 +17,31 @@ package bz.stub.parallelconsumer.streams;
  * Turn it on for a whole JVM with {@code -Dpc.streams.dispatch.enabled=true}, or per test with
  * {@link #enable(int)}.
  * <p>
- * <b>The reason is a missing refusal, not caution.</b> Joins, windows, suppression, exactly-once and
- * stream-time punctuation are unsupported on the PC path <em>and are not yet refused</em> - a topology using
- * one of them is dispatched anyway and gets wrong behaviour with nothing in the log to say so. Until the
- * refusal envelope exists, the only honest default is one that cannot silently mis-run a topology nobody
- * checked. When it lands, the default becomes a real choice again rather than a hedge.
+ * <b>The reason WAS a missing refusal. That gap is now closed, and the default still does not move -
+ * because measuring it turned up a second reason the first one was hiding.</b> Joins, windows, suppression,
+ * versioned and session stores and exactly-once are now refused, loudly and by name, at build time and at
+ * task construction ({@link PcUnsupportedConstruct}, {@link PcSupportedEnvelope}); stream-time punctuation is
+ * not yet, and is the one item of the original list still outstanding. The promise written here was to
+ * restore the on-by-default the day refusal landed. <b>That promise is superseded rather than forgotten,
+ * and the new trigger is task lifecycle and rebalance</b> - the unit that gives {@link PcTaskDispatcher} a
+ * life beyond the task instance it was constructed with.
+ * <p>
+ * <b>The evidence, because "it felt risky" is not a reason.</b> Run Apache Kafka's own suite against the
+ * patched classes with the seam <em>on</em>, and {@code StreamThreadTest} reaches
+ * {@code StreamTask.revive()} through Kafka's ordinary task-corruption recovery: a
+ * {@code TaskCorruptedException} closes the task dirty and then revives the same instance, whose dispatcher
+ * is final and was closed on the way down. {@code revive()} throws its loud-failure {@code
+ * IllegalStateException}, nothing catches it, and it leaves the run loop as an uncaught exception on the
+ * StreamThread. That is not an exotic path: {@code TaskCorruptedException} is what Kafka raises when a
+ * consumer's offset falls outside the topic's retained range, which happens to ordinary applications.
+ * The same run on the rung below this one produces the identical revival failures and zero refusals, so
+ * the two things are independent: this unit changed what a refused construct does and changed nothing at
+ * all about revival.
+ * <p>
+ * So a refused surface is safe to have on; a thrown lifecycle event mid-recovery is not, and the second is
+ * what the default is now waiting on. When the dispatcher can be recreated on revival, this becomes a real
+ * choice again rather than a hedge - and whoever makes it should re-run that seam-on measurement first,
+ * rather than trusting this paragraph.
  * <p>
  * <b>This reverses an inherited decision, and the argument it reverses was a different one.</b> The seam
  * defaulted <em>on</em> in the feasibility study (astubbs#271) on the grounds that depending on a separate,
@@ -32,8 +52,9 @@ package bz.stub.parallelconsumer.streams;
  * every user of the artifact, and it is not being paid for here - the arms below still state their
  * requirement at each site. What the artifact-is-the-opt-in argument does not cover is a user who opts in
  * to <em>per-key concurrency</em> and gets <em>silently altered semantics</em> on a topology shape nobody
- * refused. Restore the on-by-default the moment that gap closes; do not restore it merely because this
- * paragraph looks like timidity.
+ * refused. That objection is now answered by the refusal envelope above; the revival one is not, which is
+ * why the default is where it is. Do not restore on-by-default merely because these paragraphs look like
+ * timidity - restore it when revival works, and say so with a measurement.
  * <p>
  * Tests that want the stock path still say so explicitly with {@link #disable()} rather than leaning on the
  * default, because a control arm that is only a control by default stops being one the moment the default

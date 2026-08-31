@@ -24,10 +24,12 @@
         topology's own code does not change.
 
         THE SEAM IS OFF BY DEFAULT - this is an opt-in preview. Turn it on for a JVM with
-        -Dpc.streams.dispatch.enabled=true. It is off because the refusal envelope that would make it
-        safe for an arbitrary topology does not exist yet: joins, windows, suppression, EOS and
-        stream-time punctuation are NOT supported and are NOT yet refused, so a topology using one
-        gets wrong behaviour rather than an error. PcDispatchSwitch's javadoc owns that reasoning.
+        -Dpc.streams.dispatch.enabled=true. Joins, windows, suppression, versioned and session stores
+        and EOS are unsupported and are now REFUSED by name, at build time and at task construction,
+        rather than allowed to return silently wrong answers. What the default is waiting on now is
+        task lifecycle: with the seam on, Kafka's own task-corruption recovery revives a task whose
+        dispatcher was closed with it, and the loud-failure floor there leaves the StreamThread.
+        PcDispatchSwitch's javadoc owns that decision and the measurement behind it.
 
         Build machinery: the named classes are unpacked from the published kafka-streams sources jar,
         a tracked patch is applied, and the result is compiled into this module's own target/classes,
