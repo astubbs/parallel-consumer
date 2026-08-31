@@ -312,9 +312,11 @@ public class ProcessingShard<K, V> {
      * <b>In-flight records staying visible to this walk is part of how ordering is enforced.</b> A scanner that
      * meets an occupied head falls into the skip branch and breaks without ever reaching the next offset, which is
      * what makes an ordered shard self-excluding under concurrent selection. Removing them from its view is what
-     * broke ten tests on {@code perf/split-shard-inflight}
-     * ({@code docs/inflight/parked-resume-shard-dispatch-scan.md}), and is why the index below is read by the
-     * unordered path only.
+     * broke ten tests on the abandoned {@code perf/split-shard-inflight} experiment, which held selectable and
+     * in-flight records in two maps and dispatched out of order silently - it compiled clean and the block simply
+     * disappeared. That is why the index below is read by the unordered path only, and never by this walk: an
+     * index alongside an untouched base collection cannot affect the enforcement mechanism, whereas moving
+     * records out of the base can and did.
      * <p>
      * It costs at most one examination per shard per pass anyway: the {@code break} fires whether the head was
      * taken or skipped, so there is nothing here for an index to save.

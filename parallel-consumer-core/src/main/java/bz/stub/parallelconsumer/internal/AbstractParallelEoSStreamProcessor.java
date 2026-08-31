@@ -313,12 +313,6 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     private final RateLimiter loadFactorAtCeilingLimiter = new RateLimiter(LOAD_FACTOR_AT_CEILING_REPORT_RATE_SECONDS);
 
-    /**
-     * Limits how often {@link #maybeReportLoadFactorCeiling()} speaks. Matches the interval used for the equivalent
-     * steady-state warning in {@code ProcessingShard}'s slow-work check.
-     */
-    private final RateLimiter loadFactorCeilingLimiter = new RateLimiter(5);
-
     @Getter(PROTECTED)
     PCModule<K, V> module;
 
