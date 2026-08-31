@@ -1,0 +1,185 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+# Proxy-client language matrix - one row per FOREIGN-toolchain client module (astubbs#242).
+#
+# WHY THIS IS A MATRIX AND NOT STEPS ON AN EXISTING JOB. Each language needs its own toolchain
+# installed before anything of its can run, and appending eight sets of setup steps to a job that is
+# already near its timeout is what pushes it over. A matrix keyed on language adds a language by
+# adding a row, and one language's breakage cannot hide another's - which is why `fail-fast` is off.
+#
+# THE THREE JVM CLIENT MODULES ARE NOT HERE, on purpose. Java, Kotlin and Scala build with Maven
+# from Central and sit in the default reactor, so maven.yml's ordinary lanes already build them and
+# run their fixture tests. A row here would be a second, weaker copy of a check that already exists.
+#
+# EVERY ROW SETS PC_FOREIGN_CLIENTS_STRICT, and that is the half of the design that keeps the other
+# half honest. bin/foreign-client-step.sh skips a module whose toolchain is absent, because absence
+# is the normal state of a developer's machine - but on a row that has just installed the toolchain
+# itself, absence means the setup step did not do what it claimed, and a green skip would be
+# docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md again.
+#
+# WHAT THIS WORKFLOW DELIBERATELY DOES NOT DO YET: no protoc provisioning, no conformance suite, no
+# per-language static analysis, no per-language dependency audit. All four exist on
+# astubbs/parallel-consumer#293 and all four are about content this rung does not ship. They arrive
+# with the rungs that add what they check.
+#
+# Caching: the same discipline as maven.yml - explicit restore with a rotating save key, never a
+# setup action's built-in `cache:`, whose immutable keys can freeze an incomplete cache
+# permanently. The Maven cache is restore-only here; maven.yml's prepare-deps job owns saving it.
+# No per-language package cache is configured: nothing in this tree has a dependency worth caching
+# except TypeScript's compiler, and one npm install of one package is cheaper than a cache key that
+# would go stale unnoticed.
+#
+# Pinning: GitHub-owned actions follow the repo's one-tag-everywhere rule
+# (bin/check-action-versions.sh). Every non-GitHub action is pinned to a commit SHA. Toolchains are
+# exact versions in the matrix, so a version that stops resolving fails loudly at setup rather than
+# silently drifting.
+
+name: Clients
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # See the header: a row provisions its own toolchain, so an absent one is a provisioning bug.
+  PC_FOREIGN_CLIENTS_STRICT: '1'
+
+jobs:
+
+  client:
+    name: "clients: ${{ matrix.language }}"
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      # Fail the row, not the matrix.
+      fail-fast: false
+      matrix:
+        include:
+          # Fields:
+          #   language  - matrix key, and the name the fixture assertion is derived from
+          #   module    - Maven artifactId
+          #   runner    - ubuntu-latest everywhere the toolchain can be installed there
+          #   toolchain - exact version the setup step installs ('' where the runner image
+          #               supplies it and there is nothing to pin)
+          - language: go
+            module: parallel-consumer-proxy-client-go
+            runner: ubuntu-latest
+            toolchain: '1.25.13'
+          - language: python
+            module: parallel-consumer-proxy-client-python
+            runner: ubuntu-latest
+            toolchain: '3.13.5'
+          - language: typescript
+            module: parallel-consumer-proxy-client-typescript
+            runner: ubuntu-latest
+            toolchain: '24.10.0'
+          - language: rust
+            module: parallel-consumer-proxy-client-rust
+            runner: ubuntu-latest
+            toolchain: '1.90.0'
+          - language: ruby
+            module: parallel-consumer-proxy-client-ruby
+            runner: ubuntu-latest
+            toolchain: '3.4.5'
+          - language: dotnet
+            module: parallel-consumer-proxy-client-dotnet
+            runner: ubuntu-latest
+            toolchain: '9.0.x'
+          # The runner image's own compilers. There is no version to pin and nothing to install:
+          # the module compiles one translation unit with `c++`, which every ubuntu image has.
+          - language: cpp
+            module: parallel-consumer-proxy-client-cpp
+            runner: ubuntu-latest
+            toolchain: ''
+          # SWIFT RUNS ON macOS, AND THAT IS THE CHEAPEST HONEST OPTION. Swift.org publishes no
+          # toolchain in the ubuntu images, so a Linux row needs either a third-party setup action
+          # or a container - and astubbs/parallel-consumer#293 takes the container route precisely
+          # because its C++ and Swift clients need gRPC and protobuf development packages. This
+          # module needs a compiler and nothing else, so the macOS image's bundled Swift answers
+          # the whole question with no extra moving part. Revisit when the real Swift client
+          # arrives and brings its own dependency needs.
+          - language: swift
+            module: parallel-consumer-proxy-client-swift
+            runner: macos-latest
+            toolchain: ''
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          # No `cache: maven` - see the caching note in the header and in maven.yml.
+      - name: Restore Maven cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            setup-java-Linux-x64-maven-
+
+      # Per-language toolchain setup. `uses:` cannot be parameterised by the matrix, so each setup
+      # action gets a language-guarded step; everything after them is matrix-driven. Two rows have
+      # no step here and their matrix entries say why.
+      - uses: actions/setup-go@v7
+        if: matrix.language == 'go'
+        with:
+          go-version: ${{ matrix.toolchain }}
+          cache: false
+      - uses: actions/setup-python@v7
+        if: matrix.language == 'python'
+        with:
+          python-version: ${{ matrix.toolchain }}
+      - uses: actions/setup-node@v7
+        if: matrix.language == 'typescript'
+        with:
+          node-version: ${{ matrix.toolchain }}
+      - uses: actions/setup-dotnet@v6
+        if: matrix.language == 'dotnet'
+        with:
+          dotnet-version: ${{ matrix.toolchain }}
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+        if: matrix.language == 'ruby'
+        with:
+          ruby-version: ${{ matrix.toolchain }}
+          bundler-cache: false
+      - name: Set up Rust toolchain (rustup is preinstalled on the runner image)
+        if: matrix.language == 'rust'
+        run: |
+          rustup toolchain install ${{ matrix.toolchain }} --profile minimal
+          rustup default ${{ matrix.toolchain }}
+
+      # Prove the toolchain is where the strict guard will look for it. A setup action that
+      # silently no-ops leaves a row whose only symptom is a red build several steps later blaming
+      # the module, so the row says what it installed before it uses it.
+      - name: Which toolchain is on PATH?
+        run: |
+          case "${{ matrix.language }}" in
+            go)         go version ;;
+            python)     python3 --version ;;
+            typescript) node --version && npm --version ;;
+            rust)       cargo --version ;;
+            ruby)       ruby --version ;;
+            dotnet)     dotnet --version ;;
+            cpp)        c++ --version ;;
+            swift)      swift --version ;;
+            *)          echo "::error::no toolchain probe for ${{ matrix.language }} - add one when you add the row"; exit 1 ;;
+          esac
+
+      # -Dpc.foreignClients puts this module in the reactor at all; the compile phase runs its
+      # native build and the test phase runs its program and asserts the fixture line. --fail-at-end
+      # for the reason the reactor lanes in bin/ci-*.sh carry it: one run, as much breakage as it
+      # can find.
+      - name: Build and run the hello fixture (${{ matrix.module }})
+        run: >-
+          ./mvnw --batch-mode -Pci --fail-at-end package
+          -pl :${{ matrix.module }} -am -Dpc.foreignClients
