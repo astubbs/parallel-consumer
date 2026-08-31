@@ -71,12 +71,13 @@ and the executors are separate async loops.
 
 ## Building, testing, and the local gate
 
-Requires Node 20.11+ (CI pins 22.17.0) and, for the end-to-end test, a JDK 17.
+Requires Node 20.11+ (CI pins the version in the clients workflow) and, for the sidecar tests, a
+JDK 17.
 
 ```bash
 npm ci                # dependencies, from the committed lockfile
 npm run check         # THE LOCAL GATE: tsc --build (strict) then type-aware eslint
-npm test              # the suite; the end-to-end test needs the sidecar classpath below
+npm test              # the suite; the sidecar tests need the sidecar classpath below
 npm run proto         # regenerate src/generated/ from the frozen proxy.proto
 npm run proto:check   # ...and fail if the committed stubs have drifted
 npm run clean         # remove dist/ - every emitted file
@@ -129,17 +130,18 @@ the `foreign-clients` profile in the clients aggregator ([`../pom.xml`](../pom.x
   clean lifecycle never reaching `validate` where the enforcer is bound.
 - **`-P foreign-clients` is not a synonym for `-Dpc.foreignClients` here.** It activates the module,
   but the `typescript-e2e-harness` profile below activates on the *property*, so under `-P` the
-  classpath file is never written and the end-to-end test fails looking for it. That has its uses:
+  classpath file is never written and both sidecar tests fail looking for it. That has its uses:
   `-P` leaves the engine out of the reactor - three modules instead of six, and no JDK 17 needed -
   which makes it the quicker loop when all you want is `tsc`.
 
-### The end-to-end test needs the proxy module built
+### The sidecar tests need the proxy module built
 
-The test spawns the real test-mode sidecar (`TestModeMain`, in the proxy module's **test** jar), so
-it needs that jar and its classpath. This module deliberately has **no** Maven dependency on the
-engine, so the dependency exists only inside the `typescript-e2e-harness` profile, which activates
-with `-Dpc.foreignClients`; Maven then writes `target/sidecar-classpath.txt` where the test reads
-it. From the repository root:
+They spawn a real sidecar - `TestModeMain` from the proxy module's **test** jar for the end-to-end
+test, the production `Main` for the handshake - so they need those jars and their classpath. This
+module deliberately has **no** Maven dependency on the engine, so the dependency exists only inside
+the `typescript-e2e-harness` profile, which activates with `-Dpc.foreignClients`; Maven then writes
+`target/sidecar-classpath.txt` where the tests read it. From the repository root:
+<!-- file-refs: N/A - a build OUTPUT this module's Maven wiring writes, never a tracked file -->
 
 ```bash
 ./mvnw test -pl :parallel-consumer-proxy-client-typescript -am -Dpc.foreignClients
@@ -178,6 +180,6 @@ need a `protoc`, and committing is what makes "regenerating produces no diff" ch
 
 ## Depth
 
-[`client-authoring-guide.md`](../../parallel-consumer-proxy/docs/client-authoring-guide.md) and
-[`protocol-specification.md`](../../parallel-consumer-proxy/docs/protocol-specification.md) own the
+[`client-authoring-guide.md`](../../parallel-consumer-proxy-protocol/docs/client-authoring-guide.md) and
+[`protocol-specification.md`](../../parallel-consumer-proxy-protocol/docs/protocol-specification.md) own the
 protocol; this file does not restate them.

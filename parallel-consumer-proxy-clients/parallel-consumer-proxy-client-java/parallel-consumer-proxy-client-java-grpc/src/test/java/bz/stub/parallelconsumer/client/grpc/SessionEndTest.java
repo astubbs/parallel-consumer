@@ -79,7 +79,7 @@ class SessionEndTest {
                 client.poll(record -> {
                     processing.countDown();
                     // still executing when the stream dies - the case the finding names as the sharp one
-                    releaseProcessing.await(OBSERVE_BUDGET.getSeconds(), TimeUnit.SECONDS);
+                    awaitRelease(releaseProcessing);
                     return Outcome.success();
                 });
                 proxy.dispatch(0, "a-key", "a-value");
@@ -127,7 +127,7 @@ class SessionEndTest {
             var client = clientFor(proxy);
             client.poll(record -> {
                 processing.countDown();
-                releaseProcessing.await(OBSERVE_BUDGET.getSeconds(), TimeUnit.SECONDS);
+                awaitRelease(releaseProcessing);
                 return Outcome.success();
             });
             proxy.dispatch(0, "a-key", "a-value");
@@ -154,6 +154,19 @@ class SessionEndTest {
                     .that(reports.get(0).getOutcomeCase()).isEqualTo(Report.OutcomeCase.SUCCESS);
             assertWithMessage("the final report is sent BEFORE the half-close, not dropped by it")
                     .that(proxy.reportsBeforeHalfClose()).isEqualTo(1);
+        }
+    }
+
+    /**
+     * Blocks the user function until the test releases it, and <b>fails loudly if the release never comes</b>.
+     * A bare {@code await} whose result is discarded would let the function return {@code Outcome.success()}
+     * after simply timing out - which is the outcome both tests assert, so the run would go green having
+     * measured nothing. Throwing here becomes a failure {@link Outcome}, and each assertion below then sees
+     * the wrong verdict rather than the right one for the wrong reason.
+     */
+    private static void awaitRelease(CountDownLatch releaseProcessing) throws InterruptedException {
+        if (!releaseProcessing.await(OBSERVE_BUDGET.getSeconds(), TimeUnit.SECONDS)) {
+            throw new IllegalStateException("the test never released the user function within " + OBSERVE_BUDGET);
         }
     }
 

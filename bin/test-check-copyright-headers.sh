@@ -14,6 +14,9 @@
 #    4. upstream-derived file MODIFIED, no modifications line      -> FAIL
 #    5. upstream-derived file MODIFIED, holder named only in an
 #       @author byline, no "Modifications Copyright" line          -> FAIL
+#   5b. upstream-derived file MODIFIED, both the phrase and the
+#       holder on one line but in the WRONG ORDER, so the
+#       modifications are credited to somebody else                -> FAIL
 #    6. upstream-derived file MODIFIED, dual header                -> pass
 #    7. renamed upstream file, content unchanged, Confluent-only   -> pass
 #    8. renamed upstream file, content changed, no mods line       -> FAIL
@@ -65,7 +68,8 @@
 # table so a language cannot be added there without being exercised here. Fixture F (cases 30-38)
 # covers the rules that are not about a language: the unclassified-file failure, exemptions,
 # grandfathering and its limit, and the three ways a header can be present and still wrong. Both
-# carry their own case lists where they are built.
+# carry their own case lists where they are built. Fixture G (cases 39-43) covers the third
+# provenance table, recovery from an unmerged branch, whose claim the scanner verifies.
 #
 # Run: bin/test-check-copyright-headers.sh   (CI runs it before the real scan)
 
@@ -111,6 +115,15 @@ confluent_author_file() { # <path> [body] - holder named only in an @author byli
     printf '/*-\n * Copyright (C) 2020-2022 Confluent, Inc.\n *\n * @author Antony Stubbs and contributors\n */\nclass X { %s }\n' "${2:-}" > "$1"
 }
 
+# <path> [body] - the fork holder and the phrase on ONE line, but in the WRONG ORDER, with the
+# modifications ATTRIBUTED TO SOMEBODY ELSE. Both substrings are present, so a check that tests for
+# them independently accepts this; the phrase has to be followed by the holder for it to be a claim
+# by the fork. The `grep "Modifications Copyright (C).*${FORK_HOLDER}"` the scanner used to run said
+# exactly that, and the nested-`case` rewrite that replaced it silently dropped the ordering.
+misattributed_mods_file() {
+    printf '/*-\n * Copyright (C) 2020-2022 Confluent, Inc.\n * @author Antony Stubbs and contributors - Modifications Copyright (C) 2026 SomeOtherCorp\n */\nclass X { %s }\n' "${2:-}" > "$1"
+}
+
 fork_file() { # <path>
     printf '/*-\n * Copyright (C) 2026 Antony Stubbs and contributors\n */\nclass X {}\n' > "$1"
 }
@@ -127,6 +140,7 @@ confluent_file "$repoA/LosesHeader.java"                    # 2: header removed 
 confluent_file "$repoA/HeaderSwapped.java"                  # 3: header swapped for fork's post-fork
 confluent_file "$repoA/ModifiedNoLine.java"                 # 4: modified post-fork, line forgotten
 confluent_file "$repoA/ModifiedAuthorByline.java"           # 5: modified post-fork, @author only
+confluent_file "$repoA/ModifiedMisattributed.java"          # 5b: modified post-fork, mods line credits another holder
 confluent_file "$repoA/ModifiedDual.java"                   # 6: modified post-fork, line added
 confluent_file "$repoA/RenamedSameOld.java"                 # 7: renamed verbatim post-fork
 confluent_file "$repoA/RenamedChangedOld.java"              # 8: renamed WITH changes post-fork
@@ -139,6 +153,7 @@ headerless_file "$repoA/LosesHeader.java"                   # rule 2 violation
 fork_file "$repoA/HeaderSwapped.java"                       # rule 3 violation (mislabelled as fork-original)
 confluent_file "$repoA/ModifiedNoLine.java" "int changed;"  # rule 4 violation
 confluent_author_file "$repoA/ModifiedAuthorByline.java" "int changed;" # rule 5 violation (byline is no notice)
+misattributed_mods_file "$repoA/ModifiedMisattributed.java" "int changed;" # rule 5b violation (mods line credits another holder)
 dual_file "$repoA/ModifiedDual.java" "int changed;"         # rule 6 conformant
 git -C "$repoA" mv RenamedSameOld.java RenamedSame.java     # rule 7 conformant (verbatim)
 git -C "$repoA" mv RenamedChangedOld.java RenamedChanged.java
@@ -165,11 +180,12 @@ assert_contains "detects upstream file losing its header"       "upstream-derive
 assert_contains "detects upstream file with header swapped"     "upstream-derived file lost its Confluent header): HeaderSwapped.java" "$out"
 assert_contains "detects modified upstream file w/o mods line"  "upstream-derived file modified since the fork point but missing 'Modifications Copyright ... Antony Stubbs and contributors' line): ModifiedNoLine.java" "$out"
 assert_contains "detects @author byline passed off as mods line" "upstream-derived file modified since the fork point but missing 'Modifications Copyright ... Antony Stubbs and contributors' line): ModifiedAuthorByline.java" "$out"
+assert_contains "detects a mods line crediting another holder (right words, wrong order)" "upstream-derived file modified since the fork point but missing 'Modifications Copyright ... Antony Stubbs and contributors' line): ModifiedMisattributed.java" "$out"
 assert_contains "detects changed rename w/o mods line"          "renamed upstream file modified since the fork point but missing 'Modifications Copyright ... Antony Stubbs and contributors' line): RenamedChanged.java" "$out"
 assert_contains "detects extraction w/o mods line"              "extraction of upstream-derived code but missing 'Modifications Copyright ... Antony Stubbs and contributors' line): Extraction.java" "$out"
 assert_contains "detects fork file claiming Confluent"          "fork-original file claims Confluent copyright): ForkClaimsConfluent.java" "$out"
 assert_contains "detects fork file with no header"              "missing 'Antony Stubbs and contributors' header): ForkNoHeader.java" "$out"
-assert_contains "reports exactly 8 violations"                  "8 violation(s)" "$out"
+assert_contains "reports exactly 9 violations"                  "9 violation(s)" "$out"
 case "$out" in
     *"ForkGood.java"*|*"Upstream.java"*|*"ModifiedDual.java"*|*"RenamedSame.java"*)
         echo "FAIL: conformant files were flagged"; failures=$((failures + 1)) ;;
@@ -312,9 +328,19 @@ reordered="$WORK/scanner-reordered.sh"
 # The closing quote travels with whichever rule ends up last, so strip it from every extracted rule
 # and re-attach it once - otherwise moving the general rule up would move the quote with it and the
 # "control arm" would be testing a syntax error.
-all_rules=$(grep -E '^bz/stub/parallelconsumer' "$SCANNER" | tr -d '"')
-general_rule=$(grep -E '^bz/stub/parallelconsumer\|' <<<"$all_rules")
-nested_rules=$(grep -E '^bz/stub/parallelconsumer/internal/' <<<"$all_rules")
+# `|| true` on every capture, and an explicit emptiness check below. A bare `$(grep ...)` that
+# matches NOTHING returns 1, and under `set -euo pipefail` that kills this whole script on the
+# spot - no FAIL line, no summary, exit before the "could not rebuild" diagnostic three lines
+# down ever runs. So the guard written to report a broken parse was unreachable precisely when
+# the parse broke, and every case after this point (27-43) vanished with it. A self-test that
+# dies silently is indistinguishable from one that was never run.
+all_rules=$(grep -E '^bz/stub/parallelconsumer' "$SCANNER" | tr -d '"' || true)
+general_rule=$(grep -E '^bz/stub/parallelconsumer\|' <<<"$all_rules" || true)
+nested_rules=$(grep -E '^bz/stub/parallelconsumer/internal/' <<<"$all_rules" || true)
+if [ -z "$all_rules" ] || [ -z "$general_rule" ] || [ -z "$nested_rules" ]; then
+    echo "FAIL: could not read PACKAGE_MOVES out of the scanner (all='$all_rules' general='$general_rule' nested='$nested_rules') - the control arm below would prove nothing"
+    failures=$((failures + 1))
+fi
 # Through a FILE rather than `awk -v`: BSD awk rejects a newline inside a -v assignment outright
 # ("newline in string"), so the same command that works on a CI runner dies on a maintainer's Mac.
 printf '%s\n%s"\n' "$general_rule" "$nested_rules" > "$WORK/moves-block.txt"
@@ -330,8 +356,11 @@ awk -v blockfile="$WORK/moves-block.txt" '
 ' "$SCANNER" > "$reordered"
 # A control arm that was not actually built is worse than none: it would pass by testing the
 # original file. Demand that the general rule now comes FIRST among the rules in the rewritten copy.
-first_rule=$(grep -E '^bz/stub/parallelconsumer' "$reordered" | sed -n '1p')
-if [ "$first_rule" != "$general_rule" ] || ! bash -n "$reordered"; then
+# `|| true` again - `grep | sed` under pipefail returns grep's 1 when the rewrite produced no rules
+# at all, which is exactly the case this check exists to report, and `set -e` would kill the script
+# here before it could.
+first_rule=$( (grep -E '^bz/stub/parallelconsumer' "$reordered" || true) | sed -n '1p')
+if [ -z "$first_rule" ] || [ "$first_rule" != "$general_rule" ] || ! bash -n "$reordered"; then
     echo "FAIL: the ordering control arm could not rebuild PACKAGE_MOVES (first rule: '$first_rule') - a control that cannot be built proves nothing"
     failures=$((failures + 1))
 else
@@ -449,13 +478,26 @@ fi
 #   35. fork-original file mentioning Confluent in PROSE           -> pass (the claim test is
 #       same-line; this is the regression that extending past .java exposed)
 #   36. notice present but NOT inside a comment                    -> FAIL
-#   37. header placed ABOVE a #! shebang                           -> FAIL
+#   37. header placed ABOVE a #! shebang, hash style               -> FAIL
+#  37b. the same shape in a SLASH-comment language (.mjs)          -> FAIL. The shebang scan lived
+#       in the `hash` branch only, so a `.mjs` CLI with its notice above `#!/usr/bin/env node`
+#       passed green while the identical `.sh` file failed
 #   38. header placed ABOVE the <?xml ...?> declaration            -> FAIL
+#  38b. fork-original file MENTIONING the holder with no notice
+#       anywhere (an @author byline)                               -> FAIL. The fork-original arm
+#       tested the window for the holder's NAME rather than for a NOTICE, so a file with no
+#       `Copyright (C)` at all passed; renaming the holder was what turned it red
+#  38c. upstream file unmarked at the fork point that has since
+#       gained a FORK copyright claim                              -> FAIL. Grandfathering excuses
+#       "no notice at all", never a claim of fork authorship over derived content
+#  38d. --report accounts for EVERY tracked path, one row each     -> the end-to-end statement of
+#       "every tracked file is classified", which is what catches a silent skip
 repoF="$WORK/f"
 new_repo "$repoF"
 printf 'workflow: yes\n'                                                      > "$repoF/bare-upstream.yml"      # 32
 printf 'workflow: yes\n'                                                      > "$repoF/bare-upstream-edited.yml" # 33
 printf '/*-\n * Copyright (C) 2020-2022 Confluent, Inc.\n */\nclass X {}\n'    > "$repoF/WasMarked.java"         # 34
+printf 'workflow: yes\n'                                                      > "$repoF/bare-then-claimed.yml"  # 38c
 git -C "$repoF" add -A && git -C "$repoF" commit -qm upstream
 fork_point_f=$(git -C "$repoF" rev-parse HEAD)
 
@@ -471,6 +513,11 @@ printf '# Copyright (C) 2026 Antony Stubbs and contributors\n#\n#!/usr/bin/env b
                                                                               > "$repoF/aboveshebang.sh"       # 37
 printf '<!-- Copyright (C) 2026 Antony Stubbs and contributors -->\n<?xml version="1.0"?>\n<root/>\n' \
                                                                               > "$repoF/abovedecl.xml"         # 38
+printf '// Copyright (C) 2026 Antony Stubbs and contributors\n#!/usr/bin/env node\nconsole.log(1)\n' \
+                                                                              > "$repoF/aboveshebang.mjs"      # 37b
+printf '/*-\n * @author Antony Stubbs and contributors\n */\nclass X {}\n'      > "$repoF/MentionOnly.java"      # 38b
+printf '# Copyright (C) 2026 Antony Stubbs and contributors\nworkflow: yes\nextra: true\n' \
+                                                                              > "$repoF/bare-then-claimed.yml" # 38c
 git -C "$repoF" add -A && git -C "$repoF" commit -qm fork
 
 out=$( (cd "$repoF" && COPYRIGHT_CHECK_FORK_POINT="$fork_point_f" bash "$SCANNER") 2>&1 ) && rc=0 || rc=$?
@@ -481,11 +528,27 @@ assert_contains "the unclassified violation names the file"         "): mystery.
 assert_contains "an upstream file that HAD a notice and lost it still fails" \
     "upstream-derived file has no copyright header): WasMarked.java" "$out"
 assert_contains "a notice outside a comment is rejected"            "notice is not in a # comment): instring.py" "$out"
-assert_contains "a header above the shebang is rejected"            "header sits above the #! shebang" "$out"
+assert_contains "a header above the shebang is rejected"            "header sits above the #! shebang, which must be the first line): aboveshebang.sh" "$out"
+assert_contains "a header above the shebang is rejected in a SLASH language too" \
+    "header sits above the #! shebang, which must be the first line): aboveshebang.mjs" "$out"
 assert_contains "a header above the XML declaration is rejected"    "header sits above the <?xml ...?> declaration" "$out"
+assert_contains "a fork-original file that only MENTIONS the holder, with no notice, is rejected" \
+    "fork-original file missing 'Antony Stubbs and contributors' header): MentionOnly.java" "$out"
+assert_contains "grandfathering does not excuse a FORK claim on an unmarked upstream file" \
+    "upstream-derived file lost its Confluent header): bare-then-claimed.yml" "$out"
 assert_contains "grandfathered upstream files are counted, not silently skipped" \
     "2 upstream file(s) grandfathered" "$out"
-assert_contains "structural fixture reports exactly 5 violations"   "5 violation(s)" "$out"
+assert_contains "structural fixture reports exactly 8 violations"   "8 violation(s)" "$out"
+
+# 38d. EVERY tracked path gets exactly one --report row. This is the invariant the scanner's header
+# states ("EVERY TRACKED FILE IS CLASSIFIED... A quiet skip is not reachable from here") asserted
+# end-to-end rather than per-rule, and it is what catches a path dropped BEFORE classification -
+# the shape a non-ASCII filename produced, where the file was neither enforced, exempt, nor
+# unclassified and did not appear in --report at all.
+report_out=$( (cd "$repoF" && COPYRIGHT_CHECK_FORK_POINT="$fork_point_f" bash "$SCANNER" --report) 2>&1 )
+tracked_n=$(git -C "$repoF" ls-files | wc -l | tr -d ' ')
+report_n=$(printf '%s\n' "$report_out" | grep -c . || true)
+assert "--report accounts for every tracked path, one row each" "$tracked_n" "$report_n"
 case "$out" in
     *"bare-upstream.yml"*|*"bare-upstream-edited.yml"*)
         echo "FAIL: an upstream file that never carried a notice was told to grow one"; failures=$((failures + 1)) ;;
@@ -500,6 +563,73 @@ case "$out" in
         echo "FAIL: the word Confluent in PROSE was read as a copyright claim - the test must be same-line"
         failures=$((failures + 1)) ;;
     *) echo "ok:   a fork-original file may discuss Confluent without claiming its copyright" ;;
+esac
+
+# --- Fixture G: recovery from an unmerged branch (cases 39-43) ---------------------
+# The scanner's third provenance table is the only one whose claim is CHECKABLE, so these cases
+# are mostly about the check rather than about the header: a recovery entry names an origin
+# commit, and the scanner must confirm that commit really holds the file before enforcing on it.
+#
+#   39. a recovered file carrying Confluent + modifications passes
+#   40. a recovered file carrying Confluent ALONE fails for the missing modifications line
+#   41. an entry whose origin commit EXISTS but does not contain the file fails - this is the
+#       wrong-entry case, and it is the reason recoveries are not filed as extractions
+#   42. CONTROL ARM: the identical file, unregistered, is judged fork-original and fails for
+#       claiming Confluent - so the table is demonstrably what changes the verdict, not the header
+#   43. an origin commit absent from the clone WARNS and still enforces, matching how the
+#       fork-point guard already degrades on a shallow clone
+repoG="$WORK/g"
+new_repo "$repoG"
+confluent_file "$repoG/Upstream.java"
+git -C "$repoG" add -A && git -C "$repoG" commit -qm upstream
+fork_point_g=$(git -C "$repoG" rev-parse HEAD)
+
+# The unmerged branch the recovery comes from - a sibling of the fork point, never merged.
+git -C "$repoG" checkout -q -b presentation
+confluent_file "$repoG/Recovered.java"
+confluent_file "$repoG/NoModsLine.java"
+confluent_file "$repoG/Unregistered.java"
+git -C "$repoG" add -A && git -C "$repoG" commit -qm "the branch that was never merged"
+origin_g=$(git -C "$repoG" rev-parse HEAD)
+git -C "$repoG" checkout -q -
+
+dual_file       "$repoG/Recovered.java"     "int ported;"   # 39 conformant
+confluent_file  "$repoG/NoModsLine.java"    "int ported;"   # 40 violation
+dual_file       "$repoG/WrongOrigin.java"   "int ported;"   # 41 violation: not on that branch
+confluent_file  "$repoG/Unregistered.java"  "int ported;"   # 42 violation: fork-original claim
+dual_file       "$repoG/Absent.java"        "int ported;"   # 43 warns, does not fail
+git -C "$repoG" add -A && git -C "$repoG" commit -qm fork
+
+# A well-formed sha that names no object in this repo - the shallow-clone shape, not a typo.
+absent_commit=0000000000000000000000000000000000000000
+recoveries="Recovered.java|$origin_g
+NoModsLine.java|$origin_g
+WrongOrigin.java|$origin_g
+Absent.java|$absent_commit"
+
+out=$( (cd "$repoG" && COPYRIGHT_CHECK_FORK_POINT="$fork_point_g" \
+        COPYRIGHT_CHECK_EXTRA_RECOVERIES="$recoveries" \
+        bash "$SCANNER") 2>&1 ) && rc=0 || rc=$?
+assert          "recovery fixture exits 1"                          1 "$rc"
+assert_contains "detects recovered file w/o mods line" \
+    "recovery of upstream code from an unmerged branch but missing 'Modifications Copyright ... Antony Stubbs and contributors' line): NoModsLine.java" "$out"
+assert_contains "detects an entry whose origin commit lacks the file" \
+    "recovery origin $origin_g does not contain WrongOrigin.java): WrongOrigin.java" "$out"
+assert_contains "unregistered recovery stays fork-original (control arm)" \
+    "fork-original file claims Confluent copyright): Unregistered.java" "$out"
+assert_contains "an origin commit missing from the clone warns" \
+    "recovery origin $absent_commit not in history" "$out"
+assert_contains "recovery fixture reports exactly 3 violations"     "3 violation(s)" "$out"
+case "$out" in
+    *"): Recovered.java"*)
+        echo "FAIL: a conformant recovery was flagged"; failures=$((failures + 1)) ;;
+    *) echo "ok:   a recovery carrying Confluent + modifications is not flagged" ;;
+esac
+case "$out" in
+    *"): Absent.java"*)
+        echo "FAIL: an unverifiable recovery was failed rather than warned - that fails on shallow clones"
+        failures=$((failures + 1)) ;;
+    *) echo "ok:   an unverifiable recovery degrades to a warning, as the fork-point guard does" ;;
 esac
 
 # --- Drift guard: PACKAGE_MOVES vs bin/rename-packages.sh's PKG_MAP (rule 25) --------
@@ -517,10 +647,13 @@ RENAME_SCRIPT="$(dirname "$SCANNER")/rename-packages.sh"
 if [ ! -f "$RENAME_SCRIPT" ]; then
     echo "ok:   drift guard skipped - bin/rename-packages.sh is gone (the rename has landed)"
 else
-    # dot form `old|new` -> path form `new|old`, which is how the scanner writes it
-    from_rename=$(grep -E '^io(\.[a-z0-9]+){2,}\|bz(\.[a-z0-9]+){2,}"?$' "$RENAME_SCRIPT" \
+    # dot form `old|new` -> path form `new|old`, which is how the scanner writes it.
+    # `|| true` for the same reason as the control arm above: a zero-match `$(grep ...)` under
+    # `set -e` would kill the script before the emptiness check below - the very check written to
+    # catch it - so the "guard that cannot see its subject" branch was unreachable.
+    from_rename=$( (grep -E '^io(\.[a-z0-9]+){2,}\|bz(\.[a-z0-9]+){2,}"?$' "$RENAME_SCRIPT" || true) \
         | tr -d '"' | tr '.' '/' | awk -F'|' '{ print $2 "|" $1 }' | sort)
-    from_scanner=$(grep -E '^bz(/[a-z0-9]+){2,}\|io(/[a-z0-9]+){2,}"?$' "$SCANNER" | tr -d '"' | sort)
+    from_scanner=$( (grep -E '^bz(/[a-z0-9]+){2,}\|io(/[a-z0-9]+){2,}"?$' "$SCANNER" || true) | tr -d '"' | sort)
     if [ -z "$from_rename" ] || [ -z "$from_scanner" ]; then
         echo "FAIL: drift guard could not read one of the tables (rename script: '$from_rename', scanner: '$from_scanner') - a guard that cannot see its subject passes for the wrong reason"
         failures=$((failures + 1))

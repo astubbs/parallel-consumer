@@ -16,7 +16,7 @@ import java.util.concurrent.CompletionStage;
 /**
  * The transport-binding seam of the shared conformance suite: everything {@link SpikeConformanceTest} needs
  * from an engine-plus-transport fixture, expressed without naming either transport. Each transport module's
- * test tree supplies its own implementation - the gRPC one boots the proxy's {@code ProxyHarness} engine lane
+ * test tree supplies its own implementation - the gRPC one boots the proxy's {@code ConformanceHarness} engine lane
  * (from the proxy test-jar) and connects the wire client to it; the direct one drives core's mock Kafka
  * clients in-process. The suite itself cannot tell which it is running against, which is the point (KTD20):
  * the test class is the constant and the transport is the only variable.

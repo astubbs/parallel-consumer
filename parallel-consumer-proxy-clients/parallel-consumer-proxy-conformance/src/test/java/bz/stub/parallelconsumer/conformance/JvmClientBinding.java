@@ -8,7 +8,7 @@ import bz.stub.parallelconsumer.client.InboundRecord;
 import bz.stub.parallelconsumer.client.Outcome;
 import bz.stub.parallelconsumer.client.ParallelConsumerClient;
 import bz.stub.parallelconsumer.client.RecordProcessor;
-import bz.stub.parallelconsumer.proxy.harness.ProxyHarness;
+import bz.stub.parallelconsumer.proxy.harness.ConformanceHarness;
 import lombok.extern.slf4j.Slf4j;
 
 import java.nio.charset.StandardCharsets;
@@ -58,7 +58,7 @@ public final class JvmClientBinding implements ConformanceBinding {
          * can close it. Whatever engine-side arrangement the transport needs - assignment, seeding - has
          * happened by the time this returns.
          */
-        ParallelConsumerClient start(ProxyHarness harness, ConformanceScenario scenario,
+        ParallelConsumerClient start(ConformanceHarness harness, ConformanceScenario scenario,
                                      RecordProcessor processor);
     }
 
@@ -77,7 +77,7 @@ public final class JvmClientBinding implements ConformanceBinding {
     }
 
     @Override
-    public Run execute(ProxyHarness harness, ConformanceScenario scenario) {
+    public Run execute(ConformanceHarness harness, ConformanceScenario scenario) {
         var prescription = new PrescribedRun(name, scenario);
         var client = transport.start(harness, scenario, record -> outcomeFor(prescription, record));
         prescription.awaitPrescribedBehaviour();

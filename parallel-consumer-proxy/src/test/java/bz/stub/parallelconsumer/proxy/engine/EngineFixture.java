@@ -47,7 +47,7 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * family settled, and a {@link CollectingSink} standing in for the transport - so the test is on both halves
  * of the engine&harr;transport boundary and every hand-off is a deterministic rendezvous rather than a sleep.
  * <p>
- * Mirrors {@code ProxyHarness}'s conventions (budgets, arrival-sync before zero-state awaits) without reusing
+ * Mirrors {@code ConformanceHarness}'s conventions (budgets, arrival-sync before zero-state awaits) without reusing
  * it: the harness boots core's own processor behind a real gRPC server, and this fixture's whole point is
  * booting {@link ProxyProcessor} directly, so a scenario can drive the engine's own liveness API.
  * <p>

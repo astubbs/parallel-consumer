@@ -10,7 +10,6 @@ import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager;
 import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
 import lombok.SneakyThrows;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
-
 import org.apache.kafka.common.TopicPartition;
 
 import java.util.ArrayList;
@@ -36,9 +35,8 @@ public class CommitHistory {
      * <p>
      * This is the step that made {@link #highestCommit()} unreachable for anything but an assertion: the
      * constructor wants a flat per-partition list, and until this existed the only code that produced one was
-     * inside a Truth {@code Subject}. Three fixtures across the proxy family and the Java direct client had
-     * each hand-written the same reverse scan instead, because what they need is a <em>value</em> to poll on
-     * with Awaitility, and an assertion cannot be polled for a value.
+     * inside a Truth {@code Subject}. What a fixture usually needs instead is a <em>value</em> to poll on with
+     * Awaitility, and an assertion cannot be polled for a value - so each one hand-wrote the same reverse scan.
      * <p>
      * The raw list is copied before reading: it is a {@code CopyOnWriteArrayList} being appended to by the
      * commit thread while a test reads it.

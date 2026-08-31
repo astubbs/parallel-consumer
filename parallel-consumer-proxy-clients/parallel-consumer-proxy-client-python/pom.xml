@@ -27,22 +27,28 @@
     -->
     <properties>
         <pc.foreign.skip>false</pc.foreign.skip>
-        <pc.foreign.build.executable>make</pc.foreign.build.executable>
-        <pc.foreign.build.args>build</pc.foreign.build.args>
-        <pc.foreign.test.executable>make</pc.foreign.test.executable>
-        <pc.foreign.test.args>test</pc.foreign.test.args>
+        <pc.foreign.build.executable>bash</pc.foreign.build.executable>
+        <pc.foreign.build.args>${pc.foreign.step} --tool python3 -- make build</pc.foreign.build.args>
+        <pc.foreign.test.executable>bash</pc.foreign.test.executable>
+        <pc.foreign.test.args>${pc.foreign.step} --tool python3 -- make test</pc.foreign.test.args>
     </properties>
 
     <profiles>
         <!--
-            THE SIDECAR THE END-TO-END TEST DRIVES, AND WHY IT IS A DEPENDENCY.
+            THE SIDECAR THIS MODULE'S SUITE SPAWNS, AND WHY IT IS A DEPENDENCY.
 
-            The Python suite's one end-to-end test spawns the real test-mode sidecar over the real
-            wire - which needs the proxy module's test jar (TestModeMain and the harness), its main
-            jar, and core's test jar underneath. Declaring them here is what makes
+            Two tests spawn a sidecar over the real wire: the handshake check against the real
+            `Main`, and the end-to-end test that drives the test-mode sidecar and asserts a record
+            is dispatched, processed once and not redelivered. Between them they need the proxy
+            module's main jar, its test jar (TestModeMain and the harness), and core's test jar
+            underneath. Declaring them here is what makes
             `./mvnw test -pl :parallel-consumer-proxy-client-python -am -Dpc.foreignClients` - the
-            CI matrix row's exact command - build those modules first and resolve them; and
-            build-classpath below writes the resulting classpath where the test reads it.
+            CI matrix row's exact command - build those modules first and resolve them.
+
+            THE `sidecar-classpath` EXECUTION IS NOT HERE. The clients aggregator owns it and the
+            reasoning for hoisting it (six near-identical copies, two of which had already drifted);
+            it binds only because this module declares maven-dependency-plugin below. The dependency
+            is the one thing that cannot be hoisted, because it is what gives `-am` its reactor edge.
 
             SCOPED TO THIS PROFILE DELIBERATELY. No client depends on the engine, and with the
             profile inactive - every ordinary build - there is no dependency edge here at all: the
@@ -91,22 +97,8 @@
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-dependency-plugin</artifactId>
-                        <!-- version from the root pom's pluginManagement -->
-                        <executions>
-                            <execution>
-                                <id>sidecar-classpath</id>
-                                <!-- After the dependencies above are resolvable, before the test
-                                     phase where the foreign suite runs and reads the file. -->
-                                <phase>generate-test-resources</phase>
-                                <goals>
-                                    <goal>build-classpath</goal>
-                                </goals>
-                                <configuration>
-                                    <outputFile>${project.build.directory}/sidecar-classpath.txt</outputFile>
-                                    <includeScope>test</includeScope>
-                                </configuration>
-                            </execution>
-                        </executions>
+                        <!-- Declaring it is the opt-in; the aggregator's pluginManagement supplies
+                             the version and the `sidecar-classpath` execution. -->
                     </plugin>
                 </plugins>
             </build>

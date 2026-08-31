@@ -3,11 +3,31 @@ package bz.stub.parallelconsumer.proxy.harness;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import com.github.bsideup.jabel.Desugar;
 
 import java.util.List;
 import java.util.Optional;
 
+/*
+ * NO JAVA RECORDS ANYWHERE IN THIS MODULE, AND THAT IS A BUILD FACT RATHER THAN A STYLE CHOICE.
+ *
+ * The source these were taken from writes this and four other value types as records, each carrying
+ * Jabel's @Desugar. Jabel REQUIRES that annotation on every record it sees - a record without one
+ * fails the compile with "Must be annotated with @Desugar" even at release 17 - and what the
+ * annotation then does is rewrite the record into a class whose generated members have no source
+ * positions. Error Prone cannot read that: 2.42.0 crashes outright on it, first in
+ * UnnecessaryStringBuilder ("invalid replacement: [0, -1)") and, once that one is suppressed, again
+ * in DuplicateBranches. A crash is not a finding - it fails the whole compilation, attributed to
+ * line 1 of whichever file javac listed first, which is why it reads as unrelated.
+ *
+ * Neither term can move. The root pom pins Error Prone at 2.42.0 because 2.43.0 is compiled to
+ * class file 65 and JDK 17 cannot load it, and Jabel is what serves the release 8 target. The
+ * branch these came from never met any of this: its root pom has no Error Prone at all.
+ *
+ * So the fix is the one the repository had already made everywhere else - `grep -rn "record "` over
+ * master finds no Java record in any module - and which this PR's own SpikeFixture.Seed already
+ * follows: a plain final class with the same accessors. Nothing is lost but the boilerplate, and
+ * the boilerplate is what makes the module compile.
+ */
 /**
  * A named, seedable product behaviour the proxy must exhibit, expressed without reference to any client
  * language.
@@ -23,14 +43,53 @@ import java.util.Optional;
  * plain function.
  *
  * @author Antony Stubbs
- * @see ProxyHarness
+ * @see ConformanceHarness
  */
-@Desugar // Jabel requires the annotation on every record, even in this module where release=17 makes it a no-op
-public record HarnessScenario(String name, List<SeedRecord> seeds) {
+public final class HarnessScenario {
 
     /** One record to seed, key first because the key decides the shard. Offsets are assigned by list order. */
-    @Desugar
-    public record SeedRecord(String key, String value) {
+    public static final class SeedRecord {
+
+        private final String key;
+
+        private final String value;
+
+        public SeedRecord(String key, String value) {
+            this.key = key;
+            this.value = value;
+        }
+
+        public String key() {
+            return key;
+        }
+
+        public String value() {
+            return value;
+        }
+    }
+
+    private final String name;
+
+    private final List<SeedRecord> seeds;
+
+    public HarnessScenario(String name, List<SeedRecord> seeds) {
+        this.name = name;
+        this.seeds = List.copyOf(seeds);
+    }
+
+    /** The scenario's stable name: its identity in the harness, in the guide and in every binding's run. */
+    public String name() {
+        return name;
+    }
+
+    /** The records to seed, in offset order. */
+    public List<SeedRecord> seeds() {
+        return seeds;
+    }
+
+    @Override
+    public String toString() {
+        return name;
     }
 
     /**

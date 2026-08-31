@@ -223,8 +223,8 @@ public class ManagedPCInstance implements Runnable {
 
             // every incarnation gets its own fresh WorkManager, so this never double-registers; the
             // instance-level counter deliberately spans incarnations (see workResultsReturned)
-            this.parallelConsumer.getWm().getSuccessfulWorkListeners()
-                    .add(wc -> workResultsReturned.incrementAndGet());
+            this.parallelConsumer.getWm()
+                    .addSuccessfulWorkListener(wc -> workResultsReturned.incrementAndGet());
 
             this.parallelConsumer.setTimeBetweenCommits(Duration.ofSeconds(1));
             this.parallelConsumer.setMyId(Optional.of("PC-" + instanceId));

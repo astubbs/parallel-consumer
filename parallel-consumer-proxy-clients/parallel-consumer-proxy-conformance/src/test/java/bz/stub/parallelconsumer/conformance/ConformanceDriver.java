@@ -3,7 +3,7 @@ package bz.stub.parallelconsumer.conformance;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.proxy.harness.ProxyHarness;
+import bz.stub.parallelconsumer.proxy.harness.ConformanceHarness;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
@@ -70,7 +70,7 @@ public final class ConformanceDriver {
     public static RunnerTranscript drive(ConformanceBinding binding, ConformanceScenario scenario) {
         binding.ensureAvailable();
 
-        try (var harness = new ProxyHarness(scenario.harnessScenario());
+        try (var harness = new ConformanceHarness(scenario.harnessScenario());
              var run = binding.execute(harness, scenario)) {
             var transcript = run.transcript();
 
@@ -88,7 +88,7 @@ public final class ConformanceDriver {
      * The foreign half of {@link #drive}: boot the engine's gRPC transport, write the shim that announces
      * where it is, and spawn the language's runner at it. Called by {@link LanguageRunner#execute}.
      */
-    static ConformanceBinding.Run spawnAgainst(LanguageRunner runner, ProxyHarness harness,
+    static ConformanceBinding.Run spawnAgainst(LanguageRunner runner, ConformanceHarness harness,
                                                ConformanceScenario scenario) {
         int port = harness.startEngine();
         // The PORT is in the name, not just the language and scenario. Two tests may drive the same

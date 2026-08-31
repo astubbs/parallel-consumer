@@ -1,15 +1,27 @@
 # Copyright (C) 2026 Antony Stubbs and contributors
 # frozen_string_literal: true
 
-# Locates the JVM-side conformance harness so a Ruby spec can spawn it as an ordinary sidecar
-# binary.
+# Locates the JVM-side sidecars so a Ruby spec can spawn one as an ordinary sidecar binary.
 #
-# The harness is TestModeMain, shipped in the proxy module's TEST jar so it can never reach a
-# client package. That makes it a classpath invocation rather than a binary, so "the sidecar
-# binary" for a conformance test is the JVM launcher and the classpath is an argument. Everything
-# awkward about that lives here rather than in each spec.
+# THERE ARE TWO, AND THEY ANSWER DIFFERENT QUESTIONS. Both are classpath invocations rather than
+# binaries - so "the sidecar binary" for a spec is the JVM launcher and the classpath is an
+# argument - and everything awkward about that lives here rather than in each spec.
+#
+# engine_less_sidecar runs parallel-consumer-proxy's production Main. It hosts no Parallel Consumer
+# engine: it binds, announces its port, admits one connection under the transport's rules, and
+# answers every session UNIMPLEMENTED (astubbs/parallel-consumer#384). A spec that spawns it
+# exercises the whole client-side path up to and including the handshake and stops exactly where
+# the engine would begin.
+#
+# for_scenario runs TestModeMain, shipped in the proxy module's TEST jar so it can never reach a
+# client package. That one IS engine-backed, which is what makes the conformance scenarios below
+# runnable end to end.
 module Harness
-  MAIN_CLASS = "bz.stub.parallelconsumer.proxy.testmode.TestModeMain"
+  MAIN_CLASS = "bz.stub.parallelconsumer.proxy.Main"
+  TEST_MODE_MAIN_CLASS = "bz.stub.parallelconsumer.proxy.testmode.TestModeMain"
+
+  # What the sidecar's refusal must name, so a client author does not debug their own code.
+  NO_ENGINE_DESCRIPTION = "hosts no Parallel Consumer engine"
 
   # The conformance scenario names, which are the suite's identity everywhere: the harness CLI,
   # this list, and the spec names that run them. A SCENARIO NAME IS ALSO THE TOPIC NAME - the
@@ -19,7 +31,12 @@ module Harness
   FAILED_RECORD_IS_REDELIVERED = "a-failed-record-is-redelivered-with-its-failure-history"
   KEY_ORDERING = "records-sharing-a-key-share-a-shard-distinct-keys-run-concurrently"
 
-  BUILD_COMMAND = "bin/build.sh -pl :parallel-consumer-proxy -am -DskipTests"
+  # Written by the ruby-e2e-harness profile in this module's pom.
+  CLASSPATH_FILE = "sidecar-classpath.txt"
+
+  BUILD_COMMAND = "run `./mvnw test -pl :parallel-consumer-proxy-client-ruby -am " \
+                  "-Dpc.foreignClients` from the repository root, which is the same wiring the CI " \
+                  "matrix row uses"
 
   Sidecar = Struct.new(:path, :args)
 
@@ -27,12 +44,24 @@ module Harness
 
   module_function
 
-  # The command that serves one conformance scenario in mock mode.
+  # The command that runs the real sidecar shell.
   #
-  # It RAISES rather than skips when the harness is not built. A spec that quietly does not run is
+  # NO ARGUMENTS, and that is the sidecar's own rule rather than this method being terse: it takes
+  # none and refuses to start when given one, because everything is configured connect-time over
+  # the protocol.
+  #
+  # It RAISES rather than skips when the sidecar is not built. A spec that quietly does not run is
   # not a passing spec, and nothing goes red to say so; the error names the build command instead.
+  def engine_less_sidecar
+    Sidecar.new(java_binary, ["-cp", classpath, MAIN_CLASS])
+  end
+
+  # The command that serves one conformance scenario in mock mode, engine-backed.
+  #
+  # It RAISES rather than skips when the harness is not built, for the same reason
+  # engine_less_sidecar does.
   def for_scenario(scenario)
-    Sidecar.new(java_binary, ["-cp", classpath, MAIN_CLASS, "--mock", "--scenario", scenario])
+    Sidecar.new(java_binary, ["-cp", classpath, TEST_MODE_MAIN_CLASS, "--mock", "--scenario", scenario])
   end
 
   def repo_root
@@ -72,48 +101,23 @@ module Harness
        .find { |path| File.executable?(path) }
   end
 
-  # The proxy module's test classpath: its test jar (which carries the harness), its main jar, and
-  # its test-scope dependencies.
+  # The sidecar's classpath, as Maven resolved it.
   #
-  # The dependency list comes from Maven and is cached beside this module's build output, because
-  # resolving it costs seconds and the answer changes only when the proxy module's poms do. It is
-  # never committed: it is a list of absolute paths into a local repository, so it is
-  # machine-specific.
+  # ONE ROUTE, AND IT RAISES RATHER THAN GUESSING. The ruby-e2e-harness profile in this module's
+  # pom writes target/sidecar-classpath.txt on generate-test-resources, which is the only thing that
+  # reliably knows where the proxy module's output and its dependencies are - in a reactor run they
+  # are class DIRECTORIES rather than jars, so hunting for a jar finds nothing after a `test`-phase
+  # build and reports it as an unbuilt module. Same arrangement as the Go, Python, TypeScript and
+  # Rust harnesses.
   def classpath
-    @classpath ||= [single_jar("-tests.jar"), single_jar(".jar"), dependency_classpath]
-                   .join(File::PATH_SEPARATOR)
-  end
+    @classpath ||= begin
+      file = File.join(module_dir, "target", CLASSPATH_FILE)
+      raise MissingError, "#{file} is missing - #{BUILD_COMMAND}" unless File.file?(file)
 
-  def proxy_target
-    File.join(repo_root, "parallel-consumer-proxy", "target")
-  end
+      found = File.read(file).strip
+      raise MissingError, "#{file} is empty - #{BUILD_COMMAND}" if found.empty?
 
-  def single_jar(suffix)
-    unless File.directory?(proxy_target)
-      raise MissingError, "#{proxy_target} is not built - run '#{BUILD_COMMAND}' first"
+      found
     end
-
-    matches = Dir.children(proxy_target).select { |name| name.end_with?(suffix) }
-    matches.reject! { |name| name.end_with?("-tests.jar", "-sources.jar", "-javadoc.jar") } if suffix == ".jar"
-    unless matches.size == 1
-      raise MissingError,
-            "expected exactly one #{suffix.inspect} jar in #{proxy_target}, found #{matches.size} - " \
-            "run '#{BUILD_COMMAND}'"
-    end
-
-    File.join(proxy_target, matches.first)
-  end
-
-  def dependency_classpath
-    cache = File.join(module_dir, "target", "proxy-test-classpath.txt")
-    return File.read(cache).strip if File.exist?(cache)
-
-    FileUtils.mkdir_p(File.dirname(cache))
-    ok = system(File.join(repo_root, "mvnw"), "-q", "-pl", ":parallel-consumer-proxy",
-                "dependency:build-classpath", "-Dmdep.outputFile=#{cache}",
-                "-Dmdep.includeScope=test", chdir: repo_root)
-    raise MissingError, "resolving the proxy module's test classpath failed" unless ok
-
-    File.read(cache).strip
   end
 end

@@ -4,7 +4,6 @@ package bz.stub.parallelconsumer.proxy.engine;
  */
 
 import bz.stub.parallelconsumer.proxy.protocol.v1.Token;
-import com.github.bsideup.jabel.Desugar;
 import lombok.experimental.UtilityClass;
 
 import java.util.ArrayList;
@@ -40,11 +39,38 @@ class ManifestReconciler {
      * @param unissued     tokens naming a record the proxy is not holding at all - rejected, disturbing
      *                     nothing held. A client bug or a fabrication; never a reason to touch the held set
      */
-    @Desugar
-    record Reconciliation(List<String> kept,
-                          List<Token> drops,
-                          List<String> unmanifested,
-                          List<Token> unissued) {
+    public static final class Reconciliation {
+
+        private final List<String> kept;
+
+        private final List<Token> drops;
+
+        private final List<String> unmanifested;
+
+        private final List<Token> unissued;
+
+        public Reconciliation(List<String> kept, List<Token> drops, List<String> unmanifested, List<Token> unissued) {
+            this.kept = kept;
+            this.drops = drops;
+            this.unmanifested = unmanifested;
+            this.unissued = unissued;
+        }
+
+        public List<String> kept() {
+            return kept;
+        }
+
+        public List<Token> drops() {
+            return drops;
+        }
+
+        public List<String> unmanifested() {
+            return unmanifested;
+        }
+
+        public List<Token> unissued() {
+            return unissued;
+        }
     }
 
     /**

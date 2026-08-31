@@ -138,6 +138,7 @@ whatsoever. Nothing binds to `clean` - see below.
   required; it remains the fastest loop when you are only re-running `go test`. The flip side is
   worth knowing: `-P` leaves the engine out of the reactor - three modules instead of six, and no
   JDK 17 needed - which makes it the quicker loop when all you want is this module compiled.
+<!-- file-refs: N/A - a build OUTPUT this module's Maven wiring writes, never a tracked file -->
 
 ### What a Java engineer will find surprising here
 
@@ -169,6 +170,6 @@ state Go cannot see:
 
 ## Depth
 
-[`client-authoring-guide.md`](../../parallel-consumer-proxy/docs/client-authoring-guide.md) and
-[`protocol-specification.md`](../../parallel-consumer-proxy/docs/protocol-specification.md) own the
+[`client-authoring-guide.md`](../../parallel-consumer-proxy-protocol/docs/client-authoring-guide.md) and
+[`protocol-specification.md`](../../parallel-consumer-proxy-protocol/docs/protocol-specification.md) own the
 protocol; this file does not restate them.

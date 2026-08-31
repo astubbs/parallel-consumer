@@ -115,7 +115,7 @@ public final class LanguageRunners {
      * rather than surfacing later.
      * <p>
      * <b>It needs Docker, and it says so by failing.</b> A missing daemon exits 2 out of that script,
-     * which fails the build and reaches the reader as {@link RunnerUnavailableException} naming the
+     * which fails the build and reaches the reader as {@link LanguageRunner.RunnerUnavailableException} naming the
      * command - never as a skip, which is the rule this whole registry exists to keep.
      */
     public static LanguageRunner cpp() {
@@ -153,7 +153,7 @@ public final class LanguageRunners {
      * formatter in there, so a red one fails this build rather than surfacing later.
      * <p>
      * <b>It needs Docker, and it says so by failing.</b> A missing daemon exits 2 out of that script,
-     * which fails the build and reaches the reader as {@link RunnerUnavailableException} naming the
+     * which fails the build and reaches the reader as {@link LanguageRunner.RunnerUnavailableException} naming the
      * command - never as a skip, which is the rule this whole registry exists to keep.
      */
     public static LanguageRunner swift() {

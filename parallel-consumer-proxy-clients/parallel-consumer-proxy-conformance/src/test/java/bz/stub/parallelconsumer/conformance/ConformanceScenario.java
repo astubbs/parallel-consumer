@@ -3,10 +3,9 @@ package bz.stub.parallelconsumer.conformance;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.proxy.harness.HarnessScenario;
-import bz.stub.parallelconsumer.proxy.harness.ProxyHarness;
-import com.github.bsideup.jabel.Desugar;
 
+import bz.stub.parallelconsumer.proxy.harness.HarnessScenario;
+import bz.stub.parallelconsumer.proxy.harness.ConformanceHarness;
 import java.time.Duration;
 
 /**
@@ -22,10 +21,61 @@ import java.time.Duration;
  * @author Antony Stubbs
  * @see ConformanceScenarios
  */
-@Desugar // Jabel requires the annotation on every record, even in this module where release=17 makes it a no-op
-public record ConformanceScenario(HarnessScenario harnessScenario, RunnerBehaviour behaviour,
-                                  int expectedDispatches, int maxConcurrency, Duration runnerBudget,
-                                  Assertion assertion) {
+/* A plain class rather than a record - LanguageRunner's header says why, for the whole module. */
+public final class ConformanceScenario {
+
+    private final HarnessScenario harnessScenario;
+
+    private final RunnerBehaviour behaviour;
+
+    private final int expectedDispatches;
+
+    private final int maxConcurrency;
+
+    private final Duration runnerBudget;
+
+    private final Assertion assertion;
+
+    public ConformanceScenario(HarnessScenario harnessScenario, RunnerBehaviour behaviour,
+                               int expectedDispatches, int maxConcurrency, Duration runnerBudget,
+                               Assertion assertion) {
+        this.harnessScenario = harnessScenario;
+        this.behaviour = behaviour;
+        this.expectedDispatches = expectedDispatches;
+        this.maxConcurrency = maxConcurrency;
+        this.runnerBudget = runnerBudget;
+        this.assertion = assertion;
+    }
+
+    /** What the engine seeds for this scenario. */
+    public HarnessScenario harnessScenario() {
+        return harnessScenario;
+    }
+
+    /** What the binding is prescribed to do with each delivery. */
+    public RunnerBehaviour behaviour() {
+        return behaviour;
+    }
+
+    /** How many deliveries the scenario prescribes before the binding is finished. */
+    public int expectedDispatches() {
+        return expectedDispatches;
+    }
+
+    /** The in-flight ceiling the session is configured with. */
+    public int maxConcurrency() {
+        return maxConcurrency;
+    }
+
+    /** The binding's whole wall-clock budget for carrying out the prescription. */
+    public Duration runnerBudget() {
+        return runnerBudget;
+    }
+
+    /** What must be true once it has. */
+    public Assertion assertion() {
+        return assertion;
+    }
 
     /**
      * A scenario whose in-flight ceiling is its own dispatch count - which is a ceiling nothing can reach,
@@ -53,7 +103,7 @@ public record ConformanceScenario(HarnessScenario harnessScenario, RunnerBehavio
      */
     @FunctionalInterface
     public interface Assertion {
-        void check(ProxyHarness harness, RunnerTranscript transcript);
+        void check(ConformanceHarness harness, RunnerTranscript transcript);
     }
 
     /** The scenario's stable name: its identity on the runner's command line, in the harness, and in every language's tests. */

@@ -162,6 +162,8 @@ class CheckQuarantineOwnersScriptTest extends AbstractQuarantineScriptTest {
                 ("class SomeQuarantinedIT {\n" +
                         "    @Quarantined(reason = \"d\", tracking = \"t\", fixedBy = \"astubbs#999999\")\n" +
                         "    void someMethod() {}\n}\n").getBytes(StandardCharsets.UTF_8));
+        // file-refs: N/A - a path inside the temporary fixture repo this test builds, not a path in
+        // this one; `module/` is the stand-in module name the fixture uses throughout.
         writeRegistry("- [ ] `SomeQuarantinedIT.someMethod` - diagnosed. **Owner: PR astubbs#999998**\n");
         Result r = run("GIT_STUB_BASE_ANNOTATED", "0");
         assertThat(r.exitCode).isEqualTo(0);

@@ -47,7 +47,7 @@ for e in $(registry_entries); do
     if [ -z "$f" ]; then
         echo "DRIFT: $REGISTRY lists $e but no @Quarantined annotation found in a class named $cls - stale entry; delete it (rule 3: annotation and entry go together)."
         drift=1
-    elif [ -n "$method" ] && ! grep -qE "[[:space:]]$method[[:space:]]*\(" "$f"; then
+    elif [ -n "$method" ] && ! grep -qE "[[:space:]]${method}[[:space:]]*\(" "$f"; then
         echo "DRIFT: $REGISTRY lists $e but no method '$method' exists in $f - stale method entry; fix or delete it."
         drift=1
     fi

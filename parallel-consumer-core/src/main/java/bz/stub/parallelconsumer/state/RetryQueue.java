@@ -6,7 +6,6 @@ package bz.stub.parallelconsumer.state;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumer;
-import lombok.AccessLevel;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import org.apache.kafka.common.utils.CloseableIterator;
@@ -32,12 +31,10 @@ import java.util.stream.Collectors;
  */
 public class RetryQueue {
 
-    @Getter(AccessLevel.PACKAGE) //visible for testing
+    // No accessors: these are lock-protected, and handing them out bypasses every lock in this class.
     private final Map<WorkContainerKey, WorkContainerSortKey> unique = new HashMap<>();
-    @Getter(AccessLevel.PACKAGE) //visible for testing
     private final NavigableMap<WorkContainerSortKey, WorkContainer<?, ?>> sorted;
 
-    @Getter(AccessLevel.PACKAGE) //visible for testing
     private final Comparator<WorkContainerSortKey> comparator = Comparator
             .comparing(WorkContainerSortKey::getRetryDueAt)
             .thenComparing(WorkContainerKey::getTopic)
@@ -56,7 +53,12 @@ public class RetryQueue {
      * @return size of the set
      */
     public int size() {
-        return unique.size();
+        lock.readLock().lock();
+        try {
+            return unique.size();
+        } finally {
+            lock.readLock().unlock();
+        }
     }
 
     /**
@@ -65,7 +67,12 @@ public class RetryQueue {
      * @return true if the set is empty
      */
     public boolean isEmpty() {
-        return unique.isEmpty();
+        lock.readLock().lock();
+        try {
+            return unique.isEmpty();
+        } finally {
+            lock.readLock().unlock();
+        }
     }
 
     /**
@@ -158,7 +165,25 @@ public class RetryQueue {
      * @return true if the set was modified
      */
     public <K, V> boolean removeAll(List<WorkContainer<K, V>> toRemove) {
-        if (toRemove == null || unique.isEmpty()) {
+        // GUARD ON THE CALLER'S OWN LIST, never on `unique`. The original fast path read
+        // `unique.isEmpty()` with no lock held while writers mutate it under the write lock, so the
+        // JMM permitted a stale `true` and this method could return false having removed nothing -
+        // leaving a container in the retry queue while it was also in flight.
+        //
+        // Deleting it outright was the first fix and it was wrong about the cost: the claim was that
+        // the guard "only saved one uncontended lock acquisition on an empty queue". It is not
+        // uncontended and it is not once. `ProcessingShard.getWorkIfAvailable` calls this
+        // unconditionally, `ShardManager` calls that in a loop over shards, and that runs every
+        // control-loop tick - so it is one acquisition per shard per tick, bounded by key
+        // cardinality under KEY ordering. The lock is FAIR, so it queues rather than barges and
+        // blocks readers behind it, including `iterator()`, which holds the read lock for a whole
+        // iteration.
+        //
+        // `toRemove.isEmpty()` restores the fast path with none of the hazard: the list is the
+        // caller's, freshly built by `workTaken.stream().filter(...)`, shared with no other thread.
+        // It is also the more precise question - nothing to remove means nothing to do, whatever the
+        // queue currently holds.
+        if (toRemove == null || toRemove.isEmpty()) {
             return false;
         }
         lock.writeLock().lock();

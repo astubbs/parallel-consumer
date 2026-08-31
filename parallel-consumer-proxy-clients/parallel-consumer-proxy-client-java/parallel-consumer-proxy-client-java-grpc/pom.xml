@@ -92,4 +92,23 @@
         </dependency>
     </dependencies>
 
+    <build>
+        <plugins>
+            <!--
+                The SpotBugs gate is bound in the parent pom for every module beneath it; this only
+                points it at THIS module's exclusion filter, whose entries carry their own reasoning.
+                ${project.basedir} rather than a shared path in the parent: a relative
+                excludeFilterFile resolves against the module being built, so a filter declared once
+                in the parent would be looked for inside each child anyway.
+            -->
+            <plugin>
+                <groupId>com.github.spotbugs</groupId>
+                <artifactId>spotbugs-maven-plugin</artifactId>
+                <configuration>
+                    <excludeFilterFile>${project.basedir}/spotbugs-exclude.xml</excludeFilterFile>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
 </project>
