@@ -53,3 +53,25 @@ inherits more than the three hooks named above:
   so must read stderr, whereas `gh pr list --head` exits 0 with empty output for a real absence and
   non-zero only on failure. Its slug derivation also predates the `file://` fix. Read it for the
   shape of the problem, not for code to lift.
+
+**The INPUT to the lookup was wrong too, and that half is now fixed** (2026-08-31). Every copy fed
+it `git rev-parse --abbrev-ref HEAD` read in the hook process's own directory, which is the
+SESSION's - not the directory the guarded command runs in. With several worktrees checked out at
+once the lookup therefore asked about an unrelated branch and answered confidently. Seen twice in one
+session, both times reported against `docs/god-branch-decomposition-plan`, the plan worktree that
+session occupied: a force-push of `feats/proxy-verdict-free-return`
+(astubbs/parallel-consumer#295 - an open PR *with review history*, the exact case the guard exists to
+name) and a `git commit --amend` inside the `feats/ks-streams-fork-machinery` worktree.
+
+The fix takes the branch from the push refspec when the command names one, and otherwise from a
+leading `cd <path>`, the payload's `cwd`, or the hook's own directory in that order - with the
+refusal saying which it used. **The dedup decision above is untouched by it**, and it adds a fourth
+thing that now exists twice: the refspec rule, as `hook_push_head_ref` in
+`.claude/hooks/lib/hook-common.sh` (bash) and as `push_head_ref` inside
+`.claude/hooks/check-history-rewrite.sh` (python), duplicated for the same fail-open reason that
+keeps the lookup itself duplicated. Whoever folds these together folds that in too.
+
+`.claude/hooks/check-merge-outstanding-work.sh` was judged against the same defect and left alone: it
+reads the PR number out of `gh pr merge <n>` first, and its `HEAD` fallback is only reached for a
+bare `gh pr merge`, which resolves the current branch exactly as the fallback does. Correct, rather
+than merely untouched.
