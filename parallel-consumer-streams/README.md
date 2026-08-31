@@ -25,11 +25,28 @@ time rather than at runtime when the change stops applying.
 -Dpc.streams.dispatch.enabled=true
 ```
 
-**The seam is OFF by default. This is an opt-in preview, and the reason is a missing refusal rather
-than caution.** Joins, windows, suppression, exactly-once and stream-time punctuation are unsupported
-on the PC path *and are not yet refused* - a topology using one of them is dispatched anyway and gets
-wrong behaviour, with nothing in the log to say so. Until that refusal envelope exists, the only
-honest default is one that cannot silently mis-run a topology nobody checked.
+**The seam is OFF by default. This is an opt-in preview** - but the reason has changed, and the
+change is worth reading rather than skipping.
+
+The original reason was a missing refusal: joins, windows, suppression and exactly-once were
+unsupported *and not refused*, so a topology using one was dispatched anyway and got wrong behaviour
+with nothing in the log to say so. That gap is closed - see
+[What is refused, and how you find out](#what-is-refused-and-how-you-find-out). The commitment made
+at the time was to restore on-by-default the day refusal landed.
+
+**It is not being restored, and the replacement reason was found by measuring rather than by
+worrying.** Run Apache Kafka's own suite against the patched classes with the seam *on* and
+`StreamThreadTest` reaches `StreamTask.revive()` through Kafka's ordinary task-corruption recovery: a
+`TaskCorruptedException` closes the task dirty and revives the same instance, whose PC dispatcher is
+final and was closed on the way down. `revive()` throws the loud-failure `IllegalStateException` that
+exists to stop that becoming a silent stall, nothing catches it, and it leaves the run loop uncaught
+on the StreamThread. `TaskCorruptedException` is not exotic - it is what Kafka raises when a
+consumer's offset falls outside the topic's retained range.
+
+So: a refused surface is safe to have switched on; a thrown lifecycle event mid-recovery is not. The
+default now waits on task lifecycle and rebalance - the work that gives the dispatcher a life beyond
+the task instance it was built with - and whoever moves it should re-run that seam-on measurement
+first rather than trusting this paragraph.
 
 Two further switches, both process-wide for the reason given in
 [`PcDispatchSwitch`](src/main/java/bz/stub/parallelconsumer/streams/PcDispatchSwitch.java) (there is
@@ -83,10 +100,14 @@ through a second, smaller patch, for the reason given below.
 | `RecordCollectorImpl` | two `HashMap`s become `ConcurrentHashMap`s | written from the producer's I/O thread for every in-flight send; the compiler would never have demanded this class, so it is named rather than discovered |
 | `StreamTask` | record selection and the commit gates ask the dispatcher instead of the partition group; the processor chain runs on a worker | **the seam itself**, and the only class here that references Parallel Consumer - which is what let the machinery rung land the three above without it |
 | `StreamThread` | the poll wait is split: a short poll, then a wait on our own condition that a worker completion ends | it owns the only blocking wait in the run loop, and nothing else can split it - see [wake-on-work](#wake-on-work-why-the-poll-wait-is-split) |
+| `KStream`, `KTable`, `KGroupedStream`, `CogroupedKStream` | the refused overloads gain `@DoNotCall`, `@Deprecated` and a javadoc `@deprecated` tag naming this module | a call site resolves to the symbol its receiver's **static type** declares, so the compile-time half of a refusal has to sit on the interface - an annotation on the impl would never be consulted |
+| `KStreamImpl`, `KTableImpl`, `KGroupedStreamImpl`, `CogroupedKStreamImpl` | the same operators throw `UnsupportedOperationException` naming the construct, when the seam is on | an interface method has no body to throw from; this is the run-time half, and it is what refuses a topology built reflectively or from a language the annotations do not reach |
 
 That is the whole patch. The set is **named in the pom, not discovered**
 (`patched.classes`), and the stop-threshold is stated there: if it has to grow much past a dozen, the
-sprawl is itself the answer to "how little had to change", and this is a fork by instalments.
+sprawl is itself the answer to "how little had to change", and this is a fork by instalments. It is
+now thirteen - past that line rather than at it, which the pom says out loud along with the smaller
+alternative that was weighed and its cost.
 
 Kafka's `InternalMockProcessorContext` needs the second patch because it *also* reads those fields
 directly. Un-patched, every `RecordCollectorTest` case dies at construction with a
@@ -110,13 +131,22 @@ than a fork; and every generated class shares both a package name and a **classl
 because different classloaders split the package and break package-private access while the names
 still match.
 
-The jar-resident three are chosen for adjacency, not convenience: `PartitionGroup` is the buffer the
-seam bypasses, `RecordQueue` is reached into by the seam's own record preparation, and `TaskManager`
+Those three are chosen for adjacency, not convenience: `PartitionGroup` is the buffer the seam
+bypasses, `RecordQueue` is reached into by the seam's own record preparation, and `TaskManager`
 constructs `StreamTask`. If generation ever sprawled past the declared set, those are the first three
 it would reach.
 
 `StreamTask` and `StreamThread` used to be that list, on the machinery rung, precisely so the
-assertion would have to flip *visibly* on the day the generated set grew. It flipped here.
+assertion would have to flip *visibly* on the day the generated set grew. It flipped on the execution
+seam.
+
+**"Same runtime package" is a per-package property**, and the refusal envelope took the generated set
+into two more packages - so the jar-resident list gained `Materialized` and `ConsumedInternal`, one
+neighbour for each. Without them the coexistence claim about those packages would have been checked
+against nothing while still passing. The test fails loudly on a generated class in a package with no
+declared neighbour rather than skipping it, and a further test reads `patched.classes` out of the pom
+through surefire and asserts the two lists are the same set - because "keep this in sync" is a comment,
+not a check.
 
 ### An empty patch is a no-op, and that is checked by the tooling
 
@@ -131,8 +161,13 @@ between the technique and the change.
 Kafka publishes its **compiled** tests to Maven Central. This module takes them as a `test`-classifier
 dependency and points a dedicated surefire execution at them, so Kafka's own `StreamTaskTest`,
 `StreamThreadTest`, `RecordCollectorTest` and `ProcessorContextImplTest` exercise **our** copies of
-the five patched classes. Nothing is excluded, rewritten, recompiled or relaxed. It runs in the
+the patched classes. Nothing is excluded, rewritten, recompiled or relaxed. It runs in the
 module's normal `test` phase, on every build, with no profile and no flag.
+
+This is also the reason **no refused signature was deleted**. Those tests are Kafka's own *compiled*
+classes, never recompiled here, so a deleted method would link-fail against classes this project does
+not own - and the behaviour-preservation evidence would be forfeited by the very change meant to make
+the module honest. Refusal is therefore additive: annotations, and a throw guarded on the seam.
 
 That is the behaviour-preservation claim, and it is the strongest one available: **anything the patch
 broke that Kafka tested, fails here.**
@@ -181,6 +216,89 @@ split wait idle. That measurement, its refuted prediction and its arms are owned
 **this rung does not re-derive it and no figure is repeated here**, because the benchmark that
 produces one is a separate unit and a number copied out of its write-up drifts silently from it. What
 this rung ships is the mechanism and the tests that show it is load-bearing.
+
+---
+
+## What is refused, and how you find out
+
+Everything currently known to be broken on this path is **physically refused**. You do not get a
+plausible wrong answer.
+
+That matters more than it sounds. None of these constructs throws in stock Kafka Streams, and none of
+them would have thrown here either. They read a stream-time counter that never advances on the PC
+path - `PartitionGroup.nextRecord()` is where stock Streams advances it, and the PC path does not go
+through it - and several of them read-modify-write a **non-volatile `long`** from every worker, so
+under concurrent dispatch the value is corrupted rather than merely stale. Left reachable, the
+topology runs to completion and emits the wrong numbers, silently. Refusing is the only honest
+behaviour available until the semantics are fixed.
+
+### Three layers, because no one of them covers the surface
+
+| You get | When |
+|---|---|
+| A **compile error** - `@DoNotCall` under Error Prone, a deprecation warning without it | you write `join`, `leftJoin`, `outerJoin`, `windowedBy` or `suppress` against `KStream`, `KTable`, `KGroupedStream` or `CogroupedKStream` |
+| An `UnsupportedOperationException` naming the construct, at topology construction | you build that topology with the seam on |
+| An `UnsupportedOperationException` naming the construct, at task construction | your topology reaches a `WindowStore`, `SessionStore`, versioned key-value store or suppression buffer **through the Processor API**, or sets `processing.guarantee` to exactly-once |
+
+The DSL layer only fires for someone who called a refused method. The Processor API reaches the same
+machinery without touching `KStream` at all - `topology.addStateStore(Stores.windowStoreBuilder(...))`
+connects a window store to a plain `Processor` - and exactly-once is not a topology shape at all, it
+is one configuration key. The third layer is what covers both, and it lives in `StreamTask`'s
+constructor because that is the one place holding both the topology and the task config, so it costs
+no additional patched class.
+
+The store check is by **interface, never by class name**: the stores that reach the task are wrapped
+several layers deep, and every wrapper implements the interface it wraps. `instanceof` sees through
+the whole stack; a name match sees the outermost wrapper and breaks the first time Kafka adds one.
+The versioned key-value store is the trap in that design and is worth knowing about - it extends
+`StateStore` directly rather than `WindowStore`, so it looks ordinary, and it is reachable with **no
+refused DSL call anywhere** via `Materialized.as(Stores.persistentVersionedKeyValueStore(...))`. The
+general rule that came out of that is written up in
+[`a-type-gate-is-a-claim-about-a-hierarchy-you-did-not-write.md`](../docs/solutions/architecture-patterns/a-type-gate-is-a-claim-about-a-hierarchy-you-did-not-write.md).
+
+### The two run-time layers are conditional on the seam; the compile-time one cannot be
+
+With `-Dpc.streams.dispatch.enabled=false` the whole of the refusal's run-time half is inert and every
+one of these topologies builds and runs exactly as stock Kafka Streams does. That is both the escape
+hatch and the reason Kafka's own suite still passes: several of those tests build precisely the
+constructs listed here, and an unconditional check would refuse them and void the
+behaviour-preservation claim.
+
+**The compile-time layer is not conditional and cannot be** - an annotation in a class file cannot
+read a system property. If you have deliberately turned the seam off and want the call anyway,
+suppress `DoNotCall` at that call site. This repository does compile under Error Prone, so that is a
+hard error here rather than a theoretical one, and the module's own refusal test carries exactly that
+suppression: deleting it fails the build with one error per refused call site, which is the cheapest
+available falsification of the compile-time layer.
+
+Every refused method also carries a javadoc `@deprecated` tag naming **this module** as the thing
+refusing it. Without that, an IDE strikes `stream.join(...)` through with no reason attached, and the
+obvious inference - that Apache Kafka deprecated `join` - is false and alarming. The general shape of
+that mistake is written up in
+[`a-deprecation-without-an-explanation-misattributes-itself-to-the-wrong-party.md`](../docs/solutions/architecture-patterns/a-deprecation-without-an-explanation-misattributes-itself-to-the-wrong-party.md).
+
+### If you hit the task-construction refusal, it will not stop on its own
+
+That throw leaves `StreamTask`'s constructor, is caught by nothing on the way out, and reaches
+`KafkaStreams`' uncaught-exception handler. Under `StreamsUncaughtExceptionHandlerResponse.REPLACE_THREAD`
+the thread is replaced with no backoff and no attempt limit - and the replacement is refused for the
+same reason, so the application rebalances in a loop. The refusal is a property of the topology and
+the switch, not a transient failure. **Do not pair `REPLACE_THREAD` with a topology this module can
+refuse.** Moving the check ahead of `KafkaStreams.start()` is the structural fix and is not done here.
+
+### Reinstatement is evidence-gated, not judgement-gated
+
+A construct comes off the refused list when Kafka's own suite exercises it with the seam **on** and
+passes - not when someone reads the code and concludes it looks fine.
+
+### What is still unsupported and NOT refused
+
+**Stream-time punctuation.** A topology that calls
+`context.schedule(interval, PunctuationType.STREAM_TIME, ...)` is a common, non-windowed pattern, and
+under PC dispatch stream time never advances, so the punctuator simply never fires: no exception, no
+warning, no output. It is the one item of the original unsupported list this envelope does not cover,
+because it is a call on the processor context rather than a topology shape or a store type. Wall-clock
+punctuation does fire.
 
 ---
 
