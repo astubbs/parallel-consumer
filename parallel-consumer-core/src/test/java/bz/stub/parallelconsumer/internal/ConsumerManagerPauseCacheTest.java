@@ -10,14 +10,14 @@ import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import pl.tlinkowski.unij.api.UniLists;
+import pl.tlinkowski.unij.api.UniMaps;
+import pl.tlinkowski.unij.api.UniSets;
 
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.google.common.truth.Truth.assertThat;
-import pl.tlinkowski.unij.api.UniLists;
-import pl.tlinkowski.unij.api.UniMaps;
-import pl.tlinkowski.unij.api.UniSets;
 
 /**
  * {@link ConsumerManager#getPausedPartitionSize()} must describe the pause state of the poll that is

@@ -4,16 +4,10 @@ package bz.stub.parallelconsumer.internal;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import org.apache.kafka.clients.consumer.MockConsumer;
-import org.apache.kafka.clients.consumer.OffsetResetStrategy;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 
 import static com.google.common.truth.Truth.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -50,27 +44,15 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  *   which is the ordinary shutdown every user hits.</li>
  * </ol>
  */
-class ConsumerManagerCloseOwnershipTest {
+class ConsumerManagerCloseOwnershipTest extends ThreadConfinedConsumerTestBase {
 
     private static final Duration TIMEOUT = Duration.ofSeconds(1);
 
-    private MockConsumer<String, String> delegate;
-    private ThreadConfinedConsumer<String, String> confined;
     private ConsumerManager<String, String> manager;
-    private ExecutorService other;
 
     @BeforeEach
-    void setup() {
-        delegate = new MockConsumer<>(OffsetResetStrategy.EARLIEST);
-        confined = new ThreadConfinedConsumer<>(delegate);
+    void wrapTheConfinedConsumerInAManager() {
         manager = new ConsumerManager<>(confined, TIMEOUT, TIMEOUT, TIMEOUT);
-        other = Executors.newSingleThreadExecutor(r -> new Thread(r, "test-foreign-owner"));
-    }
-
-    @AfterEach
-    void teardown() throws InterruptedException {
-        other.shutdownNow();
-        other.awaitTermination(5, TimeUnit.SECONDS);
     }
 
     /**
@@ -113,9 +95,5 @@ class ConsumerManagerCloseOwnershipTest {
         assertDoesNotThrow(() -> manager.close(TIMEOUT));
 
         assertThat(delegate.closed()).isTrue();
-    }
-
-    private void onOtherThread(Runnable work) throws Exception {
-        other.submit(work).get(5, TimeUnit.SECONDS);
     }
 }

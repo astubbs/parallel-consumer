@@ -26,6 +26,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
+import java.util.regex.Pattern;
 
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
@@ -88,21 +89,24 @@ public class ConsumerManager<K, V> {
     private int correctPollWakeups = 0;
     private int noWakeups = 0;
 
+    private boolean commitRequested;
+
     /**
      * Prime the metadata cache so that groupMetadata() returns a valid value before the poll
      * thread starts. Must be called after construction, before any thread claims ownership.
      * <p>
-     * Silently handles errors (e.g., missing group.id) — validation happens later in
-     * the PC constructor's checkGroupIdConfigured().
+     * Absorbs errors (e.g., missing group.id) — validation happens later in the PC constructor's
+     * checkGroupIdConfigured(), which calls groupMetadata() on the consumer directly and throws a
+     * message naming the missing config. Logs the exception itself rather than only its message, so
+     * a failure that is NOT the group-id case - which has no such backstop - is still diagnosable.
      */
     void init() {
         try {
             updateCache();
         } catch (Exception e) {
-            log.trace("Could not prime cache during init (will be validated later): {}", e.getMessage());
+            log.trace("Could not prime cache during init (will be validated later)", e);
         }
     }
-    private boolean commitRequested;
 
     ConsumerRecords<K, V> poll(Duration requestedLongPollTimeout) {
         Duration timeoutToUse = requestedLongPollTimeout;
@@ -128,7 +132,7 @@ public class ConsumerManager<K, V> {
             // property the exit refresh relies on (see the comment there).
             updateCache();
             pollingBroker.set(true);
-            log.trace("Poll starting with timeout: {}, assignment size: {}", timeoutToUse, assignmentSizeCache);
+            log.debug("Poll starting with timeout: {}", timeoutToUse);
             Instant pollStarted = Instant.now();
             long tryCount = 0;
             boolean polledSuccessfully = false;
@@ -177,25 +181,16 @@ public class ConsumerManager<K, V> {
         // Update the cache after pollingBroker is cleared, so wakeup() from another thread
         // won't call consumer.wakeup() while we're calling consumer.groupMetadata()/paused().
         // This fixes ConcurrentModificationException when close() races against poll().
-        // Always update (not just when records > 0) so assignment cache stays current after rebalances.
+        // Always update (not just when records > 0) so the caches stay current after a rebalance,
+        // which happens inside poll().
         // See https://github.com/confluentinc/parallel-consumer/issues/857
         updateCache();
         return records != null ? records : new ConsumerRecords<>(UniMaps.of());
     }
 
-    private volatile int assignmentSizeCache = 0;
-
     protected void updateCache() {
         metaCache = consumer.groupMetadata();
         pausedPartitionSizeCache = consumer.paused().size();
-        assignmentSizeCache = consumer.assignment().size();
-    }
-
-    /**
-     * Cached assignment size, safe to read from any thread. Updated during poll.
-     */
-    public int getAssignmentSize() {
-        return assignmentSizeCache;
     }
 
     /**
@@ -463,16 +458,8 @@ public class ConsumerManager<K, V> {
         consumer.subscribe(topics, listener);
     }
 
-    void subscribe(java.util.regex.Pattern pattern, ConsumerRebalanceListener listener) {
+    void subscribe(Pattern pattern, ConsumerRebalanceListener listener) {
         consumer.subscribe(pattern, listener);
-    }
-
-    /**
-     * Returns the raw consumer class type for reflection-based checks (e.g., auto-commit detection).
-     * Does not access the consumer's Kafka methods, just the class object.
-     */
-    Class<?> getConsumerClass() {
-        return consumer.getClass();
     }
 
     public void resume(final Set<TopicPartition> pausedTopics) {

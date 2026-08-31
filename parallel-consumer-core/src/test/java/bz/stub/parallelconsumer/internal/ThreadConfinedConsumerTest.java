@@ -4,16 +4,9 @@ package bz.stub.parallelconsumer.internal;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import org.apache.kafka.clients.consumer.MockConsumer;
-import org.apache.kafka.clients.consumer.OffsetResetStrategy;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 
 import static com.google.common.truth.Truth.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -36,39 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  *       would silently disarm the guard</li>
  * </ol>
  */
-class ThreadConfinedConsumerTest {
-
-    ThreadConfinedConsumer<String, String> confined;
-
-    MockConsumer<String, String> delegate;
-
-    ExecutorService otherThread;
-
-    @BeforeEach
-    void setup() {
-        delegate = new MockConsumer<>(OffsetResetStrategy.EARLIEST);
-        confined = new ThreadConfinedConsumer<>(delegate);
-        otherThread = Executors.newSingleThreadExecutor(runnable -> {
-            Thread thread = new Thread(runnable, "test-foreign-thread");
-            thread.setDaemon(true);
-            return thread;
-        });
-    }
-
-    @AfterEach
-    void teardown() {
-        otherThread.shutdownNow();
-    }
-
-    /** Runs the action on the foreign thread and rethrows anything it threw. */
-    private void onOtherThread(Runnable action) throws Exception {
-        try {
-            otherThread.submit(action).get(10, TimeUnit.SECONDS);
-        } catch (java.util.concurrent.ExecutionException e) {
-            if (e.getCause() instanceof Exception cause) throw cause;
-            throw e;
-        }
-    }
+class ThreadConfinedConsumerTest extends ThreadConfinedConsumerTestBase {
 
     @Test
     void unclaimedConsumerAllowsAnyThread() throws Exception {
@@ -84,7 +45,7 @@ class ThreadConfinedConsumerTest {
         onOtherThread(() -> {
             var thrown = assertThrows(IllegalStateException.class, () -> confined.close());
             assertThat(thrown).hasMessageThat().contains("close");
-            assertThat(thrown).hasMessageThat().contains("test-foreign-thread");
+            assertThat(thrown).hasMessageThat().contains(FOREIGN_THREAD_NAME);
         });
 
         // owner is unaffected
