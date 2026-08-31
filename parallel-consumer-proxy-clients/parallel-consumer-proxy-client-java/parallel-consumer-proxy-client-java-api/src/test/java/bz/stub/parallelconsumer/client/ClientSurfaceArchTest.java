@@ -32,7 +32,12 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
  * This module's <em>test</em> conventions are NOT checked by the shared {@code TestConventionRules}, unlike
  * every other module in the repo: that rule library ships in core's test-jar, and this pom forbids a
  * dependency on core in any scope. The gap is recorded in {@code docs/client-static-analysis.md} rather than
- * closed by weakening the pom.
+ * closed by weakening the pom, and {@code EveryModuleWiresUpArchUnitTest} names this module as its one
+ * exemption for that reason.
+ * <p>
+ * <b>That exemption is why this class must not simply be deleted.</b> The exemption is guarded: the same test
+ * asserts that an exempt module still runs <em>some</em> {@code @AnalyzeClasses} wrapper, so removing this one
+ * turns the exemption back into a failure rather than into silence.
  */
 @AnalyzeClasses(packages = "bz.stub.parallelconsumer.client", importOptions = ImportOption.DoNotIncludeTests.class)
 class ClientSurfaceArchTest {

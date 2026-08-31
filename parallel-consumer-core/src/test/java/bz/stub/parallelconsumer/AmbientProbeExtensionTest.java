@@ -31,6 +31,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
@@ -264,6 +265,52 @@ class AmbientProbeExtensionTest {
         assertThat(autopsy).contains("in-topic-12: committed=100 end=2200 lag=2100 stagnant=");
         assertThat(autopsy).contains("failure: (no cause reported)");
         assertThat(autopsy).doesNotContain("probe clean");
+    }
+
+    /**
+     * A non-gating observation did not cause the failure being autopsied, but a reader diagnosing one
+     * needs to know a watermark sat pinned while it happened - and since 2026-08-25 the autopsy and the
+     * chaos job summary are the ONLY places a Class 2 finding can appear at all. If this section stops
+     * rendering, the finding does not go red anywhere; it simply becomes invisible.
+     */
+    @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
+    void autopsyListsNonGatingObservationsSeparatelyFromViolations() {
+        var probe = observerProbe();
+        probe.getObservations().add("CLASS2_STALL/LAG_STAGNATION: partition in-topic-21 lag=2974 "
+                + "with committed offset stagnant at 91 for 153s (bound 150s).");
+
+        String autopsy = AmbientProbeExtension.buildAutopsy(
+                contextFor(PlainFixture.class, "plainMethod"), probe, null);
+
+        assertThat(autopsy).contains("observations, non-gating (1):");
+        assertThat(autopsy).contains("CLASS2_STALL/LAG_STAGNATION: partition in-topic-21");
+        assertWithMessage("an observation must never be counted as a violation - that conflation is the "
+                + "regression this section exists to make visible")
+                .that(autopsy).contains("violations (0):");
+        assertWithMessage("an observation is something observed, so the clean-probe shortcut must not fire")
+                .that(autopsy).doesNotContain("probe clean");
+    }
+
+    /**
+     * Whenever the autopsy renders its sections at all, "no observations" is STATED rather than left
+     * to be inferred from an absent heading. The probe here is non-clean (a frozen partition), because
+     * a wholly clean probe takes the "probe clean" shortcut and renders no sections - that shortcut is
+     * asserted separately, and this test exists to prove the zero case inside the normal path.
+     */
+    @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
+    void autopsyStatesWhenThereWereNoObservations() {
+        var probe = observerProbe();
+        var tp = new TopicPartition("in-topic", 3);
+        probe.getPartitionLagSnapshots().put(tp,
+                new ProgressProbe.PartitionLagSnapshot(tp, 100, 2200, 2100, Instant.now().minusSeconds(120)));
+
+        String autopsy = AmbientProbeExtension.buildAutopsy(
+                contextFor(PlainFixture.class, "plainMethod"), probe, null);
+
+        assertThat(autopsy).contains("observations, non-gating (0):");
+        assertThat(autopsy).contains("  (none)");
     }
 
     @Test

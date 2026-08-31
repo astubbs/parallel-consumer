@@ -103,7 +103,7 @@ tell you the answer.
 
 ```bash
 dotnet build                                                # build, WITH the lint (see below)
-dotnet test                                                 # the end-to-end conformance test
+dotnet test                                                 # the end-to-end test, and the handshake
 dotnet format --verify-no-changes                           # formatting and style, no build needed
 ```
 
@@ -188,6 +188,6 @@ language, asserting engine state this process cannot see:
 
 ## Depth
 
-[`client-authoring-guide.md`](../../parallel-consumer-proxy/docs/client-authoring-guide.md) and
-[`protocol-specification.md`](../../parallel-consumer-proxy/docs/protocol-specification.md) own the
+[`client-authoring-guide.md`](../../parallel-consumer-proxy-protocol/docs/client-authoring-guide.md) and
+[`protocol-specification.md`](../../parallel-consumer-proxy-protocol/docs/protocol-specification.md) own the
 protocol; this file does not restate them.

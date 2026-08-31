@@ -157,5 +157,5 @@ That entry needs Docker, and it says so by failing rather than skipping.
 
 Pins, traps and what this wave settled are in
 [`docs/inflight/clients/swift.md`](../../docs/inflight/clients/swift.md). The protocol itself is
-[`client-authoring-guide.md`](../../parallel-consumer-proxy/docs/client-authoring-guide.md) and
-[`protocol-specification.md`](../../parallel-consumer-proxy/docs/protocol-specification.md).
+[`client-authoring-guide.md`](../../parallel-consumer-proxy-protocol/docs/client-authoring-guide.md) and
+[`protocol-specification.md`](../../parallel-consumer-proxy-protocol/docs/protocol-specification.md).

@@ -6,9 +6,9 @@ labels, and the service. AGENTS.md carries only the pointer; which lanes are pin
 `highcpu` label, and why, belongs to [`ci.md`](ci.md).
 
 Workflows that use them:
-[`pr-highcpu-fast-feedback.yml`](../.github/workflows/pr-highcpu-fast-feedback.yml)
-(every in-repo PR) and
-[`mutation-full-sweep.yml`](../.github/workflows/mutation-full-sweep.yml) (manual).
+[`chaos-pain.yml`](../.github/workflows/chaos-pain.yml)
+(on-demand seeded chaos hunts) and
+[`mutation-full-sweep.yml`](../.github/workflows/mutation-full-sweep.yml) (nightly, plus manual).
 Both target the single custom label **`highcpu`**.
 
 > **`highcpu` is the only self-hosted label.** Before pinning a job to any other, register a runner
@@ -62,11 +62,11 @@ order-dependent test).
 ## What you get
 
 - A GitHub Actions runner registered to your fork (`astubbs/parallel-consumer`)
-- Triggered on every **in-repo** pull request, plus `workflow_dispatch`. PRs from
-  forks are skipped by a same-repo guard and never run on your hardware - read
-  [Security & trust model](#security--trust-model) before changing that
-- Runs the performance suite (`bin/performance-test.sh`) and the Chaos Pain
-  Suite with concurrent test execution, advisory rather than gating
+- Triggered by `schedule` and `workflow_dispatch` only. **No workflow here runs on a
+  pull request**, so no fork code can reach your hardware and no PR waits on it -
+  read [Security & trust model](#security--trust-model) before changing that
+- Runs the nightly whole-tree PIT mutation sweep, and seeded chaos hunts on
+  demand - advisory rather than gating
 
 ## Provision the VM on Proxmox
 
@@ -169,9 +169,26 @@ from one that was never registered: the job queues.
 ### The `highcpu` runners (many-core Linux LXC, several instances)
 
 The heavy runner is a many-core Linux box running a Docker LXC with **several runner instances** (one per
-concurrent job), targeted by the [`highcpu`](../.github/workflows/pr-highcpu-fast-feedback.yml)
-workflow (`runs-on: [self-hosted, highcpu]`, same-repo-guarded, non-gating). **Performance** and the
-**Chaos Pain Suite** run there as separate matrix jobs in parallel. Provisioning it (OpenTofu + Ansible)
+concurrent job), targeted by [`mutation-full-sweep.yml`](../.github/workflows/mutation-full-sweep.yml)
+and [`chaos-pain.yml`](../.github/workflows/chaos-pain.yml)
+(`runs-on: [self-hosted, highcpu]`, non-gating). **Performance** and the
+**Chaos Pain Suite** ran there as separate matrix jobs until 2026-08-26, when chaos moved to the
+GitHub-hosted gate - measured no slower there, and a hosted job gets its own VM (see [`ci.md`](ci.md),
+"Chaos does not need the self-hosted box"). The lane then stopped running per-PR altogether: its
+remaining `Performance (optional)` check ran the same `bin/performance-test.sh` as `maven.yml`'s
+**required** `Performance Tests` job, so it was a non-gating duplicate of a gating check. The suite
+stays here as a **dispatch-only** uncontended benchmark, which is the one thing the hosted gate
+cannot produce.
+
+> **The number of runner instances IS the box's concurrency limit, and it is the only one.** No
+> workflow caps how many jobs run here - jobs queue on the runners like any other GitHub Actions job,
+> so every queued job eventually runs. If the box is being overloaded (the tell is a job whose log
+> stops dead and which fails with no `BUILD FAILURE` and no stack trace - the process was killed),
+> **run fewer runner instances**; do not add a `concurrency` group to a workflow to simulate it. A
+> concurrency group keeps one run plus at most one pending and *discards* the rest, so it silently
+> deletes work instead of queueing it - measured at 26 of 32 jobs never starting while five of six
+> runners were idle. [`ci.md`](ci.md), "Why a `concurrency` group is not a mutex", owns that
+> reasoning. Provisioning it (OpenTofu + Ansible)
 and the on-demand power/boot control are generic infrastructure kept in a separate private infra repo,
 not here.
 
@@ -180,13 +197,15 @@ here too and were removed: they were not actually faster than the GitHub-hosted 
 them, so they only added checks to triage. Mutation (PIT) was removed for a stronger reason - it ran three
 times per PR across the lanes (with a fourth copy configured but dormant), and its full sweep had never
 once completed. One PR-scoped mutation
-lane now lives in `maven.yml`, and the full sweep is manual-only in `mutation-full-sweep.yml` (which does
+lane now lives in `maven.yml`, and the full sweep runs nightly in `mutation-full-sweep.yml` (which does
 target this runner, since it wants every core it can get).
 
-**Trigger:** `pull_request` (same-repo only) plus manual `workflow_dispatch`. The jobs are advisory
-(`continue-on-error`, not required), so when the `[self-hosted, highcpu]` runner is offline the checks
-just sit pending and never block a merge - the required gate stays GitHub-hosted (`maven.yml`). **Manually:**
-`gh workflow run highcpu --ref <branch>`, or fork -> **Actions -> highcpu -> Run workflow**.
+**Triggers:** `schedule` (the nightly sweep) and `workflow_dispatch`. **Nothing here is triggered by a
+pull request any more** - the per-PR lane was deleted on 2026-08-26 once both its suites had hosted
+equivalents. Every job is advisory (`continue-on-error`, not required), and since none of them runs on
+a PR, an offline `[self-hosted, highcpu]` runner cannot leave a check pending on anybody. The required
+gate is entirely GitHub-hosted (`maven.yml`). **Manually:**
+`gh workflow run mutation-full-sweep.yml --ref <branch>`, or fork -> **Actions** -> pick the workflow.
 
 ## Fallback behaviour (important)
 
@@ -256,8 +275,10 @@ Full diagnosis, the measured runs, and the resolution are in the findings doc:
 ## Security & trust model
 
 This is a **public** repository, so the core risk is: someone opens a PR and
-their code runs on your machine. That risk is **live** - `pr-highcpu-fast-feedback.yml`
-*is* `pull_request`-triggered. What contains it is a same-repo guard on the job:
+their code runs on your machine. **Since 2026-08-26 no workflow here is `pull_request`-triggered**,
+so that risk is currently closed by construction: `workflow_dispatch` can only be fired by someone
+with write access. The same-repo guard below was removed with the trigger, and **must come back in
+the same commit as any future `pull_request:`**:
 
 ```yaml
 if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
@@ -398,6 +419,6 @@ then returns to Proxmox on the following boot. No keyboard, no boot-menu key.
 
 **Workflow can't find the runner:**
 - The runner must be **online** when the workflow is triggered
-- Verify labels match `runs-on:` in `.github/workflows/pr-highcpu-fast-feedback.yml`
+- Verify labels match `runs-on:` in `.github/workflows/mutation-full-sweep.yml`
 - Confirm a runner with that label is actually registered AND online:
   `gh api repos/astubbs/parallel-consumer/actions/runners`

@@ -21,7 +21,7 @@ leaf nothing depends on is this module's whole job.
 Two things live here, and they are the same thing from two sides:
 
 - **Its compile-scope dependencies are the harness classpath** - the engine, the proxy test-jar that
-  holds `ProxyHarness` and `TestModeMain`, and core's test-jar. A JVM client that needs to spawn the
+  holds `ConformanceHarness` and `TestModeMain`, and core's test-jar. A JVM client that needs to spawn the
   sidecar declares this one module at test scope in its own opt-in profile instead of restating
   three dependencies and drifting from them.
 - **Its test tree runs the gRPC transport's harness-backed conformance suite** - the shared spike

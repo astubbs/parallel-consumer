@@ -96,7 +96,7 @@ each wave adds its token alongside its duty.
 
 ```bash
 make build        # install into .venv, then parse every source file - what Maven's compile runs
-make test         # the suite, including the end-to-end test against the real sidecar
+make test         # the suite: the handshake against the real sidecar, and the end-to-end test
 make lint         # ruff - the same check CI runs
 make proto        # regenerate the stubs from the frozen proxy.proto
 make proto-check  # regenerate and fail if the committed stubs have drifted
@@ -116,8 +116,10 @@ The generated stubs under `src/parallel_consumer/_generated/` are **committed de
 user installing this package needs neither `protoc` nor the schema file. `make proto-check` is what
 stops the committed copy drifting from the contract.
 
-`make test` spawns the real test-mode sidecar (`TestModeMain --mock`), which lives in the proxy
-module's *test* jar and therefore needs a JVM classpath. Maven writes that classpath under
+`make test` spawns two real sidecars: `NoEngineMain`, which hosts no engine and refuses the
+session, and the test-mode sidecar (`TestModeMain --mock`) that the end-to-end test drives. Both
+live in the proxy module's *test* jar, so both need a JVM classpath. Maven writes that
+classpath under
 `target/`; running `make test` on its own drives the same Maven wiring to produce it. Under
 `./mvnw ... -Dpc.foreignClients` - the CI matrix row's command - Maven has already written it.
 
@@ -173,8 +175,8 @@ engine state Python cannot see:
 ```
 
 Depth on the protocol lives in
-[`client-authoring-guide.md`](../../parallel-consumer-proxy/docs/client-authoring-guide.md) and
-[`protocol-specification.md`](../../parallel-consumer-proxy/docs/protocol-specification.md).
+[`client-authoring-guide.md`](../../parallel-consumer-proxy-protocol/docs/client-authoring-guide.md) and
+[`protocol-specification.md`](../../parallel-consumer-proxy-protocol/docs/protocol-specification.md).
 
 ## Two divergences worth knowing
 

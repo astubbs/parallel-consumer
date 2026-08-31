@@ -16,6 +16,7 @@ import java.util.Arrays;
 import java.util.List;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.methods;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 
 /**
@@ -143,6 +144,33 @@ public class TestConventionRules {
                     // integrationTests packages (exempted above, since failsafe selects those by package), so
                     // this rule evaluates against an empty set there. That is a pass, not a violation -
                     // without this, ArchUnit's verifyNoEmptyShouldIfEnabled fails those modules.
+                    .allowEmptyShould(true);
+
+    /**
+     * A single-character method name tells a reader nothing, and it is nearly always a fixture builder -
+     * the identifier a test file repeats more than any other. The codebase had exactly ONE
+     * ({@code d(...)} in {@code KeyOrderLedgerIT}, since renamed to {@code delivery(...)}), so this rule
+     * costs nothing and forecloses the whole class.
+     *
+     * <p>It is here rather than in a {@code bin/check-*.sh} gate because ArchUnit already runs in every
+     * module's normal test suite - no new script, no new CI job, and the failure arrives at the
+     * developer who wrote it. SpotBugs was the other candidate and is the wrong tool: it detects bugs,
+     * not naming.
+     *
+     * <p>Worth recording WHY a rule this trivial is worth having. That {@code d(...)} survived three
+     * Claude review rounds and a Fable simplify-and-review pass whose maintainability reviewer returned
+     * findings on that exact file. It was found by a human, reading. Naming is precisely the class of
+     * defect automated review is weakest at - and precisely the class a cheap mechanical rule catches
+     * perfectly.
+     */
+    @ArchTest
+    static final ArchRule test_methods_must_have_names_longer_than_one_character =
+            methods()
+                    .should().haveNameNotMatching("^.$")
+                    .because("a one-character method name says nothing, and the identifier a fixture "
+                            + "builder is called by is the most-read name in a test file")
+                    // Modules whose tests live only in integrationTests packages import no classes here,
+                    // so the rule evaluates against an empty set - a pass, not a violation.
                     .allowEmptyShould(true);
 
 }

@@ -19,6 +19,7 @@ CLAUDE.md
 !/CLAUDE.md
 !/bin/CLAUDE.md
 !/docs/inflight/CLAUDE.md
+!/parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/CLAUDE.md
 #
 # The test-tree bridges are the one family that is SCOPED rather than enumerated, and the reasoning
 # above is why. There is one per module test tree, they are generated from a single shape, and they
@@ -138,3 +139,12 @@ release.properties
 /.idea/inspectionProfiles/Project_Default.xml
 /.idea/uiDesigner.xml
 /.idea/vcs.xml
+
+# jcstress run output - both land in the working directory the run was launched from, not
+# under target/, so the documented repo-root command leaves them beside the source tree
+jcstress-results-*.bin.gz
+/results/
+
+# Error Prone dumps the failing javac invocation beside the module when a check crashes, rather
+# than under target/, so a crash leaves an untracked file the next `git add -A` would commit
+javac.*.args

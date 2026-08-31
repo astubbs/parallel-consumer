@@ -1,20 +1,35 @@
 // Copyright (C) 2026 Antony Stubbs and contributors
 
-//! Locates the JVM-side conformance harness so a Rust test can spawn it as an ordinary sidecar
-//! binary.
+//! Locates the JVM-side sidecars so a Rust test can spawn one as an ordinary sidecar binary.
 //!
-//! The harness is `TestModeMain`, shipped in the proxy module's **test** jar so it can never reach
-//! a client package. That makes it a classpath invocation rather than a binary, so "the sidecar
-//! binary" for a conformance test is the JVM launcher and the classpath is an argument. Everything
-//! awkward about that lives here rather than in each test.
+//! **There are two, and they answer different questions.** Both are classpath invocations rather
+//! than binaries - so "the sidecar binary" for a test is the JVM launcher and the classpath is an
+//! argument - and everything awkward about that lives here rather than in each test.
+//!
+//! [`engine_less_sidecar`] runs `parallel-consumer-proxy`'s `NoEngineMain`, shipped in that
+//! module's **test** jar beside `TestModeMain`. It hosts no Parallel Consumer engine: it binds,
+//! announces its port, admits one connection under the transport's rules, and answers every
+//! session `UNIMPLEMENTED` (astubbs/parallel-consumer#384). A test that
+//! spawns it exercises the whole client-side path up to and including the handshake, and stops
+//! exactly where the engine would begin.
+//!
+//! [`for_scenario`] runs `TestModeMain`, shipped in the proxy module's **test** jar so it can never
+//! reach a client package. That one IS engine-backed, which is what lets `tests/session.rs` drive a
+//! conformance scenario end to end.
 
 #![allow(dead_code)] // each integration-test binary compiles this module and uses part of it
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-/// The harness entry point.
-pub const MAIN_CLASS: &str = "bz.stub.parallelconsumer.proxy.testmode.TestModeMain";
+/// The no-engine sidecar entry point, in the proxy module's TEST jar: the production lifecycle with
+/// the engine supplier swapped, so a session is answered UNIMPLEMENTED and this test has a subject.
+pub const MAIN_CLASS: &str = "bz.stub.parallelconsumer.proxy.NoEngineMain";
+
+/// The engine-backed harness entry point, in the proxy module's **test** jar.
+pub const TEST_MODE_MAIN_CLASS: &str = "bz.stub.parallelconsumer.proxy.testmode.TestModeMain";
+
+/// What the sidecar's refusal must name, so a client author does not debug their own code.
+pub const NO_ENGINE_DESCRIPTION: &str = "hosts no Parallel Consumer engine";
 
 /// The conformance suite's identities, used verbatim by every language's tests. **A scenario name
 /// is also the topic name** - the harness seeds its records on the topic it is named after.
@@ -30,11 +45,27 @@ pub struct Sidecar {
     pub args: Vec<String>,
 }
 
-/// The command that serves one conformance scenario in mock mode.
+/// The command that runs the real sidecar shell.
 ///
-/// It **fails** rather than skips when the harness is not built. A test that quietly does not run
+/// **No arguments**, and that is the sidecar's own rule rather than this function being terse: it
+/// takes none and refuses to start when given one, because everything is configured connect-time
+/// over the protocol.
+///
+/// It **fails** rather than skips when the sidecar is not built. A test that quietly does not run
 /// is not a passing test, and nothing goes red to say so; the error names the build command
 /// instead.
+pub fn engine_less_sidecar() -> Result<Sidecar, String> {
+    let root = repo_root()?;
+    Ok(Sidecar {
+        path: java_binary()?,
+        args: vec!["-cp".to_owned(), classpath(&root)?, MAIN_CLASS.to_owned()],
+    })
+}
+
+/// The command that serves one conformance scenario in mock mode, engine-backed.
+///
+/// It **fails** rather than skips when the harness is not built, for the same reason
+/// [`engine_less_sidecar`] does.
 pub fn for_scenario(scenario: &str) -> Result<Sidecar, String> {
     let root = repo_root()?;
     Ok(Sidecar {
@@ -42,7 +73,7 @@ pub fn for_scenario(scenario: &str) -> Result<Sidecar, String> {
         args: vec![
             "-cp".to_owned(),
             classpath(&root)?,
-            MAIN_CLASS.to_owned(),
+            TEST_MODE_MAIN_CLASS.to_owned(),
             "--mock".to_owned(),
             "--scenario".to_owned(),
             scenario.to_owned(),
@@ -84,99 +115,28 @@ fn java_binary() -> Result<PathBuf, String> {
         .ok_or_else(|| "harness: no JVM found - set JAVA_HOME or PC_PROXY_TEST_JAVA".to_owned())
 }
 
-/// Assembles the proxy module's test classpath: its test jar (which carries the harness), its main
-/// jar, and its test-scope dependencies.
+/// The sidecar's classpath, as Maven resolved it.
 ///
-/// The dependency list comes from Maven and is cached beside this module's build output, because
-/// resolving it costs seconds and the answer only changes when the proxy module's poms do. There
-/// is no committed classpath file: it is machine-specific, being a list of absolute paths into a
-/// local repository.
+/// **One route, and it fails rather than guessing.** The `rust-e2e-harness` profile in this
+/// module's pom writes `target/sidecar-classpath.txt` on `generate-test-resources`, which is the
+/// only thing that reliably knows where the proxy module's output and its dependencies are - in a
+/// reactor run they are class DIRECTORIES rather than jars, so hunting for a jar finds nothing
+/// after a `test`-phase build and reports it as an unbuilt module. That is what the Go, Python and
+/// TypeScript harnesses already do; this one used to hunt jars and paid for it.
 fn classpath(root: &Path) -> Result<String, String> {
-    let proxy_target = root.join("parallel-consumer-proxy/target");
-    let tests_jar = single_jar(&proxy_target, "-tests.jar")?;
-    let main_jar = single_jar(&proxy_target, ".jar")?;
-
-    let cache_dir = root.join("parallel-consumer-proxy-clients/parallel-consumer-proxy-client-rust/target");
-    let cache = cache_dir.join("proxy-test-classpath.txt");
-    if !cache.is_file() {
-        std::fs::create_dir_all(&cache_dir).map_err(|e| format!("harness: {}: {e}", cache_dir.display()))?;
-        resolve_classpath(root, &cache)?;
+    let _ = root;
+    let file = Path::new("target").join(CLASSPATH_FILE);
+    let classpath = std::fs::read_to_string(&file)
+        .map_err(|e| format!("harness: {} is missing - {HOW_TO_BUILD_IT}: {e}", file.display()))?;
+    let classpath = classpath.trim().to_owned();
+    if classpath.is_empty() {
+        return Err(format!("harness: {} is empty - {HOW_TO_BUILD_IT}", file.display()));
     }
-    let dependencies =
-        std::fs::read_to_string(&cache).map_err(|e| format!("harness: reading {}: {e}", cache.display()))?;
-
-    Ok([
-        tests_jar.display().to_string(),
-        main_jar.display().to_string(),
-        dependencies.trim().to_owned(),
-    ]
-    .join(":"))
+    Ok(classpath)
 }
 
-/// Asks Maven for the proxy module's test-scope dependencies, two ways.
-///
-/// The reactor form is tried first because it is the correct one: it resolves this repository's own
-/// snapshots from the reactor rather than from a local repository that may not hold them. It reads
-/// **every** module's pom, though, so an unrelated module with a malformed pom fails it - which is
-/// not hypothetical on a branch several agents are editing at once. The single-project form is the
-/// fallback: it reads only this module and its parents, at the cost of needing the sibling
-/// snapshots installed.
-fn resolve_classpath(root: &Path, cache: &Path) -> Result<(), String> {
-    let common = ["-q", "dependency:build-classpath", "-Dmdep.includeScope=test"];
-    let output_file = format!("-Dmdep.outputFile={}", cache.display());
-    let proxy_pom = root.join("parallel-consumer-proxy/pom.xml");
-    let attempts: [Vec<String>; 2] = [
-        vec!["-pl".to_owned(), ":parallel-consumer-proxy".to_owned()],
-        vec!["-f".to_owned(), proxy_pom.display().to_string()],
-    ];
+/// Written by the `rust-e2e-harness` profile in this module's pom.
+const CLASSPATH_FILE: &str = "sidecar-classpath.txt";
 
-    let mut last = String::new();
-    for scoping in attempts {
-        let output = Command::new(root.join("mvnw"))
-            .current_dir(root)
-            .args(&scoping)
-            .args(common)
-            .arg(&output_file)
-            .output()
-            .map_err(|e| format!("harness: running mvnw: {e}"))?;
-        if output.status.success() {
-            return Ok(());
-        }
-        last = String::from_utf8_lossy(&output.stdout).into_owned();
-    }
-    Err(format!(
-        "harness: resolving the proxy module's test classpath failed both ways:\n{last}"
-    ))
-}
-
-fn single_jar(dir: &Path, suffix: &str) -> Result<PathBuf, String> {
-    let build_first = "run 'bin/build.sh -pl :parallel-consumer-proxy -am -DskipTests' first \
-         (the harness lives in the proxy module's test jar, and this module has no Maven \
-         dependency on it, so -am cannot pull it in)";
-    let entries =
-        std::fs::read_dir(dir).map_err(|e| format!("harness: {} is not built - {build_first}: {e}", dir.display()))?;
-
-    let mut matches: Vec<PathBuf> = entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-            if !name.ends_with(suffix) {
-                return false;
-            }
-            // -sources.jar and -javadoc.jar also end in .jar; the plain artifact is the one whose
-            // remaining suffix carries no classifier.
-            suffix != ".jar"
-                || !(name.ends_with("-tests.jar") || name.ends_with("-sources.jar") || name.ends_with("-javadoc.jar"))
-        })
-        .collect();
-    matches.sort();
-
-    match matches.len() {
-        1 => Ok(matches.remove(0)),
-        found => Err(format!(
-            "harness: expected exactly one {suffix:?} jar in {}, found {found} - {build_first}",
-            dir.display()
-        )),
-    }
-}
+const HOW_TO_BUILD_IT: &str = "run `./mvnw test -pl :parallel-consumer-proxy-client-rust -am \
+     -Dpc.foreignClients` from the repository root, which is the same wiring the CI matrix row uses";

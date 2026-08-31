@@ -18,7 +18,7 @@ help:
 	@echo "build       deps + compile - what Maven's compile phase runs, and the whole of it"
 	@echo "deps        install the package and its dev tools into $(VENV)"
 	@echo "compile     parse every source file - the syntax check Maven's compile phase must fail on"
-	@echo "test        run the suite (spawns the test-mode sidecar for the end-to-end test)"
+	@echo "test        run the suite (spawns the real sidecar, and the test-mode one end to end)"
 	@echo "lint        ruff + mypy - the whole static analysis, and exactly what the CI row runs"
 	@echo "ruff        the linter alone (pyflakes, bugbear, bandit)"
 	@echo "typecheck   mypy alone: --strict over src, --check-untyped-defs over tests, tools and scripts"
@@ -93,8 +93,8 @@ proto: build
 proto-check: build
 	$(BIN)/python tools/generate_proto.py --check
 
-# The classpath the end-to-end test needs to spawn the test-mode sidecar, written by this
-# module's own Maven wiring (the python-e2e-harness profile in pom.xml).
+# The classpath the sidecar-spawning tests need - both the real shell and the test-mode sidecar -
+# written by this module's own Maven wiring (the python-e2e-harness profile in pom.xml).
 #
 # UNDER MAVEN THIS RULE NEVER RUNS: Maven writes the file at generate-test-resources, before it
 # reaches the test phase that calls `make test`, so the file already exists and make skips the

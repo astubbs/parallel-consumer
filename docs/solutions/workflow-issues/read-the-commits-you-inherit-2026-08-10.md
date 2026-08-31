@@ -70,4 +70,6 @@ calibrated to a cost that does not apply here.
 
 - [`docs/inflight/pr-strategy-doc-merge-triggers.md`](../../inflight/pr-strategy-doc-merge-triggers.md) - the
   per-branch re-check list this failure mode routes around
-- `AGENTS.md`, Read the commits you inherit - the rule that cites this write-up
+- `AGENTS.md`, "Read the record you inherit" - the rule that cites this write-up. It was
+  headed "Read the commits you inherit" when this was written, and was renamed when the same
+  rule gained its second trigger: being handed a branch, rather than having your base move.

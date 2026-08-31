@@ -19,40 +19,59 @@
     <!--
         Thin Maven wrapper over the Go toolchain (go.mod beside this file). The commands below run
         ONLY under -Dpc.foreignClients - see the foreign-clients profile in the clients aggregator
-        for why opt-in is load-bearing. An ordinary `bin/build.sh -am` therefore builds this
-        skeleton and runs no Go toolchain at all.
+        for why opt-in is load-bearing - and both go through bin/foreign-client-step.sh, which
+        decides what an ABSENT go means: a banner and a skip by default, red under
+        -Dpc.foreign.strict=1, which is what the CI row passes. The commands themselves are declared
+        here and nowhere else (astubbs#242).
 
-        THE TEST NEEDS THE PROXY MODULE'S TEST JAR, and the go-e2e-harness profile below is what
-        gets it. `go test` here spawns the conformance harness (TestModeMain, in
-        parallel-consumer-proxy's test jar), and with no Maven dependency at all `-am` did not pull
-        the proxy into the reactor - so the CI row's own command,
-        `./mvnw test -pl :parallel-consumer-proxy-client-go -am -Dpc.foreignClients`, ran the Go
-        test against an unbuilt `parallel-consumer-proxy/target` and failed there. The profile
+        THE TESTS NEED THE SIDECARS, and the go-e2e-harness profile below is what gets them. Two Go
+        tests spawn a sidecar over the real wire - the end-to-end one drives TestModeMain from
+        parallel-consumer-proxy's test jar, the handshake one drives its production Main - and with
+        no Maven dependency at all `-am` did not pull the proxy into the reactor, so the CI row's own
+        command, `./mvnw test -pl :parallel-consumer-proxy-client-go -am -Dpc.foreignClients`, ran
+        the Go test against an unbuilt `parallel-consumer-proxy/target` and failed there. The profile
         declares that dependency in the opt-in lane only, exactly as the Python and TypeScript
-        modules do, and writes the resolved classpath where the test reads it.
+        modules do, and the aggregator's hoisted execution writes the resolved classpath where the
+        tests read it.
 
-        The Go test still fails rather than skipping when the harness is absent, because a test
-        that quietly does not run is not a passing test. Recorded as a wave finding in
-        docs/inflight/clients/go.md (astubbs#242).
+        The Go tests still fail rather than skipping when the sidecar is absent, because a test that
+        quietly does not run is not a passing test. Recorded as a wave finding in
+        docs/inflight/clients/go.md.
+
+        TWO FLAGS ON THE TEST COMMAND, AND NEITHER IS DECORATION.
+
+        -count=1 DEFEATS GO'S TEST CACHE, and it is here because the cache produced a false pass that
+        was caught by accident. `go test` caches a package's result keyed on its own inputs, and the
+        sidecar this module spawns is not one of them - so breaking the sidecar's refusal on purpose,
+        to prove the handshake test could fail, returned `ok (cached)` and the arm read as green.
+        A CI row is a fresh checkout and never sees it; a developer changing the engine and re-running
+        the Go client does, silently, which is the worse half.
+
+        -race is the Go client's own concurrency check, and it is the cheapest real win available on
+        the whole polyglot surface: this is the client with the executor fan-out, the detector is
+        built into the toolchain, and it costs one flag.
+        docs/inflight/static-polyglot-client-analysers.md ranked it first of five and recorded that
+        the gating recipe did not use it while a per-language note claimed it did.
     -->
     <properties>
         <pc.foreign.skip>false</pc.foreign.skip>
-        <pc.foreign.build.executable>go</pc.foreign.build.executable>
-        <pc.foreign.build.args>build ./...</pc.foreign.build.args>
-        <pc.foreign.test.executable>go</pc.foreign.test.executable>
-        <pc.foreign.test.args>test ./...</pc.foreign.test.args>
+        <pc.foreign.build.executable>bash</pc.foreign.build.executable>
+        <pc.foreign.build.args>${pc.foreign.step} --tool go -- go build ./...</pc.foreign.build.args>
+        <pc.foreign.test.executable>bash</pc.foreign.test.executable>
+        <pc.foreign.test.args>${pc.foreign.step} --tool go -- go test -race -count=1 ./...</pc.foreign.test.args>
     </properties>
 
     <profiles>
         <!--
-            THE SIDECAR THE END-TO-END TEST DRIVES, AND WHY IT IS A DEPENDENCY.
+            THE SIDECARS THE SUITE DRIVES, AND WHY THEY ARE A DEPENDENCY.
 
-            The Go suite's end-to-end test spawns the real test-mode sidecar over the real wire -
-            which needs the proxy module's test jar (TestModeMain and the harness), its main jar,
-            and core's test jar underneath. Declaring them here is what makes the CI matrix row's
-            exact command build those modules first and resolve them; build-classpath below writes
-            the resulting classpath to target/sidecar-classpath.txt, where internal/harness reads
-            it.
+            The Go suite's end-to-end test spawns the real test-mode sidecar over the real wire, and
+            its handshake test spawns the production Main - which between them need the proxy
+            module's test jar (TestModeMain and the harness), its main jar, and core's test jar
+            underneath. Declaring them here is what makes the CI matrix row's exact command build
+            those modules first and resolve them; the aggregator's hoisted `sidecar-classpath`
+            execution writes the resulting classpath to target/sidecar-classpath.txt, where
+            internal/harness reads it.
 
             SCOPED TO THIS PROFILE DELIBERATELY. No client depends on the engine, and with the
             profile inactive - every ordinary build - there is no dependency edge here at all, so
@@ -100,22 +119,8 @@
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-dependency-plugin</artifactId>
-                        <!-- version from the root pom's pluginManagement -->
-                        <executions>
-                            <execution>
-                                <id>sidecar-classpath</id>
-                                <!-- After the dependencies above are resolvable, before the test
-                                     phase where the Go suite runs and reads the file. -->
-                                <phase>generate-test-resources</phase>
-                                <goals>
-                                    <goal>build-classpath</goal>
-                                </goals>
-                                <configuration>
-                                    <outputFile>${project.build.directory}/sidecar-classpath.txt</outputFile>
-                                    <includeScope>test</includeScope>
-                                </configuration>
-                            </execution>
-                        </executions>
+                        <!-- Declaring it is the opt-in; the aggregator's pluginManagement supplies
+                             the version and the `sidecar-classpath` execution. -->
                     </plugin>
                 </plugins>
             </build>

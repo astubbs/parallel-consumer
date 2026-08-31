@@ -85,5 +85,5 @@ shim is the thing to delete and `--sidecar` becomes `--port`.
 - `docs/inflight/parked-testing-as-a-feature-for-the-clients.md` - why this is a product feature and
   not a contributing-guide footnote, and the standard the evidence entries have to meet before the
   strong version of the claim can be published.
-- `parallel-consumer-proxy/docs/client-authoring-guide.md` §7 - owns the scenario names and what each
+- `parallel-consumer-proxy-protocol/docs/client-authoring-guide.md` §7 - owns the scenario names and what each
   asserts. The conformance module's README owns the runner mechanics only.

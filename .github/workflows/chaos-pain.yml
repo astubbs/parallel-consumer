@@ -1,5 +1,5 @@
 # Copyright (C) 2026 Antony Stubbs and contributors
-#
+
 # Chaos Pain Suite - ON-DEMAND seeded stall hunting on the self-hosted high-CPU runner.
 #
 # Runs the @Tag("chaos") suite (see integrationTests.chaostests + the design doc under docs/plans/):
@@ -9,7 +9,7 @@
 #
 # This workflow is workflow_dispatch ONLY (seed replay + reps; runs QUEUE - measurements are never
 # killed). The per-PR-commit chaos run lives in the highcpu fast-feedback lane
-# (pr-highcpu-fast-feedback.yml, check "highcpu / Chaos Pain Suite") - both call bin/chaos-test.sh.
+# (maven.yml, check "Chaos Pain Suite") - both call bin/chaos-test.sh.
 #
 # QUARANTINE interaction: bin/chaos-test.sh EXCLUDES @Quarantined chaos scenarios - the Quarantine
 # Lane owns them, and a known-RED scenario must not drown the tripwire signal. While W1
@@ -37,9 +37,14 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: chaos-pain-${{ github.ref }}
-  cancel-in-progress: false   # chaos runs are measurements - queue, never kill
+# NO `concurrency:` HERE, deliberately. This used to share a repo-wide `highcpu-box-exclusive` group
+# with the per-PR lane, as a mutex over the physical box. A concurrency group cannot do that job: it
+# holds one running plus at most ONE pending and DISCARDS the rest, so it deduplicates where a mutex
+# needs to queue. Measured on 2026-08-26, 26 of 32 box jobs never executed a step while five of six
+# runners were idle. How many jobs the box runs at once is the BOX's decision, made by how many runner
+# processes it runs - not something a workflow file may assert. A dispatched hunt now queues on a
+# runner like any other job and always eventually runs. See docs/ci.md, "The box decides its own
+# concurrency".
 
 jobs:
   chaos:
