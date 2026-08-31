@@ -1,0 +1,109 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+# Builds the proxy sidecar as a GraalVM native executable and drives it through its whole lifecycle
+# (astubbs#242).
+#
+# WHY THIS IS ITS OWN WORKFLOW AND NOT A STEP ON maven.yml. It needs a second JDK - a GraalVM one,
+# alongside the project's JDK 17 - and it is the only lane in the repository that does. Bolting that
+# onto a lane already near its timeout is what pushes it over, and it would make every ordinary build
+# provision a toolchain nothing else uses.
+#
+# TWO ROWS, AND THEY ANSWER DIFFERENT QUESTIONS. macOS/arm64 is where the sidecar's native build was
+# first proven by hand, so that row is a regression guard. Linux is where a sidecar actually gets
+# deployed and had never been tried at all - the branch this work was re-cut from recorded "untried:
+# Linux" as one of its own gaps, and this row is what closes it.
+#
+# PC_NATIVE_IMAGE_STRICT IS SET, and it is the half that keeps the other half honest. On a developer
+# box bin/native-image-sidecar.sh prints a banner and exits 0 when GraalVM is absent, because absence
+# there is normal. Here the row installs the toolchain itself, so absence means the setup step did not
+# do what it claimed, and a green skip would be
+# docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md again.
+#
+# THE PROJECT'S JDK IS INSTALLED SECOND ON PURPOSE. Maven must run on JDK 17 - the reactor is built
+# and cross-compiled for it, and an unrelated module's delombok step fails on a newer one - so the
+# GraalVM JDK is never allowed to become JAVA_HOME. It is reached by path, through PC_NATIVE_IMAGE,
+# which is exactly the separation the script's header describes.
+#
+# Caching: restore-only, the same discipline as maven.yml and clients.yml - never a setup action's
+# built-in `cache:`, whose immutable keys can freeze an incomplete cache permanently.
+
+name: Native Image
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # See the header: the row provisions its own toolchain, so an absent one is a provisioning bug.
+  PC_NATIVE_IMAGE_STRICT: '1'
+
+jobs:
+
+  native-sidecar:
+    name: "native sidecar: ${{ matrix.platform }}"
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      # Fail the row, not the matrix: a Linux-only or macOS-only failure is the finding.
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            runner: ubuntu-latest
+          - platform: macos
+            runner: macos-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # The Maven build this row runs includes the copyright header check, which classifies
+          # provenance against the fork-point commit and SKIPS ITSELF with a warning on a shallow
+          # clone - a check reporting success without having run, which is the class this file's
+          # header already cites. copyright.yml sets this for the same reason.
+          fetch-depth: 0
+
+      # GraalVM first, and captured by path rather than left as JAVA_HOME - see the header.
+      - uses: actions/setup-java@v5
+        id: graalvm
+        with:
+          distribution: 'graalvm'
+          java-version: '23'
+      - name: Point the script at this row's native-image
+        run: echo "PC_NATIVE_IMAGE=${{ steps.graalvm.outputs.path }}/bin/native-image" >> "$GITHUB_ENV"
+
+      # The project's JDK, installed last so JAVA_HOME is the one Maven must build on.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          # No `cache: maven` - see the caching note in the header and in maven.yml.
+      - name: Restore Maven cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          # The Linux key on the macOS row too, as clients.yml's macOS row does: a Maven repository
+          # holds platform-independent jars, and maven.yml's prepare-deps job saves only this key -
+          # a platform-specific key here would simply never hit anything.
+          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            setup-java-Linux-x64-maven-
+
+      # Say what was installed before using it. A setup action that silently resolves something else
+      # leaves a row whose only symptom is a red build several steps later blaming the module.
+      - name: Which toolchains are these?
+        run: |
+          java -version
+          "$PC_NATIVE_IMAGE" --version
+
+      # Builds the image and runs the lifecycle exercise; its exit code is the row's. The script owns
+      # the recipe, so nothing about the build lives in this file.
+      - name: Build the native sidecar and drive its lifecycle
+        run: bin/native-image-sidecar.sh

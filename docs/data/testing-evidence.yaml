@@ -186,14 +186,23 @@ module_evidence:
       server was shut down". Plus the transport's own admission rules - loopback-only bind, the
       non-loopback opt-in and its warning, the authority allowlist and the one-connection slot -
       each asserted with service-invocation counters rather than on the client-visible status alone.
+      The same lifecycle claims are then driven a second time against a GraalVM NATIVE EXECUTABLE of
+      the same entry point, from outside a process the exercise spawned - which is the only thing
+      that can evidence the transport, the generated stubs and protobuf surviving closed-world
+      compilation, since the JVM suite would pass regardless.
     inspect:
       - parallel-consumer-proxy/src/test/java/bz/stub/parallelconsumer/proxy/MainTest.java
       - parallel-consumer-proxy/src/test/java/bz/stub/parallelconsumer/proxy/transport/ProxyServerTest.java
       - parallel-consumer-proxy/src/test/java/bz/stub/parallelconsumer/proxy/lifecycle/ParentDeathWatchdogTest.java
+      - parallel-consumer-proxy/src/test/java/bz/stub/parallelconsumer/proxy/NativeSidecarLifecycle.java
+      - bin/native-image-sidecar.sh
     limitation: >-
       Evidence about a PROCESS, not about processing. No engine is hosted, so no record has been
       dispatched, no verdict returned and no offset committed; and the sidecar has never run against
-      a broker, because it cannot be configured to reach one.
+      a broker, because it cannot be configured to reach one. The native arm runs only where a
+      GraalVM toolchain exists - the Native Image workflow, and a developer box that has one - and it
+      evidences the SHELL in an image: an engine and a Kafka client are exactly the parts that make
+      closed-world analysis hard, and neither is on this module's classpath.
   - id: streams-alpha
     artifact: parallel-consumer-streams-spike
     coverage: Planned alpha evidence must exercise the release artifact's opt-in boundary, comparison switch and supported topology/recovery claims.
