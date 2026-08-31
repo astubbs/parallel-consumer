@@ -169,12 +169,12 @@ The other two harnesses inherit the same caveat: `ShardManagerLincheckTest` and
 `PartitionStateLincheckTest` hit 8 of 8 at a tenth of their committed bounds, but on the fast machine
 only.
 
-## Nothing runs the lane, so the tripwire it promises cannot fire
+## ~~Nothing runs the lane~~ - RESOLVED by astubbs/parallel-consumer#392
 
-`bin/lincheck-test.sh` is excluded from every gating suite by design, and no workflow invokes it. The
-ASM instrumentation tripwire - the control that exists because a broken transformer once reported a
-clean pass against code that cannot survive two threads - therefore never runs. Three reviewers
-converged on this independently.
+The lane now runs on every PR as a tail step of the `Unit Tests` row in `maven.yml`
+(`docs/testing.md`'s Lincheck section owns the wiring statement). The first wired run caught the
+roster guard already stale - the incident and its lesson are recorded in
+`docs/solutions/workflow-issues/a-lane-nothing-runs-cannot-catch-its-own-guard-drifting.md`.
 
 ## The red control has drifted from a standard that landed after it
 
