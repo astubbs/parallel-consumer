@@ -22,6 +22,9 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import bz.stub.parallelconsumer.internal.utils.ThroughputReport;
+
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -114,6 +117,7 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
         var failureMessage = StringUtils.msg("All keys sent to input-topic should be processed and produced, within time " +
                         "(expected: {} commit: {} order: {} max poll: {})",
                 expectedMessageCount, commitMode, order, maxPoll);
+        Instant waitStarted = Instant.now();
         try {
             waitAtMost(ceilingFor(expectedMessageCount))
                     // dynamic reason support still waiting https://github.com/awaitility/awaitility/pull/193#issuecomment-873116199
@@ -129,8 +133,13 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
                         all.assertAll();
                     });
         } catch (ConditionTimeoutException e) {
+            ThroughputReport.report("MultiInstanceHighVolumeTest", consumedKeys.size(), expectedMessageCount,
+                    waitStarted, StringUtils.msg("commitMode={} order={} maxPoll={} outcome=FAILED",
+                            commitMode, order, maxPoll));
             fail(failureMessage + "\n" + e.getMessage());
         }
+        ThroughputReport.report("MultiInstanceHighVolumeTest", consumedKeys.size(), expectedMessageCount,
+                waitStarted, StringUtils.msg("commitMode={} order={} maxPoll={}", commitMode, order, maxPoll));
 
         assertThat(processedCount.get())
                 .as("messages processed and produced by parallel-consumer should be equal")

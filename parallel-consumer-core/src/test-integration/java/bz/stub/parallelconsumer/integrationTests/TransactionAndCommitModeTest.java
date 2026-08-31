@@ -7,6 +7,7 @@ package bz.stub.parallelconsumer.integrationTests;
 import bz.stub.parallelconsumer.internal.utils.ArgumentSetsBuilder;
 import bz.stub.parallelconsumer.internal.utils.ProgressBarUtils;
 import bz.stub.parallelconsumer.internal.utils.ProgressTracker;
+import bz.stub.parallelconsumer.internal.utils.ThroughputReport;
 import bz.stub.parallelconsumer.internal.utils.TrimListRepresentation;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
@@ -293,6 +294,10 @@ class TransactionAndCommitModeTest extends BrokerIntegrationTest<String, String>
             // A count that only exists at a level nobody enables has not been reported.
             Set<String> missingFromConsumed = new HashSet<>(expectedKeys);
             missingFromConsumed.removeAll(consumedKeys);
+            // Report the rate on the way out too, so a failing run is comparable with a passing one.
+            ThroughputReport.report("TransactionAndCommitModeTest", processedCount.get(), expectedMessageCount,
+                    waitStarted, msg("commitMode={} order={} maxPoll={} threads={} outcome=FAILED",
+                            commitMode, order, maxPoll, numThreads));
             long failedAfterMs = Duration.between(waitStarted, Instant.now()).toMillis();
             long rate = failedAfterMs > 0 ? (processedCount.get() * 1000L) / failedAfterMs : -1;
             String diagnosis = msg("consumed={} producedAck={} expected={} stillMissing={} "
@@ -317,12 +322,9 @@ class TransactionAndCommitModeTest extends BrokerIntegrationTest<String, String>
         // docs/solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md.
         // The deadline stays, because a run that never finishes must still fail; the rate is what
         // makes two runs comparable.
-        long elapsedMs = Duration.between(waitStarted, Instant.now()).toMillis();
-        long perSecond = elapsedMs > 0 ? (processedCount.get() * 1000L) / elapsedMs : -1;
-        log.warn("PC-THROUGHPUT commitMode={} order={} maxPoll={} threads={} processed={} expected={} "
-                        + "elapsedMs={} recordsPerSecond={}",
-                commitMode, order, maxPoll, numThreads, processedCount.get(), expectedMessageCount,
-                elapsedMs, perSecond);
+        ThroughputReport.report("TransactionAndCommitModeTest", processedCount.get(), expectedMessageCount,
+                waitStarted, msg("commitMode={} order={} maxPoll={} threads={}",
+                        commitMode, order, maxPoll, numThreads));
 
         pc.closeDrainFirst();
 
