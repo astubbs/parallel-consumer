@@ -20,10 +20,15 @@ import java.util.List;
  * report green having tested nothing - the exact shape this repository has seven recorded instances of. So
  * an unregistered name is an error naming what is registered, never an empty selection.
  *
- * <b>The foreign languages are not registered on this stack.</b> Their runners, and the registry and driver
- * that spawn them, are the next extraction out of astubbs/parallel-consumer#293; when they arrive they are
- * concatenated into {@link #selectable()} beside the JVM clients, which is the only place either registry has
- * to know the other exists.
+ * <b>A deferred cell is named by the failure, not merely absent from it.</b> Ten languages have client
+ * libraries and conformance runners in this tree ({@link LanguageRunners}) and none of them can be driven
+ * here, because driving one needs an engine behind the sidecar and there is none. Selecting one therefore
+ * fails saying <em>that</em>, rather than "unknown name" - a CI row that names {@code go} has not made a
+ * typo, and telling it so would send its operator looking for a misspelling.
+ * <p>
+ * <b>The foreign bindings are concatenated into {@link #selectable()} beside the JVM clients</b>, which is
+ * the only place either registry has to know the other exists - and today that concatenation contributes
+ * nothing, which {@link TheEngineArrivingMustBringTheForeignCellsTest} is what stops being permanent.
  *
  * @author Antony Stubbs
  * @see JvmClientBindings
@@ -46,6 +51,19 @@ public final class ConformanceBindings {
 
     /** The engine itself: the control arm, first in every selection. */
     private static final CoreBinding CORE = new CoreBinding();
+
+    /**
+     * The cells this rung knows about and cannot run - every one of them waiting on the same thing, an
+     * engine behind the sidecar. Derived from {@link LanguageRunners#all()} rather than listed, so a
+     * language added to the registry cannot be forgotten here, and it goes away by itself: a name that
+     * becomes selectable stops being deferred because {@link #select} checks the registered set first.
+     */
+    static List<String> deferredUntilTheEngineArrives() {
+        var deferred = new ArrayList<String>();
+        deferred.add(JvmClientBindings.JAVA_GRPC);
+        LanguageRunners.all().forEach(runner -> deferred.add(runner.language()));
+        return List.copyOf(deferred);
+    }
 
     /** Every binding this run drives: the core control arm, plus the languages the selector kept. */
     public static List<ConformanceBinding> selected() {
@@ -82,9 +100,18 @@ public final class ConformanceBindings {
         selectable.forEach(binding -> known.add(binding.name()));
         var unknown = wanted.stream().filter(name -> !known.contains(name)).toList();
         if (!unknown.isEmpty()) {
+            var deferred = deferredUntilTheEngineArrives();
+            var waiting = unknown.stream().filter(deferred::contains).toList();
+            // Both cases FAIL - what differs is what the reader is told to do next. Reporting a deferred
+            // cell as an unrecognised name would send a CI row's operator hunting a typo that is not there.
             throw new IllegalArgumentException("-D" + LANGUAGE_PROPERTY + " names bindings this suite does "
                     + "not register: " + unknown + " (registered: " + known + "). A typo here would otherwise "
-                    + "run nothing and read as a pass.");
+                    + "run nothing and read as a pass."
+                    + (waiting.isEmpty() ? "" : " Of those, " + waiting + " are deferred rather than "
+                    + "misspelled: their clients exist, and driving one needs an engine behind the sidecar, "
+                    + "which this build has none of. " + TheEngineArrivingMustBringTheForeignCellsTest.class
+                    .getSimpleName() + " and " + TheEngineArrivingMustBringTheGrpcBindingTest.class
+                    .getSimpleName() + " go red the day that changes."));
         }
 
         var selected = new ArrayList<ConformanceBinding>(List.of(CORE));
@@ -93,16 +120,35 @@ public final class ConformanceBindings {
     }
 
     /**
-     * Every binding a selector may name, in matrix order: today the JVM clients this suite drives in-process,
-     * and with extraction A9 the languages whose runners it spawns. The control arm is not among them - it is
-     * added to every selection rather than chosen.
+     * Every binding a selector may name, in matrix order: the JVM clients this suite drives in-process, then
+     * the languages whose runners it spawns. The control arm is not among them - it is added to every
+     * selection rather than chosen.
      * <p>
      * <b>It is a concatenation rather than one list</b> because the registries hold different facts - a client
      * object's construction against a runner binary's build - and are edited by different waves. This is the
-     * only place either has to know the other exists, which is what keeps A9 additive here.
+     * only place either has to know the other exists.
      */
     private static List<ConformanceBinding> selectable() {
-        return List.copyOf(new ArrayList<ConformanceBinding>(JvmClientBindings.all()));
+        var selectable = new ArrayList<ConformanceBinding>(JvmClientBindings.all());
+        selectable.addAll(foreignBindings());
+        return List.copyOf(selectable);
+    }
+
+    /**
+     * The languages driven through their own conformance runners - <b>empty on this rung, and empty for one
+     * reason that is checked rather than described.</b>
+     * <p>
+     * Spawning a runner means giving it a sidecar to connect to and an engine behind that sidecar to dispatch
+     * records; the sidecar here hosts no engine and refuses every session {@code UNIMPLEMENTED}
+     * (astubbs/parallel-consumer#384). A binding that spawned a runner at it would watch ten clients fail
+     * identically and learn nothing about any of them, and a stand-in engine would make agreement between
+     * bindings a statement about the stand-in. So the registry of runners is complete
+     * ({@link LanguageRunners}) and the list of bindings over it is empty, and
+     * {@link TheEngineArrivingMustBringTheForeignCellsTest} fails the build the moment the engine reaches
+     * this module's classpath while that is still so.
+     */
+    private static List<ConformanceBinding> foreignBindings() {
+        return List.of();
     }
 
     private ConformanceBindings() {
