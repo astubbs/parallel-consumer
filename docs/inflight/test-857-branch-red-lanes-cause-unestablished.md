@@ -120,6 +120,45 @@ sharpens the decomposition question already recorded below: the branch's measure
 twenty lines of lock change, verified on both assignors, and this regression is in the part that
 verification never touched.
 
+### The mechanism, 2026-09-01 - and it refutes the hypothesis above
+
+**The branch is not slow. It is IDLE.** The diagnostic added for this run reports, at the moment the
+deadline expires with thousands of records still unconsumed:
+
+```
+pc: workRemaining=0 recordsOutForProcessing=0 state=RUNNING closedOrFailed=false
+```
+
+Both ends are zero. PC has nothing outstanding and nothing in flight, is RUNNING and has not failed -
+so it is not processing slowly and it is not blocked. It believes there is no work, while the records
+are sitting on the topic. **This is an ingestion failure wearing a throughput failure's clothes.**
+
+Three independent readings agree and none of them would have said this alone:
+
+- **JFR, differentially against master.** Normalised per second - which the raw counts do not do,
+  since master finishes in a few seconds and the branch runs the full deadline - monitor waits are
+  the SAME on both arms, the branch PARKS LESS than master, and it samples less CPU. Not contended,
+  not computing.
+- **The both-ends diagnostic**, which is the reading that names it. A completion counter alone would
+  have shown a flat line and left "not finishing" and "not trying" indistinguishable; zero-and-zero
+  is a third state that says neither.
+- **The rate**, which is what made the failure legible enough to investigate at all.
+
+**This refutes the cluster 2 hypothesis as stated.** That guess was about per-call overhead in the
+consumer wrapper, and overhead cannot produce an idle instance with an empty pipeline. Cluster 2 is
+not exonerated - `ThreadConfinedConsumer` wraps `pause`/`resume`/`paused` among everything else - but
+the mechanism to look for is now a pause that is never lifted, or work that is never fetched, and no
+longer "it got slower".
+
+**The shape is the confluentinc#857 symptom itself**: paused consumption, here in
+`PERIODIC_TRANSACTIONAL_PRODUCER`. A branch whose subject is that defect exhibiting that defect in a
+mode its fix does not cover is the thing to look at next.
+
+**What has NOT been established:** whether partitions are actually paused. `describeProgress()` does
+not report pause state, and it cannot simply call `consumer.paused()` - that would trip
+`ThreadConfinedConsumer`'s ownership guard from the test thread. Establishing it needs pause state
+tracked somewhere reachable, which is the next step and a small one.
+
 ## Why it matters beyond the branch that found it
 
 If cluster 2 is implicated, the question is not only "fix it" but whether that work belongs on a PR
