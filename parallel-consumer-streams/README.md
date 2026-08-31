@@ -190,6 +190,12 @@ is stated here without a number.
 > **Do not scope the run with `-Dtest=`.** It silently overrides that execution's `<includes>`, so
 > Kafka's suite does not run at all - and the build still goes green, with the number you were
 > checking never computed. It has cost several people a whole run.
+>
+> **"Zero failures" has one known exception**, and it is Kafka's own flake rather than this patch's:
+> `StreamThreadTest.shouldLogAndRecordSkippedRecordsForInvalidTimestamps` asserts on a thread name
+> that depends on which thread logged. Diagnosed, with its control arm and what to do about it, in
+> [`docs/inflight/test-streamthreadtest-invalid-timestamps-flake.md`](../docs/inflight/test-streamthreadtest-invalid-timestamps-flake.md).
+> If that exact case fails, re-run. **Anything else that fails is real.**
 
 ### Wake-on-work: why the poll wait is split
 

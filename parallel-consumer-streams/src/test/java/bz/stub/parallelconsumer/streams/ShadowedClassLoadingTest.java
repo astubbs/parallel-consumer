@@ -162,8 +162,9 @@ class ShadowedClassLoadingTest {
                         + "list above is still complete - fix the pom rather than deleting this test")
                 .isNotBlank();
 
-        List<String> fromPom = new ArrayList<>();
-        for (String path : property.split(",")) {
+        String[] paths = property.split(",");
+        List<String> fromPom = new ArrayList<>(paths.length);
+        for (String path : paths) {
             fromPom.add(path.trim().replace(".java", "").replace('/', '.'));
         }
 
@@ -180,7 +181,7 @@ class ShadowedClassLoadingTest {
      * otherwise be checked against nothing, and the loop over the result would pass while proving nothing.
      */
     private static List<Class<?>> jarResidentSiblingsOf(Class<?> generated) {
-        List<Class<?>> siblings = new ArrayList<>();
+        List<Class<?>> siblings = new ArrayList<>(JAR_RESIDENT_NAMES.length);
         for (String name : JAR_RESIDENT_NAMES) {
             Class<?> candidate = load(name);
             if (candidate.getPackage().getName().equals(generated.getPackage().getName())) {
@@ -197,7 +198,7 @@ class ShadowedClassLoadingTest {
     }
 
     private static Set<String> jarResidentPackages() {
-        Set<String> packages = new LinkedHashSet<>();
+        Set<String> packages = new LinkedHashSet<>(JAR_RESIDENT_NAMES.length);
         for (String name : JAR_RESIDENT_NAMES) {
             packages.add(load(name).getPackage().getName());
         }
