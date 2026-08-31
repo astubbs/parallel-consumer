@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+    SpotBugs exclusions for the shared client API surface (astubbs#242; the policy is in
+    docs/client-static-analysis.md). The gate itself is bound in the parent pom.
+
+    WHY A FILE AND NOT @SuppressFBWarnings AT THE SITE, which is otherwise the better shape because
+    it keeps the reason next to the code: @SuppressFBWarnings needs com.github.spotbugs:spotbugs-
+    annotations on this module's classpath, and this module is dependency-free by design - its pom
+    says so, and the direct sibling's bannedDependencies enforcer rule exists to keep it that way.
+    An analysis annotation is not a transport type, but "dependency-free" is an inherited invariant
+    and a static-analysis change is the wrong place to start reinterpreting it. So the reasoning
+    lives here instead, and every exclusion below names ONE class and ONE pattern - a new class that
+    exposes its internals still fails the build, which is the property that matters.
+
+    Every entry is a judgement, not a mute. If you are adding one, write why, or fix the code.
+
+-->
+<FindBugsFilter>
+
+    <!--
+        ZERO-COPY IS THE CONTRACT, NOT AN OVERSIGHT. InboundRecord's javadoc states it three times -
+        "Key and value are the bytes Kafka held ... The arrays are not copied; treat them as
+        read-only" - and it is the whole reason the wrapper is cheap: a defensive copy of every key
+        and value would double the allocation on the hot path of a library that exists to raise
+        throughput. SpotBugs is describing the design accurately; it just cannot read the contract.
+
+        The exclusion is per-class and per-pattern deliberately. If a FUTURE field on one of these
+        classes is a mutable object the caller must not reach - a Map of headers, say - that is a
+        different question with a different answer, and EI_EXPOSE_REP will still be reported for it
+        only if someone widens this filter. Widening it is the thing to argue about.
+    -->
+    <Match>
+        <Class name="bz.stub.parallelconsumer.client.InboundRecord"/>
+        <Or>
+            <Bug pattern="EI_EXPOSE_REP"/>
+            <Bug pattern="EI_EXPOSE_REP2"/>
+        </Or>
+    </Match>
+    <Match>
+        <Class name="bz.stub.parallelconsumer.client.OutboundRecord"/>
+        <Or>
+            <Bug pattern="EI_EXPOSE_REP"/>
+            <Bug pattern="EI_EXPOSE_REP2"/>
+        </Or>
+    </Match>
+
+    <!--
+        A FALSE POSITIVE, and checked in the source rather than judged by its label: Outcome.produce()
+        returns a field that Outcome.success() already built as
+        Collections.unmodifiableList(new ArrayList<>(produce)) - copied AND unmodifiable at
+        construction, so there is no internal representation left to expose. SpotBugs does not track
+        the wrapper through the constructor. Scoped to the one method, so a future accessor on this
+        class that really does hand out mutable state is still reported.
+    -->
+    <Match>
+        <Class name="bz.stub.parallelconsumer.client.Outcome"/>
+        <Method name="produce"/>
+        <Bug pattern="EI_EXPOSE_REP"/>
+    </Match>
+
+</FindBugsFilter>

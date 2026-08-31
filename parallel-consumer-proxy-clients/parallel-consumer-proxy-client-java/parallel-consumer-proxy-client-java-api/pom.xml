@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-client-java</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Client Java API</name>
+    <artifactId>parallel-consumer-proxy-client-java-api</artifactId>
+
+    <!--
+        The shared Java wrapper surface: the API both transports implement and the nine other
+        languages mirror (astubbs#242, docs/plans/2026-08-14-001-feat-language-proxy-plan.md).
+
+        DEPENDENCY-FREE, deliberately: every arrow points INTO this module (api <- direct,
+        api <- grpc), and nothing here may depend on core, the protocol module, protobuf or gRPC.
+        Transport types must never appear on this surface; the direct sibling's bannedDependencies
+        rule is what makes that checkable - a transport type leaking in here fails THAT module's
+        build. The test tree is bound by the same rule, because a test-jar published from here would
+        land on the direct module's test classpath.
+
+        The transport-parameterised conformance suite belongs in this module's test tree and is NOT
+        here yet: it arrives with the conformance rung, which stacks on this one. What is here is
+        the surface's own tests - the ArchUnit rules over the surface, and Outcomes' exception
+        bridge.
+    -->
+
+    <build>
+        <plugins>
+            <!--
+                The SpotBugs gate is bound in the parent pom for every module beneath it; this only
+                points it at THIS module's exclusion filter, whose entries carry their own reasoning.
+                ${project.basedir} rather than a shared path in the parent: a relative
+                excludeFilterFile resolves against the module being built, so a filter declared once
+                in the parent would be looked for inside each child anyway. Only this module needs
+                one - every sibling is clean with no filter at all - so a local file is also the
+                honest shape.
+            -->
+            <plugin>
+                <groupId>com.github.spotbugs</groupId>
+                <artifactId>spotbugs-maven-plugin</artifactId>
+                <configuration>
+                    <excludeFilterFile>${project.basedir}/spotbugs-exclude.xml</excludeFilterFile>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>
