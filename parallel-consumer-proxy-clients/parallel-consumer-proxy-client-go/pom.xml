@@ -60,24 +60,11 @@
 
     <profiles>
         <!--
-            THE SIDECAR THIS MODULE'S HANDSHAKE TEST SPAWNS, AND WHY IT IS A DEPENDENCY.
-
-            That test starts parallel-consumer-proxy's real Main as a child process and speaks the
-            protocol to it, so `-am` has to build the proxy first - which it will not do for a module
-            that declares no dependency on it. Declaring one here is what makes the CI matrix row's
-            exact command work; the execution that writes the resolved classpath where the test reads
-            it is managed ONCE in the clients aggregator, and this module opts in by declaring the
-            plugin below.
-
-            SCOPED TO THIS PROFILE DELIBERATELY. No client depends on the sidecar, and with the
-            profile inactive - every ordinary build - there is no dependency edge here at all. The
-            client obtains the protocol the way every non-JVM client does, by generating from the
-            .proto by path with no Maven dependency; this edge is test-scoped harness plumbing in the
-            opt-in lane and nothing this client ships.
-
-            TEST SCOPE, THOUGH nothing here links against it - the sidecar is a PROCESS. The scope
-            says WHEN the artifact is needed, which is only when the suite runs. The engine rung adds
-            the proxy's TEST jar here too, for the harness that lives in it.
+            The sidecar this module's handshake test spawns. The clients aggregator owns the wiring
+            and the reasoning - its `sidecar-classpath` execution, and why hoisting it is safe; what
+            is here is the one thing that cannot be hoisted, the dependency that makes `-am` build
+            parallel-consumer-proxy before this module's suite tries to spawn it. Test-scoped and
+            inside the opt-in profile, so an ordinary build has no edge to the sidecar at all.
         -->
         <profile>
             <id>go-sidecar-harness</id>
@@ -96,7 +83,6 @@
             </dependencies>
             <build>
                 <plugins>
-                    <!-- Opts this module into the aggregator's managed sidecar-classpath execution. -->
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-dependency-plugin</artifactId>
