@@ -5,8 +5,8 @@ package bz.stub.parallelconsumer.proxy;
 
 import bz.stub.parallelconsumer.proxy.protocol.v1.ClientMessage;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Configure;
-import bz.stub.parallelconsumer.proxy.protocol.v1.ProxyMessage;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ProxyServiceGrpc;
+import bz.stub.parallelconsumer.proxy.transport.RecordingProxyMessageObserver;
 import io.grpc.ManagedChannel;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
@@ -22,12 +22,7 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Drives an already-built <b>native executable</b> of {@link Main} through the sidecar's whole lifecycle, and
@@ -173,33 +168,20 @@ public final class NativeSidecarLifecycle {
         }
     }
 
-    /** Opens a session and requires it to terminate with {@code UNIMPLEMENTED} rather than hang or answer. */
+    /**
+     * Opens a session and requires it to terminate with {@code UNIMPLEMENTED} rather than hang or answer.
+     * <p>
+     * The observer is the transport tests' {@link RecordingProxyMessageObserver} rather than a third
+     * hand-rolled copy of the same three fields.
+     */
     private static void assertSessionRefused(ManagedChannel channel) throws InterruptedException {
-        var terminated = new CountDownLatch(1);
-        var failure = new AtomicReference<Throwable>();
-        List<ProxyMessage> replies = Collections.synchronizedList(new ArrayList<>());
-
-        StreamObserver<ClientMessage> session = ProxyServiceGrpc.newStub(channel).session(new StreamObserver<>() {
-            @Override
-            public void onNext(ProxyMessage message) {
-                replies.add(message);
-            }
-
-            @Override
-            public void onError(Throwable thrown) {
-                failure.set(thrown);
-                terminated.countDown();
-            }
-
-            @Override
-            public void onCompleted() {
-                terminated.countDown();
-            }
-        });
+        var recorder = new RecordingProxyMessageObserver();
+        StreamObserver<ClientMessage> session = ProxyServiceGrpc.newStub(channel).session(recorder);
         session.onNext(ClientMessage.newBuilder().setConfigure(Configure.newBuilder().addTopics("input")).build());
 
-        assertTrue(terminated.await(AWAIT_SECONDS, TimeUnit.SECONDS), "the session must terminate rather than hang");
-        Throwable observed = failure.get();
+        assertTrue(recorder.terminated.await(AWAIT_SECONDS, TimeUnit.SECONDS),
+                "the session must terminate rather than hang");
+        Throwable observed = recorder.error.get();
         assertTrue(observed instanceof StatusRuntimeException,
                 "the session must fail with a gRPC status, but was: " + observed);
         Status status = ((StatusRuntimeException) observed).getStatus();
@@ -208,7 +190,7 @@ public final class NativeSidecarLifecycle {
         String description = String.valueOf(status.getDescription());
         assertTrue(description.contains("hosts no Parallel Consumer engine"),
                 "the refusal must name what is missing, but said: " + description);
-        assertTrue(replies.isEmpty(), "a build with no engine must not answer a Configure with anything");
+        assertTrue(recorder.messages.isEmpty(), "a build with no engine must not answer a Configure with anything");
     }
 
     /** The socket is the observable that separates "the process returned" from "the server shut down". */
