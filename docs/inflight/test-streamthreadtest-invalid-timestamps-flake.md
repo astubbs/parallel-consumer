@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- flaky-case: org.apache.kafka.streams.processor.internals.StreamThreadTest#shouldLogAndRecordSkippedRecordsForInvalidTimestamps -->
 
 `StreamThreadTest.shouldLogAndRecordSkippedRecordsForInvalidTimestamps[3]` fails intermittently in the
 upstream-Kafka suite that `parallel-consumer-streams` runs against its patched classes. Diagnosed
@@ -56,6 +57,19 @@ So the gate needs restating rather than repeating. Options, in rough order of pr
   patch - which is where a change to a Kafka test class can actually live.
 - **State the gate as "zero failures other than this named case"**, which is honest but relies on every
   future agent knowing the exception.
+
+**The third option is now MECHANICAL for the seam-on lane, and only for it.** The
+`flaky-case:` marker at the top of this note is machine-readable, and
+`bin/ci-streams-seam-on-evidence.sh` reads every note in this directory for one. That lane runs Kafka's
+suite twice, and its control arm is the seam-off run - so a control-arm failure has to be either
+ledgered here, in which case the lane names this note and carries on, or unknown, in which case the
+lane stops and says the control is not a control. **That relocates the signal instead of destroying
+it, which is what a re-run would do**, and it means the lane's own gate does not depend on a
+developer remembering the exception.
+
+It changes nothing for the ordinary build. The seam-off oracle in the module's normal `test` phase
+still goes red on this case, still with no record of why at the point of failure, so the options above
+are still open and this note is still live.
 
 Until then, when this case fails: **do not chase it, and do not "fix" the code under test.** Confirm it
 is this test and this parameterisation, then re-run. Anything else that fails is real.

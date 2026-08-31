@@ -140,6 +140,31 @@
         <kafka.test.patched.dir>${project.build.directory}/kafka-test-patched</kafka.test.patched.dir>
         <kafka.test.pristine.dir>${project.build.directory}/kafka-test-pristine</kafka.test.pristine.dir>
         <patched.test.classes>org/apache/kafka/test/InternalMockProcessorContext.java</patched.test.classes>
+
+        <!-- THE SEAM-ON EVIDENCE LANE, opt-in. See the kafka-upstream-tests-seam-on execution for what it
+             measures and bin/ci-streams-seam-on-evidence.sh for the lane that reads it. Off here because the
+             seam-on run is EXPECTED to have failures - they are the measurement - and a red gate on every
+             build trains people to ignore it. -->
+        <seam.on.upstream.skip>true</seam.on.upstream.skip>
+
+        <!-- Whether a failure in the seam-OFF oracle stops the build. TRUE everywhere except inside the
+             seam-on evidence lane, and the exception is the point rather than a loosening.
+
+             In an ordinary build the oracle is the behaviour-preservation gate and a failure must be fatal.
+             In the lane the same run is the CONTROL ARM, and stopping on its first failure means the
+             measured arm never runs at all - so a known, already-diagnosed flake in Kafka's own suite costs
+             a fifteen-minute re-run and teaches exactly the habit this repository has a write-up against.
+             The lane relaxes this ONE execution and then makes the verdict itself: every control-arm failure
+             must carry a flaky-case marker in the inflight ledger, or SeamOnDivergenceLaneTest fails. That
+             assertion is not relaxed, so nothing is being waved through - the failure is being classified
+             instead of being allowed to abort the measurement. -->
+        <seam.off.upstream.failure.ignore>false</seam.off.upstream.failure.ignore>
+
+        <!-- Handed to the classifier so a report directory left behind by an earlier run cannot be read as
+             this run's result. Surefire forks a fresh JVM per execution, all of them after this timestamp is
+             stamped, so "older than the build started" is exactly the stale case. Format pinned because the
+             classifier parses it; module-local, so nothing outside this module sees the change. -->
+        <maven.build.timestamp.format>yyyy-MM-dd'T'HH:mm:ss'Z'</maven.build.timestamp.format>
     </properties>
 
     <dependencies>
@@ -499,6 +524,11 @@
                             <goal>test</goal>
                         </goals>
                         <configuration>
+                            <!-- False in every ordinary build: this execution IS the behaviour-preservation
+                                 gate. The seam-on evidence lane sets it true, because there this run is the
+                                 control arm and aborting on its first failure means the measured arm never
+                                 runs - see the property's own comment. -->
+                            <testFailureIgnore>${seam.off.upstream.failure.ignore}</testFailureIgnore>
                             <dependenciesToScan>
                                 <dependency>org.apache.kafka:kafka-streams</dependency>
                             </dependenciesToScan>
@@ -548,6 +578,108 @@
                                  group filters would silently drop all of them. -->
                             <groups combine.self="override"/>
                             <excludedGroups combine.self="override"/>
+                        </configuration>
+                    </execution>
+
+                    <!-- 4b. THE SAME UPSTREAM CLASSES, SEAM ON. The execution above is a
+                         BEHAVIOUR-PRESERVATION claim - the patch changes nothing while the switch is off.
+                         This one is the opposite measurement: what Kafka's own suite says about the path this
+                         module actually ships. It is the evidence the refusal envelope's reinstatement rule
+                         needs, because a refused construct only comes back when Kafka's suite exercises it
+                         seam-ON and passes.
+
+                         SKIPPED BY DEFAULT and testFailureIgnore=true, because the failures ARE the
+                         measurement rather than a regression. What turns that measurement into a gate is the
+                         execution after it: every failure seam-on that was green seam-off must be explained
+                         by a named mechanism, and one that is not fails the lane. So this execution never
+                         goes red and the classifier does - which is the only arrangement in which "the
+                         failures are expected" and "a new divergence fails the build" are both true.
+
+                         Run it through bin/ci-streams-seam-on-evidence.sh, which deletes both report
+                         directories first. Do NOT use -Dtest= to narrow it: that overrides the includes
+                         below, the suite never runs, and the build goes green having computed nothing. -->
+                    <execution>
+                        <id>kafka-upstream-tests-seam-on</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>test</goal>
+                        </goals>
+                        <configuration>
+                            <skipTests>${seam.on.upstream.skip}</skipTests>
+                            <testFailureIgnore>true</testFailureIgnore>
+                            <dependenciesToScan>
+                                <dependency>org.apache.kafka:kafka-streams</dependency>
+                            </dependenciesToScan>
+                            <!-- Deliberately the SAME include list as the seam-off execution above. The
+                                 classifier set-differences the two arms case by case, and a case present in
+                                 one arm and absent from the other cannot be differenced - it would be
+                                 silently dropped from the divergence set. SeamOnDivergenceClassifier asserts
+                                 the two arms cover the same classes rather than trusting this comment. -->
+                            <includes>
+                                <include>org/apache/kafka/streams/processor/internals/StreamTaskTest.java</include>
+                                <include>org/apache/kafka/streams/processor/internals/StreamThreadTest.java</include>
+                                <include>org/apache/kafka/streams/processor/internals/ProcessorContextImplTest.java</include>
+                                <include>org/apache/kafka/streams/processor/internals/RecordCollectorTest.java</include>
+                            </includes>
+                            <reportsDirectory>${project.build.directory}/surefire-reports-kafka-upstream-seam-on</reportsDirectory>
+                            <systemPropertyVariables>
+                                <pc.streams.dispatch.enabled>true</pc.streams.dispatch.enabled>
+                            </systemPropertyVariables>
+                            <classpathDependencyExcludes>
+                                <classpathDependencyExclude>ch.qos.logback:logback-classic</classpathDependencyExclude>
+                            </classpathDependencyExcludes>
+                            <!-- Same serial-runner requirement as the seam-off execution above. -->
+                            <properties>
+                                <configurationParameters>
+                                    junit.jupiter.execution.parallel.enabled = false
+                                </configurationParameters>
+                            </properties>
+                            <groups combine.self="override"/>
+                            <excludedGroups combine.self="override"/>
+                        </configuration>
+                    </execution>
+
+                    <!-- 4c. THE GATE ON 4b. Reads both report directories, set-differences them, and
+                         classifies every divergence by the mechanism its own recorded failure names.
+                         Explained divergences pass; one that matches no known mechanism fails this
+                         execution, and therefore the build.
+
+                         Runs in the same opt-in as 4b, and LAST, because it reads what 4b wrote. It is
+                         excluded from the default test execution by name for the same reason - run before
+                         the reports exist it can only report their absence. -->
+                    <execution>
+                        <id>seam-on-evidence-classification</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>test</goal>
+                        </goals>
+                        <configuration>
+                            <skipTests>${seam.on.upstream.skip}</skipTests>
+                            <includes>
+                                <include>**/SeamOnDivergenceLaneTest.java</include>
+                            </includes>
+                            <reportsDirectory>${project.build.directory}/surefire-reports-seam-on-lane</reportsDirectory>
+                            <systemPropertyVariables>
+                                <seam.on.reports.dir>${project.build.directory}/surefire-reports-kafka-upstream-seam-on</seam.on.reports.dir>
+                                <seam.off.reports.dir>${project.build.directory}/surefire-reports-kafka-upstream</seam.off.reports.dir>
+                                <seam.on.evidence.buildStartedAt>${maven.build.timestamp}</seam.on.evidence.buildStartedAt>
+                                <patched.classes>${patched.classes}</patched.classes>
+                            </systemPropertyVariables>
+                            <groups combine.self="override"/>
+                            <excludedGroups combine.self="override"/>
+                        </configuration>
+                    </execution>
+
+                    <!-- The classifier is not part of the module's ordinary test run: it reads report
+                         directories that only exist once 4b has run, so here it could only ever report their
+                         absence. Named rather than tagged, because the two Kafka executions above already
+                         override the group filters and a tag would not reach them. -->
+                    <execution>
+                        <id>default-test</id>
+                        <configuration>
+                            <excludes>
+                                <exclude>**/SeamOnDivergenceLaneTest.java</exclude>
+                            </excludes>
                         </configuration>
                     </execution>
                 </executions>

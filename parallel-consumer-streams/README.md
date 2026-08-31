@@ -206,6 +206,43 @@ is stated here without a number.
 > [`docs/inflight/test-streamthreadtest-invalid-timestamps-flake.md`](../docs/inflight/test-streamthreadtest-invalid-timestamps-flake.md).
 > If that exact case fails, re-run. **Anything else that fails is real.**
 
+### The same suite with the seam ON, and what its failures mean
+
+The execution above is a claim about the **patch**. It says nothing about the path this module
+actually ships, because it runs with the switch off. The opposite measurement is a second execution
+over the same four classes with `pc.streams.dispatch.enabled=true`, and a lane that reads both:
+
+```bash
+bin/ci-streams-seam-on-evidence.sh
+```
+
+**Seam-on failures are the measurement, not a regression.** Kafka's tests assert on things this
+design deliberately does differently - a refused construct throws where stock would have run it, a
+committed offset is Parallel Consumer's frontier rather than Streams' `consumedOffsets`, a record
+handed to a worker has not been processed by the time `process()` returns. So the seam-on execution
+carries `testFailureIgnore` and never reddens a build. **What gates is the execution after it**: every
+case that passes with the seam off and fails with it on must be explained by a *named mechanism*, and
+one that is not fails the lane. That split is the only arrangement in which "these failures are
+expected" and "a new divergence fails the build" are both true.
+
+Three of the mechanisms are derived from the code at run time - the refusal envelope's own enum
+supplies both the marker and the construct name, and the commit-encoding class is recognised from the
+`OffsetAndMetadata` the assertion itself renders. The rest are attributions that no stack trace can
+produce ("this test drives the task synchronously"), and those live in
+[`docs/inflight/test-streams-seam-on-divergence-triage.md`](../docs/inflight/test-streams-seam-on-divergence-triage.md)
+with the mechanism and the rung that owns each one, so the PR that closes one edits the attribution
+in the same change.
+
+**The seam-off run is the lane's control arm**, and the lane checks its integrity first: a
+control-arm failure must carry a `flaky-case:` marker in `docs/inflight/`, or the lane stops and says
+there is nothing trustworthy to difference against. That is what lets the invalid-timestamps flake
+above be *named* rather than re-run - the lane relaxes the oracle's own fail-fast for its run only,
+so one known flake no longer costs a full re-run of both arms.
+
+**Do not narrow this run with `-Dtest=` either**, and do not read a report directory the lane did not
+write: `SurefireArm` refuses a directory that is missing, empty, or older than the build that is
+reading it, because all three parse as a clean pass.
+
 ### Wake-on-work: why the poll wait is split
 
 `StreamThread` polls the consumer and runs the topology on **one** thread, so blocking in
@@ -340,7 +377,9 @@ refuse.** Moving the check ahead of `KafkaStreams.start()` is the structural fix
 ### Reinstatement is evidence-gated, not judgement-gated
 
 A construct comes off the refused list when Kafka's own suite exercises it with the seam **on** and
-passes - not when someone reads the code and concludes it looks fine.
+passes - not when someone reads the code and concludes it looks fine. `bin/ci-streams-seam-on-evidence.sh`
+is that evidence: it reports every refused construct by name, taken from the enum itself, so the
+question "does Kafka's suite still refuse this one" has an answer somebody can run.
 
 ### What is still unsupported and NOT refused
 
