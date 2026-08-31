@@ -7,8 +7,8 @@ package bz.stub.parallelconsumer;
 
 import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.internal.DynamicLoadFactor;
-import bz.stub.parallelconsumer.internal.navigator.ResourceAllocator;
-import bz.stub.parallelconsumer.internal.navigator.ResourceContract;
+import bz.stub.parallelconsumer.navigator.ResourceAllocator;
+import bz.stub.parallelconsumer.navigator.ResourceContract;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tag;

@@ -1,12 +1,12 @@
-package bz.stub.parallelconsumer.internal.navigator;
+package bz.stub.parallelconsumer.navigator;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.internal.navigator.ParticipantBackedNavigatorView;
 import bz.stub.parallelconsumer.state.ShardKey;
 
-import java.time.Clock;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalDouble;
@@ -34,7 +34,7 @@ import java.util.OptionalDouble;
  * the one canonical clock (KTD4), so two consecutive reads across a quantum boundary may legitimately differ.
  *
  * @author Antony Stubbs
- * @see NavigatorParticipant the state this view reads
+ * @see bz.stub.parallelconsumer.internal.navigator.NavigatorParticipant the state this view reads
  */
 public interface NavigatorView {
 
@@ -68,8 +68,8 @@ public interface NavigatorView {
      * Every tagged resource currently withholding work, each paired with its own next-credit time (R18's "for
      * which resource, their {@code availableAt}"; R9's all-binding-predicates shape) - the same unreduced set
      * the defer-moment attribution logs. A deferred record's own {@code availableAt} is the LATEST of these
-     * ({@link NavigatorParticipant#availableAt}); a projection, not a promise (KD10). Empty when nothing is
-     * blocking right now, or when the instance is untagged.
+     * ({@link bz.stub.parallelconsumer.internal.navigator.NavigatorParticipant#availableAt}); a projection,
+     * not a promise (KD10). Empty when nothing is blocking right now, or when the instance is untagged.
      */
     List<ResourceDeferral> blockingResourceDeferrals();
 
@@ -94,14 +94,5 @@ public interface NavigatorView {
      */
     static NavigatorView inert() {
         return ParticipantBackedNavigatorView.INERT;
-    }
-
-    /**
-     * A view over {@code participant}, reading "now" from {@code clock} - the ONE canonical clock the allocator
-     * and its members share (KTD4): the module clock in production, the shared {@code MutableClock} in the
-     * virtual-clock test lane. An inert participant yields a view equivalent to {@link #inert()}.
-     */
-    static NavigatorView of(NavigatorParticipant participant, Clock clock) {
-        return new ParticipantBackedNavigatorView(participant, clock);
     }
 }

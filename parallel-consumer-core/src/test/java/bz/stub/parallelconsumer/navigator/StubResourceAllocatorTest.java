@@ -1,4 +1,4 @@
-package bz.stub.parallelconsumer.internal.navigator;
+package bz.stub.parallelconsumer.navigator;
 
 /*-
  * Copyright (C) 2026 Antony Stubbs and contributors

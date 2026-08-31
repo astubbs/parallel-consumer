@@ -8,8 +8,9 @@ package bz.stub.parallelconsumer.internal;
 import bz.stub.parallelconsumer.internal.admission.AdmissionController;
 import bz.stub.parallelconsumer.internal.utils.SupplierUtils;
 import bz.stub.parallelconsumer.internal.navigator.NavigatorParticipant;
-import bz.stub.parallelconsumer.internal.navigator.NavigatorView;
-import bz.stub.parallelconsumer.internal.navigator.ResourceAllocator;
+import bz.stub.parallelconsumer.internal.navigator.ParticipantBackedNavigatorView;
+import bz.stub.parallelconsumer.navigator.NavigatorView;
+import bz.stub.parallelconsumer.navigator.ResourceAllocator;
 import bz.stub.parallelconsumer.internal.utils.TimeUtils;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
@@ -250,7 +251,7 @@ public class PCModule<K, V> {
      * {@link #resourceAllocator}'s note.
      */
     private final Supplier<NavigatorView> navigatorView =
-            SupplierUtils.memoize(() -> NavigatorView.of(navigatorParticipant(), clock()));
+            SupplierUtils.memoize(() -> ParticipantBackedNavigatorView.of(navigatorParticipant(), clock()));
 
     public NavigatorView navigatorView() {
         return navigatorView.get();

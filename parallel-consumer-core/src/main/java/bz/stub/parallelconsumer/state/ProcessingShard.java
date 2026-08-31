@@ -11,7 +11,7 @@ import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.internal.RateLimiter;
 import bz.stub.parallelconsumer.internal.navigator.NavigatorDecision;
 import bz.stub.parallelconsumer.internal.navigator.NavigatorParticipant;
-import bz.stub.parallelconsumer.internal.navigator.ResourceDeferral;
+import bz.stub.parallelconsumer.navigator.ResourceDeferral;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

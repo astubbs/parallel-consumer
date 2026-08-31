@@ -4,6 +4,8 @@ package bz.stub.parallelconsumer.internal.navigator;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.navigator.ResourceContract;
+import bz.stub.parallelconsumer.navigator.StubResourceAllocator;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
 import org.junit.jupiter.api.Test;

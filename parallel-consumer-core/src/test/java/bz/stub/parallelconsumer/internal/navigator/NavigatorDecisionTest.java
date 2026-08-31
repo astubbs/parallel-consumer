@@ -4,6 +4,7 @@ package bz.stub.parallelconsumer.internal.navigator;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.navigator.ResourceDeferral;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;

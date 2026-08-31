@@ -6,8 +6,8 @@ package bz.stub.parallelconsumer.internal;
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
-import bz.stub.parallelconsumer.internal.navigator.StubResourceAllocator;
-import bz.stub.parallelconsumer.internal.navigator.ResourceContract;
+import bz.stub.parallelconsumer.navigator.StubResourceAllocator;
+import bz.stub.parallelconsumer.navigator.ResourceContract;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.MockConsumer;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;

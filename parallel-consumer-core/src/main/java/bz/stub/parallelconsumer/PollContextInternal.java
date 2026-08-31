@@ -6,7 +6,7 @@ package bz.stub.parallelconsumer;
  */
 
 import bz.stub.parallelconsumer.internal.ProducerManager;
-import bz.stub.parallelconsumer.internal.navigator.NavigatorView;
+import bz.stub.parallelconsumer.navigator.NavigatorView;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import lombok.Getter;
 import lombok.Setter;

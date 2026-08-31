@@ -5,7 +5,7 @@ package bz.stub.parallelconsumer;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.internal.navigator.NavigatorView;
+import bz.stub.parallelconsumer.navigator.NavigatorView;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import lombok.AccessLevel;
 import lombok.EqualsAndHashCode;

@@ -4,6 +4,10 @@ package bz.stub.parallelconsumer.internal.navigator;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.navigator.ConservationLedger;
+import bz.stub.parallelconsumer.navigator.ResourceContract;
+import bz.stub.parallelconsumer.navigator.ResourceDeferral;
+import bz.stub.parallelconsumer.navigator.StubResourceAllocator;
 import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import bz.stub.parallelconsumer.state.ShardKey;

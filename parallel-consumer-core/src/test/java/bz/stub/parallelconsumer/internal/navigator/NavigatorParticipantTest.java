@@ -4,6 +4,10 @@ package bz.stub.parallelconsumer.internal.navigator;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.navigator.ConservationLedger;
+import bz.stub.parallelconsumer.navigator.ResourceAllocator;
+import bz.stub.parallelconsumer.navigator.ResourceContract;
+import bz.stub.parallelconsumer.navigator.StubResourceAllocator;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.threeten.extra.MutableClock;

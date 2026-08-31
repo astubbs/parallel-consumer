@@ -5,9 +5,9 @@ package bz.stub.parallelconsumer.internal;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
-import bz.stub.parallelconsumer.internal.navigator.ResourceAllocator;
-import bz.stub.parallelconsumer.internal.navigator.ResourceContract;
-import bz.stub.parallelconsumer.internal.navigator.StubResourceAllocator;
+import bz.stub.parallelconsumer.navigator.ResourceAllocator;
+import bz.stub.parallelconsumer.navigator.ResourceContract;
+import bz.stub.parallelconsumer.navigator.StubResourceAllocator;
 import bz.stub.parallelconsumer.state.WorkManager;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;

@@ -5,6 +5,11 @@ package bz.stub.parallelconsumer.internal.navigator;
  */
 
 import bz.stub.parallelconsumer.internal.RateLimiter;
+import bz.stub.parallelconsumer.navigator.CapacityLease;
+import bz.stub.parallelconsumer.navigator.ConservationLedger;
+import bz.stub.parallelconsumer.navigator.NavigatorView;
+import bz.stub.parallelconsumer.navigator.ResourceAllocator;
+import bz.stub.parallelconsumer.navigator.ResourceDeferral;
 import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import bz.stub.parallelconsumer.state.ShardKey;

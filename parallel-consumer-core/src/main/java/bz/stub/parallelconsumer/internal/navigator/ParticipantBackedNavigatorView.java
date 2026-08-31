@@ -4,6 +4,8 @@ package bz.stub.parallelconsumer.internal.navigator;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.navigator.NavigatorView;
+import bz.stub.parallelconsumer.navigator.ResourceDeferral;
 import bz.stub.parallelconsumer.state.ShardKey;
 
 import java.time.Clock;
@@ -22,19 +24,31 @@ import java.util.OptionalDouble;
  *
  * @author Antony Stubbs
  */
-final class ParticipantBackedNavigatorView implements NavigatorView {
+public final class ParticipantBackedNavigatorView implements NavigatorView {
 
     /** The untagged instance's singleton (R3): backed by the inert participant, so every read short-circuits. */
-    static final NavigatorView INERT =
+    public static final NavigatorView INERT =
             new ParticipantBackedNavigatorView(NavigatorParticipant.inert(), Clock.systemUTC());
 
     private final NavigatorParticipant participant;
 
     private final Clock clock;
 
-    ParticipantBackedNavigatorView(NavigatorParticipant participant, Clock clock) {
+    private ParticipantBackedNavigatorView(NavigatorParticipant participant, Clock clock) {
         this.participant = participant;
         this.clock = clock;
+    }
+
+    /**
+     * A view over {@code participant}, reading "now" from {@code clock} - the ONE canonical clock the allocator
+     * and its members share (KTD4): the module clock in production, the shared {@code MutableClock} in the
+     * virtual-clock test lane. An inert participant yields a view equivalent to {@link NavigatorView#inert()}.
+     * <p>
+     * Lives here rather than on {@link NavigatorView} so the public interface's signatures never name an
+     * internal type - {@link NavigatorParticipant} is engine wiring, not user surface.
+     */
+    public static NavigatorView of(NavigatorParticipant participant, Clock clock) {
+        return new ParticipantBackedNavigatorView(participant, clock);
     }
 
     @Override
