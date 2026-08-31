@@ -6,7 +6,8 @@
 From the follow-up Codex strategy conversation, weekend of 2026-08-29/30 (first review's breakdown:
 [`core-engine-thesis.md`](core-engine-thesis.md)). The satellite of
 [`core-per-function-capacity-arbitration.md`](core-per-function-capacity-arbitration.md) that is
-useful *before* any allocator exists.
+useful *before* any allocator exists - and, like it, a projection of
+[`core-execution-opportunity-model.md`](core-execution-opportunity-model.md).
 
 ## The claim
 

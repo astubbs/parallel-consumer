@@ -46,6 +46,9 @@ feature behind these):
   re-implements badly" line already in [`core-auto-scaling.md`](core-auto-scaling.md).
 - Broadest, candidate positioning rather than a post title: *Kafka tells us what work we own.
   Parallel Consumer figures out how to run it.*
+- The category framing, sharpest of the lot: *the real competitor is manual concurrency
+  management* - `maxConcurrency = 100` as this generation's manual memory management, expected to
+  look as archaic as hand-sizing a web server's per-endpoint thread counts.
 
 **Boundary engineering** (reaches native-interop people):
 - *Why we didn't port Parallel Consumer to Python* - "we gave Python PC by refusing to implement
@@ -79,7 +82,9 @@ The review proposed reserving *"Kafka Can Linger. Hasten Doesn't."* for a rebran
 the owner decides with them in view: it puns on `linger.ms` but lands adjacent to the competitor
 llingr, and [`next-reclaim-the-category.md`][next-reclaim-the-category] rules the category is
 *"won by building, never by attacking anyone else's work"*. A rename is the owner's call and is not
-otherwise tracked here.
+otherwise tracked here. Noting for the record: the 2026-08-29/30 follow-up conversation used
+"Hasten" throughout as though the rename had happened, and closed on the same tagline - an
+assumption in a transcript, not a decision.
 
 <!-- These notes live on `research/market-analysis-recut`, not master. Pinned to a commit
      so the links keep resolving after the branch moves or merges. -->
