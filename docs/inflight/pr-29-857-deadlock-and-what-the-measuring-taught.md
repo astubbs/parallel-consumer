@@ -118,11 +118,219 @@ Context `gh` cannot give you about PR astubbs/parallel-consumer#29
 (`bugs/857-paused-consumption-multi-consumers-bug`). Delete this file when the PR merges, promoting
 anything below that is still wanted into `next-candidates.md`.
 
-## Does astubbs#119 close with this PR? Research in progress, 2026-08-27
+## What the PR is, in one line
 
-**Provisional answer: no, and the reason is that astubbs#119 is a symptom bucket rather than a
-defect.** This section records what has been established so far. It is not finished - the sighting
-inventory and the merged-PR mapping are still being gathered.
+Fixes the AB-BA deadlock between the poll thread's `onPartitionsRevoked` and the control thread's
+`commitOffsetsThatAreReady`, proven on its own instrument at 60/60 failures before and 0/60 after.
+
+## Still open on this PR, 2026-08-19
+
+Ordered by what blocks a merge. **This file should have existed from the branch's first commit and
+did not** - the April investigation log (`docs/BUG_857_INVESTIGATION.md`) was retired in `69a670de4`
+into the solutions write-up and the per-mode inflight split, which kept the SETTLED knowledge and
+left the live threads without a home. Append here as you go rather than reconstructing later.
+<!-- file-refs: N/A - the sentence records that this file was retired; naming it is the point -->
+
+**Landed 2026-08-19 (was "in flight" above this line's earlier revision)**
+
+- **Instance-granularity progress detector** - `INSTANCE_STALL/NO_WORK_COMPLETED` in
+  `ProgressProbe`, wired for every chaos scenario by `ChaosScenarioBase#startRun`. Per INSTANCE,
+  not per shard: which shards hold queued work is `ShardManager`'s private `processingShards`, so
+  shard granularity needs a main-code accessor this deliberately does not add - and per-instance is
+  the confluentinc#857 wedge signature anyway, because completions are counted where
+  `WorkManager#onSuccessResult` runs, PC's CONTROL thread, which is the thread the AB-BA cycle
+  freezes. Additive: no existing probe, bound or assertion changed. Non-vacuity proven both ways:
+  broker-free `InstanceStallProbeIT` (7 tests, gates every integration build) fires on
+  held-work-no-completions and stays silent on advance/idle/stopped/restart, and survived four
+  guard-deletion mutations; live, the eager arm on seed `4734674029169027864` in diagnostic mode
+  tripped `CLASS2_STALL` 55 times while draining fully and the new check fired ZERO times, peak
+  36.4s against the 150s bound. Silent on all five live runs (eager, coop x2, KEY cell x2).
+- **Ordering coverage under churn** - `ChaosRevokeUnderWorkKeyOrderIT` ("w4key"), a NEW eager cell
+  over the shared driver (matrix cells untouched; `processingOrder()`/`heavySleep()`/tick hooks
+  promoted with byte-identical defaults), reusing `KeyOrderLedger`. First run rediscovered W5's tick
+  trap at the matrix cells' 300-1000ms rate - single-delivery windows plus a fake 154s stagnation -
+  so the cell runs W5's 1000-2500ms ticks, with the cost recorded in its `STORM_TICK_MIN` javadoc.
+  Passing run on seed `4734674029169027864`: `comparedDeliveries=244022` of 250,608 (~2.9 epoch
+  windows per key), `orderRegressions=0 overlaps=0`, zero loss, 608 duplicates, zero violations.
+- **Sighting, not retuned**: on today's contended box the COOPERATIVE unordered arm also trips the
+  150s bound (twice: 1 violation each, ~154s, drains fully under
+  `-Dchaos.diagnoseStallRecovery=true`) - where the matrix run recorded 0. More weight behind the
+  recorded decision to stop gating on the bound; nothing was changed to make anything pass.
+
+**Decisions that are the owner's, not an agent's**
+
+- **DECIDED 2026-08-19 by the owner: stop GATING on `LAG_STAGNATION_BOUND`.** The question asked was
+  "shouldn't we just remove it - it isn't testing anything", and it holds up: a genuinely wedged run
+  is already caught twice without it, by the quiet-phase `await()` failing at `QUIET_CAP` and by the
+  scenario's `@Timeout(600)` behind that. The bound's only unique contributions are detecting
+  earlier and naming the partition, bought at the cost of firing on every slow-but-correct run and -
+  through `failFast` - destroying the evidence at the moment of detection.
+  <br>
+  **Keep the measurement, drop the gate.** The peak stagnation figure is worth having in an autopsy;
+  it must not fail a build. `ProgressProbe` already has the mechanism - observer mode records
+  violations without gating - so this is a mode change rather than a deletion, and the peak stays in
+  the autopsy block either way.
+  <br>
+  What takes over as the gate is the shard-progress check: holding work while completing none is a
+  real wedge, and unlike a duration it cannot fire on slowness. **Sequence matters** - land the
+  shard check, prove it fires and stays silent in the right places, and only then stop gating on the
+  bound. Doing it the other way leaves a window with no Class 2 gate at all. The three options
+  previously listed here (raise the bound, shorten `HEAVY_SLEEP`, retire the eager arm) are
+  superseded; the rejected move is unchanged - nudging a threshold until a run goes green, which the
+  July recalibration already did once. Background:
+  `test-class2-probe-asserts-timing-not-correctness.md`.
+  <br>
+  **Still unimplemented on this branch as of 2026-08-20, deliberately.** Flipping the gate right
+  after the sightings above, with no demonstrating chaos run (fires on a wedge, silent on a
+  slow-but-correct drain), would be indistinguishable in the history from tuning-to-green - the
+  rejected move. It wants its own small change where that demonstration is the content; the
+  principle itself is now durable in `docs/investigating.md` ("Designing a liveness check").
+- **Whether the ordering ledger should gate.** `ChaosKeyOrderIT` is `@Tag("chaos")`, so ordering
+  under real churn runs only on demand; what gates every build is `KeyOrderLedgerIT`, which checks
+  the ledger's LOGIC against synthetic histories. So a genuine ordering regression under churn would
+  not be caught by a normal build. Defensible - chaos runs are long, and a red chaos run is
+  investigation material rather than a merge blocker - but it should be a decision rather than an
+  accident.
+
+**Evidence gaps, stated rather than hidden**
+
+- **The four-cell matrix is one seed and one run per cell.** The direction is unambiguous (0 vs 53
+  violations, 405 vs 2,421 duplicates) but the numbers are not repeat-measured. **Addressed rather
+  than left implicit**: the README table now states the date, the seed, the scenario classes and
+  one-run-per-cell in its caption, and carries the command to regenerate them - so a reader can tell
+  what the numbers are worth and reproduce them. Repeating across seeds would still strengthen it.
+  The owner's note is that the demo app supersedes this table entirely once it can run the
+  configurations against a user's own topic, which is recorded in the caption as a forward pointer.
+- **The drain arm was run twice** because the first run's log was truncated by a full `/tmp`; only
+  the second is valid. Any re-measurement should filter maven output at source rather than writing
+  raw logs to a shared tmpfs.
+
+**Merge mechanics not yet done**
+
+- **Review is DEFERRED on purpose, decided 2026-08-19 - do not request it yet.** `reviewDecision` is
+  empty and a red `claude-review` is the expected state meanwhile, not a fault. The merge order is
+  astubbs#204, then astubbs#31, then astubbs#57, then this PR, then astubbs#267, so three PRs land
+  under this branch before it merges; reviewing now spends a review cycle on a tree that is about to
+  change and buys a second one later. **Sequence: let those merge -> merge master here -> re-verify
+  -> then request review** (`@claude review this` on the PR; it does not run on push). A human LGTM
+  is required regardless of CI.
+- **What the re-verification must cover when that happens**, because a clean textual merge proves
+  nothing here: astubbs#31 is "replace a stale container at a reused offset after rebalance", which
+  is this PR's own territory - epoch fencing, revocation, stale work - and astubbs#57 touches
+  `PartitionStateManager`, where a counter has already drifted from ground truth once. Run
+  `Rebalance857CommitSyncDeadlockProbeIT` (the 60/60 to 0/60 proof, 20 tests / ~5.6 min),
+  `ShardManagerStaleContainerTest`, `OutForProcessingCounterDriftProbeTest` and
+  `InstanceStallProbeIT`. Compiling is not evidence that the fencing argument survived.
+- **A roadmap edit falls due at merge, and no gate will ask for it.** `docs/data/roadmap.yaml`'s
+  `known-defects-cleared` entry says the deadlock's "mitigation drafted on astubbs#29", which stops
+  being true when this merges. `roadmap-stage-gate.js` (arrived on master in `a78299794`) only fires
+  for entries carrying a `pull_request:` field, and this entry has none, so it is out of reach by
+  design. `stage` stays `in-progress` - this PR does not clear every known critical - so it is the
+  `stage_detail` wording only, and it must not be edited before the merge, when it would assert
+  something not yet true.
+- **A merge strategy has not been recommended**, and the squash message has not been offered - both
+  are owed before merge (`docs/merge-checklist.md`).
+- **Duplicate-code and file-similarity reports** need reading once review runs; clones introduced by
+  this PR are in scope, pre-existing ones are not.
+
+**Noticed here, not this PR's to fix**
+
+- `AGENTS.md` is ~498 lines against the ~400-line backstop it sets for itself. Pre-existing, and by
+  its own rule that means something situational has crept in and wants relocating to a topic doc.
+
+## Compounding ideas this work produced, 2026-08-19
+
+Four more from the split and hand-off, 2026-08-20 - these came from the PROCESS rather than the
+defect, which is why they were not in the first list.
+
+- **Extracting code to a minimal branch is a bug-finding technique, not just a review-simplification
+  one.** `PCMetrics.close()` iterates the registry directly instead of going through the guarded
+  `removeMeter`, and that hole was invisible where it was written, because its only caller wraps the
+  call in a try/catch. It surfaced the moment the change was lifted onto a branch without that
+  wrapper. **A contract that holds only because every caller guards it is not a contract** - and the
+  cheapest test of whether one is real is to move it somewhere its callers are not. Worth doing
+  deliberately for any guarantee that matters, not just when a PR needs splitting.
+- **Verify the assumption a split rests on before offering it.** The metrics extraction was offered
+  on the belief that its test would pass on master without this branch's `doClose` guards. It did
+  not. Two minutes of checking found a real hole; asserting it would have shipped a fix that only
+  worked in the place it came from.
+- **A test that fails for the "wrong" reason is often the one earning its keep.** The exploding-registry
+  test failed twice before it passed, and the first failure - the registry killing the instance before
+  the close path was reached - IS how the revoke-path exposure was found. A narrower test written to
+  pass first time would have shipped the `finally` guard and missed the larger defect. Ask why a test
+  fails before making it not fail.
+- **Encode a merge order as `depends on` lines, not as prose.** The PR-dependency gate blocks a child
+  until every parent merges, so an ordering that matters becomes mechanically impossible to get wrong
+  rather than merely written down. This is `docs/agent-harness.md`'s principle applied to PROCESS
+  instead of code, and it replaced a note that was already being ignored - by its own author, who
+  merged master early anyway.
+
+**And one about this file.** It did not exist until the work was nearly done, so learnings landed in
+topic docs or nowhere and had to be reconstructed at the end - several survived only because the
+owner asked the right question at the right moment. **A PR earns its working note at its first
+commit, not its last.** The cost is one file; the thing it buys is that a finding gets written where
+it happens rather than recalled later.
+
+**Landed 2026-08-20**: the rule now lives in `docs/inflight/AGENTS.md` ("A PR earns its working
+note at its first commit") and `.github/PULL_REQUEST_TEMPLATE.md` carries a checklist box for it,
+which the existing `PR Checklist` gate enforces on every human PR - so a missing note is caught at
+PR-open rather than never.
+
+
+Kept here rather than in `next-candidates.md` because they belong to this PR until it lands. Each
+came from an INSTRUMENT being wrong rather than the product, which is why they generalise.
+**Promoted 2026-08-20**: the both-ends, assert-the-property and granularity lessons now have their
+durable home in `docs/investigating.md` ("Designing a liveness check") - do not promote them again
+at merge; the remaining items below keep their existing owners or await promotion.
+
+- **Truth probes for internal state, made routine** (`test-truth-probes-for-internal-state.md` owns
+  this) - the chaos suite judged PC from outside, via committed offsets read by an admin client,
+  while `WorkManager` and `ShardManager` expose the real answer publicly
+  (`getNumberOfWorkQueuedInShardsAwaitingSelection`, `isRecordsAwaitingProcessing`,
+  `isNoRecordsOutForProcessing`, `getNumberOfIncompleteOffsets`, and `pc.getWm()` is public). A test
+  that infers internal state from an external signal will eventually infer it wrongly. Where a
+  component knows the answer, ask it.
+- **Measure both ends of anything you count.** A completion counter alone cannot distinguish
+  "nothing is finishing" from "nothing is happening"; a fleet inside a 20s user function reads as a
+  flat line while fully busy. Counting entry as well as exit made in-flight work visible and turned
+  an apparent stall into an obvious back-pressure pause. Any counter used to judge liveness needs
+  its partner.
+- **Assert the property, report the timing.** A correctness suite gating on a duration turns every
+  slow-but-correct run into a failure and every threshold into an argument
+  (`test-class2-probe-asserts-timing-not-correctness.md`). Gate on completion, loss, duplicates and
+  ordering; publish recovery time and peaks as measurements.
+- **Granularity is part of a liveness check's correctness.** The existing `NO_PROGRESS` probe has
+  the right SHAPE - while work remains, completions must advance - but is fleet-wide, so one wedged
+  shard hides behind seventy-nine healthy ones. A check at the wrong granularity is not a weak check,
+  it is a check for a different property.
+- **A scale knob turns a stress test into an experiment.** `-Dperf.scale` on the capacity profiles
+  exists because a measurement welded to one size can only answer the question that size happens to
+  ask. The same applies to any workload constant that was chosen for one machine.
+- **The harness cannot model a crash** (`test-chaos-crash-fidelity-variant.md`) - every stop is an
+  orderly close, so the most-reported confluentinc#857 shape is the one no scenario produces.
+- **Run-mode experiments belong in the demo app** (`branch-polyglot-demo-ideation.md`) - the
+  assignor x stop-mode matrix is a user-facing result, and the harness that produced it is a
+  ready-made engine for the bring-your-own-topic direction.
+
+## Already fixed
+
+**Everything below this heading is settled, and is kept rather than deleted because the reasoning is
+what a later reader needs.** `bin/check-pr-ready.sh` counts items ABOVE this heading as outstanding,
+so moving a section here is how a resolved thing stops being reported as open work. Adding a section
+above it again is a claim that it is live.
+
+Settled as of 2026-09-01: all six dependencies this note was waiting on - astubbs#57, astubbs#267,
+astubbs#322, astubbs#323, astubbs#324 and astubbs#325 - have merged, which resolves the merge-order
+decision and the PCMetrics instruction outright. The astubbs#119 question is answered rather than in
+progress: it does not close with this PR, and the section states why.
+
+## Does astubbs#119 close with this PR? ANSWERED: no - settled 2026-09-01
+
+**Answer: no, and the reason is that astubbs#119 is a symptom bucket rather than a defect.** It was
+provisional when written and is not any more: the sighting inventory and the merged-PR mapping were
+gathered, and the transactional revoke wait (astubbs#44) was established as a separate defect in a
+commit mode this PR's fix cannot reach. Closing astubbs#119 here would take the rest of the family
+with it.
 
 ### The reported symptoms are not one mechanism
 
@@ -431,11 +639,6 @@ or (once) a leader election. Only two exceptions exist: sangreal's July `pc_log`
 paused, but somehow polling 0 records"*, and dmironowicz on this PR. Two independent observations of
 a stall with no rebalance narrative is thin, but it is not nothing, and neither has ever been chased.
 
-## What the PR is, in one line
-
-Fixes the AB-BA deadlock between the poll thread's `onPartitionsRevoked` and the control thread's
-`commitOffsetsThatAreReady`, proven on its own instrument at 60/60 failures before and 0/60 after.
-
 ## What the PR is NOT, which took a day to establish
 
 The eager `ChaosRevokeUnderWorkIT` `CLASS2_STALL` sightings were this family's leading candidates for
@@ -520,195 +723,6 @@ improvements happened after the code left here:
 
 astubbs#57 pinned both with a test that fails against either weaker shape, so a wrong resolution is
 caught rather than merely regretted - but only if master's side is the one kept.
-
-## Still open on this PR, 2026-08-19
-
-Ordered by what blocks a merge. **This file should have existed from the branch's first commit and
-did not** - the April investigation log (`docs/BUG_857_INVESTIGATION.md`) was retired in `69a670de4`
-into the solutions write-up and the per-mode inflight split, which kept the SETTLED knowledge and
-left the live threads without a home. Append here as you go rather than reconstructing later.
-<!-- file-refs: N/A - the sentence records that this file was retired; naming it is the point -->
-
-**Landed 2026-08-19 (was "in flight" above this line's earlier revision)**
-
-- **Instance-granularity progress detector** - `INSTANCE_STALL/NO_WORK_COMPLETED` in
-  `ProgressProbe`, wired for every chaos scenario by `ChaosScenarioBase#startRun`. Per INSTANCE,
-  not per shard: which shards hold queued work is `ShardManager`'s private `processingShards`, so
-  shard granularity needs a main-code accessor this deliberately does not add - and per-instance is
-  the confluentinc#857 wedge signature anyway, because completions are counted where
-  `WorkManager#onSuccessResult` runs, PC's CONTROL thread, which is the thread the AB-BA cycle
-  freezes. Additive: no existing probe, bound or assertion changed. Non-vacuity proven both ways:
-  broker-free `InstanceStallProbeIT` (7 tests, gates every integration build) fires on
-  held-work-no-completions and stays silent on advance/idle/stopped/restart, and survived four
-  guard-deletion mutations; live, the eager arm on seed `4734674029169027864` in diagnostic mode
-  tripped `CLASS2_STALL` 55 times while draining fully and the new check fired ZERO times, peak
-  36.4s against the 150s bound. Silent on all five live runs (eager, coop x2, KEY cell x2).
-- **Ordering coverage under churn** - `ChaosRevokeUnderWorkKeyOrderIT` ("w4key"), a NEW eager cell
-  over the shared driver (matrix cells untouched; `processingOrder()`/`heavySleep()`/tick hooks
-  promoted with byte-identical defaults), reusing `KeyOrderLedger`. First run rediscovered W5's tick
-  trap at the matrix cells' 300-1000ms rate - single-delivery windows plus a fake 154s stagnation -
-  so the cell runs W5's 1000-2500ms ticks, with the cost recorded in its `STORM_TICK_MIN` javadoc.
-  Passing run on seed `4734674029169027864`: `comparedDeliveries=244022` of 250,608 (~2.9 epoch
-  windows per key), `orderRegressions=0 overlaps=0`, zero loss, 608 duplicates, zero violations.
-- **Sighting, not retuned**: on today's contended box the COOPERATIVE unordered arm also trips the
-  150s bound (twice: 1 violation each, ~154s, drains fully under
-  `-Dchaos.diagnoseStallRecovery=true`) - where the matrix run recorded 0. More weight behind the
-  recorded decision to stop gating on the bound; nothing was changed to make anything pass.
-
-**Decisions that are the owner's, not an agent's**
-
-- **DECIDED 2026-08-19 by the owner: stop GATING on `LAG_STAGNATION_BOUND`.** The question asked was
-  "shouldn't we just remove it - it isn't testing anything", and it holds up: a genuinely wedged run
-  is already caught twice without it, by the quiet-phase `await()` failing at `QUIET_CAP` and by the
-  scenario's `@Timeout(600)` behind that. The bound's only unique contributions are detecting
-  earlier and naming the partition, bought at the cost of firing on every slow-but-correct run and -
-  through `failFast` - destroying the evidence at the moment of detection.
-  <br>
-  **Keep the measurement, drop the gate.** The peak stagnation figure is worth having in an autopsy;
-  it must not fail a build. `ProgressProbe` already has the mechanism - observer mode records
-  violations without gating - so this is a mode change rather than a deletion, and the peak stays in
-  the autopsy block either way.
-  <br>
-  What takes over as the gate is the shard-progress check: holding work while completing none is a
-  real wedge, and unlike a duration it cannot fire on slowness. **Sequence matters** - land the
-  shard check, prove it fires and stays silent in the right places, and only then stop gating on the
-  bound. Doing it the other way leaves a window with no Class 2 gate at all. The three options
-  previously listed here (raise the bound, shorten `HEAVY_SLEEP`, retire the eager arm) are
-  superseded; the rejected move is unchanged - nudging a threshold until a run goes green, which the
-  July recalibration already did once. Background:
-  `test-class2-probe-asserts-timing-not-correctness.md`.
-  <br>
-  **Still unimplemented on this branch as of 2026-08-20, deliberately.** Flipping the gate right
-  after the sightings above, with no demonstrating chaos run (fires on a wedge, silent on a
-  slow-but-correct drain), would be indistinguishable in the history from tuning-to-green - the
-  rejected move. It wants its own small change where that demonstration is the content; the
-  principle itself is now durable in `docs/investigating.md` ("Designing a liveness check").
-- **Whether the ordering ledger should gate.** `ChaosKeyOrderIT` is `@Tag("chaos")`, so ordering
-  under real churn runs only on demand; what gates every build is `KeyOrderLedgerIT`, which checks
-  the ledger's LOGIC against synthetic histories. So a genuine ordering regression under churn would
-  not be caught by a normal build. Defensible - chaos runs are long, and a red chaos run is
-  investigation material rather than a merge blocker - but it should be a decision rather than an
-  accident.
-
-**Evidence gaps, stated rather than hidden**
-
-- **The four-cell matrix is one seed and one run per cell.** The direction is unambiguous (0 vs 53
-  violations, 405 vs 2,421 duplicates) but the numbers are not repeat-measured. **Addressed rather
-  than left implicit**: the README table now states the date, the seed, the scenario classes and
-  one-run-per-cell in its caption, and carries the command to regenerate them - so a reader can tell
-  what the numbers are worth and reproduce them. Repeating across seeds would still strengthen it.
-  The owner's note is that the demo app supersedes this table entirely once it can run the
-  configurations against a user's own topic, which is recorded in the caption as a forward pointer.
-- **The drain arm was run twice** because the first run's log was truncated by a full `/tmp`; only
-  the second is valid. Any re-measurement should filter maven output at source rather than writing
-  raw logs to a shared tmpfs.
-
-**Merge mechanics not yet done**
-
-- **Review is DEFERRED on purpose, decided 2026-08-19 - do not request it yet.** `reviewDecision` is
-  empty and a red `claude-review` is the expected state meanwhile, not a fault. The merge order is
-  astubbs#204, then astubbs#31, then astubbs#57, then this PR, then astubbs#267, so three PRs land
-  under this branch before it merges; reviewing now spends a review cycle on a tree that is about to
-  change and buys a second one later. **Sequence: let those merge -> merge master here -> re-verify
-  -> then request review** (`@claude review this` on the PR; it does not run on push). A human LGTM
-  is required regardless of CI.
-- **What the re-verification must cover when that happens**, because a clean textual merge proves
-  nothing here: astubbs#31 is "replace a stale container at a reused offset after rebalance", which
-  is this PR's own territory - epoch fencing, revocation, stale work - and astubbs#57 touches
-  `PartitionStateManager`, where a counter has already drifted from ground truth once. Run
-  `Rebalance857CommitSyncDeadlockProbeIT` (the 60/60 to 0/60 proof, 20 tests / ~5.6 min),
-  `ShardManagerStaleContainerTest`, `OutForProcessingCounterDriftProbeTest` and
-  `InstanceStallProbeIT`. Compiling is not evidence that the fencing argument survived.
-- **A roadmap edit falls due at merge, and no gate will ask for it.** `docs/data/roadmap.yaml`'s
-  `known-defects-cleared` entry says the deadlock's "mitigation drafted on astubbs#29", which stops
-  being true when this merges. `roadmap-stage-gate.js` (arrived on master in `a78299794`) only fires
-  for entries carrying a `pull_request:` field, and this entry has none, so it is out of reach by
-  design. `stage` stays `in-progress` - this PR does not clear every known critical - so it is the
-  `stage_detail` wording only, and it must not be edited before the merge, when it would assert
-  something not yet true.
-- **A merge strategy has not been recommended**, and the squash message has not been offered - both
-  are owed before merge (`docs/merge-checklist.md`).
-- **Duplicate-code and file-similarity reports** need reading once review runs; clones introduced by
-  this PR are in scope, pre-existing ones are not.
-
-**Noticed here, not this PR's to fix**
-
-- `AGENTS.md` is ~498 lines against the ~400-line backstop it sets for itself. Pre-existing, and by
-  its own rule that means something situational has crept in and wants relocating to a topic doc.
-
-## Compounding ideas this work produced, 2026-08-19
-
-Four more from the split and hand-off, 2026-08-20 - these came from the PROCESS rather than the
-defect, which is why they were not in the first list.
-
-- **Extracting code to a minimal branch is a bug-finding technique, not just a review-simplification
-  one.** `PCMetrics.close()` iterates the registry directly instead of going through the guarded
-  `removeMeter`, and that hole was invisible where it was written, because its only caller wraps the
-  call in a try/catch. It surfaced the moment the change was lifted onto a branch without that
-  wrapper. **A contract that holds only because every caller guards it is not a contract** - and the
-  cheapest test of whether one is real is to move it somewhere its callers are not. Worth doing
-  deliberately for any guarantee that matters, not just when a PR needs splitting.
-- **Verify the assumption a split rests on before offering it.** The metrics extraction was offered
-  on the belief that its test would pass on master without this branch's `doClose` guards. It did
-  not. Two minutes of checking found a real hole; asserting it would have shipped a fix that only
-  worked in the place it came from.
-- **A test that fails for the "wrong" reason is often the one earning its keep.** The exploding-registry
-  test failed twice before it passed, and the first failure - the registry killing the instance before
-  the close path was reached - IS how the revoke-path exposure was found. A narrower test written to
-  pass first time would have shipped the `finally` guard and missed the larger defect. Ask why a test
-  fails before making it not fail.
-- **Encode a merge order as `depends on` lines, not as prose.** The PR-dependency gate blocks a child
-  until every parent merges, so an ordering that matters becomes mechanically impossible to get wrong
-  rather than merely written down. This is `docs/agent-harness.md`'s principle applied to PROCESS
-  instead of code, and it replaced a note that was already being ignored - by its own author, who
-  merged master early anyway.
-
-**And one about this file.** It did not exist until the work was nearly done, so learnings landed in
-topic docs or nowhere and had to be reconstructed at the end - several survived only because the
-owner asked the right question at the right moment. **A PR earns its working note at its first
-commit, not its last.** The cost is one file; the thing it buys is that a finding gets written where
-it happens rather than recalled later.
-
-**Landed 2026-08-20**: the rule now lives in `docs/inflight/AGENTS.md` ("A PR earns its working
-note at its first commit") and `.github/PULL_REQUEST_TEMPLATE.md` carries a checklist box for it,
-which the existing `PR Checklist` gate enforces on every human PR - so a missing note is caught at
-PR-open rather than never.
-
-
-Kept here rather than in `next-candidates.md` because they belong to this PR until it lands. Each
-came from an INSTRUMENT being wrong rather than the product, which is why they generalise.
-**Promoted 2026-08-20**: the both-ends, assert-the-property and granularity lessons now have their
-durable home in `docs/investigating.md` ("Designing a liveness check") - do not promote them again
-at merge; the remaining items below keep their existing owners or await promotion.
-
-- **Truth probes for internal state, made routine** (`test-truth-probes-for-internal-state.md` owns
-  this) - the chaos suite judged PC from outside, via committed offsets read by an admin client,
-  while `WorkManager` and `ShardManager` expose the real answer publicly
-  (`getNumberOfWorkQueuedInShardsAwaitingSelection`, `isRecordsAwaitingProcessing`,
-  `isNoRecordsOutForProcessing`, `getNumberOfIncompleteOffsets`, and `pc.getWm()` is public). A test
-  that infers internal state from an external signal will eventually infer it wrongly. Where a
-  component knows the answer, ask it.
-- **Measure both ends of anything you count.** A completion counter alone cannot distinguish
-  "nothing is finishing" from "nothing is happening"; a fleet inside a 20s user function reads as a
-  flat line while fully busy. Counting entry as well as exit made in-flight work visible and turned
-  an apparent stall into an obvious back-pressure pause. Any counter used to judge liveness needs
-  its partner.
-- **Assert the property, report the timing.** A correctness suite gating on a duration turns every
-  slow-but-correct run into a failure and every threshold into an argument
-  (`test-class2-probe-asserts-timing-not-correctness.md`). Gate on completion, loss, duplicates and
-  ordering; publish recovery time and peaks as measurements.
-- **Granularity is part of a liveness check's correctness.** The existing `NO_PROGRESS` probe has
-  the right SHAPE - while work remains, completions must advance - but is fleet-wide, so one wedged
-  shard hides behind seventy-nine healthy ones. A check at the wrong granularity is not a weak check,
-  it is a check for a different property.
-- **A scale knob turns a stress test into an experiment.** `-Dperf.scale` on the capacity profiles
-  exists because a measurement welded to one size can only answer the question that size happens to
-  ask. The same applies to any workload constant that was chosen for one machine.
-- **The harness cannot model a crash** (`test-chaos-crash-fidelity-variant.md`) - every stop is an
-  orderly close, so the most-reported confluentinc#857 shape is the one no scenario produces.
-- **Run-mode experiments belong in the demo app** (`branch-polyglot-demo-ideation.md`) - the
-  assignor x stop-mode matrix is a user-facing result, and the harness that produced it is a
-  ready-made engine for the bring-your-own-topic direction.
 
 ## Related
 
