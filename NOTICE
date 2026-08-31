@@ -17,6 +17,14 @@ from Apache Kafka:
   org.apache.kafka.streams.processor.internals.RecordCollectorImpl
   org.apache.kafka.streams.processor.internals.StreamTask
   org.apache.kafka.streams.processor.internals.StreamThread
+  org.apache.kafka.streams.kstream.KStream
+  org.apache.kafka.streams.kstream.KTable
+  org.apache.kafka.streams.kstream.KGroupedStream
+  org.apache.kafka.streams.kstream.CogroupedKStream
+  org.apache.kafka.streams.kstream.internals.KStreamImpl
+  org.apache.kafka.streams.kstream.internals.KTableImpl
+  org.apache.kafka.streams.kstream.internals.KGroupedStreamImpl
+  org.apache.kafka.streams.kstream.internals.CogroupedKStreamImpl
 
 Apache Kafka
 Copyright 2024 The Apache Software Foundation
@@ -26,7 +34,10 @@ https://kafka.apache.org
 These files have been CHANGED by Antony Stubbs and contributors, to make Kafka Streams'
 processor context and record collector safe to drive from more than one thread, to let a
 task dispatch its records through Parallel Consumer instead of its own partition group,
-and to let a worker completion end the stream thread's poll wait. The changes are
+to let a worker completion end the stream thread's poll wait, and to refuse the
+constructs that do not work under that concurrency - windowed operators, joins,
+suppression, versioned and session stores, and exactly-once - rather than let them return
+silently wrong results. The changes are
 expressed as, and limited to, the patch tracked at
 parallel-consumer-streams/src/main/patch/pc-streams.patch; no Apache Kafka source is
 redistributed in this repository. See parallel-consumer-streams/README.md.
