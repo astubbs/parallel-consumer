@@ -71,6 +71,7 @@ engine's reactor. `-am` is not optional for `compile` or `test` - `-pl` alone fa
 owns that). `./mvnw clean -P foreign-clients -pl :parallel-consumer-proxy-client-cpp` still needs
 the profile - without it the module is not in the reactor at all - but needs no `-am`, the clean
 lifecycle never reaching `validate` where the enforcer is bound.
+<!-- file-refs: N/A - that note ships on feats/proxy-requirements; read it with `git show origin/feats/proxy-requirements:docs/inflight/bug-scoping-a-build-to-one-client-module-fails.md` -->
 
 **What a Java engineer will find surprising:**
 
@@ -203,6 +204,6 @@ build rather than skipping the language.
 
 ## Depth
 
-[`client-authoring-guide.md`](../../parallel-consumer-proxy/docs/client-authoring-guide.md) and
-[`protocol-specification.md`](../../parallel-consumer-proxy/docs/protocol-specification.md) own the
+[`client-authoring-guide.md`](../../parallel-consumer-proxy-protocol/docs/client-authoring-guide.md) and
+[`protocol-specification.md`](../../parallel-consumer-proxy-protocol/docs/protocol-specification.md) own the
 protocol; this file does not restate them.

@@ -115,6 +115,7 @@ engine's reactor. `-am` is not optional for `compile` or `test` - `-pl` alone fa
 owns that). `./mvnw clean -P foreign-clients -pl :parallel-consumer-proxy-client-swift` still needs
 the profile - without it the module is not in the reactor at all - but needs no `-am`, the clean
 lifecycle never reaching `validate` where the enforcer is bound.
+<!-- file-refs: N/A - that note ships on feats/proxy-requirements; read it with `git show origin/feats/proxy-requirements:docs/inflight/bug-scoping-a-build-to-one-client-module-fails.md` -->
 
 **What a Java engineer will find surprising:**
 
@@ -166,5 +167,6 @@ That entry needs Docker, and it says so by failing rather than skipping.
 
 Pins, traps and what this wave settled are in
 [`docs/inflight/clients/swift.md`](../../docs/inflight/clients/swift.md). The protocol itself is
-[`client-authoring-guide.md`](../../parallel-consumer-proxy/docs/client-authoring-guide.md) and
-[`protocol-specification.md`](../../parallel-consumer-proxy/docs/protocol-specification.md).
+[`client-authoring-guide.md`](../../parallel-consumer-proxy-protocol/docs/client-authoring-guide.md) and
+[`protocol-specification.md`](../../parallel-consumer-proxy-protocol/docs/protocol-specification.md).
+<!-- file-refs: N/A - the per-language wave notes live on feats/proxy-requirements, where those waves ran; read one with `git show origin/feats/proxy-requirements:docs/inflight/clients/<language>.md` -->

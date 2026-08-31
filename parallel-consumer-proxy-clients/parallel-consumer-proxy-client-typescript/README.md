@@ -31,6 +31,7 @@ outcomes, the `Shutdown` drain, the demo, and npm publishing. This client declar
 
 The plan is `docs/plans/2026-08-14-001-feat-language-proxy-plan.md` (astubbs#242); what this wave
 learned is in `docs/inflight/clients/typescript.md`.
+<!-- file-refs: N/A - the per-language wave notes live on feats/proxy-requirements, where those waves ran; read one with `git show origin/feats/proxy-requirements:docs/inflight/clients/<language>.md`; the plan ships on feats/proxy-requirements; read it with `git show origin/feats/proxy-requirements:docs/plans/2026-08-14-001-feat-language-proxy-plan.md` -->
 
 ## The surface
 
@@ -144,6 +145,7 @@ the `foreign-clients` profile in the clients aggregator ([`../pom.xml`](../pom.x
   classpath file is never written and the handshake test fails looking for it. That has its uses:
   `-P` leaves the engine out of the reactor - three modules instead of six, and no JDK 17 needed -
   which makes it the quicker loop when all you want is `tsc`.
+<!-- file-refs: N/A - that note ships on feats/proxy-requirements; read it with `git show origin/feats/proxy-requirements:docs/inflight/bug-scoping-a-build-to-one-client-module-fails.md` -->
 
 ### The handshake test needs the proxy module built
 
@@ -152,6 +154,7 @@ it needs that jar and its classpath. This module deliberately has **no** Maven d
 engine, so the dependency exists only inside the `typescript-sidecar-harness` profile, which activates
 with `-Dpc.foreignClients`; Maven then writes `target/sidecar-classpath.txt` where the test reads
 it. From the repository root:
+<!-- file-refs: N/A - a build OUTPUT this module's Maven wiring writes, never a tracked file -->
 
 ```bash
 ./mvnw test -pl :parallel-consumer-proxy-client-typescript -am -Dpc.foreignClients
@@ -190,6 +193,6 @@ need a `protoc`, and committing is what makes "regenerating produces no diff" ch
 
 ## Depth
 
-[`client-authoring-guide.md`](../../parallel-consumer-proxy/docs/client-authoring-guide.md) and
-[`protocol-specification.md`](../../parallel-consumer-proxy/docs/protocol-specification.md) own the
+[`client-authoring-guide.md`](../../parallel-consumer-proxy-protocol/docs/client-authoring-guide.md) and
+[`protocol-specification.md`](../../parallel-consumer-proxy-protocol/docs/protocol-specification.md) own the
 protocol; this file does not restate them.

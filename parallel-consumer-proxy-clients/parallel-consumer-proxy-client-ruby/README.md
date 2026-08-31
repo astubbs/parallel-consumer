@@ -130,6 +130,7 @@ This module is `packaging: pom` with four `pc.foreign.*` properties naming those
   lifecycle never reaching `validate` where the enforcer is bound.
 - **`vendor/bundle` must survive a clean**, and RuboCop's cache (`~/.cache/rubocop_cache`) is
   outside the module and shared with every checkout on the box. Neither is build output.
+<!-- file-refs: N/A - that note ships on feats/proxy-requirements; read it with `git show origin/feats/proxy-requirements:docs/inflight/bug-scoping-a-build-to-one-client-module-fails.md` -->
 
 ### The shared conformance suite
 
@@ -167,6 +168,6 @@ Ruby has no codegen step at install time. Re-running the script on an unchanged 
 
 ## Depth
 
-[`client-authoring-guide.md`](../../parallel-consumer-proxy/docs/client-authoring-guide.md) and
-[`protocol-specification.md`](../../parallel-consumer-proxy/docs/protocol-specification.md) own the
+[`client-authoring-guide.md`](../../parallel-consumer-proxy-protocol/docs/client-authoring-guide.md) and
+[`protocol-specification.md`](../../parallel-consumer-proxy-protocol/docs/protocol-specification.md) own the
 protocol; this file does not restate them.

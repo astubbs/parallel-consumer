@@ -17,6 +17,7 @@
 #                              happens to look like the image and the static link proved nothing.
 #   pc-cpp-conformance-runner  this language's half of the shared conformance suite
 #   pc-cpp-tests               the module's own tests, run by ctest inside the image
+<!-- file-refs: N/A - that note ships on feats/proxy-requirements; read it with `git show origin/feats/proxy-requirements:docs/inflight/parked-containerised-toolchains-and-runtime.md` -->
 
 cmake_minimum_required(VERSION 3.20)
 

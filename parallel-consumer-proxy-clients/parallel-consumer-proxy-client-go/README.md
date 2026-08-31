@@ -106,6 +106,7 @@ and its container, packaging, and the rest of the conformance suite.
 
 The current findings, including the ones the frozen documents could not answer, are in
 [`docs/inflight/clients/go.md`](../../docs/inflight/clients/go.md).
+<!-- file-refs: N/A - the per-language wave notes live on feats/proxy-requirements, where those waves ran; read one with `git show origin/feats/proxy-requirements:docs/inflight/clients/<language>.md` -->
 
 ## Generated code
 
@@ -149,6 +150,7 @@ whatsoever. Nothing binds to `clean` - see below.
   required; it remains the fastest loop when you are only re-running `go test`. The flip side is
   worth knowing: `-P` leaves the engine out of the reactor - three modules instead of six, and no
   JDK 17 needed - which makes it the quicker loop when all you want is this module compiled.
+<!-- file-refs: N/A - a build OUTPUT this module's Maven wiring writes, never a tracked file; that note ships on feats/proxy-requirements; read it with `git show origin/feats/proxy-requirements:docs/inflight/bug-scoping-a-build-to-one-client-module-fails.md` -->
 
 ### What a Java engineer will find surprising here
 
@@ -169,6 +171,7 @@ whatsoever. Nothing binds to `clean` - see below.
 - **A green test phase may have run nothing.** `go test` caches passing results, so a second
   `./mvnw test ...` over unchanged sources prints `ok ... (cached)` and executes no test. Surefire
   has no equivalent. `go test -count=1 ./...` forces the re-run when you need to see it happen.
+<!-- file-refs: N/A - that note ships on feats/proxy-requirements; read it with `git show origin/feats/proxy-requirements:docs/inflight/bug-mvn-clean-does-not-clean-go-output.md` -->
 
 The shared cross-language conformance suite drives this client's runner
 (`cmd/conformance-runner`) through the same scenarios as every other language, asserting engine
@@ -180,6 +183,6 @@ state Go cannot see:
 
 ## Depth
 
-[`client-authoring-guide.md`](../../parallel-consumer-proxy/docs/client-authoring-guide.md) and
-[`protocol-specification.md`](../../parallel-consumer-proxy/docs/protocol-specification.md) own the
+[`client-authoring-guide.md`](../../parallel-consumer-proxy-protocol/docs/client-authoring-guide.md) and
+[`protocol-specification.md`](../../parallel-consumer-proxy-protocol/docs/protocol-specification.md) own the
 protocol; this file does not restate them.

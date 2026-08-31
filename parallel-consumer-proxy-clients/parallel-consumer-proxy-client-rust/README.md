@@ -20,8 +20,8 @@
 
 Key-ordered concurrent Kafka processing from Rust, with the Parallel Consumer engine running as a
 sidecar process. The crate speaks the frozen v1 proxy protocol
-([`protocol-specification.md`](../../parallel-consumer-proxy/docs/protocol-specification.md),
-[`client-authoring-guide.md`](../../parallel-consumer-proxy/docs/client-authoring-guide.md)) and
+([`protocol-specification.md`](../../parallel-consumer-proxy-protocol/docs/protocol-specification.md),
+[`client-authoring-guide.md`](../../parallel-consumer-proxy-protocol/docs/client-authoring-guide.md)) and
 nothing else - it never reads the proxy's Java.
 
 **Wave one.** Connect, `Configure`, dispatch waves, the user's function, per-record reports,
@@ -106,6 +106,7 @@ ordinary build of this module runs no Rust toolchain whatsoever.
   JDK 17 needed - which makes it the quicker loop when all you want is the clippy gate.
 - **`package`, not `test`, for that lane**, because `tests/harness` looks for the proxy's test jar as
   a *file* and `test` stops one phase short of producing one. Same reason the CI row runs `package`.
+<!-- file-refs: N/A - that note ships on feats/proxy-requirements; read it with `git show origin/feats/proxy-requirements:docs/inflight/bug-scoping-a-build-to-one-client-module-fails.md` -->
 
 ### What a Java engineer will find surprising here
 
@@ -144,3 +145,4 @@ than being rescued by a spare core:
 
 Findings, divergences and what wave two owes are in
 [`docs/inflight/clients/rust.md`](../../docs/inflight/clients/rust.md).
+<!-- file-refs: N/A - the per-language wave notes live on feats/proxy-requirements, where those waves ran; read one with `git show origin/feats/proxy-requirements:docs/inflight/clients/<language>.md` -->

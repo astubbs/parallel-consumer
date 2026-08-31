@@ -1,8 +1,8 @@
 # The release-documentation records are flat files, and the per-module fragment mechanism is not here
 
-<!-- inflight-type: decision -->
+<!-- inflight-type: register -->
 <!-- inflight-impact: process -->
-<!-- inflight-state: open -->
+<!-- inflight-state: open - nobody has to decide until two module waves collide on module-maturity.yaml, or a module reaches master with no row -->
 
 `docs/data/module-maturity.yaml` and `docs/data/testing-evidence.yaml` are single hand-maintained
 files with one entry per module. Every module in the reactor now has a row in both, so nothing is
@@ -35,7 +35,7 @@ rows.
 **What is left is the merge path itself**, and it is a real trade rather than an oversight:
 
 - **For**: one file per module means one PR per module, so two module waves never conflict on the
-  same file - which is the same reasoning that turned `docs/inflight.md` into a directory. It also
+  same file - which is the same reasoning that turned this directory's single predecessor file into a directory. It also
   makes a module with no row a build failure rather than a thing nobody notices.
 - **Against**: it is a schema extension, a merge step in `bin/check-docs-data.sh`, and a second gate,
   for a repository whose module count changes a few times a year. The flat files are readable in one

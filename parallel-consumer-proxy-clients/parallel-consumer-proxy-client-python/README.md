@@ -160,6 +160,7 @@ the `foreign-clients` profile in the clients aggregator ([`../pom.xml`](../pom.x
   and writes the sidecar classpath - activates on the *property*. The flip side is worth knowing:
   `-P` leaves the engine out of the reactor - three modules instead of six, and no JDK 17 needed -
   which makes it the quicker loop when all you want is this module compiled.
+<!-- file-refs: N/A - that note ships on feats/proxy-requirements; read it with `git show origin/feats/proxy-requirements:docs/inflight/bug-scoping-a-build-to-one-client-module-fails.md` -->
 
 **What a Java engineer will find surprising**, beyond the `.venv` rule above:
 
@@ -185,8 +186,8 @@ engine state Python cannot see:
 ```
 
 Depth on the protocol lives in
-[`client-authoring-guide.md`](../../parallel-consumer-proxy/docs/client-authoring-guide.md) and
-[`protocol-specification.md`](../../parallel-consumer-proxy/docs/protocol-specification.md).
+[`client-authoring-guide.md`](../../parallel-consumer-proxy-protocol/docs/client-authoring-guide.md) and
+[`protocol-specification.md`](../../parallel-consumer-proxy-protocol/docs/protocol-specification.md).
 
 ## Two divergences worth knowing
 
