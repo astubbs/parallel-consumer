@@ -1,0 +1,91 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# Seam-on evidence lane for parallel-consumer-streams (astubbs#255). Runs Apache Kafka's own test
+# suite against this module's patched classes TWICE - seam off, then seam on - and classifies every
+# case that passes in the first and fails in the second by the mechanism its own failure names.
+#
+# UNLIKE THE QUARANTINE LANE, RED HERE IS NOT EXPECTED. That lane runs tests known to be failing, so
+# its verdict lives in the summary and the step carries continue-on-error. This one asserts that every
+# seam-on divergence is EXPLAINED, and green is the ordinary state. A red job means one of two things,
+# both of which want a human: a new divergence nobody has attributed (a change altered the dispatch
+# path's semantics), or an attribution in docs/inflight/ that has gone stale because a rung fixed the
+# thing it described. Neither is fixed by re-running.
+#
+# PATH-SCOPED, because nothing outside these paths can change the answer and the run costs Kafka's
+# whole suite twice. The ledger is in the trigger set deliberately: an edit to an attribution changes
+# the verdict exactly as much as an edit to the code does.
+
+name: Streams Seam-On Evidence
+
+on:
+  pull_request:
+    paths:
+      - 'parallel-consumer-streams/**'
+      - 'bin/ci-streams-seam-on-evidence.sh'
+      - 'docs/inflight/*.md'
+      - '.github/workflows/streams-seam-on-evidence.yml'
+  push:
+    branches: [ master ]
+    paths:
+      - 'parallel-consumer-streams/**'
+      - 'bin/ci-streams-seam-on-evidence.sh'
+      - 'docs/inflight/*.md'
+      - '.github/workflows/streams-seam-on-evidence.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  seam-on-evidence:
+    name: "divergence classification"
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - name: Restore Maven cache
+        uses: actions/cache/restore@v4
+        with:
+          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
+          path: ~/.m2/repository
+          restore-keys: |
+            setup-java-Linux-x64-maven-
+      # This module fetches Kafka's `sources` and `test-sources` CLASSIFIER artifacts by explicit
+      # artifactItems, which dependency:go-offline does not resolve - so the cache-warming job does not
+      # cover them and they are fetched live from Central here. That is the already-recorded
+      # region-dependent timeout class, and a red on THIS step is a download failure rather than a
+      # divergence. Recorded in docs/inflight/ci-streams-classifier-artifacts-escape-the-cache-warming-job.md.
+      - name: Run the lane (red means an unexplained divergence, not a flaky test)
+        run: bin/ci-streams-seam-on-evidence.sh
+      - name: Publish the measurement
+        if: always()
+        run: |
+          {
+            echo "## Seam-on evidence lane"
+            echo ""
+            report=parallel-consumer-streams/target/seam-on-evidence-report.txt
+            if [ -f "$report" ]; then
+              echo '```'
+              cat "$report"
+              echo '```'
+            else
+              echo "No report was produced, so the lane did not reach the classifier."
+              echo "That is an ERROR rather than an empty result - the usual causes are a Maven Central"
+              echo "read timeout during the classifier-artifact fetch, or the build failing before the"
+              echo "\`test\` phase. Read the job log rather than re-running."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the measurement as an artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: seam-on-evidence
+          if-no-files-found: warn
+          path: |
+            parallel-consumer-streams/target/seam-on-evidence-report.txt
+            parallel-consumer-streams/target/surefire-reports-kafka-upstream/
+            parallel-consumer-streams/target/surefire-reports-kafka-upstream-seam-on/
