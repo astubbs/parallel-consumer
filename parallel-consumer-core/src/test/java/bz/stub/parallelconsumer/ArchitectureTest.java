@@ -12,6 +12,7 @@ import com.tngtech.archunit.lang.ArchCondition;
 import com.tngtech.archunit.base.DescribedPredicate;
 import com.tngtech.archunit.core.domain.JavaMethod;
 import com.tngtech.archunit.core.domain.JavaMethodCall;
+import com.tngtech.archunit.core.domain.JavaModifier;
 import com.tngtech.archunit.lang.ArchRule;
 
 import java.util.ArrayDeque;
@@ -104,6 +105,26 @@ class ArchitectureTest {
      *
      * <p><b>The exemption list is the known-open debt, not a way to pass.</b> Each entry is a real
      * violation with an owner; adding to it should feel like taking on a defect, because it is.
+     *
+     * <p><b>WHAT THIS RULE CANNOT SEE, and it is not a detail.</b> ArchUnit matches method CALLS.
+     * A {@code synchronized} block compiles to a {@code MONITORENTER} instruction, which is not a
+     * call, so <b>no {@code synchronized} block is visible to this rule at any depth</b>. The
+     * consequence is worth stating without softening: <b>this rule would NOT have caught
+     * confluentinc#857</b>, whose defect was {@code synchronized (commitCommand)} inside
+     * {@code onPartitionsRevoked}. It fires today only because the remaining violation happens to
+     * use {@code Thread.sleep}. A green run therefore means "reaches none of the calls named in
+     * {@link #BLOCKING_CALLS}", never "nothing here blocks" - and reading it as the latter is
+     * exactly the false green this rule exists to prevent elsewhere.
+     *
+     * <p>Two narrower limits follow from the same mechanism. Synchronized <em>methods</em> ARE
+     * detectable, because the modifier survives into the class file, and this rule now flags them -
+     * so the blind spot is blocks specifically, not monitors in general. And the walk
+     * follows statically resolvable calls only, so a monitor or a wait behind dynamic dispatch through
+     * an interface - a user-supplied {@code ConsumerRebalanceListener}, for instance - is out of reach
+     * whatever the deny list says.
+     *
+     * <p>Closing the block gap needs bytecode inspection rather than ArchUnit. Until someone wants
+     * that, the honest position is that this rule covers a named, enumerable set and says so.
      */
     @ArchTest
     static final ArchRule rebalanceCallbacksMustNotBlock =
@@ -121,11 +142,33 @@ class ArchitectureTest {
             "java.util.concurrent.locks.Lock.lockInterruptibly()",
             "java.util.concurrent.locks.ReentrantLock.lock()",
             "java.util.concurrent.locks.ReentrantLock.lockInterruptibly()",
-            "java.util.concurrent.CountDownLatch.await()"
+            "java.util.concurrent.CountDownLatch.await()",
+            // Added 2026-08-31 by the astubbs/parallel-consumer#29 defect-class sweep. The original
+            // list named only what the two known defects used, which meant the rule answered a
+            // narrower question than its own description claimed.
+            "java.lang.Object.wait()",
+            "java.lang.Object.wait(long)",
+            "java.lang.Thread.join()",
+            "java.lang.Thread.join(long)",
+            "java.util.concurrent.Semaphore.acquire()",
+            "java.util.concurrent.locks.Condition.await()",
+            "java.util.concurrent.Future.get()",
+            "java.util.concurrent.CompletableFuture.get()",
+            "java.util.concurrent.CompletableFuture.join()",
+            "java.util.concurrent.BlockingQueue.take()",
+            "java.util.concurrent.BlockingQueue.put(java.lang.Object)",
+            "java.util.concurrent.locks.ReentrantReadWriteLock$ReadLock.lock()",
+            "java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()"
     ));
 
     /**
      * Known violations, each an open defect rather than an accepted design.
+     *
+     * <p><b>Keyed on {@code root => target}, not on the root alone.</b> A root-keyed exemption silences
+     * that callback for EVERY blocking call, so accepting one known defect would hide the next,
+     * unrelated one - a gate that goes quiet exactly where it has already found something is worse
+     * than one that never looked. The pair form exempts the one reach that is tracked and leaves the
+     * callback under inspection for everything else.
      *
      * <p>{@code onPartitionsRevoked}'s {@code while (isTransactionCommittingInProgress())
      * Thread.sleep(100)} is unbounded and transactional-mode only. It arrived as confluentinc#548's
@@ -134,7 +177,23 @@ class ArchitectureTest {
      * remove this entry when that lands.
      */
     private static final Set<String> KNOWN_BLOCKING_VIOLATIONS = new HashSet<>(Arrays.asList(
-            "bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.onPartitionsRevoked(java.util.Collection)"
+            "bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.onPartitionsRevoked"
+                    + "(java.util.Collection) => java.lang.Thread.sleep(long)",
+            // The RetryQueue write lock on the revoke/lost path. Pre-existing on master, surfaced by the
+            // astubbs/parallel-consumer#29 defect-class sweep once the deny list learned about
+            // ReentrantReadWriteLock. Owner: docs/inflight/bug-retry-queue-write-lock-on-the-rebalance-path.md
+            "bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.onPartitionsRevoked"
+                    + "(java.util.Collection) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
+            "bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.onPartitionsLost"
+                    + "(java.util.Collection) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
+            "bz.stub.parallelconsumer.state.PartitionStateManager.onPartitionsLost"
+                    + "(java.util.Collection) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
+            "bz.stub.parallelconsumer.state.PartitionStateManager.onPartitionsRevoked"
+                    + "(java.util.Collection) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
+            "bz.stub.parallelconsumer.state.WorkManager.onPartitionsLost"
+                    + "(java.util.Collection) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
+            "bz.stub.parallelconsumer.state.WorkManager.onPartitionsRevoked"
+                    + "(java.util.Collection) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()"
     ));
 
     private static DescribedPredicate<JavaMethod> areRebalanceCallbacks() {
@@ -154,9 +213,6 @@ class ArchitectureTest {
         return new ArchCondition<>("not reach a blocking call, transitively") {
             @Override
             public void check(JavaMethod root, ConditionEvents events) {
-                if (KNOWN_BLOCKING_VIOLATIONS.contains(root.getFullName())) {
-                    return; // open defect, tracked - see KNOWN_BLOCKING_VIOLATIONS
-                }
                 Set<String> visited = new HashSet<>();
                 Deque<JavaMethod> queue = new ArrayDeque<>();
                 queue.add(root);
@@ -167,7 +223,8 @@ class ArchitectureTest {
                     }
                     for (JavaMethodCall call : current.getMethodCallsFromSelf()) {
                         String target = call.getTarget().getFullName();
-                        if (BLOCKING_CALLS.contains(target)) {
+                        if (BLOCKING_CALLS.contains(target)
+                                && !KNOWN_BLOCKING_VIOLATIONS.contains(root.getFullName() + " => " + target)) {
                             events.add(SimpleConditionEvent.violated(root,
                                     root.getFullName() + " reaches blocking call " + target
                                             + " via " + current.getFullName()
@@ -175,10 +232,21 @@ class ArchitectureTest {
                                             + "Decline instead (tryLock), or move the work off the poll thread."));
                         }
                         // only walk our own code; the JDK and Kafka client are the boundary
-                        call.getTarget().resolveMember().ifPresent(m -> {
-                            if (m instanceof JavaMethod
-                                    && m.getOwner().getPackageName().startsWith("bz.stub.parallelconsumer")) {
-                                queue.add((JavaMethod) m);
+                        // resolveMember() on a method call already yields a JavaMethod, so an instanceof
+                        // here is a null check wearing a type check - which is what BadInstanceof flagged.
+                        call.getTarget().resolveMember().ifPresent(reached -> {
+                            if (reached.getOwner().getPackageName().startsWith("bz.stub.parallelconsumer")) {
+                                // A synchronized METHOD keeps its modifier in the class file, so unlike a
+                                // synchronized block it is visible here. Entering one from a rebalance
+                                // callback is an unbounded wait on whoever holds the monitor.
+                                if (reached.getModifiers().contains(JavaModifier.SYNCHRONIZED)) {
+                                    events.add(SimpleConditionEvent.violated(root,
+                                            root.getFullName() + " reaches synchronized method "
+                                                    + reached.getFullName() + " via " + current.getFullName()
+                                                    + " - entering a monitor from a rebalance callback waits "
+                                                    + "for whoever holds it, inside poll()."));
+                                }
+                                queue.add(reached);
                             }
                         });
                     }
