@@ -44,7 +44,11 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
 
     private final Duration commitTimeout;
 
-    private Optional<Thread> owningThread = Optional.empty();
+    /** Written by the broker-poll thread in {@link #claim()}, read by the CONTROL thread - by
+     * {@code isOwner()} and, on the timeout path, to diagnose why the poll thread is not answering.
+     * Volatile so that read cannot see a stale empty and report "no poll thread has claimed this
+     * committer" about a committer that was claimed. */
+    private volatile Optional<Thread> owningThread = Optional.empty();
 
     /**
      * Queue of commit requests from other threads
@@ -197,21 +201,29 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
                     // default by 3x and making the number useless as a diagnostic.
                     // TODO(refactor): a user-facing failure wants a PC-named type, not "internal runtime" -
                     // see docs/inflight/core-exception-hierarchy-cleanup.md
-                    throw InternalRuntimeException.msg(
+                    // "blocked or slower" is two opposite defects with opposite responses, and the
+                    // message alone could never say which - so every such failure was triaged by
+                    // arguing from preconditions. Look, now, while the thread is still parked: after
+                    // the throw the evidence is gone. See PollThreadStallDiagnosis for the incident.
+                    String diagnosis = owningThread
+                            .map(PollThreadStallDiagnosis::diagnose)
+                            .orElse("UNAVAILABLE - no poll thread has claimed this committer yet");
+                    throw PCInternalRuntimeException.msg(
                             "Timeout waiting for commit response {} to request {} - the broker poll thread is the " +
                                     "only producer of commit responses, and it has not died with an exception, so it is " +
                                     "not answering: it is blocked or slower than the configured offsetCommitTimeout. Had " +
                                     "it thrown, that would have been reported here immediately, with its own error as the " +
                                     "cause. An Error rather than an Exception escapes that path and is reported by " +
-                                    "AbstractParallelEoSStreamProcessor's supervise() backstop instead",
-                            commitTimeout, commitRequest);
+                                    "AbstractParallelEoSStreamProcessor's supervise() backstop instead." +
+                                    " POLL THREAD AT TIMEOUT: {}",
+                            commitTimeout, commitRequest, diagnosis);
                 }
                 // an older request's response, or the wake-up token: keep draining until ours arrives
             } catch (InterruptedException e) {
                 log.debug("Interrupted waiting for commit response", e);
             }
         }
-        throw new InternalRuntimeException("Too many attempts taking commit responses");
+        throw new PCInternalRuntimeException("Too many attempts taking commit responses");
     }
 
     /**
@@ -243,7 +255,7 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
                 : "request " + commitRequest + " can never be answered";
         // TODO(refactor): a user-facing failure wants a PC-named type - see
         // docs/inflight/core-exception-hierarchy-cleanup.md
-        throw new InternalRuntimeException(
+        throw new PCInternalRuntimeException(
                 "The broker poll thread has died, so {} - its own error is the cause of this one",
                 death, context);
     }
@@ -324,6 +336,16 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
         return commitMode.equals(PERIODIC_CONSUMER_SYNC);
     }
 
+    /**
+     * Records the broker-poll thread as this committer's owner.
+     * <p>
+     * <b>Called exactly once, as a METHOD REFERENCE</b> - {@code committer.ifPresent(ConsumerOffsetCommitter::claim)}
+     * in {@code BrokerPollSystem}'s control loop, on the poll thread itself, before the loop starts.
+     * That spelling is invisible to a grep for {@code .claim(}, which returns zero hits: a reviewer
+     * reading this file can conclude the owner is never set and that everything depending on it -
+     * {@code isOwner()}, and the timeout-path diagnosis - is dead code. It is not. Named here because
+     * the same wrong conclusion has now been reached once.
+     */
     public void claim() {
         owningThread = Optional.of(Thread.currentThread());
     }

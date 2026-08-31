@@ -3,7 +3,6 @@ package bz.stub.parallelconsumer.conformance;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import com.github.bsideup.jabel.Desugar;
 
 import java.util.List;
 import java.util.stream.Collectors;
@@ -15,9 +14,60 @@ import java.util.stream.Collectors;
  *
  * @author Antony Stubbs
  */
-@Desugar // Jabel requires the annotation on every record, even in this module where release=17 makes it a no-op
-public record RunnerTranscript(String language, String commandLine, int exitCode,
-                               List<DispatchObservation> observations, String stdout, String stderr) {
+/* A plain class rather than a record - LanguageRunner's header says why, for the whole module. */
+public final class RunnerTranscript {
+
+    private final String language;
+
+    private final String commandLine;
+
+    private final int exitCode;
+
+    private final List<DispatchObservation> observations;
+
+    private final String stdout;
+
+    private final String stderr;
+
+    public RunnerTranscript(String language, String commandLine, int exitCode,
+                            List<DispatchObservation> observations, String stdout, String stderr) {
+        this.language = language;
+        this.commandLine = commandLine;
+        this.exitCode = exitCode;
+        this.observations = List.copyOf(observations);
+        this.stdout = stdout;
+        this.stderr = stderr;
+    }
+
+    /** The binding that produced this transcript. */
+    public String language() {
+        return language;
+    }
+
+    /** How the binding was invoked, for a failure message to quote. */
+    public String commandLine() {
+        return commandLine;
+    }
+
+    /** The verdict channel: zero means the prescription was carried out. */
+    public int exitCode() {
+        return exitCode;
+    }
+
+    /** Every observation the binding made, in the order it made them. */
+    public List<DispatchObservation> observations() {
+        return observations;
+    }
+
+    /** What the binding printed, verbatim. */
+    public String stdout() {
+        return stdout;
+    }
+
+    /** What the binding reported went wrong, verbatim. */
+    public String stderr() {
+        return stderr;
+    }
 
     /** The deliveries, in arrival order - what every scenario written before overlap mattered asserts on. */
     public List<DispatchObservation> dispatches() {

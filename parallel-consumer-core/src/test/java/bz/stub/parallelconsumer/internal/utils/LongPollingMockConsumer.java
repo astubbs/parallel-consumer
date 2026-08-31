@@ -200,9 +200,12 @@ public class LongPollingMockConsumer<K, V> extends MockConsumer<K, V> {
      * Seeding first removes the window rather than narrowing it: {@link MockConsumer#updateBeginningOffsets} is
      * a map merge that requires no assignment, and {@code rebalance} never touches that map.
      * <p>
-     * Established by widening the window rather than by argument: with a sleep between the two calls,
-     * {@code GrpcSpikeConformanceTest} fails with exactly that exception on every test; with the same sleep and
-     * the seeding moved ahead of the rebalance, it passes.
+     * Established by widening the window rather than by argument, and re-established on this branch against
+     * a test that is here: with a sleep between the two calls, every test in
+     * {@code DirectSpikeConformanceTest} fails with exactly that exception; with the same sleep and the
+     * seeding moved ahead of the rebalance, all five pass. The write-up
+     * ({@code docs/solutions/test-flakiness/assign-the-mock-consumer-after-seeding-its-offsets-2026-08-15.md})
+     * records the original measurement, which was made against the gRPC sibling of that test.
      */
     public void subscribeWithRebalanceAndAssignment(final List<String> topics, int partitions) {
         List<TopicPartition> topicPartitions = topics.stream()

@@ -11,7 +11,6 @@ import bz.stub.parallelconsumer.proxy.protocol.v1.ProduceRecord;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Report;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Token;
 import bz.stub.parallelconsumer.state.ShardKey;
-import com.github.bsideup.jabel.Desugar;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
@@ -139,8 +138,38 @@ public class ProxyProcessor extends ExternalEngine<byte[], byte[]> {
      * @param returned     how many held records the manifest did not name, and were returned to scheduling
      * @param unissued     tokens naming a record the proxy holds nothing for - rejected, nothing disturbed
      */
-    @Desugar
-    public record ManifestOutcome(List<Token> drops, int kept, int returned, List<Token> unissued) {
+    public static final class ManifestOutcome {
+
+        private final List<Token> drops;
+
+        private final int kept;
+
+        private final int returned;
+
+        private final List<Token> unissued;
+
+        public ManifestOutcome(List<Token> drops, int kept, int returned, List<Token> unissued) {
+            this.drops = drops;
+            this.kept = kept;
+            this.returned = returned;
+            this.unissued = unissued;
+        }
+
+        public List<Token> drops() {
+            return drops;
+        }
+
+        public int kept() {
+            return kept;
+        }
+
+        public int returned() {
+            return returned;
+        }
+
+        public List<Token> unissued() {
+            return unissued;
+        }
     }
 
     private final InFlightRegistry inFlight;

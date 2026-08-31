@@ -3,7 +3,6 @@ package bz.stub.parallelconsumer.proxy.protocol;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import com.github.bsideup.jabel.Desugar;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -26,25 +25,20 @@ import static com.google.common.truth.Truth.assertWithMessage;
  */
 class WireDurationsTest {
 
-    /** One row of the equivalence table: a name for the failure message, and the two wire fields. */
-    @Desugar // Jabel requires the annotation on every record, even in this module where release=17 makes it a no-op
-    private record Row(String name, long seconds, int nanos) {
-    }
-
-    private static final List<Row> TABLE = List.of(
-            new Row("zero", 0L, 0),
-            new Row("whole seconds", 5L, 0),
-            new Row("one nano", 0L, 1),
-            new Row("sub-second nanos", 0L, 500_000_000),
-            new Row("seconds and nanos", 1L, 500_000_000),
-            new Row("maximal nanos", 1L, 999_999_999),
+    private static final List<WireBridgeRow> TABLE = List.of(
+            new WireBridgeRow("zero", 0L, 0),
+            new WireBridgeRow("whole seconds", 5L, 0),
+            new WireBridgeRow("one nano", 0L, 1),
+            new WireBridgeRow("sub-second nanos", 0L, 500_000_000),
+            new WireBridgeRow("seconds and nanos", 1L, 500_000_000),
+            new WireBridgeRow("maximal nanos", 1L, 999_999_999),
             // protobuf's own documented Duration bound, and then the widest the two fields can carry at all
-            new Row("protobuf maximum", 315_576_000_000L, 999_999_999),
-            new Row("long maximum seconds", Long.MAX_VALUE, 999_999_999));
+            new WireBridgeRow("protobuf maximum", 315_576_000_000L, 999_999_999),
+            new WireBridgeRow("long maximum seconds", Long.MAX_VALUE, 999_999_999));
 
     @Test
     void everyRepresentableValueRoundTripsThroughTheWireAndBack() {
-        for (Row row : TABLE) {
+        for (WireBridgeRow row : TABLE) {
             var wire = wire(row);
 
             var backToWire = WireDurations.toWire(WireDurations.toJava(wire));
@@ -58,7 +52,7 @@ class WireDurationsTest {
 
     @Test
     void theJavaValueCarriesTheSecondsAndNanosItWasGiven() {
-        for (Row row : TABLE) {
+        for (WireBridgeRow row : TABLE) {
             var asJava = WireDurations.toJava(wire(row));
 
             assertWithMessage("%s: seconds", row.name()).that(asJava.getSeconds()).isEqualTo(row.seconds());
@@ -106,7 +100,7 @@ class WireDurationsTest {
         assertThat(WireDurations.toJava(wire)).isEqualTo(java.time.Duration.ofMillis(-1500));
     }
 
-    private static com.google.protobuf.Duration wire(Row row) {
+    private static com.google.protobuf.Duration wire(WireBridgeRow row) {
         return com.google.protobuf.Duration.newBuilder().setSeconds(row.seconds()).setNanos(row.nanos()).build();
     }
 }

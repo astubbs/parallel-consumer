@@ -76,7 +76,7 @@ public class ConfigureHandler extends ProxyServiceGrpc.ProxyServiceImplBase {
 
     /**
      * The capability token gating {@code Dispatch} waves - one of the frozen specification's v1 baseline
-     * tokens ({@code parallel-consumer-proxy/docs/protocol-specification.md}, "Capabilities and
+     * tokens ({@code parallel-consumer-proxy-protocol/docs/protocol-specification.md}, "Capabilities and
      * versioning"). A client whose declared capability set does not include it receives no dispatches (the
      * negotiated-intersection rule, R38).
      */

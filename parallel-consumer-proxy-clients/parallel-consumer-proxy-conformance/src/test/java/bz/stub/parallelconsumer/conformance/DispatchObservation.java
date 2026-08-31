@@ -3,7 +3,6 @@ package bz.stub.parallelconsumer.conformance;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import com.github.bsideup.jabel.Desugar;
 
 import java.util.Optional;
 
@@ -29,8 +28,63 @@ import java.util.Optional;
  * @see RunnerContract#DISPATCH_LINE_PREFIX
  * @see RunnerContract#SETTLED_LINE_PREFIX
  */
-@Desugar // Jabel requires the annotation on every record, even in this module where release=17 makes it a no-op
-public record DispatchObservation(Kind kind, String key, long offset, int attempt, String reason) {
+/* A plain class rather than a record - LanguageRunner's header says why, for the whole module. */
+public final class DispatchObservation {
+
+    private final Kind kind;
+
+    private final String key;
+
+    private final long offset;
+
+    private final int attempt;
+
+    private final String reason;
+
+    public DispatchObservation(Kind kind, String key, long offset, int attempt, String reason) {
+        this.kind = kind;
+        this.key = key;
+        this.offset = offset;
+        this.attempt = attempt;
+        this.reason = reason;
+    }
+
+    /** Which of a record's two moments this line reports. */
+    public Kind kind() {
+        return kind;
+    }
+
+    /** The record's key, as UTF-8 text. */
+    public String key() {
+        return key;
+    }
+
+    /** The record's offset in its partition. */
+    public long offset() {
+        return offset;
+    }
+
+    /** Which attempt this delivery is, counting from one. */
+    public int attempt() {
+        return attempt;
+    }
+
+    /** On a dispatch, the history the record arrived with; on a settlement, the failure reported. */
+    public String reason() {
+        return reason;
+    }
+
+    /**
+     * The whole line, as a runner would have printed it - this is what a failure message shows when it
+     * attaches the transcript, so it has to read like the contract rather than like a default toString.
+     */
+    @Override
+    public String toString() {
+        return (kind == Kind.DISPATCH
+                ? RunnerContract.DISPATCH_LINE_PREFIX
+                : RunnerContract.SETTLED_LINE_PREFIX)
+                + "key=" + key + " offset=" + offset + " attempt=" + attempt + " reason=" + reason;
+    }
 
     /** Which of a record's two moments this line reports. */
     public enum Kind {

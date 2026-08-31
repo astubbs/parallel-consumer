@@ -42,6 +42,25 @@ public final class ConformanceBindings {
     /** The engine itself: the control arm, first in every selection. */
     private static final CoreBinding CORE = new CoreBinding();
 
+    /**
+     * The cells that exist but cannot be driven for want of an engine behind the sidecar - <b>empty here, and
+     * empty because the engine arrived rather than because nobody maintains it.</b>
+     * <p>
+     * astubbs/parallel-consumer#387 and astubbs/parallel-consumer#390 cut this module out of
+     * {@code feats/proxy-requirements} onto a stack whose sidecar hosts no engine, so on those rungs this
+     * listed {@code java-grpc} and all ten languages, and the selector used it to tell a CI row naming
+     * {@code go} that its cell was deferred rather than misspelled. Every one of them is a registered binding
+     * again, so nothing is deferred and this is empty.
+     * <p>
+     * <b>Kept rather than deleted</b>, because it is the contract
+     * {@link TheEngineArrivingMustBringTheForeignCellsTest} reads to check that a language which is not a
+     * binding is at least a named deferral - and the next capability to arrive without a cell (leases,
+     * reconnect, the drain) needs exactly this list rather than a new one.
+     */
+    static List<String> deferredUntilTheEngineArrives() {
+        return List.of();
+    }
+
     /** Every binding this run drives: the core control arm, plus the languages the selector kept. */
     public static List<ConformanceBinding> selected() {
         var former = System.getProperty(FORMER_LANGUAGE_PROPERTY);

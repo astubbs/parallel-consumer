@@ -1,15 +1,26 @@
 // Copyright (C) 2026 Antony Stubbs and contributors
 
-// Package harness locates the JVM-side conformance harness so a Go test can spawn it as an
-// ordinary sidecar binary.
+// Package harness locates the JVM-side sidecars so a Go test can spawn one as an ordinary sidecar
+// binary.
 //
-// The harness is TestModeMain, shipped in the proxy module's TEST jar so it can never reach a
-// client package. That makes it a classpath invocation rather than a binary, so "the sidecar
-// binary" for a conformance test is the JVM launcher and the classpath is an argument. Everything
-// awkward about that lives here rather than in each test.
+// THERE ARE TWO, AND THEY ANSWER DIFFERENT QUESTIONS. Both are classpath invocations rather than
+// binaries - so "the sidecar binary" for a test is the JVM launcher and the classpath is an
+// argument - and everything awkward about that lives here rather than in each test.
 //
-// This package is test scaffolding that is not itself a _test.go file, because the demo and
-// example waves will want it too.
+// EngineLessSidecar runs parallel-consumer-proxy's production Main, the same binary an application
+// would spawn. It hosts no Parallel Consumer engine: it binds, announces its port, admits one
+// connection under the transport's rules, and answers every session UNIMPLEMENTED
+// (astubbs/parallel-consumer#384). A Go test that spawns it exercises the whole client-side path up
+// to and including the handshake - spawn, port parse, lifeline, channel, Configure on the wire, and
+// the mapping of the server's answer back to a Go error - and stops exactly where the engine would
+// begin.
+//
+// ForScenario runs TestModeMain out of the proxy module's TEST jar, which is the engine-backed
+// harness and can never reach a client package. That is what makes the conformance scenarios below
+// runnable end to end rather than deferred.
+//
+// This package is test scaffolding that is not itself a _test.go file, because the demo and example
+// waves will want it too.
 package harness
 
 import (
@@ -21,8 +32,21 @@ import (
 	"strings"
 )
 
-// MainClass is the harness entry point.
-const MainClass = "bz.stub.parallelconsumer.proxy.testmode.TestModeMain"
+// MainClass is the no-engine sidecar entry point, in the proxy module's TEST jar. It is the
+// production lifecycle - the same bind, admission rules and parent-death contract an application
+// gets - with the engine supplier swapped, so a session is answered UNIMPLEMENTED and the handshake
+// test has a subject. The production Main hosts the engine; spawning that here would leave nothing
+// to assert the refusal against.
+const MainClass = "bz.stub.parallelconsumer.proxy.NoEngineMain"
+
+// TestModeMainClass is the engine-backed harness entry point, in the proxy module's TEST jar so it
+// can never reach a client package.
+const TestModeMainClass = "bz.stub.parallelconsumer.proxy.testmode.TestModeMain"
+
+// NoEngineDescription is the substring the sidecar's refusal carries. Asserted on rather than the
+// bare status code, because a description naming what is missing is what stops a client author
+// debugging their own code - and asserting on it here is what keeps the two sides in step.
+const NoEngineDescription = "hosts no Parallel Consumer engine"
 
 // Scenario names, which are the conformance suite's identities everywhere: the harness CLI, this
 // list, and the Go test names that run them. A scenario name is ALSO the topic name to subscribe
@@ -41,27 +65,55 @@ type Sidecar struct {
 	Args []string
 }
 
-// ForScenario builds the command that serves one conformance scenario in mock mode.
+// EngineLessSidecar builds the command that runs the real sidecar shell.
 //
-// It FAILS rather than skips when the harness is not built. A test that quietly does not run is
-// not a passing test, and nothing goes red to say so; the error names the build command instead.
-func ForScenario(scenario string) (Sidecar, error) {
-	root, err := repoRoot()
-	if err != nil {
-		return Sidecar{}, err
-	}
-	java, err := javaBinary()
-	if err != nil {
-		return Sidecar{}, err
-	}
-	cp, err := classpath(root)
+// It FAILS rather than skips when the proxy module is not built. A test that quietly does not run
+// is not a passing test, and nothing goes red to say so; the error names the build command instead.
+func EngineLessSidecar() (Sidecar, error) {
+	java, cp, err := javaAndClasspath()
 	if err != nil {
 		return Sidecar{}, err
 	}
 	return Sidecar{
 		Path: java,
-		Args: []string{"-cp", cp, MainClass, "--mock", "--scenario", scenario},
+		// NO ARGUMENTS, and that is the sidecar's own rule rather than this file being terse: it
+		// takes none, and refuses to start when given one, because everything is configured
+		// connect-time over the protocol.
+		Args: []string{"-cp", cp, MainClass},
 	}, nil
+}
+
+// ForScenario builds the command that serves one conformance scenario in mock mode, engine-backed.
+//
+// It FAILS rather than skips when the harness is not built, for the same reason EngineLessSidecar
+// does.
+func ForScenario(scenario string) (Sidecar, error) {
+	java, cp, err := javaAndClasspath()
+	if err != nil {
+		return Sidecar{}, err
+	}
+	return Sidecar{
+		Path: java,
+		Args: []string{"-cp", cp, TestModeMainClass, "--mock", "--scenario", scenario},
+	}, nil
+}
+
+// javaAndClasspath resolves the two things both sidecar commands need. Shared rather than repeated,
+// so the two entry points cannot drift in how they locate a JVM or a classpath.
+func javaAndClasspath() (string, string, error) {
+	root, err := repoRoot()
+	if err != nil {
+		return "", "", err
+	}
+	java, err := javaBinary()
+	if err != nil {
+		return "", "", err
+	}
+	cp, err := classpath(root)
+	if err != nil {
+		return "", "", err
+	}
+	return java, cp, nil
 }
 
 // repoRoot walks up from this package to the enclosing git working tree.

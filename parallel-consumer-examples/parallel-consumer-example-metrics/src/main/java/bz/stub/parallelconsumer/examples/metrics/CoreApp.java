@@ -22,6 +22,7 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.Map;
@@ -84,10 +85,13 @@ public class CoreApp {
         try {
             final var server = HttpServer.create(new InetSocketAddress(7001), 0);
             server.createContext(METRICS_ENDPOINT, httpExchange -> {
-                String response = meterRegistry.scrape();
-                httpExchange.sendResponseHeaders(200, response.getBytes().length);
+                // Encoded ONCE, explicitly. It was `response.getBytes()` twice - the platform
+                // default charset, and two separate encodings for the Content-Length and the body,
+                // which can disagree the moment a metric tag is not ASCII. Prometheus expects UTF-8.
+                byte[] body = meterRegistry.scrape().getBytes(StandardCharsets.UTF_8);
+                httpExchange.sendResponseHeaders(200, body.length);
                 try (OutputStream os = httpExchange.getResponseBody()) {
-                    os.write(response.getBytes());
+                    os.write(body);
                 }
             });
             metricsEndpointExecutor.submit(server::start);

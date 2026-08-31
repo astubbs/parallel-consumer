@@ -150,7 +150,9 @@ updates:
   # Until these blocks existed, `maven` and `github-actions` were the ONLY two ecosystems
   # declared, while the language-proxy clients had brought seven more into the tree. Nothing
   # updated any of them and nothing said so - the gap surfaced when a gRPC CVE was found by a
-  # CI scan rather than by a bot, on a version pinned when the branch started.
+  # CI scan rather than by a bot, on a version pinned when the branch started. The invariant is
+  # now enforced rather than written down: bin/check-dependabot-coverage.sh fails the build if a
+  # manifest for a new ecosystem arrives without an entry here, or an entry points at nothing.
   #
   # THESE ENTRIES DO NOTHING UNTIL THE CLIENT MODULES ARE ON `master`, AND THAT IS NOT A
   # DEFECT - it is the thing to know before concluding they are broken. Dependabot reads the
@@ -209,7 +211,8 @@ updates:
   # CMakeLists.txt resolves everything through find_package/PkgConfig against system packages
   # from the runner image, so there is no manifest, no lockfile, and no version for a bot to
   # bump. Dependabot supports no C++ ecosystem, and neither does anything else we would adopt.
-  # Its dependencies move when the image does.
+  # Its dependencies move when the image does. bin/check-dependabot-coverage.sh prints that
+  # module on every run, including green ones, so the absence stays a stated fact.
   #
   # The three JVM clients (Java, Kotlin, Scala) need no entry: they are Maven modules, so the
   # `maven` block at the top of this file and the whole-tree OSS Index lane already cover them.

@@ -3,7 +3,6 @@ package bz.stub.parallelconsumer.proxy.protocol;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import com.github.bsideup.jabel.Desugar;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -24,27 +23,22 @@ import static com.google.common.truth.Truth.assertWithMessage;
  */
 class WireTimestampsTest {
 
-    /** One row of the equivalence table: a name for the failure message, and the two wire fields. */
-    @Desugar // Jabel requires the annotation on every record, even in this module where release=17 makes it a no-op
-    private record Row(String name, long seconds, int nanos) {
-    }
-
-    private static final List<Row> TABLE = List.of(
-            new Row("epoch", 0L, 0),
-            new Row("whole seconds", 1_700_000_000L, 0),
-            new Row("one nano", 0L, 1),
-            new Row("sub-second nanos", 1_700_000_000L, 500_000_000),
-            new Row("maximal nanos", 1_700_000_000L, 999_999_999),
+    private static final List<WireBridgeRow> TABLE = List.of(
+            new WireBridgeRow("epoch", 0L, 0),
+            new WireBridgeRow("whole seconds", 1_700_000_000L, 0),
+            new WireBridgeRow("one nano", 0L, 1),
+            new WireBridgeRow("sub-second nanos", 1_700_000_000L, 500_000_000),
+            new WireBridgeRow("maximal nanos", 1_700_000_000L, 999_999_999),
             // the bounds the protobuf Timestamp documentation states: 0001-01-01 to 9999-12-31
-            new Row("protobuf maximum, 9999-12-31", 253_402_300_799L, 999_999_999),
-            new Row("protobuf minimum, 0001-01-01", -62_135_596_800L, 0),
+            new WireBridgeRow("protobuf maximum, 9999-12-31", 253_402_300_799L, 999_999_999),
+            new WireBridgeRow("protobuf minimum, 0001-01-01", -62_135_596_800L, 0),
             // and the wider bounds java.time actually carries, which the two fields also survive
-            new Row("Instant.MAX", 31_556_889_864_403_199L, 999_999_999),
-            new Row("Instant.MIN", -31_557_014_167_219_200L, 0));
+            new WireBridgeRow("Instant.MAX", 31_556_889_864_403_199L, 999_999_999),
+            new WireBridgeRow("Instant.MIN", -31_557_014_167_219_200L, 0));
 
     @Test
     void everyRepresentableValueRoundTripsThroughTheWireAndBack() {
-        for (Row row : TABLE) {
+        for (WireBridgeRow row : TABLE) {
             var backToWire = WireTimestamps.toWire(WireTimestamps.toJava(wire(row)));
 
             assertWithMessage("%s: seconds survived the round trip", row.name())
@@ -56,7 +50,7 @@ class WireTimestampsTest {
 
     @Test
     void theInstantCarriesTheSecondsAndNanosItWasGiven() {
-        for (Row row : TABLE) {
+        for (WireBridgeRow row : TABLE) {
             var asJava = WireTimestamps.toJava(wire(row));
 
             assertWithMessage("%s: epoch second", row.name())
@@ -100,7 +94,7 @@ class WireTimestampsTest {
         assertThat(WireTimestamps.toJava(wire)).isEqualTo(Instant.ofEpochMilli(-1500));
     }
 
-    private static com.google.protobuf.Timestamp wire(Row row) {
+    private static com.google.protobuf.Timestamp wire(WireBridgeRow row) {
         return com.google.protobuf.Timestamp.newBuilder().setSeconds(row.seconds()).setNanos(row.nanos()).build();
     }
 }

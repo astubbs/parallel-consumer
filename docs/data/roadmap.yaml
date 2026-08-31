@@ -308,9 +308,14 @@ entries:
     stage: limited-poc
     stage_delivery: pending-merge
     stage_detail: >-
-      astubbs#293 carries the module, the frozen v1 protocol and eleven clients under one
-      conformance suite - broad, but an experimental brand-new system nobody has used in anger,
-      and every client negotiates only the dispatch capability so far.
+      The module, the frozen v1 protocol and eleven clients under one conformance suite - broad, but
+      an experimental brand-new system nobody has used in anger, and every client negotiates only the
+      dispatch capability so far. It no longer arrives as one PR: astubbs#380 through astubbs#390
+      carry the polyglot build machinery, the frozen protocol, the sidecar shell, the native image,
+      the Java reference client, the conformance framework and the ten language clients, each
+      reviewable on its own, and astubbs#293 is the rung that carries the remote execution model
+      itself. The stage is unchanged by that split - the same artifact exists either way - but the
+      delivery is now a stack that lands bottom-up, with astubbs#293 last.
     why_now: >-
       The engine's guarantees are locked to the JVM today. A sidecar speaking a frozen protocol makes
       them a capability any language can adopt, and the conformance suite makes every client answer to

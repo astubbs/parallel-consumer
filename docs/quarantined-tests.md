@@ -46,8 +46,9 @@ Rules (full discipline in [`docs/testing.md`](testing.md), AGENTS.md, and the `@
    master-state flaky - it simply has no root cause yet. Demanding one before quarantine leaves an
    undiagnosed red blocking every unrelated PR, which trains everyone to read red as normal; this
    repo already deleted surefire retries for hiding flakes, and a permanently-red gate destroys the
-   same signal more thoroughly. The tell that the old default was miscalibrated: its escape hatch was
-   an owner-granted exception, and the exception had become the routine path.
+   same signal more thoroughly. The tell that the old default was miscalibrated: its only escape
+   hatch was an owner-granted exception, so every undiagnosed red had to be escalated to the owner
+   or left blocking - the rule had no path a contributor could take on the evidence they had.
 
    The bar it does NOT lower: quarantine still defers rather than forgives. The lane keeps running
    the test, the registry keeps it loud, and rule 5 still blocks a release while the list is
@@ -77,19 +78,6 @@ Every entry below is a timing flake rather than a deterministic failure, so all 
 `flapping = true`: a pass proves nothing and the lane reports it without demanding action. All
 were hidden by the surefire retry until astubbs#224 removed it.
 
-- [ ] `PCMetricsTest.metricsRegisterBinding` - asserts `PARTITION_LAST_COMMITTED_OFFSET` equals a
-  **completion counter** while the suite runs `UNORDERED`. Commits are contiguous and bounded by the
-  lowest incomplete offset; completions are not ordered, and workers call `latch.await()` *before*
-  `counter.incrementAndGet()`, so a latched worker's offset never completes and the gap is
-  **permanent**. The 120s `atMost` cannot close it - it only makes the failure cost 140s of every CI
-  run. Quarantined on a **diagnosed mechanism**, which is the stronger half of rule 1, not on a
-  sighting ledger. The fix is one comparand -
-  `PARTITION_HIGHEST_SEQUENTIAL_SUCCEEDED_OFFSET` is the contiguous high-water mark the commit metric
-  actually tracks - but the sibling assertions on `PARTITION_HIGHEST_COMPLETED_OFFSET` and
-  `PARTITION_INCOMPLETE_OFFSETS` derive from the same counters and want reading as a set first, so it
-  is not a one-line change. Diagnosis in
-  `docs/inflight/bug-pcmetrics-committed-offset-vs-completion-count.md`. No Owner yet.
-
 - [ ] `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` - fails inside
   the shared `BlockedThreadAsserter#assertUnblocksAfter` helper rather than in the test's own
   assertions, so the same signature can surface from any test that uses it. The unblocker is
@@ -101,28 +89,3 @@ were hidden by the surefire retry until astubbs#224 removed it.
   [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).
   Owner: PR astubbs#262, which anchors the measurement to a nanos stamp taken just before
   `schedule()`, leaving the residual error sub-millisecond and in the safe direction.
-
-- [ ] `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` -
-  **UNDIAGNOSED, quarantined on its sighting ledger (rule 1)**: at 4/45 it is the
-  most frequent tracked flake and blocked every PR. Fails as `ConditionTimeout` at the
-  `getHighestSeenOffset()` assertion - the committed high-water mark never reaches
-  `expectedHighestSeen` (139), with a different actual each run (136 and 132 seen). An earlier
-  quarantine attributed it to the retry-delay sleep and was reverted: that code runs *after* the
-  failing assertion, so it cannot be the cause. No owner - diagnosing it is the open task; the
-  unverified hypothesis and its falsification path are in
-  [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).
-
-- [ ] `PCMetricsTest.metricsRegisterBinding` - **re-quarantined**, having been released by
-  astubbs#265 on a causal fix that addressed the opposite direction of the failure. That diagnosis was
-  that the metric could be *more* current than the expectation testing it (`expected 203.0 but was
-  207.0`), so the `Thread.sleep(1000)` became an `await().untilAsserted(...)` on the trailing meters.
-  What fails now is the metric *behind* and never converging: `PARTITION_LAST_COMMITTED_OFFSET` for
-  partition 1 stays short of `counterP1 + p1StartingOffset` for the whole 120s budget. Seen twice in a
-  row on one head (astubbs#116, 2026-08-14) as `expected 1213.0 but was 1209.0` then `expected 1207.0
-  but was 1195.0` - a shortfall that varies, so no wait closes it. That is the shape
-  [`assert-the-commit-frontier-not-the-tick-path.md`](solutions/test-flakiness/assert-the-commit-frontier-not-the-tick-path.md)
-  warns against, and it rhymes with the `OffsetEncodingBackPressureTest` entry below, whose committed
-  high-water mark also never reaches its expectation with a different actual each run - worth ruling
-  in or out as one phenomenon rather than two. Whether the un-committed tail is a wrong test
-  assumption or real commit behaviour is undecided and is the open task. No owner yet; diagnosis in
-  [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).

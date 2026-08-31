@@ -78,6 +78,21 @@
         <pc.foreign.build.args>placeholder-never-runs</pc.foreign.build.args>
         <pc.foreign.test.executable>false</pc.foreign.test.executable>
         <pc.foreign.test.args>placeholder-never-runs</pc.foreign.test.args>
+
+        <!--
+            STRICT MODE: whether an absent toolchain is a loud skip or a red build. Empty here, so a
+            developer box is lenient; anything other than 0/false/no makes the same case red. It is
+            passed to the wrapper as an ENVIRONMENT VARIABLE rather than an argument because a shell
+            script has no way to read a Maven property, and as a property here rather than only an
+            env var because `-Dpc.foreign.strict=1` is what a developer will reach for - which the
+            root pom's absent-clients notice already tells them to use, and which reached nothing
+            until this property and the two environmentVariables blocks below existed.
+
+            .github/workflows/clients.yml sets it, and that is the pairing that makes the lenient
+            default safe: on a CI row the toolchain is provisioned by the row, so its absence is a
+            provisioning bug and must not be a green skip.
+        -->
+        <pc.foreign.strict></pc.foreign.strict>
     </properties>
 
     <build>
@@ -212,6 +227,47 @@
             <build>
                 <pluginManagement>
                     <plugins>
+                        <!--
+                            THE SIDECAR CLASSPATH, WIRED ONCE FOR EVERY MODULE THAT SPAWNS ONE.
+
+                            Eight client modules run a test that spawns a sidecar as a child process,
+                            and each needs the same two things: the proxy on its test classpath so
+                            `-am` builds it first, and the resolved classpath written where the test
+                            can read it. The dependency stays in each module - see below - but this
+                            execution does not: six copies of it were six near-identical blocks the
+                            duplicate-code check rightly flagged, and they had already drifted (two
+                            wrote a differently-named file, which is why two harnesses hunted jars on
+                            disk instead of reading it).
+
+                            IT BINDS ONLY WHERE THE MODULE DECLARES THE PLUGIN, which is what makes
+                            hoisting it safe: pluginManagement contributes an execution to a module's
+                            effective model only if that module declares the plugin, so the JVM
+                            clients and the conformance module are untouched.
+
+                            generate-test-resources: after the module's dependencies resolve, before
+                            the test phase where the foreign suite runs and reads the file.
+                            includeScope=test because build-classpath emits DEPENDENCIES and never
+                            the project's own output - a narrower scope silently produced a classpath
+                            with every transitive jar on it and no sidecar to run.
+                        -->
+                        <plugin>
+                            <groupId>org.apache.maven.plugins</groupId>
+                            <artifactId>maven-dependency-plugin</artifactId>
+                            <!-- version from the root pom's pluginManagement -->
+                            <executions>
+                                <execution>
+                                    <id>sidecar-classpath</id>
+                                    <phase>generate-test-resources</phase>
+                                    <goals>
+                                        <goal>build-classpath</goal>
+                                    </goals>
+                                    <configuration>
+                                        <outputFile>${project.build.directory}/sidecar-classpath.txt</outputFile>
+                                        <includeScope>test</includeScope>
+                                    </configuration>
+                                </execution>
+                            </executions>
+                        </plugin>
                         <plugin>
                             <groupId>org.codehaus.mojo</groupId>
                             <artifactId>exec-maven-plugin</artifactId>
@@ -227,6 +283,9 @@
                                         <executable>${pc.foreign.build.executable}</executable>
                                         <commandlineArgs>${pc.foreign.build.args}</commandlineArgs>
                                         <workingDirectory>${project.basedir}</workingDirectory>
+                                        <environmentVariables>
+                                            <PC_FOREIGN_CLIENTS_STRICT>${pc.foreign.strict}</PC_FOREIGN_CLIENTS_STRICT>
+                                        </environmentVariables>
                                     </configuration>
                                 </execution>
                                 <!--
@@ -244,6 +303,9 @@
                                         <executable>${pc.foreign.test.executable}</executable>
                                         <commandlineArgs>${pc.foreign.test.args}</commandlineArgs>
                                         <workingDirectory>${project.basedir}</workingDirectory>
+                                        <environmentVariables>
+                                            <PC_FOREIGN_CLIENTS_STRICT>${pc.foreign.strict}</PC_FOREIGN_CLIENTS_STRICT>
+                                        </environmentVariables>
                                     </configuration>
                                 </execution>
                             </executions>

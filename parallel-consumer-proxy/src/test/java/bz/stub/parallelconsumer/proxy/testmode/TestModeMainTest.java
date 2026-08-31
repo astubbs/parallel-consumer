@@ -5,13 +5,12 @@ package bz.stub.parallelconsumer.proxy.testmode;
 
 import bz.stub.parallelconsumer.proxy.config.ConfigureHandler;
 import bz.stub.parallelconsumer.proxy.harness.HarnessScenario;
-import bz.stub.parallelconsumer.proxy.harness.ProxyHarness;
+import bz.stub.parallelconsumer.proxy.harness.ConformanceHarness;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ClientMessage;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Configure;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ProxyMessage;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ProxyServiceGrpc;
 import bz.stub.parallelconsumer.proxy.protocol.v1.Report;
-import com.github.bsideup.jabel.Desugar;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.stub.StreamObserver;
@@ -87,7 +86,7 @@ class TestModeMainTest {
         var errBytes = new ByteArrayOutputStream();
         var lifeline = new PipedInputStream();
         var parentEnd = new PipedOutputStream(lifeline);
-        var harnessRef = new AtomicReference<ProxyHarness>();
+        var harnessRef = new AtomicReference<ConformanceHarness>();
         ExecutorService sidecarThread = Executors.newSingleThreadExecutor();
         ManagedChannel channel = null;
         try {
@@ -98,7 +97,7 @@ class TestModeMainTest {
                     lifeline, harnessRef::set));
 
             int port = awaitPortLine(outBytes);
-            Awaitility.await().atMost(ProxyHarness.CONVERGENCE_BUDGET).until(() -> harnessRef.get() != null);
+            Awaitility.await().atMost(ConformanceHarness.CONVERGENCE_BUDGET).until(() -> harnessRef.get() != null);
 
             channel = ManagedChannelBuilder.forAddress("127.0.0.1", port).usePlaintext().build();
             var responses = new LinkedBlockingQueue<ProxyMessage>();
@@ -128,8 +127,8 @@ class TestModeMainTest {
                             .addTopics(scenario.name())
                             .setMaxConcurrency(2)
                             .setCommitInterval(com.google.protobuf.Duration.newBuilder()
-                                    .setSeconds(ProxyHarness.COMMIT_INTERVAL.getSeconds())
-                                    .setNanos(ProxyHarness.COMMIT_INTERVAL.getNano())))
+                                    .setSeconds(ConformanceHarness.COMMIT_INTERVAL.getSeconds())
+                                    .setNanos(ConformanceHarness.COMMIT_INTERVAL.getNano())))
                     .build());
 
             var configured = take(responses, streamError).getConfigured();
@@ -149,7 +148,7 @@ class TestModeMainTest {
                             .setSuccess(Report.Success.newBuilder()))
                     .build());
 
-            Awaitility.await().atMost(ProxyHarness.CONVERGENCE_BUDGET).untilAsserted(() ->
+            Awaitility.await().atMost(ConformanceHarness.CONVERGENCE_BUDGET).untilAsserted(() ->
                     assertWithMessage("the committed offset advances past the served record")
                             .that(harnessRef.get().lastCommittedOffset()).isEqualTo(OptionalLong.of(1)));
 
@@ -172,7 +171,7 @@ class TestModeMainTest {
     }
 
     private static int awaitPortLine(ByteArrayOutputStream outBytes) {
-        Awaitility.await().atMost(ProxyHarness.CONVERGENCE_BUDGET).until(() ->
+        Awaitility.await().atMost(ConformanceHarness.CONVERGENCE_BUDGET).until(() ->
                 outBytes.toString(StandardCharsets.UTF_8).contains("\n"));
         String firstLine = outBytes.toString(StandardCharsets.UTF_8).lines().findFirst().orElseThrow();
         assertThat(firstLine).startsWith(TestModeMain.PORT_LINE_PREFIX);
@@ -181,14 +180,38 @@ class TestModeMainTest {
 
     private static ProxyMessage take(BlockingQueue<ProxyMessage> responses, AtomicReference<Throwable> streamError)
             throws InterruptedException {
-        var message = responses.poll(ProxyHarness.CONVERGENCE_BUDGET.toSeconds(), TimeUnit.SECONDS);
+        var message = responses.poll(ConformanceHarness.CONVERGENCE_BUDGET.toSeconds(), TimeUnit.SECONDS);
         assertWithMessage("no proxy message arrived within the budget (stream error: %s)", streamError.get())
                 .that(message).isNotNull();
         return message;
     }
 
-    @Desugar // Jabel requires the annotation on every record, even in this module where release=17 makes it a no-op
-    private record Run(int exitCode, String out, String err) {
+    /* A plain final class rather than a record - LivenessSettings' header says why, for the whole module. */
+    private static final class Run {
+
+        private final int exitCode;
+
+        private final String out;
+
+        private final String err;
+
+        private Run(int exitCode, String out, String err) {
+            this.exitCode = exitCode;
+            this.out = out;
+            this.err = err;
+        }
+
+        private int exitCode() {
+            return exitCode;
+        }
+
+        private String out() {
+            return out;
+        }
+
+        private String err() {
+            return err;
+        }
     }
 
     private static Run run(String... args) {

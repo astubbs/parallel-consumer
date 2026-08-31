@@ -8,12 +8,14 @@ import bz.stub.parallelconsumer.proxy.engine.ProxyProcessor;
 import bz.stub.parallelconsumer.proxy.lifecycle.DrainCoordinator;
 import bz.stub.parallelconsumer.proxy.lifecycle.ParentDeathWatchdog;
 import bz.stub.parallelconsumer.proxy.transport.ProxyServer;
+import io.grpc.BindableService;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
 import java.time.Duration;
+import java.util.function.Supplier;
 
 /**
  * The sidecar (KTD4, R47, R52): the application's child process, which serves one client over gRPC and dies
@@ -22,8 +24,9 @@ import java.time.Duration;
  * <h2>The spawning contract</h2>
  *
  * Bind an ephemeral loopback port, print {@code port: <n>} as the first line of stdout, then serve until the
- * parent dies. That is deliberately the same contract {@code TestModeMain} already publishes, so a client can
- * spawn either binary through one code path.
+ * parent dies. Everything a spawning client needs to find this process is on that one line, so the client
+ * side of the contract is a line read rather than a discovery protocol. That is deliberately the same
+ * contract {@code TestModeMain} already publishes, so a client can spawn either binary through one code path.
  *
  * <h2>It parses no configuration, and that is a rule rather than an omission</h2>
  *
@@ -41,6 +44,18 @@ import java.time.Duration;
  * {@link ParentDeathWatchdog}'s pid poll is the backstop, but the backstop has an interval and the pipe does
  * not.
  *
+ * <h2>What this build serves</h2>
+ *
+ * It hosts a real engine: {@link #sessionServiceFactory} returns {@link ConfigureHandler}, which builds a
+ * {@link ProxyProcessor} when a client's {@code Configure} arrives, and the shutdown drain below waits for
+ * records the client is still holding in its own process. That is unit U10, and it is why this class carries
+ * an exit code for a drain that timed out.
+ * <p>
+ * A build that hosts <em>no</em> engine is still spawnable, and that is what the eight cross-language
+ * {@code SidecarHandshakeTest}s point at: {@code NoEngineMain} in this module's test tree passes the
+ * no-engine session service through the same seam. It moved there when this entry point gained its engine -
+ * the alternative was those tests silently losing their subject.
+ *
  * @author Antony Stubbs
  * @see ParentDeathWatchdog
  * @see DrainCoordinator
@@ -56,6 +71,9 @@ public final class Main {
      * different outcome for the data: those records were left uncommitted for redelivery, not resolved.
      */
     public static final int EXIT_DRAIN_TIMED_OUT = 3;
+
+    /** Could not bind the listener. Distinct from a usage error: the invocation was fine, the socket was not. */
+    public static final int EXIT_BIND_FAILED = 4;
 
     /** The port line, as the spawning client parses it. Identical to the test-mode binary's. */
     public static final String PORT_LINE_PREFIX = "port: ";
@@ -84,6 +102,13 @@ public final class Main {
     /** Used only until a client configures the engine; after that the configured drain timeout governs. */
     private static final Duration DEFAULT_DRAIN_TIMEOUT = Duration.ofSeconds(30);
 
+    /**
+     * What the production entry point always asks for: let the OS choose, so no well-known port is guessable
+     * and two sidecars on one host cannot race for the same number. Only a test names a port, and only so
+     * that a bind failure can be provoked.
+     */
+    private static final int EPHEMERAL_PORT = 0;
+
     private Main() {
     }
 
@@ -98,6 +123,22 @@ public final class Main {
      * @param parentLifeline the inherited pipe; {@code System.in} in the real sidecar
      */
     public static int run(String[] args, PrintStream out, PrintStream err, InputStream parentLifeline) {
+        return run(args, out, err, parentLifeline, sessionServiceFactory(), EPHEMERAL_PORT);
+    }
+
+    /**
+     * The two seams this class has, both package-private because neither is a knob the sidecar exposes.
+     * <p>
+     * {@code sessionService} is what selects what the transport hosts: the transport's contract with it is
+     * {@link BindableService} and nothing more - which is the whole reason the transport can be reviewed
+     * without an engine - and it is a factory rather than an instance because each run owns its own service
+     * for the life of one server. It is also how a no-engine sidecar is still spawnable, for the handshake
+     * tests that assert the refusal. {@code port} exists only so a bind failure can be provoked
+     * deliberately; production always passes {@link #EPHEMERAL_PORT}, and an untestable exit code is one
+     * nobody can rely on.
+     */
+    static int run(String[] args, PrintStream out, PrintStream err, InputStream parentLifeline,
+                   Supplier<BindableService> sessionService, int port) {
         boolean domainSocket = false;
         if (args.length == 1 && SOCKET_FLAG.equals(args[0])) {
             domainSocket = true;
@@ -106,11 +147,12 @@ public final class Main {
                     + " (got '" + args[0] + "')");
         }
 
-        var handler = ConfigureHandler.builder().build();
+        var service = sessionService.get();
 
         try (var server = ProxyServer.builder()
-                .sessionService(handler)
+                .sessionService(service)
                 .domainSocket(domainSocket)
+                .port(port)
                 .build()
                 .start()) {
             if (domainSocket) {
@@ -129,23 +171,38 @@ public final class Main {
                 log.info("Shutting down: {}", watchdog.cause());
             }
 
-            return exitCodeFor(drain(handler));
+            return exitCodeFor(drain(service));
         } catch (IOException bindFailed) {
             err.println("sidecar: could not bind the listener: " + bindFailed.getMessage());
-            return EXIT_USAGE;
+            return EXIT_BIND_FAILED;
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             log.warn("Interrupted while serving; shutting down");
-            return exitCodeFor(drain(handler));
+            return exitCodeFor(drain(service));
         }
+    }
+
+    /**
+     * What the production sidecar hosts. Named rather than inlined so the choice is one greppable call site -
+     * which is what let the no-engine build become a test entry point rather than a second copy of this
+     * class.
+     */
+    static Supplier<BindableService> sessionServiceFactory() {
+        return () -> ConfigureHandler.builder().build();
     }
 
     /**
      * Runs the drain against whatever the session actually reached. <b>An engine that was never configured
      * is a clean exit, not a timeout</b> - a sidecar whose client died during the handshake holds no records,
-     * so there is nothing to wait for and nothing to leave uncommitted.
+     * so there is nothing to wait for and nothing to leave uncommitted. A service that is not engine-backed
+     * at all - the no-engine build the handshake tests spawn - is the same case for the same reason.
      */
-    private static DrainCoordinator.Outcome drain(ConfigureHandler handler) {
+    private static DrainCoordinator.Outcome drain(BindableService service) {
+        if (!(service instanceof ConfigureHandler)) {
+            log.info("This build hosts no engine; nothing to drain");
+            return DrainCoordinator.Outcome.DRAINED;
+        }
+        var handler = (ConfigureHandler) service;
         var engine = handler.engine();
         if (!engine.isPresent()) {
             log.info("No engine was ever configured; nothing to drain");

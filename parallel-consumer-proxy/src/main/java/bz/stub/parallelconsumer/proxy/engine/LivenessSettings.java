@@ -4,7 +4,6 @@ package bz.stub.parallelconsumer.proxy.engine;
  */
 
 import bz.stub.parallelconsumer.internal.utils.TimeUtils;
-import com.github.bsideup.jabel.Desugar;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -34,14 +33,59 @@ import java.time.Duration;
  * @param reconnectWindow   how long records are held after connection loss before returning to scheduling (R42)
  * @param clock             the clock every deadline here is measured against; injected so tests advance time
  *                          rather than sleeping through it
+ * <b>A plain final class rather than a record, and that is a build fact rather than a style choice</b> - the
+ * same one astubbs/parallel-consumer#387 hit one rung down, and the reason this module has no Java record
+ * anywhere. Jabel REQUIRES {@code @Desugar} on every record it sees, even at release 17, and what the
+ * annotation then does is rewrite the record into a class whose generated members carry no source positions.
+ * Error Prone cannot read that: 2.42.0 crashes rather than reporting, first in {@code UnnecessaryStringBuilder}
+ * ({@code invalid replacement: [0, -1)}) and, once that is suppressed, again in {@code DuplicateBranches}. A
+ * crash is not a finding - it fails the whole compilation and is attributed to line 1 of whichever file javac
+ * listed first, which is why it reads as unrelated to the file that caused it. Neither term can move: the root
+ * pom pins Error Prone at 2.42.0 because 2.43.0 needs a JVM this build cannot use, and Jabel serves the
+ * release 8 target. {@code grep -rn "record "} over the tree finds none.
+ *
  * @author Antony Stubbs
  */
-@Desugar
-public record LivenessSettings(boolean leasesEnabled,
-                               Duration leaseDuration,
-                               Duration heartbeatInterval,
-                               Duration reconnectWindow,
-                               Clock clock) {
+public final class LivenessSettings {
+
+    private final boolean leasesEnabled;
+
+    private final Duration leaseDuration;
+
+    private final Duration heartbeatInterval;
+
+    private final Duration reconnectWindow;
+
+    private final Clock clock;
+
+    public LivenessSettings(boolean leasesEnabled, Duration leaseDuration, Duration heartbeatInterval,
+                            Duration reconnectWindow, Clock clock) {
+        this.leasesEnabled = leasesEnabled;
+        this.leaseDuration = leaseDuration;
+        this.heartbeatInterval = heartbeatInterval;
+        this.reconnectWindow = reconnectWindow;
+        this.clock = clock;
+    }
+
+    public boolean leasesEnabled() {
+        return leasesEnabled;
+    }
+
+    public Duration leaseDuration() {
+        return leaseDuration;
+    }
+
+    public Duration heartbeatInterval() {
+        return heartbeatInterval;
+    }
+
+    public Duration reconnectWindow() {
+        return reconnectWindow;
+    }
+
+    public Clock clock() {
+        return clock;
+    }
 
     /** One minute of client silence before a delivery's lease lapses - see the class javadoc's derivation. */
     public static final Duration DEFAULT_LEASE_DURATION = Duration.ofSeconds(60);

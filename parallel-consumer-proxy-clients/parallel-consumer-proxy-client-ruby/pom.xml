@@ -52,27 +52,28 @@
     -->
     <properties>
         <pc.foreign.skip>false</pc.foreign.skip>
-        <pc.foreign.build.executable>${project.basedir}/scripts/build.sh</pc.foreign.build.executable>
-        <!--
-            EMPTY ON PURPOSE: the script takes no arguments, and the aggregator's exec execution
-            reads this property unconditionally, so it has to resolve to something. An empty value
-            resolves to no arguments at all, which was verified rather than assumed.
-        -->
-        <pc.foreign.build.args></pc.foreign.build.args>
-        <pc.foreign.test.executable>bundle</pc.foreign.test.executable>
-        <pc.foreign.test.args>exec rake</pc.foreign.test.args>
+        <pc.foreign.build.executable>bash</pc.foreign.build.executable>
+        <pc.foreign.build.args>${pc.foreign.step} --tool ruby -- ./scripts/build.sh</pc.foreign.build.args>
+        <pc.foreign.test.executable>bash</pc.foreign.test.executable>
+        <pc.foreign.test.args>${pc.foreign.step} --tool ruby -- bundle exec rake</pc.foreign.test.args>
     </properties>
 
     <profiles>
         <!--
-            THE SIDECAR THE CONFORMANCE SPEC DRIVES, AND WHY IT IS A DEPENDENCY.
+            THE SIDECARS THE SPECS DRIVE, AND WHY THEY ARE A DEPENDENCY.
 
-            spec/support/harness.rb spawns the real test-mode sidecar over the real wire, which
-            needs the proxy module's test jar (TestModeMain and the harness) and its main jar.
-            Declaring them here is what makes the CI row's own command build the proxy before this
-            module's test phase; the row runs `package` rather than `test` for the other half of
-            it, because the harness looks for jar FILES and `test` stops one phase short of
-            producing them.
+            spec/support/harness.rb spawns a real sidecar over the real wire - the test-mode one for
+            the end-to-end spec, the production Main for the handshake-refusal spec - which needs the
+            proxy module's test jar (TestModeMain and the harness), its main jar, and core's test jar
+            underneath. Declaring them here is what makes the CI row's own command build the proxy
+            before this module's test phase.
+
+            THE HARNESS NO LONGER LOOKS FOR JAR FILES. It reads the classpath Maven writes, so the
+            row no longer needs `package` rather than `test` to have jars on disk. The
+            `sidecar-classpath` execution that writes it is the clients aggregator's, hoisted there
+            with the other copies; it binds here only because this module declares
+            maven-dependency-plugin below. The dependency is the one thing that cannot be hoisted -
+            it is what gives `-am` its reactor edge.
 
             SCOPED TO THIS PROFILE DELIBERATELY. No client depends on the engine, and with the
             profile inactive - every ordinary build - there is no dependency edge here at all, so a
@@ -116,34 +117,8 @@
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-dependency-plugin</artifactId>
-                        <!-- version from the root pom's pluginManagement -->
-                        <executions>
-                            <execution>
-                                <!--
-                                    THE HARNESS ASKS MAVEN FOR THIS LIST ITSELF IF IT IS NOT HERE,
-                                    AND IN CI THAT SECOND ASK FAILS. Its fallback runs a nested
-                                    `./mvnw -pl :parallel-consumer-proxy dependency:build-classpath`
-                                    with no -am, so parallel-consumer-core has to come from the
-                                    local repository - which a CI job never installs into, since
-                                    the reactor stops at `package`. Writing the file here, from the
-                                    reactor that already has every module resolved, means the
-                                    fallback is only ever the developer's path. Same arrangement as
-                                    the Go module's sidecar-classpath.txt, one filename apart
-                                    because each harness chose its own.
-                                -->
-                                <id>proxy-test-classpath</id>
-                                <!-- After the dependencies above resolve, before the test phase
-                                     where the foreign suite runs and reads the file. -->
-                                <phase>generate-test-resources</phase>
-                                <goals>
-                                    <goal>build-classpath</goal>
-                                </goals>
-                                <configuration>
-                                    <outputFile>${project.build.directory}/proxy-test-classpath.txt</outputFile>
-                                    <includeScope>test</includeScope>
-                                </configuration>
-                            </execution>
-                        </executions>
+                        <!-- Declaring it is the opt-in; the aggregator's pluginManagement supplies
+                             the version and the `sidecar-classpath` execution. -->
                     </plugin>
                 </plugins>
             </build>
@@ -170,7 +145,8 @@
           code is source here, and clean does not delete source.
         - RuboCop's cache is ~/.cache/rubocop_cache - outside the module, shared with every other
           checkout on the box, and out of bounds for that reason alone.
-        - target/proxy-test-classpath.txt, written by the profile above, is under target/, which
+        - target/sidecar-classpath.txt, written by the aggregator execution the profile above opts
+          into, is under target/, which
           the default clean execution already removes. Everything else the specs write goes to
           Dir.mktmpdir, under the system temp directory.
 
