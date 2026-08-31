@@ -316,15 +316,22 @@ public class PcTaskDispatcher implements Closeable {
         EpochAndRecordsMap<byte[], byte[]> epochTagged =
                 new EpochAndRecordsMap<>(new ConsumerRecords<>(byPartition), workManager.getPm());
 
-        recordsOffered.addAndGet(batch.size());
-        recordsAccepted.addAndGet(epochTagged.count());
-        PcDispatchCounters.onOfferedToWorkManager(batch.size());
-        PcDispatchCounters.onAcceptedByWorkManager(epochTagged.count());
-        if (epochTagged.count() != batch.size()) {
+        // Counted once. EpochAndRecordsMap.count() sums a stream over every partition's record list, so it is
+        // O(records) with an allocation, and this is the poll-batch hot path - it was being called four
+        // times for one answer that cannot change in between. SpotBugs flagged the repetition on the lines
+        // this diff wrote.
+        final int offered = batch.size();
+        final int accepted = epochTagged.count();
+
+        recordsOffered.addAndGet(offered);
+        recordsAccepted.addAndGet(accepted);
+        PcDispatchCounters.onOfferedToWorkManager(offered);
+        PcDispatchCounters.onAcceptedByWorkManager(accepted);
+        if (accepted != offered) {
             // Loud, because the thing being guarded against is silence.
             log.error("PC dropped {} of {} records for {} for want of a partition-assignment epoch - " +
                             "onPartitionsAssigned was not driven for this partition",
-                    batch.size() - epochTagged.count(), batch.size(), partition);
+                    offered - accepted, offered, partition);
         }
 
         workManager.registerWork(epochTagged);
