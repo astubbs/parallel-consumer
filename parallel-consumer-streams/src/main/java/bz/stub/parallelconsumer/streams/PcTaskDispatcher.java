@@ -7,6 +7,7 @@ package bz.stub.parallelconsumer.streams;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.internal.EpochAndRecordsMap;
 import bz.stub.parallelconsumer.internal.PCModule;
+import bz.stub.parallelconsumer.state.PartitionState;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import bz.stub.parallelconsumer.state.WorkManager;
 import lombok.Getter;
@@ -21,8 +22,8 @@ import org.apache.kafka.common.TopicPartition;
 import java.io.Closeable;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -37,6 +38,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.LockSupport;
 
 /**
  * One Parallel Consumer {@code WorkManager}, and the worker pool that drains it, standing in for a
@@ -89,6 +91,15 @@ import java.util.concurrent.atomic.AtomicReference;
  *       private {@code __processing.threads.enabled__} config on, {@code DefaultTaskExecutor} calls
  *       {@code task.process} from its own thread, which would drive {@link #dispatchAvailable} off the owner
  *       thread.</li>
+ *   <li>{@link #isClosed()}, {@link #getInFlightCount()}, {@link #hasPendingCompletions()},
+ *       {@link #isQuiescent()}, {@link #hasPendingFailure()}, {@link #getBufferedRecordCount(TopicPartition)},
+ *       {@link #getBufferedRecordCount()} and the five record counters ({@code getRecordsOffered} through
+ *       {@code getRecordsFailed}) - <b>any thread</b>, for the same reason as the row above: atomics,
+ *       concurrent collections and volatiles only. The buffered counts are read from
+ *       {@code StreamTask.addRecords} on the StreamThread <em>and</em> sampled from a watcher thread by the
+ *       memory-bound proof, which is what makes "any thread" a requirement here rather than a convenience.
+ *       <b>Not {@code getBufferedUnderflowCount()}</b>, which is a plain {@code int}, owner-thread-only, and
+ *       named just like the others without being one of them.</li>
  * </ul>
  *
  * <p>The rule that keeps the surfaces apart: <b>a question is not allowed to mutate.</b> A query that drained
@@ -193,7 +204,13 @@ public class PcTaskDispatcher implements Closeable {
      */
     private volatile Thread ownerThread;
 
-    private final Set<TopicPartition> inputPartitions;
+    /**
+     * The partitions this task holds. Written only by the owner thread, through {@link #updatePartitions};
+     * <b>iterated from a foreign thread</b> by {@link #getBufferedRecordCount()}, which the memory-bound
+     * proof samples while the run is in flight - hence concurrent rather than the {@code LinkedHashSet} it
+     * used to be. The only thing lost with the insertion order is the order these appear in log lines.
+     */
+    private final Set<TopicPartition> inputPartitions = ConcurrentHashMap.newKeySet();
 
     @Getter
     private final WorkManager<byte[], byte[]> workManager;
@@ -210,7 +227,50 @@ public class PcTaskDispatcher implements Closeable {
 
     private final AtomicInteger inFlight = new AtomicInteger();
 
-    private final AtomicReference<Throwable> firstFailure = new AtomicReference<>();
+    private final AtomicReference<Failure> firstFailure = new AtomicReference<>();
+
+    /**
+     * Set by the first {@link #recordFailure}, and never cleared while this dispatcher is live. See
+     * {@link #hasPendingFailure()} for why this is a separate field rather than a null check on
+     * {@link #firstFailure}, which {@link #pollFailure()} empties as it hands the failure over.
+     * <p>
+     * Volatile: written by whichever worker fails first, read by the owner thread on every pump.
+     */
+    private volatile boolean failureSeen;
+
+    /**
+     * Records this dispatcher has handed out for each partition that are still counted among Parallel
+     * Consumer's <em>incomplete</em> offsets for it. Subtracted from PC's own per-partition incomplete count
+     * to answer {@link #getBufferedRecordCount(TopicPartition)}.
+     *
+     * <p><b>Written only by the owner thread</b> - {@link #dispatchAvailable} adds one per record it takes
+     * from the WorkManager, {@link #drainCompletions} removes one per record whose <em>success</em> PC has
+     * folded back in, because success is the only outcome that removes an offset from
+     * {@code PartitionState.incompleteOffsets}. A {@link ConcurrentHashMap} so that the memory-bound proof
+     * can sample occupancy from a watcher thread while the owner mutates it.
+     *
+     * <p><b>This is a subtrahend, not a buffer count</b>, and the distinction is the whole reason the
+     * accounting is shaped this way rather than as a count of its own - see
+     * {@link #getBufferedRecordCount(TopicPartition)}.
+     */
+    private final Map<TopicPartition, Integer> handedOutStillIncomplete = new ConcurrentHashMap<>();
+
+    /**
+     * How many times a buffered-occupancy read came out <em>negative</em> and was clamped to zero - which
+     * says {@link #handedOutStillIncomplete} has drifted above PC's own incomplete count for that partition.
+     * <p>
+     * Counted and logged rather than silently clamped, because that is the drift direction which
+     * <em>removes</em> the memory bound: a buffered count reading low never crosses the threshold, so the
+     * pause never fires and nothing says so. The opposite direction - drift low, so the count reads high and
+     * a partition stays paused - is caught instead by the count returning to exactly zero at quiescence,
+     * which is asserted rather than counted.
+     * <p>
+     * A clamp on its own is what hid a conditional-decrement bug in the engine's own intake gate; see
+     * {@code docs/solutions/logic-errors/counter-clamp-hid-a-conditional-decrement-bug-2026-08-21.md}.
+     * Owner thread only - the accessor is called from the thread that drove the pump - so a plain
+     * {@code int}.
+     */
+    private int bufferedUnderflows;
 
     /**
      * The condition the StreamThread waits on instead of sitting out the rest of {@code poll.ms}. Bound
@@ -276,6 +336,15 @@ public class PcTaskDispatcher implements Closeable {
      */
     private volatile int lastDispatchCount = -1;
 
+    /**
+     * Whether the last {@link #dispatchAvailable} stopped because the pool had no free slot, rather than
+     * because {@link WorkManager} had nothing to hand out. Owner thread only.
+     * <p>
+     * It exists to keep {@link #awaitOutcomeIfIdle()} out of the saturated case, and that distinction is not
+     * cosmetic - see there for the measurement that forced it.
+     */
+    private boolean pumpStoppedForCapacity;
+
     private final AtomicLong recordsOffered = new AtomicLong();
     private final AtomicLong recordsAccepted = new AtomicLong();
     private final AtomicLong recordsDispatched = new AtomicLong();
@@ -296,7 +365,7 @@ public class PcTaskDispatcher implements Closeable {
     }
 
     public PcTaskDispatcher(final String taskName, final Set<TopicPartition> inputPartitions, final int poolSize) {
-        this.inputPartitions = new LinkedHashSet<>(inputPartitions);
+        this.inputPartitions.addAll(inputPartitions);
         this.poolSize = poolSize;
 
         ParallelConsumerOptions<byte[], byte[]> options = ParallelConsumerOptions.<byte[], byte[]>builder()
@@ -428,6 +497,24 @@ public class PcTaskDispatcher implements Closeable {
             return 0;
         }
 
+        // A failure this dispatcher has seen stops further work being handed out. Stock Kafka Streams stops
+        // processing at the throw - the exception leaves process() and the thread dies - whereas here the
+        // throw happens on a worker and reaches the StreamThread later, so without this bar the dispatcher
+        // keeps running the backlog of a task that is already dying, producing forward() side effects for
+        // every record of it.
+        //
+        // The drain above still ran, deliberately: those outcomes have to reach PC's accounting or the
+        // commit frontier is wrong on the way down. In-flight records are left to finish rather than
+        // interrupted - a worker cancelled mid-chain leaves a half-forwarded record, and abandoning rather
+        // than interrupting is the policy PC already applies at revocation.
+        //
+        // Returning 0 marks the dispatcher quiescent once the pool empties, which is what suspend() needs in
+        // order to drain rather than sit out its whole timeout.
+        if (hasPendingFailure()) {
+            lastDispatchCount = 0;
+            return 0;
+        }
+
         // Never ask for more than the pool can start (checked per loop pass below): PC would happily hand
         // out its full target and the surplus would sit in the executor's queue marked in-flight, which
         // inflates the concurrency being measured and delays every completion behind it.
@@ -439,15 +526,22 @@ public class PcTaskDispatcher implements Closeable {
         // its whole key for ~poll.ms. Stock consumes such records inline, so this loop restores parity.
         // Terminates: every iteration either consumes at least one record from a finite backlog or exits.
         int consumed = 0;
+        pumpStoppedForCapacity = false;
         while (true) {
             int capacity = poolSize - inFlight.get();
             if (capacity < 1) {
+                pumpStoppedForCapacity = true;
                 break;
             }
             List<WorkContainer<byte[], byte[]>> available = workManager.getWorkIfAvailable(capacity);
             int syncCompleted = 0;
             for (WorkContainer<byte[], byte[]> work : available) {
                 consumed++;
+                // The record has left the buffer the moment PC hands it out, whatever happens to it next -
+                // dispatched, dropped during preparation, or failed at preparation. Counted here, beside the
+                // `consumed` it must always agree with, rather than on each of the three branches below,
+                // because three call sites is how they would silently stop agreeing.
+                handedOutStillIncomplete.merge(work.getTopicPartition(), 1, Integer::sum);
                 Runnable chainExecution;
                 try {
                     chainExecution = preparer.prepare(work.getCr());
@@ -556,8 +650,59 @@ public class PcTaskDispatcher implements Closeable {
         work.onUserFunctionFailure(cause);
         recordsFailed.incrementAndGet();
         PcDispatchCounters.onFailed();
-        firstFailure.compareAndSet(null, cause);
+        if (!firstFailure.compareAndSet(null, new Failure(cause, work.getCr()))) {
+            // Every failure after the first is surfaced through the log or it is surfaced nowhere: only one
+            // exception can leave process(), and several key shards can fail concurrently under KEY
+            // ordering. recordsFailed counts them; without this their stack traces do not exist anywhere.
+            log.error("PC dispatch: additional failure on {}-{} offset {}, after one is already pending. "
+                            + "Only the first is surfaced to the StreamThread.",
+                    work.getCr().topic(), work.getCr().partition(), work.getCr().offset(), cause);
+        }
+        // Set AFTER firstFailure, so an owner thread that finds the bar closed can always find the failure
+        // behind it. The reverse order leaves a window in which dispatch is barred but pollFailure() returns
+        // null, which reads as a dispatcher that has silently stopped working.
+        failureSeen = true;
         completed.add(work);
+    }
+
+    /**
+     * A worker's exception, together with the record that caused it.
+     *
+     * <p>The record travels with the throwable because stock Kafka Streams' {@code handleException} names the
+     * topic, partition and offset of the failing record in the message it wraps, and a PC-dispatched failure
+     * arriving without them is strictly harder to diagnose than the stock one it replaces: what failed is
+     * <em>one record out of {@code poolSize} running concurrently</em>, so "which one" is the first question
+     * anyone asks.
+     *
+     * <p>A plain final class rather than a record: this module compiles Java 17 source to Java 8 bytecode
+     * through Jabel, which does not desugar records.
+     */
+    public static final class Failure {
+
+        private final Throwable cause;
+
+        private final ConsumerRecord<byte[], byte[]> record;
+
+        Failure(final Throwable cause, final ConsumerRecord<byte[], byte[]> record) {
+            this.cause = cause;
+            this.record = record;
+        }
+
+        public Throwable getCause() {
+            return cause;
+        }
+
+        public String getTopic() {
+            return record.topic();
+        }
+
+        public int getPartition() {
+            return record.partition();
+        }
+
+        public long getOffset() {
+            return record.offset();
+        }
     }
 
     /**
@@ -572,9 +717,17 @@ public class PcTaskDispatcher implements Closeable {
             // Read the outcome before handing the container over - handleFutureResult ends the flight and
             // hands the container to shard and partition state, and nothing promises it stays readable.
             final boolean succeeded = work.isUserFunctionSucceeded();
+            final TopicPartition partition = work.getTopicPartition();
             workManager.handleFutureResult(work);
             if (succeeded) {
                 successesDrained++;
+                // Success is the ONLY outcome that takes an offset out of PC's incomplete set
+                // (PartitionState.onSuccess removes it; onFailure is a no-op), so it is the only outcome
+                // that may cancel this record's contribution to handedOutStillIncomplete. A failed record
+                // stays incomplete forever with retries disabled, and must go on being subtracted, or the
+                // partition's buffered count reads one too high for good and it never resumes.
+                handedOutStillIncomplete.computeIfPresent(partition,
+                        (ignored, held) -> held <= 1 ? null : held - 1);
             }
         }
     }
@@ -583,11 +736,126 @@ public class PcTaskDispatcher implements Closeable {
      * The first processing failure since the last call, cleared as it is returned, so the caller can surface
      * it the way stock Kafka Streams surfaces one - out of the thread that drives processing.
      *
-     * @return the failure, or null
+     * @return the failure and the record that caused it, or null
      */
-    public Throwable pollFailure() {
+    public Failure pollFailure() {
         return firstFailure.getAndSet(null);
     }
+
+    /**
+     * Whether this dispatcher has seen a processing failure at all - <b>sticky</b>, and deliberately not the
+     * same question as "is a failure waiting to be surfaced".
+     * <p>
+     * Two things read it, and they need the sticky answer for different reasons.
+     * {@link #dispatchAvailable} bars further dispatch on it, and {@link #pollFailure()} clears
+     * {@link #firstFailure} as it hands the failure over - so a bar that read only that field would be open
+     * again the instant the StreamThread took the exception, and {@code StreamTask.suspend()}'s
+     * {@link #pumpUntilQuiescent} drain, which runs immediately afterwards, would hand out the entire
+     * remaining backlog of a task that is already dying. {@link #collectCommitData()} fences on it for the
+     * reason given there.
+     * <p>
+     * <b>Never actually reset.</b> {@link #close()} and {@link #abortClose()} make it moot rather than
+     * clearing it - {@link #dispatchAvailable} tests {@code closed} first - and a task revived after a dirty
+     * close is given a <em>fresh</em> dispatcher by the patched {@code StreamTask.revive()}, so no live
+     * dispatcher ever needs it cleared. Said precisely rather than as "cleared on close", because a javadoc
+     * claim a reader can check and find false is the defect class this file's history is made of.
+     * <p>
+     * A question, so it does not mutate.
+     */
+    public boolean hasPendingFailure() {
+        return failureSeen;
+    }
+
+    /**
+     * How long {@link #awaitOutcome()} will wait for work already in flight to report back. A <b>cap on the
+     * pathological case</b> rather than a normal cost: the wait ends at the first outcome, and an in-flight
+     * record always produces one.
+     */
+    static final Duration OUTCOME_SETTLE_BUDGET = Duration.ofMillis(100);
+
+    /**
+     * Wait, bounded, for the outcome of work this dispatcher already has in flight. Owner thread only.
+     *
+     * <h2>What this is for: a failure that reaches Kafka's recovery from the same pump that caused it</h2>
+     * Stock Kafka Streams surfaces a processor's exception out of the very {@code process()} call that ran
+     * the record, and Kafka's recovery machinery is written against that: {@code StreamThread}'s run loop
+     * catches {@code TaskCorruptedException} and {@code TaskMigratedException} <em>around the processing
+     * loop</em>, and Kafka's own {@code StreamThreadTest.shouldReinitializeRevivedTasksInAnyState} asserts
+     * exactly that shape - one {@code runOnce}, one throw. Asynchronous dispatch breaks it: the record fails
+     * on a worker after the pump that dispatched it has already returned, so the exception is delivered at
+     * the <em>next</em> pump, which may be in the next {@code runOnce} or later. A commit or a checkpoint can
+     * happen in between (see {@link #collectCommitData()}), and an application stock Streams would have
+     * recovered shuts down instead.
+     *
+     * <p>Calling this when a pump had nothing left to hand out closes that gap, because Kafka's own loop
+     * calls {@code process()} again while it reports progress: the pump that dispatched the record returns
+     * "progress", the loop comes back, that pump finds nothing available and waits here for the outcome, and
+     * the failure is thrown from the same {@code runOnce}.
+     *
+     * <p>Callers on the pump path want {@link #awaitOutcomeIfIdle()}, which decides <em>whether</em> waiting
+     * is the right thing to do. This overload always waits and exists so a test can drive the wait directly.
+     *
+     * <p>It returns as soon as any of the exit conditions holds, so the budget binds only when a worker
+     * neither finishes nor fails within it.
+     *
+     * @param budget the longest this will wait
+     * @return true if it returned because there was something to see rather than because the budget expired
+     */
+    public boolean awaitOutcome(final Duration budget) {
+        final long deadline = System.nanoTime() + budget.toNanos();
+        while (true) {
+            if (closed || failureSeen || inFlight.get() == 0 || !completed.isEmpty()) {
+                return true;
+            }
+            if (System.nanoTime() - deadline >= 0) {
+                return false;
+            }
+            // Parked rather than signalled: this is the idle path, so the granularity costs nothing, and a
+            // condition variable here would put a lock acquisition on every worker's completion - the one
+            // path in this class that is genuinely hot.
+            LockSupport.parkNanos(PARK_SLICE_NANOS);
+        }
+    }
+
+    /**
+     * Wait for an outcome <b>only when waiting is what an idle pump should do</b> - see
+     * {@link #awaitOutcome(Duration)} for what the wait buys.
+     *
+     * <h2>The saturated case is excluded, and a measurement is why</h2>
+     * A pump can consume nothing for two quite different reasons. Either {@link WorkManager} had nothing to
+     * hand out - the idle case, where the outcome of work already running is the only thing that can change
+     * anything, so waiting for it is right. Or <b>the pool was full</b>, which is the normal steady state
+     * under load: there is plenty of work, just nowhere to put it.
+     *
+     * <p>Waiting in the saturated case throttles <em>intake</em>, because the StreamThread's next act would
+     * have been to poll. It is not a small effect. With the pause switched off, so that nothing else bounds
+     * inflow, peak occupancy over a 600-record backlog measured <b>36 with an unconditional wait and 596
+     * without it</b> - one term changed, same broker, topology, data and machine. That is a sixteen-fold
+     * throttle, and it arrived as a *second* memory bound nobody designed: it silently made the control arm
+     * of the memory-bound proof look almost bounded, which is worse than the throughput cost, because a
+     * contaminated control arm turns a measurement into a reassurance.
+     *
+     * <p>So the wait is gated on {@link #pumpStoppedForCapacity}. <b>The residual, stated rather than
+     * glossed:</b> at {@code poolSize} 1 a single in-flight record fills the pool, so this declines to wait
+     * and a failure is delivered on the next pump instead of this one. The typed-exception guarantee is
+     * therefore a guarantee about a pool with a spare slot, which is every default configuration and every
+     * arm this module measures.
+     *
+     * @return true if it returned because there was something to see; false if it declined to wait or the
+     *         budget expired
+     */
+    public boolean awaitOutcomeIfIdle() {
+        if (pumpStoppedForCapacity) {
+            return false;
+        }
+        return awaitOutcome(OUTCOME_SETTLE_BUDGET);
+    }
+
+    /**
+     * 250 microseconds. Written through {@link TimeUnit} rather than {@code Duration.ofMicros}, which is
+     * Java 9 and this module compiles to the Java 8 API surface.
+     */
+    private static final long PARK_SLICE_NANOS = TimeUnit.MICROSECONDS.toNanos(250);
 
     /**
      * The frontier and its encoded holes, for every dirty partition - what the consumer-group commit should
@@ -601,10 +869,35 @@ public class PcTaskDispatcher implements Closeable {
      * Collection does not clear anything. PC's dirty state clears only on {@link #onCommitSuccess}, so a
      * commit that fails after collection simply leaves the partition dirty and the next collection returns
      * the same (or newer) data - nothing is stranded.
+     *
+     * <h2>A worker's failure fences this, and that is a correctness property rather than a tidiness one</h2>
+     * Once {@link #hasPendingFailure()} is true this collects <b>nothing</b>, and it answers
+     * astubbs/parallel-consumer#271's review thread on a worker's failure being committed past.
+     * <p>
+     * On the stock path the question cannot arise: an exception leaves {@code process()} synchronously, so
+     * the {@code runOnce} iteration that would have committed never reaches its commit. Here the throw
+     * happens on a worker, and Kafka's loop runs {@code process} then {@code punctuate} then
+     * {@code maybeCommit} - so a failure landing in that window would otherwise let a scheduled commit make
+     * <em>another key's</em> completed offsets durable for a task that is about to be closed dirty and
+     * rewound. For a {@code TaskCorruptedException} that is worse than a duplicate: recovery wipes the
+     * task's state stores and re-reads from the committed position, so an offset committed in that window
+     * marks records covered whose state changes are then thrown away.
+     * <p>
+     * <b>Not committing is the safe direction</b> - the frontier simply does not advance and whoever owns
+     * the partition next re-reads, which is the at-least-once trade this module already makes.
+     * <p>
+     * <b>The fence is here and NOT on {@code hasUncommittedWork()}.</b> That one answers "is it safe to walk
+     * away", which {@code StreamTask.validateClean} turns into a {@code TaskMigratedException}; fencing it
+     * would make a failed task look clean to close, which is the opposite of what a failure should mean.
      */
     public Map<TopicPartition, OffsetAndMetadata> collectCommitData() {
         assertOwnerThread("collectCommitData");
         drainCompletions();
+        if (hasPendingFailure()) {
+            log.warn("PC dispatch over {} has a pending failure - collecting no commit data, so nothing "
+                    + "commits past the record that failed", inputPartitions);
+            return Collections.emptyMap();
+        }
         // What this collection covers is what the drain just folded in - the DRAINED count, never the
         // published one. A worker that publishes from here on is not in the map below, so pinning the
         // published count instead would let onCommitSuccess mark its record covered by a commit that never
@@ -715,6 +1008,11 @@ public class PcTaskDispatcher implements Closeable {
         if (!revoked.isEmpty()) {
             workManager.onPartitionsRevoked(revoked);
             inputPartitions.removeAll(revoked);
+            // Whatever this dispatcher had handed out for a revoked partition is abandoned with it, and PC's
+            // state for it goes too - so the subtrahend must go, or a later re-assignment of the same
+            // partition starts with a stale debt and its buffered count reads permanently low, which is the
+            // direction that removes the memory bound.
+            revoked.forEach(handedOutStillIncomplete::remove);
         }
         if (!assigned.isEmpty()) {
             workManager.onPartitionsAssigned(assigned);
@@ -778,6 +1076,91 @@ public class PcTaskDispatcher implements Closeable {
 
     public int getInFlightCount() {
         return inFlight.get();
+    }
+
+    /**
+     * How many records this dispatcher holds for {@code partition} that no worker has started - Kafka
+     * Streams' {@code RecordQueue.size()} for the PC path, and what the patched {@code StreamTask} compares
+     * against {@code buffered.records.per.partition} to decide whether to pause the consumer.
+     *
+     * <h2>"Buffered" means accepted-and-not-yet-handed-out</h2>
+     * Not accepted-and-not-yet-completed. Kafka's {@code RecordQueue.size()} counts records
+     * {@code nextRecord()} has not yet returned, and because stock processes synchronously that is the same
+     * as "not yet started"; this is the faithful analogue. The two definitions differ by the in-flight set,
+     * which is bounded by {@link #poolSize}, so the one chosen here is both what stock means and the only
+     * unbounded quantity of the two.
+     *
+     * <h2>DERIVED from PC's own number, not counted alongside it</h2>
+     * {@code PartitionState.incompleteOffsets} already holds exactly "registered here and not yet
+     * completed", so the buffered count is that, less the records this dispatcher has handed out and PC has
+     * not yet marked complete ({@link #handedOutStillIncomplete}). Nothing is predicted, and there is one
+     * authority rather than two that can disagree.
+     *
+     * <p><b>This overrides a decision recorded on the branch this work is reconstructed from, so the
+     * reasoning being overridden is written down here rather than lost.</b> That branch kept a standalone
+     * per-partition count, raised at registration by asking PC, one record at a time, which of a batch it
+     * had not already completed - explicitly <em>because</em> {@code getNumberOfIncompleteOffsets()} counts
+     * a failed record forever, and backpressure built on it would pause that partition permanently. That
+     * objection is real and is answered rather than ignored: a failed record is never taken out of
+     * {@link #handedOutStillIncomplete} (see {@link #drainCompletions}), so it cancels itself out of this
+     * subtraction and cannot pin the partition.
+     *
+     * <p>What the standalone count could not answer is the defect this design removes. Predicting at
+     * registration overcounts whenever PC accepts an offset into its incomplete set but {@code
+     * ProcessingShard.addWorkContainer} <em>drops</em> the arriving container because a live one for that
+     * offset is already resident - which is what happens to a re-delivered offset after a {@code seek},
+     * and is the shape of the offset-reset and corruption-recovery paths. That record is never handed out,
+     * so nothing ever decrements it back, and the partition stays paused for good with no symptom but a
+     * topology that has gone quiet. Deriving is immune to it: {@code incompleteOffsets.put} is idempotent
+     * per offset, so a re-delivered offset does not move this number at all.
+     *
+     * <p><b>Callable from any thread.</b> Both sides are concurrent collections that publish without a lock -
+     * PC's partition-state map and its per-partition incomplete map, and this class's own - so a foreign
+     * reader gets a weakly-consistent count rather than a torn one. That is what the memory-bound proof's
+     * sampler needs, and it is the reason neither side may quietly become a plain map.
+     *
+     * @return the count, never negative; a negative result is clamped and counted - see
+     *         {@link #getBufferedUnderflowCount()}
+     */
+    public int getBufferedRecordCount(final TopicPartition partition) {
+        if (closed) {
+            return 0;
+        }
+        final PartitionState<byte[], byte[]> state = workManager.getPm().getPartitionState(partition);
+        if (state == null) {
+            return 0;
+        }
+        final int buffered = state.getNumberOfIncompleteOffsets()
+                - handedOutStillIncomplete.getOrDefault(partition, 0);
+        if (buffered < 0) {
+            if (bufferedUnderflows++ == 0) {
+                log.warn("PC dispatch buffered occupancy for {} came out negative ({}) - this dispatcher has "
+                                + "handed out more records than PC still counts as incomplete, which stops "
+                                + "the memory bound firing for that partition. Further occurrences are "
+                                + "counted, not logged.",
+                        partition, buffered);
+            }
+            return 0;
+        }
+        return buffered;
+    }
+
+    /**
+     * {@link #getBufferedRecordCount(TopicPartition)} summed over every partition this task holds - the PC
+     * path's answer for {@code StreamTask.numBuffered()}, and so for the {@code active-buffer-count} metric.
+     * Any thread.
+     */
+    public int getBufferedRecordCount() {
+        int total = 0;
+        for (TopicPartition partition : inputPartitions) {
+            total += getBufferedRecordCount(partition);
+        }
+        return total;
+    }
+
+    /** Test seam and drift detector: see {@link #bufferedUnderflows}. Owner thread only. */
+    int getBufferedUnderflowCount() {
+        return bufferedUnderflows;
     }
 
     /**
@@ -887,6 +1270,28 @@ public class PcTaskDispatcher implements Closeable {
         return ACTIVE.size();
     }
 
+    /**
+     * Records held but not yet started, summed over every live dispatcher in this JVM - the number the
+     * memory-bound proof samples while a run is in flight.
+     * <p>
+     * Static and public for the same reason {@link #abortAllActive()} is: a broker-backed test drives a real
+     * {@code KafkaStreams}, and the dispatchers it must read are buried several layers inside it with no seam
+     * to reach them by. <b>Safe from any thread</b> - see {@link #getBufferedRecordCount(TopicPartition)},
+     * which is precisely why neither side of that subtraction may quietly become a non-concurrent
+     * collection.
+     * <p>
+     * A sampler is the only honest instrument for this. The interesting quantity is a <em>peak</em>, and a
+     * peak is invisible to any assertion made after the run: by the time processing finishes, occupancy is
+     * zero whether it stayed bounded throughout or first grew to hold the whole topic.
+     */
+    public static int bufferedRecordsAcrossActive() {
+        int total = 0;
+        for (PcTaskDispatcher dispatcher : ACTIVE) {
+            total += dispatcher.getBufferedRecordCount();
+        }
+        return total;
+    }
+
     /** Crash-injection for tests: {@link #abortClose()} every live dispatcher in the JVM. */
     public static void abortAllActive() {
         for (PcTaskDispatcher dispatcher : ACTIVE) {
@@ -940,6 +1345,10 @@ public class PcTaskDispatcher implements Closeable {
         // commitNeeded() is false once the task has closed dirty. Set after the revoke, which is the last
         // thing on this path that changes what is outstanding.
         successesCommitted = successesPublished.get();
+        // Same reason, for the other published quantity: a closed dispatcher holds nothing, and a subtrahend
+        // left behind outlives the task it belonged to. getBufferedRecordCount() short-circuits on `closed`
+        // as well, so this is belt and braces on a map that a revived task must not inherit.
+        handedOutStillIncomplete.clear();
         log.info("PC dispatch closed over {}", inputPartitions);
     }
 }
