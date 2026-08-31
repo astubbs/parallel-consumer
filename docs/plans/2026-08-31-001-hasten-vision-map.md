@@ -112,6 +112,89 @@ navigator micro-MVP (beat 4), then the lighthouse spike (beat 8), which exists t
 four falsifiers before the vision earns more investment. STRATEGY.md adoption waits for the
 owner's triage and the ce-strategy run.
 
+## Risks register
+
+Recorded at capture time so future sessions can correct course, not just admire the map. Each
+entry: the risk, the tell that it is materialising, and the correction already on the record (or
+named here for the first time). Consult this before expanding any track.
+
+- **Frictionless-derivation bias.** The corpus was produced in a medium with no adversarial
+  pressure - the reviewing model never once said "bad idea"; every correction came from the owner
+  or from checking the repo. The local half (admission, resources, attribution, DLQ-less failure,
+  Prescience-as-PC-feature) is grounded in shipped code; the global half (fleet, economics,
+  demand shaping) is pure derivation with materially lower survival odds, and the notes give both
+  equal typographic confidence. *Tell:* global-half notes accumulating detail while no falsifier
+  has run. *Correction:* the lighthouse falsifiers gate investment
+  ([`core-lighthouse-mvp.md`](../inflight/core-lighthouse-mvp.md)); treat derivation and
+  measurement as different grades of claim.
+- **Shipping displacement.** The vision makes everything feel connected, so everything feels
+  worth doing - in a repo that already accumulates open PRs faster than it lands releases.
+  *Tell:* another strategy weekend before the navigator demo exists; v6 slipping for any
+  vision-shaped reason. *Correction:* v6 is untouched by all of this by construction; the next
+  built thing is the smallest demo (2 tokens/sec, two instances, bottleneck correctly attributed),
+  and "no subsystem gets completed for its own sake" cuts both ways - including the note corpus.
+- **Identity fusion resists falsification.** The owner has named this work as a career
+  culmination; pre-registered falsifiers are emotionally easy to write and hard to honour.
+  *Tell:* a falsifier outcome reframed as "needs more work" rather than accepted; benchmarks
+  chosen after seeing results. *Correction:* the falsifiers are written down before building;
+  the research-program discipline (publish refuted hypotheses,
+  [`docs-research-program.md`](../inflight/docs-research-program.md)) applies to the architecture
+  itself; the measurement campaign that withdrew its own headline claims is the precedent to keep.
+- **Naming exuberance as a displacement tell.** A dozen codenames accreted in one weekend; fun is
+  fine, but naming is cheaper than building and feels like progress. *Tell:* new vocabulary
+  outpacing new measurements. *Correction:* one product name (after trademark clearance - open
+  decision below), plain words everywhere else; codenames stay quarantined in the glossary.
+- **Market-niche mismatch.** The workloads that *need* ordering-domain scheduling today
+  (key-skewed, downstream-limited, ordering-sensitive) are real but a niche; intellectual
+  superiority historically loses to distribution. *Tell:* engine features landing while adoption
+  numbers stay flat; positioning arguments winning debates and no users. *Correction:* the
+  layer-2 adapter strategy ([`core-ecosystem-adapters.md`](../inflight/core-ecosystem-adapters.md))
+  is the strategic main line, not a side quest - "just change your import" is the distribution
+  answer, and the fleet layer is the eventual market-widener, sequenced after a falsifier
+  survives.
+- **Kafka absorbs the substrate faster than the higher layers mature.** Share Groups, KIP-1277
+  and successors keep implementing pieces of the mechanics. *Tell:* a KIP shipping something a
+  note still describes as a differentiator. *Correction:* the recorded robustness position -
+  multiple acquisition engines, "as Kafka gains primitives the runtime gets smaller, not less
+  useful" - plus actively tracking the KIP landscape rather than discovering it in a launch-week
+  comment thread.
+- **Coordination-plane correctness debt.** The global half implies leases, epochs, fencing and
+  authority transfer - the hardest failure-mode class there is, and this repo's own bug ledger
+  shows what client-side concurrency already cost. *Tell:* a distributed feature growing beyond
+  its conservation-law safety argument; an in-memory stub whose semantics a distributed
+  implementation cannot honour. *Correction:* failure-wastes-capacity-never-violates-the-contract
+  as the design bias, the architectural-stubs rule, and the twenty-instances-under-churn
+  acceptance test before anything clever.
+- **The agentic cost model can rationalise unbounded breadth.** "Price conceptual complexity, not
+  code" is only valid while the breadth genuinely collapses onto the small primitive set; agents
+  making code cheap makes sprawl cheap too. *Tell:* a new "product" needing its own distributed
+  coordination mechanism (the recorded litmus test firing); adapter count growing while the
+  conformance matrix does not. *Correction:* the litmus test in
+  [`core-internal-machinery-as-features.md`](../inflight/core-internal-machinery-as-features.md),
+  and the falsifiers again - if the collapse is illusory, the cost model is void.
+- **Solo-maintainer concentration.** One person's attention is the ordering key; the vision
+  multiplies the surface that only the owner can explain. *Tell:* questions only answerable by
+  the owner accumulating; contributors bouncing off the corpus. *Correction:* the lighthouse as
+  onboarding path, the docs-site work, and the owner's own stated goal - explainable without the
+  owner in the critical path.
+- **Complexity leaking to users.** Every layer added above the consumer risks the
+  change-your-import promise. *Tell:* a feature that requires users to learn scheduler vocabulary
+  to get the old behaviour; a facade needing configuration the wrapped API never needed.
+  *Correction:* progressive declaration (discover what is safe, declare only the unknowable,
+  delegate explicitly) and the adapter pass/fail test - if a compatibility layer still builds its
+  own HA/retries/DLQ, the substrate failed.
+- **Note-corpus drift.** ~45 notes restate facts the duplication scanners cannot see; cached
+  external-world claims (Share Groups versions, competitor facts) go stale silently. *Tell:* two
+  notes disagreeing about a fact neither owns; a note citing an external state older than its
+  reader assumes. *Correction:* this binder owns no content; the file-refs gate polices links;
+  verify-before-citing caveats are already in the notes and must be honoured, not tidied away;
+  the owner's triage pass is the scheduled cleanup.
+- **Positioning misread as abandonment.** To an outside user, "PC is now the kernel of a
+  scheduler runtime" can read as "the consumer library is deprecated". *Tell:* issues or comments
+  asking whether PC is still maintained; v6 messaging leading with the vision. *Correction:* v6
+  ships as a consumer-library release on its own merits; the vision is introduced as what the
+  library was always becoming, never as what replaces it.
+
 ## Open decisions, all the owner's
 
 Product name (trademark clearance first) and the W2/Voice codename question; the OSS/enterprise
