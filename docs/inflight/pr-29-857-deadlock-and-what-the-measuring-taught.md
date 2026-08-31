@@ -61,13 +61,29 @@ it.
 
 ## NEXT TASKS, in order
 
-1. **~~Settle whether the stall detector MISSES real failures~~ - CLOSED 2026-08-28.** It does not miss. Re-measured on the pre-astubbs#344 tree where the silence was seen: five failures, none with all detectors quiet, and one caught by a DIFFERENT detector while `NO_PROGRESS` sat at zero. The original observation counted only `NO_PROGRESS` hits, so a failure caught elsewhere read as a failure caught by nothing. The detector over-fires on slow runs and that is the whole of its fault. Formerly top of this list on the grounds that a detector which over-fires AND under-fires is worse than none. Eight replays, five failures, all five detected. The original observation is suspect and probably a measurement artefact; if it matters, re-run on the pre-astubbs#344 tree where it was seen. Formerly top of this list on the grounds that a detector which over-fires AND under-fires is worse than none - it over-fires only. Across the astubbs#344 arms a third of
-   the failing runs went red with `NO_PROGRESS` not firing at all. This is top of the list because
-   the 2026-08-25 Class 2 demotion left the gating liveness claim resting on this detector, and
-   2026-08-28 then showed it ALSO over-fires on merely-slow runs. A detector that over-fires and
-   under-fires is worse than no detector, because the suite goes green on its silence.
-   `bin/audit-stall-detector-silence.sh` classifies every failing run by what actually caught it;
-   the case that matters is a failure with no detector firing at all.
+**CLOSED 2026-08-31 - whether the fix covers the COOPERATIVE revoke path.** It was an inference
+(the fix sits on the revoke path, so it should be assignor-independent) until measured. A seed
+replay of the family's twentieth capture could not settle it - a chaos seed fixes the conductor's
+schedule, not the poll-versus-control interleaving - so it was asked on the deterministic probe
+instead, which forces the window open. Four cells, {fix, pre-fix control} x {eager, cooperative},
+twenty repetitions each: both fix cells pass throughout, both control cells fail throughout. The
+pre-fix cycle is therefore not eager-specific, which fits the twentieth capture being a cooperative
+revoke. Cells, caveats and the two instrumentation faults caught along the way are in
+`docs/solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md` and
+the probe's own Calibration status javadoc.
+
+1. **Settle whether the stall detector MISSES real failures - REOPENED 2026-08-31.** It was closed
+   on 2026-08-28 after eight replays on the pre-astubbs#344 tree, where the silence had been seen:
+   five failures, every one caught by some detector, and one caught by a DIFFERENT detector while
+   `NO_PROGRESS` sat at zero. That explained the original reading - it counted only `NO_PROGRESS`
+   hits, so a failure caught elsewhere looked like a failure caught by nothing - and the verdict was
+   that the detector over-fires on slow runs and that is the whole of its fault.
+   **The overnight torture run then produced the case that closure said did not exist:** cycle 16
+   failed on a bare awaitility timeout with no detector firing at all. So the detector over-fires on
+   slow runs AND can stay silent on a real failure, which is the combination that matters, because
+   the suite goes green on its silence. `bin/audit-stall-detector-silence.sh` classifies a failing
+   run by what actually caught it; re-run it against the torture corpus rather than the astubbs#344
+   arms, since the corpus is where the counter-example lives.
 
 2. **Confirm the drain result on a second seed.** The async line was demoted to a timing proxy on one
    firing. The Class 2 demotion used two. Cheap, and it is what makes the demotion safe to act on.
