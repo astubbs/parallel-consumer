@@ -55,6 +55,35 @@ current agent throughput, this filter is a merge gate as much as a strategy poin
 Flink/Dataflow; its advantage is that sophisticated processing remains the application's own
 deployment, with Kafka as the only cluster.
 
+## Sharpenings from the follow-up conversation (2026-08-29/30)
+
+Recorded here because each is a candidate refinement of the thesis section this note proposes:
+
+- **The scheduling-domain ladder** - the conversation's own verdict: "the clearest conceptual
+  spine you've found so far". One question at successively larger domains:
+
+  ```
+  Kafka          which machine owns this partition?
+  PC             which record inside that partition may run?
+  local engine   which runnable record is most useful to run?
+  fleet          which application should receive scarce capacity?
+  infrastructure which resource should receive additional capacity?
+  economics      where should the next dollar go?
+  ```
+
+- **Three layers to keep clean**: programming model (Streams, Spring, plain consumer, whatever the
+  team already chose) / execution model (ordering, dispatch, retries, concurrency, admission) /
+  global control model (capacity, contracts, QoS). The product constraint that follows: **"keep
+  your code; replace the runtime underneath it"** - a feature that forces a rewrite of the
+  application's conceptual model had better be exceptional. Compact forms worth keeping: *one
+  implementation of intelligence, many implementations of ergonomics*, and for Streams
+  specifically, *Kafka Streams tells us what the computation means; the engine decides how
+  aggressively, where, and under what constraints it executes*.
+- **The adjacent-competitor distinction** (Netflix Conductor and its kin): an orchestrator wants
+  the application rewritten into its workflow model; this project wants to disappear underneath
+  the application that already exists. Same answer for any "why not <orchestrator>?" question -
+  the workflow is their first-class object; here the application remains the application.
+
 ## The specific gaps named in STRATEGY.md
 
 **Which copy, because it changes the list: the one on `research/market-analysis-recut`, not the one

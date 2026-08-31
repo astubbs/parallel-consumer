@@ -25,6 +25,15 @@ Machinery the fleet-coordination direction needs *anyway*, each a candidate expo
 - **Per-record selection and command** - the control plane's ability to act on *anything that is
   waiting*, at record granularity ([`web-control-plane.md`](web-control-plane.md)).
 
+The 1:20pm exchange extended the inventory from what the coordination machinery implies: leader
+election (coordinator partition ownership), distributed semaphores (leased capacity -
+[`core-shared-execution-resources.md`](core-shared-execution-resources.md)), durable timers,
+distributed configuration tables (compacted control topics), circuit breakers (shared resource
+health), bulkheads (QoS allocations), a work queue (Kafka plus a generic work envelope),
+priority/fair scheduling, and a service/resource registry. The endpoint: **a distributed scheduler
+API** - "submit a unit of work with an ordering identity, resource requirements and a payload" -
+at which point kwq's work-queue proposition becomes a native consequence rather than a product.
+
 ## The multiplier that makes this different from the usual platform trap
 
 Everything above sits under the shared engine, so building it once for internal need means having

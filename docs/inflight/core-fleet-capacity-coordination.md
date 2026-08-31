@@ -39,7 +39,14 @@ marks the boundaries - because fiction is where scope creep hides best.
    $11,400/month of removable compute, because 22 applications over-provision to absorb the shared
    database's latency") - and the economics behind it, the best articulation of the cost story so
    far: **every team pays for the same uncertainty separately; a global view reserves it once and
-   lends it out**. Feeds [`perf-benchmark-cost-to-slo.md`](perf-benchmark-cost-to-slo.md).
+   lends it out**. The 1:20pm exchange completed the frame: a dollar of infrastructure has no
+   intrinsic value - its value is what it unlocks elsewhere in the graph (spare CPU in a DB-bound
+   application is worth ~nothing; $500 of database releases executable work in three
+   applications) - so the system's cleanest description is *continuously moving infrastructure
+   spend toward the current global constraint, and moving it again when the constraint moves*.
+   And the problem is capacity over TIME, not just now: shock reserve, forecast demand,
+   provisioning lead time, failure reserve and cost are dimensions of one optimisation. Feeds
+   [`perf-benchmark-cost-to-slo.md`](perf-benchmark-cost-to-slo.md).
 7. **The coordination architecture.** A small control plane *over Kafka* - application records
    never transit it, every runtime decides locally, collectively one scheduler, no cluster to
    operate. Embedded-not-cluster extended to the fleet layer, and the only form of claim 1 that
