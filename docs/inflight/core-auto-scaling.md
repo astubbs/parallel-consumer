@@ -78,7 +78,10 @@ Two dimensions, deliberately staged:
   metric that infrastructure (HPA/KEDA external metrics is the natural consumer) acts on. PC
   owns the hysteresis: raise the recommendation only after a sustained cool-down (fixed ~5min,
   or dynamic from observed variance) of "at my sustainable max concurrency, more instance-local
-  concurrency does not help but the workload is still behind". Same in reverse to shrink.
+  concurrency does not help but the workload is still behind". Same in reverse to shrink -
+  and the shrink side gains an experimental form in
+  [`core-scale-in-proof.md`](core-scale-in-proof.md): constrain the fleet to a counterfactual
+  capacity and prove the SLO holds before any instance is removed.
   Rebalance is the natural acknowledgement - PC observes whether the recommendation was acted
   on via group membership change. Cap the recommendation at partition count (instances beyond
   it are idle by construction - the confluentinc#766 topology). This beats lag-based
@@ -105,6 +108,15 @@ partition-count cap. The client-side vantage is exactly what makes the distincti
 (admission saturation vs downstream latency vs blocked ordering domains), and it is what makes the
 recommendation stronger than "tell infrastructure when more would help" - the signal no external
 autoscaler can construct.
+
+**Addition from the follow-up conversation, 2026-08-29/30: a loop below these two.** When one
+process hosts many processing functions, each runs dimension 1 independently and the process
+reallocates shared capacity between them before any instance vote is raised - reallocate before
+you replicate.
+[`core-per-function-capacity-arbitration.md`](core-per-function-capacity-arbitration.md) owns it,
+including the caveat about what resource is actually arbitrable; what binds here is only the
+composition: the +1 vote gains a precondition - internal reallocation exhausted first - which
+makes the recommendation stronger, not different.
 
 Lifecycle rules:
 
@@ -160,10 +172,12 @@ scale from per-record ground truth. Key-ordered concurrency + runtime-discovered
 bindings for every language, is the "client as engine" story - candidate for the strategy doc's
 core positioning.
 
-Next step when picked up: ce-brainstorm the per-instance controller (dimension 1 only) into
-requirements; instance-count recommendation is a follow-on with its own note when dimension 1
-lands. Branch plan: this docs branch merges as one unit; implementation work starts in its own
-worktree from master afterwards (do not stack implementation on a docs branch).
+**Dimension 1 is in flight (update 2026-08-31): astubbs#333 implements the adaptive controller**
+as a discovered admission target - records allowed in flight, thread pool fixed at the ceiling -
+Gradient2 ported from Netflix/concurrency-limits with measured deviations (median utilization, a
+bounded probe-down), staged OBSERVE -> ENFORCE and off by default, targeting the
+`perf/engine-concurrency` stack. Instance-count recommendation (dimension 2) is explicitly out of
+that PR's scope and remains the follow-on with its own note when picked up.
 
 ## Measured evidence for the premise (2026-08-20)
 

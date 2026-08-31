@@ -31,6 +31,26 @@ Decisions that gate any build:
   (structured rate-limit exception from the user function), and adaptive all ship as
   implementations of one SPI; users pick per deployment.
 
+**The same follow-up then designed the candidate mechanism in full:**
+[`core-shared-execution-resources.md`](core-shared-execution-resources.md) - named resources,
+Kafka-delegated renewable capacity leases, consumable per-quantum credits with a
+failure-wastes-never-violates bias, hard-vs-adaptive resource semantics, and an equal-share v1
+that needs no new distributed algorithm. It answers this note's gating decisions without closing
+them: it takes the strategy-menu shape (idea 5), puts the adaptive envelope on the *resource*
+(resolving idea 8's standalone-vs-controller fork as "both, hierarchically"), and picks the
+admission-constraint enforcement seam (ideas 2/3). The decisions stay open until the owner adopts
+them; the design is now written down rather than re-derivable.
+
+**Addition from the follow-up Codex conversation, 2026-08-29/30: contracts are per-SERVICE, and
+functions share them.** The declared ceiling ("Stripe: 100 concurrent, 1,000 req/s") is scoped to
+the downstream service, not to a function - so `payments.capture`, `payments.refund` and
+`subscriptions.renew` wanting 170 between them compete for a known 100-call budget, allocated by
+marginal benefit ([`core-per-function-capacity-arbitration.md`](core-per-function-capacity-arbitration.md)).
+The controller treats the contract as a hard ceiling and learns *below* it, so a known limit is
+never rediscovered experimentally per deployment - which is the min-composition decision above,
+restated with the service as the scope. The governance view ("requested 170, allocated 100, per
+function") belongs to [`web-control-plane.md`](web-control-plane.md).
+
 Idea 7 (decorrelated retry jitter) is independently shippable and needs none of these.
 Next step when picked up: ce-brainstorm idea 8's scope boundary (what ships in the controller
 vs the standalone strategies) into requirements.

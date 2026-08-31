@@ -13,7 +13,16 @@ KafkaConsumer  ->  PC KafkaConsumer facade  ->  PC ShareConsumer facade  ->  PC 
 ```
 
 Each step exposes more PC capability without forcing a day-one rewrite; the engine underneath never
-changes. The strategic consequence, stated in the review's words: *the public API is becoming
+changes. The owner's side of the 2026-08-29/30 follow-up restated the ladder as *descending
+commitment* across the whole product, each rung a complete stopping point: not convinced by the
+global cost-optimising scheduler? take the parallel consumer for your language. Not that? the
+Kafka Streams wrapper. Or just the web GUI to observe and send commands. Or only the distributed
+rate limiting, acting on horizontal-scaling signals while ignoring vertical ones until confident.
+Or, at minimum, the KafkaConsumer-shaped wrapper for better performance. Nobody is asked to buy
+the vision to use a rung. Adjacent evidence for the bottom rungs: kwq
+(https://github.com/bluemonk3y/kwq, unexamined beyond its premise) - an independent "Kafka is
+already a work queue" take, supporting the argument that users should not have to adapt to a third
+system to get queue semantics. The strategic consequence, stated in the review's words: *the public API is becoming
 interchangeable - the execution engine is the product.*
 
 ## The KafkaConsumer-shaped facade: mostly already tracked, reframed
@@ -23,7 +32,12 @@ The safe-exposure problem, the 1.0 gate (astubbs#158, astubbs#139) and the exist
 [`next-expose-consumer-and-admin-apis.md`](next-expose-consumer-and-admin-apis.md) - this note adds
 only the framing that was missing there: the facade is not just "expose consumer ops to PC users",
 it is a **drop-in migration path** - keep the familiar low-level API, replace the execution model
-underneath. That is the mirror image of Streams-on-PC (keep the familiar high-level API, replace
+underneath. **Bounded by the GitHub Codex review, 2026-08-31: a poll-shaped facade returns records to the USER'S
+loop, so dispatch, invocation, retries and completion stay under user control - PC cannot
+transparently replace that execution model without the application moving to a callback/handler
+registration, which is a different contract. The KafkaConsumer rung is therefore honest as *API
+compatibility plus observation* (the migration advisor below); transparent execution replacement
+begins at the rungs that own dispatch.** That is the mirror image of Streams-on-PC (keep the familiar high-level API, replace
 the execution model), and the symmetry is the product philosophy: preserve the application model,
 improve the engine.
 
@@ -56,3 +70,21 @@ over a classic group. Same vocabulary, opposite direction, different constraints
 
 **Cost:** the review called it "almost embarrassingly cheap" given the existing batch API - mostly
 API vocabulary and lifecycle translation. Treat that as a prediction to be tested, not an estimate.
+
+## Addition from the follow-up conversation (2026-08-29/30): the migration advisor
+
+The KafkaConsumer facade gains an adoption mechanism: run an existing consumer through it in
+**observation mode** - parallel execution off - and let PC measure the workload it was never
+allowed to parallelise: unique active keys, key-distribution shape, estimated exploitable key
+concurrency versus the partition count. The pitch stops being "PC might make your application
+faster" and becomes "we observed your workload; here is the parallelism your current consumer
+leaves unused." It is research question 1 of
+[`docs-research-program.md`](docs-research-program.md) run against the prospect's own traffic, and
+composes with [`perf-workload-replay-simulator.md`](perf-workload-replay-simulator.md) for the
+shadow-simulation step ("KEY ordering with adaptive concurrency would have exposed ~70x more
+parallelism").
+
+**Honesty bound:** observation mode sees keys, arrival pattern and poll cadence - it does not see
+per-record handler time, because the user's loop processes records outside PC. Key-structure
+estimates (exploitable concurrency) are solid; handler-time claims ("97.8% of handler time had
+independent work waiting") need the poll-gap inference named as an inference.

@@ -19,6 +19,11 @@ audience that does not yet care about the project, and all roads lead back to on
 - *Do you really need more Kafka partitions?* - partition-count planning is a universally
   recognised annoyance.
 - *Why adding consumers sometimes does absolutely nothing.*
+- The owner's compact form of the whole split (2026-08-29/30): *the broker schedules partitions;
+  PC schedules keys* - orchestration at the granularity the ecosystem missed.
+- From the 2026-08-29/30 follow-up ([`core-partition-advisor.md`](core-partition-advisor.md)):
+  *Choose partitions for Kafka. Let PC choose parallelism for your application* - and the
+  conference-slide form, *"How many partitions will you need in three years?" Wrong question.*
 
 **Hot keys and tails:**
 - *The hot key isn't the problem. Its neighbours are* - collateral head-of-line blocking, measured.
@@ -30,6 +35,24 @@ audience that does not yet care about the project, and all roads lead back to on
   identical lag, radically different consumability; why `lag > X -> replicas++` misfires.
 - *Virtual threads don't tell you how much concurrency you can afford* - cheap concurrency vs
   useful concurrency; reaches well beyond Kafka.
+
+**Scaling unit** (from the follow-up conversation, 2026-08-29/30 -
+[`core-per-function-capacity-arbitration.md`](core-per-function-capacity-arbitration.md) is the
+feature behind these):
+- *Stop scaling your whole Kafka application because one part of it is busy* - the strongest
+  headline of the follow-up: scaling the pod duplicates every cold consumer to feed one hot one.
+- *Your application is not a scaling unit* / *Every function deserves its own concurrency.*
+- *Stop provisioning concurrency. Start discovering it.*
+- The polyglot reframe belongs with these: not eleven SDKs but one runtime replacing eleven
+  ecosystems' worth of concurrency machinery - a sharper form of the "engine every language
+  re-implements badly" line already in [`core-auto-scaling.md`](core-auto-scaling.md).
+- Broadest, candidate positioning rather than a post title: *Kafka tells us what work we own.
+  Parallel Consumer figures out how to run it.*
+- The developer-facing pitch in one line (2026-08-30): *Tell it what your work needs. Don't
+  write code that waits for it* - the programming-model form of the admission model.
+- The category framing, sharpest of the lot: *the real competitor is manual concurrency
+  management* - `maxConcurrency = 100` as this generation's manual memory management, expected to
+  look as archaic as hand-sizing a web server's per-endpoint thread counts.
 
 **Boundary engineering** (reaches native-interop people):
 - *Why we didn't port Parallel Consumer to Python* - "we gave Python PC by refusing to implement
@@ -43,8 +66,25 @@ audience that does not yet care about the project, and all roads lead back to on
 
 **Streams:**
 - *We ran Kafka Streams' test suite against a different execution model* - the sober one; failures
-  almost as interesting as passes. Avoid antagonistic framings toward maintainers; the underlying
+  almost as interesting as passes.
+- The recursion arc, from the 2026-08-29/30 follow-up - the narrative piece rather than a title:
+  the machinery built to eliminate unnecessary waiting inside one Kafka consumer becomes the JVM
+  runtime that gives every language Kafka Streams, then the engine that gives Streams itself
+  key-level concurrency, then the scheduler through which that Rust workload joins a company-wide
+  system whose whole purpose is eliminating unnecessary waiting. Avoid antagonistic framings toward maintainers; the underlying
   line worth keeping is *architecture arguments eventually become executable hypotheses*.
+
+**Origin story** (2026-08-30 - the public version of the admission-model lineage):
+- The narrative seed from the handoff: *the birthday card and the hot sauce* - a card going three
+  streets away waits behind a parcel with a customs problem, the architect asks why, and there is
+  no good answer. The explanation rule that goes with it: start with parcels and waiting, never
+  with Kafka or leases; each zoom-out should feel like "well, of course that is the next thing."
+- The Ray line, for the competitive set: *Ray distributes compute across resources it owns; this
+  coordinates execution against resources the whole organization shares.*
+- *We tried to add global rate limiting to Parallel Consumer and discovered the correct solution
+  was a distributed execution scheduler.* Possibly the best one-line explanation of where the
+  project came from; the long form is
+  [`core-admission-scheduling-model.md`](core-admission-scheduling-model.md)'s lineage section.
 
 **Method:**
 - The AI-era maintainership piece: not boosterism - the observed economics. Agents are workers,
@@ -63,4 +103,12 @@ The review proposed reserving *"Kafka Can Linger. Hasten Doesn't."* for a rebran
 the owner decides with them in view: it puns on `linger.ms` but lands adjacent to the competitor
 llingr, and [`next-reclaim-the-category.md`](next-reclaim-the-category.md) rules the category is
 *"won by building, never by attacking anyone else's work"*. A rename is the owner's call and is not
-otherwise tracked here.
+otherwise tracked here. Noting for the record: the 2026-08-29/30 follow-up conversation used
+"Hasten" throughout as though the rename had happened, and closed on the same tagline - an
+assumption in a transcript, not a decision. The owner's own position, stated in the same
+conversation: run under a working codename (referred to as "W2") so the product name stays
+adjustable - "I think hasten nails it but it takes the pressure off". Leading candidate,
+deliberately uncommitted. (The handoff document uses W2 for the resource plane specifically -
+see the glossary note in [`core-admission-scheduling-model.md`](core-admission-scheduling-model.md).)
+Practical item from the handoff research backlog: **trademark/domain clearance for the name
+before any major brand investment.**

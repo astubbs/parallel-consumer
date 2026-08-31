@@ -31,10 +31,24 @@ Each reveal degrades gracefully: reveal 1 alone is a complete demo the day the a
 works; 2 and 3 attach when their workstreams deliver. Vanilla Kafka Streams on the same topology
 has exactly one execution lane, which is the comparison frame.
 
+## The follow-up's upgrade to reveal 2: the topology tunes itself (2026-08-29/30)
+
+The follow-up conversation turned "and that's Kafka Streams" from a caption into a dashboard: many
+processors on screen, each concurrency line moving independently. Constrain one downstream and its
+line falls while unrelated processors keep climbing; change key skew live; then introduce a
+*second* bottleneck and watch the engine discover both independently. The audience should
+understand before it is said: *the topology is tuning itself.* Stands on the per-function layer
+([`core-per-function-capacity-arbitration.md`](core-per-function-capacity-arbitration.md)), so it
+attaches after the single-line demo works, the same way reveals 2 and 3 attach after reveal 1.
+
 ## Relationship to existing demo work
 
-Not the same artefact as the uber demo (astubbs#332: eleven language clients, one workload -
+Not the same artefact as the uber demo (astubbs#332: every language client on one workload -
 breadth) or the per-language demos (astubbs#331). This is depth: one topology, one climbing line
-on a chart. The web GUI ([`web-gui-observability-ideas.md`](web-gui-observability-ideas.md),
+on a chart. The 2026-08-29/30 follow-up added the reconciling frame:
+[`docs-executable-progression.md`](docs-executable-progression.md) proposes one staged application
+whose later stages *are* these reveals, with the realistic-domain Streams benchmark
+(`test/ks-streams-realistic-domain-benchmark`) as the domain and the uber demo as its language
+matrix - so the demo artefacts converge instead of drifting. The web GUI ([`web-gui-observability-ideas.md`](web-gui-observability-ideas.md),
 astubbs#268) is the natural view for it, and the downstream simulator overlaps the "deliberately
 made Kafka slow" harness ideas in [`docs-content-series.md`](docs-content-series.md).
