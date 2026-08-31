@@ -139,8 +139,12 @@ running first, or the refused surface is defined by whatever nobody has looked a
 **Refused construct**
 A Kafka Streams feature the module rejects outright rather than documenting as a caveat, because
 concurrent dispatch would make it answer wrongly rather than fail. Most of them are refused for one
-underlying reason: they gate on stream time, the clock Kafka Streams advances as records are read in
-order, and that clock does not advance on this project's dispatch path.
+underlying reason: they gate on stream time, and on this project's dispatch path stream time is a
+different quantity from the one they were written against - see **In-flight low-water mark**. Which
+records fall inside a window, which version of a table a record reads, and which update is final
+therefore move with dispatch order rather than being properties of the data alone. This sentence used
+to say the clock simply never advanced, which was true before the dispatch path derived one of its
+own and is the commonest stale claim about this module.
 
 A refusal names both the construct and the mechanism that breaks it, and says it will recur until the
 topology changes or the seam is turned off. That last part is load-bearing rather than padding: the
@@ -154,6 +158,36 @@ conditional on the seam, and stays silent while the seam is off. Because the bui
 method Apache Kafka owns rather than anything this project wrote, it has to name this project as the
 party refusing and keep its objection distinct from any deprecation Apache Kafka has of its own - a
 marker on someone else's symbol is read as that symbol's owner speaking unless it says otherwise.
+
+**In-flight low-water mark**
+The event-time clock this project's dispatch path publishes in place of the one stock Kafka Streams
+advances as it selects records in order: the lowest event timestamp among the records currently
+executing, or the highest ever handed out when nothing is executing, and never allowed to move
+backwards.
+
+It guarantees one thing and is routinely misread as guaranteeing more. What it guarantees is that the
+mark never passes a record that is *currently executing*, so an operation triggered by the clock cannot
+close over work still inside the chain. What it is **not** is an ordering boundary: because the mark
+only ever rises, a record handed out later may carry a lower timestamp and run below it, and because
+records are handed out per key rather than in timestamp order, the mark can sit above a record that has
+not started. Reading it as a watermark - "no earlier element will follow" - is the mistake that makes a
+windowed operator look safe behind it.
+
+It also says nothing about work accepted but not yet handed out, and nothing about records not yet
+fetched. That silence is not a divergence: the stock clock keeps it too.
+
+**Punctuator**
+A callback a topology schedules to run on an interval rather than per record, against either the event
+clock or the wall clock. It is the one construct that reaches this dispatch path without passing any
+refusal check, because it is a call made on the processor context while the task is already running
+rather than a shape anything can inspect beforehand - so the only honest treatment left is to warn at
+registration.
+
+Two things about it differ here and neither is about timing. Its effects are outside this project's
+commit accounting, so nothing it emits or writes is covered by the frontier a commit advances. And it
+runs *concurrently with records still inside the chain*, where stock guarantees the two never overlap
+for one task - which turns the obvious punctuator, the one that sweeps a store now that everything up
+to a point is done, into a race against the processors writing that store.
 
 ## Test reliability
 
