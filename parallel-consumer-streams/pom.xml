@@ -673,11 +673,21 @@
                     <!-- The classifier is not part of the module's ordinary test run: it reads report
                          directories that only exist once 4b has run, so here it could only ever report their
                          absence. Named rather than tagged, because the two Kafka executions above already
-                         override the group filters and a tag would not reach them. -->
+                         override the group filters and a tag would not reach them.
+
+                         THE OTHER TWO ENTRIES ARE THE ROOT POM'S AND ARE REPEATED ON PURPOSE. An <excludes>
+                         list here REPLACES the inherited one rather than adding to it, so declaring only the
+                         classifier silently pulled every `integrationTests` class - which is where this
+                         module's broker-backed arms live - into the surefire `test` phase, making the unit
+                         lane need Docker. It went unnoticed for exactly one build, because everything passed.
+                         combine.children="append" would express the intent, but a literal list is what a
+                         reader can check against the root pom without knowing that attribute exists. -->
                     <execution>
                         <id>default-test</id>
                         <configuration>
                             <excludes>
+                                <exclude>**/integrationTest*/**/*.java</exclude>
+                                <exclude>**/*IT.java</exclude>
                                 <exclude>**/SeamOnDivergenceLaneTest.java</exclude>
                             </excludes>
                         </configuration>
