@@ -75,6 +75,12 @@ feature behind these):
   line worth keeping is *architecture arguments eventually become executable hypotheses*.
 
 **Origin story** (2026-08-30 - the public version of the admission-model lineage):
+- The narrative seed from the handoff: *the birthday card and the hot sauce* - a card going three
+  streets away waits behind a parcel with a customs problem, the architect asks why, and there is
+  no good answer. The explanation rule that goes with it: start with parcels and waiting, never
+  with Kafka or leases; each zoom-out should feel like "well, of course that is the next thing."
+- The Ray line, for the competitive set: *Ray distributes compute across resources it owns; this
+  coordinates execution against resources the whole organization shares.*
 - *We tried to add global rate limiting to Parallel Consumer and discovered the correct solution
   was a distributed execution scheduler.* Possibly the best one-line explanation of where the
   project came from; the long form is
@@ -102,7 +108,10 @@ otherwise tracked here. Noting for the record: the 2026-08-29/30 follow-up conve
 assumption in a transcript, not a decision. The owner's own position, stated in the same
 conversation: run under a working codename (referred to as "W2") so the product name stays
 adjustable - "I think hasten nails it but it takes the pressure off". Leading candidate,
-deliberately uncommitted.
+deliberately uncommitted. (The handoff document uses W2 for the resource plane specifically -
+see the glossary note in [`core-admission-scheduling-model.md`](core-admission-scheduling-model.md).)
+Practical item from the handoff research backlog: **trademark/domain clearance for the name
+before any major brand investment.**
 
 <!-- These notes live on `research/market-analysis-recut`, not master. Pinned to a commit
      so the links keep resolving after the branch moves or merges. -->

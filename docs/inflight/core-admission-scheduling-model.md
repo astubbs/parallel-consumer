@@ -16,6 +16,10 @@ design built on it.
 scheduling metadata. **Mentat** - the local scheduler/selector. **Voice** - the global
 coordination/resource plane. **Golden Path** - the selection objective. **Why Wait?** - the
 explainability principle. Notes use them for fidelity to the transcript, nothing more.
+**Naming discrepancy, for the owner to settle:** the handoff document (self-dated 29 Aug,
+predating these codenames) calls the resource/coordination plane **W2**, while the owner's own
+12:28pm message used W2 as a project-level working codename. W2-the-plane and Voice may be the
+same thing under two names; nothing depends on resolving it yet.
 
 ## The hinge
 

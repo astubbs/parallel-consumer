@@ -53,7 +53,9 @@ marks the boundaries - because fiction is where scope creep hides best.
    survives the positioning. The owner added the dogfooding requirement: the coordination topic's
    pulse frequency is itself dynamic, governed by the same contract system, **because the broker
    is a shared resource too** - a scheduler that exempts its own traffic from its scheduling has
-   not understood its thesis. And the positioning line worth keeping: the fleet layer is *Kafka's
+   not understood its thesis. The handoff extends this: Kafka itself becomes a resource-graph
+   *node* - broker CPU, disk, network, leadership and replication as observable, optimizable
+   capacity - kept replaceable, with no invasive broker modification required initially. And the positioning line worth keeping: the fleet layer is *Kafka's
    child at the edge* - completing client-side what the broker's partition-level orchestration
    starts, never replacing it.
 8. **The definition and the adoption mechanics.** One sentence - *"coordinates how your company

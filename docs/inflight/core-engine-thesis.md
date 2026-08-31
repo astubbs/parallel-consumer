@@ -83,6 +83,15 @@ Recorded here because each is a candidate refinement of the thesis section this 
   the application rewritten into its workflow model; this project wants to disappear underneath
   the application that already exists. Same answer for any "why not <orchestrator>?" question -
   the workflow is their first-class object; here the application remains the application.
+- **The commercial-shape hypothesis** (from the handoff document, uncaptured by the transcript
+  excerpts): a candidate OSS/enterprise split - OSS centre: key scheduling, Streams integration,
+  polyglot clients, adaptive concurrency, named resources, global limiting primitives, basic
+  decision telemetry; enterprise centre: the company-wide resource graph, governance/RBAC, global
+  QoS/contracts, cross-cluster control, SLO history, cloud inventory/pricing, cost optimization,
+  audit. A hypothesis for the owner, recorded so the eventual decision starts from a written
+  candidate. Paired with the authority ladder the handoff names for every consequential control:
+  **Observe -> Recommend -> Shadow -> Enforce**, and progressive declaration (discover what is
+  safe; declare only what is unknowable; delegate control explicitly).
 - **One demo, many presentations - candidate strategy material in its own right** (owner,
   2026-08-31): the convergence frame in
   [`docs-executable-progression.md`](docs-executable-progression.md) - one staged application

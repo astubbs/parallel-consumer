@@ -18,6 +18,15 @@ site - and the audience-relative entries, "coming from KafkaConsumer / Kafka Str
 which are just different starting stages on the same ladder. All grounded in one running
 application, so a presentation can never drift from code that compiles.
 
+**The handoff document carries the worked curriculum** - a 13-stage composable tutorial stack
+(consumer -> Streams -> buffet -> named resources -> delegated semaphore -> QoS -> observability
+-> scaling -> workflow -> actors -> infrastructure -> economics -> global system), the logistics
+domain-mapping table, and two binding rules this note adopts: *each stage imports the previous
+and adds only the new capability*, and the architectural law that **the canonical example must
+compose** - a capability needing a new conceptual universe should have its scope challenged.
+Detail lives there:
+[`docs/ideation/2026-08-29-hasten-compound-engineering-handoff.md`](../ideation/2026-08-29-hasten-compound-engineering-handoff.md), section 4.
+
 This generalises machinery the repo already trusts: the README is generated from tagged compiled
 source precisely so prose cannot drift from code, and astubbs#266's examples exist to demonstrate
 capability rather than API mechanics. The docs site ([`docs-site.md`](docs-site.md), astubbs#208)

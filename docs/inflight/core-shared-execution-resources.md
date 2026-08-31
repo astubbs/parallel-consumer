@@ -174,6 +174,17 @@ reallocate. And v1 needs no solver - ranked first-fit over requirement vectors
 candidate) is the whole MVP scheduler. Steal packing algorithms only if measurement shows greedy
 leaving real capacity unused.
 
+### The stub rule and the seam inventory (from the handoff document)
+
+**Architectural stubs preserve future seams: an in-memory implementation may stand in for a
+distributed one only if it obeys the same semantic contract** - the handoff's critical rule, and
+the licence for building v1 locally without painting over the distributed future. The handoff's
+section 24 carries the candidate seam inventory (WorkSource, WorkEnvelope, OrderingDomain,
+AdmissionController, ResourceContract, DemandSignal, CapacityLease, ResourceAllocator,
+CapacityProvider, Actuator, Decision/Explanation, ActorAddress) - the vocabulary implementation
+should start from rather than invent
+([`docs/ideation/2026-08-29-hasten-compound-engineering-handoff.md`](../ideation/2026-08-29-hasten-compound-engineering-handoff.md)).
+
 ### Theory to steal, not reinvent (the literature dive's verdicts)
 
 - **Conservative 2PL / preclaiming**: declare the full resource set before execution, acquire
