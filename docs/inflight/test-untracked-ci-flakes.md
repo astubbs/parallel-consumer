@@ -16,6 +16,15 @@ written up in
 [`back-pressure-freezes-the-frontier-the-test-asserted-2026-08-24.md`](../solutions/test-flakiness/back-pressure-freezes-the-frontier-the-test-asserted-2026-08-24.md).
 Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutions/).
 
+### The key-order point check again, on the navigator allocator's full run, 2026-09-01
+
+A full core unit run on `feats/hasten-micro-mvp` (the navigator U2 allocator work) failed once:
+`processInKeyOrder(CommitMode)[1][2][3]` at `[sanity check input data]` - the symptom this ledger
+already owns below. In isolation the class went green, and the immediate second full run went
+green whole-suite. The navigator change cannot reach it: nothing outside the new navigator
+package invokes the allocator yet, so the recorded point-check diagnosis holds and the sighting
+is filed for rate, not novelty.
+
 ### Two more point checks in the same class, 2026-08-23
 
 Second sighting pair on `throttling-ideation`, 2026-08-25, on the U2 (pool actuator) full run:

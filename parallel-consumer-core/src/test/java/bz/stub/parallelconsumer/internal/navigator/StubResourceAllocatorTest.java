@@ -13,9 +13,9 @@ import static com.google.common.truth.Truth.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * The registry half of {@link StubResourceAllocator} (R1, R4, R19) - the part U1 owns. The credit-facing
- * {@link ResourceAllocator#currentLease} is a placeholder in this unit; it is not exercised here beyond
- * confirming it stays empty (the next unit implements real minting behind the same method).
+ * The registry half of {@link StubResourceAllocator} (R1, R4, R19). The minting, membership and conservation
+ * mechanics live in {@link StubResourceAllocatorMintingTest} on the virtual clock; here only registration-time
+ * fail-fast and the empty-before-any-pull lease read are exercised.
  */
 class StubResourceAllocatorTest {
 
@@ -64,9 +64,20 @@ class StubResourceAllocatorTest {
     }
 
     @Test
-    void currentLeaseIsEmptyInThisUnit() {
+    void currentLeaseOfAMemberThatNeverPulledAQuantumIsEmpty() {
         allocator.register(API_X);
 
-        assertThat(allocator.currentLease("api-x", Instant.now()).isPresent()).isFalse();
+        assertThat(allocator.currentLease("member-1", "api-x", Instant.now()).isPresent()).isFalse();
+    }
+
+    /**
+     * Covers R19's fail-fast posture at the policy itself: a quantum the minting arithmetic cannot divide time
+     * by must be rejected at registration, naming the field - never a runtime failure deep in the engine.
+     */
+    @Test
+    void registeringANonPositiveQuantumFailsFastNamingTheField() {
+        assertThatThrownBy(() -> allocator.register(new ResourceContract("api-z", 2.0, 2, Duration.ZERO)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("quantum");
     }
 }
