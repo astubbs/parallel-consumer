@@ -165,14 +165,23 @@ printf 'native-image-sidecar: using %s\n' "$NATIVE_IMAGE"
 "$NATIVE_IMAGE" --version
 
 # The Maven half runs on whatever JDK the caller has - the project's JDK 17 - because compiling the
-# module is an ordinary build. Only the image step uses GraalVM. test-compile rather than compile:
-# the lifecycle verifier lives in the module's test sources, since it is a verification tool and not
-# something the sidecar ships.
-printf 'native-image-sidecar: building the module and its runtime classpath\n'
+# module is an ordinary build. Only the image step uses GraalVM.
+#
+# INSTALL, NOT test-compile, and the difference is what a warm ~/.m2 hides. The classpath step below
+# runs on this module ALONE - it has to, because -am would run the goal on every module in the
+# reactor and each would overwrite the same output file - so it resolves the sibling snapshots
+# (proxy-protocol, and core's test-jar) from the local repository rather than from the reactor. On a
+# developer box those are usually already installed and the weaker `test-compile` appears to work;
+# on a clean CI runner it fails with "Could not find artifact ... in central", which is how this was
+# found. `install` is what makes the two machines behave the same.
+#
+# It reaches test-compile on the way past, which is what the lifecycle verifier needs: it lives in
+# the module's test sources, being a verification tool rather than something the sidecar ships.
+printf 'native-image-sidecar: building and installing the module and its dependencies\n'
 CLASSPATH_FILE="$MODULE_DIR/target/native-image-runtime-classpath.txt"
 (
     cd "$REPO_ROOT"
-    ./mvnw --batch-mode -q -pl parallel-consumer-proxy -am -DskipTests test-compile
+    ./mvnw --batch-mode -q -pl parallel-consumer-proxy -am -DskipTests install
     # -DincludeScope, NOT -Dmdep.includeScope. See the header: the wrong spelling is ignored and
     # yields the test classpath, which compiles JUnit and a test logback.xml into the binary.
     ./mvnw --batch-mode -q -pl parallel-consumer-proxy dependency:build-classpath \

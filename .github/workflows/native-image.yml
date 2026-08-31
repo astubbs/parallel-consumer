@@ -63,6 +63,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          # The Maven build this row runs includes the copyright header check, which classifies
+          # provenance against the fork-point commit and SKIPS ITSELF with a warning on a shallow
+          # clone - a check reporting success without having run, which is the class this file's
+          # header already cites. copyright.yml sets this for the same reason.
+          fetch-depth: 0
 
       # GraalVM first, and captured by path rather than left as JAVA_HOME - see the header.
       - uses: actions/setup-java@v5
