@@ -37,8 +37,115 @@
          INFO. Measured over the 387-test core unit suite, that was 196 banner dumps inside 5,520 lines
          of output, now 3,687. Reading one failing class meant scrolling past its options dump once per
          test. -->
+
+    <!-- ===================================================================================
+         SILOED LOG STREAMS - copies, not diversions.
+
+         Every logger below keeps its default additivity, so everything still reaches STDOUT
+         exactly as before. These are ADDITIONAL copies routed by concern, because during
+         analysis a concern is either the only thing you want or the only thing in the way.
+
+         The rule for what earns a file: anything tangential to running the product. Detectors
+         and probes exist to observe the test, not to be the product. The harness is not the
+         product. Those two are the ones that get lost in a shared stream.
+
+         Levels are NOT set here - they are inherited, so `pc.log.level` still governs and
+         bin/check-test-log-config.sh still holds. Raising the harness raises these with it.
+
+         Written under target/ so they are build output. Start with what analysis actually
+         asked for this week and add streams as they earn it, rather than guessing the set.
+         ================================================================================= -->
+
+    <!-- PROVE which config loaded rather than assuming - logback prints the file URL it read:
+             -Dlogback.statusListenerClass=ch.qos.logback.core.status.OnConsoleStatusListener
+         The integration suite has its own profile, selected explicitly:
+             -Dlogback.configurationFile=logback-integration-test.xml
+         docs/logging.md owns the why. -->
+
+    <property name="pc.log.dir" value="${pc.log.dir:-target/pc-logs}"/>
+
+    <!-- EVERY error, and EVERY warning, for the whole run - never rolled, never truncated.
+         A ring buffer is the right answer to volume and the wrong answer to a warning from two
+         days ago, which is the line you want when something fails on day three. -->
+    <appender name="ERRORS" class="ch.qos.logback.core.FileAppender">
+        <file>${pc.log.dir}/errors.log</file>
+        <append>true</append>
+        <filter class="ch.qos.logback.classic.filter.LevelFilter">
+            <level>ERROR</level><onMatch>ACCEPT</onMatch><onMismatch>DENY</onMismatch>
+        </filter>
+        <encoder><pattern>%d{HH:mm:ss.SSS} %X{pcId} [%thread] %logger{36} - %msg%n%ex</pattern></encoder>
+    </appender>
+
+    <appender name="WARNINGS" class="ch.qos.logback.core.FileAppender">
+        <file>${pc.log.dir}/warnings.log</file>
+        <append>true</append>
+        <filter class="ch.qos.logback.classic.filter.LevelFilter">
+            <level>WARN</level><onMatch>ACCEPT</onMatch><onMismatch>DENY</onMismatch>
+        </filter>
+        <encoder><pattern>%d{HH:mm:ss.SSS} %X{pcId} [%thread] %logger{36} - %msg%n%ex</pattern></encoder>
+    </appender>
+
+    <appender name="PROBES" class="ch.qos.logback.core.FileAppender">
+        <file>${pc.log.dir}/probes.log</file>
+        <append>true</append>
+        <encoder><pattern>%d{HH:mm:ss.SSS} %X{pcId} [%thread] %logger{24} - %msg%n</pattern></encoder>
+    </appender>
+
+    <appender name="HARNESS" class="ch.qos.logback.core.FileAppender">
+        <file>${pc.log.dir}/harness.log</file>
+        <append>true</append>
+        <encoder><pattern>%d{HH:mm:ss.SSS} %X{pcId} [%thread] %logger{24} - %msg%n</pattern></encoder>
+    </appender>
+
+    <appender name="PC_COMMIT" class="ch.qos.logback.core.FileAppender">
+        <file>${pc.log.dir}/pc-commit-offsets.log</file>
+        <append>true</append>
+        <encoder><pattern>%d{HH:mm:ss.SSS} %X{pcId} [%thread] %logger{24} - %msg%n</pattern></encoder>
+    </appender>
+
+    <appender name="PC_LIFECYCLE" class="ch.qos.logback.core.FileAppender">
+        <file>${pc.log.dir}/pc-poll-rebalance-lifecycle.log</file>
+        <append>true</append>
+        <encoder><pattern>%d{HH:mm:ss.SSS} %X{pcId} [%thread] %logger{24} - %msg%n</pattern></encoder>
+    </appender>
+
+    <appender name="PC_STATE" class="ch.qos.logback.core.FileAppender">
+        <file>${pc.log.dir}/pc-shard-work-state.log</file>
+        <append>true</append>
+        <encoder><pattern>%d{HH:mm:ss.SSS} %X{pcId} [%thread] %logger{24} - %msg%n</pattern></encoder>
+    </appender>
+
+    <!-- Routing. No level attributes on purpose: these inherit, so pc.log.level still governs. -->
+
+    <!-- Detectors and probes - the instruments. "Did the detector fire" should be one small file,
+         not a grep of a 38,000-line run log. Answering that took several wrong greps on 2026-08-28,
+         and the finding that a detector stayed SILENT on a third of failures was noticed by
+         accident rather than by looking. -->
+    <logger name="bz.stub.parallelconsumer.integrationTests.chaostests.ProgressProbe"><appender-ref ref="PROBES"/></logger>
+    <logger name="bz.stub.parallelconsumer.integrationTests.chaostests.KeyOrderLedger"><appender-ref ref="PROBES"/></logger>
+    <logger name="bz.stub.parallelconsumer.integrationTests.AmbientProbeExtension"><appender-ref ref="PROBES"/></logger>
+    <logger name="bz.stub.parallelconsumer.internal.PollThreadStallDiagnosis"><appender-ref ref="PROBES"/></logger>
+
+    <!-- The harness: what the test did TO the system, separate from what the system did. -->
+    <logger name="bz.stub.parallelconsumer.integrationTests.chaostests.ChaosConductor"><appender-ref ref="HARNESS"/></logger>
+    <logger name="bz.stub.parallelconsumer.integrationTests.chaostests.ChaosScenarioBase"><appender-ref ref="HARNESS"/></logger>
+    <logger name="bz.stub.parallelconsumer.integrationTests.utils.ManagedPCInstance"><appender-ref ref="HARNESS"/></logger>
+
+    <!-- PC subsystems, split by the question you are asking. -->
+    <logger name="bz.stub.parallelconsumer.internal.ConsumerOffsetCommitter"><appender-ref ref="PC_COMMIT"/></logger>
+    <logger name="bz.stub.parallelconsumer.internal.ProducerManager"><appender-ref ref="PC_COMMIT"/></logger>
+    <logger name="bz.stub.parallelconsumer.offsets"><appender-ref ref="PC_COMMIT"/></logger>
+
+    <logger name="bz.stub.parallelconsumer.internal.BrokerPollSystem"><appender-ref ref="PC_LIFECYCLE"/></logger>
+    <logger name="bz.stub.parallelconsumer.internal.ConsumerManager"><appender-ref ref="PC_LIFECYCLE"/></logger>
+    <logger name="bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor"><appender-ref ref="PC_LIFECYCLE"/></logger>
+
+    <logger name="bz.stub.parallelconsumer.state"><appender-ref ref="PC_STATE"/></logger>
+
     <root level="${pc.log.level:-warn}">
         <appender-ref ref="STDOUT"/>
+        <appender-ref ref="ERRORS"/>
+        <appender-ref ref="WARNINGS"/>
     </root>
 
     <!-- current -->

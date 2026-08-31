@@ -1,0 +1,63 @@
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+    INTEGRATION-TEST logging profile. NOT loaded by default.
+
+    Select it explicitly at runtime:
+        -Dlogback.configurationFile=logback-integration-test.xml
+
+    Named differently from the unit profile ON PURPOSE. Both used to be logback-test.xml and both
+    copied to target/test-classes, so which one won was decided by file timestamp - the integration
+    suite's logging config was effectively nondeterministic. A distinct name plus an explicit switch
+    replaces that coin flip.
+
+    PROVE which config loaded rather than assuming:
+        -Dlogback.statusListenerClass=ch.qos.logback.core.status.OnConsoleStatusListener
+    Logback then prints the URL of the file it read. Reach for it whenever a logging change appears
+    to have had no effect - the usual cause is that it was never loaded, and that failure is silent.
+
+    Levels are property-driven like the unit profile. They used to be hardcoded to debug on six
+    per-record loggers, which is what produced a 126MB chaos job log.
+
+    docs/logging.md owns the why.
+-->
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<configuration packagingData="true" scan="true" scanPeriod="5 seconds" debug="false">
+
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{mm:ss.SSS} %yellow(%X{pcId}) %highlight(%-5level) %yellow([%thread]) %X{offset} %cyan(\(%file:%line\)#%M) %msg%n
+            </pattern>
+        </encoder>
+    </appender>
+
+    <root level="info">
+        <appender-ref ref="STDOUT"/>
+    </root>
+
+    <!-- PC state management — DEBUG to capture epoch, stale container, and rebalance events
+         without the overwhelming volume of TRACE on 500k records -->
+    <logger name="bz.stub.parallelconsumer.state.PartitionStateManager" level="${pc.log.level:-info}"/>
+    <logger name="bz.stub.parallelconsumer.state.ProcessingShard" level="${pc.log.level:-info}"/>
+    <logger name="bz.stub.parallelconsumer.state.ShardManager" level="${pc.log.level:-info}"/>
+    <logger name="bz.stub.parallelconsumer.state.PartitionState" level="${pc.log.level:-info}"/>
+    <logger name="bz.stub.parallelconsumer.state.RemovedPartitionState" level="${pc.log.level:-info}"/>
+    <logger name="bz.stub.parallelconsumer.internal.BrokerPollSystem" level="${pc.log.level:-info}"/>
+
+    <!-- Keep general PC at info to reduce noise -->
+    <logger name="bz.stub.parallelconsumer" level="info"/>
+
+    <!-- Suppress noisy external loggers -->
+    <logger name="org.apache.kafka" level="warn"/>
+    <logger name="org.apache.kafka.common.config.AbstractConfig" level="error"/>
+    <logger name="bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest" level="warn"/>
+    <logger name="org.postgresql" level="info"/>
+    <logger name="io.netty" level="info"/>
+    <logger name="pl.tlinkowski" level="warn"/>
+
+</configuration>
