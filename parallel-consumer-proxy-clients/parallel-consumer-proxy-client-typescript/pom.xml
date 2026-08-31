@@ -17,28 +17,88 @@
     <packaging>pom</packaging>
 
     <!--
-        Thin Maven wrapper over the TypeScript toolchain. This module is in the reactor only under
-        -Dpc.foreignClients - see the foreign-clients profile in the clients aggregator for why
-        opt-in is load-bearing - and all it does today is build a program that prints one fixture
-        line and check that it did (astubbs#242).
+        Thin Maven wrapper over the Node toolchain: package.json beside this file is the real
+        build, and `npm run build` / `npm test` are the one recipe a developer and the CI matrix
+        row both run. The exec bindings fire ONLY under -Dpc.foreignClients (the foreign-clients
+        profile in the clients aggregator), so an ordinary `bin/build.sh -am` builds this module
+        as an empty Maven skeleton and starts no Node at all.
 
-        package.json beside this pom is the language-native build file, and `npm run build` is
-        one command by design: its `prebuild` hook runs `npm ci` first, so the toolchain check
-        stays a check for npm rather than for npm-plus-a-populated-node_modules. tsc really does
-        run - this module proves the TypeScript compiler works, not merely that Node can execute
-        a file.
+        `npm run build` runs `npm ci` first, deliberately: the exec binding calls a script, not a
+        shell, so there is nowhere else to install dependencies, and `npm ci` from the committed
+        package-lock.json is the reproducible form of it.
 
-        Both commands go through bin/foreign-client-step.sh, which decides what an ABSENT npm
-        means: a banner and a skip by default, red under -Dpc.foreign.strict=1, which is what the
-        CI row passes. The commands themselves are declared here and nowhere else.
+        TypeScript wave of the language-proxy plan, astubbs#242.
     -->
     <properties>
         <pc.foreign.skip>false</pc.foreign.skip>
         <pc.foreign.build.executable>bash</pc.foreign.build.executable>
         <pc.foreign.build.args>${pc.foreign.step} --tool npm -- npm run build</pc.foreign.build.args>
         <pc.foreign.test.executable>bash</pc.foreign.test.executable>
-        <pc.foreign.test.args>${pc.foreign.step} --tool npm --hello typescript -- node target/tsc/hello.js</pc.foreign.test.args>
+        <pc.foreign.test.args>${pc.foreign.step} --tool npm -- npm test</pc.foreign.test.args>
     </properties>
+
+    <profiles>
+        <!--
+            THE SIDECAR THE END-TO-END TEST DRIVES, AND WHY IT IS A DEPENDENCY.
+
+            The suite's end-to-end test spawns the real sidecar over the real wire, which
+            needs the proxy module's own artefact and its dependencies, and
+            core's test jar underneath. Declaring them here is what makes
+            `./mvnw test -pl :parallel-consumer-proxy-client-typescript -am -Dpc.foreignClients` -
+            the CI matrix row's exact command - build those modules first and resolve them;
+            build-classpath below then writes the classpath where the test reads it.
+
+            SCOPED TO THIS PROFILE DELIBERATELY. No client depends on the engine, and with the
+            profile inactive - every ordinary build - there is no dependency edge here at all. The
+            client itself obtains the protocol the way every non-JVM client does, by generating
+            from the .proto by path, with no Maven dependency; this edge is a test-scoped harness
+            dependency in the opt-in lane and nothing this client ships.
+
+            Modelled on the Python client's python-sidecar-harness profile, which solved the same
+            problem first. The Go wave recorded the unsolved version of it as a plan defect: `-am`
+            alone cannot order a build this module has no dependency on.
+        -->
+        <profile>
+            <id>typescript-sidecar-harness</id>
+            <activation>
+                <property>
+                    <name>pc.foreignClients</name>
+                </property>
+            </activation>
+            <dependencies>
+                <dependency>
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-proxy</artifactId>
+                    <version>${project.version}</version>
+                    <scope>test</scope>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <!-- version from the root pom's pluginManagement -->
+                        <executions>
+                            <execution>
+                                <id>sidecar-classpath</id>
+                                <!-- After the dependencies above resolve, before the test phase
+                                     where the Node suite runs and reads the file. -->
+                                <phase>generate-test-resources</phase>
+                                <goals>
+                                    <goal>build-classpath</goal>
+                                </goals>
+                                <configuration>
+                                    <outputFile>${project.build.directory}/sidecar-classpath.txt</outputFile>
+                                    <includeScope>test</includeScope>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 
     <build>
         <plugins>
@@ -47,11 +107,41 @@
                 <artifactId>exec-maven-plugin</artifactId>
             </plugin>
             <!--
-                NO maven-clean-plugin FILESET HERE, and that is a decision rather than an omission -
-                "nothing to clean" and "nobody wired the clean" look identical in a pom. Everything
-                this module builds lands under target/, which Maven's default clean already takes.
-                node_modules is a fetched-dependency directory - this language's ~/.m2 - and `mvn clean` does not empty ~/.m2, so it is deliberately left alone; tsc's output goes to target/tsc.
+                WHAT `mvn clean` REMOVES FOR THIS MODULE, AND WHAT IT DELIBERATELY LEAVES.
+
+                `dist/` is the whole of tsc's output: every emitted .js, .d.ts, .js.map and
+                .d.ts.map, plus the incremental build state, which lands at dist/tsconfig.tsbuildinfo
+                because outDir is dist and the project is composite. So one directory is the
+                complete answer, and a plain directory rather than an include pattern avoids the
+                glob subtlety that a pattern selecting a directory does not select the files under
+                it. Measured: after `npm run build`, dist/src/index.js and dist/tsconfig.tsbuildinfo
+                exist and nothing outside dist/ is new.
+
+                node_modules IS NOT LISTED, AND THAT IS THE POINT. It holds fetched dependencies,
+                which makes it this language's local repository, not build output; `mvn clean`
+                deletes target/ and does not empty ~/.m2. Listing it would turn a sub-second clean
+                into a 128-package reinstall.
+
+                NOT IN A PROFILE, matching the rest of this tree: deleting a directory needs no
+                toolchain, so `./mvnw clean` must work on a box with no Node installed. Gating it
+                behind -Dpc.foreignClients would make cleaning require the very toolchain the
+                profile exists to keep optional.
+
+                `npm run clean` in package.json is the developer-facing equivalent and removes the
+                same directory. Two lists that must agree: change one, change the other.
             -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-clean-plugin</artifactId>
+                <!-- version from the root pom's pluginManagement -->
+                <configuration>
+                    <filesets>
+                        <fileset>
+                            <directory>${project.basedir}/dist</directory>
+                        </fileset>
+                    </filesets>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 

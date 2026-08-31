@@ -17,41 +17,151 @@
     <packaging>pom</packaging>
 
     <!--
-        Thin Maven wrapper over the Ruby toolchain. This module is in the reactor only under
-        -Dpc.foreignClients - see the foreign-clients profile in the clients aggregator for why
-        opt-in is load-bearing - and all it does today is build a program that prints one fixture
-        line and check that it did (astubbs#242).
+        Thin Maven wrapper over Bundler (Gemfile beside this file). The commands below run ONLY
+        under -Dpc.foreignClients - see the foreign-clients profile in the clients aggregator for
+        why opt-in is load-bearing. An ordinary `bin/build.sh -am` therefore builds this skeleton
+        and runs no Ruby toolchain at all.
 
-        Gemfile beside this pom is the language-native build file, and it declares no gems on
-        purpose: printing one line needs none, and a `bundle install` would make this module's
-        ability to run depend on the network rather than only on ruby being present. `ruby -c` is
-        the build step - it parses without executing, which is the only compile-shaped thing Ruby
-        offers.
+        THE TEST PHASE RUNS `rake`, NOT `rspec`, and the difference is deliberate: rake's default
+        task is rubocop-then-spec, so the bug finder runs in the same lane as the specs and on a
+        developer's box rather than only in CI. The clients matrix runs its own rubocop step on
+        top; that is a redundancy, not the first place the check fires.
 
-        Both commands go through bin/foreign-client-step.sh, which decides what an ABSENT ruby
-        means: a banner and a skip by default, red under -Dpc.foreign.strict=1, which is what the
-        CI row passes. The commands themselves are declared here and nowhere else.
+        THE SPECS NEED THE PROXY MODULE'S TEST JAR, AND THE PROFILE BELOW IS HOW MAVEN ORDERS IT.
+        The conformance spec spawns the harness (Main, in parallel-consumer-proxy's own
+        jar). An earlier note in this place said Maven could not order that for us and told the
+        reader to build the proxy by hand first; it can, the same way the Go, Python and TypeScript
+        modules already do it, and the clients matrix row - which cannot run a hand command - was
+        red on exactly this. Locally the hand command still works and is still the fastest way:
+
+            bin/build.sh -pl :parallel-consumer-proxy -am -DskipTests
+
+        The spec fails with that command in its message rather than skipping, because a test that
+        quietly does not run is not a passing test. Recorded as a wave finding in
+        docs/inflight/clients/ruby.md (astubbs#242).
+    -->
+    <!--
+        THE COMPILE PHASE RUNS scripts/build.sh, NOT `bundle install`, AND THAT IS THE POINT.
+        Installing gems is not compiling: with `bundle install` as the whole of the compile phase,
+        `mvn compile -Dpc.foreignClients` reported BUILD SUCCESS on a lib/ file ending in
+        `this is not valid ruby @@@`, because nothing in the phase ever parsed a source file. The
+        script installs the gems and then runs `rake syntax`, which is `ruby -c` over every source
+        file; the script's header says why the two steps cannot be one property, and the Rakefile
+        task says why `ruby -c` rather than RuboCop. Ruby wave of the language-proxy plan,
+        astubbs#242.
     -->
     <properties>
         <pc.foreign.skip>false</pc.foreign.skip>
         <pc.foreign.build.executable>bash</pc.foreign.build.executable>
-        <pc.foreign.build.args>${pc.foreign.step} --tool ruby -- ruby -c lib/hello.rb</pc.foreign.build.args>
+        <pc.foreign.build.args>${pc.foreign.step} --tool ruby -- ./scripts/build.sh</pc.foreign.build.args>
         <pc.foreign.test.executable>bash</pc.foreign.test.executable>
-        <pc.foreign.test.args>${pc.foreign.step} --tool ruby --hello ruby -- ruby lib/hello.rb</pc.foreign.test.args>
+        <pc.foreign.test.args>${pc.foreign.step} --tool ruby -- bundle exec rake</pc.foreign.test.args>
     </properties>
 
+    <profiles>
+        <!--
+            THE SIDECAR THE CONFORMANCE SPEC DRIVES, AND WHY IT IS A DEPENDENCY.
+
+            spec/support/harness.rb spawns the real sidecar over the real wire, which
+            needs the proxy module's own artefact and its dependencies.
+            Declaring them here is what makes the CI row's own command build the proxy before this
+            module's test phase; the row runs `package` rather than `test` for the other half of
+            it, because the harness looks for jar FILES and `test` stops one phase short of
+            producing them.
+
+            SCOPED TO THIS PROFILE DELIBERATELY. No client depends on the engine, and with the
+            profile inactive - every ordinary build - there is no dependency edge here at all, so a
+            scoped build still runs no Ruby toolchain and never reaches the engine. Modelled on the
+            go-sidecar-harness profile, which was written when the Go row failed this same way.
+        -->
+        <profile>
+            <id>ruby-sidecar-harness</id>
+            <activation>
+                <property>
+                    <name>pc.foreignClients</name>
+                </property>
+            </activation>
+            <dependencies>
+                <dependency>
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-proxy</artifactId>
+                    <version>${project.version}</version>
+                    <scope>test</scope>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <!-- version from the root pom's pluginManagement -->
+                        <executions>
+                            <execution>
+                                <!--
+                                    THE HARNESS ASKS MAVEN FOR THIS LIST ITSELF IF IT IS NOT HERE,
+                                    AND IN CI THAT SECOND ASK FAILS. Its fallback runs a nested
+                                    `./mvnw -pl :parallel-consumer-proxy dependency:build-classpath`
+                                    with no -am, so parallel-consumer-core has to come from the
+                                    local repository - which a CI job never installs into, since
+                                    the reactor stops at `package`. Writing the file here, from the
+                                    reactor that already has every module resolved, means the
+                                    fallback is only ever the developer's path. Same arrangement as
+                                    the Go module's sidecar-classpath.txt, one filename apart
+                                    because each harness chose its own.
+                                -->
+                                <id>sidecar-classpath</id>
+                                <!-- After the dependencies above resolve, before the test phase
+                                     where the foreign suite runs and reads the file. -->
+                                <phase>generate-test-resources</phase>
+                                <goals>
+                                    <goal>build-classpath</goal>
+                                </goals>
+                                <configuration>
+                                    <outputFile>${project.build.directory}/sidecar-classpath.txt</outputFile>
+                                    <includeScope>test</includeScope>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
+    <!--
+        NO maven-clean-plugin FILESETS HERE, AND THAT IS A MEASUREMENT RATHER THAN AN OVERSIGHT.
+
+        Ruby compiles to nothing, and this module emits nothing of its own for `mvn clean` to
+        remove. Measured against a tree carrying none of it: `bundle install` produced vendor/
+        and nothing else, and `bundle exec rubocop` and `bundle exec rspec` produced nothing at
+        all. A `git status` run afterwards, with the ignored files included, listed exactly one
+        entry: vendor/. (An XML comment may not contain two consecutive dashes, which is why that
+        command is described rather than quoted; it has broken a pom in this tree before.)
+
+        Each of the four candidates, and why it is not a clean target:
+
+        - vendor/bundle is the INSTALLED BUNDLE. That makes it this language's local repository,
+          not build output; `mvn clean` deletes target/ and does not empty ~/.m2. Deleting it would
+          cost a full reinstall of 27 gems, two of them with native extensions.
+        - lib/parallelconsumer/ is protoc's output but it is COMMITTED (see .gitignore, which says
+          why: a consumer of this library must find the stubs already there). Committed generated
+          code is source here, and clean does not delete source.
+        - RuboCop's cache is ~/.cache/rubocop_cache - outside the module, shared with every other
+          checkout on the box, and out of bounds for that reason alone.
+        - target/proxy-test-classpath.txt, written by the profile above, is under target/, which
+          the default clean execution already removes. Everything else the specs write goes to
+          Dir.mktmpdir, under the system temp directory.
+
+        So the correct configuration for this module is none, and the answer is recorded here
+        rather than left as an absence, because an empty configuration and an unconsidered one
+        look identical.
+    -->
     <build>
         <plugins>
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
             </plugin>
-            <!--
-                NO maven-clean-plugin FILESET HERE, and that is a decision rather than an omission -
-                "nothing to clean" and "nobody wired the clean" look identical in a pom. Everything
-                this module builds lands under target/, which Maven's default clean already takes.
-                Ruby produces no build artefact at all here; there is nothing to remove.
-            -->
         </plugins>
     </build>
 

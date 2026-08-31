@@ -17,30 +17,65 @@
     <packaging>pom</packaging>
 
     <!--
-        Thin Maven wrapper over the Swift toolchain. This module is in the reactor only under
-        -Dpc.foreignClients - see the foreign-clients profile in the clients aggregator for why
-        opt-in is load-bearing - and all it does today is build a program that prints one fixture
-        line and check that it did (astubbs#242).
+        Thin Maven wrapper over bin/build-client.sh, which builds this module IN A CONTAINER: Swift
+        is one of the two languages mise cannot serve here, because Swift.org publishes no Debian 13
+        toolchain (astubbs#242,
+        docs/inflight/parked-containerised-toolchains-and-runtime.md). The commands below run ONLY
+        under -Dpc.foreignClients - see the foreign-clients profile in the clients aggregator for why
+        opt-in is load-bearing - so an ordinary scoped build of this module starts no container at
+        all.
 
-        Package.swift beside this pom is the language-native build file. The scratch-path flag moves
-        SwiftPM's output out of its default .build/ and under target/, so Maven's default clean
-        removes it; the package declares no dependencies, so the build needs no network.
+        It calls the script rather than `swift` directly for the obvious reason: there is no swift on
+        the host, and there will not be. The script owns which route a language takes; this pom only
+        names the language. The test-phase invocation runs the EXTRACTED artifact on the host, which
+        is what asserts the static link - see the script's header. (Its flag cannot be written in an
+        XML comment: two consecutive hyphens end one.)
 
-        NOT A CONTAINER, where the source branch uses one: Swift is containerised there because
-        Swift.org publishes no build for the distribution that branch's C++ client also needs.
-        A hello fixture needs the swift toolchain and nothing else, and requiring Docker for it
-        would put a second thing in the way of the check.
+        The path is relative to this module rather than ${maven.multiModuleProjectDirectory}: that
+        property is set by the mvn launcher and is empty when the build is driven by an IDE or an
+        embedder, which would silently invoke "/bin/build-client.sh".
 
-        Both commands go through bin/foreign-client-step.sh, which decides what an ABSENT swift
-        means: a banner and a skip by default, red under -Dpc.foreign.strict=1, which is what the
-        CI row passes. The commands themselves are declared here and nowhere else.
+        THIS MODULE CONFIGURES NO maven-clean-plugin FILESET, AND THAT IS THE ANSWER RATHER THAN AN
+        OMISSION. Every other foreign client declares one, because its native toolchain writes
+        somewhere Maven has never heard of; the container route writes exactly ONE host-side path,
+        the export directory bin/build-client.sh computes as <module>/target/container (grep
+        `out_dir` in that script). That is inside ${project.build.directory}, so the default clean
+        already deletes the two extracted binaries, the dynamic control, Package.resolved and
+        link-report.txt - by the same mechanism that keeps the promise for a Java module, with
+        nothing added. Measured on this module: build, `target/container/pc-swift-selftest`
+        present, `mvn clean`, gone, rebuild green.
+
+        THERE IS NO `.build` DIRECTORY HERE TO DELETE, and the reason is worth knowing before
+        someone adds a fileset for one. SwiftPM's three scratch paths are BuildKit CACHE MOUNTS
+        inside the image (grep `pc-swift-scratch-static` in the Dockerfile), one per build
+        configuration because two configurations sharing a path invalidate each other's whole
+        dependency graph - measured at 151s of pure re-compilation per edit. They are shared build
+        cache, not module output: deleting them would not remove one file from this directory, and
+        would cost the next build a full rebuild of SwiftNIO and grpc-swift. The Dockerfile keeps
+        them outside the package directory precisely so a stray `.build` can never appear in the
+        checkout.
+
+        WHAT MUST NOT BE ADDED HERE. Everything else this build produces is SHARED: the swift:6.1
+        base image (3.4 GB), the BuildKit layer cache including the two compiled protoc plugins, and
+        the apt and SwiftPM cache mounts. Several agents and worktrees run against this machine at
+        once, so deleting any of them would throw away output nobody asked this module to rebuild,
+        and would turn a colleague's 2-second cached build into a many-minute one.
+        bin/build-client.sh's `build_natively` records the same reasoning for the native route.
+        They are this language's ~/.m2, and `mvn clean` does not empty ~/.m2.
+
+        And nothing here may list `target/container` explicitly either: that would be a second copy
+        of the script's `out_dir`, free to drift from it, deleting something already deleted.
+
+        Skeleton until the Swift wave of the language-proxy plan starts; that wave owns everything in
+        this directory except the build environment (Dockerfile, toolchain-smoke/), and may replace
+        the smoke target once it has one of its own.
     -->
     <properties>
         <pc.foreign.skip>false</pc.foreign.skip>
-        <pc.foreign.build.executable>bash</pc.foreign.build.executable>
-        <pc.foreign.build.args>${pc.foreign.step} --tool swift -- swift build --scratch-path target/swift --configuration release</pc.foreign.build.args>
-        <pc.foreign.test.executable>bash</pc.foreign.test.executable>
-        <pc.foreign.test.args>${pc.foreign.step} --tool swift --hello swift -- target/swift/release/hello</pc.foreign.test.args>
+        <pc.foreign.build.executable>${project.basedir}/../../bin/build-client.sh</pc.foreign.build.executable>
+        <pc.foreign.build.args>swift</pc.foreign.build.args>
+        <pc.foreign.test.executable>${project.basedir}/../../bin/build-client.sh</pc.foreign.test.executable>
+        <pc.foreign.test.args>swift --test</pc.foreign.test.args>
     </properties>
 
     <build>
@@ -49,12 +84,6 @@
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
             </plugin>
-            <!--
-                NO maven-clean-plugin FILESET HERE, and that is a decision rather than an omission -
-                "nothing to clean" and "nobody wired the clean" look identical in a pom. Everything
-                this module builds lands under target/, which Maven's default clean already takes.
-                the scratch-path flag puts SwiftPM's output under target/, which the default clean takes.
-            -->
         </plugins>
     </build>
 

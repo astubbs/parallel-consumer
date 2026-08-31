@@ -1,3 +1,3 @@
-# NuGet's own package cache, if a future dependency ever populates it here. Not cleaned by Maven
-# on purpose - a fetched-dependency directory is this language's ~/.m2.
-packages/
+bin/
+obj/
+target/

@@ -1,0 +1,18 @@
+#!/bin/sh
+#
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+# The TypeScript conformance runner, as one executable path.
+#
+# The shared suite's registry checks that a runner is an EXECUTABLE FILE, and `tsc` emits JavaScript
+# without a shebang or a mode bit - so the entry names this, and this names node plus the compiled
+# runner. `npm run build` (the module's own recipe, which the CI row and a developer both run) is
+# what puts that file there.
+#
+# exec, not a subshell: the suite reaps this process, and a shell left in the middle would hold the
+# runner's stdout open after it exited.
+
+set -eu
+
+here="$(cd "$(dirname "$0")" && pwd)"
+exec node "$here/../dist/test/conformance-runner.js" "$@"

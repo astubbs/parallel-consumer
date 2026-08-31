@@ -1,0 +1,50 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+# frozen_string_literal: true
+
+# The module's local entry point: `bundle exec rake` runs the bug-finder and the specs, in that
+# order, which is the whole local verification loop. The Maven wrapper beside this file drives the
+# same two commands under -Dpc.foreignClients, so CI and a developer's box run the same thing.
+
+require "rspec/core/rake_task"
+require "rubocop/rake_task"
+
+RSpec::Core::RakeTask.new(:spec)
+RuboCop::RakeTask.new(:rubocop)
+
+desc "Regenerate the committed protobuf/gRPC stubs from the frozen schema"
+task :proto do
+  sh "./scripts/generate-proto.sh"
+end
+
+# THE COMPILE-PHASE CHECK, and the reason it exists: `bundle install` was the whole of what Maven's
+# compile phase ran for this module, so `mvn compile -Dpc.foreignClients` reported SUCCESS with
+# `this is not valid ruby @@@` sitting in lib/parallel_consumer.rb - measured, before this task
+# existed. A check that reports success without having looked is worse than no check
+# (docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md).
+# scripts/build.sh is what Maven runs and it calls this task; the file list lives HERE so there is
+# one of it, and so `bundle exec rake syntax` is the same check by hand.
+#
+# `ruby -c` IS THE TOOL, one process per file: it is the interpreter's own parser, it runs none of
+# the code, and what a broken file prints is Ruby's own error with the line and the caret. RuboCop
+# would also catch it - Lint/Syntax - and is already the test lane's, but pointing the compile phase
+# at the linter would make `mvn compile` sensitive to .rubocop.yml and go red on a shadowed
+# variable, which is a different claim from "this file is Ruby". RubyVM::InstructionSequence
+# .compile_file in a single process is ~8x faster and was rejected for being MRI-only, to buy 0.4s.
+#
+# EVERY .rb UNDER lib/ IS PARSED, generated stubs included - .rubocop.yml excludes them from STYLE
+# because protoc wrote them, but this library ships them and a stub that does not parse is a broken
+# release. scripts/conformance-runner is named explicitly: it is Ruby with a shebang and no
+# extension, and it is the cross-language conformance suite's only view of this client, so a runner
+# that stopped parsing must redden this module rather than the Java one.
+#
+# NOT ADDED TO `default`: the parse belongs to the compile phase, and the test lane's RuboCop
+# already refuses to lint a file it cannot parse.
+desc "Parse every Ruby source file - the check Maven's compile phase must fail on"
+task :syntax do
+  files = FileList["lib/**/*.rb", "spec/**/*.rb"].to_a + ["scripts/conformance-runner"]
+  broken = files.reject { |file| system(RbConfig.ruby, "-c", file, out: File::NULL) }
+  abort "syntax check failed: #{broken.join(', ')}" unless broken.empty?
+  puts "syntax OK: #{files.size} files"
+end
+
+task default: %i[rubocop spec]
