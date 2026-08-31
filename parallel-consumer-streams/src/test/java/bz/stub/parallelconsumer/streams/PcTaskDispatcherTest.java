@@ -1597,36 +1597,52 @@ class PcTaskDispatcherTest {
     }
 
     /**
-     * The pool rejecting a submission must not strand a stream-time hold (astubbs#255, U13).
+     * A pool that rejects a submission must leave the record accounted for, not in limbo (astubbs#255, U13).
      * <p>
      * {@code abortAllActive()} crashes every live dispatcher from a foreign thread <em>by design</em>, so a
      * pump can pass the {@code closed} check and then find the pool shut down at
-     * {@code workerPool.execute}. Every increment made before that submission has to be compensated, and the
-     * hold is the one that used to be missed: it pins the mark at the rejected record's timestamp forever,
-     * which is a stopped punctuation clock rather than merely a wrong counter.
+     * {@code workerPool.execute}. Before this was handled, the {@code RejectedExecutionException} left
+     * {@code dispatchAvailable} - and therefore the patched {@code process()} - on the StreamThread, having
+     * already incremented {@link PcTaskDispatcher#getInFlightCount()} for a record that would never run and
+     * never report: PC held it forever, {@code isQuiescent()} could not become true, and the close path paid
+     * its whole termination wait.
+     * <p>
+     * <b>The stream-time hold is released there too, and that half is deliberately unobservable.</b> Both
+     * close paths freeze the mark, and a fixed-size pool with an unbounded queue rejects nothing until it is
+     * shut down - so on this code there is no reachable state in which a leaked hold moves the mark. It is
+     * released anyway, because the alternative is a closed dispatcher holding {@link WorkContainer}
+     * references, and because the freeze is a second mechanism rather than a licence to skip the first. Say
+     * so rather than claiming a proof this test cannot give.
      * <p>
      * The abort is fired from <b>inside the preparer</b> rather than from a second thread, which makes the
      * ordering deterministic instead of a race this test would sometimes lose.
      */
     @Test
-    void aRejectedPoolSubmissionReleasesItsStreamTimeHold() {
+    void aRejectedPoolSubmissionIsAccountedForRatherThanLeftInFlight() {
         dispatcher = new PcTaskDispatcher("task-st-rejected", INPUT_PARTITIONS, 4);
         dispatcher.registerRecords(PARTITION, UniLists.of(
                 record(PARTITION, 0, 10L, "key-a"),
                 record(PARTITION, 1, 900L, "key-b")));
 
-        // Shut the pool down while the pump is between its `closed` check and its first execute().
-        dispatcher.dispatchAvailable(rec -> {
+        // Shut the pool down while the pump is between its `closed` check and its first execute(). Any
+        // escape from here is the defect: this call is `process()` on the StreamThread.
+        final int consumed = dispatcher.dispatchAvailable(rec -> {
             dispatcher.abortClose();
             return prepared(rec, () -> { });
         });
 
+        assertThat(consumed)
+                .as("the pump still reports progress for records it consumed, so process() does not park "
+                        + "the StreamThread for a poll budget on the way down")
+                .isEqualTo(2);
         assertThat(dispatcher.getRecordsFailed())
-                .as("precondition: the submissions really were rejected and accounted for as failures, "
-                        + "rather than silently vanishing from PC's books")
+                .as("the rejected submissions are accounted for as failures rather than silently vanishing "
+                        + "from PC's books")
                 .isEqualTo(2L);
         assertThat(dispatcher.getInFlightCount())
-                .as("and the in-flight count was compensated too - nothing is running")
+                .as("and the in-flight increment made before the submit was compensated - otherwise PC "
+                        + "holds two records that will never run and never report, isQuiescent() can never "
+                        + "become true, and every close pays its full termination wait")
                 .isZero();
     }
 
