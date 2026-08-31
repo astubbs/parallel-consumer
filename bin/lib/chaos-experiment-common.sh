@@ -84,6 +84,17 @@ pc_count_matches() { # extended-regex file
 # 0 and is indistinguishable from a pass in a rate. That discipline has changed an answer more than
 # once, which is why it is shared rather than remembered.
 
+# Delete the reports BEFORE a run, so an iteration that dies before failsafe (compile break, bad
+# -Dit.test, dependency resolution) cannot be classified from the previous iteration's file. Without
+# this the DID-NOT-RUN verdict below is unreachable in exactly the case it exists for: the stale
+# report still says tests="1", so a broken tree reports the last good run over and over. It fails
+# toward "everything is fine", which is the direction that hides a problem. bin/chaos-test.sh met the
+# neighbouring version of this - every rep writes the SAME TEST-<class>.xml - and solved it by
+# archiving; here the previous rep's file has already been read, so deleting is enough.
+pc_clear_failsafe_reports() { # tree-root report-name-fragment
+    rm -f "$1/parallel-consumer-core/target/failsafe-reports"/TEST-*"$2"*.xml
+}
+
 # The last matching report's counts, verbatim - callers print it when there is nothing to classify.
 pc_failsafe_stats() { # tree-root report-name-fragment
     grep -ohE 'tests="[0-9]+" errors="[0-9]+" skipped="[0-9]+" failures="[0-9]+"' \
@@ -164,6 +175,7 @@ pc_consumed_bounds() { # run-log
 pc_run_chaos() { # tree-root seed logfile [extra maven args...]
     local tree="$1" seed="$2" log="$3"
     shift 3
+    pc_clear_failsafe_reports "$tree" ChurnStorm
     JAVA_HOME="$PC_JAVA_HOME" "$tree/mvnw" -f "$tree/pom.xml" -Pci -pl parallel-consumer-core -am \
         verify -DskipUTs=true -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed="$seed" \
         -Dit.test=ChaosChurnStormIT "${PC_EXPERIMENT_SKIPS[@]}" "$@" > "$log" 2>&1
@@ -172,6 +184,7 @@ pc_run_chaos() { # tree-root seed logfile [extra maven args...]
 pc_run_performance() { # tree-root it-test logfile [extra maven args...]
     local tree="$1" it_test="$2" log="$3"
     shift 3
+    pc_clear_failsafe_reports "$tree" "$it_test"
     JAVA_HOME="$PC_JAVA_HOME" "$tree/mvnw" -f "$tree/pom.xml" -Pci -pl parallel-consumer-core -am \
         verify -DskipUTs=true -Dincluded.groups=performance -Dexcluded.groups= \
         -Dit.test="$it_test" "${PC_EXPERIMENT_SKIPS[@]}" "$@" > "$log" 2>&1

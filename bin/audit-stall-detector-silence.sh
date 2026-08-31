@@ -14,11 +14,20 @@
 # it. A run that passes is not a data point here - only failures carry the question, and neither is a
 # run that executed no test at all.
 #
-#   no-progress   - the detector fired. Working as intended.
-#   other-probe   - a different detector caught it. Not a miss; a different signature.
-#   ledger-only   - the end-of-run correctness ledger failed with NO detector firing. THE MISS CASE:
-#                   something went wrong and the liveness detectors said nothing.
-#   unclassified  - read it by hand; the classifier is not the oracle.
+# These are the verdicts the classifier actually emits - grep pc_detector_verdict in
+# bin/lib/chaos-experiment-common.sh if you are changing either side, because nothing checks that
+# this table and that function agree:
+#
+#   no-progress          - the detector fired. Working as intended.
+#   other-probe          - a different detector caught it. Not a miss; a different signature.
+#   LEDGER-ONLY-MISS-CASE - the end-of-run correctness ledger failed with NO detector firing. THE
+#                          MISS CASE: something went wrong and the liveness detectors said nothing.
+#
+# There is deliberately no `unclassified` verdict. This table used to list one and the classifier
+# has never emitted it, which is worse than a missing row: a reader who never sees it concludes the
+# corpus was clean rather than that the bucket does not exist. Every failing run lands in one of the
+# three above - and the counts are printed beside the verdict so it can be re-checked by hand, which
+# is the job the phantom bucket appeared to be doing.
 #
 # Reads the siloed probes.log (docs/logging.md) so "which detector fired" is a small file.
 #
