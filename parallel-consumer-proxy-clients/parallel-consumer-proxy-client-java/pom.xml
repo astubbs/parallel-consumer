@@ -39,6 +39,7 @@
         <module>parallel-consumer-proxy-client-java-api</module>
         <module>parallel-consumer-proxy-client-java-direct</module>
         <module>parallel-consumer-proxy-client-java-grpc</module>
+        <module>parallel-consumer-proxy-client-java-harness</module>
     </modules>
 
     <!--
