@@ -31,6 +31,21 @@
         </encoder>
     </appender>
 
+    <!-- KNOWN, and left alone deliberately on 2026-09-01 - do not "fix" this in one line.
+
+         The header above says levels are property-driven. That is true of the six named subsystem
+         loggers and NOT of the two pins here: this root, and the bz.stub.parallelconsumer logger
+         below, are both bare literals, so -Dpc.log.level does not reach PC's own loggers in this
+         profile.
+
+         The obvious repair - making this root ${pc.log.level:-info} - looks right and achieves
+         nothing: the package pin below overrides root for every PC logger, so the flag would only
+         raise third-party loggers nobody pinned (testcontainers, docker-java). That is noise, not
+         signal. The two pins have to be decided together, and the decision is not free - the header
+         records that hardcoded levels here once produced a 126MB chaos job log.
+
+         Nothing goes red either way: bin/check-test-log-config.sh scopes itself to the four library
+         modules' src/test/resources/logback-test.xml and does not cover this file. -->
     <root level="info">
         <appender-ref ref="STDOUT"/>
     </root>

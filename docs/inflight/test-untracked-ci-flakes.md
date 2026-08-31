@@ -21,9 +21,44 @@ Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutio
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. Mechanism known and owned (astubbs#262), quarantined - see below |
 | `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 3 seen (2026-08-18, 2026-08-19, 2026-08-25) | Not from the original scan - each found while babysitting a branch carrying **no main Java**. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third sighting carries the failing batch contents and they point at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
 
+| `ParallelEoSStreamProcessorTest.processInKeyOrder` | 2 seen locally (2026-09-01), 1 in 3 isolated runs | **Two DIFFERENT failures under one test name, and the documented fix is already in the tree.** See below - this one is not a fresh flake, it is a solved one still firing |
+
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
 door, and for the same reason: two of that family turned out to be real product bugs, and the third
 was neither tight nor a stall but a test that could not force its own trigger.
+
+### `processInKeyOrder` - a solved flake that still fires, and a second failure hiding under the same name
+
+<!-- post-merge: checked-begin - names the branch the sighting came from, in the past tense, which
+     stays true once that work has landed -->
+Seen 2026-09-01 while running the core unit suite on the branch that became
+astubbs/parallel-consumer#381, which carried no main Java - so nothing in that work can be the cause.
+Recorded rather than diagnosed, because a sighting has to be written down before the branch that saw
+it merges: the evidence expires with the logs.
+<!-- post-merge: checked-end -->
+
+**Two distinct failures, and conflating them would waste the next person's time:**
+
+- **Parameter `[1]`, `ConditionTimeoutException` after ~41s**, on the assertion labelled
+  *"Which offsets are committed and in the expected order"*. This is, symptom for symptom, the flake
+  written up in
+  [`../solutions/test-flakiness/assert-the-commit-frontier-not-the-tick-path.md`](../solutions/test-flakiness/assert-the-commit-frontier-not-the-tick-path.md).
+  Reproduced 1 run in 3 in isolation, so it is cheap to work on.
+- **Parameter `[3]`, an `AssertionError` on the test's own input-data sanity check** - "actual size
+  is 0 while expected size is 9", the latch list empty. Seen ONCE, in a full 533-test suite run, and
+  NOT reproduced in two subsequent full-class runs or three method runs. Different parameter,
+  different phase, different message. Nothing yet says the two share a cause.
+
+**The part worth acting on: that solution doc records its fix as `e8c9bb12` on astubbs#264 and
+"UNMERGED as of 2026-08-13". astubbs#264 merged that same day, and the frontier assertion it
+introduced IS in the tree** - `KafkaTestUtils` carries the frontier helper. Yet the failing
+assertion still reports the OLD label, which `KafkaTestUtils` still offers as a default description
+from two call sites. So the fix landed and this path did not adopt it.
+
+That makes this a **stale-resolution** case rather than a new flake, and it is the more useful
+reading: a solution doc that says "fixed" is why nobody re-opened this. Whoever picks it up should
+start by checking which call sites still take the ordered-list assertion, and update that doc's
+`status`, which is wrong in a way that suppresses attention.
 
 ### `simpleBatchTest` - three modules, one shared helper, and a lead nobody has tested
 

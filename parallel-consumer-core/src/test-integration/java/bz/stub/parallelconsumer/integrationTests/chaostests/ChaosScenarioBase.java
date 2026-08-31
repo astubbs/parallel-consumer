@@ -102,6 +102,22 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> i
      *
      * @param methodStart when the {@code @Timeout} clock started - the top of the {@code @Test} method,
      *                     since that is JUnit's own reference point
+     * <p>
+     * <b>Second resolver, deliberately narrower - see {@code AmbientProbeExtension.reportDeadlineHeadroom}.</b>
+     * That one resolves {@code @Timeout} method-then-class, because a class-only lookup made it emit
+     * nothing at all for a suite that declares the annotation on methods. This one resolves
+     * class-only, and that is a decision rather than a copy that drifted: no chaos scenario declares
+     * a method-level {@code @Timeout} today, so the two behave identically, and the gap is documented
+     * below rather than closed.
+     * <p>
+     * Sharing them would cost a new file for what is one lambda
+     * ({@code t -> Duration.ofMillis(t.unit().toMillis(t.value()))}), and the two callers resolve from
+     * different places - an {@code ExtensionContext} there, {@code getClass()} here. Recorded so the
+     * difference is not rediscovered as an oversight and unified without noticing what it costs.
+     * <p>
+     * <b>If you do unify them:</b> {@code Optional.or(...)} is Java 9+ and this module compiles to
+     * Java 8 bytecode through Jabel, so the {@code isPresent()} re-assignment in the other resolver
+     * has to stay.
      */
     protected Duration effectiveDiagnosticQuietCap(Instant methodStart) {
         Duration ceiling = AnnotationSupport.findAnnotation(getClass(), Timeout.class)
