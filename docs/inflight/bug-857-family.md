@@ -1817,10 +1817,13 @@ waiting to acquire a monitor**, on an `AtomicBoolean` held by `pc-control-PC-12`
 `commitOffsetsThatAreReady` reached from `onPartitionsRevoked`. The instrumentation states the
 disjunction it was written to settle: contention or a lock-ordering defect, **not** a slow broker.
 
-**Not the observing PR's defect.** astubbs/parallel-consumer#379 adds an unpublished Kafka Streams
-build-machinery module and touches no core Java, no locking, no rebalance path and no in-flight
-accounting - its diff outside `parallel-consumer-streams/` is the root pom's module line, `NOTICE`,
-three `bin/` gates and docs. Same crossing as the entries above: what it brought in is master.
+<!-- post-merge: checked-begin -->
+**Not the observing PR's defect.** It was seen on astubbs/parallel-consumer#379, which adds an
+unpublished Kafka Streams build-machinery module and touches no core Java, no locking, no rebalance
+path and no in-flight accounting - its diff outside `parallel-consumer-streams/` is the root pom's
+module line, `NOTICE`, three `bin/` gates and docs. Same crossing as the entries above: what it
+brought in is master.
+<!-- post-merge: checked-end -->
 
 ## Delete when
 
