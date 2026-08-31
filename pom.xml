@@ -43,6 +43,8 @@
              Maven Central itself, so it needs nothing installed and there is nothing for
              -Dpc.foreignClients to guard. -->
         <module>parallel-consumer-proxy-protocol</module>
+        <!-- Same reasoning as the protocol module above: an ordinary JVM module, in the default reactor. -->
+        <module>parallel-consumer-proxy</module>
         <module>parallel-consumer-proxy-clients</module>
         <module>parallel-consumer-examples</module>
     </modules>
