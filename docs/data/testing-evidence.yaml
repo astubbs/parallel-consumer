@@ -194,6 +194,33 @@ module_evidence:
       Evidence about a PROCESS, not about processing. No engine is hosted, so no record has been
       dispatched, no verdict returned and no offset committed; and the sidecar has never run against
       a broker, because it cannot be configured to reach one.
+  - id: proxy-client-java
+    artifact: parallel-consumer-proxy-client-java
+    coverage: >-
+      The DIRECT transport over core's mock Kafka clients: a record delivered as the API's own type,
+      a success applied as BOTH a committed offset and a produced record - the assertions chosen
+      because a transport that ran the user function and dropped its verdict looks identical from the
+      processor's side - a failure redelivered carrying the reason the previous attempt gave, the
+      session's end completing on close and not before, and poll refused a second time. The gRPC
+      transport against a REAL sidecar started through its own entry point: the handshake reaching the
+      session service and its refusal reaching the caller from both connect() and sessionEnd(),
+      asserted on the STATUS CODE, because the authority allowlist and the admission slot answer with
+      different codes before the service method runs - with a control arm pointed at a port nothing is
+      listening on, so the assertion cannot pass on any failure at all. Against a scripted proxy: a
+      mid-session stream error ending the session with its cause and releasing the executors, and a
+      close mid-processing reporting the user function's own outcome rather than a fabricated one.
+      Plus the wire mapping's decided conversions, above all the delivery token echoed byte for byte.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/parallel-consumer-proxy-client-java-direct/src/test/java/bz/stub/parallelconsumer/client/direct/DirectParallelConsumerClientTest.java
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/parallel-consumer-proxy-client-java-harness/src/test/java/bz/stub/parallelconsumer/client/harness/SidecarHandshakeTest.java
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/parallel-consumer-proxy-client-java-grpc/src/test/java/bz/stub/parallelconsumer/client/grpc/SessionEndTest.java
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/parallel-consumer-proxy-client-java-api/src/test/java/bz/stub/parallelconsumer/client/ClientSurfaceArchTest.java
+    limitation: >-
+      NO RECORD HAS CROSSED THE WIRE. The sidecar on this branch hosts no engine, so every gRPC
+      assertion past the handshake is against a proxy the test itself scripts - which can prove how
+      the transport reacts, and cannot prove that a real engine would ever behave that way. Nothing
+      here has run against a broker, in either transport. The cross-language conformance suite, which
+      is what makes the two transports answerable to the SAME scenarios, is not on this branch.
   - id: streams-alpha
     artifact: parallel-consumer-streams-spike
     coverage: Planned alpha evidence must exercise the release artifact's opt-in boundary, comparison switch and supported topology/recovery claims.

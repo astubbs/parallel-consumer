@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-client-java</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Client Java Harness Lane</name>
+    <artifactId>parallel-consumer-proxy-client-java-harness</artifactId>
+
+    <!--
+        THE ONE PLACE ON THE JVM SIDE THAT DEPENDS ON THE SIDECAR, AND THE REASON IT IS A MODULE
+        RATHER THAN A SCOPE (astubbs#242).
+
+        THE HAZARD IT REMOVES. A test-scope dependency is not transitive on the CLASSPATH, but it
+        IS an edge in the Maven REACTOR: `-pl <anything that depends on java-grpc> -am` walks the
+        declared dependencies of every module it reaches, test scope included. If java-grpc
+        test-depended on parallel-consumer-proxy, any client wrapping it - the Kotlin client, Scala
+        next - would drag the sidecar into an ordinary build, and `bin/build.sh` opens with `clean`,
+        so the routine build of a wrapper would delete the sidecar jar other languages' tests spawn.
+        The measurement that says the hazard is absent is a reactor list, not an assertion:
+
+            ./mvnw -pl :parallel-consumer-proxy-client-kotlin -am validate
+
+        must not print parallel-consumer-proxy. Rerun it before adding any dependency here or in a
+        client module.
+
+        WHY NOT A PROFILE, which is how the non-JVM clients answer the same question. Their harness
+        lane is opt-in because their tests need a foreign toolchain anyway. Here the test needs
+        nothing but the JVM already running the build, and it is the Java client's only evidence
+        against a real server; a profile would take it out of the default lane, and a test that does
+        not run is not a passing test.
+
+        WHAT IS IN IT TODAY, and it is deliberately less than the name promises. The sidecar on this
+        branch hosts no Parallel Consumer engine - it binds, admits a connection and refuses every
+        session with UNIMPLEMENTED - so the only thing that can be proved end to end is the
+        handshake: that the gRPC transport's own connect path reaches a real server's real service
+        and reports what it was told. That is this module's whole test tree. The engine-backed
+        conformance run, and the compile-scope harness classpath a JVM client declares to spawn a
+        sidecar as a child process, arrive with the conformance rung stacked above this one.
+
+        This module publishes nothing (the clients aggregator skips deploy and install for the whole
+        tree) and has no main sources: it is a classpath and a test tree, deliberately.
+    -->
+
+    <properties>
+        <!-- the sidecar and the gRPC transport both require it; see java-grpc's pom for the reasoning -->
+        <release.target>17</release.target>
+    </properties>
+
+    <build>
+        <plugins>
+            <!--
+                The parent's SpotBugs gate is inherited and NOT switched off, even though this module
+                has no main sources: the root pom sets includeTests=true, so the analysis has this
+                module's test tree to read and its one finding is declined below with its reason. An
+                opt-out would also silently exempt the first main source anyone adds here.
+
+                What is configured is only the filter's location. ${project.basedir} rather than a
+                shared path in the parent: a relative excludeFilterFile resolves against the module
+                being built, so a filter declared once in the parent would be looked for inside each
+                child anyway. ${project.basedir} rather than a shared path in the parent: a relative
+                excludeFilterFile resolves against the module being built, so a filter declared once
+                in the parent would be looked for inside each child anyway.
+            -->
+            <plugin>
+                <groupId>com.github.spotbugs</groupId>
+                <artifactId>spotbugs-maven-plugin</artifactId>
+                <configuration>
+                    <excludeFilterFile>${project.basedir}/spotbugs-exclude.xml</excludeFilterFile>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+    <dependencies>
+        <!--
+            THE SIDECAR, at compile scope. Compile rather than test so it flows transitively: a JVM
+            client that needs one declares this ONE module in its own opt-in profile and gets the
+            set, instead of restating dependencies and drifting from them. Nothing consumes it that
+            way yet; the scope is chosen for what the module is for, and the alternative would have
+            to be changed back the moment the first wrapper arrives.
+        -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- the transport under test -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-client-java-grpc</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <!--
+            TestConventionRules, the shared ArchUnit rule library. Core's test-jar is the only
+            engine-side artifact this module names directly, and it is not the hazardous one: core
+            is already in the reactor of anything that reaches the protocol module.
+        -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+        <!--
+            Declared explicitly rather than leaned on transitively: core's test-jar reaches for
+            commons-lang3, and test scope is not transitive, so relying on core to supply it here
+            would break the moment core stopped using it.
+        -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+</project>

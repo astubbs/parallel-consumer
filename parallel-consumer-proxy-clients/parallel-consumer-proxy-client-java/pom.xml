@@ -14,40 +14,142 @@
 
     <name>Parallel Consumer - Proxy Client Java</name>
     <artifactId>parallel-consumer-proxy-client-java</artifactId>
+    <packaging>pom</packaging>
 
     <!--
-        The Java end of the polyglot build scaffolding (astubbs#242): an ordinary Maven module that
-        compiles one class, runs it, and asserts the one fixture line every other language also
-        prints. No toolchain detection, because the JDK that is running Maven is the toolchain.
+        Nested aggregator for the Java client (astubbs#242,
+        docs/plans/2026-08-14-001-feat-language-proxy-plan.md): one shared wrapper surface, two
+        transports behind it, and a lane that holds the sidecar dependency for both.
 
-        A LEAF MODULE TODAY, AN AGGREGATOR LATER, and the difference is worth stating because the
-        source branch astubbs/parallel-consumer#293 has the aggregator form. There, this artifactId
-        is a nested aggregator over api / direct / grpc / harness - a shared client surface with two
-        transports behind it. That structure belongs to the Java reference client, which is its own
-        rung of this stack; splitting it here would mean three modules each printing the same line,
-        which the duplicate-code detectors would rightly flag and which would prove nothing three
-        times. The rung that brings the real client converts this module and moves this class out.
+        THIS MODULE WAS A LEAF UNTIL THIS RUNG. It compiled one HelloFixture class asserting the
+        polyglot scaffolding's fixture line, and its own pom said the rung bringing the real client
+        would convert it and move that class out. That is this change: a Java module that compiles a
+        client surface, two transports and their suites is a strictly stronger statement about the
+        Java toolchain than a class that prints a string, so the fixture is deleted rather than
+        relocated. The eight non-JVM modules keep theirs, and bin/foreign-client-step.sh still
+        derives their expected line - nothing about that wrapper changes.
 
-        NOTHING IS PUBLISHED: deploy, install and gpg are all skipped by the clients aggregator.
+        The api module owns the user-facing surface; direct binds parallel-consumer-core in-process
+        with no protobuf and no gRPC anywhere on its classpath (enforced in its pom); grpc speaks the
+        frozen v1 wire to the sidecar; harness is a BUILD-GRAPH module rather than a product one,
+        holding the sidecar dependency so no module a client wraps carries one - its pom explains
+        what that buys and how to measure it.
     -->
+    <modules>
+        <module>parallel-consumer-proxy-client-java-api</module>
+        <module>parallel-consumer-proxy-client-java-direct</module>
+        <module>parallel-consumer-proxy-client-java-grpc</module>
+        <module>parallel-consumer-proxy-client-java-harness</module>
+    </modules>
 
-    <dependencies>
-        <!--
-            THE SHARED ArchUnit RULES, and the reason this module has any dependency at all.
-            EveryModuleWiresUpArchUnitTest fails the build for a module with src/test/java and no
-            wired TestConventionsArchTest, because a module ArchUnit was never pointed at reports
-            nothing rather than reporting itself unprotected. The rules live once, in core's test
-            jar, which is how every other module in this reactor reaches them.
+    <!--
+        THE gRPC GRAPH'S TWO PINS, DECLARED ONCE FOR THE TREE THAT NEEDS THEM. Only the modules that
+        put gRPC on a classpath resolve either artifact, so grpc and harness inherit these and api
+        and direct are unaffected - direct's bannedDependencies rule proves that, since a pin here
+        adds nothing to a graph that has no gRPC in it.
 
-            Test scope, so no client ever ships an edge to the engine.
-        -->
-        <dependency>
-            <groupId>bz.stub.parallelconsumer</groupId>
-            <artifactId>parallel-consumer-core</artifactId>
-            <version>${project.version}</version>
-            <classifier>tests</classifier>
-            <scope>test</scope>
-        </dependency>
-    </dependencies>
+        parallel-consumer-proxy's pom OWNS the reasoning for both and carries it in full. In one line
+        each: gRPC drags error_prone_annotations in at several versions and resolution settles on the
+        lowest, which the root pom's requireUpperBoundDeps refuses; and grpc-core brings gson 2.11.0
+        at runtime, the version OSS Index matches for CVE-2025-53864 - an advisory about a library
+        this repository does not depend on, pinned forward rather than excluded because an exclusion
+        would carry a retirement condition nobody could ever discharge.
+
+        WHY HERE AND NOT THE ROOT POM. That is the question the proxy module's pom already answered
+        for itself, and nothing here re-opens it: what is different is only that this aggregator has
+        two children needing the same pin, and dependencyManagement does not flow between siblings.
+        Declaring it in each of them would have been the third and fourth copy of the same two lines.
+        Do NOT hoist it further - the root's ${error-prone.version} pins the Error Prone COMPILER,
+        deliberately below current for an unrelated and temporary reason, and putting a differently
+        motivated number beside it is how the two come to be "fixed" into agreement.
+
+        The numbers match parallel-consumer-proxy's because this tree's highest requester is the same
+        one, NOT because two poms are kept equal by hand. The protocol module's error_prone pin is
+        deliberately a version lower, since its highest requester differs; equalising the three would
+        break one of them.
+    -->
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>com.google.errorprone</groupId>
+                <artifactId>error_prone_annotations</artifactId>
+                <version>2.48.0</version>
+            </dependency>
+            <dependency>
+                <groupId>com.google.code.gson</groupId>
+                <artifactId>gson</artifactId>
+                <version>2.14.0</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <plugins>
+            <!--
+                STATIC ANALYSIS FOR THE JAVA CLIENT, AND IT FAILS THE BUILD (astubbs#242; the policy
+                is in docs/client-static-analysis.md).
+
+                Declared once here so every module beneath it inherits it - including any added
+                later, which is the point of putting it here rather than in each child. The root pom
+                already pluginManages this plugin - version, effort=Max, threshold=Medium, the
+                fb-contrib/findsecbugs/slf4j detector set - so nothing is repeated; what is added is
+                the binding and the fact that it GATES.
+
+                WHY BEFORE `test` AND NOT AT `verify`, which is the plugin's own default phase: the
+                gating PR lane runs `bin/ci-unit-test.sh`, which stops at `test`. A verify-bound
+                check would run only in the push-to-master full build - after review, on the wrong
+                side of the merge - and would read as covered the whole time. Bound before `test`,
+                every one of `test`, `package` and `verify` reaches it, and so does
+                `bin/build.sh -pl :<module> -am` on a laptop.
+
+                WHY process-test-classes AND NOT process-classes, WHICH IS WHERE THIS ARRIVED FROM
+                astubbs/parallel-consumer#293. The root pom sets includeTests=true, so SpotBugs also
+                reads target/test-classes - and at process-classes that directory has not been
+                written yet. On a clean build the gate silently analysed main code only; on the next
+                incremental build, with test classes left over, the SAME tree failed with two
+                findings in a test. A gate whose verdict depends on what a previous run left on disk
+                is not a gate, and the discovery order here - clean pass, then incremental fail on an
+                unchanged tree - is exactly how one goes unnoticed. process-test-classes is the first
+                phase after test-compile and is still before `test`, so nothing above changes and the
+                analysis is the same set every time.
+
+                WHY `check` AND NOT `spotbugs`: the `spotbugs` goal writes a report and exits 0.
+                `check` reads that report and fails, which is the difference between analysis
+                nobody reads and a gate. It runs the analysis itself (@Execute), so there is no
+                second execution to keep in step.
+
+                THIS IS A HARDER GATE THAN THE REPO-WIDE LANE, deliberately. maven.yml's
+                `static: spotbugs` job is core-scoped, baseline-excluded and non-blocking - it
+                reports what is NEW against master and never reddens. That design suits a codebase
+                with long-standing findings (docs/inflight/static-spotbugs-latent-findings.md);
+                these modules have none, and starting a new module at zero is the one moment a
+                clean-slate gate is free.
+
+                DISMISSING A FINDING: the shape that keeps the reason next to the code is
+                @SuppressFBWarnings at the site, and it is unavailable in the api module - the
+                annotation needs com.github.spotbugs:spotbugs-annotations on the classpath, and that
+                module is dependency-free by design. So a dismissal goes in the module's own
+                spotbugs-exclude.xml, named class by class and pattern by pattern with the reason
+                written beside it. A module-wide or pattern-wide exclusion is the thing to refuse:
+                it silences the finding for code nobody has written yet. Every entry in every module's
+                filter names a class and a pattern, most of them a method or a field as well, and
+                each carries the argument for declining it rather than a label.
+            -->
+            <plugin>
+                <groupId>com.github.spotbugs</groupId>
+                <artifactId>spotbugs-maven-plugin</artifactId>
+                <!-- version and configuration come from the root pom's pluginManagement -->
+                <executions>
+                    <execution>
+                        <id>spotbugs-gate</id>
+                        <phase>process-test-classes</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
 
 </project>

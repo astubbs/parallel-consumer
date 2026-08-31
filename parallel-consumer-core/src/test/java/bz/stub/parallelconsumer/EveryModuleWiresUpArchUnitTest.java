@@ -10,7 +10,9 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -36,6 +38,29 @@ class EveryModuleWiresUpArchUnitTest {
 
     private static final String ARCH_TEST = "TestConventionsArchTest.java";
 
+    /**
+     * The one module that CANNOT wire the shared wrapper, with the reason, because a bare exemption is the
+     * hole this test exists to close.
+     *
+     * <p>{@code TestConventionRules} ships in core's test-jar, and the proxy client's api module is
+     * dependency-free by design - on core in any scope, which its own pom states and the direct sibling's
+     * {@code bannedDependencies} enforcer rule exists to keep true. So the wrapper is unavailable there, and
+     * the choice is between weakening that invariant and naming the module here. This test postdates the
+     * branch that module was extracted from (astubbs/parallel-consumer#242), so the collision is new rather
+     * than a rule anybody ignored.
+     *
+     * <p><b>It is not unprotected.</b> The module runs {@code ClientSurfaceArchTest} instead, whose two rules
+     * are narrower and stronger than the shared conventions: no transport, engine or Kafka type may appear
+     * anywhere in the surface nine other languages mirror. {@link #runsSomeOtherArchUnitWrapper} is what makes
+     * this row an exemption rather than a mute - delete that test and the module fails this one again.
+     *
+     * <p>What lifts it: extracting {@code TestConventionRules} into a small test-support artifact that neither
+     * core nor the clients own. Worth doing when a second module hits the same wall, not before.
+     */
+    private static final Set<String> EXEMPT_BECAUSE_THEY_CANNOT_DEPEND_ON_CORES_TEST_JAR =
+            Collections.singleton("parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/"
+                    + "parallel-consumer-proxy-client-java-api/src/test/java");
+
     @Test
     void everyModuleWithTestSourcesWiresUpArchUnit() throws IOException {
         Path repoRoot = repoRoot();
@@ -48,6 +73,8 @@ class EveryModuleWiresUpArchUnitTest {
                     .filter(EveryModuleWiresUpArchUnitTest::hasJavaSources)
                     .filter(p -> !containsArchTest(p))
                     .map(repoRoot::relativize)
+                    .filter(p -> !EXEMPT_BECAUSE_THEY_CANNOT_DEPEND_ON_CORES_TEST_JAR.contains(
+                            p.toString().replace(java.io.File.separatorChar, '/')))
                     .collect(Collectors.toList());
         }
 
@@ -57,6 +84,42 @@ class EveryModuleWiresUpArchUnitTest {
                         + "Unprotected", ARCH_TEST)
                 .that(unprotected)
                 .isEmpty();
+    }
+
+    /**
+     * The exemption above is only honest while the exempt module runs ArchUnit under some OTHER wrapper, so
+     * that is asserted rather than assumed. Without this, deleting {@code ClientSurfaceArchTest} would leave a
+     * module with test sources, no ArchUnit at all, and a row in this file saying that is fine - which is the
+     * silent opt-out the whole class exists to prevent, reintroduced by the fix for it.
+     */
+    @Test
+    void everyExemptModuleStillRunsSomeArchUnitWrapper() throws IOException {
+        Path repoRoot = repoRoot();
+        for (String exempt : EXEMPT_BECAUSE_THEY_CANNOT_DEPEND_ON_CORES_TEST_JAR) {
+            Path testJavaDir = repoRoot.resolve(exempt);
+            assertWithMessage("an exempt module must still exist: %s", exempt)
+                    .that(Files.isDirectory(testJavaDir)).isTrue();
+            assertWithMessage("%s is exempt from the shared wrapper because it cannot depend on core's "
+                            + "test-jar, NOT from ArchUnit - it must still run some @AnalyzeClasses test of "
+                            + "its own, or the exemption is a hole", exempt)
+                    .that(runsSomeOtherArchUnitWrapper(testJavaDir)).isTrue();
+        }
+    }
+
+    /** Whether any test in the tree points ArchUnit at packages, whatever the class is called. */
+    private static boolean runsSomeOtherArchUnitWrapper(Path testJavaDir) throws IOException {
+        try (Stream<Path> paths = Files.walk(testJavaDir)) {
+            return paths.filter(p -> p.getFileName().toString().endsWith(".java"))
+                    .anyMatch(p -> readBody(p).contains("@AnalyzeClasses"));
+        }
+    }
+
+    private static String readBody(Path file) {
+        try {
+            return new String(Files.readAllBytes(file), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new IllegalStateException("cannot read " + file, e);
+        }
     }
 
     private static boolean hasJavaSources(Path testJavaDir) {

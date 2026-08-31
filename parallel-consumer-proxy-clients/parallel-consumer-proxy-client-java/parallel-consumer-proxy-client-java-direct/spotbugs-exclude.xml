@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+    SpotBugs exclusions for the direct transport (astubbs#242; the policy is in
+    docs/client-static-analysis.md). The gate itself is bound in the parent pom.
+
+    One entry, naming one class, one method and one pattern. Every entry here is a judgement, not a
+    mute: if you are adding one, write why, or fix the code. A module-wide or pattern-wide exclusion
+    is the thing to refuse - it silences the finding for code nobody has written yet.
+
+-->
+<FindBugsFilter>
+
+    <!--
+        THE FINDING'S OWN REMEDY IS FORBIDDEN HERE, WHICH IS WHY THIS IS DECLINED RATHER THAN FIXED.
+        fb-contrib's CE_CLASS_ENVY says toInboundRecord calls more methods on RecordContext than on
+        its own class, and the refactor it is pointing at is "move this method onto RecordContext".
+        That is precisely the dependency this architecture forbids: RecordContext is a
+        parallel-consumer-core type, and core must not know that a client API exists. The mirror rule
+        is enforced from the other side by ClientSurfaceArchTest, which fails the api module's build
+        if a core or Kafka type reaches the shared surface.
+
+        A translation method between two representations reads the source object and nothing else -
+        that is what makes it a translation rather than logic. The gRPC transport's WireMapping is
+        the same shape for the same reason; it does not trip the detector only because its
+        conversions are shorter, which is not a difference worth restructuring code around.
+
+        Scoped to the one method, so any OTHER method on this class that grows real feature envy is
+        still reported.
+    -->
+    <Match>
+        <Class name="bz.stub.parallelconsumer.client.direct.DirectParallelConsumerClient"/>
+        <Method name="toInboundRecord"/>
+        <Bug pattern="CE_CLASS_ENVY"/>
+    </Match>
+
+</FindBugsFilter>
