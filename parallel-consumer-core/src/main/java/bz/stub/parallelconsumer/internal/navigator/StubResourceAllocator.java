@@ -151,6 +151,18 @@ public class StubResourceAllocator implements ResourceAllocator {
                             + "(R19 fail-fast).",
                     contract.getName(), contract.getRatePerSecond(), contract.getBurst()));
         }
+        // A positive rate that floors to zero credits per quantum is not a slow resource - it is a permanent
+        // stall: grantPerQuantum == 0 means nextCreditAt returns empty, no lease ever mints, and no wakeup
+        // exists to break it, so a tagged record starves silently forever. A rate of exactly 0 is the
+        // deliberate shut valve and stays legal (R19).
+        if (contract.getRatePerSecond() > 0 && grantPerQuantum(contract) == 0) {
+            throw new IllegalArgumentException(msg(
+                    "Resource '{}' declares rate {}/s over quantum {} - floor(rate x quantum) mints ZERO "
+                            + "credits every quantum, so every tagged member would starve forever with no "
+                            + "wakeup to break it. Raise the quantum or the rate so at least one whole credit "
+                            + "mints per quantum (R19 fail-fast).",
+                    contract.getName(), contract.getRatePerSecond(), contract.getQuantum()));
+        }
         ResourceContract existing = registry.putIfAbsent(contract.getName(), contract);
         if (existing != null && !existing.equals(contract)) {
             throw new IllegalArgumentException(msg(
@@ -194,7 +206,7 @@ public class StubResourceAllocator implements ResourceAllocator {
             // Death loses capacity (KD9/R6): the leaver's live unspent credits are gone NOW - expired, never
             // redistributed mid-window. Its share re-divides from the next quantum via the event above.
             // The zeroed lease record is KEPT as the quantum's issued-marker: a straggling readQuantum after
-            // close-entry must find the quantum already issued, never re-mint it (R14, KTD4's per-quantum
+            // the leave must find the quantum already issued, never re-mint it (R14, KTD4's per-quantum
             // grant bound). The record leaves at the next settle, like any stale lease.
             Map<String, LeaseState> memberLeases = leases.get(memberId);
             if (memberLeases != null) {

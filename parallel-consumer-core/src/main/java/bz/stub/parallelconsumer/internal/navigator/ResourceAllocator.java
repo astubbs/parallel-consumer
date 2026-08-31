@@ -45,8 +45,11 @@ public interface ResourceAllocator {
      *
      * @throws IllegalArgumentException {@code contract.getName()} is already registered under a different
      *                                  {@link ResourceContract}, or the policy is unusable (non-positive
-     *                                  quantum or negative rate/burst) - fail fast at registration, never
-     *                                  deep in the engine (R19)
+     *                                  quantum, negative rate/burst, or a positive rate whose quantum is too
+     *                                  short to mint even one whole credit - {@code floor(rate x quantum) == 0}
+     *                                  would starve every tagged member forever with no wakeup to break it) -
+     *                                  fail fast at registration, never deep in the engine (R19). A rate of
+     *                                  exactly {@code 0} is legal - the intentional always-blocked policy.
      */
     void register(ResourceContract contract);
 

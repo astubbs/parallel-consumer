@@ -4,11 +4,13 @@ package bz.stub.parallelconsumer.internal.navigator;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.internal.RateLimiter;
 import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import bz.stub.parallelconsumer.state.ShardKey;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Tag;
+import lombok.extern.slf4j.Slf4j;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -21,6 +23,7 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.function.DoubleSupplier;
 
 /**
  * One PC instance's membership of the shared {@link ResourceAllocator} (U3's engine seam): the instance's stable
@@ -53,9 +56,18 @@ import java.util.concurrent.atomic.LongAdder;
  * {@link ConcurrentHashMap}) - the same "final reference to a self-guarding type needs no {@code @GuardedBy}"
  * shape {@code StubResourceAllocator.Counters} uses, so immutability of the FIELD still holds even though the
  * VALUE it refers to mutates.
+ * <p>
+ * <b>Fail-safe on a throwing allocator.</b> The allocator is user-supplied (a public options seam), so every
+ * interaction here is guarded: a {@link RuntimeException} from it degrades this instance rather than killing it
+ * (the control task's own boundary would otherwise close the whole consumer). Eligibility reads treat the
+ * resource as BLOCKED with no known next credit - a deferral, never a free pass - view reads return their
+ * empty/zero shapes, and mutating calls are skipped. Each failure is counted monotonically
+ * ({@link #allocatorFailureCount()}, the {@code pc.navigator.allocator.failures} gauge) and logged rate-limited
+ * under {@link #LOG_PREFIX} via {@link #recordAllocatorFailure}.
  *
  * @author Antony Stubbs
  */
+@Slf4j
 public final class NavigatorParticipant {
 
     private static final NavigatorParticipant INERT =
@@ -109,6 +121,27 @@ public final class NavigatorParticipant {
      * Final reference to a self-guarding type, like its siblings above - no {@code @GuardedBy} to name (KTD11).
      */
     private final ConcurrentHashMap<ShardKey, Long> resourceDeferredCountByShard = new ConcurrentHashMap<>();
+
+    /** How often {@link #recordAllocatorFailure} may warn - failures sit on the per-claim hot path, so an
+     * unlimited warning would log at claim frequency. Same cadence as {@code ProcessingShard}'s own navigator
+     * constraint report. */
+    private static final int ALLOCATOR_FAILURE_LOG_INTERVAL_SECONDS = 5;
+
+    /**
+     * Total allocator calls that threw (the fail-safe posture above) - monotonic, never reset, the
+     * {@link PCMetricsDef#NAVIGATOR_ALLOCATOR_FAILURES} gauge target. Zero for a healthy allocator and always
+     * zero for {@link #inert()}, which holds no allocator to fail. Final reference to a self-guarding type,
+     * like its counter siblings (KTD11).
+     */
+    private final LongAdder allocatorFailureCount = new LongAdder();
+
+    /**
+     * Rate-limits the allocator-failure warning. {@link RateLimiter} itself is NOT thread-safe (a plain
+     * timestamp, no lock to name in a {@code @GuardedBy}) - tolerated deliberately, because a race between the
+     * claim path and the metrics scrape thread can only duplicate or drop a WARN line, never corrupt state; the
+     * {@link #allocatorFailureCount} it accompanies is the exact record.
+     */
+    private final RateLimiter allocatorFailureLogLimiter = new RateLimiter(ALLOCATOR_FAILURE_LOG_INTERVAL_SECONDS);
 
     private NavigatorParticipant(ResourceAllocator allocator, List<String> resourceTags, String memberId) {
         this.allocator = allocator;
@@ -198,11 +231,16 @@ public final class NavigatorParticipant {
         return credits.isEmpty() ? Optional.empty() : Optional.of(Collections.min(credits));
     }
 
-    /** The blocking resources' next-credit times, unreduced - {@code availableAt} takes the max, the wakeup the min. */
+    /**
+     * The blocking resources' next-credit times, unreduced - {@code availableAt} takes the max, the wakeup the
+     * min. Derived from {@link #blockingResourceDeferrals} so the blocked-tag walk, its allocator calls and the
+     * fail-safe guard exist exactly once; a deferral with no time to name is simply skipped, exactly as the
+     * allocator's own {@link Optional#empty()} is.
+     */
     private List<Instant> blockedNextCredits(Instant now) {
         List<Instant> credits = new ArrayList<>();
-        for (String tag : blockedTags(now)) {
-            allocator.nextCreditAt(memberId, tag, now).ifPresent(credits::add);
+        for (ResourceDeferral deferral : blockingResourceDeferrals(now)) {
+            deferral.getNextCreditAt().ifPresent(credits::add);
         }
         return credits;
     }
@@ -221,7 +259,14 @@ public final class NavigatorParticipant {
         }
         List<ResourceDeferral> deferrals = new ArrayList<>(blocked.size());
         for (String tag : blocked) {
-            deferrals.add(new ResourceDeferral(tag, allocator.nextCreditAt(memberId, tag, now)));
+            Optional<Instant> nextCreditAt;
+            try {
+                nextCreditAt = allocator.nextCreditAt(memberId, tag, now);
+            } catch (RuntimeException e) {
+                recordAllocatorFailure(e);
+                nextCreditAt = Optional.empty(); // fail safe: still blocking, with no KNOWN next credit
+            }
+            deferrals.add(new ResourceDeferral(tag, nextCreditAt));
         }
         return Collections.unmodifiableList(deferrals);
     }
@@ -322,7 +367,12 @@ public final class NavigatorParticipant {
         if (!isActive()) {
             return 0.0;
         }
-        return allocator.globalRatePerSecond(resourceName);
+        try {
+            return allocator.globalRatePerSecond(resourceName);
+        } catch (RuntimeException e) {
+            recordAllocatorFailure(e);
+            return 0.0; // fail safe: the view's zero shape, same answer as an unknown resource
+        }
     }
 
     /**
@@ -334,7 +384,12 @@ public final class NavigatorParticipant {
         if (!isActive()) {
             return 0.0;
         }
-        return allocator.localRatePerSecond(memberId, resourceName, now);
+        try {
+            return allocator.localRatePerSecond(memberId, resourceName, now);
+        } catch (RuntimeException e) {
+            recordAllocatorFailure(e);
+            return 0.0; // fail safe: the view's zero shape, same answer as a non-member
+        }
     }
 
     /** The latest-reason gauge's live value (U4, KTD6) - {@link NavigatorDecisionReason#NO_DEFERRAL_VALUE} before any episode. */
@@ -343,8 +398,9 @@ public final class NavigatorParticipant {
     }
 
     /**
-     * Registers the {@code pc.navigator.*} meters (U4): the deferred-count and latest-reason gauges, one
-     * episode counter per {@link NavigatorDecisionReason}, and per-tagged-resource spent/overdraft/next-credit
+     * Registers the {@code pc.navigator.*} meters (U4): the deferred-count, latest-reason and
+     * allocator-failure gauges, one episode counter per {@link NavigatorDecisionReason}, and
+     * per-tagged-resource spent/overdraft/next-credit
      * gauges read live from the allocator's {@link ConservationLedger} - mirrors
      * {@code AdmissionController#initMetrics}'s mode-gated pattern. A NO-OP for {@link #inert()} (R3: an
      * untagged instance registers nothing) or when {@code pcMetrics} is null. Called once, by
@@ -363,6 +419,8 @@ public final class NavigatorParticipant {
                 NavigatorParticipant::currentlyDeferredCount);
         pcMetrics.gaugeFromMetricDef(PCMetricsDef.NAVIGATOR_DEFERRAL_REASON, this,
                 NavigatorParticipant::lastReasonValue);
+        pcMetrics.gaugeFromMetricDef(PCMetricsDef.NAVIGATOR_ALLOCATOR_FAILURES, this,
+                NavigatorParticipant::allocatorFailureCount);
         for (NavigatorDecisionReason reason : NavigatorDecisionReason.values()) {
             Counter counter = pcMetrics.getCounterFromMetricDef(PCMetricsDef.NAVIGATOR_DEFERRAL_EPISODES,
                     Tag.of("reason", reason.name()));
@@ -370,13 +428,19 @@ public final class NavigatorParticipant {
         }
         for (String resourceName : resourceTags) {
             Tag resourceTag = Tag.of(RESOURCE_TAG_KEY, resourceName);
+            // guarded: these read the user-supplied allocator from the scrape thread, so a throwing allocator
+            // must degrade the gauge to its zero/absent shape, never fail the scrape (the fail-safe posture)
             pcMetrics.gaugeFromMetricDef(PCMetricsDef.NAVIGATOR_CREDITS_SPENT, this,
-                    p -> p.allocator.conservationLedger(resourceName, clock.instant()).getSpent(), resourceTag);
+                    p -> p.guardedGaugeRead(
+                            () -> p.allocator.conservationLedger(resourceName, clock.instant()).getSpent(), 0),
+                    resourceTag);
             pcMetrics.gaugeFromMetricDef(PCMetricsDef.NAVIGATOR_CREDITS_OVERDRAFT, this,
-                    p -> p.allocator.conservationLedger(resourceName, clock.instant()).getOverdraft(), resourceTag);
+                    p -> p.guardedGaugeRead(
+                            () -> p.allocator.conservationLedger(resourceName, clock.instant()).getOverdraft(), 0),
+                    resourceTag);
             pcMetrics.gaugeFromMetricDef(PCMetricsDef.NAVIGATOR_NEXT_CREDIT_AT, this,
-                    p -> p.allocator.nextCreditAt(resourceName, clock.instant())
-                            .map(Instant::getEpochSecond).orElse(-1L),
+                    p -> p.guardedGaugeRead(() -> p.allocator.nextCreditAt(resourceName, clock.instant())
+                            .map(Instant::getEpochSecond).orElse(-1L), -1),
                     resourceTag);
         }
     }
@@ -395,24 +459,38 @@ public final class NavigatorParticipant {
             return;
         }
         for (String tag : resourceTags) {
-            allocator.spend(memberId, tag, now);
+            try {
+                allocator.spend(memberId, tag, now);
+            } catch (RuntimeException e) {
+                // per tag, so one failing resource never skips a healthy resource's debit (its ledger stays honest)
+                recordAllocatorFailure(e);
+            }
         }
     }
 
     /** Membership join (R16) - the engine calls this once, at the running transition. No-op when inert. */
     public void join(Instant now) {
         if (isActive()) {
-            allocator.join(memberId, now);
+            try {
+                allocator.join(memberId, now);
+            } catch (RuntimeException e) {
+                recordAllocatorFailure(e);
+            }
         }
     }
 
     /**
-     * Membership leave (R16) - the engine calls this at close ENTRY, before the drain, so the share is dropped
-     * at the next quantum without waiting for the lease TTL (AE2). No-op when inert.
+     * Membership leave (R16) - the engine calls this at its CLOSING transition (after any drain has
+     * completed, never before: leave expires live credits immediately, which would starve a draining backlog)
+     * so the share is dropped at the next quantum without waiting for the lease TTL (AE2). No-op when inert.
      */
     public void leave(Instant now) {
         if (isActive()) {
-            allocator.leave(memberId, now);
+            try {
+                allocator.leave(memberId, now);
+            } catch (RuntimeException e) {
+                recordAllocatorFailure(e);
+            }
         }
     }
 
@@ -422,14 +500,64 @@ public final class NavigatorParticipant {
      */
     public void readQuantum(Instant now) {
         if (isActive()) {
-            allocator.readQuantum(memberId, now);
+            try {
+                allocator.readQuantum(memberId, now);
+            } catch (RuntimeException e) {
+                recordAllocatorFailure(e);
+            }
         }
     }
 
-    /** Blocked = no live lease, or a live lease with zero credits left (KTD1's eligibility definition). */
+    /**
+     * Blocked = no live lease, or a live lease with zero credits left (KTD1's eligibility definition) - or an
+     * allocator that THREW: an unreadable resource fails safe as blocked (a deferral, never a free pass, and
+     * never a crash on the per-claim hot path).
+     */
     private boolean isBlocked(String tag, Instant now) {
-        Optional<CapacityLease> lease = allocator.currentLease(memberId, tag, now);
+        Optional<CapacityLease> lease;
+        try {
+            lease = allocator.currentLease(memberId, tag, now);
+        } catch (RuntimeException e) {
+            recordAllocatorFailure(e);
+            return true;
+        }
         return !lease.isPresent() || lease.get().getAvailableCredits() <= 0;
+    }
+
+    /**
+     * The one shared failure seam behind the class javadoc's fail-safe posture: count it (monotonic, for the
+     * {@link PCMetricsDef#NAVIGATOR_ALLOCATOR_FAILURES} gauge) and warn rate-limited. The CALLER supplies the
+     * degraded answer - blocked for eligibility, empty/zero for views, skip for mutations - because only the
+     * call site knows its safe shape. Deliberately try/catch at each site rather than a supplier-wrapping
+     * helper: a capturing lambda would allocate per call on the hot claim path; this method costs nothing until
+     * an exception is already in flight.
+     */
+    private void recordAllocatorFailure(RuntimeException failure) {
+        allocatorFailureCount.increment();
+        allocatorFailureLogLimiter.performIfNotLimited(() -> log.warn(
+                LOG_PREFIX + " ({}): resource allocator threw - degrading soft, not crashing: eligibility reads "
+                        + "report blocked, view reads report empty, mutating calls are skipped "
+                        + "({} allocator failures so far)",
+                memberId, allocatorFailureCount.sum(), failure));
+    }
+
+    /** The allocator-failure count's live value - the {@link PCMetricsDef#NAVIGATOR_ALLOCATOR_FAILURES} gauge target. */
+    public long allocatorFailureCount() {
+        return allocatorFailureCount.sum();
+    }
+
+    /**
+     * The scrape-thread half of the fail-safe posture: the per-resource gauges in {@link #initMetrics} read the
+     * allocator live, so a throwing allocator would otherwise fail every scrape. Off the hot path, so the
+     * supplier allocation the claim path avoids is fine here.
+     */
+    private double guardedGaugeRead(DoubleSupplier read, double fallback) {
+        try {
+            return read.getAsDouble();
+        } catch (RuntimeException e) {
+            recordAllocatorFailure(e);
+            return fallback;
+        }
     }
 
     private List<String> blockedTags(Instant now) {

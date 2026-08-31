@@ -26,9 +26,11 @@ import org.apache.kafka.common.annotation.InterfaceStability;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.function.Function;
@@ -812,12 +814,16 @@ public class ParallelConsumerOptions<K, V> {
     /**
      * R3's untouched path falls straight out of the guard below: an instance with no {@link #resourceTags} never
      * reaches the allocator at all, so admission behaves exactly as it does today. Otherwise enforces R4 and
-     * R19's two remaining fail-fast checks (the third - a policy collision on re-registration - lives on
+     * R19's remaining fail-fast checks (a policy collision on re-registration lives on
      * {@link ResourceAllocator#register}, not here, since it fires at registration time rather than at an
-     * instance's {@code validate()}):
+     * instance's {@code validate()}), plus two hardening checks against a malformed tag list itself:
      * <ol>
      *     <li>{@link #resourceTags} non-empty but {@link #resourceAllocator} unset - a tag with nowhere to
      *     resolve credit from is a configuration error, not a silent no-op.</li>
+     *     <li>a null or blank entry in {@link #resourceTags} - it cannot be looked up, so it must fail here
+     *     with a named error rather than bare inside the allocator's map.</li>
+     *     <li>a duplicate entry in {@link #resourceTags} - each entry spends a credit independently, so a
+     *     repeated tag would silently halve this instance's effective rate against that resource.</li>
      *     <li>a tag naming a resource the supplied {@link #resourceAllocator} has no {@link ResourceContract}
      *     registered for - a typo must not silently mint an unconstrained resource (KD5), so it fails here,
      *     naming the unknown resource, rather than deep in the engine on first dispatch.</li>
@@ -834,6 +840,23 @@ public class ParallelConsumerOptions<K, V> {
                             "supply the shared allocator that grants its credits (the {} precedent: construct " +
                             "one and pass the same instance to every instance's builder).",
                     Fields.resourceTags, tags.size(), tags, Fields.resourceAllocator, Fields.meterRegistry));
+        }
+        for (String resourceName : tags) {
+            if (resourceName == null || resourceName.trim().isEmpty()) {
+                throw new IllegalArgumentException(msg(
+                        "{} contains a null/blank tag ({}) - every entry must name a real resource, since a " +
+                                "missing name cannot be looked up in the supplied {} and would fail unhelpfully " +
+                                "deep in the allocator instead of here.",
+                        Fields.resourceTags, tags, Fields.resourceAllocator));
+            }
+        }
+        Set<String> distinctTags = new HashSet<>(tags);
+        if (distinctTags.size() != tags.size()) {
+            throw new IllegalArgumentException(msg(
+                    "{} contains a duplicate tag ({}) - each entry spends a credit independently, so repeating a " +
+                            "tag silently halves this instance's effective rate against that resource; list each " +
+                            "resource once.",
+                    Fields.resourceTags, tags));
         }
         for (String resourceName : tags) {
             if (!resourceAllocator.lookup(resourceName).isPresent()) {

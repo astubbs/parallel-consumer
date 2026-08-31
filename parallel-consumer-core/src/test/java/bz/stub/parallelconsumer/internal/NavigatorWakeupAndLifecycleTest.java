@@ -26,15 +26,17 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * The navigator's control-loop seams on the virtual clock (the plan's U3): the {@code timeToBlockFor}
  * resource-keyed wakeup bound (KTD5) - its own branch, not floored by the retry delay - and the lifecycle
  * hooks' per-call contracts ({@code joinNavigatorOnRunning}, {@code tickNavigatorQuantumRead},
- * {@code leaveNavigatorOnCloseEntry}; R16/KTD4), driven directly the way {@code AdmissionSeamTest} and
+ * {@code leaveNavigatorOnClosingTransition}; R16/KTD4), driven directly the way {@code AdmissionSeamTest} and
  * {@code AdmissionLifecycleTest} drive their seams, without a real control loop. The proof that a REAL control
  * loop fires these hooks at the right moments is {@link NavigatorEngineLifecycleTest}.
  *
@@ -187,9 +189,9 @@ class NavigatorWakeupAndLifecycleTest {
 
     /**
      * The three hooks drive the allocator's membership the way the plan's R16 anchors demand: join makes the
-     * member count from the next quantum, the per-pass tick mints its share, and leave at close entry expires
-     * its live credits and drops its share from the next quantum - WITHOUT waiting for the lease TTL (AE2's
-     * engine half; the TTL-only path is allocator-covered).
+     * member count from the next quantum, the per-pass tick mints its share, and leave at the CLOSING
+     * transition expires its live credits and drops its share from the next quantum - WITHOUT waiting for the
+     * lease TTL (AE2's engine half; the TTL-only path is allocator-covered).
      */
     @Test
     void joinTickAndLeaveDriveTheAllocatorMembershipLifecycle() {
@@ -205,7 +207,7 @@ class NavigatorWakeupAndLifecycleTest {
                 .that(lease.isPresent()).isTrue();
         assertThat(lease.get().getAvailableCredits()).isEqualTo(1);
 
-        pc.leaveNavigatorOnCloseEntry();
+        pc.leaveNavigatorOnClosingTransition();
 
         assertWithMessage("leave must expire the live unspent credits immediately (death loses capacity)")
                 .that(allocator.conservationLedger(API_X, clock.instant()).getExpired()).isEqualTo(1);
@@ -217,23 +219,64 @@ class NavigatorWakeupAndLifecycleTest {
 
     /**
      * The tick's state gate: PAUSED keeps membership alive (an idle-but-live instance keeps its share, R17;
-     * pause is a credit no-op, KTD10), while DRAINING - which follows the close-entry leave - ticks nothing.
+     * pause is a credit no-op, KTD10), and DRAINING still ticks - the membership only leaves at the CLOSING
+     * transition, so the drain tail keeps earning the credits a resource-deferred backlog needs to ever
+     * drain (a close-entry leave stalled close(DRAIN) until timeout). CLOSING, which follows that leave,
+     * ticks nothing.
      */
     @Test
-    void theQuantumTickRunsWhilePausedButNotWhileDraining() {
+    void theQuantumTickRunsWhilePausedAndDrainingButNotWhileClosing() {
         buildTaggedHarness();
         pc.joinNavigatorOnRunning();
         clock.add(Duration.ofSeconds(1));
 
         pc.setState(State.DRAINING);
         pc.tickNavigatorQuantumRead();
-        assertWithMessage("a draining instance has already left - the tick must not renew or mint")
-                .that(allocator.currentLease(MEMBER, API_X, clock.instant()).isPresent()).isFalse();
+        assertWithMessage("a draining instance is still dispatching its backlog - the tick must keep minting")
+                .that(allocator.currentLease(MEMBER, API_X, clock.instant()).isPresent()).isTrue();
 
         pc.setState(State.PAUSED);
         pc.tickNavigatorQuantumRead();
         assertWithMessage("a paused instance is alive and keeps pulling its share (R17)")
                 .that(allocator.currentLease(MEMBER, API_X, clock.instant()).isPresent()).isTrue();
+
+        pc.leaveNavigatorOnClosingTransition();
+        pc.setState(State.CLOSING);
+        clock.add(Duration.ofSeconds(1));
+        pc.tickNavigatorQuantumRead();
+        assertWithMessage("a closing instance has already left - the tick must not renew or mint")
+                .that(allocator.currentLease(MEMBER, API_X, clock.instant()).isPresent()).isFalse();
+    }
+
+    /**
+     * The exactly-once guard on the leave: every route into CLOSING calls
+     * {@code leaveNavigatorOnClosingTransition} - the caller's thread via either close() mode, the control
+     * thread at drain-complete or on the worker-pool-death self-close - and however many of them fire, the
+     * allocator must hear exactly ONE leave (a second membership event would be noise in its append-only log).
+     */
+    @Test
+    void repeatedClosingTransitionsProduceExactlyOneAllocatorLeave() {
+        clock = MutableClock.epochUTC();
+        var leaveCalls = new AtomicInteger();
+        allocator = new StubResourceAllocator(clock) {
+            @Override
+            public void leave(String memberId, Instant now) {
+                leaveCalls.incrementAndGet();
+                super.leave(memberId, now);
+            }
+        };
+        allocator.register(new ResourceContract(API_X, 1.0, 1, Duration.ofSeconds(1)));
+        buildHarness(optionsBuilder()
+                .resourceTags(UniLists.of(API_X))
+                .resourceAllocator(allocator)
+                .build());
+        pc.joinNavigatorOnRunning();
+
+        pc.leaveNavigatorOnClosingTransition();
+        pc.leaveNavigatorOnClosingTransition();
+
+        assertWithMessage("racing CLOSING transitions must collapse to one allocator leave")
+                .that(leaveCalls.get()).isEqualTo(1);
     }
 
     /** R3 on the control-loop seams: an untagged instance's hooks reach no allocator at all. */
@@ -249,8 +292,29 @@ class NavigatorWakeupAndLifecycleTest {
         pc.joinNavigatorOnRunning();
         pc.tickNavigatorQuantumRead();
         pc.timeToBlockFor();
-        pc.leaveNavigatorOnCloseEntry();
+        pc.leaveNavigatorOnClosingTransition();
 
         Mockito.verifyNoInteractions(untouched);
+    }
+
+    // -----------------------------------------------------------------------------------------------------
+    // Startup failure: close() on an engine whose control loop was never submitted
+    // -----------------------------------------------------------------------------------------------------
+
+    /**
+     * supervisorLoop sets state=RUNNING and then runs startup code (the navigator join, the broker-poll
+     * start) BEFORE submitting the control task - a throw in that window strands the instance at RUNNING
+     * with an empty {@code controlThreadFuture}. A later close() must surface that as a clear
+     * IllegalStateException from waitForClose, not the unrelated NoSuchElementException an unguarded
+     * {@code Optional#get} used to produce (which none of waitForClose's catch clauses name).
+     */
+    @Test
+    void closeAfterAStrandedStartupSurfacesAStartupFailureNotAnEmptyOptional() {
+        buildUntaggedHarness();
+        pc.setState(State.RUNNING); // the stranded shape: state advanced, control task never submitted
+
+        var thrown = assertThrows(IllegalStateException.class, () -> pc.closeDontDrainFirst());
+
+        assertThat(thrown).hasMessageThat().contains("Control loop was never started");
     }
 }

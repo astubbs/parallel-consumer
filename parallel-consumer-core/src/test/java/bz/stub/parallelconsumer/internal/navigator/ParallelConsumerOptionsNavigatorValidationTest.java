@@ -9,6 +9,7 @@ import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Collections;
 
 import static org.apache.kafka.clients.consumer.OffsetResetStrategy.EARLIEST;
@@ -95,6 +96,65 @@ class ParallelConsumerOptionsNavigatorValidationTest {
                 .build();
 
         assertThatCode(options::validate).doesNotThrowAnyException();
+    }
+
+    /**
+     * A duplicated tag would otherwise pass the unknown-resource check and then spend two credits per poll
+     * against the same resource ({@link NavigatorParticipant#spendOneCreditPerTag} debits once per list entry,
+     * not per distinct resource), silently halving this instance's effective rate. It must be rejected at
+     * {@code validate()}, naming the duplicated tag.
+     */
+    @Test
+    void duplicateTagFailsNamingIt() {
+        StubResourceAllocator allocator = new StubResourceAllocator();
+        allocator.register(API_X);
+
+        var options = optionsBuilder()
+                .resourceAllocator(allocator)
+                .resourceTags(Arrays.asList("api-x", "api-x"))
+                .build();
+
+        assertThatThrownBy(options::validate)
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("api-x");
+    }
+
+    /**
+     * A null entry in {@link ParallelConsumerOptions#getResourceTags()} must fail with a named validation error,
+     * not a bare {@link NullPointerException} inside the allocator's map.
+     */
+    @Test
+    void nullTagEntryFailsWithNamedErrorNotNpe() {
+        StubResourceAllocator allocator = new StubResourceAllocator();
+        allocator.register(API_X);
+
+        var options = optionsBuilder()
+                .resourceAllocator(allocator)
+                .resourceTags(Arrays.asList("api-x", null))
+                .build();
+
+        assertThatThrownBy(options::validate)
+                .isInstanceOf(IllegalArgumentException.class)
+                .isNotInstanceOf(NullPointerException.class)
+                .hasMessageContaining("resourceTags");
+    }
+
+    /**
+     * A blank entry is just as unresolvable as a null one, and must fail the same way.
+     */
+    @Test
+    void blankTagEntryFails() {
+        StubResourceAllocator allocator = new StubResourceAllocator();
+        allocator.register(API_X);
+
+        var options = optionsBuilder()
+                .resourceAllocator(allocator)
+                .resourceTags(Arrays.asList("api-x", "  "))
+                .build();
+
+        assertThatThrownBy(options::validate)
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("resourceTags");
     }
 
     private static ParallelConsumerOptions.ParallelConsumerOptionsBuilder<String, String> optionsBuilder() {

@@ -31,8 +31,9 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * The navigator wired through a REAL control loop (the plan's U3, AE5's honest half): a resource-deferred
  * record's user function is GENUINELY NOT INVOKED - the engine runs freely for hundreds of passes and
  * dispatches nothing - until the virtual clock passes the record's {@code availableAt}, at which point the
- * loop's own per-pass quantum read (KTD4) mints the credit and the record runs. Then close-entry drops the
- * membership share at the next quantum without waiting for the lease TTL (R16, AE2's engine half).
+ * loop's own per-pass quantum read (KTD4) mints the credit and the record runs. Then the CLOSING transition
+ * drops the membership share at the next quantum without waiting for the lease TTL (R16, AE2's engine half) -
+ * and a close(DRAIN) keeps the share, and so the credit supply, for the whole drain tail.
  * <p>
  * Wiring: a real {@link ParallelEoSStreamProcessor} over a {@link PCModuleTestEnv} whose {@link MutableClock}
  * is SHARED with the {@link StubResourceAllocator} (KTD4's one canonical clock), fed by a hand-rebalanced
@@ -119,9 +120,10 @@ class NavigatorEngineLifecycleTest {
         Awaitility.await("the deferred record dispatches once its availableAt passes")
                 .atMost(Duration.ofSeconds(10)).until(() -> invocations.get() == 2);
 
-        // close ENTRY calls leave (R16): the share is gone from the NEXT quantum, NOT after the lease TTL -
-        // the membership lease was renewed by the loop moments ago, so TTL alone (3 quanta) would still count
-        // this member at quantum 3; only the close-entry leave explains a zero share there
+        // the CLOSING transition calls leave (R16, revised): DONT_DRAIN transitions on the caller's thread at
+        // close entry, so the share is gone from the NEXT quantum, NOT after the lease TTL - the membership
+        // lease was renewed by the loop moments ago, so TTL alone (3 quanta) would still count this member at
+        // quantum 3; only the explicit leave explains a zero share there
         pc.closeDontDrainFirst();
         Instant nextQuantumAfterClose = clock.instant().plus(QUANTUM);
         assertWithMessage("explicit close must drop the share at the next quantum without waiting for the TTL")
@@ -133,5 +135,84 @@ class NavigatorEngineLifecycleTest {
         assertThat(ledger.getOverdraft()).isEqualTo(0);
         assertWithMessage("conservation identity closes at end of life (%s)", ledger)
                 .that(ledger.getOutstanding()).isEqualTo(ledger.getLiveCredits());
+    }
+
+    /**
+     * The DRAIN half of the lifecycle (the close-entry-leave starvation fix): close(DRAIN) with a
+     * resource-deferred backlog must keep the membership - and so the credit supply - for the whole drain
+     * tail. Leaving at close ENTRY expired the live credits immediately and a left member never re-mints,
+     * while the quantum tick was gated out of DRAINING: no new credit could ever mint, the deferred records
+     * never became eligible, and close stalled until the drain timeout. Now the tick runs while DRAINING and
+     * the leave fires at the drain-complete CLOSING transition - exactly once.
+     * <p>
+     * Four records against one credit per quantum: at most one more could dispatch before the state leaves
+     * RUNNING, so completing the drain REQUIRES credits minted while DRAINING - a ticker thread advances the
+     * shared virtual clock a quantum at a time while close(DRAIN) blocks the test thread.
+     */
+    @Test
+    void closeWithDrainCompletesAResourceDeferredBacklogAndLeavesExactlyOnce() {
+        var leaveCalls = new AtomicInteger();
+        var countingAllocator = new StubResourceAllocator(clock) {
+            @Override
+            public void leave(String memberId, Instant now) {
+                leaveCalls.incrementAndGet();
+                super.leave(memberId, now);
+            }
+        };
+        countingAllocator.register(new ResourceContract(API_X, 1.0, 1, QUANTUM));
+        mockConsumer = new MockConsumer<>(OffsetResetStrategy.EARLIEST);
+        var options = ParallelConsumerOptions.<String, String>builder()
+                .consumer(mockConsumer)
+                .ordering(ParallelConsumerOptions.ProcessingOrder.UNORDERED)
+                .pcInstanceTag(MEMBER)
+                .resourceTags(UniLists.of(API_X))
+                .resourceAllocator(countingAllocator)
+                .drainTimeout(Duration.ofSeconds(20))
+                .build();
+        var module = new PCModuleTestEnv(options, clock);
+        pc = new ParallelEoSStreamProcessor<>(options, module);
+
+        pc.subscribe(UniLists.of(TOPIC));
+        mockConsumer.updateBeginningOffsets(Collections.singletonMap(tp, 0L));
+        mockConsumer.rebalance(Collections.singletonList(tp));
+        pc.onPartitionsAssigned(UniLists.of(tp));
+
+        pc.poll(context -> invocations.incrementAndGet());
+        int totalRecords = 4;
+        for (int offset = 0; offset < totalRecords; offset++) {
+            mockConsumer.addRecord(new ConsumerRecord<>(TOPIC, 0, offset, "key-" + offset, "value-" + offset));
+        }
+
+        // quantum 1: one credit, one dispatch - the remaining three are genuinely resource-deferred
+        clock.add(QUANTUM);
+        Awaitility.await("the first credit dispatches exactly one record")
+                .atMost(Duration.ofSeconds(10)).until(() -> invocations.get() == 1);
+
+        // while close(DRAIN) blocks this thread, the ticker advances the SHARED virtual clock; each dispatch
+        // needs a fresh credit, so the backlog draining at all proves quanta were read while DRAINING
+        var ticker = new Thread(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    return;
+                }
+                clock.add(QUANTUM);
+            }
+        }, "virtual-clock-ticker");
+        ticker.start();
+        try {
+            pc.close(Duration.ofSeconds(10), DrainingCloseable.DrainingMode.DRAIN);
+        } finally {
+            ticker.interrupt();
+        }
+
+        assertWithMessage("the whole deferred backlog must have drained before close completed")
+                .that(invocations.get()).isEqualTo(totalRecords);
+        assertWithMessage("every dispatch spent a credit the drain tail minted")
+                .that(countingAllocator.conservationLedger(API_X, clock.instant()).getSpent())
+                .isEqualTo(totalRecords);
+        assertWithMessage("membership must leave exactly once, at the drain-complete CLOSING transition")
+                .that(leaveCalls.get()).isEqualTo(1);
     }
 }

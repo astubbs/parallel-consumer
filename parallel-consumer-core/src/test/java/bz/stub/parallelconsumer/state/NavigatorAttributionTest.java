@@ -34,6 +34,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.IntFunction;
 import java.util.stream.Collectors;
 
 import static com.google.common.truth.Truth.assertThat;
@@ -80,6 +81,11 @@ class NavigatorAttributionTest {
     }
 
     void setupTagged(List<ResourceContract> contracts, List<String> tags) {
+        setupTagged(contracts, tags, ParallelConsumerOptions.ProcessingOrder.UNORDERED);
+    }
+
+    void setupTagged(List<ResourceContract> contracts, List<String> tags,
+                     ParallelConsumerOptions.ProcessingOrder ordering) {
         clock = MutableClock.epochUTC();
         allocator = new StubResourceAllocator(clock);
         for (ResourceContract contract : contracts) {
@@ -87,7 +93,7 @@ class NavigatorAttributionTest {
         }
         registry = new SimpleMeterRegistry();
         var options = ParallelConsumerOptions.<String, String>builder()
-                .ordering(ParallelConsumerOptions.ProcessingOrder.UNORDERED)
+                .ordering(ordering)
                 .pcInstanceTag(MEMBER)
                 .resourceTags(tags)
                 .resourceAllocator(allocator)
@@ -102,9 +108,18 @@ class NavigatorAttributionTest {
     }
 
     void register(int fromOffset, int count) {
+        registerRecords(fromOffset, count, i -> "key-" + i);
+    }
+
+    /** Same-key records land on ONE shard under {@code KEY} ordering - the ordered-head scenarios need that. */
+    void registerWithKey(String key, int fromOffset, int count) {
+        registerRecords(fromOffset, count, i -> key);
+    }
+
+    private void registerRecords(int fromOffset, int count, IntFunction<String> keyForOffset) {
         List<ConsumerRecord<String, String>> recs = new ArrayList<>(count);
         for (int i = fromOffset; i < fromOffset + count; i++) {
-            recs.add(new ConsumerRecord<>(TOPIC, 0, i, "key-" + i, "value-" + i));
+            recs.add(new ConsumerRecord<>(TOPIC, 0, i, keyForOffset.apply(i), "value-" + i));
         }
         Map<TopicPartition, List<ConsumerRecord<String, String>>> m = new HashMap<>();
         m.put(TP, recs);
@@ -223,12 +238,39 @@ class NavigatorAttributionTest {
             for (int pass = 0; pass < 11; pass++) {
                 wm.getWorkIfAvailable(2);
             }
-            var steadyStateLines = messagesAt(appender, Level.INFO).stream()
-                    .filter(message -> message.contains("resource deferral continues"))
-                    .collect(Collectors.toList());
             assertWithMessage("the FIRST pass's steady-state attempt always fires (RateLimiter's own first-call "
                             + "rule) but every pass after it, all well inside the 5s rate-limit window, must not")
-                    .that(steadyStateLines).hasSize(1);
+                    .that(steadyStateLines(appender)).hasSize(1);
+        } finally {
+            detachAppender(appender);
+        }
+    }
+
+    /**
+     * The steady-state limiter is ONE per engine, owned by {@link ShardManager} and shared into every shard -
+     * per-shard limiters multiplied the INFO cadence by the number of blocked shards. Under {@code KEY} ordering
+     * three distinct keys make three shards; the one credit admits one record, leaving TWO shards blocked in the
+     * same pass. With the shared limiter the first blocked shard's attempt fires (the first-call rule, as above)
+     * and the second's - same pass, same wall-clock instant - is suppressed; per-shard limiters would each fire
+     * their own first call, one line per blocked shard.
+     */
+    @Test
+    void twoBlockedShardsShareOneEngineWideSteadyStateLimiter() {
+        setupTagged(UniLists.of(new ResourceContract(API_A, 1.0, 1, ONE_SECOND)), UniLists.of(API_A),
+                ParallelConsumerOptions.ProcessingOrder.KEY);
+        register(0, 3); // three distinct keys - three shards; the one credit admits one record
+
+        var appender = attachAppender();
+        try {
+            for (int pass = 0; pass < 11; pass++) {
+                wm.getWorkIfAvailable(3);
+            }
+            assertWithMessage("each newly deferred record still gets its own defer-moment line")
+                    .that(deferMomentLines(appender)).hasSize(2);
+            assertThat(gauge(PCMetricsDef.NAVIGATOR_DEFERRED_RECORDS)).isEqualTo(2.0);
+            assertWithMessage("TWO blocked shards must share ONE engine-wide steady-state limiter: at most one "
+                            + "'deferral continues' line per interval for the whole engine, never one per shard")
+                    .that(steadyStateLines(appender)).hasSize(1);
         } finally {
             detachAppender(appender);
         }
@@ -251,6 +293,98 @@ class NavigatorAttributionTest {
 
         assertThat(second).hasSize(1);
         assertThat(gauge(PCMetricsDef.NAVIGATOR_DEFERRED_RECORDS)).isEqualTo(0.0);
+    }
+
+    // -----------------------------------------------------------------------------------------------------
+    // Non-resource refusals under exhausted credits are NOT deferrals - the attribution gate is the record's
+    // own non-resource claim terms, not the instance-level credit read
+    // -----------------------------------------------------------------------------------------------------
+
+    /**
+     * An ordered shard's head that is out at a worker while credits are exhausted is EXECUTING, not deferred.
+     * In production the walk only meets an occupied head inside the direct-pull engine's concurrent-claimers
+     * window (claim CAS won, occupancy charge not yet published - see the ordered walk's javadoc), which cannot
+     * be held open deterministically, so the refused-claim observation that window produces is driven against
+     * the attribution site directly.
+     */
+    @Test
+    void anInFlightHeadUnderExhaustedCreditsIsNotAttributedAsResourceDeferral() {
+        setupTagged(UniLists.of(new ResourceContract(API_A, 1.0, 1, ONE_SECOND)), UniLists.of(API_A),
+                ParallelConsumerOptions.ProcessingOrder.KEY);
+        registerWithKey("hot-key", 0, 2);
+        var taken = wm.getWorkIfAvailable(2);
+        assertWithMessage("the head is claimed - IN FLIGHT - and the one credit is spent")
+                .that(taken).hasSize(1);
+        var inFlightHead = taken.get(0);
+        var shard = wm.getSm().getShard(ShardKey.of(inFlightHead, ParallelConsumerOptions.ProcessingOrder.KEY))
+                .orElseThrow(() -> new AssertionError("shard must exist for the taken record"));
+
+        var appender = attachAppender();
+        try {
+            shard.attributeResourceDeferralMaybe(inFlightHead);
+
+            assertWithMessage("an executing head refused for being in flight must never be attributed as "
+                            + "resource deferral, however exhausted the credits are")
+                    .that(deferMomentLines(appender)).isEmpty();
+            assertThat(gauge(PCMetricsDef.NAVIGATOR_DEFERRED_RECORDS)).isEqualTo(0.0);
+        } finally {
+            detachAppender(appender);
+        }
+    }
+
+    @Test
+    void aRetryParkedRecordUnderExhaustedCreditsIsNotAttributedAsResourceDeferral() {
+        setupTagged(UniLists.of(new ResourceContract(API_A, 1.0, 1, ONE_SECOND)), UniLists.of(API_A));
+        register(0, 1);
+        var taken = wm.getWorkIfAvailable(1); // spends the only credit
+        assertThat(taken).hasSize(1);
+        var failed = taken.get(0);
+        failed.onUserFunctionFailure(new RuntimeException("simulated failure"));
+        wm.onFailureResult(failed); // parked: retry delay running, credits exhausted
+
+        var appender = attachAppender();
+        try {
+            // the clock is held still, so every pass re-observes the record inside its retry delay
+            for (int pass = 0; pass < 5; pass++) {
+                wm.getWorkIfAvailable(1);
+            }
+            assertWithMessage("a record refused because its retry delay has not passed must never be attributed "
+                            + "as resource deferral, however exhausted the credits are - it churned one spurious "
+                            + "episode per pass when the gate was the instance-level credit read")
+                    .that(deferMomentLines(appender)).isEmpty();
+            assertThat(gauge(PCMetricsDef.NAVIGATOR_DEFERRED_RECORDS)).isEqualTo(0.0);
+        } finally {
+            detachAppender(appender);
+        }
+    }
+
+    // -----------------------------------------------------------------------------------------------------
+    // The success-retirement path closes an open episode - the gauge cannot leak upward permanently
+    // -----------------------------------------------------------------------------------------------------
+
+    /**
+     * A record attributed as deferred can still depart on SUCCESS without any claim clearing its marker (the
+     * selectable-index window: a concurrent claim won before the attribution landed). That departure runs
+     * {@link ProcessingShard#onSuccess}'s retire-already-deducted path, which must close the episode - it used
+     * to leave the per-shard deferred gauge high forever.
+     */
+    @Test
+    void successRetirementClosesAnOpenDeferralEpisodeAndReturnsTheGaugeToZero() {
+        setupTagged(UniLists.of(new ResourceContract(API_A, 1.0, 1, ONE_SECOND)), UniLists.of(API_A));
+        register(0, 2);
+        var taken = wm.getWorkIfAvailable(2);
+        assertThat(taken).hasSize(1);
+        assertThat(gauge(PCMetricsDef.NAVIGATOR_DEFERRED_RECORDS)).isEqualTo(1.0);
+
+        var shard = wm.getSm()
+                .getShard(ShardKey.of(taken.get(0), ParallelConsumerOptions.ProcessingOrder.UNORDERED))
+                .orElseThrow(() -> new AssertionError("shard must exist for the taken record"));
+        long deferredOffset = taken.get(0).offset() == 0 ? 1 : 0;
+        shard.onSuccess(shard.getWorkContainerAt(deferredOffset));
+
+        assertWithMessage("success retirement must close the record's open deferral episode, or the gauge "
+                        + "leaks upward permanently")
+                .that(gauge(PCMetricsDef.NAVIGATOR_DEFERRED_RECORDS)).isEqualTo(0.0);
     }
 
     // -----------------------------------------------------------------------------------------------------
@@ -327,6 +461,12 @@ class NavigatorAttributionTest {
     private static List<String> deferMomentLines(ListAppender<ILoggingEvent> appender) {
         return messagesAt(appender, Level.INFO).stream()
                 .filter(message -> message.contains("entered resource deferral"))
+                .collect(Collectors.toList());
+    }
+
+    private static List<String> steadyStateLines(ListAppender<ILoggingEvent> appender) {
+        return messagesAt(appender, Level.INFO).stream()
+                .filter(message -> message.contains("resource deferral continues"))
                 .collect(Collectors.toList());
     }
 

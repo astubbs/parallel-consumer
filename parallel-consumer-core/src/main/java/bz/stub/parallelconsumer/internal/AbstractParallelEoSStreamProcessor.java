@@ -1079,14 +1079,17 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         } else {
             log.info("Signaling to close...");
 
-            // navigator membership ends at close ENTRY, before any drain (the plan's R16/KTD10): the share is
-            // dropped at the next quantum without waiting for the lease TTL, and the drain tail's dispatches
-            // spend whatever live credits remain until the allocator expires them - bounded by R12's overshoot
-            // framing. Deliberately BEFORE the state transition, so no drain-pass quantum read can renew a
-            // membership that is already leaving. A close() the control loop initiates itself (an internal
-            // error path) never reaches here; the membership lease TTL is exactly the backstop for that -
-            // a control loop that stopped reading quanta lapses.
-            leaveNavigatorOnCloseEntry();
+            // navigator membership ends at the CLOSING transition, not here at close entry (the plan's
+            // R16/KTD10, revised): leave() expires the member's live credits immediately and a left member
+            // never re-mints, so a close-entry leave starved a DRAIN of its credit supply - a
+            // resource-deferred backlog could then never drain and close stalled until timeout. Instead
+            // transitionToClosing() calls leaveNavigatorOnClosingTransition(), which both routes below reach
+            // exactly once (CAS-guarded): DONT_DRAIN transitions immediately, DRAIN transitions when the
+            // shards have emptied - the drain tail keeps reading quanta (see tickNavigatorQuantumRead's
+            // DRAINING gate) so deferred records still earn credits while draining. A close() the control
+            // loop initiates from its interrupt/error paths goes straight to doClose without transitioning
+            // through here; the membership lease TTL is exactly the backstop for that - a control loop that
+            // stopped reading quanta lapses.
 
             switch (drainMode) {
                 case DRAIN -> {
@@ -1126,7 +1129,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         log.info("Waiting on closed state...");
         while (!state.equals(CLOSED)) {
             try {
-                Future<Boolean> booleanFuture = this.controlThreadFuture.get();
+                // Guarded like close()'s own read below: supervisorLoop sets state=RUNNING and then runs
+                // user-suppliable startup code (the navigator join) BEFORE submitting the control task, so a
+                // startup failure strands state at RUNNING with no future to wait on - surface that as the
+                // startup failure it is, not as a bare NoSuchElementException none of the catches below name.
+                Future<Boolean> booleanFuture = this.controlThreadFuture.orElseThrow(() ->
+                        new IllegalStateException("Control loop was never started - startup failed before the "
+                                + "control task was submitted (see the exception thrown from the poll* call)"));
                 log.debug("Blocking on control future, for duration {} seconds", toSeconds(timeout));
                 boolean signaled = booleanFuture.get(toSeconds(timeout), SECONDS);
                 if (!signaled)
@@ -1621,15 +1630,18 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * and what keeps an idle-but-live instance a member (R17: the control loop ticks regardless of demand, so
      * only a STOPPED control loop lets the lease TTL fire).
      * <p>
-     * Gated to {@link State#RUNNING} and {@link State#PAUSED}: a paused instance is alive and keeps its share
-     * (pause is a credit no-op, KTD10), while DRAINING/CLOSING follow {@link #leaveNavigatorOnCloseEntry()} -
-     * the membership has already left, and a post-leave lease renewal, though harmless to the division (the
-     * leave event wins from the next quantum), would be noise in the allocator's records.
+     * Gated to {@link State#RUNNING}, {@link State#PAUSED} and {@link State#DRAINING}: a paused instance is
+     * alive and keeps its share (pause is a credit no-op, KTD10), and a DRAINING instance is still
+     * dispatching its backlog - membership only leaves at the CLOSING transition
+     * ({@link #leaveNavigatorOnClosingTransition()}), so the drain tail keeps earning credits and a
+     * resource-deferred backlog can actually drain rather than stalling close(DRAIN) until timeout. CLOSING
+     * follows the leave - the membership has already left, and a post-leave lease renewal, though harmless to
+     * the division (the leave event wins from the next quantum), would be noise in the allocator's records.
      * <p>
      * Untagged instances (R3): one inert-participant check, nothing else.
      */
     void tickNavigatorQuantumRead() {
-        if (state != RUNNING && state != PAUSED) {
+        if (state != RUNNING && state != PAUSED && state != State.DRAINING) {
             return;
         }
         var navigator = module.navigatorParticipant();
@@ -1651,13 +1663,29 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     /**
-     * Navigator membership leave, called at close ENTRY - before the drain - from {@link #close(DrainingMode)}
-     * (the plan's R16): an explicit close drops the share at the next quantum without waiting for the lease
-     * TTL (AE2). Idempotent in effect: a second leave for a member already gone changes nothing in the
-     * allocator's division. Package-private for the same direct-testability reason as
-     * {@link #joinNavigatorOnRunning()}.
+     * Guarantees {@link #leaveNavigatorOnClosingTransition()} fires the allocator leave at most ONCE per
+     * instance, whichever thread reaches a CLOSING transition first - the caller's thread via
+     * {@link #close(DrainingMode)}, or the control thread at drain-complete or on the worker-pool-death path.
+     * Final reference to a self-guarding type, so no {@code @GuardedBy} to name (the
+     * {@link #admissionWindowPoisonedByPause} shape). Never reset: close is terminal for an instance.
      */
-    void leaveNavigatorOnCloseEntry() {
+    private final AtomicBoolean navigatorLeaveSent = new AtomicBoolean(false);
+
+    /**
+     * Navigator membership leave, called from {@link #transitionToClosing()} (the plan's R16, revised): the
+     * share is dropped at the next quantum without waiting for the lease TTL (AE2), but only once the engine
+     * is genuinely CLOSING - a DRAIN keeps its membership (and so its credit supply, via
+     * {@link #tickNavigatorQuantumRead()}) for the whole drain tail, because {@code leave()} expires live
+     * credits immediately and a left member never re-mints, so leaving at close ENTRY starved a
+     * resource-deferred backlog of the credits it needed to ever drain. CAS-guarded
+     * ({@link #navigatorLeaveSent}) so every route into CLOSING - both close() modes, drain-complete, the
+     * worker-pool-death self-close - produces exactly one allocator leave. Package-private for the same
+     * direct-testability reason as {@link #joinNavigatorOnRunning()}.
+     */
+    void leaveNavigatorOnClosingTransition() {
+        if (!navigatorLeaveSent.compareAndSet(false, true)) {
+            return;
+        }
         var navigator = module.navigatorParticipant();
         if (navigator.isActive()) {
             navigator.leave(module.clock().instant());
@@ -2200,6 +2228,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     private void transitionToClosing() {
         log.debug("Transitioning to closing...");
+        // BEFORE the state write, mirroring transitionToDraining's edge-action ordering: a quantum tick that
+        // reads the pre-CLOSING state just after the leave is harmless (a post-leave renewal changes no
+        // division - the leave event wins from the next quantum), where the reverse order would let a tick
+        // renew a membership the allocator should already be retiring.
+        leaveNavigatorOnClosingTransition();
         if (state == State.UNUSED) {
             state = CLOSED;
         } else {

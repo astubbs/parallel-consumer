@@ -90,15 +90,15 @@ public class ProcessingShard<K, V> {
     private final RateLimiter slowWarningRateLimit = new RateLimiter(5);
 
     /**
-     * How often the steady-state "still deferred" line re-fires while a shard has ANY resource-deferred record
-     * (U4, KTD6 - the {@code constraintReportLimiter} pattern), independent of the once-per-episode defer-moment
-     * line. Same interval as {@code AdmissionController}'s own constraint report, for one greppable cadence
-     * across both subsystems' steady-state narration.
+     * How often the steady-state "still deferred" line re-fires while ANY of this engine's shards has a
+     * resource-deferred record (U4, KTD6 - the {@code constraintReportLimiter} pattern), independent of the
+     * once-per-episode defer-moment line. <b>One limiter per engine</b>, owned by {@link ShardManager} and
+     * shared into every shard it creates - the same one-per-engine arrangement as {@code AdmissionController}'s
+     * own constraint report, and at the same interval, for one greppable cadence across both subsystems'
+     * steady-state narration. Per-shard limiters multiplied the INFO cadence by the number of blocked shards;
+     * the line each shard logs still carries that shard's own key.
      */
-    private static final int NAVIGATOR_CONSTRAINT_REPORT_INTERVAL_SECONDS = 5;
-
-    private final RateLimiter navigatorConstraintReportLimiter =
-            new RateLimiter(NAVIGATOR_CONSTRAINT_REPORT_INTERVAL_SECONDS);
+    private final RateLimiter navigatorConstraintReportLimiter;
 
     /**
      * Approximately how many of this shard's {@link #entries} are selectable as work right now.
@@ -500,27 +500,43 @@ public class ProcessingShard<K, V> {
     /**
      * The defer-transition observation site (U4, R9): called for every refused claim, on the controller thread
      * (or a worker thread under the direct-pull engine's concurrent claimers - see {@code WorkContainer}'s dedup
-     * marker javadoc). A no-op in one field read for an untagged instance or a record refused for a NON-resource
-     * reason (still in flight, retry delay not yet passed) - {@link WorkContainer#resourceAvailableAt()} is
-     * empty in both cases, so {@link NavigatorParticipant#blockingResourceDeferrals} is never even reached.
+     * marker javadoc). A no-op in one field read for an untagged instance. For a tagged instance the gate is the
+     * record's OWN non-resource claim terms ({@link WorkContainer#isEligibleButForResourceCredit()}): a record
+     * refused because it is in flight, carries a success verdict, or is still waiting out a retry delay is never
+     * attributed, <em>whatever the credit state says</em> - the instance-level credit read alone cannot tell WHY
+     * this record was refused, and under exhausted credits it used to mislabel an executing head or a
+     * retry-parked record as "entered resource deferral". Only a record that would be claimable but for resource
+     * credits reaches the credit gate below.
      * <p>
      * On a genuine resource block: attributes the FIRST observation of this deferral episode (the defer-moment
      * log line, once - {@link WorkContainer#markResourceDeferralAttributedIfNew()} dedups across the many
-     * control-loop passes one episode spans) and, independently, re-fires a rate-limited steady-state line every
-     * {@link #NAVIGATOR_CONSTRAINT_REPORT_INTERVAL_SECONDS} while the block persists - the
+     * control-loop passes one episode spans) and, independently, re-fires a rate-limited steady-state line on
+     * {@link #navigatorConstraintReportLimiter}'s engine-wide cadence while the block persists - the
      * {@code constraintReportLimiter} pattern, so an operator who missed the defer-moment line still sees the
      * constraint named periodically.
+     * <p>
+     * Package-private, visible for testing: the in-flight-head refusal is only reachable through the walk inside
+     * the direct-pull engine's concurrent-claimers window (claim CAS won, occupancy charge not yet published), so
+     * the deterministic test for that case drives this site directly.
      */
-    private void attributeResourceDeferralMaybe(WorkContainer<K, V> workContainer) {
+    void attributeResourceDeferralMaybe(WorkContainer<K, V> workContainer) {
         NavigatorParticipant navigator = module.navigatorParticipant();
         if (!navigator.isActive()) {
             return; // R3's zero-cost path
         }
+        if (!workContainer.isEligibleButForResourceCredit()) {
+            // refused for a NON-resource reason - in flight, success verdict awaiting retirement, or retry
+            // delay still running - so never a deferral, however exhausted the credits are. Close any episode
+            // this record still thinks is open: an attribution that raced a winning claim can leave the marker
+            // set on a record that is now in flight or succeeded.
+            closeAnyOpenDeferralEpisode(workContainer, navigator);
+            return;
+        }
         Instant now = module.clock().instant();
         if (navigator.hasSpendableCreditForAllTags(now)) {
-            // refused for a non-resource reason (the short-circuiting credit read is the cheap gate) - close any
-            // episode this record still thinks is open (it regained eligibility on a resource without ever
-            // winning the claim, e.g. a retry delay elsewhere)
+            // eligible AND credits available, yet the claim was refused - a lost claim race, or credits raced
+            // back since the claim's own read. Either way not a resource block: close any episode this record
+            // still thinks is open
             closeAnyOpenDeferralEpisode(workContainer, navigator);
             return;
         }
@@ -603,6 +619,13 @@ public class ProcessingShard<K, V> {
         if (removed != null) {
             population.onRetired();
             occupancy.onRetired(removed.offset());
+            // U4: same reasoning as retireAndDeductIfStillCounted - a record departing on success with an
+            // episode still open (an attribution that raced its winning claim) must close it here, or the
+            // deferred-count gauge leaks upward permanently. Observational episode count only, never the
+            // allocator's conservation ledger; the marker check is the R3 zero-cost gate.
+            if (removed.isResourceDeferralAttributed()) {
+                closeAnyOpenDeferralEpisode(removed, module.navigatorParticipant());
+            }
         }
     }
 

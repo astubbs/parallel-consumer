@@ -713,6 +713,17 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     }
 
     /**
+     * The claim decision's NON-resource terms, over one observed state: whether this record would be claimable
+     * but for resource credits - not in flight, no success verdict ({@link ExecutionState#isClaimable()}), and
+     * its retry delay passed. Exactly {@link #isClaimableFrom(ExecutionState)} minus the resource term, kept
+     * here so U4's attribution gate cannot drift into an approximation of the claim it explains. Pure, and
+     * package-private - only {@code ProcessingShard}'s attribution site reads it.
+     */
+    boolean isEligibleButForResourceCredit() {
+        return state.get().isClaimable() && isDelayPassed();
+    }
+
+    /**
      * U4's dedup marker read: true while this record's current resource-deferral episode has already been
      * attributed. Package-private - only {@code ProcessingShard}'s attribution site reads it.
      */

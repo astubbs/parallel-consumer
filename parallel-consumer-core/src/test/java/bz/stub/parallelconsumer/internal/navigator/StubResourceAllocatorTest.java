@@ -80,4 +80,29 @@ class StubResourceAllocatorTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("quantum");
     }
+
+    /**
+     * Covers R19's fail-fast posture on a policy that registers fine and then starves forever: 0.5/s over a
+     * 1s quantum floors to zero credits every quantum, so no lease would ever mint and no wakeup would ever
+     * exist to break it - the silent-starvation defect this test guards must be caught at registration.
+     */
+    @Test
+    void registeringARateThatFloorsToZeroCreditsPerQuantumFailsFastNamingTheResource() {
+        assertThatThrownBy(() -> allocator.register(new ResourceContract("api-slow", 0.5, 2, Duration.ofSeconds(1))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("api-slow");
+    }
+
+    /**
+     * Covers R19: a rate of exactly zero is the deliberate shut valve, not a starvation defect - it must stay
+     * legal even though it also mints zero credits every quantum.
+     */
+    @Test
+    void registeringAZeroRateIsAccepted() {
+        ResourceContract shutValve = new ResourceContract("api-shut", 0.0, 2, Duration.ofSeconds(1));
+
+        allocator.register(shutValve);
+
+        assertThat(allocator.lookup("api-shut")).hasValue(shutValve);
+    }
 }

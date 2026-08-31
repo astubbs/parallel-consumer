@@ -194,4 +194,59 @@ class NavigatorParticipantTest {
         Mockito.verify(reads, Mockito.never()).leave(Mockito.anyString(), Mockito.any());
         Mockito.verify(reads, Mockito.never()).readQuantum(Mockito.anyString(), Mockito.any());
     }
+
+    // ------------------------------------------------------------------
+    // Fail-safe on a throwing allocator - degrade, never crash
+    // ------------------------------------------------------------------
+
+    /**
+     * The allocator is user-supplied (a public options seam) and its reads sit on the per-claim hot path, where
+     * the only other boundary is the control task's catch-and-close - so a throwing allocator must DEGRADE this
+     * instance, never kill it: eligibility fails safe as BLOCKED with no known next credit (a deferral, not a
+     * free pass), view reads return their zero shapes, mutating calls are swallowed after logging, and every
+     * failure lands on the monotonic counter the {@code pc.navigator.allocator.failures} gauge reads.
+     */
+    @Test
+    void aThrowingAllocatorDegradesToBlockedAndNeverPropagates() {
+        ResourceAllocator throwing = Mockito.mock(ResourceAllocator.class);
+        IllegalStateException boom = new IllegalStateException("user allocator failure");
+        Mockito.when(throwing.currentLease(Mockito.anyString(), Mockito.anyString(), Mockito.any()))
+                .thenThrow(boom);
+        Mockito.when(throwing.nextCreditAt(Mockito.anyString(), Mockito.anyString(), Mockito.any()))
+                .thenThrow(boom);
+        Mockito.when(throwing.globalRatePerSecond(Mockito.anyString())).thenThrow(boom);
+        Mockito.when(throwing.localRatePerSecond(Mockito.anyString(), Mockito.anyString(), Mockito.any()))
+                .thenThrow(boom);
+        Mockito.doThrow(boom).when(throwing).spend(Mockito.anyString(), Mockito.anyString(), Mockito.any());
+        Mockito.doThrow(boom).when(throwing).join(Mockito.anyString(), Mockito.any());
+        Mockito.doThrow(boom).when(throwing).leave(Mockito.anyString(), Mockito.any());
+        Mockito.doThrow(boom).when(throwing).readQuantum(Mockito.anyString(), Mockito.any());
+        var participant = NavigatorParticipant.activeMember(throwing, UniLists.of(API_A), MEMBER);
+
+        assertWithMessage("an unreadable resource must fail SAFE as blocked - a deferral, never a free pass")
+                .that(participant.hasSpendableCreditForAllTags(now())).isFalse();
+        assertWithMessage("one failed eligibility read is one counted failure")
+                .that(participant.allocatorFailureCount()).isEqualTo(1);
+
+        assertWithMessage("blocked with no KNOWN next credit - no time to name, and no crash")
+                .that(participant.availableAt(now()).isPresent()).isFalse();
+        assertThat(participant.earliestBlockedResourceNextCreditAt(now()).isPresent()).isFalse();
+        assertWithMessage("the attribution read still names the blocked resource, with its time unknown")
+                .that(participant.blockingResourceDeferrals(now())).hasSize(1);
+
+        assertWithMessage("view reads return their zero shapes rather than propagating")
+                .that(participant.globalRatePerSecond(API_A)).isEqualTo(0.0);
+        assertThat(participant.localRatePerSecond(API_A, now())).isEqualTo(0.0);
+
+        long beforeSpend = participant.allocatorFailureCount();
+        participant.spendOneCreditPerTag(now()); // must not throw - swallowed after logging
+        assertWithMessage("a failed spend is swallowed AND counted")
+                .that(participant.allocatorFailureCount()).isEqualTo(beforeSpend + 1);
+
+        // the lifecycle mutations swallow too - a throwing allocator must never abort start or close
+        participant.join(now());
+        participant.leave(now());
+        participant.readQuantum(now());
+        assertThat(participant.allocatorFailureCount()).isEqualTo(beforeSpend + 4);
+    }
 }

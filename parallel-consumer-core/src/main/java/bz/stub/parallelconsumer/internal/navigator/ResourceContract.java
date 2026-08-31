@@ -34,6 +34,11 @@ public class ResourceContract {
 
     /**
      * The declared rate, in credits (tokens) per second (R1). v1's demo policy is {@code 2.0} (KTD7).
+     * <p>
+     * {@code 0} is legal and intentional - the deliberate shut valve, always-blocked for every tagged member.
+     * Any other non-negative rate must still mint at least one whole credit per quantum
+     * ({@code floor(rate x quantum) > 0}); {@link ResourceAllocator#register} rejects a policy that cannot
+     * (R19).
      */
     double ratePerSecond;
 
