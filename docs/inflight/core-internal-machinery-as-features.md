@@ -42,6 +42,13 @@ a side effect, a Python, Go, Rust, C# and Swift global rate limiter with Kafka c
 agreement. No other route to "a polyglot actor bus" costs this little, because the polyglot
 boundary (astubbs#242, astubbs#293) is already paid for.
 
+## The phenomenon now has a name (2026-08-30)
+
+**Compositional reinforcement** - each core primitive is designed so other capabilities emerge by
+reusing its semantics rather than adding independent distributed mechanisms. That is the
+architecture-doc term; "synergistic architecture" is the memorable version. It names why this
+note's inventory keeps growing without the build cost growing with it.
+
 ## The filter, so this stays a principle and not a sprawl
 
 Each exposure competes with a dedicated market (flags vs LaunchDarkly, tracing vs the OTel vendor

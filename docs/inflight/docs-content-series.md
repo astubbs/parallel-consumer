@@ -72,6 +72,12 @@ feature behind these):
   system whose whole purpose is eliminating unnecessary waiting. Avoid antagonistic framings toward maintainers; the underlying
   line worth keeping is *architecture arguments eventually become executable hypotheses*.
 
+**Origin story** (2026-08-30 - the public version of the admission-model lineage):
+- *We tried to add global rate limiting to Parallel Consumer and discovered the correct solution
+  was a distributed execution scheduler.* Possibly the best one-line explanation of where the
+  project came from; the long form is
+  [`core-admission-scheduling-model.md`](core-admission-scheduling-model.md)'s lineage section.
+
 **Method:**
 - The AI-era maintainership piece: not boosterism - the observed economics. Agents are workers,
   branches are records, maintainer attention is the ordering key; implementation concurrency high,

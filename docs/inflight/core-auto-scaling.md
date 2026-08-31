@@ -40,7 +40,10 @@ Two dimensions, deliberately staged:
   metric that infrastructure (HPA/KEDA external metrics is the natural consumer) acts on. PC
   owns the hysteresis: raise the recommendation only after a sustained cool-down (fixed ~5min,
   or dynamic from observed variance) of "at my sustainable max concurrency, more instance-local
-  concurrency does not help but the workload is still behind". Same in reverse to shrink.
+  concurrency does not help but the workload is still behind". Same in reverse to shrink -
+  and the shrink side gains an experimental form in
+  [`core-scale-in-proof.md`](core-scale-in-proof.md): constrain the fleet to a counterfactual
+  capacity and prove the SLO holds before any instance is removed.
   Rebalance is the natural acknowledgement - PC observes whether the recommendation was acted
   on via group membership change. Cap the recommendation at partition count (instances beyond
   it are idle by construction - the confluentinc#766 topology). This beats lag-based

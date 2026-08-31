@@ -52,6 +52,18 @@ regime -> "another instance predicted (not) to help". Natural home is the embedd
 PR's own bar of "only what no external tool can show", since no broker-side tool can see probe
 results.
 
+## The design rule this implies (2026-08-30): every adaptive decision must be externally explainable
+
+Do not let the controller output only `targetConcurrency=137` - have it retain the decision
+history that produced it (`96->128: +19% throughput; 128->160: +2%; 160->192: -7%, latency +31%;
+operating region ~128-150`). One retained ledger becomes autoscaling evidence, diagnostics, GUI
+content, research data and promotional material simultaneously - and it is what turns the product
+surface from a metrics page into a **conclusions page** ("this workload is compute constrained;
+evidence; action"), which is the attribution feature's mature form. This should bind astubbs#333's
+controller as it evolves: the engine's unusual asset is measurement *plus actuation* - it can
+change concurrency and observe the causal response - and a decision whose evidence is discarded
+wastes the experiment it ran.
+
 ## A tension to hold, not resolve silently
 
 The conversation wants the scale-out signal to carry magnitude ("an additional instance has ~4,000
