@@ -8,17 +8,21 @@ import bz.stub.parallelconsumer.integrationTests.chaostests.ChaosSeed;
 import bz.stub.parallelconsumer.integrationTests.chaostests.ProgressProbe;
 import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import lombok.extern.slf4j.Slf4j;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.AfterEachCallback;
 import org.junit.jupiter.api.extension.AfterTestExecutionCallback;
 import org.junit.jupiter.api.extension.BeforeEachCallback;
 import org.junit.jupiter.api.extension.ExtensionContext;
 import org.junit.jupiter.api.extension.TestWatcher;
+import org.junit.platform.commons.support.AnnotationSupport;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
@@ -95,6 +99,7 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
             ProgressProbe probe = ProgressProbe.ambientObserver(kcu, kcu::getGroupId);
             probe.start();
             context.getStore(NAMESPACE).put(PROBE_KEY, probe);
+            context.getStore(NAMESPACE).put(STARTED_KEY, Instant.now());
         } catch (Exception e) {
             log.debug("[ambient-probe] could not start (test proceeds unobserved): {}", e.getMessage());
         }
@@ -106,6 +111,8 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
      */
     @Override
     public void afterTestExecution(ExtensionContext context) {
+        reportDeadlineHeadroom(context);
+
         captureChaosSeed(context);
         stopProbe(context);
     }
@@ -195,6 +202,65 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
         return context.getTestMethod()
                 .map(method -> method.isAnnotationPresent(NoAmbientProbe.class))
                 .orElse(false);
+    }
+
+    /** Store key for the test's start instant; see {@link #reportDeadlineHeadroom}. */
+    private static final String STARTED_KEY = "ambient-probe-started-at";
+
+    /** The token a collector greps for. Changing it breaks any harness reading these runs. */
+    public static final String HEADROOM_MARKER = "PC-DEADLINE-HEADROOM";
+
+    /**
+     * Emits how much of its own deadline each broker integration test consumed, on passes as well as
+     * failures.
+     *
+     * <p><b>Why headroom rather than pass or fail.</b> This suite's long-running flake family - the
+     * one whose members rotate between runs under parallel load - fails by timing out, and a
+     * pass/fail result cannot distinguish a test that finished comfortably from one that scraped in
+     * with a fraction of a second to spare. Those are the same green. So "the flake got worse" has
+     * only ever been an impression, argued from how often people saw red, and the argument restarts
+     * every time somebody changes the runner or the fork count.
+     *
+     * <p>A test that normally uses a third of its deadline and starts using nearly all of it is
+     * degrading BEFORE it flakes, and that is visible here a run at a time. It also gives the
+     * quarantine discipline something to weigh: an entry backed by a headroom trend is evidence,
+     * where a sighting count is a story about attention.
+     *
+     * <p><b>It reports; it gates nothing.</b> No threshold is asserted, deliberately - the healthy
+     * fraction differs per test and nobody has measured the spread yet, and a bound guessed before
+     * the spread is known is the mistake this repo has already written up under timing bounds used
+     * as correctness gates. Collect first.
+     *
+     * <p>Silent when the test declares no {@code @Timeout}: with no ceiling there is no headroom to
+     * express, and inventing a denominator would be worse than saying nothing.
+     */
+    private void reportDeadlineHeadroom(ExtensionContext context) {
+        Instant started = context.getStore(NAMESPACE).get(STARTED_KEY, Instant.class);
+        if (started == null) {
+            return;
+        }
+        // METHOD first, then class - the order JUnit itself resolves in, because a method-level
+        // @Timeout OVERRIDES the class-level one. A class-only lookup silently finds no ceiling on
+        // every test that annotates its methods, which is most of them here, and the reporter then
+        // returns quietly rather than reporting nothing-to-report. Found by running it: the first
+        // test tried emitted no line at all.
+        Optional<Duration> ceiling = context.getTestMethod()
+                .flatMap(m -> AnnotationSupport.findAnnotation(m, Timeout.class))
+                .map(t -> Duration.ofMillis(t.unit().toMillis(t.value())));
+        if (!ceiling.isPresent()) {
+            ceiling = context.getTestClass()
+                    .flatMap(c -> AnnotationSupport.findAnnotation(c, Timeout.class))
+                    .map(t -> Duration.ofMillis(t.unit().toMillis(t.value())));
+        }
+        if (!ceiling.isPresent()) {
+            return;
+        }
+        long elapsedMs = Duration.between(started, Instant.now()).toMillis();
+        long ceilingMs = ceiling.get().toMillis();
+        long usedPercent = ceilingMs > 0 ? (elapsedMs * 100L) / ceilingMs : -1;
+        log.warn("{} test={} elapsedMs={} deadlineMs={} deadlineUsedPercent={} outcome={}",
+                HEADROOM_MARKER, context.getDisplayName(), elapsedMs, ceilingMs, usedPercent,
+                context.getExecutionException().isPresent() ? "FAILED" : "PASSED");
     }
 
     private static ProgressProbe probeOf(ExtensionContext context) {
