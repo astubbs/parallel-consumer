@@ -19,6 +19,9 @@ audience that does not yet care about the project, and all roads lead back to on
 - *Do you really need more Kafka partitions?* - partition-count planning is a universally
   recognised annoyance.
 - *Why adding consumers sometimes does absolutely nothing.*
+- From the 2026-08-29/30 follow-up ([`core-partition-advisor.md`](core-partition-advisor.md)):
+  *Choose partitions for Kafka. Let PC choose parallelism for your application* - and the
+  conference-slide form, *"How many partitions will you need in three years?" Wrong question.*
 
 **Hot keys and tails:**
 - *The hot key isn't the problem. Its neighbours are* - collateral head-of-line blocking, measured.

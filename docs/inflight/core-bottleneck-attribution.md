@@ -15,7 +15,8 @@ classify **why** more concurrency stops helping. Probe 64 -> 96 gains 0.3% under
 `LOCAL_CPU`. Probe 200 -> 300 loses 4% while callback latency rises 110 -> 171ms:
 `DOWNSTREAM_SATURATION`. Backlog 800k with 11 independent keys and concurrency stuck at 11:
 `ORDERING_PARALLELISM`. Three regimes, three different remedies - another process helps only the
-first, cannot help the second, and cannot help the third at any price. The differentiator over
+first, cannot help the second, and cannot help the third at any price. (A fourth sits one level
+up: ownership itself binding - [`core-partition-advisor.md`](core-partition-advisor.md).) The differentiator over
 every observability product: **the evidence is experimental, not inferred**. The engine did not
 read a CPU graph and guess that 300 would be worse; it tried 300. Across the language bindings
 this compounds - the Python developer gets the experiments they would have had to run by hand,
