@@ -16,10 +16,14 @@ design built on it.
 scheduling metadata. **Mentat** - the local scheduler/selector. **Voice** - the global
 coordination/resource plane. **Golden Path** - the selection objective. **Why Wait?** - the
 explainability principle. Notes use them for fidelity to the transcript, nothing more.
-**Naming discrepancy, for the owner to settle:** the handoff document (self-dated 29 Aug,
-predating these codenames) calls the resource/coordination plane **W2**, while the owner's own
-12:28pm message used W2 as a project-level working codename. W2-the-plane and Voice may be the
-same thing under two names; nothing depends on resolving it yet.
+The supplement expands the set: **Guild / Navigator** - the higher-level placement/topology
+optimizer (where work, ownership and capacity should live); **No-record / No-ship** - explicit
+markers of semantic opacity ([`core-prescience-and-spice.md`](core-prescience-and-spice.md));
+**Kwisatz Haderach** - a playful alias for complete semantic Prescience, easter-egg only.
+**Naming, partially resolved:** the supplement confirms **Voice** as the authoritative control
+plane - the thing the earlier handoff called **W2** - while the owner's separate use of W2 as a
+project-level codename stands on its own. Public API names must work for people who have never
+read Dune; these stay internal/demo vocabulary.
 
 ## The hinge
 
@@ -108,7 +112,10 @@ sharpened five things:
   remove the failed thing"; the sparse frontier adds the third option - leave it exactly where it
   is and progress everything it does not constrain. **Do not DLQ on failure; DLQ only when the
   original execution position is deliberately abandoned** (a compatibility projection, not a
-  mechanism). Feeds astubbs#149's requirements work.
+  mechanism). The supplement adds: the head-of-shard block is sometimes a *desirable correctness
+  property*, not a cost; the operator verb is **Proceed**, not Retry (make the original execution
+  eligible again); and Skip writes durable skipped-state to a compact store with an optional
+  metadata-only DLQ projection. Feeds astubbs#149's requirements work.
 - **The effect frontier.** The bridge's documented crash windows are the generic problem: three
   frontiers per execution - source durable / effect performed / completion authoritative - and
   recovery reconciles them via stable effect identity, execute, authoritative check

@@ -54,6 +54,31 @@ first measurable form. Lineage ([`core-decision-lineage.md`](core-decision-linea
 same construction pointed backward: derived semantic indexes over durable facts, one of possible
 futures, one of realised pasts.
 
+## The supplement's formalization - and the standalone-feature claim
+
+The handoff supplement (sections 11-17) firms this up in five ways, detail there:
+
+- **The Store is separate from the execution shards.** Flow: log -> Prescience Store (complete,
+  compressed, derived, disposable - rebuild from Kafka after loss) -> scheduler selection ->
+  execution shards (the hot hydrated subset) -> workers. Never grow the PC buffer enormous;
+  tier the store instead (compressed RAM -> mmap/NVMe -> embedded LSM behind an abstraction).
+- **Minimal Spice is just `ordering key -> outstanding offsets`** - which alone yields domain
+  depth, heads, and independent-work counts, making **100% Prescience a plausible standalone
+  Parallel Consumer feature today**, before any of the rest of the runtime exists. At that point
+  PC is a semantic queue over Kafka on its own.
+- **`targetPrescience(100%)` as an elastic runtime SLO**: extend the local store, then add nodes
+  for *knowledge* capacity (not CPU), then spread ownership - and if partition count prevents
+  distribution, partition count has become a knowledge-distribution constraint
+  ([`core-partition-virtualization.md`](core-partition-virtualization.md) closes that loop).
+- **Physical coverage is not semantic Prescience.** A **No-record** is indexed but semantically
+  opaque work; a **No-ship** is an opaque execution boundary (a legacy ERP) behind which nothing
+  can be seen. The model states where knowledge ends instead of implying omniscience - report
+  both numbers. **Spice density** (useful scheduling information per byte) is the quality metric.
+- **Two open designs for large payloads**, both kept until experiments pick one: a two-layer
+  index (payload untouched, hydrate on selection) versus transparent head/body externalization
+  (which gives large-message support a second purpose: Prescience density). Thresholds adaptive,
+  never hard-coded.
+
 ## Producer declarations create a feedback loop, and topology extends the horizon
 
 Declared demand can be checked against observed usage: "this class declares {db} but consumed

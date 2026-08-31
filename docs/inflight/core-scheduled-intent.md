@@ -9,7 +9,9 @@ From the follow-up Codex conversation, 2026-08-30 (model root:
 ## Two distinct time primitives, kept distinct
 
 - **`notBefore = T` on existing work** - the obligation exists; execution is time-ineligible. An
-  admission predicate, nothing more (retry backoff is this).
+  admission predicate, nothing more (retry backoff is this). If Kafka's delayed-delivery work
+  (KIP-1277) ships a broker-side time index, use it as the storage/delivery primitive rather
+  than recreating it - time stays an eligibility predicate here either way.
 - **`fireAt = T` on a schedule** - the obligation does not exist yet; create it at T. Cron is this.
 
 ## The implementation the conversation called stupid-simple

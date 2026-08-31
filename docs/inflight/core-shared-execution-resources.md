@@ -137,6 +137,12 @@ proactive admission planning rather than failure handling - explicitly not MVP.
 
 ### Knowledge is global, authority is sharded, execution is local
 
+**Wording correction from the supplement, so nobody misreads "local hot path" as "no
+scheduler":** there is a scheduler on every execution path - what the design avoids is
+*centralized* scheduling. The scheduler is **sharded with the work it schedules**: Kafka
+ownership decides where embedded scheduler authority lives, and *scheduler failover follows work
+failover*. The compact form: **your applications are the scheduler.**
+
 The owner's correction that reshaped the design: a partition-local scheduler cannot inspect "is
 lock X free?" - it only sees its delegated slice. Two resource classes follow: **delegatable**
 (token buckets, quotas, pools - the owner hands out chunks, the hot path stays local) and

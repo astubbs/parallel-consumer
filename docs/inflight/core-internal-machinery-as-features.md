@@ -33,6 +33,10 @@ health), bulkheads (QoS allocations), a work queue (Kafka plus a generic work en
 priority/fair scheduling, and a service/resource registry. The endpoint: **a distributed scheduler
 API** - "submit a unit of work with an ordering identity, resource requirements and a payload" -
 at which point kwq's work-queue proposition becomes a native consequence rather than a product.
+The handoff supplement's sweep adds: durable futures/promises, durable conditions/watches,
+barriers/latches/phasers, idempotency gates for Kafka-contained effects, rendezvous/fan-in,
+application-level quorum decisions, and durable causal cancellation - all thin ergonomic layers
+over persistence, ordering and ownership Kafka already supplies.
 
 ## The multiplier that makes this different from the usual platform trap
 

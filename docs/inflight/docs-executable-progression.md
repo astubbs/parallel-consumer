@@ -18,6 +18,19 @@ site - and the audience-relative entries, "coming from KafkaConsumer / Kafka Str
 which are just different starting stages on the same ladder. All grounded in one running
 application, so a presentation can never drift from code that compiles.
 
+**The supplement upgrades the example to a company: Hasten Logistics LLC** ("Why wait? We
+deliver."). The binding rules: *if the product claims it, Hasten Logistics uses it*; **no feature
+demo - one company**; a new idea that cannot compose into the same estate has its kernel
+membership challenged. The estate is simultaneously tutorial, integration test, polyglot
+conformance suite, chaos environment, performance playground, documentation source, onboarding
+path and conference demo. And **no language island**: every supported language contributes a
+*meaningful* component playing to its ecosystem (Python route optimization, Go customs, Rust
+CPU-bound work, a Haskell effect-typed RPC surface, an Elixir/BEAM-native actor), with
+cross-language call *paths* (Java -> Python -> Go) rather than hub-and-spoke Java-to-everything -
+that is what proves neutrality is architectural. The CDC dogfood also lives here: a corporate
+PostgreSQL the runtime emphatically does not own, mirrored into live resource policies
+([`core-runtime-services-and-compat.md`](core-runtime-services-and-compat.md)).
+
 **The handoff document carries the worked curriculum** - a 13-stage composable tutorial stack
 (consumer -> Streams -> buffet -> named resources -> delegated semaphore -> QoS -> observability
 -> scaling -> workflow -> actors -> infrastructure -> economics -> global system), the logistics

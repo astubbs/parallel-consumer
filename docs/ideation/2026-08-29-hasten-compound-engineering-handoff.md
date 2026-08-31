@@ -1,3 +1,4 @@
+<!-- issue-refs: exempt-file - preserved verbatim external document; its #N tokens are markdown TOC anchors and section numbers, not issue references -->
 > Provenance: an agent-written compound-engineering handoff produced at the owner's request at the
 > end of the 2026-08-29/30 strategy weekend (document self-dated 29 August 2026 - it predates the
 > 30th's exchanges, so it uses "W2" for the resource/coordination plane where the later transcript

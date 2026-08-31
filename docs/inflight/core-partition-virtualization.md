@@ -47,6 +47,19 @@ the remedy ladder that mostly avoids repartitioning.
   generation, which is [`core-work-identity-model.md`](core-work-identity-model.md)'s
   identity/position split applied at every granularity.
 
+## The supplement's additions: folds, promotion, and the knowledge loop
+
+The supplement names the operation - a **fold** removes the distance between where logical work
+resides and the placement that best serves execution, while application-visible identity stays
+stable: ownership folds, shard folds, topic folds (generation migration), and future cluster
+folds. Latent ordering domains observed inside ordinary partitions ("Sandtrout") are **promoted
+to independently routable virtual shards ("Worms") only when physical placement becomes an
+observable execution constraint** - never eagerly - and collapse back when the hot condition
+passes. And the loop closes on knowledge, not only throughput: when partition count prevents
+distributing Prescience capacity across nodes, partition count has become a
+**knowledge-distribution constraint**, and the same fold machinery corrects it
+([`core-prescience-and-spice.md`](core-prescience-and-spice.md)'s elastic target is the driver).
+
 ## Boundaries kept from the handoff
 
 Vanilla Kafka-compatible applications keep normal Kafka semantics - aggressive virtualization

@@ -119,7 +119,11 @@ And the Share Groups irony completes the granularity argument: Kafka itself now 
 partition ownership is too coarse for some execution models (KIP-932) - but *record* is also
 sometimes the wrong scheduling granularity. **The ordering domain is the granularity that
 actually matters**, and this project is the only thing scheduling at it. (Candidate `CONCEPTS.md`
-vocabulary when this is adopted.)
+vocabulary when this is adopted.) The supplement turns this into a robustness position: accept
+**multiple acquisition engines** beneath one execution model (classic consumer + sparse
+completion; ShareConsumer for fungible work; whatever Kafka adds next - KIP-1277 delayed delivery
+is the same pattern for time), so *as Kafka gains primitives, the runtime gets smaller, not less
+useful* - "Kafka implementing more of PC is Kafka implementing more of our substrate for us".
 
 ## The specific gaps named in STRATEGY.md
 

@@ -51,7 +51,10 @@ Database -> CDC topics -> discovered schemas -> generated/augmented Streams mate
 active/standby stores -> distributed IQ -> polyglot typed clients: declare which tables to
 mirror, and the runtime supplies the operational apparatus around the materialization. The
 product-language precision the handoff insists on: these are *Streams-backed materialized read
-models with explicit consistency semantics*, never "database replicas". Valuable precisely
+models with explicit consistency semantics*, never "database replicas". The supplement's dogfood
+scenario is the sharpest form: an existing corporate Postgres of service/resource policies,
+mirrored via CDC into live ResourceContracts - *you do not move your source of truth into the
+runtime; the runtime turns the source of truth you already have into execution policy*. Valuable precisely
 because the resulting state lives inside the execution fabric - queryable, actor-associable,
 lineage-participating, observed beside the work that updates it.
 

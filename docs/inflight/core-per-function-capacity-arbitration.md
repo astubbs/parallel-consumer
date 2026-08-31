@@ -67,7 +67,9 @@ astubbs#245 (runtime subscription change), which [`core-auto-scaling.md`](core-a
 carries only as earmarks. But the *nearest existing* multi-function process is a Kafka Streams
 topology under astubbs#255 / astubbs#271 - its operators are exactly the many functions with
 radically different concurrency->useful-work curves, so the Streams work is the likelier first
-host for this layer, not the later one. Dimension 1 itself is no longer
+host for this layer, not the later one. (Sequencing caveat, 2026-08-31: the handoff supplement
+rules PC-inside-Streams a post-lighthouse optimization - [`core-lighthouse-mvp.md`](core-lighthouse-mvp.md) -
+so "likelier first host" is an architectural claim, not a schedule.) Dimension 1 itself is no longer
 a blocker - astubbs#333 implements it. If the multi-function work never lands, this note reduces
 to "dimension 1, run once".
 
