@@ -104,3 +104,93 @@ hammering one fake API, aggregate rate never exceeding the contract while instan
 and are killed. Explicitly deferred from v1: mid-window reclamation, multi-resource optimisation,
 the adaptive global envelope, hard global concurrency. Every later feature is then policy or
 optimisation over a proven primitive, not correctness.
+
+## Additions from the 2026-08-30 exchange - authority, contracts, and stolen theory
+
+The final exchange of the weekend rebuilt this design's foundations on the admission model
+([`core-admission-scheduling-model.md`](core-admission-scheduling-model.md)). What follows is the
+delta.
+
+### Every waiting primitive collapses into capacity
+
+An exclusive lock is capacity 1; a semaphore is capacity N; a rate limit is capacity that
+replenishes; a quota is capacity scoped to a tenant or window; an open circuit breaker is capacity
+dynamically zero; a maintenance fence is capacity held at zero until cleared. **Different capacity
+functions feeding one admission system** - so the planned KS-backed locks/token-buckets did not
+disappear, they moved: build Kafka-backed resource authority as scheduler internals first, and
+expose conventional `acquire(lock)` APIs later as thin projections of the same substrate
+([`core-internal-machinery-as-features.md`](core-internal-machinery-as-features.md)) for the
+things that are not engine-dispatched work.
+
+### Declare on your function, not in your function
+
+The registration API is an **execution contract**: ordering domain, required resources and
+quantities (dynamic identities derived from the record - `tenant/{id}`), atomicity requirements,
+not-before/deadline, QoS. The engine compiles it into an admission plan before user code runs;
+"acquire A, then B, maybe wait" leaves the function body entirely. Contracts are versioned
+runtime artifacts (v2 that stops calling Salesforce changes future-demand arithmetic for v2
+records), KS topology stages declare them per stage (astubbs#271's API grows this), and waiting
+records are indexed by the fact that could make them runnable - a capacity change re-evaluates
+the affected candidates, never a scan of the waiting population. The model leaves room for
+alternative bundles ((GPU-A or GPU-B) and DB; provider A or cheaper-B) so fallback becomes
+proactive admission planning rather than failure handling - explicitly not MVP.
+
+### Knowledge is global, authority is sharded, execution is local
+
+The owner's correction that reshaped the design: a partition-local scheduler cannot inspect "is
+lock X free?" - it only sees its delegated slice. Two resource classes follow: **delegatable**
+(token buckets, quotas, pools - the owner hands out chunks, the hot path stays local) and
+**authoritative** (N=1 mutexes, tiny-N semaphores - a grant needs request/response with the
+sharded owner, but the round trip happens while the work is still WAITing, never inside user
+code). Three levels of state: **replicated fact** (global tables: resource definitions,
+contracts, fences, epochs, dictionaries), **delegated authority** (local leases, spend without
+coordination), **authoritative decision** (the control-shard owner). Control traffic gets
+dedicated compacted topics and a hard reserved capacity class - if the estate is on fire, the
+messages that reallocate capacity must still flow. One rejected design recorded so it stays
+rejected: the offset-race lock (write a claim, win if your record is the key's next) - retries
+amplify exactly under contention, and the sharded in-memory owner with a changelog does the same
+job without the weirdness.
+
+### Prefetch authority, and let completion release it
+
+Request scarce authority at the *last responsible moment* that still allows immediate dispatch -
+lead the request by the measured control-plane RTT so the grant lands as the final predicate
+satisfies. Prescience makes lease *placement* schedulable too ("A has 70 future users of X, B has
+2 - keep the lease at A"): **authority locality**, cache locality where the cached thing is
+authority. Lock lifetime attaches to the work, not the process - PC's sparse completion frontier
+is richer release evidence than any committed offset - with lease expiry and fencing epochs as
+the failure path, and renewal driven by the engine's own liveness view of the executing work
+rather than user code calling renew.
+
+### The two schedulers, cleanly separated (the owner's decomposition)
+
+The multidimensional optimisation lives at the **resource owner**: divide capacity C among demand
+streams to maximise aggregate utility subject to QoS/fairness - utility curves *measured* by the
+adaptive machinery (astubbs#333's probes answer "when this workload got 20 more units, how much
+useful throughput appeared?"). Record selection is **downstream and local**: spend the allocation
+on the best admissible work. The loop: allocate -> execute -> measure marginal utility ->
+reallocate. And v1 needs no solver - ranked first-fit over requirement vectors
+(`requirements <= available`, component-wise; reserve all-or-nothing; skip and try the next
+candidate) is the whole MVP scheduler. Steal packing algorithms only if measurement shows greedy
+leaving real capacity unused.
+
+### Theory to steal, not reinvent (the literature dive's verdicts)
+
+- **Conservative 2PL / preclaiming**: declare the full resource set before execution, acquire
+  all-or-nothing, no hold-and-wait, no deadlock. Its historical weakness - you must know the full
+  set in advance - is exactly this design's natural state: contracts declare it, Kafka holds the
+  work before execution, Prescience sees millions of declarations ahead. *The old CS says "if
+  only we knew"; this system says "we do."*
+- **Calvin**: deterministic conflict ordering validates the shape - but only order where claims
+  intersect (a partial order), not globally. A single-partition Kafka topic is a gloriously
+  boring durable sequencer, used **only** for conjunctive multi-resource claims; single-resource
+  work never needs a global order. With a common claim sequence, every resource queue sorts
+  identically and A-before-B holds everywhere they conflict: multi-lock admission without
+  distributed negotiation.
+- **C/D-RAS** (conjunctive resource allocation) for the safety/liveness mathematics; **advance
+  reservation / co-allocation** (grid) for the Capacity Horizon; **DRF** for multi-resource
+  fairness. Separation of concerns: preclaiming gives safety, DRF gives fairness, the objective
+  ("which feasible allocation best advances useful future work") is the part that is ours.
+- The design objective all of it serves: **do all distributed arbitration before the work becomes
+  runnable, so the final admission decision is local** - coordination latency hidden under
+  waiting the work was doing anyway, the scheduling analogue of CPU prefetching.
