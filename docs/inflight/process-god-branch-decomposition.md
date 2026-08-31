@@ -12,13 +12,16 @@ What no command will tell you:
 - **Extractions land on `master` first; the god PRs shrink by merging `master` forward.** Never
   rewrite `feats/proxy-requirements` or the `ks-streams-*` forest - the forest is additionally
   bound by its own "merge, never rebase" settled decision.
-- **The verdict-free return (closed astubbs#295) is resurrected by cherry-picking `4b4ff1968`
-  from `feats/proxy-requirements`**, not by reopening its original branch, which predates the
-  package rename.
+- **The verdict-free return (closed astubbs#295) is resurrected by reopening the PR FIRST, then
+  force-pushing** the renamed cherry-pick of `4b4ff1968` (from `feats/proxy-requirements`, rebased
+  onto current `master`) to its original branch. Reopen-first is load-bearing: GitHub refuses to
+  reopen a PR whose head branch was force-pushed after it closed.
 - **`feats/native-image-sidecar` contains the whole demo chain** (sibling of astubbs#340's
   branch, on top of `feats/polyglot-demos`) - it is a stack rung today, not a `master` candidate.
-- The four independent starters are the plan's A1-A4, plus B1 (Streams fork/build machinery).
-  Check `gh pr list -R astubbs/parallel-consumer` for which have opened before starting one.
+- **The extractions are stacks, not independent branches** - cut by partitioning the god tip's
+  tree, each rung on its parent with a `depends on` line. Only the astubbs#295 resurrection and
+  the hygiene audit are `master`-based singletons. Check
+  `gh pr list -R astubbs/parallel-consumer` for which rungs have opened before starting one.
 
 ## Delete when
 

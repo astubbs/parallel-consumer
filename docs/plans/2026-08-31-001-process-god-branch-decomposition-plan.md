@@ -38,13 +38,15 @@ anything below was written; most held, and these did not survive contact:
   proxy module shell (extraction A5 below) exists on `master`.
 - **astubbs#295 (verdict-free work return) is buried, not lost.** Its closing comment says the
   commit was cherry-picked onto `feats/proxy-requirements` unchanged - it is `4b4ff1968` on that
-  branch, already package-renamed. Resurrection is a cherry-pick of that commit onto a fresh
-  `master`-based branch, NOT a reopen of the original `feats/proxy-verdict-free-return` branch,
-  which predates the package rename.
-- **The Streams forest predates the package rename** (sources still `io.confluent.*`), which the
-  analysis did not weigh. This is an argument *for* its copy-don't-preserve strategy: branches cut
-  fresh from `master` are born renamed, and the notebook forest is never rebased (a settled
-  decision - see the handover below).
+  branch, already package-renamed. Resurrection route (owner's call): **reopen the existing PR
+  FIRST, then force-push** the renamed cherry-pick, rebased onto current `master`, to
+  `feats/proxy-verdict-free-return`. The ordering is load-bearing - GitHub refuses to reopen a PR
+  whose head branch was force-pushed after it closed. Reopening keeps the PR's review history and
+  gives the stack a real `depends on` anchor.
+- **The Streams forest predates the package rename** (sources still `io.confluent.*`). Not a
+  deciding argument for any strategy - the rename mechanics run on predated branches routinely,
+  that being how the fork migrated in the first place. It is simply a step any copy or promotion
+  must include.
 - The rest checked out: astubbs#293 stacks 328 → 331 → {340, native-image-sidecar} → 334 (334 on
   340); astubbs#338 and astubbs#339 are the model extractions that already merged; the ks-streams
   branch map matches the on-branch handover,
@@ -69,10 +71,19 @@ the most mechanically-reviewable bulk first:
 | A9 | Eleven dispatch-only clients | thin bindings implementing negotiated dispatch only | Boring once A2+A3+A8 exist - which is the point |
 | A10+ | Advanced protocol behaviours | security posture, capability negotiation, epochs/reconnect, leases/heartbeats, shutdown drain, produce path | Each deserves its own semantic review |
 
-A1-A4 are independent of each other and of everything else: **start all four concurrently.** A5
-onward is a stack (each `depends on` its parent). A6 has two routes: as an interim measure it can
-open now as a rung between astubbs#331 and a re-parented astubbs#340 (that re-parenting matches
-astubbs#340's own narrative); the durable route is the re-cut against A5.
+A1 and A4 are `master`-based singletons - genuinely context-free. **Everything else is one stack,
+cut by partitioning the tip's tree**, in order A2 → A3 → A5 → A6/A7 → A8 → A9: rather than
+disentangling content onto master-fresh branches (which forces every extraction to re-establish
+context, and made the last decomposition harder than it needed to be), each rung is cut on top of
+its parent largely as a path-scoped checkout from `feats/proxy-requirements` - the layers align
+with module and directory boundaries, and every rung inherits the working context below it. Each
+rung carries `depends on` its parent, plus astubbs#295 where it needs the verdict-free path.
+
+**The retarget move, once the stack exists:** merge the top rung into `feats/proxy-requirements`
+(both sides added the same bytes, so it mostly auto-resolves) and retarget astubbs#293's base onto
+that rung. The merge-base moves, so astubbs#293's displayed diff collapses to its residue
+immediately - no waiting for bottom-up merges to reach `master`. Merges to `master` then proceed
+bottom-up as each rung is reviewed.
 
 **What stays in astubbs#293:** the dispatch-wave engine, session/service orchestration,
 connect-time configuration, the epoch/manifest/reconnect machinery until its seams are visible,
@@ -84,6 +95,14 @@ model.* That is a reviewable claim; today's is not.
 The dispatch-only discipline already in the branch (every client negotiates only dispatch, while
 the wire and engine carry leases, heartbeats, reconnect, drain) is the seam that makes A7-A9
 cuttable: dispatch is a complete first feature slice.
+
+**The descendants (astubbs#328, astubbs#331, astubbs#340, astubbs#334) stay as they are.** Each is
+already one idea stacked on its prerequisite; their review burden is inherited ancestry, and it
+shrinks as the base beneath them decomposes, without anyone touching them. astubbs#334
+(`research/kafka-streams-foreign-wrappers` - foreign wrappers around *stock JVM* Streams, not
+Streams-on-PC) is additionally **disposition-pending**: when its turn comes, the question is
+whether it lands as a module, is re-cut as a smaller preview, or stays a research record - not how
+to decompose it.
 
 ## Wagon B: Kafka Streams on PC (astubbs#271 and the `ks-streams-*` forest)
 
@@ -108,6 +127,14 @@ copy/cherry-pick.
 | B5 | Stream time + punctuation semantics | low-water mark, punctuation, effect survival, restart/refire, commit-coverage findings | the `stream-time-lowwater` and three `punctuator-*` branches, `postcommit-checkpoint-gap` |
 | B6 | Evidence suite | seam-on upstream gate, PC integration laws, realistic-domain benchmark | `ks-streams-seam-on-upstream-gate`, `test/ks-streams-realistic-domain-benchmark` |
 | B7 | Example / preview module | runnable demo | `ks-streams-pc-example` |
+
+**B1-B7 are cut as a fresh stack** (B1 the base on `master`, each rung on its parent), by the same
+tip-partition method - `feats/ks-streams-task-lifecycle-and-rebalance` is the most advanced
+integration point and the natural tip to partition B2-B4 from. Promoting the existing forest
+branches into PRs directly was considered and rejected: their merge topology is non-linear
+(branches cut from different points, reconciled by merging the base forward, never rebased) and
+several deliberately retain refutations, so stacked PRs on them would ask reviewers to read the
+notebook rather than the design.
 
 B1 is the best early land in the whole campaign: it asserts nothing more controversial than "we
 can reproducibly patch Kafka Streams and prove the unmodified path still behaves like upstream",
@@ -151,11 +178,12 @@ Two constraints from the handover that the reconstruction must respect:
 
 ## Sequencing
 
-Start four concurrently (no conceptual overlap): **A1, A2, A3, A4**. B1 can also start in
-parallel - it touches entirely different files. Then A5 → A6/A7 → A8 → A9, and B2 → B3 → B4 →
-B5/B6/B7, each opening as its parent merges. Reassess the residual astubbs#293 and astubbs#271
-once the mechanical mass is out; their remaining seams will be visible then, and this plan should
-not pretend to see them now.
+Start four concurrently (no conceptual overlap): **A1 (the astubbs#295 resurrection), A2 (the
+Wagon A stack's bottom rung), A4 (the hygiene audit), and B1** - it touches entirely different
+files. A3 starts as soon as A2's branch exists to stack on; then A5 → A6/A7 → A8 → A9, and B2 →
+B3 → B4 → B5/B6/B7, each rung opening once its parent is cut (merging waits for review,
+bottom-up). Reassess the residual astubbs#293 and astubbs#271 once the mechanical mass is out;
+their remaining seams will be visible then, and this plan should not pretend to see them now.
 
 Coordination state lives in `docs/inflight/process-god-branch-decomposition.md` (created with this
 plan); this document is the reasoning and does not track live status.
