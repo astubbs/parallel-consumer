@@ -20,10 +20,49 @@ an ENTRY refresh (before `pollingBroker` is set, preserving the CME fix);
 
 ## Still open
 
-- **The `Performance Tests` lane failure is not yet re-measured.** `MultiInstanceHighVolumeTest`
-  (`PERIODIC_CONSUMER_SYNC`, KEY) plausibly shares the cause - the pause-cache mechanism is
-  commit-mode-independent - but that is an expectation, not a measurement. Verify the lane after
-  this fix lands.
+<!-- post-merge: checked-begin - every reference below names its PR in full and is written
+     in the past tense as a record of runs that happened, so it reads the same once these
+     branches have landed and stopped existing -->
+- **MEASURED 2026-09-01, and the expectation was WRONG: the `Performance Tests` lane is a
+  SEPARATE defect from the pause-cache one.** This bullet used to predict that
+  `MultiInstanceHighVolumeTest` (`PERIODIC_CONSUMER_SYNC`, KEY) shared the cause, on the reasoning
+  that the pause-cache mechanism is commit-mode-independent. The lane has now run with the fix in
+  place and it still fails, so that prediction is refuted rather than confirmed - recorded here
+  because a refuted prediction is worth as much as a held one and disappears if only the new number
+  is written down.
+
+  The comparison, same test and identical configuration (`order=KEY maxPoll=500`), each figure from
+  one CI run of the lane rather than a standing property - `grep PC-THROUGHPUT` in the job log to
+  re-derive any of them:
+
+  | Branch | Result |
+  |---|---|
+  | astubbs/parallel-consumer#381 (test-scope, cut from master, so the closest thing to a master baseline) | `processed=3000000 expected=3000000 elapsedMs=42024 recordsPerSecond=71387` - PASS |
+  | astubbs/parallel-consumer#29 | `processed=2191095 expected=3000000 elapsedMs=60554 recordsPerSecond=36184` - FAILED |
+
+  astubbs/parallel-consumer#29 failed the lane twice with consistent numbers against one clean run
+  on astubbs/parallel-consumer#381, so this was two samples versus one and not a single-run coin
+  flip. It was still three runs on GitHub-hosted runners, so a repeat would firm it up before anyone
+  treats the ratio itself as precise.
+
+- **astubbs/parallel-consumer#393 is RULED OUT as the cause, for free.** Its `Performance Tests`
+  lane passed - `MultiInstanceHighVolumeTest` ran green there - and its thread-confinement refactor
+  was also present in astubbs/parallel-consumer#29's tree. So whatever halved throughput there was
+  not the consumer-ownership work. (No `PC-THROUGHPUT` line exists on that branch: it does not carry
+  `ThroughputReport`, which arrived with astubbs/parallel-consumer#381. The evidence is the passing
+  test, not a rate.)
+
+  This is the ablation the extraction bought without anyone running an experiment - a branch cut
+  from a suspect tree is a control arm for whatever stayed behind, and it is worth checking for one
+  before designing a bisect.
+
+- **Cheapest next ablation, not yet run: the INFO-level logging raise.** Both branches of the revoke
+  fork were lifted to INFO by the astubbs/parallel-consumer#29 work (`grep "Acquired commitLock on
+  revoke"`), and per-loop INFO logging in a three-million-record run is the right shape to cost this
+  much throughput. Also on the same suspect list: the coherence check in `describeProgress()` and the
+  pause-observation fields on `BrokerPollSystem`. One term at a time, same lane, control arm - the
+  method that diagnosis used on itself.
+<!-- post-merge: checked-end -->
 - **RESOLVED 2026-09-01: the "residual throughput gap" was a measurement artifact, not a defect.**
   It was measured under `-Dpc.log.level=debug` with five concurrent repetitions, which depresses both
   arms and the branch more. Re-measured in the conditions the original regression was measured in -
