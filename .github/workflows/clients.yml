@@ -176,14 +176,27 @@ jobs:
       # build.rs runs prost/tonic codegen on every `cargo build`, so without this the row fails in
       # the build, the test and the analysis step identically.
       #
-      # apt rather than a setup action: the well-known types have to come from the same
-      # distribution as the binary, and the distro package puts them where protoc looks by itself.
+      # LIBPROTOBUF-DEV IS NOT OPTIONAL DESPITE NOTHING HERE LINKING C++, and leaving it out is
+      # exactly how this row failed once: `protobuf-compiler` ships the binary and NOT the
+      # well-known types, so protoc ran and then could not resolve the schema's own imports -
+      # `google/protobuf/duration.proto: File not found`, which reads as a broken .proto rather
+      # than a half-installed toolchain. The Swift module's Dockerfile carries the same pairing and
+      # the same sentence; it was already written down here and this row did not read it.
+      #
+      # Where the types land is what the crate's build script looks for: it takes `../include`
+      # relative to the resolved protoc, which for /usr/bin/protoc is /usr/include - the directory
+      # this package fills. apt rather than a setup action for that reason: the binary and the
+      # types come from one distribution and land where each other expects.
       - name: Install protoc (rust generates from the frozen schema on every build)
         if: matrix.language == 'rust'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends protobuf-compiler
+          sudo apt-get install --yes --no-install-recommends protobuf-compiler libprotobuf-dev
           protoc --version
+          # Prove the types are there before the crate needs them, so a half-installed toolchain
+          # fails HERE naming the package rather than three minutes later naming the schema.
+          test -f /usr/include/google/protobuf/duration.proto \
+            || { echo "::error::libprotobuf-dev did not provide the well-known types"; exit 1; }
 
       # Prove the toolchain is where the strict guard will look for it. A setup action that
       # silently no-ops leaves a row whose only symptom is a red build several steps later blaming
