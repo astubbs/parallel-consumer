@@ -45,6 +45,10 @@ attaches after the single-line demo works, the same way reveals 2 and 3 attach a
 
 Not the same artefact as the uber demo (astubbs#332: eleven language clients, one workload -
 breadth) or the per-language demos (astubbs#331). This is depth: one topology, one climbing line
-on a chart. The web GUI ([`web-gui-observability-ideas.md`](web-gui-observability-ideas.md),
+on a chart. The 2026-08-29/30 follow-up added the reconciling frame:
+[`docs-executable-progression.md`](docs-executable-progression.md) proposes one staged application
+whose later stages *are* these reveals, with the realistic-domain Streams benchmark
+(`test/ks-streams-realistic-domain-benchmark`) as the domain and the uber demo as its language
+matrix - so the demo artefacts converge instead of drifting. The web GUI ([`web-gui-observability-ideas.md`](web-gui-observability-ideas.md),
 astubbs#268) is the natural view for it, and the downstream simulator overlaps the "deliberately
 made Kafka slow" harness ideas in [`docs-content-series.md`](docs-content-series.md).

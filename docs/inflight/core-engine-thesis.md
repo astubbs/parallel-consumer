@@ -74,8 +74,8 @@ Recorded here because each is a candidate refinement of the thesis section this 
 - **Three layers to keep clean**: programming model (Streams, Spring, plain consumer, whatever the
   team already chose) / execution model (ordering, dispatch, retries, concurrency, admission) /
   global control model (capacity, contracts, QoS). The product constraint that follows: **"keep
-  your code; replace the runtime underneath it"** - a feature that forces a rewrite of the
-  application's conceptual model had better be exceptional. Compact forms worth keeping: *one
+  your code; replace the runtime underneath it"** - a design *pressure*, not an absolute promise:
+  a feature that forces a rewrite of the application's conceptual model had better be exceptional. Compact forms worth keeping: *one
   implementation of intelligence, many implementations of ergonomics*, and for Streams
   specifically, *Kafka Streams tells us what the computation means; the engine decides how
   aggressively, where, and under what constraints it executes*.
@@ -83,6 +83,13 @@ Recorded here because each is a candidate refinement of the thesis section this 
   the application rewritten into its workflow model; this project wants to disappear underneath
   the application that already exists. Same answer for any "why not <orchestrator>?" question -
   the workflow is their first-class object; here the application remains the application.
+- **One demo, many presentations - candidate strategy material in its own right** (owner,
+  2026-08-31): the convergence frame in
+  [`docs-executable-progression.md`](docs-executable-progression.md) - one staged application
+  whose stages are the reveals, whose domain is the realistic benchmark, and whose matrix is the
+  uber demo - is a claim about how the project demonstrates and teaches itself, with a
+  merge-gate-shaped consequence: no new standalone demo codebase gets built when a stage of the
+  progression could carry it.
 
 ## The specific gaps named in STRATEGY.md
 
