@@ -137,6 +137,7 @@ EXEMPT_PATHS="
 *.json|JSON has no comment syntax - see docs/copyright.md for the in-band conventions that fit
 *.sln|Visual Studio solution format carries no comment syntax
 *.bin|binary test fixture
+*.patch|a diff of third-party source, regenerated wholesale by its own tool - the NOTICE names what it modifies
 */py.typed|PEP 561 marker, required by the spec to be empty
 */META-INF/services/*|JDK ServiceLoader registry - the file's entire content is the provider list
 *.md|prose - never distributed detached from LICENSE, so a per-file notice has no recipient

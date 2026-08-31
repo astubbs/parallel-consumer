@@ -2,7 +2,7 @@
 #
 # Copyright (C) 2026 Antony Stubbs and contributors
 #
-# Guards the test logging harness in the four LIBRARY modules' logback-test.xml.
+# Guards the test logging harness in the LIBRARY modules' logback-test.xml.
 #
 # Why a gate rather than a note: every failure in this class is silent. A committed `debug` default
 # does not go red - it floods the CI log and slows the run, and the volume alone can break tests.
@@ -40,6 +40,7 @@ MODULES=(
     parallel-consumer-vertx
     parallel-consumer-reactor
     parallel-consumer-mutiny
+    parallel-consumer-streams
 )
 
 # Allow the self-test to point the gate at a fixture tree.
