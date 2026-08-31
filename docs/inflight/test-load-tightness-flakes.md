@@ -17,6 +17,7 @@ baseline for comparison is 15/20 runs fully clean, zero stall-class failures.
 | `KafkaSanityTests`, `TransactionMarkersTest` | singles | residual, uncategorised |
 | `PartitionStateCommittedOffsetIT.committedOffsetRemoved[3] none` | 1 sighting (2026-08-05) | `RebalanceInProgressException` out of the test's own setup |
 | `PartitionStateCommittedOffsetIT.committedOffsetRemoved[2] earliest` | 1 sighting (2026-08-25, astubbs#353, [job 97859037375](https://github.com/astubbs/parallel-consumer/actions/runs/32865269364/job/97859037375)) | `checkHowManyRecordsWithKeyPresent` expected 2 got 1 - the `[1] latest` assertion signature (solved 2026-08-05 as a nudge race) appearing on the `earliest` parameter; `probe clean` autopsy (test-side, not consumer-group progress), on a branch with no Java <!-- post-merge: checked --> |
+| `PartitionStateCommittedOffsetIT.committedOffsetRemoved[1] latest` | 1 sighting (2026-09-01, astubbs/parallel-consumer#390, [job 99511508437](https://github.com/astubbs/parallel-consumer/actions/runs/33399088555/job/99511508437)) | the same `checkHowManyRecordsWithKeyPresent` expected 2 got 1 as the `earliest` row above, now on the parameter the 2026-08-05 nudge-race fix was written for; `probe clean` autopsy again. See the section below <!-- post-merge: checked -->
 | `TransactionTimeoutsTest.commitTimeout[2]` | 1 sighting (2026-08-06, astubbs#204) | incompletes `[8]` where the parameter pins `[8, 12]` |
 
 **A third member has now left the family, and it left by being reclassified rather than fixed-as-tight.**
@@ -164,4 +165,38 @@ passed. So the arm is not simply wrong on this runner; it is wrong when the race
 way, which is what the family signature says. Still worth noting how thin the evidence for
 "non-deterministic" is on a single retry: it separates *always red* from *not always red*, and
 nothing more.
+<!-- post-merge: checked-end -->
+
+## All three parameters of `committedOffsetRemoved` have now shown one assertion signature (2026-09-01)
+<!-- post-merge: checked-begin -->
+
+`Integration Tests` on astubbs/parallel-consumer#390 (the ten foreign dispatch clients)
+([job 99511508437](https://github.com/astubbs/parallel-consumer/actions/runs/33399088555/job/99511508437)),
+`forkCount=4`. The **`[1] latest`** arm failed in `checkHowManyRecordsWithKeyPresent`:
+
+    value of : myCollection.size()
+    expected : 2
+    but was  : 1
+
+**Why this is worth a section rather than only a table row.** The `[3] none` and `[2] earliest` rows
+above are already here, and `[1] latest` is the parameter that
+[`latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md`](../solutions/test-flakiness/latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md)
+was written for. So every parameter of this method has now been seen failing, and the arm with a
+merged fix is failing again - at a *different point* from the one that fix addressed. That fix
+solved an unwinnable **await**; what fails here is the **assertion** three statements later, which
+is the second-order cost
+[`docs/plans/2026-08-05-001-investigate-committedoffset-latest-reflake.md`](../plans/2026-08-05-001-investigate-committedoffset-latest-reflake.md)
+predicted in as many words: moving the nudge inside the await made its count unbounded, while call
+sites went on assuming exactly one. **This sighting is that plan's hypothesis arriving on the arm it
+was written about**, so read the plan before treating it as new.
+
+Ambient probe agreed unprompted, in the same words as every other member: *"probe clean - no
+rebalance dwell, no lag stagnation, no frozen partitions observed: the fault is likely in the test
+itself, not consumer-group progress."*
+
+**Master state, not that PR's.** Its diff touches no file under `parallel-consumer-core` and adds no
+dependency any core test resolves; the modules it adds are client wrappers below
+`parallel-consumer-proxy-clients`. Recorded rather than acted on for that reason - and **not**
+quarantined, because the registry wants an owning fix PR and the diagnosis above already names one
+that would have to exist first.
 <!-- post-merge: checked-end -->
