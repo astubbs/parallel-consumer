@@ -46,12 +46,25 @@ package bz.stub.parallelconsumer.streams;
  * shuts down instead. That is the same shape as the reason just closed - a recoverable event turned fatal -
  * arriving by the other route, and it is unrefusable, because it is a property of the exception rather than
  * of the topology. It belongs to the error-surfacing unit, along with
- * astubbs/parallel-consumer#271's open thread on a worker failure being committed past. <b>Stream-time
- * punctuation is a separate outstanding item</b>, recorded in {@code docs/inflight/}; it was already priced
- * in when the refusal reason was closed, and is not what this paragraph is about.
+ * astubbs/parallel-consumer#271's open thread on a worker failure being committed past.
+ * <p>
+ * <b>Stream-time punctuation was the separate outstanding item this paragraph used to defer to
+ * {@code docs/inflight/}, and it is now closed - but it is NOT a reason to flip anything.</b> Punctuation
+ * fires on this path (astubbs#255, U13): stream time is a low-water mark over work in flight, and both
+ * punctuation types now warn at registration about how they diverge, including the concurrency hazard that
+ * can corrupt a state store rather than merely retime output. Two divergences are pinned as *known* rather
+ * than fixed - the mark can overtake stock where PC's KEY-shard order differs from stock's timestamp order,
+ * and after a restart against a group this module committed the mark is not restored at all, so punctuators
+ * re-fire over covered event time. So the item moves from "unimplemented and silent" to "implemented, loud,
+ * and with two measured gaps"; the sentence it replaces said this was already priced in when the refusal
+ * reason closed, and that pricing stands.
  * <p>
  * Whoever flips this next should re-run the seam-on measurement rather than trusting these paragraphs, and
- * should expect the pattern to repeat: three times now, the measurement has named the next reason.
+ * should expect the pattern to repeat: three times now, the measurement has named the next reason. <b>The
+ * flip is deliberately not decided here.</b> This rung closed one of the default's named triggers and left
+ * the default where it found it, because the exception-surfacing reason above is still open and lives on a
+ * sibling branch: a default moved on one rung's evidence while another rung holds an unclosed reason is a
+ * default nobody measured. It is a decision for after those rungs reconcile.
  * <p>
  * <b>This reverses an inherited decision, and the argument it reverses was a different one.</b> The seam
  * defaulted <em>on</em> in the feasibility study (astubbs#271) on the grounds that depending on a separate,

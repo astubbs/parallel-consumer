@@ -553,6 +553,27 @@
                 </executions>
             </plugin>
 
+            <!-- 5. The same SLF4J-binding split as surefire above, on the OTHER lane - and it was missing.
+                    That exclusion sits on the surefire plugin's configuration, which failsafe does not
+                    inherit, so this module's own INTEGRATION tests were binding reload4j while the pom's
+                    comment above said "our own tests keep logback (and logback-test.xml)". Nothing went red
+                    for it, because nothing asserted on a log line in that lane until
+                    PunctuatorWarningTest did - and what it got was a ClassCastException casting an
+                    org.slf4j.reload4j adapter to a logback Logger.
+
+                    The Kafka-fork execution is surefire's and keeps reload4j, so LogCaptureAppender still
+                    works there; this only makes the failsafe lane agree with the unit lane and with
+                    src/test/resources/logback-test.xml, which was already being ignored here. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <configuration>
+                    <classpathDependencyExcludes>
+                        <classpathDependencyExclude>org.slf4j:slf4j-reload4j</classpathDependencyExclude>
+                    </classpathDependencyExcludes>
+                </configuration>
+            </plugin>
+
             <!-- The generated Apache Kafka classes are not ours to hold to this project's static-analysis
                  rules. `target/classes` here holds nothing else, so this exclusion is the whole module -
                  and it says something true rather than hiding something of ours: the root pom's

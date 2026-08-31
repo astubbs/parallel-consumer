@@ -268,6 +268,43 @@ throughput**, that the handover actually happened (with a reader `assign`ed and 
 position captured when the second instance started, so it cannot be satisfied by the first
 instance's earlier output), and that ownership moved rather than being shared.
 
+### Stream time
+
+Stock Kafka Streams advances stream time inside `PartitionGroup.nextRecord()`, at *selection*, before
+the record is processed. The PC path never calls `nextRecord()` - that is the whole seam - so before
+this work the value sat at `UNKNOWN` for the life of every dispatched task. Two things followed, both
+silently: `STREAM_TIME` punctuators never fired, and `ProcessorContext.currentStreamTimeMs()` returned
+a constant `-1`. The second is the more likely of the two for a user to hit, because it is reachable
+from any processor with no refused DSL call in sight.
+
+Stream time now comes from the dispatcher as an **in-flight low-water mark**: the lowest stream
+timestamp still executing, or the highest ever dispatched when nothing is, clamped monotone. The
+timestamp is the one the configured `TimestampExtractor` produced, carried across the seam with the
+work rather than read off the `ConsumerRecord` - a payload-time topology points its extractor at a
+field inside the value, so those are two different numbers.
+
+**What it guarantees is narrower than a watermark, and the difference matters:**
+
+- **It never passes a record that is currently in flight**, so a punctuation cannot close a window
+  over work still inside the processor chain. That is the property worth having.
+- **It is not an order boundary.** The monotone clamp means a record dispatched later can carry a
+  lower timestamp and sit below the mark; `PcTaskDispatcher` counts exactly those, and that counter is
+  what a future decision about reinstating any windowed operator turns on.
+- **It can sit ABOVE what stock would hold.** Between batches the pool empties and the mark rises to
+  the highest ever dispatched - and PC hands records out per KEY shard rather than in stock's
+  timestamp order, so wherever those orders differ the mark overtakes stock. It needs neither
+  concurrency nor a second partition: three records on one partition with three distinct keys give
+  `[0, 2, 2]` where stock reports `[0, 1, 2]`, which is pinned as a characterisation test. An earlier
+  version of this work claimed "never ahead of stock"; that claim was false and was retracted.
+
+A task restoring from a committed partition time seeds the mark, and the PC path's own `RecordQueue`
+with it - without the second half, a topology using Kafka's shipped `UsePartitionTimeOnInvalidTimestamp`
+throws on the first record after a restart with an invalid embedded timestamp, where stock recovers.
+Neither half helps when the group's commits were written by *this* module: those carry Parallel
+Consumer's frontier payload rather than Streams' `TopicPartitionMetadata`, so there is nothing to
+decode. That is the re-fire gap named under
+[What is still unsupported and NOT refused](#what-is-still-unsupported-and-not-refused).
+
 ---
 
 ## What is refused, and how you find out
@@ -344,12 +381,41 @@ passes - not when someone reads the code and concludes it looks fine.
 
 ### What is still unsupported and NOT refused
 
-**Stream-time punctuation.** A topology that calls
-`context.schedule(interval, PunctuationType.STREAM_TIME, ...)` is a common, non-windowed pattern, and
-under PC dispatch stream time never advances, so the punctuator simply never fires: no exception, no
-warning, no output. It is the one item of the original unsupported list this envelope does not cover,
-because it is a call on the processor context rather than a topology shape or a store type. Wall-clock
-punctuation does fire.
+**Punctuation - now WARNED rather than silent, and still not refused.** A punctuator is a call on the
+processor context rather than a topology shape or a store type, so all three refusal layers are blind
+to it: there is nothing structural to inspect at build time or at task construction. Both punctuation
+types nevertheless *work* here, so refusing them would break topologies that run today. Instead, each
+type logs a warning **once per task, at registration**, naming the divergences below - and that log
+line is the only channel a user has. It is covered by `PunctuatorWarningTest`, whose seam-off control
+asserts a stock task says nothing.
+
+This section used to read *"under PC dispatch stream time never advances, so the punctuator simply
+never fires"*. That is no longer true - see [Stream time](#stream-time) - and the item is now
+"implemented, loud, and with two measured gaps" rather than "unimplemented and silent".
+
+- **`STREAM_TIME`** - the firing *times* differ. Stream time is the low-water mark described below, so
+  punctuation lags stock within a batch and can overtake it between batches; punctuations may be
+  **skipped rather than delayed**, because `PunctuationSchedule` collapses every interval crossed in
+  one jump into a single firing and on this path such jumps are the normal case; and after a restart
+  against a group *this module* committed, the mark is not restored at all, so punctuators re-fire
+  over event time an earlier run already covered (`StreamTimePunctuatorRefireOnRestartTest` measures
+  this against a seam-off control - stock fires at the restored mark, PC fires below the earlier run's
+  base).
+- **`WALL_CLOCK_TIME`** - the firing times are **unaffected**. `maybePunctuateSystemTime` is
+  byte-for-byte stock on this path and reads the system clock.
+- **Both** - the punctuator runs **concurrently with records still inside the processor chain**. Stock
+  guarantees `punctuate()` and `process()` never overlap for one task; here they do. A plain
+  `KeyValueStore` is *supported*, so the obvious punctuator - "iterate the store now that everything
+  up to T is done" - races the processors writing that same non-thread-safe store. **This is the
+  clause that can corrupt user state rather than merely retime output**, and it is why wall-clock
+  punctuation is warned about at all.
+- **Both** - what a punctuator forwards or writes sits outside PC's commit frontier. Measured non-EOS,
+  those effects still reach the broker on the producer's own schedule
+  (`PunctuatorEffectSurvivalTest`, with a five-minute-linger negative control), and `postCommit` runs
+  normally under load (`PostCommitCheckpointGapTest` - 12,000 records checkpointed within a commit
+  round of stock). What is left is an idle-window tail: a crash landing in an idle moment costs a
+  little extra changelog replay. Under exactly-once the forward would sit in an open transaction, but
+  EOS is refused.
 
 **A typed control-flow exception raised inside a processor.** `TaskCorruptedException` and
 `TaskMigratedException` are how a topology tells Kafka's `TaskManager` to recover a task rather than
