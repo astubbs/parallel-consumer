@@ -517,11 +517,24 @@ public class ProcessingShard<K, V> {
             return; // R3's zero-cost path
         }
         Instant now = module.clock().instant();
+        if (navigator.hasSpendableCreditForAllTags(now)) {
+            // refused for a non-resource reason (the short-circuiting credit read is the cheap gate) - close any
+            // episode this record still thinks is open (it regained eligibility on a resource without ever
+            // winning the claim, e.g. a retry delay elsewhere)
+            closeAnyOpenDeferralEpisode(workContainer, navigator);
+            return;
+        }
+        // A persisting block is re-observed on every control-loop pass; only assemble the full decision (every
+        // blocking resource paired with its next-credit time, plus the slots marker) when a line will actually
+        // fire - a fresh episode's defer-moment line, or the rate limiter admitting a steady-state line.
+        boolean freshEpisode = !workContainer.isResourceDeferralAttributed();
+        if (!freshEpisode && !navigatorConstraintReportLimiter.couldPerform()) {
+            return;
+        }
         Optional<NavigatorDecision> maybeDecision =
                 navigator.currentDecision(now, module.isAdmissionSlotsCurrentlyBinding());
         if (!maybeDecision.isPresent()) {
-            // refused for a non-resource reason - close any episode this record still thinks is open (it
-            // regained eligibility on a resource without ever winning the claim, e.g. a retry delay elsewhere)
+            // credits raced back between the gate and the assembly - nothing is blocking after all
             closeAnyOpenDeferralEpisode(workContainer, navigator);
             return;
         }

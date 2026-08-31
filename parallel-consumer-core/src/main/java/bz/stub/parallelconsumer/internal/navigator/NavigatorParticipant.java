@@ -182,14 +182,8 @@ public final class NavigatorParticipant {
      * case there is no time to name). A projection, not a promise (KD10's best-effort framing).
      */
     public Optional<Instant> availableAt(Instant now) {
-        Instant latest = null;
-        for (String tag : blockedTags(now)) {
-            Optional<Instant> nextCredit = allocator.nextCreditAt(memberId, tag, now);
-            if (nextCredit.isPresent() && (latest == null || nextCredit.get().isAfter(latest))) {
-                latest = nextCredit.get();
-            }
-        }
-        return Optional.ofNullable(latest);
+        List<Instant> credits = blockedNextCredits(now);
+        return credits.isEmpty() ? Optional.empty() : Optional.of(Collections.max(credits));
     }
 
     /**
@@ -200,14 +194,17 @@ public final class NavigatorParticipant {
      * Empty when nothing is blocking.
      */
     public Optional<Instant> earliestBlockedResourceNextCreditAt(Instant now) {
-        Instant earliest = null;
+        List<Instant> credits = blockedNextCredits(now);
+        return credits.isEmpty() ? Optional.empty() : Optional.of(Collections.min(credits));
+    }
+
+    /** The blocking resources' next-credit times, unreduced - {@code availableAt} takes the max, the wakeup the min. */
+    private List<Instant> blockedNextCredits(Instant now) {
+        List<Instant> credits = new ArrayList<>();
         for (String tag : blockedTags(now)) {
-            Optional<Instant> nextCredit = allocator.nextCreditAt(memberId, tag, now);
-            if (nextCredit.isPresent() && (earliest == null || nextCredit.get().isBefore(earliest))) {
-                earliest = nextCredit.get();
-            }
+            allocator.nextCreditAt(memberId, tag, now).ifPresent(credits::add);
         }
-        return Optional.ofNullable(earliest);
+        return credits;
     }
 
     /**

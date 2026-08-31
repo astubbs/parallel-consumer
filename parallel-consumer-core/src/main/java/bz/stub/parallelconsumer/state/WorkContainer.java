@@ -480,9 +480,9 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
         // gone since the eligibility read lands as overdraft in the allocator, never a refusal here.
         if (navigator.isActive()) {
             navigator.spendOneCreditPerTag(module.clock().instant());
-            // U4: a dispatch ends any open deferral episode - CAS true->false so the count is decremented
-            // exactly once, whichever thread's claim wins the race against a concurrent attribution read.
-            if (resourceDeferralAttributed.compareAndSet(true, false)) {
+            // U4: a dispatch ends any open deferral episode - the CAS-guarded clear keeps the count decrement
+            // exactly-once, whichever thread's claim wins the race against a concurrent attribution read.
+            if (clearResourceDeferralAttributionIfSet()) {
                 // U5: derived exactly as ShardManager#computeShardKey derives the shard's own key, so the
                 // per-shard breakdown decrements the same entry the episode's start incremented. Computed only
                 // on this transition (a formerly-deferred record's dispatch), never on the ordinary claim path.

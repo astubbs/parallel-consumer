@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.internal;
  */
 
 import bz.stub.parallelconsumer.internal.admission.AdmissionController;
+import bz.stub.parallelconsumer.internal.utils.SupplierUtils;
 import bz.stub.parallelconsumer.internal.navigator.NavigatorParticipant;
 import bz.stub.parallelconsumer.internal.navigator.NavigatorView;
 import bz.stub.parallelconsumer.internal.navigator.ResourceAllocator;
@@ -18,11 +19,10 @@ import lombok.Setter;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.producer.Producer;
 
-import com.google.errorprone.annotations.concurrent.GuardedBy;
-
 import java.time.Clock;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 /**
  * Minimum dependency injection system, modled on how Dagger works.
@@ -193,87 +193,67 @@ public class PCModule<K, V> {
         return new AdmissionController(options(), clock(), pcMetrics());
     }
 
-    @GuardedBy("this")
-    private Optional<ResourceAllocator> resourceAllocator;
-
     /**
      * The navigator's allocator handle (KD2, KTD3): the application-supplied {@link ResourceAllocator}, wrapped
      * so an untagged instance (no allocator configured, {@link ParallelConsumerOptions#getResourceTags()} empty)
      * reads a plain {@link Optional#empty()} rather than every future caller null-checking
      * {@link ParallelConsumerOptions#getResourceAllocator()} itself.
      * <p>
-     * <b>{@code synchronized}, for {@link #admissionController()}'s reason - the re-examination that accessor's
-     * U1-era javadoc demanded, performed when U3 landed the wiring.</b> Since U3 this accessor is reached at
-     * runtime from more than one thread: {@link #navigatorParticipant()} (itself touched by the control thread's
-     * per-pass quantum read and every thread that constructs a {@code WorkContainer}) calls it, and test code
-     * holding the module remains a documented seam. Unsynchronised, two racing first-touches would each wrap a
-     * fresh {@code Optional} and the loser's caller would keep a stale handle; the lock both serialises the
-     * check-then-create and publishes the write, and is reentrant, so the call from
-     * {@link #navigatorParticipant()} (which holds the same monitor) is safe.
+     * The three navigator accessors memoise through {@link SupplierUtils#memoize} rather than this class's
+     * older {@code synchronized}-accessor shape: they are reached at runtime from more than one thread - every
+     * {@code WorkContainer} construction (once per inbound record), the control thread's per-pass quantum read,
+     * and the lifecycle hooks - so the post-initialisation fast path must be a lock-free read, not a monitor
+     * acquisition per record. The utility serialises only the one-time construction and publishes safely.
      */
-    public synchronized Optional<ResourceAllocator> resourceAllocator() {
-        if (resourceAllocator == null) {
-            resourceAllocator = Optional.ofNullable(options().getResourceAllocator());
-        }
-        return resourceAllocator;
-    }
+    private final Supplier<Optional<ResourceAllocator>> resourceAllocator =
+            SupplierUtils.memoize(() -> Optional.ofNullable(options().getResourceAllocator()));
 
-    @GuardedBy("this")
-    private NavigatorParticipant navigatorParticipant;
+    public Optional<ResourceAllocator> resourceAllocator() {
+        return resourceAllocator.get();
+    }
 
     /**
      * This instance's navigator membership (U3's engine seam): member id, tagged resources and allocator handle
      * resolved ONCE per instance - {@link NavigatorParticipant#inert()} when the instance tags nothing, which is
-     * R3's zero-cost path (callers check {@link NavigatorParticipant#isActive()} and go no further).
-     * <p>
-     * <b>{@code synchronized} for {@link #admissionController()}'s reason</b>: first touch happens at runtime
-     * from whichever thread gets there first - {@code WorkContainer} construction (broker-poll or control
-     * thread, and worker threads under direct pull), the control loop's per-pass quantum read, and the lifecycle
-     * join on the caller's thread. Two racing constructions of an ACTIVE participant would be benign in state
-     * (the participant is immutable and both would carry the same member id) but the losing caller would keep an
-     * unpublished handle; mutual exclusion makes the question moot at the cost of one uncontended acquire.
-     * Callers on hot paths hold the returned reference in a final field rather than re-calling per record - see
-     * {@code WorkContainer}'s field.
+     * R3's zero-cost path (callers check {@link NavigatorParticipant#isActive()} and go no further). Memoised
+     * lock-free after first touch - see {@link #resourceAllocator}'s note; hot callers additionally hold the
+     * returned reference in a final field rather than re-calling per record ({@code WorkContainer}'s field).
      * <p>
      * The member id is the SAME identity {@link PCMetrics} publishes as the {@code pcinstance} meter tag (and
      * {@code AbstractParallelEoSStreamProcessor} derives its log id from): a user-supplied
      * {@link ParallelConsumerOptions#getPcInstanceTag()} verbatim, or the generated UUID - so an allocator-side
      * membership view, a metric and a log line all name the instance the same way.
      */
-    public synchronized NavigatorParticipant navigatorParticipant() {
-        if (navigatorParticipant == null) {
-            List<String> resourceTags = options().getResourceTags();
-            Optional<ResourceAllocator> allocator = resourceAllocator();
-            boolean tagged = allocator.isPresent() && resourceTags != null && !resourceTags.isEmpty();
-            navigatorParticipant = tagged
-                    ? NavigatorParticipant.activeMember(allocator.get(), resourceTags,
-                    pcMetrics().getInstanceTag().getValue())
-                    : NavigatorParticipant.inert();
-            // U4: registers the pc.navigator.* meters once, immediately after construction - a no-op for the
-            // inert (untagged) shape, mirroring AdmissionController#initMetrics's mode-gated pattern (R3).
-            navigatorParticipant.initMetrics(pcMetrics(), clock());
-        }
-        return navigatorParticipant;
-    }
+    private final Supplier<NavigatorParticipant> navigatorParticipant = SupplierUtils.memoize(() -> {
+        List<String> resourceTags = options().getResourceTags();
+        Optional<ResourceAllocator> allocator = resourceAllocator();
+        boolean tagged = allocator.isPresent() && resourceTags != null && !resourceTags.isEmpty();
+        NavigatorParticipant participant = tagged
+                ? NavigatorParticipant.activeMember(allocator.get(), resourceTags,
+                pcMetrics().getInstanceTag().getValue())
+                : NavigatorParticipant.inert();
+        // U4: registers the pc.navigator.* meters once, immediately after construction - a no-op for the
+        // inert (untagged) shape, mirroring AdmissionController#initMetrics's mode-gated pattern (R3).
+        participant.initMetrics(pcMetrics(), clock());
+        return participant;
+    });
 
-    @GuardedBy("this")
-    private NavigatorView navigatorView;
+    public NavigatorParticipant navigatorParticipant() {
+        return navigatorParticipant.get();
+    }
 
     /**
      * The navigator's observed-state surface (U5, R18): {@link #navigatorParticipant()} bound to the module
      * clock as a {@link NavigatorView}, resolved ONCE and handed to every {@code PollContextInternal} at its
      * construction sites - the processor exposes this NARROW view to user code, never the module itself.
-     * Side-effect-free to read, by that interface's contract (AE6).
-     * <p>
-     * <b>{@code synchronized} for {@link #navigatorParticipant()}'s reason</b>, and reentrant over the same
-     * monitor, so the delegation below is safe. First touch is the first user-function batch dispatch, on a
-     * worker thread; the memoised handle makes every later call one uncontended acquire and one field read.
+     * Side-effect-free to read, by that interface's contract (AE6). Memoised lock-free after first touch - see
+     * {@link #resourceAllocator}'s note.
      */
-    public synchronized NavigatorView navigatorView() {
-        if (navigatorView == null) {
-            navigatorView = NavigatorView.of(navigatorParticipant(), clock());
-        }
-        return navigatorView;
+    private final Supplier<NavigatorView> navigatorView =
+            SupplierUtils.memoize(() -> NavigatorView.of(navigatorParticipant(), clock()));
+
+    public NavigatorView navigatorView() {
+        return navigatorView.get();
     }
 
     /**
