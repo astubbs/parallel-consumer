@@ -391,6 +391,95 @@ git status')"
 assert "a commit inside a function-keyword body is still gated" 2 \
     "$(gate_rc "$red" 'function deploy { git commit -m x; }; deploy')"
 
+# --- WHICH WORKING TREE IT GATES -----------------------------------------------------------------
+#
+# The gate script and its working directory both came from `$CLAUDE_PROJECT_DIR`, which names the
+# SESSION's project root. A SUBAGENT has its own working directory while that variable still points
+# at the session's most recent worktree - and a subagent's `git commit ...` is bare, so it matches
+# the registration and arrives here. Observed 2026-08-31: a subagent committing in
+# `.claude/worktrees/proxy-server-shell` was gated against `.claude/worktrees/bench-harness`, failing
+# check-file-refs.sh on citations to files that do not exist on its branch while its own tree ran the
+# same gate at exit 0, and five commits went through with --no-verify.
+#
+# THE WORSE HALF LEAVES NO TRACE, and gets its own case below: the misresolution can fail OPEN, a red
+# tree passing because the session's tree is green. Nobody investigates a commit that was allowed.
+#
+# REAL GIT REPOS, unlike `make_project` above, because the resolution now climbs to the repository
+# root - and the assertions are on the gate's own LABEL rather than on paths, since `mktemp -d` under
+# `/var` and `git rev-parse --show-toplevel` under `/private/var` name the same directory differently
+# on macOS.
+make_worktree() { # <label> <gate-exit-code> -> a git repo whose stub gate announces itself
+    local dir="$TMP/wt-$1-$RANDOM$RANDOM"
+    mkdir -p "$dir/.githooks" "$dir/nested/deeper"
+    ( cd "$dir" && git init -q . )
+    printf '#!/bin/sh\necho "GATE OF %s SPOKE in $(basename "$PWD")"\nexit %s\n' "$1" "$2" > "$dir/.githooks/pre-commit"
+    chmod +x "$dir/.githooks/pre-commit"
+    echo "$dir"
+}
+wt_fire() { # <CLAUDE_PROJECT_DIR> <payload-cwd|-> <command> -> "<exit>|<stderr>"
+    local payload out rc=0
+    payload=$(python3 -c '
+import json, sys
+d = {"tool_name": "Bash", "tool_input": {"command": sys.argv[1]}}
+if sys.argv[2] != "-":
+    d["cwd"] = sys.argv[2]
+print(json.dumps(d))' "$3" "$2")
+    out=$(printf '%s' "$payload" | CLAUDE_PROJECT_DIR="$1" "$HOOKS/pre-commit-gate.sh" 2>&1 >/dev/null) || rc=$?
+    printf '%s|%s' "$rc" "$(printf '%s' "$out" | tr '\n' ' ')"
+}
+
+session_green=$(make_worktree session-green 0)
+commit_red=$(make_worktree commit-red 1)
+session_red=$(make_worktree session-red 1)
+commit_green=$(make_worktree commit-green 0)
+
+# 1. THE INCIDENT. The commit runs in a worktree whose gate is red; the session's is green.
+wt_out=$(wt_fire "$session_green" "$commit_red" 'git commit -m "in the other worktree"')
+assert "a commit is gated by the tree it runs in, not the session's" 2 "${wt_out%%|*}"
+case "$wt_out" in
+    *"GATE OF commit-red"*) got=ran_the_commits_gate ;;
+    *"GATE OF session-green"*) got=ran_the_sessions_gate ;;
+    *) got="neither: ${wt_out#*|}" ;;
+esac
+assert "...and it is the commit's OWN gate script that ran" ran_the_commits_gate "$got"
+case "${wt_out#*|}" in *"in wt-commit-red"*) got=ran_there ;; *) got="wrong cwd: ${wt_out#*|}" ;; esac
+assert "...run WITH that tree as its working directory" ran_there "$got"
+
+# 2. THE SILENT HALF, which is the one nobody would have found: a red tree allowed because the
+# SESSION's tree is green. Exit 0 here is the fix; the pre-fix hook blocked on the session's gate.
+wt_out=$(wt_fire "$session_red" "$commit_green" 'git commit -m "clean tree"')
+assert "a clean tree is not blocked by the session's red one" 0 "${wt_out%%|*}"
+case "${wt_out#*|}" in *"GATE OF session-red"*) got=ran_the_sessions_gate ;; *) got=left_it_alone ;; esac
+assert "...and the session's gate was not consulted at all" left_it_alone "$got"
+
+# 3. `git -C <path> commit` names its own repository, and is the strongest signal there is.
+wt_out=$(wt_fire "$session_green" - "git -C $commit_red commit -m x")
+assert "git -C names the tree to gate" 2 "${wt_out%%|*}"
+case "$wt_out" in *"GATE OF commit-red"*) got=followed_dash_c ;; *) got="ignored it: ${wt_out#*|}" ;; esac
+assert "...even with no cwd in the payload" followed_dash_c "$got"
+
+# 4. A COMMIT FROM A SUBDIRECTORY has to climb: the gate lives at the checkout root, and stopping at
+# the literal directory would find no gate and fail open - a silent skip, not a visible error.
+wt_out=$(wt_fire "$session_green" "$commit_red/nested/deeper" 'git commit -m "from a subdir"')
+assert "a commit from a subdirectory climbs to the repository root" 2 "${wt_out%%|*}"
+
+# 5. THE FALLBACK IS A DECISION, not an accident: with nothing in the payload saying where the
+# command runs, `$CLAUDE_PROJECT_DIR` is still the best available answer and is still used. All the
+# cases above this section rely on it, so this pins it explicitly alongside its replacements.
+wt_out=$(wt_fire "$commit_red" - 'git commit -m "no cwd in the payload"')
+assert "with nothing else to go on it falls back to the project dir" 2 "${wt_out%%|*}"
+case "$wt_out" in *"GATE OF commit-red"*) got=used_the_fallback ;; *) got="${wt_out#*|}" ;; esac
+assert "...and says so rather than skipping" used_the_fallback "$got"
+case "$wt_out" in *"did not say where it runs"*) got=labelled ;; *) got=unlabelled ;; esac
+assert "...labelled as the session's root in the refusal" labelled "$got"
+
+# 6. A BYPASS IS STILL A BYPASS wherever the commit runs - the escape hatch must not have been
+# narrowed to the session's tree by any of the above.
+wt_out=$(wt_fire "$session_green" "$commit_red" 'git commit --no-verify -m "I have a reason"')
+assert "--no-verify bypasses the OTHER tree's red gate too" 0 "${wt_out%%|*}"
+
+rm -rf "$session_green" "$commit_red" "$session_red" "$commit_green"
+
 # ---------------------------------------------------------------------------------------------
 # inject-merge-checklist.sh
 # ---------------------------------------------------------------------------------------------

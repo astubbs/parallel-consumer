@@ -77,4 +77,20 @@ keeps the lookup itself duplicated. Whoever folds these together folds that in t
 reads the PR number out of `gh pr merge <n>` first, and its `HEAD` fallback is only reached for a
 bare `gh pr merge`, which resolves the current branch exactly as the fallback does. Correct, rather
 than merely untouched.
+
+**A third sighting, in a hook with no PR lookup at all, and it widens the class.**
+`.claude/hooks/pre-commit-gate.sh` took its working tree from `$CLAUDE_PROJECT_DIR`, which names the
+SESSION's project root - so a *subagent*, which has its own working directory, was gated against the
+session's most recent worktree. On 2026-08-31 a subagent committing in
+`.claude/worktrees/proxy-server-shell` was gated against `.claude/worktrees/bench-harness`:
+`bin/check-file-refs.sh` failed on citations to `bench/` files absent from its branch while its own
+tree ran the same gate clean, and five commits went through with `--no-verify`. The mirror image
+leaves no trace at all - a red tree passes because the session's is green - and nobody investigates a
+commit that was allowed. Fixed the same way: `git -C`, then a leading `cd`, then the payload's `cwd`,
+with `$CLAUDE_PROJECT_DIR` kept as a labelled last resort.
+
+So the derivation rule now has **three** consumers rather than the two named above, and only two of
+them can share `hook-common.sh`. What generalises is not the code: it is that **a hook process's own
+directory and environment describe the session, never the command**, and every guard here that reads
+either has to be re-checked against that.
 <!-- post-merge: checked-end -->
