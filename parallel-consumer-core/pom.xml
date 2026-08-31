@@ -18,6 +18,8 @@
     <name>Parallel Consumer - Core</name>
 
     <properties>
+        <!-- Root of the per-fork test log silos; see the surefire argLine below and docs/logging.md. -->
+        <pc.log.dir>target/pc-logs</pc.log.dir>
         <!-- JUnit 5 thread-parallelism for THIS module's tests. Declared once here because surefire and
              failsafe both need it verbatim, and a copy in each drifted the moment one gained a comment.
              A property is the right home: property values preserve newlines, which the JUnit
@@ -196,7 +198,26 @@
                          would silently replace (and the coverage report would then be empty, with a green build).
                          Root pom declares an empty argLine property so this still resolves under -Djacoco.skip.
                          Why it is needed and what it costs: docs/plans/2026-08-25-001-test-lincheck-poc-plan.md -->
-                    <argLine>@{argLine} ${lincheck.jvm.args}</argLine>
+                    <!-- -Dpc.log.dir gives every fork its own directory. The seven FileAppenders in
+                         src/test/resources/logback-test.xml are plain, non-prudent FileAppenders on fixed
+                         paths, and the ci profile runs surefire at forkCount=1C with reuseForks - so one
+                         JVM per core would otherwise hold a handle on each of the same seven files.
+                         Non-prudent appenders are not safe for multiple JVMs on one file, and the two
+                         streams that promise EVERY error and EVERY warning for the whole run are exactly
+                         the ones that would lose writes.
+
+                         Why a directory per fork rather than <prudent>: prudent mode buys one shared path
+                         at the cost of unbuffered, file-locked writes on all seven appenders, on every
+                         line. Read across the forks instead - `cat target/pc-logs/fork-*/errors.log`.
+
+                         ${pc.log.dir} is a property so a caller can still redirect the root
+                         (-Dpc.log.dir=/tmp/run-3), and ${surefire.forkNumber} is left for surefire to
+                         expand per fork - Maven passes unknown properties through untouched.
+
+                         FAILSAFE IS DELIBERATELY NOT GIVEN THIS. It declares no forkCount, so it runs at
+                         the default of 1, and the bin/ experiment runners read a flat
+                         <their -Dpc.log.dir>/probes.log path that a fork subdirectory would break. -->
+                    <argLine>@{argLine} ${lincheck.jvm.args} -Dpc.log.dir=${pc.log.dir}/fork-${surefire.forkNumber}</argLine>
                 </configuration>
             </plugin>
             <plugin>
