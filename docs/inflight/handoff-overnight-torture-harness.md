@@ -78,15 +78,20 @@ thing that ran.
 
 ## Where things sit
 
-The harness now lives on `bugs/857-paused-consumption-multi-consumers-bug` (astubbs#29), which
-absorbed `feats/overnight-torture-harness` whole. That branch gets no PR of its own: it contained
-astubbs#29 in its entirety, so a PR from it would have shown that whole diff for a two-file
-addition. It is now only a pointer, and can be deleted once astubbs#29 lands.
+<!-- post-merge: checked-begin - written as it reads once the confluentinc#857 work has merged:
+     the harness is on master and the branch that carried it is gone, so every mention below says what
+     that work CONTAINED rather than that it is open -->
 
-The test infrastructure the harness depends on - the log silos and the scenario-wide recovery
-diagnostic - was extracted to astubbs#381 and cut fresh from master, so it is no longer gated behind
-the deadlock fix. If you need only the harness and its logging, that PR is the one to watch.
+The harness ships with the confluentinc#857 work, which absorbed `feats/overnight-torture-harness`
+whole rather than carrying it as a separate PR: that branch contained the 857 branch in its
+entirety, so a PR from it would have shown the whole 857 diff to review a two-file addition. Nothing
+depends on the `feats/overnight-torture-harness` ref.
 
-astubbs#29 itself is NOT mergeable yet, and for reasons unrelated to code: its records must be
-migrated out of `pr-29-857-deadlock-and-what-the-measuring-taught.md` before that note is deleted on
-merge, and its title and body are stale in four ways. `docs/merge-checklist.md` owns the rest.
+Its real dependency was never the deadlock fix. The harness drives only chaos scenarios that predate
+the 857 work - `ChaosChurnStormIT`, `ChaosKeyOrderIT`, and the three revoke-under-work scenarios -
+and it needs `pc.log.dir` from the test log silos. Those silos and the scenario-wide stall-recovery
+diagnostic were extracted to astubbs/parallel-consumer#381, cut from master. What tied the harness
+to the 857 branch was purpose, not code: it exists to torture that fix, weighted to the transactional
+commit mode.
+
+<!-- post-merge: checked-end -->
