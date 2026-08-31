@@ -32,10 +32,11 @@ macOS, JDK 17, several agent sessions sharing the box:
 | Full default build, unmodified `master`, same box, same window | green |
 | The method alone (`-Dtest=ParallelEoSStreamProcessorTest#processInKeyOrder`) | green, 3 of 3 |
 
-**It is not PR-state.** The branch that observed it (`feats/polyglot-build-scaffolding`) adds a
-module tree and touches no file under `parallel-consumer-core`, and the failing parameterisations
-varied between the two red runs. Load is the variable that moves it, which is why it has been seen
-here and not on a CI runner - and equally why a loaded runner will eventually see it.
+**It is not PR-state.** The work that observed it - the polyglot build scaffolding under
+`parallel-consumer-proxy-clients/` - adds a module tree and touches no file under
+`parallel-consumer-core`, and the failing parameterisations varied between the two red runs. Load is
+the variable that moves it, which is why it has been seen locally and not on a CI runner - and
+equally why a loaded runner will eventually see it.
 
 Not quarantined: quarantine wants a diagnosis or a sighting ledger proving master-state, and one
 machine under self-inflicted load is neither. This note IS the start of that ledger - add sightings
