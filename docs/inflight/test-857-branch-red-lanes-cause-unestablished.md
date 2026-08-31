@@ -197,6 +197,54 @@ touched by the branch and both sit on that path.
 which is the argument for the instrument rather than for either guess. Each was plausible, each was
 what an experienced reader would have assumed, and each took one line of output to refute.
 
+### CORRECTION, 2026-09-01: it is NOT idle. Two of PC's own counters disagree.
+
+**The "idle" reading above was over-read, and this section corrects it.** With debug logging on -
+verified as reaching the run, 720k DEBUG lines including PC's own classes - the load gate and the
+diagnostic print three consecutive lines at the same instant:
+
+```
+isPoolQueueLow? workAmountBelowTarget false 281 vs 64
+calculateQuantityToRequest target: 320, current queue size: 319, requesting: 1, loading factor: 5
+pc: workRemaining=0 recordsOutForProcessing=0 state=RUNNING pausedPartitions=0
+```
+
+**PC's executor queue holds 319 records against a target of 320, and it is stepping the loading
+factor UP - while `workRemaining()` and `recordsOutForProcessing` both read zero.** It is saturated
+and slow, not starved. `consumed` and `producedAck` track each other exactly at ~600/s.
+
+So the sequence of hypotheses this file records now reads: cluster 2 overhead (refuted), paused
+consumption (refuted), idle/not-fetching (**refuted here, by me, having asserted it**). The lesson is
+not about any of the three - it is that a single counter read at one moment supported a confident
+wrong reading three times, and each time an adjacent instrument disagreed.
+
+### The finding that replaces it, stated narrowly
+
+**Two of PC's own accounting views disagree at the same instant**, reproducibly. The load gate
+counts 281-319 records queued; `getNumberOfIncompleteOffsets()` and `numberRecordsOutForProcessing`
+both report zero.
+
+**What is NOT established, and must not be assumed:**
+
+- **Whether master shows the same disagreement.** It has not been compared. Master passes this test,
+  so its failure path never prints the diagnostic, and no mid-run sampling has been done on either
+  arm. Until that control exists, this may be a long-standing property of these metrics rather than
+  anything the branch caused - and the throughput regression is measured separately and stands on its
+  own evidence regardless.
+- **Whether it has any consequence beyond diagnostics.** The obvious worry is that an instance
+  believing no offsets are incomplete may commit offsets for records it has not processed, which in
+  this mode would skip them on restart. That is a hypothesis about a mechanism, not an observation:
+  no such commit has been demonstrated.
+
+**The epoch hypothesis is refuted.** Zero epoch-stale skips and zero no-epoch-yet skips across the
+whole run, with debug confirmed live. The branch's only changes to that path are a comment and a
+trace line.
+
+**The transactional revoke wait is not involved either.** This test creates ONE consumer and the run
+contains ZERO revocations, so `onPartitionsRevoked` never executes. That also makes this failure
+unlike the rest of the confluentinc#857 family, which is rebalance-centred throughout: whatever this
+is, it happens in the steady state.
+
 ## Why it matters beyond the branch that found it
 
 If cluster 2 is implicated, the question is not only "fix it" but whether that work belongs on a PR
