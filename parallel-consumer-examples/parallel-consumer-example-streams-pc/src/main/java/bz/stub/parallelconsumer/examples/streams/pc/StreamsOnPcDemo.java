@@ -122,7 +122,7 @@ public final class StreamsOnPcDemo {
      * ones mattered. Everything needed to state what happened is repeated here, so the bottom of the
      * output is a complete answer on its own.
      */
-    private static void printSummary(final List<DemoSection> sections,
+    private static void printSummary(final Iterable<DemoSection> sections,
                                      final LatencyScenario headOfLine,
                                      final LatencyScenario singleKey,
                                      final DemoBroker broker,

@@ -130,7 +130,7 @@ final class DemoBroker implements AutoCloseable {
      * @param names      created in one request, so an arm waits for one round trip rather than one per topic
      */
     void createTopics(final int partitions, final String... names) {
-        List<NewTopic> topics = new ArrayList<>();
+        List<NewTopic> topics = new ArrayList<>(names.length);
         for (String name : names) {
             topics.add(new NewTopic(name, partitions, (short) 1));
         }
