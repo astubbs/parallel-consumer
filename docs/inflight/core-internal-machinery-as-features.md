@@ -1,4 +1,4 @@
-# Internal machinery as customer features - the AWS move, with an 11-language multiplier
+# Internal machinery as customer features - the AWS move, with a polyglot multiplier
 
 <!-- inflight-type: feature -->
 <!-- inflight-state: deferred - a standing principle plus an inventory, not scheduled work -->

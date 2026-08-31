@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: process -->
+<!-- inflight-state: deferred - the ce-strategy briefing; STRATEGY.md adoption is the owner's decision -->
 
 Source: an external-model strategy review (Codex) over the weekend of 2026-08-22/23, run against
 this repo with the `research/market-analysis-recut` STRATEGY.md in view. This note is the breakdown

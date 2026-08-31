@@ -50,7 +50,7 @@ progression affordable.
 
 Three demo artefacts already exist, and the progression must compose with them rather than becoming
 their sibling: the **uber demo** (astubbs#332, collapsed into astubbs#331's `feats/polyglot-demos` -
-eleven language clients, one workload: breadth), the **three-reveal demo**
+every language client on one workload: breadth), the **three-reveal demo**
 ([`web-three-reveal-demo.md`](web-three-reveal-demo.md) - one topology, one climbing line: depth),
 and the **realistic-domain Streams benchmark** (`test/ks-streams-realistic-domain-benchmark`, one of
 the sibling branches [`branch-ks-streams-workstream.md`](branch-ks-streams-workstream.md)

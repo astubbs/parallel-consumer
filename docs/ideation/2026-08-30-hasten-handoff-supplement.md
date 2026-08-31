@@ -2,8 +2,9 @@
 > Provenance: the second handoff document from the strategy weekend - the supplement covering
 > everything after the main handoff
 > ([`2026-08-29-hasten-compound-engineering-handoff.md`](2026-08-29-hasten-compound-engineering-handoff.md))
-> was written, i.e. the 2026-08-30/31 exchanges. Preserved verbatim except for HTML-comment gate
-> markers inserted where the text names files by their original download names. This document
+> was written, i.e. the 2026-08-30/31 exchanges. Preserved verbatim except for two
+> annotations: the line-1 issue-refs exemption comment, and one inline parenthetical at the Scope
+> line mapping the original download filename to the preserved path of the main handoff. This document
 > resolves several terms the earlier captures flagged as uncaptured (Guild/Navigator, No-record /
 > No-ship, Sandtrout/Worm, the Nile relationship) and carries two sequencing rulings tracked in
 > `docs/inflight/core-lighthouse-mvp.md`. Where it and a note disagree, flag it - do not silently

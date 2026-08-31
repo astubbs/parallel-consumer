@@ -43,7 +43,7 @@ attaches after the single-line demo works, the same way reveals 2 and 3 attach a
 
 ## Relationship to existing demo work
 
-Not the same artefact as the uber demo (astubbs#332: eleven language clients, one workload -
+Not the same artefact as the uber demo (astubbs#332: every language client on one workload -
 breadth) or the per-language demos (astubbs#331). This is depth: one topology, one climbing line
 on a chart. The 2026-08-29/30 follow-up added the reconciling frame:
 [`docs-executable-progression.md`](docs-executable-progression.md) proposes one staged application

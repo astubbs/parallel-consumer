@@ -1,7 +1,7 @@
 # Capacity fingerprinting: remember what the controller learned
 
 <!-- inflight-type: feature -->
-<!-- inflight-state: deferred - needs the controller in production first; persistence home is an open design question -->
+<!-- inflight-state: deferred - needs the controller in production first; persistence home decided 2026-08-31: Kafka Streams state -->
 
 From the follow-up Codex strategy conversation, weekend of 2026-08-29/30 (breakdown root:
 [`core-engine-thesis.md`](core-engine-thesis.md)) - its author's favourite of the batch, and it
