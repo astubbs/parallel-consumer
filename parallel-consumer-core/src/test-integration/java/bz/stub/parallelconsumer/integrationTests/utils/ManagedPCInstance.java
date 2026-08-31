@@ -223,12 +223,32 @@ public class ManagedPCInstance implements Runnable {
             }
             KafkaConsumer<String, String> newConsumer = kcu.createNewConsumer(false, consumerProps);
 
-            this.parallelConsumer = new ParallelEoSStreamProcessor<>(ParallelConsumerOptions.<String, String>builder()
+            // A TRANSACTIONAL INSTANCE NEEDS A PRODUCER, and the absence of these three lines is the
+            // whole reason the chaos suite has never had a transactional scenario.
+            //
+            // The fleet has always been parameterised by commit mode - config.commitMode is passed
+            // straight through - so the mode LOOKED reachable, and the gap read as a deliberate
+            // exclusion rather than a missing capability. It was not: PERIODIC_TRANSACTIONAL_PRODUCER
+            // requires a producer to be supplied, one was never wired, so any scenario asking for it
+            // would have failed at construction. Nobody asked, so nobody found out.
+            //
+            // That gap matters more than its size. astubbs/parallel-consumer#44 - the only issue
+            // upstream ever labelled a VERIFIED BUG - lives in this mode, as does the unbounded
+            // revoke wait tracked in docs/inflight/bug-857-transactional-revoke-wait.md, and the
+            // chaos suite could not reach either of them.
+            //
+            // Wired ONLY for the mode that requires it, deliberately: handing a producer to the
+            // consumer-commit modes would change what every existing scenario exercises, and those
+            // scenarios' calibration is the expensive part of this suite.
+            var optionsBuilder = ParallelConsumerOptions.<String, String>builder()
                     .ordering(config.order)
                     .consumer(newConsumer)
                     .commitMode(config.commitMode)
-                    .maxConcurrency(config.maxConcurrency)
-                    .build());
+                    .maxConcurrency(config.maxConcurrency);
+            if (config.commitMode == CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER) {
+                optionsBuilder.producer(kcu.createNewProducer(config.commitMode));
+            }
+            this.parallelConsumer = new ParallelEoSStreamProcessor<>(optionsBuilder.build());
 
             // every incarnation gets its own fresh WorkManager, so this never double-registers; the
             // instance-level counter deliberately spans incarnations (see workResultsReturned)
