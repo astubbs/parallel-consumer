@@ -122,7 +122,7 @@ public class ProgressTracker {
 
     public Exception constructError(String messageToAppend) {
         return new PCInternalRuntimeException(msg("No progress beyond {} records after {} rounds. {} {}",
-                processedCount, rounds, verdict(), messageToAppend));
+                processedCount, rounds, describeVerdict(), messageToAppend));
     }
 
     /**
@@ -143,7 +143,7 @@ public class ProgressTracker {
      * external counter cannot see the difference between "not trying" and "trying and not
      * finishing" - only the instance knows whether it is holding work it is not completing.
      */
-    private String verdict() {
+    public String describeVerdict() {
         int seen = processedCount.get();
         Duration flatFor = Duration.between(lastAdvance, Instant.now());
         String shape = seen > lastSeen.get()

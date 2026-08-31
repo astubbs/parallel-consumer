@@ -1,4 +1,4 @@
-# Two CI lanes are red on the confluentinc#857 branch, and the cause is not established
+# The confluentinc#857 branch is several times slower in transactional mode - the red lane is a symptom
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
@@ -77,10 +77,53 @@ alternated:
   same non-evidence that voided the 2026-08-31 seed replay. A local run that never fails has not
   tested the hypothesis.
 
+
+## RESULT, 2026-08-31 - the prediction held, and the finding is bigger than the lane
+
+**The branch is roughly four to ten times slower than master on this test.** Measured, not inferred.
+
+Three repetitions per arm, alternating, on a machine whose load was sampled per run. Both arms
+carried an IDENTICAL instrument - the same two test files and the same inert `describeProgress()` -
+so the only difference left was the branch's main-code work.
+
+| arm | outcomes | records/second observed |
+|---|---|---|
+| master | green throughout | ~5,000 - 7,100 |
+| the branch | red, red, green | ~650 - 1,800 |
+
+**The load-bearing comparison is the pair where BOTH arms passed.** A failing run's rate is capped by
+the deadline it hit, so red-versus-green would be an artefact. In the repetition where the branch
+went green it still ran at ~1,300-1,800 against master's ~6,500-6,900 at comparable load. Slower
+when it passes, not merely slower when it fails.
+
+**This is why the rate instrument had to exist.** The pass/fail deadline had been reporting "flaky"
+for weeks - the same tree passing or failing on the machine's mood - while the rate says the same
+thing on every run in both directions. The earlier pass/fail arm of this experiment came within one
+green run of being read as "the branch is fine".
+
+### What this does and does not establish
+
+- **Establishes:** the branch causes it. Master does not reproduce, including under heavier load than
+  the branch failed at, and the gap persists on green runs.
+- **Does NOT establish which part of the branch.** The `tryLock` fix cannot be responsible - wrong
+  commit mode - which leaves cluster 2 as the pre-registered candidate, but no arm has isolated it.
+  The next experiment is a third tree: master plus cluster 2 alone, or the branch with cluster 2
+  reverted. Until that runs, "cluster 2" remains the hypothesis it was written down as.
+- **Scope:** one test, transactional mode, KEY ordering, one machine. The `Performance Tests` lane
+  failure (`MultiInstanceHighVolumeTest`, consumer-sync mode) has not been measured this way and may
+  or may not share a cause.
+
+### The consequence for the branch
+
+A four-fold throughput regression is not a red lane to be explained away; it is a defect. It also
+sharpens the decomposition question already recorded below: the branch's measured claim is about
+twenty lines of lock change, verified on both assignors, and this regression is in the part that
+verification never touched.
+
 ## Why it matters beyond the branch that found it
 
 If cluster 2 is implicated, the question is not only "fix it" but whether that work belongs on a PR
 whose measured claim is about twenty lines of lock change. The decomposition that produced
-astubbs/parallel-consumer#375, #376 and #381 left cluster 2 in place as the largest unextracted
+astubbs#375, astubbs#376 and astubbs#381 left cluster 2 in place as the largest unextracted
 piece, on the grounds that its fix is a design decision about consumer ownership rather than a patch.
 A red lane traceable to it would be an argument for separating it.

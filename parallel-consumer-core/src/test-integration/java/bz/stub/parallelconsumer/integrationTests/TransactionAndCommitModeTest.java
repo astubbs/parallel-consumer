@@ -36,6 +36,7 @@ import org.junitpioneer.jupiter.cartesian.ArgumentSets;
 import org.junitpioneer.jupiter.cartesian.CartesianTest;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -249,6 +250,7 @@ class TransactionAndCommitModeTest extends BrokerIntegrationTest<String, String>
         // round without progress should be tolerated is recorded in docs/refactoring.md.
         Duration deadline = timeoutFor(numThreads);
         ProgressTracker progressTracker = new ProgressTracker(processedCount, null, deadline);
+        Instant waitStarted = Instant.now();
         var failureMessage = msg("All keys sent to input-topic should be processed and produced, within time (expected: {} commit: {} order: {} max poll: {})",
                 expectedMessageCount, commitMode, order, maxPoll);
         try {
@@ -284,13 +286,43 @@ class TransactionAndCommitModeTest extends BrokerIntegrationTest<String, String>
                         all.assertAll();
                     });
         } catch (ConditionTimeoutException e) {
-            log.debug("Expected keys (size {})", expectedKeys.size());
-            log.debug("Consumed keys ack'd (size {})", consumedKeys.size());
-            log.debug("Produced keys (size {})", producedKeysAcknowledged.size());
-            expectedKeys.removeAll(consumedKeys);
-            log.info("Missing keys from consumed: {}", expectedKeys);
-            fail(failureMessage + "\n" + e.getMessage());
+            // The diagnosis goes in the FAILURE MESSAGE, not in a log line. It used to be three
+            // log.debug calls and a log.info, on a logger both test profiles pin to warn - so a
+            // reader of a failed CI run saw the assertion and none of the evidence behind it, and
+            // could not tell a slow run from a stalled one. docs/logging.md owns the profiles.
+            // A count that only exists at a level nobody enables has not been reported.
+            Set<String> missingFromConsumed = new HashSet<>(expectedKeys);
+            missingFromConsumed.removeAll(consumedKeys);
+            long failedAfterMs = Duration.between(waitStarted, Instant.now()).toMillis();
+            long rate = failedAfterMs > 0 ? (processedCount.get() * 1000L) / failedAfterMs : -1;
+            String diagnosis = msg("consumed={} producedAck={} expected={} stillMissing={} "
+                            + "recordsPerSecond={} | {} | pc: {}",
+                    consumedKeys.size(), producedKeysAcknowledged.size(), expectedKeys.size(),
+                    missingFromConsumed.size(), rate, progressTracker.describeVerdict(),
+                    pc.describeProgress());
+            fail(failureMessage + "\n" + diagnosis + "\n" + e.getMessage());
         }
+
+        // ALWAYS report the rate, on a passing run as well as a failing one, and at WARN so the test
+        // log profiles do not filter it away.
+        //
+        // This exists because the assertion above is a WALL-CLOCK DEADLINE, and a deadline is a coin
+        // flip under load: the same tree passes or fails depending on what else the machine is doing,
+        // so a red run says "slower than 30s here, today" and nothing else. That is not a property
+        // you can compare between two trees, which is exactly what is needed to decide whether a
+        // branch made throughput worse. A rate is.
+        //
+        // The repo states the general form: assert the property, report the timing. A timing bound
+        // used as a correctness gate manufactures its own evidence - see
+        // docs/solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md.
+        // The deadline stays, because a run that never finishes must still fail; the rate is what
+        // makes two runs comparable.
+        long elapsedMs = Duration.between(waitStarted, Instant.now()).toMillis();
+        long perSecond = elapsedMs > 0 ? (processedCount.get() * 1000L) / elapsedMs : -1;
+        log.warn("PC-THROUGHPUT commitMode={} order={} maxPoll={} threads={} processed={} expected={} "
+                        + "elapsedMs={} recordsPerSecond={}",
+                commitMode, order, maxPoll, numThreads, processedCount.get(), expectedMessageCount,
+                elapsedMs, perSecond);
 
         pc.closeDrainFirst();
 
