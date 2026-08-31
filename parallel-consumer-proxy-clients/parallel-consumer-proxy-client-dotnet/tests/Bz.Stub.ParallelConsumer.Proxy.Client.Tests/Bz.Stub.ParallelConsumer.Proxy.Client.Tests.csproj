@@ -1,0 +1,35 @@
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+    The .NET client's test suite. It spawns the JVM conformance harness as an ordinary sidecar and
+    drives the real gRPC wire; there is no in-process fake, because a fake would prove that this
+    client agrees with itself.
+
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Bz.Stub.ParallelConsumer.Proxy.Client.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+
+    <!--
+        The library targets net8.0, which is the CI row's pinned SDK; a developer machine may carry
+        only a newer runtime. RollForward lets the net8.0 test host run there, so "build what CI
+        builds" and "run it locally" are not in conflict.
+    -->
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" PrivateAssets="All" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Bz.Stub.ParallelConsumer.Proxy.Client/Bz.Stub.ParallelConsumer.Proxy.Client.csproj" />
+  </ItemGroup>
+
+</Project>

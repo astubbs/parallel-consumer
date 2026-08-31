@@ -43,6 +43,19 @@ machine under self-inflicted load is neither. This note IS the start of that led
 rather than rewriting it, and if CI produces one, that is the evidence the quarantine registry
 wants.
 
+## Sightings
+
+<!-- post-merge: checked-begin -->
+<!-- The row names the PR rather than its branch, because a PR outlives the branch it merges from,
+     and it describes a run that had already happened when it was written - so nothing in it depends
+     on that PR still being open. -->
+
+| When | Where | What was seen |
+|---|---|---|
+| 2026-09-01 | astubbs/parallel-consumer#390 (the ten foreign dispatch clients), full reactor `test` with `-Dpc.foreignClients`, macOS | `processInKeyOrder(CommitMode)[1]` red on the **sanity check**, `actual size is 0 while expected size is 9` - the same assertion and the same shape as the original sighting, a different parameterisation again. Same load condition: a second agent was running `parallel-consumer-core` tests in another worktree on the same box at the time. That PR's diff touches no file under `parallel-consumer-core`. |
+| 2026-09-01 | the same, second run, on a box with nothing else running | red again, and wider: `processInKeyOrder` failed on **all three** parameterisations plus `inFlightMessagesCommittedIfProcessedDuringShutdown[3]`, same assertion each time. **A control arm was run and it does not support "load".** The identical command on the base branch, same box, same window: green. The method alone on the branch: green 3 of 3. `parallel-consumer-core` is byte-identical between the two branches, so nothing in the diff can explain the split - and CI's `tests` job, which runs the same suite on a Linux runner, was green on that PR. Reported as an unexplained rate rather than a verdict: red 2 of 2 locally on one branch, green 1 of 1 on its base, green on CI. |
+<!-- post-merge: checked-end -->
+
 The fix, when somebody takes it, is the same rule the solutions write-up already states: await the
 condition the test actually depends on (every seeded record polled) rather than a fixed number of
 loop cycles, so the sanity check cannot be reached before it can be true.

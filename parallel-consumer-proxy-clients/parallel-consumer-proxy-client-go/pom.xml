@@ -17,27 +17,80 @@
     <packaging>pom</packaging>
 
     <!--
-        Thin Maven wrapper over the Go toolchain. This module is in the reactor only under
-        -Dpc.foreignClients - see the foreign-clients profile in the clients aggregator for why
-        opt-in is load-bearing - and all it does today is build a program that prints one fixture
-        line and check that it did (astubbs#242).
+        Thin Maven wrapper over the Go toolchain (go.mod beside this file). The commands below run
+        ONLY under -Dpc.foreignClients - see the foreign-clients profile in the clients aggregator
+        for why opt-in is load-bearing - and both go through bin/foreign-client-step.sh, which
+        decides what an ABSENT go means: a banner and a skip by default, red under
+        -Dpc.foreign.strict=1, which is what the CI row passes. The commands themselves are declared
+        here and nowhere else (astubbs#242).
 
-        go.mod beside this pom is the language-native build file; cmd/hello is the whole
-        program. `go build -o` is used rather than a bare `go build ./...`, which for a
-        multi-package match compiles as a check and DISCARDS the objects - there would then be
-        nothing to run, and the fixture would be asserting about a binary the build never kept.
+        THE TEST NEEDS THE SIDECAR, and the go-sidecar-harness profile below is what gets it. One Go
+        test spawns parallel-consumer-proxy's real Main over the real wire, and with no Maven
+        dependency at all `-am` did not pull the proxy into the reactor - so the CI row's own
+        command, `./mvnw test -pl :parallel-consumer-proxy-client-go -am -Dpc.foreignClients`, ran
+        the Go test against an unbuilt `parallel-consumer-proxy/target` and failed there. The profile
+        declares that dependency in the opt-in lane only and writes the resolved classpath where the
+        test reads it.
 
-        Both commands go through bin/foreign-client-step.sh, which decides what an ABSENT go
-        means: a banner and a skip by default, red under -Dpc.foreign.strict=1, which is what the
-        CI row passes. The commands themselves are declared here and nowhere else.
+        The Go test still fails rather than skipping when the sidecar is absent, because a test that
+        quietly does not run is not a passing test.
+
+        TWO FLAGS ON THE TEST COMMAND, AND NEITHER IS DECORATION.
+
+        -count=1 DEFEATS GO'S TEST CACHE, and it is here because the cache produced a false pass that
+        was caught by accident. `go test` caches a package's result keyed on its own inputs, and the
+        sidecar this module spawns is not one of them - so breaking the sidecar's refusal on purpose,
+        to prove the handshake test could fail, returned `ok (cached)` and the arm read as green.
+        A CI row is a fresh checkout and never sees it; a developer changing the engine and re-running
+        the Go client does, silently, which is the worse half.
+
+        -race is the Go client's own concurrency check, and it is the cheapest real win available on
+        the whole polyglot surface: this is the client with the executor fan-out, the detector is
+        built into the toolchain, and it costs one flag.
+        docs/inflight/static-polyglot-client-analysers.md ranked it first of five and recorded that
+        the gating recipe did not use it while a per-language note claimed it did.
     -->
     <properties>
         <pc.foreign.skip>false</pc.foreign.skip>
         <pc.foreign.build.executable>bash</pc.foreign.build.executable>
-        <pc.foreign.build.args>${pc.foreign.step} --tool go -- go build -o target/hello ./cmd/hello</pc.foreign.build.args>
+        <pc.foreign.build.args>${pc.foreign.step} --tool go -- go build ./...</pc.foreign.build.args>
         <pc.foreign.test.executable>bash</pc.foreign.test.executable>
-        <pc.foreign.test.args>${pc.foreign.step} --tool go --hello go -- target/hello</pc.foreign.test.args>
+        <pc.foreign.test.args>${pc.foreign.step} --tool go -- go test -race -count=1 ./...</pc.foreign.test.args>
     </properties>
+
+    <profiles>
+        <!--
+            The sidecar this module's handshake test spawns. The clients aggregator owns the wiring
+            and the reasoning - its `sidecar-classpath` execution, and why hoisting it is safe; what
+            is here is the one thing that cannot be hoisted, the dependency that makes `-am` build
+            parallel-consumer-proxy before this module's suite tries to spawn it. Test-scoped and
+            inside the opt-in profile, so an ordinary build has no edge to the sidecar at all.
+        -->
+        <profile>
+            <id>go-sidecar-harness</id>
+            <activation>
+                <property>
+                    <name>pc.foreignClients</name>
+                </property>
+            </activation>
+            <dependencies>
+                <dependency>
+                    <groupId>bz.stub.parallelconsumer</groupId>
+                    <artifactId>parallel-consumer-proxy</artifactId>
+                    <version>${project.version}</version>
+                    <scope>test</scope>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 
     <build>
         <plugins>
@@ -46,10 +99,34 @@
                 <artifactId>exec-maven-plugin</artifactId>
             </plugin>
             <!--
-                NO maven-clean-plugin FILESET HERE, and that is a decision rather than an omission -
-                "nothing to clean" and "nobody wired the clean" look identical in a pom. Everything
-                this module builds lands under target/, which Maven's default clean already takes.
-                Go's own caches (GOCACHE, GOMODCACHE) live outside the module and are this language's ~/.m2 - `go clean -cache` is not what `mvn clean` means.
+                NO maven-clean-plugin FILESET HERE, AND THAT IS A MEASURED RESULT RATHER THAN AN
+                OMISSION - the note exists because "nothing to clean" and "nobody wired the clean"
+                look identical in a pom (astubbs#242).
+
+                GO WRITES NOTHING INTO THIS DIRECTORY. `go build ./...` matches several packages, and
+                for that form the toolchain compiles as a check and DISCARDS the objects - verified
+                by running it in a pristine tree and finding not one new file, tracked or ignored.
+                What it produces instead goes to the build cache, GOCACHE (~/.cache/go-build), with
+                the modules in GOMODCACHE (~/go/pkg/mod). Both are outside the module, both are
+                shared with every other checkout and agent on the machine, and both are this
+                language's ~/.m2 - so `go clean -cache` or `-modcache` is exactly the deletion this
+                repo forbids, not the one it wants. `go vet` and `go tool staticcheck` are the same
+                story.
+
+                THE ONE BUILT ARTEFACT IS ALREADY COVERED. The shared conformance suite prebuilds
+                `go build -o target/conformance-runner ./cmd/conformance-runner` - grep
+                `target/conformance-runner` in the conformance module's LanguageRunners - and Maven's
+                default clean takes target/ whole, no configuration needed. Proven both ways: the
+                binary is there after the suite's prebuild and gone after `mvn clean`.
+
+                gen/ IS SOURCE, NOT OUTPUT. The protobuf stubs under gen/ are committed on purpose,
+                because Go has no codegen step at `go get` time - scripts/generate-proto.sh says so
+                in its header. Deleting them would break a consumer of this module, and the
+                regeneration check is `git status` staying clean, not a clean removing them.
+
+                So if a future change here starts emitting into the module - a `go build -o` landing
+                outside target/, a `go test -c` binary - it needs a fileset added below, and this
+                paragraph is the reason nobody had to write one before.
             -->
         </plugins>
     </build>

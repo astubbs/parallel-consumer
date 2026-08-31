@@ -224,6 +224,86 @@ module_evidence:
       module's test-jar and as a binding of the cross-binding matrix; what is still missing is the
       half that makes the two transports answerable to the SAME scenarios, because the gRPC cell needs
       an engine to dispatch and has none - see proxy-conformance-suite.
+  - id: proxy-client-kotlin
+    artifact: parallel-consumer-proxy-client-kotlin
+    coverage: >-
+      The handshake against a REAL sidecar process started through the proxy module's own entry point: Configure reaching the session service and the service's refusal reaching the caller in this language's own error idiom, asserted on the STATUS CODE because the authority allowlist and the admission slot answer with different codes before the service method runs - with a control arm pointed at a port nothing is listening on, so the assertion cannot pass on any failure at all. Beside it, the library's own logic over scripted or in-process fixtures: the dispatch queue's hand-out and its overflow-is-a-protocol-violation rule, the in-flight ceiling counting queued plus executing, the session's end carrying its cause, wire and outcome conversion, and that no verdict is invented for work the user's function did not finish.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-kotlin
+    limitation: >-
+      NO RECORD HAS CROSSED THE WIRE. The sidecar this client connects to hosts no engine and refuses every session, so what is evidenced ends at the handshake; everything past it is against fixtures this module writes, which can prove how the client reacts and cannot prove that a real engine would behave that way. Nothing has run against a broker. Its conformance runner compiles and is registered; nothing has executed it, because that needs an engine - see proxy-conformance-suite.
+  - id: proxy-client-scala
+    artifact: parallel-consumer-proxy-client-scala
+    coverage: >-
+      The handshake against a REAL sidecar process started through the proxy module's own entry point: Configure reaching the session service and the service's refusal reaching the caller in this language's own error idiom, asserted on the STATUS CODE because the authority allowlist and the admission slot answer with different codes before the service method runs - with a control arm pointed at a port nothing is listening on, so the assertion cannot pass on any failure at all. Beside it, the library's own logic over scripted or in-process fixtures: the dispatch queue's hand-out and its overflow-is-a-protocol-violation rule, the in-flight ceiling counting queued plus executing, the session's end carrying its cause, wire and outcome conversion, and that no verdict is invented for work the user's function did not finish.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-scala
+    limitation: >-
+      NO RECORD HAS CROSSED THE WIRE. The sidecar this client connects to hosts no engine and refuses every session, so what is evidenced ends at the handshake; everything past it is against fixtures this module writes, which can prove how the client reacts and cannot prove that a real engine would behave that way. Nothing has run against a broker. Its conformance runner compiles and is registered; nothing has executed it, because that needs an engine - see proxy-conformance-suite.
+  - id: proxy-client-go
+    artifact: parallel-consumer-proxy-client-go
+    coverage: >-
+      The handshake against a REAL sidecar process started through the proxy module's own entry point: Configure reaching the session service and the service's refusal reaching the caller in this language's own error idiom, asserted on the STATUS CODE because the authority allowlist and the admission slot answer with different codes before the service method runs - with a control arm pointed at a port nothing is listening on, so the assertion cannot pass on any failure at all. Beside it, the library's own logic over scripted or in-process fixtures: the dispatch queue's hand-out and its overflow-is-a-protocol-violation rule, the in-flight ceiling counting queued plus executing, the session's end carrying its cause, wire and outcome conversion, and that no verdict is invented for work the user's function did not finish.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-go
+    limitation: >-
+      NO RECORD HAS CROSSED THE WIRE. The sidecar this client connects to hosts no engine and refuses every session, so what is evidenced ends at the handshake; everything past it is against fixtures this module writes, which can prove how the client reacts and cannot prove that a real engine would behave that way. Nothing has run against a broker. Its conformance runner compiles and is registered; nothing has executed it, because that needs an engine - see proxy-conformance-suite.
+  - id: proxy-client-python
+    artifact: parallel-consumer-proxy-client-python
+    coverage: >-
+      The handshake against a REAL sidecar process started through the proxy module's own entry point: Configure reaching the session service and the service's refusal reaching the caller in this language's own error idiom, asserted on the STATUS CODE because the authority allowlist and the admission slot answer with different codes before the service method runs - with a control arm pointed at a port nothing is listening on, so the assertion cannot pass on any failure at all. Beside it, the library's own logic over scripted or in-process fixtures: the dispatch queue's hand-out and its overflow-is-a-protocol-violation rule, the in-flight ceiling counting queued plus executing, the session's end carrying its cause, wire and outcome conversion, and that no verdict is invented for work the user's function did not finish.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-python
+    limitation: >-
+      NO RECORD HAS CROSSED THE WIRE. The sidecar this client connects to hosts no engine and refuses every session, so what is evidenced ends at the handshake; everything past it is against fixtures this module writes, which can prove how the client reacts and cannot prove that a real engine would behave that way. Nothing has run against a broker. Its conformance runner compiles and is registered; nothing has executed it, because that needs an engine - see proxy-conformance-suite.
+  - id: proxy-client-typescript
+    artifact: parallel-consumer-proxy-client-typescript
+    coverage: >-
+      The handshake against a REAL sidecar process started through the proxy module's own entry point: Configure reaching the session service and the service's refusal reaching the caller in this language's own error idiom, asserted on the STATUS CODE because the authority allowlist and the admission slot answer with different codes before the service method runs - with a control arm pointed at a port nothing is listening on, so the assertion cannot pass on any failure at all. Beside it, the library's own logic over scripted or in-process fixtures: the dispatch queue's hand-out and its overflow-is-a-protocol-violation rule, the in-flight ceiling counting queued plus executing, the session's end carrying its cause, wire and outcome conversion, and that no verdict is invented for work the user's function did not finish.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-typescript
+    limitation: >-
+      NO RECORD HAS CROSSED THE WIRE. The sidecar this client connects to hosts no engine and refuses every session, so what is evidenced ends at the handshake; everything past it is against fixtures this module writes, which can prove how the client reacts and cannot prove that a real engine would behave that way. Nothing has run against a broker. Its conformance runner compiles and is registered; nothing has executed it, because that needs an engine - see proxy-conformance-suite.
+  - id: proxy-client-rust
+    artifact: parallel-consumer-proxy-client-rust
+    coverage: >-
+      The handshake against a REAL sidecar process started through the proxy module's own entry point: Configure reaching the session service and the service's refusal reaching the caller in this language's own error idiom, asserted on the STATUS CODE because the authority allowlist and the admission slot answer with different codes before the service method runs - with a control arm pointed at a port nothing is listening on, so the assertion cannot pass on any failure at all. Beside it, the library's own logic over scripted or in-process fixtures: the dispatch queue's hand-out and its overflow-is-a-protocol-violation rule, the in-flight ceiling counting queued plus executing, the session's end carrying its cause, wire and outcome conversion, and that no verdict is invented for work the user's function did not finish.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-rust
+    limitation: >-
+      NO RECORD HAS CROSSED THE WIRE. The sidecar this client connects to hosts no engine and refuses every session, so what is evidenced ends at the handshake; everything past it is against fixtures this module writes, which can prove how the client reacts and cannot prove that a real engine would behave that way. Nothing has run against a broker. Its conformance runner compiles and is registered; nothing has executed it, because that needs an engine - see proxy-conformance-suite.
+  - id: proxy-client-ruby
+    artifact: parallel-consumer-proxy-client-ruby
+    coverage: >-
+      The handshake against a REAL sidecar process started through the proxy module's own entry point: Configure reaching the session service and the service's refusal reaching the caller in this language's own error idiom, asserted on the STATUS CODE because the authority allowlist and the admission slot answer with different codes before the service method runs - with a control arm pointed at a port nothing is listening on, so the assertion cannot pass on any failure at all. Beside it, the library's own logic over scripted or in-process fixtures: the dispatch queue's hand-out and its overflow-is-a-protocol-violation rule, the in-flight ceiling counting queued plus executing, the session's end carrying its cause, wire and outcome conversion, and that no verdict is invented for work the user's function did not finish.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-ruby
+    limitation: >-
+      NO RECORD HAS CROSSED THE WIRE. The sidecar this client connects to hosts no engine and refuses every session, so what is evidenced ends at the handshake; everything past it is against fixtures this module writes, which can prove how the client reacts and cannot prove that a real engine would behave that way. Nothing has run against a broker. Its conformance runner compiles and is registered; nothing has executed it, because that needs an engine - see proxy-conformance-suite.
+  - id: proxy-client-dotnet
+    artifact: parallel-consumer-proxy-client-dotnet
+    coverage: >-
+      The handshake against a REAL sidecar process started through the proxy module's own entry point: Configure reaching the session service and the service's refusal reaching the caller in this language's own error idiom, asserted on the STATUS CODE because the authority allowlist and the admission slot answer with different codes before the service method runs - with a control arm pointed at a port nothing is listening on, so the assertion cannot pass on any failure at all. Beside it, the library's own logic over scripted or in-process fixtures: the dispatch queue's hand-out and its overflow-is-a-protocol-violation rule, the in-flight ceiling counting queued plus executing, the session's end carrying its cause, wire and outcome conversion, and that no verdict is invented for work the user's function did not finish.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-dotnet
+    limitation: >-
+      NO RECORD HAS CROSSED THE WIRE. The sidecar this client connects to hosts no engine and refuses every session, so what is evidenced ends at the handshake; everything past it is against fixtures this module writes, which can prove how the client reacts and cannot prove that a real engine would behave that way. Nothing has run against a broker. Its conformance runner compiles and is registered; nothing has executed it, because that needs an engine - see proxy-conformance-suite.
+  - id: proxy-client-cpp
+    artifact: parallel-consumer-proxy-client-cpp
+    coverage: >-
+      Its own suite, run INSIDE its build image - the dispatch queue's hand-out and its overflow rule, the option validation, and the port line found among the sidecar's log chatter - plus a statically linked artifact that runs on a host with none of the image's libraries, with a dynamically linked control beside it that must fail there.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-cpp
+    limitation: >-
+      NO RECORD HAS CROSSED THE WIRE, and unlike the other eight languages this one has not spoken to a real sidecar at all: its toolchain lives in a container with no JVM in it, so the handshake-against-a-real-sidecar check the others carry has nowhere to run here. What is evidenced is the library's own logic and the portability of what the image produced. Its conformance runner compiles and is registered; nothing has executed it, because that needs an engine behind the sidecar - see proxy-conformance-suite.
+  - id: proxy-client-swift
+    artifact: parallel-consumer-proxy-client-swift
+    coverage: >-
+      Its own suite, run INSIDE its build image - the dispatch queue's hand-out and its overflow rule, the option validation, and the port line found among the sidecar's log chatter - plus a statically linked artifact that runs on a host with none of the image's libraries, with a dynamically linked control beside it that must fail there.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-swift
+    limitation: >-
+      NO RECORD HAS CROSSED THE WIRE, and unlike the other eight languages this one has not spoken to a real sidecar at all: its toolchain lives in a container with no JVM in it, so the handshake-against-a-real-sidecar check the others carry has nowhere to run here. What is evidenced is the library's own logic and the portability of what the image produced. Its conformance runner compiles and is registered; nothing has executed it, because that needs an engine behind the sidecar - see proxy-conformance-suite.
   - id: proxy-conformance-suite
     artifact: parallel-consumer-proxy-conformance
     coverage: >-

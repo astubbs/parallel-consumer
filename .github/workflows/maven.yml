@@ -109,11 +109,18 @@ jobs:
       # from the plugin's own zinc dependency and no pom property carries it, so a `dependency:get`
       # would need a literal that rots silently the next time the plugin is bumped - and warming
       # the wrong coordinate is indistinguishable from a cache hit until it fails four jobs
-      # downstream. `-am` keeps this to the Scala module's own reactor chain, which is the root
-      # pom, the clients aggregator and the module itself: it declares no Parallel Consumer
-      # dependency, so nothing else is built here. (astubbs#242)
+      # downstream. (astubbs#242)
+      #
+      # `test-compile`, NOT `compile`, and the difference is load-bearing rather than a wider net.
+      # The Scala module now depends on the gRPC transport, which reaches the protocol module, which
+      # TEST-depends on parallel-consumer-core's test-jar. Maven resolves an inter-module test-jar
+      # from the reactor only once the producing module has reached test-compile; stopped at
+      # `compile` it falls back to the repository, and on a runner with an empty ~/.m2 that is
+      # `Could not find artifact ...core:jar:tests` - which fails this job, and with it the cache
+      # save every other lane restores from. Nothing about this is local: a developer's ~/.m2 holds
+      # the artifact from any earlier build, so the failure only exists on a cold machine.
       - name: Warm scala-maven-plugin's compiler and zinc bridge
-        run: ./mvnw --batch-mode -Pci -pl :parallel-consumer-proxy-client-scala -am compile
+        run: ./mvnw --batch-mode -Pci -pl :parallel-consumer-proxy-client-scala -am test-compile
       - name: Save Maven cache (rotating key)
         if: success()
         uses: actions/cache/save@v4

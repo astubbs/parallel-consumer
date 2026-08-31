@@ -64,6 +64,27 @@ class SelectorMatchingNothingFailsTest {
                 .that(thrown).hasMessageThat().contains(JvmClientBindings.JAVA_GRPC);
     }
 
+    /**
+     * A deferred FOREIGN cell fails too - and the failure has to read differently from a typo's, because the
+     * reader's next move differs. {@code go} is not a misspelling of anything: the client exists, its runner
+     * exists, and what is missing is an engine for the runner to reach. Telling a CI row's operator that
+     * {@code go} is unrecognised would send them hunting a spelling mistake that is not there.
+     */
+    @Test
+    void aDeferredLanguageFailsAsDeferredRatherThanAsATypo() {
+        for (var runner : LanguageRunners.all()) {
+            var thrown = assertThrows(IllegalArgumentException.class,
+                    () -> ConformanceBindings.select(runner.language()),
+                    () -> runner.language() + " is not registered, so selecting it must fail");
+
+            assertWithMessage("the failure names the language that was asked for")
+                    .that(thrown).hasMessageThat().contains(runner.language());
+            assertWithMessage("and says it is waiting on the engine rather than misspelled, or the reader "
+                    + "goes looking for a typo that is not there")
+                    .that(thrown).hasMessageThat().contains("deferred rather than");
+        }
+    }
+
     @Test
     void anEmptySelectorMeansEverything() {
         var everything = ConformanceBindings.select(null).size();
