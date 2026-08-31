@@ -215,6 +215,15 @@ class ParallelEoSStreamProcessorPauseResumeTest extends ParallelEoSStreamProcess
         //
         // What the test is actually for - that pausing finishes in-flight work successfully and commits its
         // offsets - is asserted below and is unchanged in both modes.
+        //
+        // WHERE THE LOST STRICTNESS GOES. Loosening this line deletes a real property of the shipped engine:
+        // strictly MORE than maxConcurrency records must drain, because the load factor keeps a multiple of it
+        // already committed to running in the executor's queue. That half cannot be asserted on this branch - it
+        // has to be skipped for the queue-less engine, and a skip needs a per-engine predicate that only arrives
+        // with the direct-pull work. It is restored, at full strength and in its own skippable method, on
+        // perf/shard-occupancy-scan-v2 (astubbs#361), as
+        // ParallelEoSStreamProcessorPauseResumeTest#pausingDrainsThePreLoadedExecutorQueueAsWellAsTheInFlightRecords.
+        // Do not read the loosening as a decision that the property stopped mattering.
         Awaitility
                 .waitAtMost(defaultTimeout)
                 .alias("at least " + degreeOfParallelism + " records should be processed")
@@ -226,6 +235,12 @@ class ParallelEoSStreamProcessorPauseResumeTest extends ParallelEoSStreamProcess
         // shouldn't have anymore in flight records now
         assertThat(testUserFunction.numInFlightRecords.get()).isEqualTo(0);
         assertThat(parallelConsumer.getWm().getNumberRecordsOutForProcessing()).isEqualTo(0);
+
+        // The bound the original assertion never had, and the part of the lost strictness that CAN be asserted
+        // here: whatever was already dispatched drains, but the pause stops the rest, so this must be nowhere near
+        // the whole set. Without it, an engine that ignored the pause entirely would satisfy everything above.
+        // Engine-independent, so no skip is needed and it holds under virtual threads too.
+        assertThat(testUserFunction.numProcessedRecords.get()).isLessThan(numTestRecordsPerSet);
 
         // resume parallel consumer ->
         parallelConsumer.resumeIfPaused();
