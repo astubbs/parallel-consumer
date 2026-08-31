@@ -1556,17 +1556,28 @@ class PcTaskDispatcherTest {
     }
 
     /**
-     * The branch {@code dropStreamTimeHoldsWithoutPublishing()} is named for, and which nothing exercised
-     * until this test - only the abort path was covered (astubbs#255, U13).
+     * A closed dispatcher's mark is frozen at the last honest value it had (astubbs#255, U13) - the branch
+     * {@code dropStreamTimeHoldsWithoutPublishing()} is named for, and which nothing exercised until this
+     * test: only the abort path was covered.
+     *
+     * <h2>The first version of this test could not fail, and the sabotage is what caught it</h2>
+     * It closed a dispatcher over two latched records and asserted the mark had not advanced. The reasoning
+     * was that {@code close()} forces the pool with {@code shutdownNow()}, the interrupted chains throw into
+     * {@code recordFailure}, and the very next statement is the drain - which without a freeze releases the
+     * killed records' holds, empties the map, and publishes the highest timestamp ever dispatched over work
+     * that never completed.
      * <p>
-     * A <b>clean</b> close whose pool does not drain in time calls {@code shutdownNow()}, which interrupts
-     * the running chains; each throws into {@code recordFailure}, and the very next statement in
-     * {@code close()} is the drain. Without the freeze this class now raises at the top of both close paths,
-     * that drain releases the killed records' holds and republishes - advancing the mark to the highest
-     * timestamp ever dispatched, over work the shutdown had just destroyed.
+     * <b>Removing the freeze left it green.</b> The interrupted workers do not reliably enqueue their
+     * outcomes before {@code close()}'s drain has already polled an empty mailbox, so the mark stays put for
+     * a reason that has nothing to do with the flag. That advance is a genuine race - three of the four
+     * orderings of two killed records produce it - but a race is not something this test can pin, and a test
+     * that passes either way is the "green that asserted nothing" this module keeps finding in its own work.
      * <p>
-     * The interrupt is what makes this deterministic: {@code awaitLatch} rethrows rather than looping, so the
-     * chain really does end when {@code shutdownNow()} fires rather than waiting out the close timeout.
+     * So the discriminating assertion is the <b>second</b> one below: a publish reaching a closed dispatcher
+     * by the one deterministic route, {@link PcTaskDispatcher#seedStreamTime(long)}. That is the field's
+     * actual claim - <em>once either close path has begun, the mark stops moving</em> - rather than one
+     * scenario in which the claim happens to hold. The first assertion is kept because the scenario is the
+     * one the defect was reported from, and is labelled for what it is worth on its own: not much.
      */
     @Test
     void aCleanCloseThatHasToForceThePoolDoesNotAdvanceTheMarkOverTheWorkItKilled() {
@@ -1592,7 +1603,17 @@ class PcTaskDispatcherTest {
 
         assertThat(forced.getStreamTimeLowWaterMark())
                 .as("the two records were killed by the forced shutdown, not completed, so close()'s own "
-                        + "drain must not publish 900 over them. Frozen at the last honest value.")
+                        + "drain must not publish 900 over them. WEAK ON ITS OWN - measured green with the "
+                        + "freeze removed, because the interrupted workers do not reliably enqueue before "
+                        + "that drain polls. The assertion below is the one that discriminates.")
+                .isEqualTo(10L);
+
+        forced.seedStreamTime(9_999L);
+
+        assertThat(forced.getStreamTimeLowWaterMark())
+                .as("THE DISCRIMINATOR: a closed dispatcher's mark is frozen, whatever reaches it. seeding "
+                        + "is the one route that publishes without a drain, so this fails the moment the "
+                        + "freeze is removed from close() - which the assertion above does not.")
                 .isEqualTo(10L);
     }
 
