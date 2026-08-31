@@ -72,6 +72,27 @@ revoke. Cells, caveats and the two instrumentation faults caught along the way a
 `docs/solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md` and
 the probe's own Calibration status javadoc.
 
+0. **AT MERGE, resolve a deliberate divergence: the dependency DELETED `getAssignmentSize`, and
+   this branch still calls it.** The simplify pass on astubbs/parallel-consumer#393 removed
+   `assignmentSizeCache`, `ConsumerManager.getAssignmentSize()` and the `consumer.assignment()` call
+   in `updateCache()`, on the grounds that the base commit had deleted `pausedForThrottling` for
+   being exactly that shape and that the poll hot path should read Kafka once per pass. Correct on
+   that branch, where nothing called it.
+
+   **It is not zero-caller here.** This branch adds a public
+   `AbstractParallelEoSStreamProcessor.getAssignmentSize()` delegating to the deleted method, and
+   `MultiInstanceRebalanceTest` calls it as `assignedPartitions={}` in a failure-time state dump. So
+   the merge has a decision to make, and it will surface as a compile error rather than silently -
+   which is the good case.
+
+   **The resolution is not "revert the deletion".** The caller is a diagnostic on a failure path,
+   invoked once per dump, so the per-poll cost argument that justified the deletion does not apply
+   to it: have the dump read `consumer.assignment().size()` at the point of use, or drop the field.
+   Nothing on master calls either method, so no shipped API is at stake.
+
+<!-- post-merge: checked - describes a merge-time task on named PRs, so it reads as a record of what
+     the merge had to resolve once both have landed -->
+
 1. **Settle whether the stall detector MISSES real failures - REOPENED 2026-08-31.** It was closed
    on 2026-08-28 after eight replays on the pre-astubbs#344 tree, where the silence had been seen:
    five failures, every one caught by some detector, and one caught by a DIFFERENT detector while
