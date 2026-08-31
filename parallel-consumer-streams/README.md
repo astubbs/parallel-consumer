@@ -243,6 +243,35 @@ so one known flake no longer costs a full re-run of both arms.
 write: `SurefireArm` refuses a directory that is missing, empty, or older than the build that is
 reading it, because all three parse as a clean pass.
 
+### The laws Kafka's own suite cannot state
+
+Kafka's suite is the oracle for *behaviour preservation*. It cannot state the properties this module
+exists for, because stock Kafka Streams has no way to express them - there is no stock arm in which
+two records of one partition run at once, so no stock test asserts what happens when they do. Four
+broker-backed arms do, and each carries its control:
+
+| Law | The arm | Its control |
+|---|---|---|
+| Records of distinct keys on one partition run **concurrently**, and records of one key never do | `PcDrivenStreamsDispatchTest` | the same topology and data with the switch off, asserting the dispatch counter is zero and the chain was walked one record at a time |
+| PC-driven output is **identical to what stock Kafka Streams produced**, record for record | `PcDrivenStreamsProofTest` | a baseline generated in a JVM that provably never loaded the patch - see below - plus a same-harness seam-off arm that separates "the patch changed the output" from "concurrency changed the output" |
+| The same holds for a **stateful** topology, where Kafka's own store wrappers read the per-task record context ambiently | `PcDrivenStatefulProofTest` | its own external stock baseline, and an ambient-context probe that fails on a record context crossing threads |
+| **Nothing is lost or double-counted across a crash**: the committed frontier is a point below which every record has been processed, not the offset of the last one handed out | `CommitFrontierCrashRestartTest` | a stock arm through the same crash and restart |
+| The patched classes are behaviour-preserving under **serial** dispatch | `ShadowedStreamsControlTest` | it *is* the control - stock, single-threaded Streams running our generated classes |
+
+**The output baselines are generated in another module, and that is the whole point.** This module
+compiles patched copies of Kafka's classes into its own build output, which precedes the
+`kafka-streams` jar on the classpath, so *every* `KafkaStreams` instance in this JVM runs the patch. A
+"stock arm" written here would share every defect the patch introduced and the comparison would prove
+nothing. The baselines come from `parallel-consumer-example-streams`, which does not depend on this
+module and asserts its own classpath is stock before recording a row, and they are tracked as
+fixtures. The fixture carries the **inputs** as well as the outputs, and the arms here replay those
+inputs rather than rebuilding them from a second copy of the generation rules - so the two arms cannot
+drift in what they were fed.
+
+**The commit-frontier law is also what the seam-on lane defers to.** That lane cannot tell a
+deliberate encoding divergence from an offset regression inside a Kafka unit test, and says so; this
+arm can, because it asserts on records that arrived rather than on a base64 metadata string.
+
 ### Wake-on-work: why the poll wait is split
 
 `StreamThread` polls the consumer and runs the topology on **one** thread, so blocking in
