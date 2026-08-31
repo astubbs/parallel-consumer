@@ -90,6 +90,17 @@ the probe's own Calibration status javadoc.
    to it: have the dump read `consumer.assignment().size()` at the point of use, or drop the field.
    Nothing on master calls either method, so no shipped API is at stake.
 
+   **Second deletion in the same merge, and this one must NOT come back as it was.**
+   astubbs/parallel-consumer#393 also removed `ConsumerManager.getConsumerClass()`, which this
+   branch still defines. It could never have worked: `consumer` is a `ThreadConfinedConsumer` and
+   `Object.getClass()` is final, so it returned the *wrapper's* class and never
+   `KafkaConsumer`/`MockConsumer`/`LegacyKafkaConsumer`/`AsyncKafkaConsumer`. Its purpose was
+   reflective auto-commit detection, which string-matches exactly those names and then reflects into
+   fields only a real driver has - so wiring it up would have made the auto-commit-disabled check
+   fail **silently**, which is worse than not having it. If this branch wants the capability, it has
+   to unwrap the delegate rather than reinstate the method; taking this side of the conflict without
+   reading it reintroduces a check that cannot fire.
+
 <!-- post-merge: checked - describes a merge-time task on named PRs, so it reads as a record of what
      the merge had to resolve once both have landed -->
 
