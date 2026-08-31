@@ -97,9 +97,9 @@ import java.util.concurrent.locks.LockSupport;
  *       {@code getRecordsFailed}) - <b>any thread</b>, for the same reason as the row above: atomics,
  *       concurrent collections and volatiles only. The buffered counts are read from
  *       {@code StreamTask.addRecords} on the StreamThread <em>and</em> sampled from a watcher thread by the
- *       memory-bound proof, which is what makes "any thread" a requirement here rather than a convenience.
- *       <b>Not {@code getBufferedUnderflowCount()}</b>, which is a plain {@code int}, owner-thread-only, and
- *       named just like the others without being one of them.</li>
+ *       memory-bound proof, which is what makes "any thread" a requirement here rather than a convenience -
+ *       and it is why the underflow counter those reads raise is an {@code AtomicInteger} rather than the
+ *       plain {@code int} it started as.</li>
  * </ul>
  *
  * <p>The rule that keeps the surfaces apart: <b>a question is not allowed to mutate.</b> A query that drained
@@ -267,10 +267,17 @@ public class PcTaskDispatcher implements Closeable {
      * <p>
      * A clamp on its own is what hid a conditional-decrement bug in the engine's own intake gate; see
      * {@code docs/solutions/logic-errors/counter-clamp-hid-a-conditional-decrement-bug-2026-08-21.md}.
-     * Owner thread only - the accessor is called from the thread that drove the pump - so a plain
-     * {@code int}.
+     * <p>
+     * <b>Atomic, because the thing that increments it is a query callable from any thread.</b> It is
+     * raised inside {@link #getBufferedRecordCount(TopicPartition)}, which the memory-bound proof samples
+     * from a watcher thread, so a plain {@code int} here would be an unsynchronised cross-thread write - and
+     * the log-once guard would fire twice when two threads both read zero. This is the one place in this
+     * class where a question mutates anything, and it is admissible only because what it touches is a
+     * diagnostic counter that no answer depends on: see
+     * {@code docs/solutions/architecture-patterns/a-query-must-never-mutate-derive-thread-safety-from-callers.md}
+     * for the rule and what it is actually protecting.
      */
-    private int bufferedUnderflows;
+    private final AtomicInteger bufferedUnderflows = new AtomicInteger();
 
     /**
      * The condition the StreamThread waits on instead of sitting out the rest of {@code poll.ms}. Bound
@@ -1133,7 +1140,7 @@ public class PcTaskDispatcher implements Closeable {
         final int buffered = state.getNumberOfIncompleteOffsets()
                 - handedOutStillIncomplete.getOrDefault(partition, 0);
         if (buffered < 0) {
-            if (bufferedUnderflows++ == 0) {
+            if (bufferedUnderflows.getAndIncrement() == 0) {
                 log.warn("PC dispatch buffered occupancy for {} came out negative ({}) - this dispatcher has "
                                 + "handed out more records than PC still counts as incomplete, which stops "
                                 + "the memory bound firing for that partition. Further occurrences are "
@@ -1158,9 +1165,9 @@ public class PcTaskDispatcher implements Closeable {
         return total;
     }
 
-    /** Test seam and drift detector: see {@link #bufferedUnderflows}. Owner thread only. */
+    /** Test seam and drift detector: see {@link #bufferedUnderflows}. Any thread. */
     int getBufferedUnderflowCount() {
-        return bufferedUnderflows;
+        return bufferedUnderflows.get();
     }
 
     /**
