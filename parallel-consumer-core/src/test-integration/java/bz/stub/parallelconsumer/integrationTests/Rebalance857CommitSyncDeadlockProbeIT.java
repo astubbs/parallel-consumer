@@ -11,6 +11,7 @@ import bz.stub.parallelconsumer.internal.utils.ThreadUtils;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
@@ -21,14 +22,13 @@ import pl.tlinkowski.unij.api.UniSets;
 
 import java.time.Duration;
 import java.util.Collection;
+import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_SYNC;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.PARTITION;
-import static bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils.GroupOption.NEW_GROUP;
-import static bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils.GroupOption.REUSE_GROUP;
 import static java.time.Duration.ofSeconds;
 import static org.awaitility.Awaitility.await;
 import static org.hamcrest.CoreMatchers.is;
@@ -82,6 +82,40 @@ class Rebalance857CommitSyncDeadlockProbeIT extends BrokerIntegrationTest<String
      * mid-commit (blocked in commitAndWait, holding the commit lock) when the revoke-path commit
      * attempt starts. Well under offsetCommitTimeout (10s) and all broker/rebalance timeouts.
      */
+    /**
+     * Runs this instrument on the COOPERATIVE assignor instead of the default eager one:
+     * {@code -Dprobe857.cooperative=true}. Off by default, so the gating configuration is unchanged.
+     * <p>
+     * <b>Why this switch exists.</b> astubbs#29's evidence came from this probe on the eager path,
+     * while the family's twentieth capture is a COOPERATIVE revoke. That the fix covers both is an
+     * inference - it sits on the revoke path, which should be assignor-independent - and inference is
+     * not measurement. The seed replay that was supposed to settle it could not: a chaos seed fixes
+     * the conductor's schedule, not the poll-versus-control interleaving the AB-BA close races on, so
+     * the control arm never reproduced (recorded in
+     * {@code docs/inflight/test-857-revoke-under-work-sightings.md}). This instrument does not depend
+     * on that luck - it forces the window open with {@link #REVOKE_DWELL_MS} against a one-second
+     * commit interval - so pointing it at the cooperative assignor asks the same question with the
+     * schedule controlled rather than sampled.
+     * <p>
+     * Both consumers in the group must agree on the assignor, so the property feeds
+     * {@link #assignorProps()} and is applied to the PC consumer and to the joining consumer whose
+     * arrival triggers the revoke. The strategy string is the one the chaos suite already uses.
+     */
+    static final boolean COOPERATIVE = Boolean.getBoolean("probe857.cooperative");
+
+    /**
+     * Consumer properties selecting the arm. Empty for eager, which is the default assignor - so the
+     * eager arm is byte-for-byte the configuration that produced this probe's original result.
+     */
+    private static Properties assignorProps() {
+        Properties props = new Properties();
+        if (COOPERATIVE) {
+            props.put(ConsumerConfig.PARTITION_ASSIGNMENT_STRATEGY_CONFIG,
+                    "org.apache.kafka.clients.consumer.CooperativeStickyAssignor");
+        }
+        return props;
+    }
+
     static final long REVOKE_DWELL_MS = 4_000L;
 
     static final long FIRST_BATCH = 500L;
@@ -116,7 +150,10 @@ class Rebalance857CommitSyncDeadlockProbeIT extends BrokerIntegrationTest<String
         firstRevokeCompleted = new CountDownLatch(1);
         revokeCommitAttemptTookMs = new AtomicLong(-1);
         setupTopic();
-        consumer = getKcu().createNewConsumer(NEW_GROUP);
+        // true = mint a fresh group; the joining consumer below passes false to REUSE it, which is
+        // what makes its arrival a rebalance of this group rather than an unrelated one.
+        consumer = getKcu().createNewConsumer(true, assignorProps());
+        log.info("PROBE857: assignor arm = {}", COOPERATIVE ? "COOPERATIVE" : "EAGER (default)");
         var pcOptions = ParallelConsumerOptions.<String, String>builder()
                 .commitMode(PERIODIC_CONSUMER_SYNC)
                 .consumer(consumer)
@@ -168,7 +205,7 @@ class Rebalance857CommitSyncDeadlockProbeIT extends BrokerIntegrationTest<String
         await().timeout(ofSeconds(30)).untilAtomic(count, is(greaterThan(5L)));
         log.info("PROBE857: records are being consumed, triggering rebalance by joining a second consumer");
 
-        try (var newConsumer = getKcu().createNewConsumer(REUSE_GROUP)) {
+        try (var newConsumer = getKcu().createNewConsumer(false, assignorProps())) {
             newConsumer.subscribe(UniLists.of(topic));
             newConsumer.poll(ofSeconds(5));
 
