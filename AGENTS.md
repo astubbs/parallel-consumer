@@ -315,6 +315,7 @@ bin/performance-test.sh      # performance tests (substantial hardware)
 | `parallel-consumer-vertx` | Vert.x integration for async HTTP |
 | `parallel-consumer-reactor` | Project Reactor integration |
 | `parallel-consumer-mutiny` | SmallRye Mutiny integration (Quarkus) |
+| `parallel-consumer-streams` | Kafka Streams (alpha, **unpublished**) - build-time patching of Kafka's internals; its own README owns the mechanism |
 | `parallel-consumer-examples` | Example implementations for each module |
 
 ## Key Architecture Decisions

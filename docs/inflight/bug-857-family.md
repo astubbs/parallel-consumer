@@ -1800,6 +1800,43 @@ which is why the capture is worth attributing to the merge rather than to the br
 
 <!-- post-merge: checked-end -->
 
+## 2026-08-31, CHAOS lane: the BLOCKED-on-monitor discriminator again, on the COOPERATIVE DRAIN arm
+
+Recorded for the seed, since the log expires and no replay has been run.
+
+`ChaosRevokeUnderWorkCooperativeDrainIT.revokeUnderDrainingStopsWithCooperativeAssignorStaysProtocolHonest`,
+seed **`1159274055608047297`**. Replay:
+
+```
+./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=1159274055608047297
+```
+
+Same discriminator as the captures above, not a new one: instance 12 ended with
+`Timeout waiting for commit response PT10S`, and the probe classified the poll thread as **BLOCKED -
+waiting to acquire a monitor**, on an `AtomicBoolean` held by `pc-control-PC-12`, whose top frame is
+`commitOffsetsThatAreReady` reached from `onPartitionsRevoked`. The instrumentation states the
+disjunction it was written to settle: contention or a lock-ordering defect, **not** a slow broker.
+
+<!-- post-merge: checked-begin -->
+**It did not reproduce on the next run of the same tree, which is an intermittency datum rather
+than a clearance.** The two `Chaos Pain Suite` runs on astubbs/parallel-consumer#379 are separated
+only by two documentation commits - no Java, no pom, no workflow - so the tree the second run
+scheduled is the first run's tree for every purpose this failure could care about. One red, one
+green: **1 of 2**, with different seeds each time, since the lane seeds per run. That is the same
+shape as the pair of runs one commit apart already cited above, and it says the same thing - the
+trigger is the schedule, not the tree - on a pair whose two halves are closer together than any
+previous one. It is not evidence the capture was noise, and a green run has never been treated as
+one here.
+<!-- post-merge: checked-end -->
+
+<!-- post-merge: checked-begin -->
+**Not the observing PR's defect.** It was seen on astubbs/parallel-consumer#379, which adds an
+unpublished Kafka Streams build-machinery module and touches no core Java, no locking, no rebalance
+path and no in-flight accounting - its diff outside `parallel-consumer-streams/` is the root pom's
+module line, `NOTICE`, three `bin/` gates and docs. Same crossing as the entries above: what it
+brought in is master.
+<!-- post-merge: checked-end -->
+
 ## Delete when
 
 The `CLASS2_STALL` entries above are superseded by this section and kept only as the record of how a

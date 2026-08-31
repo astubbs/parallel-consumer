@@ -8,14 +8,24 @@
 then removed from the corpus. They are held here until their modules exist.
 <!-- file-refs: N/A - the sentence is about records that were written and then not kept -->
 
-**Why.** Neither `parallel-consumer-streams-spike` nor `parallel-consumer-connect` is a module in
-`pom.xml` or a directory in the tree. Both records carried `status: planned` with
-`target_release: 0.6.0.0`, which is honest, but they also carried a Maven coordinate that reads as
-copy-pasteable for an artifact that will not resolve. The corpus's own standard, set by the maturity
-work, is not to assert what the tree contradicts.
+**Why.** Both records carried `status: planned` with `target_release: 0.6.0.0`, which is honest, but
+they also carried a Maven coordinate that reads as copy-pasteable for an artifact that will not
+resolve. The corpus's own standard, set by the maturity work, is not to assert what the tree
+contradicts.
 
-**When they return.** Whichever PR lands each module restores its record in the same change, with
-`status: published`, a real `since`, and setup that resolves. Do not rewrite the drafts - but do not
+**`parallel-consumer-streams` is now a module in `pom.xml` and a directory in the tree, and that
+changes nothing here.** What landed is the fork/build machinery: no Parallel Consumer execution seam,
+and **publication deliberately off** (`maven.deploy.skip`, `gpg.skip`, `skipPublishing` in its own
+pom). So the coordinate still does not resolve for anyone, and a record whose whole problem was
+uncopy-pasteable setup is no closer to being restorable. The trigger is unchanged: the PR that makes
+the artifact real. `parallel-consumer-connect` is not in the tree at all.
+
+**When they return.** Whichever PR makes each artifact *publishable* restores its record in the same
+change, with `status: published`, a real `since`, and setup that resolves. "Lands the module" was the
+wording until the streams module shell landed unpublished, and it does not survive that: a directory
+in the reactor is not an artifact anyone can depend on. The same distinction governs the staged
+maturity row in `docs/data/staging/module-maturity-rows.yaml`, whose `opt_in: artifact dependency`
+is the claim that has to become true. Do not rewrite the drafts - but do not
 look for them in master's history either: the astubbs#273 squash-merge made them unreachable from
 here. Where each draft actually is:
 
@@ -30,4 +40,4 @@ and [`branch-connect-on-pc-workstream.md`](branch-connect-on-pc-workstream.md).
 
 ## Delete when
 
-Both modules are in the reactor and both records are back in `docs/features/`.
+Both modules publish an artifact and both records are back in `docs/features/`.

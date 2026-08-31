@@ -10,7 +10,22 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 GATE="$PWD/bin/check-test-log-config.sh"
 
-MODULES=(parallel-consumer-core parallel-consumer-vertx parallel-consumer-reactor parallel-consumer-mutiny)
+# READ THE MODULE LIST OUT OF THE GATE, DO NOT RESTATE IT. A second copy here does not merely go
+# stale, it INVERTS the self-test: the fixture tree is built from this list, so a module the gate
+# checks but the fixture omits makes the *conforming* case fail, and every "expected pass" case
+# reports a gate bug that does not exist. That is what a fifth library module did on first arrival.
+# The anchored parse is why the gate's array stays one name per line.
+# A read loop rather than mapfile: macOS ships bash 3.2, where mapfile does not exist and the
+# failure is `command not found` on a line nobody looks at twice.
+MODULES=()
+while IFS= read -r module; do
+    MODULES+=("$module")
+done < <(sed -n '/^MODULES=(/,/^)/p' bin/check-test-log-config.sh | sed -n 's/^[[:space:]]\{1,\}\(parallel-consumer-[a-z-]*\)$/\1/p')
+
+if (( ${#MODULES[@]} == 0 )); then
+    echo "test-check-test-log-config: could not read MODULES out of bin/check-test-log-config.sh" >&2
+    exit 1
+fi
 
 pass=0
 fail=0
