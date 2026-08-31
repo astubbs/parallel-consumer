@@ -102,17 +102,21 @@ modules:
     reliability_confidence: >-
       What is evidenced is the process boundary, and only that: the sidecar binds loopback on an
       ephemeral port, announces it, admits exactly one stream, rejects an unlisted declared authority
-      before the service method runs, and releases the socket when its parent dies. It hosts NO
-      Parallel Consumer engine - a session is answered UNIMPLEMENTED - so nothing here evidences a
-      record being processed, an offset being committed, or any protocol behaviour beyond the
-      handshake being refused.
+      before the service method runs, and releases the socket when its parent dies. That same
+      lifecycle is evidenced twice - once in the JVM and once against a GraalVM native executable of
+      the same entry point - so the transport surviving closed-world compilation is evidenced, not
+      assumed. It hosts NO Parallel Consumer engine - a session is answered UNIMPLEMENTED - so
+      nothing here evidences a record being processed, an offset being committed, or any protocol
+      behaviour beyond the handshake being refused.
     api_expectation: >-
       Pre-1.0 and expected to change substantially: the engine, its connect-time configuration and
       the shutdown drain are still to arrive, and the seam they plug into is the one thing here most
       likely to move.
     support_posture: >-
       Experimental. Published to no registry, and there is no supported way to run it against a
-      broker yet because it cannot be configured.
+      broker yet because it cannot be configured. A native executable can be built from a checkout
+      with bin/native-image-sidecar.sh, but no binary is distributed and building one is not part of
+      the ordinary build.
     evidence_id: proxy-sidecar
     tracking: astubbs#242
     use_this_if: >-

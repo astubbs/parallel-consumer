@@ -38,6 +38,26 @@ The transport's contract with what it hosts is `io.grpc.BindableService` and not
 compiles against no engine type at all. `NoEngineSessionService` is what fills that slot until the
 engine arrives, and `Main#sessionServiceFactory` is the one call site that changes when it does.
 
+## Building it as a native executable
+
+`bin/native-image-sidecar.sh` builds this module's `Main` into a GraalVM native executable and then
+drives that executable through the whole lifecycle above - the port line, a real gRPC session
+answered `UNIMPLEMENTED`, a clean exit on parent death, the socket released. It needs a GraalVM JDK;
+without one it prints a banner saying so and exits 0, unless `PC_NATIVE_IMAGE_STRICT` is set, which
+is what the `Native Image` workflow does on rows that install the toolchain themselves.
+
+**Nothing in the ordinary build runs it.** There is no Maven profile and no plugin, so `./mvnw
+install` and every other CI lane are unchanged on a machine that has never heard of GraalVM.
+
+Why it matters here rather than as a packaging detail: **the proposition is that a Go, Python or Ruby
+team is handed an executable, not a JVM dependency**. The engine's guarantees stop being a JVM
+feature only if the artifact stops being a JVM artifact. What the script proves today is that the
+*shell* survives closed-world compilation - the transport, the generated stubs and protobuf all still
+work in the image. What it cannot yet prove is anything about an engine that is not in this module.
+
+The recipe is one flag, `--no-fallback`, and the script's header says why that one is load-bearing
+and why there is deliberately no reachability metadata here.
+
 ## Security posture
 
 Loopback-only, and that is what removes the need for authentication: only the spawning process can
@@ -50,9 +70,12 @@ the server warns with the full surface it is exposing.
 
 Connect-time configuration and the options mapping, the dispatch engine and its waves, the in-flight
 registry, epochs, leases and heartbeats, reconnect with manifest reconciliation, the produce path,
-the shutdown drain that waits on records held in a foreign process, capability negotiation, the
-native image, and the client libraries. Those are reviewed as their own changes; astubbs#242 tracks
-the whole.
+the shutdown drain that waits on records held in a foreign process, capability negotiation, and the
+client libraries. Those are reviewed as their own changes; astubbs#242 tracks the whole.
+
+Also not here: the `--shared` C-ABI build that embeds the engine in the host process with no gRPC at
+all. That is a different artifact from the executable above and is proven separately in
+astubbs#340.
 
 ## Related
 
