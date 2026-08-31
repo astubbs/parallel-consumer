@@ -245,29 +245,33 @@ already says the latter. The impact answers the question a reader actually has, 
 prefixes - `misdirection` covers notes filed under `ci-`, `test-`, `branch-`, `deps-` and `static-`.
 
 The impacts, in the order `.claude/hooks/inject-recorded-knowledge.sh` presents them at session
-start. **The order is not severity - signal integrity comes first**, because you cannot judge the
-state of the code through instruments that lie, and acting on a false green is worse than acting on
-nothing:
+start - which is `INFLIGHT_IMPACT_ORDER` in `bin/lib/inflight-tags.sh`, and that lib is the
+authority when this table disagrees with it. It did disagree, until 2026-08-31: this table had
+`crash` twelfth where the hook emits it third, so a reader judging what outranks what got the
+wrong answer from the document that claims to describe it.
+
+**The order is not severity - signal integrity comes first**, because you cannot judge the state of
+the code through instruments that lie, and acting on a false green is worse than acting on nothing:
 
 | Impact | Valid on | The consequence |
 |---|---|---|
 | `misdirection` | bug | the signal is actively WRONG - a green that asserted nothing, a hidden flake, a contaminated control arm, a scanner returning 401 while appearing to scan |
 | `blind-spot` | bug | there is no signal - untested behaviour, unscanned code, an obligation nobody tracks |
+| `crash` | bug, feature | the process dies, or exhausts a resource until it does - a leak ends here |
 | `data-loss` | bug | a record is dropped or mis-committed |
 | `stall` | bug | something stops making progress and stays stopped |
 | `security` | bug, task, feature | a grant or permission wider than it should be, or a known exposure carried |
 | `config-lie` | bug | an option does not do what it says |
+| `reliability` | bug, task, feature | it survives less than it should, and no single defect is named yet |
 | `throughput` | bug | backpressure or fetch behaviour is wrong, with no data risk |
 | `release-gate` | task | blocks publishing |
 | `coordination` | task | two pieces of work will collide, or one is blocked waiting on another |
 | `stranded-work` | task | work or knowledge that will be lost if nobody acts |
-| `deps-debt` | task | upgrades deliberately held back |
-| `crash` | bug, feature | the process dies, or exhausts a resource until it does - a leak ends here |
-| `reliability` | bug, task, feature | it survives less than it should, and no single defect is named yet |
 | `ci` | task, feature | the build, gates, review automation or agent harness are wrong or missing |
 | `test-debt` | task, feature | tests that should exist and do not |
 | `refactor` | task, feature | the code is harder to change than it needs to be |
 | `process` | task, feature | how the work itself is ranked, recorded or organised |
+| `deps-debt` | task | upgrades deliberately held back |
 
 **An impact names a CONSEQUENCE, never a state.** "in progress", "standard work", "medium" and the
 like are status labels wearing an impact's clothes - they answer "where is this?" when the question

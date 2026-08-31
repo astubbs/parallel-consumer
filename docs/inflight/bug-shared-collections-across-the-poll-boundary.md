@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
+<!-- inflight-labels: concurrency -->
 
 
 **Live on master.** `PCMetrics` keeps `private List<Meter.Id> registeredMeters = new ArrayList<>()`,
