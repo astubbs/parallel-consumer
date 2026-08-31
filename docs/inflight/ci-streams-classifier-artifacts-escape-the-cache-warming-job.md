@@ -5,7 +5,9 @@
 
 <!-- post-merge: checked-begin -->
 `parallel-consumer-streams` (astubbs#255). First seen as a red Unit lane on the task-lifecycle rung,
-astubbs/parallel-consumer#394, which had **nothing to do with the tests** on it.
+astubbs/parallel-consumer#394, which had **nothing to do with the tests** on it. Seen again, with the
+same signature, on the error-surfacing rung stacked above it, astubbs/parallel-consumer#395 - two
+independent branches, which is what makes it master-state rather than one PR's problem.
 <!-- post-merge: checked-end -->
 
 ## What it looks like
