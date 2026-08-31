@@ -11,8 +11,12 @@ import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIn
 import lombok.NonNull;
 import lombok.SneakyThrows;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
+import org.apache.kafka.common.TopicPartition;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -23,6 +27,28 @@ public class CommitHistory {
     public CommitHistory(final List<OffsetAndMetadata> collect) {
         super();
         this.history = collect;
+    }
+
+    /**
+     * Reads one partition's commits out of a mock consumer's raw commit history - the shape
+     * {@code LongPollingMockConsumer#getCommitHistoryInt()} returns, a list of commit instants each mapping
+     * partition to offset.
+     * <p>
+     * This is the step that made {@link #highestCommit()} unreachable for anything but an assertion: the
+     * constructor wants a flat per-partition list, and until this existed the only code that produced one was
+     * inside a Truth {@code Subject}. What a fixture usually needs instead is a <em>value</em> to poll on with
+     * Awaitility, and an assertion cannot be polled for a value - so each one hand-wrote the same reverse scan.
+     * <p>
+     * The raw list is copied before reading: it is a {@code CopyOnWriteArrayList} being appended to by the
+     * commit thread while a test reads it.
+     */
+    public static CommitHistory forPartition(final List<Map<TopicPartition, OffsetAndMetadata>> rawHistory,
+                                             final TopicPartition partition) {
+        List<OffsetAndMetadata> forPartition = new ArrayList<>(rawHistory).stream()
+                .map(commitInstant -> commitInstant.get(partition))
+                .filter(Objects::nonNull)
+                .collect(Collectors.toList());
+        return new CommitHistory(forPartition);
     }
 
     public boolean contains(final int offset) {
