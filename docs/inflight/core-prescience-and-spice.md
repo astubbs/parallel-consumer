@@ -34,6 +34,19 @@ benchmark) applied to a new index. The knowledge hierarchy: record metadata -> p
 Prescience (exact offsets) -> app demand -> cluster -> global (counts, weighted demand, deadlines
 only). 100% Prescience never means one centralised index - exact locally, aggregate globally.
 
+## Open implementation question (owner, 2026-08-31): fetch keys and headers without bodies?
+
+The wish: build Prescience by reading only keys + headers off the broker. No such fetch exists -
+Kafka's fetch protocol returns whole (often compressed) record batches with no server-side
+projection - so the honest emulations are client-side: drop bodies after decode (saves memory,
+not network), or drop selectively once memory pressure crosses a threshold. The trap the owner
+already named: rehydration then needs random seeks back to dropped offsets, which in the worst
+case is a disaster (re-fetching whole batches for one body, fetch-session churn). The
+architectural fix for the *network* half is already on the table below: head/body externalization
+puts the decision surface in the control record so full-body fetch is never needed for indexing.
+Verdict to record: body-dropping is a memory-tier tactic inside the Store, not a bandwidth
+strategy; the bandwidth strategy is Spice/externalization.
+
 ## The reframing that names it (2026-08-31): an inverted EXECUTION index, not a cache
 
 A cache accelerates retrieving something whose identity you already know; **an index creates new

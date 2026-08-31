@@ -17,7 +17,10 @@ distributed IQ out of the box: local-owner execution, direct routing to remote o
 replica-aware standby reads under an explicit consistency policy, the same store/query surface in
 every language binding, and the dashboard consuming the *same API* (no privileged UI backend).
 Plus a live catalog of Streams applications, topologies, stores, owners and restore state - one
-discoverable state fabric from separately deployed JVMs.
+discoverable state fabric from separately deployed JVMs. Reuse ruling from the owner's checklist
+(2026-08-31): KS standby replicas serve double duty - they are the read replicas that spread IQ
+load, **and the hot-failover mechanism is Kafka Streams' own, used directly rather than
+reimplemented** - the same do-not-rewrite-the-specialist instinct, applied to Streams itself.
 
 ## Semantic health, not process health
 

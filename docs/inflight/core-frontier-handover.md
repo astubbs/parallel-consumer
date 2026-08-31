@@ -54,6 +54,19 @@ authoritative distributed decision can later be superseded, ask what fences the 
 - epochs are not optional decoration, and even Prescience needs one (100% coverage is meaningless
 except relative to a captured committed frontier).
 
+## Open design question (owner, 2026-08-31): why negotiate F out-of-band at all?
+
+Alternative: write a synchronization-boundary record into the topic itself and make *reading it*
+the trigger - the csid-jms-bridge's epoch-marker move, applied to handover - or carry the boundary
+in producer-written control headers to avoid polluting the log with control records. Trade-offs to
+settle before building: the in-log marker needs no offset prediction and is causally positioned by
+construction (the boundary IS where it sits in the log), but requires either producer cooperation
+or a control producer injecting records into application topics; per-record control headers spread
+the same requirement across every producer; the out-of-band F-agreement touches the log not at
+all and works when producers are not runtime-controlled, at the cost of the prediction/ACK round.
+Likely resolution is by ownership: in-log markers where the runtime owns the produce side
+(internal/generated topics), F-agreement where it does not. Unresolved - record, do not assume.
+
 ## The separation the protocol forces, and it is thesis-grade
 
 Kafka's group coordinator cannot express "v7 owns this partition until offset F, then v8" - so

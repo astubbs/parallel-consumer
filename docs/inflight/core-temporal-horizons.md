@@ -41,6 +41,11 @@ What falls out:
   [`core-fleet-capacity-coordination.md`](core-fleet-capacity-coordination.md). Its cousin:
   **counterfactual load testing** - "if admission opened fully, what binds first?" answered from
   the real future work population, before executing it.
+- **Causal admission propagation.** A downstream constraint can propagate *backwards* through
+  known work relationships before queues physically fill: if A -> B -> C and C has a maintenance
+  window in ten minutes, producing another million B outputs destined for C has little value now.
+  Proactive shaping where conventional backpressure is reactive - admission shaped before
+  saturation, not execution squeezed after it.
 - **Aging becomes fundamental.** Destroying FIFO as execution policy destroys FIFO's accidental
   fairness, so starvation protection must be explicit and low in the scheduler: waiting itself
   accrues scheduling claim, with priority overriding deliberately rather than starvation emerging

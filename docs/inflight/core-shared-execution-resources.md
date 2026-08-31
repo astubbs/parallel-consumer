@@ -93,6 +93,14 @@ spend capacity locally.**
   acquisition order, release on partial failure, all local synchronisation. Fits PC exactly
   because the engine already lives with "semantically executable but not selected right now".
 
+## The micro-MVP before even that (owner's checklist, 2026-08-31)
+
+Smaller than the twenty-instance test, and the first observable moment: a user function registers
+a 2-tokens-per-second rate-limited service, two instances spawn, the observer reports the
+bottleneck as *rate limit* (not CPU, not keys), and each instance is seen firing at 1Hz. One
+resource, two nodes, the constraint visibly shared and correctly attributed. The owner's working
+name for the branch: the navigator module. Then the v1 below is the scale-up of the same thing.
+
 ## The v1 the conversation itself insisted on
 
 One hard distributed **rate** resource. Kafka-elected owner mints finite short-lived credits;

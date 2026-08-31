@@ -49,6 +49,18 @@ permanent configuration, and the reason field gives the incident review its time
    feature, and the dashboard's offset ribbon (astubbs#268) already draws the underlying truth -
    this publishes it where autoscalers and alerts can read it.
 
+## The split the owner drew (2026-08-31): embedded UI vs control-plane app
+
+The embedded PC web UI (astubbs#268) and the fleet control-plane application are **different
+products, at least at this stage** - the control plane *depends on* the web-ui work rather than
+being it. One deployment option kept open: the control plane can itself run embedded in the PC
+instances, with any instance's UI redirecting to the current control-plane leader - no separate
+deployment, leadership from the machinery the coordination plane already has.
+
+Fifth-and-a-half instrument from the same checklist: **per-record ETA** - projected from when the
+record's required resources become available plus average processing time; the admission-promise
+machinery ([`core-temporal-horizons.md`](core-temporal-horizons.md)) surfaced on the panel.
+
 ## Two consequences to keep visible
 
 - **Act changes astubbs#268's security posture, materially.** That PR's stated posture is

@@ -14,6 +14,12 @@ algorithms, making optimizer changes materially safer to roll out. The repo alre
 this shape: astubbs#333 ships OBSERVE before ENFORCE, and the shipped-vs-direct-pull engine pair
 (astubbs#361) is the first real candidate comparison.
 
+The same mechanism generalises past schedulers (owner's checklist, 2026-08-31): **user-function
+A/B and canarying** - route a fraction of ordering domains to handler v8 while v7 keeps the rest,
+composing with versions-as-capabilities
+([`core-frontier-handover.md`](core-frontier-handover.md)) and the supplement's record-level
+canary idea, ordering preserved by construction because domains never split.
+
 **The statistical caveat that decides whether results mean anything:** the 1% of domains is not
 the same workload as the 99% - key skew means the canary can draw a hot domain or miss all of
 them. Compare like with like (stratify by domain activity, or rotate assignment), or the

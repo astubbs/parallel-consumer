@@ -22,8 +22,13 @@ retry amplification, scale-out response, the p99 knee - is what the adaptive con
   downstream latency sensitivity doubled" - production itself reports that the application's
   execution characteristics changed, no benchmark run required.
 
-**Open question to settle before building: where the fingerprint lives.** Commit metadata is
-capped at 4096 chars and already contended (astubbs#306); local disk dies with the pod; a
-compacted topic is the Kafka-native answer but is new infrastructure. Also: a prior must expire -
-a fingerprint from last month's key distribution can be worse than ignorance, so the verify step
-is mandatory, not an optimisation.
+**The open question answered (owner, 2026-08-31): the fingerprint lives in Kafka Streams state.**
+A Streams-backed store gets durability, failover and - naturally - the *record of performance over
+time* that regression detection needs, for free. Three requirements added with it: a fingerprint
+without its **environment** is uninterpretable (stamp the instance count and topology it was
+measured under), it should link a **snapshot of the resource's own configuration** (the Postgres
+that measured this was running two read replicas), and **central resource schedulers subscribe to
+all fingerprints and reduce to their own resource** - the fingerprint stream is an input to the
+allocator, not only a diagnostic. Still true regardless: a prior must expire - a fingerprint from
+last month's key distribution can be worse than ignorance, so the verify step is mandatory, not
+an optimisation.

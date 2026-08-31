@@ -22,6 +22,14 @@ systems glued together. The governing rule: *no subsystem gets completed for its
 Hasten Logistics pulls through the minimum implementation necessary to prove the whole
 architecture.*
 
+## The owner's one-sentence acceptance form (2026-08-31)
+
+A two-node Hasten Logistics where a global resource constraint prevents dispatch, Prescience
+finds useful work around it, Why Wait explains every withheld execution, sparse completion
+preserves causality through failure, and the system survives losing a node - **with the Spice
+headers added automatically by the wrapped producer from the producing function's registered
+requirements**, so producer-side declaration is proven transparent from day one, not retrofitted.
+
 ## Ruling 1: the multilingual Streams wrapper is lighthouse-scoped
 
 **Hasten Logistics defines the MVP surface area of multilingual Kafka Streams** - implement only
