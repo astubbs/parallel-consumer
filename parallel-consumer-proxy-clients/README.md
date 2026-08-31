@@ -1,15 +1,20 @@
-# Proxy clients - build scaffolding
+# Proxy clients
 
-Eleven client modules, one per language the proxy sidecar will eventually speak to
-(astubbs/parallel-consumer#242). **Today none of them is a client.** Each one detects its
-toolchain, compiles or packages one source file, runs the resulting program, and asserts that it
-printed one deterministic fixture line. There is no Kafka, no protobuf, no gRPC and no Parallel
-Consumer semantics anywhere in this directory.
+Eleven client modules, one per language the proxy sidecar speaks to
+(astubbs/parallel-consumer#242). **One of them is a client; the other ten are still build
+scaffolding.**
 
-That is the point. Wiring eleven toolchains into one Maven reactor is a mechanical question with a
-mechanical answer, and it is worth settling on its own before anything interesting depends on it.
-The clients themselves are later rungs of the stack being extracted from
-astubbs/parallel-consumer#293, which is where all of that work currently lives.
+- **Java is real** - a shared client surface with two transports behind it, its own aggregator with
+  four modules under it. [`parallel-consumer-proxy-client-java/README.md`](parallel-consumer-proxy-client-java/README.md)
+  owns what it can and cannot do.
+- **The other ten** each detect their toolchain, compile or package one source file, run the
+  resulting program, and assert that it printed one deterministic fixture line. There is no Kafka,
+  no protobuf, no gRPC and no Parallel Consumer semantics in any of them.
+
+The scaffolding was settled first on purpose: wiring eleven toolchains into one Maven reactor is a
+mechanical question with a mechanical answer, and it is worth answering before anything interesting
+depends on it. The remaining ten clients are later rungs of the stack being extracted from
+astubbs/parallel-consumer#293, which is where that work currently lives.
 
 ## Building it
 
@@ -48,7 +53,7 @@ reactor summary still prints SUCCESS for a module whose step was skipped.
 
 | Module | Toolchain | Build | Run |
 |---|---|---|---|
-| `...-client-java` | the JDK already running Maven | Maven | surefire |
+| `...-client-java` | the JDK already running Maven | Maven | surefire - **a real client, not a fixture** |
 | `...-client-kotlin` | kotlin-maven-plugin, from Central | Maven | surefire |
 | `...-client-scala` | scala-maven-plugin, from Central | Maven | surefire |
 | `...-client-go` | `go` | `go build` | the linked binary |
@@ -61,10 +66,14 @@ reactor summary still prints SUCCESS for a module whose step was skipped.
 | `...-client-swift` | `swift` | `swift build` | the built binary |
 
 Each module's own pom declares its build and run commands and explains its own choices; nothing
-restates them, here or in the shared wrapper. The three JVM modules assert the fixture in their own
-test frameworks rather than through the wrapper, because they have no toolchain to detect - but the
-string has to agree across all eleven, so `bin/foreign-client-step.sh` derives it once and a change
-there has to change every module.
+restates them, here or in the shared wrapper. Kotlin and Scala assert the fixture in their own test
+frameworks rather than through the wrapper, because they have no toolchain to detect - but the
+string has to agree across every module that still prints it, so `bin/foreign-client-step.sh`
+derives it once and a change there has to change all of them.
+
+**Java no longer prints the fixture line**, and that is not a gap: a module that compiles a client
+surface, two transports and their suites is a stronger statement about the JDK than a class that
+prints a string, and the fixture was deleted rather than relocated when the real client landed.
 
 ## If you are adding a language
 

@@ -118,6 +118,32 @@ modules:
     use_this_if: >-
       You are reviewing or extending the sidecar's packaging and process lifecycle. There is no
       user-facing reason to depend on it yet.
+  - artifact: parallel-consumer-proxy-client-java
+    maturity: alpha
+    minimum_java: 17
+    reliability_confidence: >-
+      Two transports behind one surface, evidenced very differently. The DIRECT transport is
+      evidenced end to end - a record through the user function, its verdict applied as a committed
+      offset and a produced record, a failure redelivered carrying its reason - because the engine it
+      binds is parallel-consumer-core, which is ordinary. The gRPC transport is evidenced as far as a
+      real sidecar can take it, which today is the handshake: it reaches a running sidecar's session
+      service and reports the refusal it is given. Its dispatch, report and shutdown paths are
+      implemented and exercised against a scripted proxy, never yet against a real engine, so nothing
+      here evidences a record crossing the wire.
+    api_expectation: >-
+      Pre-1.0 and expected to change: this surface is the one the other client languages mirror, and
+      what it must stay expressible in is a harder constraint than Java alone would impose. It carries
+      no transport type by construction - an ArchUnit rule over the bytecode and an enforcer ban over
+      the dependency tree both fail the build if one appears.
+    support_posture: >-
+      Experimental. Published to no registry; the whole clients tree skips deploy and install, so the
+      only way to use it is from this checkout.
+    evidence_id: proxy-client-java
+    tracking: astubbs#242
+    use_this_if: >-
+      You are writing or reviewing a proxy client. This is the reference surface the other languages
+      mirror, and parallel-consumer-proxy-protocol/docs/client-authoring-guide.md is what to read
+      beside it.
   - artifact: parallel-consumer-examples
     maturity: reference-example
     reliability_confidence: Exercises supported module use cases; it is not a runtime library dependency.
