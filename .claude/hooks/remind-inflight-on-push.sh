@@ -45,7 +45,12 @@ hook_lib="${BASH_SOURCE[0]%/*}/lib/hook-common.sh"
 # shellcheck source=.claude/hooks/lib/hook-common.sh
 . "$hook_lib"
 
-hook_git_runs "$payload" push || exit 0
+# ONE tokeniser spawn answers both of this hook's questions - "is this a push?" here, and "which
+# branch does it name?" below. `hook_git_runs "$payload" push` would pay python3 a second time to
+# walk the same token list, the economy hook-common.sh's `hook_git_runs_any` records. A push
+# invocation is a line reading `push` or `push<TAB>args...`.
+invocations="$(hook_git_invocations "$payload")"
+case "$invocations" in push|push$'\t'*|*$'\n'push|*$'\n'push$'\t'*) ;; *) exit 0 ;; esac
 
 root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$root" ] || exit 0
@@ -59,7 +64,7 @@ cd "$root" 2>/dev/null || exit 0
 # guard, twice, on two different branches - .claude/hooks/check-history-rewrite.sh records both under
 # "WHICH BRANCH". `hook_push_head_ref` owns the refspec rules.
 inferred_branch=0
-branch="$(hook_push_head_ref "$payload")"
+branch="$(hook_push_head_ref "$invocations")"
 if [ -z "$branch" ]; then
     inferred_branch=1
     branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"

@@ -132,7 +132,12 @@ hook_git_subcommands() { # <payload-json>
 # refuses tool calls and therefore may not depend on a library it might fail to source
 # (astubbs/parallel-consumer#341). That duplication is deliberate and is tracked with the rest of it
 # in docs/inflight/ci-pr-lookup-is-copied-into-three-hooks.md; change one and change the other.
-hook_push_head_ref() { # <payload-json>
+#
+# TAKES THE TOKENISER'S OUTPUT, NOT THE PAYLOAD. The caller has already spawned
+# `hook_git_invocations` to ask whether the payload is a push at all; reading that list rather than
+# re-deriving it keeps the whole hook to ONE python3 spawn - the same economy `hook_git_runs_any`
+# exists for, one function down.
+hook_push_head_ref() { # <invocations - the output of hook_git_invocations>
     local line args t spec dst count skip
     while IFS= read -r line; do
         case "$line" in push|push$'\t'*) ;; *) continue ;; esac
@@ -170,7 +175,7 @@ EOF
         printf '%s\n' "$dst"
         return 0
     done <<EOF
-$(hook_git_invocations "$1")
+$1
 EOF
     return 0
 }

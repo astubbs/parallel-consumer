@@ -46,6 +46,13 @@ assert() { # <description> <expected> <actual>
     fi
 }
 
+# The `--head` value a stubbed `gh` was asked about, read from that stub's argv log. Awk rather
+# than `grep -o ... | head -1`, which is the early-exiting-reader pipeline shape bin/AGENTS.md
+# warns about - and this suite runs under pipefail.
+stub_head_arg() { # <argv-log>
+    awk '{for (i = 1; i < NF; i++) if ($i == "--head") { print $(i+1); exit }}' "$1"
+}
+
 # ---------------------------------------------------------------------------------------------
 # check-squash-subject.sh
 #
@@ -1679,7 +1686,7 @@ push_fire_logged() { # <command> -> stdout of the hook
     printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$1" \
         | PATH="$push_log_stub:$PATH" TMPDIR="$PUSH_TMPDIR" bash "$PUSH_HOOK" 2>/dev/null
 }
-push_head() { awk '{for (i = 1; i < NF; i++) if ($i == "--head") { print $(i+1); exit }}' "$push_log_stub/argv.log"; }
+push_head() { stub_head_arg "$push_log_stub/argv.log"; }
 
 push_fire_logged 'git push origin feats/somewhere-else' >/dev/null
 assert "the reminder looks up the branch the push names" feats/somewhere-else "$(push_head)"
@@ -2006,9 +2013,7 @@ hb_fire() { # <command> [payload-cwd] -> stdout of the hook
     printf '{"tool_name":"Bash","cwd":"%s","tool_input":{"command":"%s"}}' "${2:-$PWD}" "$1" \
         | PATH="$hb_stub:$PATH" bash "$HIST_HOOK" 2>/dev/null
 }
-# No pipeline: `grep -o ... | head -1` is the early-exiting-reader shape bin/AGENTS.md warns about,
-# and this suite runs under pipefail.
-hb_head() { awk '{for (i = 1; i < NF; i++) if ($i == "--head") { print $(i+1); exit }}' "$hb_stub/argv.log"; }
+hb_head() { stub_head_arg "$hb_stub/argv.log"; }
 
 hb_out="$(hb_fire 'git push --force origin feats/elsewhere')"
 assert "a force-push names the branch its refspec names" feats/elsewhere "$(hb_head)"
