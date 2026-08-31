@@ -9,6 +9,12 @@ From the follow-up Codex strategy conversation, weekend of 2026-08-29/30 (first 
 architectural insight worth protecting*. Filed as a task because it is a constraint on how the
 feature notes around it get built, not a feature itself.
 
+**Matured 2026-08-30:** the conversation's final exchange generalised this into the admission
+model - [`core-admission-scheduling-model.md`](core-admission-scheduling-model.md) **now owns the
+conceptual model** (waiting as a scheduling state, eligibility vs selection, the KNOWN ->
+ADMISSIBLE -> ADMITTED -> RUNNING states). This note keeps the features-as-projections table below
+and the original gate-ladder form.
+
 ## The insight
 
 Nearly every feature this conversation produced is the same knowledge asked a different question:
