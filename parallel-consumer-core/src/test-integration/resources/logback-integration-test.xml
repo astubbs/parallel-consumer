@@ -22,11 +22,6 @@
 
     docs/logging.md owns the why.
 -->
-<!--
-
-    Copyright (C) 2026 Antony Stubbs and contributors
-
--->
 <configuration packagingData="true" scan="true" scanPeriod="5 seconds" debug="false">
 
     <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
