@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.internal;
  */
 
 import bz.stub.parallelconsumer.internal.admission.AdmissionController;
+import bz.stub.parallelconsumer.internal.navigator.ResourceAllocator;
 import bz.stub.parallelconsumer.internal.utils.TimeUtils;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
@@ -16,6 +17,7 @@ import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.producer.Producer;
 
 import java.time.Clock;
+import java.util.Optional;
 
 /**
  * Minimum dependency injection system, modled on how Dagger works.
@@ -184,6 +186,31 @@ public class PCModule<K, V> {
      */
     private AdmissionController initAdmissionController() {
         return new AdmissionController(options(), clock(), pcMetrics());
+    }
+
+    private Optional<ResourceAllocator> resourceAllocator;
+
+    /**
+     * The navigator's allocator handle (KD2, KTD3): the application-supplied {@link ResourceAllocator}, wrapped
+     * so an untagged instance (no allocator configured, {@link ParallelConsumerOptions#getResourceTags()} empty)
+     * reads a plain {@link Optional#empty()} rather than every future caller null-checking
+     * {@link ParallelConsumerOptions#getResourceAllocator()} itself.
+     * <p>
+     * <b>Unsynchronised, unlike {@link #admissionController()} - reasoned the same way that accessor's javadoc
+     * demands.</b> As of THIS unit (U1, the declaration side only) nothing wires the allocator into the
+     * selection path or the control loop: the only callers are single-threaded processor construction and test
+     * code holding the module directly, the same shape {@link #workManager()} and {@link #producerManager()}
+     * already have unsynchronised. That changes once a later unit reaches this accessor from the control
+     * thread's per-pass quantum read (KTD4) and the broker-poll thread's membership join/leave (R16) - at that
+     * point this accessor needs {@link #admissionController()}'s mutual-exclusion treatment for the same reason:
+     * two racing first-touches would each wrap a fresh {@code Optional}, and the loser's caller would keep a
+     * stale handle. Re-examine this comment when that wiring lands rather than assuming the shape still holds.
+     */
+    public Optional<ResourceAllocator> resourceAllocator() {
+        if (resourceAllocator == null) {
+            resourceAllocator = Optional.ofNullable(options().getResourceAllocator());
+        }
+        return resourceAllocator;
     }
 
     /**
