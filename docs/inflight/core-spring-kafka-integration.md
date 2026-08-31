@@ -4,7 +4,9 @@
 <!-- inflight-state: deferred - needs a product decision -->
 
 From the Codex strategy review of 2026-08-22/23 (breakdown in
-[`core-engine-thesis.md`](core-engine-thesis.md)).
+[`core-engine-thesis.md`](core-engine-thesis.md)). The 2026-08-29/30 follow-up generalised this
+into a per-ecosystem strategy - [`core-ecosystem-adapters.md`](core-ecosystem-adapters.md) owns
+the general shape and the design checklist; this note stays the Java worked instance.
 
 **The history:** users repeatedly asked for Spring integration during the owner's consulting years,
 and it was brushed off - PC already had a perfectly good API, and wrapping it in annotations so
