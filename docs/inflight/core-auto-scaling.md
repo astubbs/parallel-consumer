@@ -131,7 +131,9 @@ scale from per-record ground truth. Key-ordered concurrency + runtime-discovered
 bindings for every language, is the "client as engine" story - candidate for the strategy doc's
 core positioning.
 
-Next step when picked up: ce-brainstorm the per-instance controller (dimension 1 only) into
-requirements; instance-count recommendation is a follow-on with its own note when dimension 1
-lands. Branch plan: this docs branch merges as one unit; implementation work starts in its own
-worktree from master afterwards (do not stack implementation on a docs branch).
+**Dimension 1 is in flight (update 2026-08-31): astubbs#333 implements the adaptive controller**
+as a discovered admission target - records allowed in flight, thread pool fixed at the ceiling -
+Gradient2 ported from Netflix/concurrency-limits with measured deviations (median utilization, a
+bounded probe-down), staged OBSERVE -> ENFORCE and off by default, targeting the
+`perf/engine-concurrency` stack. Instance-count recommendation (dimension 2) is explicitly out of
+that PR's scope and remains the follow-on with its own note when picked up.

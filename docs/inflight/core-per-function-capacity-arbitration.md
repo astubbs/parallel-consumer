@@ -1,7 +1,7 @@
 # Per-function capacity arbitration: the scaling unit is the function, not the application
 
 <!-- inflight-type: feature -->
-<!-- inflight-state: deferred - needs multi-function instances and the dimension-1 controller; endpoint of the auto-scaling track, not its entry -->
+<!-- inflight-state: deferred - needs multi-function instances; dimension 1 is astubbs#333, assumed merging soon -->
 
 From the follow-up Codex strategy conversation, weekend of 2026-08-29/30 (the first review's
 breakdown is [`core-engine-thesis.md`](core-engine-thesis.md); the controller this extends is
@@ -28,25 +28,34 @@ layer of "tried everything cheaper first". The endpoint claim, candidate thesis 
 application stops having a meaningful configured size - partition count, thread count and replica
 count all become implementation constraints around an engine discovering where useful work exists.
 
-## The caveat recorded with it, so nobody builds the wrong half first
+## The budget is measured, not configured (corrected 2026-08-31)
 
-**"The process has room for ~500 useful concurrent operations" is a fiction until something
-concrete bounds it.** With virtual threads, threads are not the scarce resource. What is actually
-arbitrable: CPU (the JVM scheduler already arbitrates it), memory holding in-flight records
-(real, and PC-controlled), fetch bandwidth of a shared consumer (real). Functions that are IO-bound
-against *distinct* downstreams barely contend - each hill-climber finds its own ceiling and there
-is nothing to arbitrate. So the entry shape is per-function dimension-1 controllers plus
-shared-resource *ceilings* (min-composition - ideation idea 5/8, same seam as
-[`core-distributed-throttling.md`](core-distributed-throttling.md)); the marginal-benefit
-scheduler is where the track ends up if the ceilings prove insufficient, not where it starts.
+The first draft of this note called the "process has room for ~500 useful concurrent operations"
+pool a fiction until something concrete bounded it. Wrong, per the owner's correction: the number
+is the output of the dimension-1 controller, which astubbs#333 implements (assume it and the
+`perf/engine-concurrency` stack under it merge soon). That controller discovers an **admission
+target** - records allowed in flight, measured from service time, outcome signals and sustained
+achieved in-flight, thread pool fixed at the ceiling - and admission is the right variable for
+arbitration too: per-function admission sub-targets decompose a process-wide target naturally, and
+admission behaves identically on platform and virtual threads, which is that PR's own argument for
+choosing it.
+
+What survives of the caveat: the arbiter only bites when the sum of per-function profitable
+concurrency exceeds the discovered process-wide target. Functions IO-bound on distinct downstreams
+can each sit at their own dimension-1 answer with the sum still under the process ceiling - then
+there is nothing to arbitrate, and the right amount of scheduler is none. astubbs#333 also already
+names the edge this layer inherits per function: where ordering starves a workload, admission is
+not the binding constraint, and the controller reports rather than adapting against a constraint
+it cannot move.
 
 ## Prerequisites, promoted from earmark to load-bearing
 
 The many-functions process does not exist in PC today - one instance, one function. This idea
 stands on astubbs#254 (per-topic processing functions, confluentinc#372) and astubbs#245 (runtime
 subscription change), which [`core-auto-scaling.md`](core-auto-scaling.md) carries only as
-earmarks; the Streams flavour additionally stands on astubbs#255. If those never land, this note
-reduces to "dimension 1, run once".
+earmarks; the Streams flavour additionally stands on astubbs#255. Dimension 1 itself is no longer
+a blocker - astubbs#333 implements it. If the multi-function work never lands, this note reduces
+to "dimension 1, run once".
 
 ## Split rationale
 
