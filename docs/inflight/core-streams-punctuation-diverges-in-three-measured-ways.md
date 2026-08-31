@@ -64,6 +64,12 @@ are not.
   `seedStreamTime`'s call site and `pcAwareStreamTime()`'s PC branch, and the module's upstream
   execution pins the seam OFF, so both are measured by hand rather than gated. It belongs with the
   seam-on evidence lane rather than here.
+  <br>**And that run does NOT cover the second half of the seed - measured, not assumed.** Removing
+  only the `pcRecordQueues` seed and re-running the same two cases seam-on leaves them green,
+  case-for-case. So the line that makes a `UsePartitionTimeOnInvalidTimestamp` extractor recover after
+  a restart rests on reading `RecordQueue.updateHead`'s signature, and Kafka's own suite has no case
+  for that extractor to borrow. Anyone adding the seam-on lane should add one rather than assume the
+  existing cases reach it.
 
 ## One claim left standing that this work did not verify
 
