@@ -331,3 +331,65 @@ lift of the recovery diagnostic into `ChaosScenarioBase`, so the flag is accepte
 there. Those runs DID fail - `errors="1"` in the failsafe report - but emitted no telemetry, and the
 grep read that silence as "did not fire". **Comparing the trees needs the lift backported first**;
 until then that arm is void, not negative.
+
+## Unattended soak, 2026-08-29 - a rate at last, and three signatures in one night
+
+An overnight rotation of five chaos scenarios on an idle M2 desktop (`bin/torture-overnight.sh`).
+**`ChaosChurnStormIT` failed roughly one cycle in eleven. The other four scenarios failed not once,
+across four times as many cycles.** Whatever this is, it is specific to W1 and it is not ambient
+load - which is the control arm this file has never had, and it arrived for free. The run's
+`SUMMARY.md` carries the per-scenario tallies; `grep 'END ' tally.tsv` reproduces them.
+
+The four are not one signature. They are three:
+
+| Cycle | Signature | Seed |
+|---|---|---|
+| 51 | `NO_PROGRESS` fleet stuck at 97386/100000, 30s against a 30s bound | `87978223167568` |
+| 166 | `NO_PROGRESS` fleet stuck at 97297/100000, 30s against a 30s bound | `106062481479157` |
+| 111 | `INSTANCE_STALL/NO_WORK_COMPLETED` - instance 0 holding work (`queued=0, outForProcessing=18`), no work result for 151s against a 150s bound | `6077035105695` |
+| 16 | no gating detector fired at all - `ConditionTimeoutException` on the outer 5-minute wait, with many non-gating `CLASS2_STALL` observations and a long list of frozen partitions | `43637745393105` |
+
+The two `NO_PROGRESS` seeds belong to
+[`test-no-progress-window-may-not-transfer-to-w1.md`](test-no-progress-window-may-not-transfer-to-w1.md),
+which owns that calibration question and now carries them.
+
+**Cycle 111 is the one to look at first.** `INSTANCE_STALL` is the *gating* liveness claim the
+2026-08-25 Class 2 demotion leaned on - the detector argued to carry the real property the lag bound
+only approximated. It watches completions and is re-armed by any returned work result, so it cannot
+fire on slow-but-progressing. Here it fired with 18 records out for processing and nothing returning
+for 151s. **If that one turns out not to drain, it is a better lead than anything else in this file.**
+
+**Cycle 16 is a genuine detector-quiet failure, and I checked it the way this file says to.** The
+"silence" recorded earlier in this file was explained as listening on one channel - counting
+`NO_PROGRESS` hits only, so a failure caught by a different detector read as caught by none. So this
+time the sweep was for *any* detector-shaped token, not one name
+(`grep -ohE '[A-Z][A-Z0-9_]{4,}/[A-Z_]+|INSTANCE_STALL' probes.log | sort | uniq -c`). Two tokens
+came back and they came back in equal numbers: `CLASS2_STALL/LAG_STAGNATION`, non-gating since
+2026-08-25, and `INSTANCE_STALL` - and the equality is the finding, because every `INSTANCE_STALL`
+mention sits **inside the `CLASS2_STALL` observation text itself**, where the explanation names it.
+No `VIOLATION` line exists in that cycle at all. The likely mechanism is coherent rather than mysterious: a run
+creeping forward slowly never holds the consumed count still for 30s, so the fleet-level bound never
+trips, and the run dies on the outer wait instead. That is precisely the shape
+[`test-per-shard-liveness-has-no-gate.md`](test-per-shard-liveness-has-no-gate.md) describes as
+covered by nothing that gates - 20 watermarks frozen while instances kept completing.
+
+**None of the four is classified, and the reason is a harness omission, not a hard problem.** The
+soak did not pass `-Dchaos.diagnoseStallRecovery`, so every cycle aborted at its violation and not
+one recorded whether the fleet recovered. Under the answer already in this file these firings are
+*expected* to drain; that expectation is exactly what must not be assumed. The seeds are kept so the
+question can be asked rather than inferred.
+
+**The harness now asks it automatically.** `bin/torture-overnight.sh` passes the diagnostic on every
+cycle, records `diag=ACTIVE|NOT-ENGAGED` so an ignored flag cannot pass for an engaged one, and
+prints a drain verdict computed from the samples **after** the violation. It is deliberately not a
+binary: `CLIMBED`, `CREEPING`, `FLAT`, `RECEDED` and several "cannot judge" answers are distinct,
+because collapsing any pair reintroduces a specific wrong reading. The script header owns the set.
+
+**And it repeated this file's own instrument defect, in mirror image.** The classifier above once
+called every drained run `FLAT`; the first version of this `drain=` verdict compared the first
+sample of the whole run to the last, which calls every **wedge** `CLIMBED` - a run that raced to
+97386, tripped the detector and never moved again still "climbed", from 12000. Same bug class,
+opposite direction, and the dangerous one: it reports the interesting result as the boring one.
+Caught by `bin/test-torture-overnight.sh`, whose `wedge` case fails against the old logic and passes
+against the new. The lesson this file already records - a wrong verdict on a right number reads as a
+finding - held for the second time in four days.
