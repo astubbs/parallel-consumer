@@ -211,6 +211,19 @@ exactly like one that works. The verification is therefore to assert the number 
 rule reports zero, that an enabled one reports more than zero - never to observe that the build
 passed.
 
+**Filtered diagnostic**
+A diagnostic the code emits correctly and no reader can see, because the logging profile in force
+suppresses that level for the package it was written in. Distinct from a missing diagnostic: the call
+executed, the evidence was produced, and only the transport discarded it. Neighbour of an inert
+configuration - both make an absence unreadable, one by never reaching the tool, the other by never
+reaching the reader.
+
+A search for the line returns the same nothing whether the code path ran or not, so silence carries
+no information in either direction. Two habits follow: prove the level reached the run before
+believing any zero, and when both branches of a decision are worth observing, emit them at the same
+level - logging only one makes "took the other branch" indistinguishable from "never reached the
+fork". Evidence a failure message must carry belongs in the assertion, which no profile can filter.
+
 **Positive control**
 An arm of a measurement whose only job is to register a hit, proving the instrument could have detected
 something on this run. Its own reading is never the result — it is what licenses reading every other
