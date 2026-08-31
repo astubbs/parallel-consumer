@@ -245,6 +245,34 @@ contains ZERO revocations, so `onPartitionsRevoked` never executes. That also ma
 unlike the rest of the confluentinc#857 family, which is rebalance-centred throughout: whatever this
 is, it happens in the steady state.
 
+### The coherence check, and why the direct-pull stack changes what it should watch
+
+A coherence line was added to `describeProgress()`: it flags **work queued for execution while PC
+believes no offsets are incomplete and nothing is out for processing**. That is a different KIND of
+check from every probe this repo has - those watch LIVENESS, sampling one number over time, and a
+system can be perfectly live while lying about what it holds. This watches whether PC's separate
+views of its own state can all be true at once.
+
+**It has not fired yet, and is therefore unarmed.** The run that would exercise it passed - the
+branch's failure is load-dependent - so nothing has demonstrated the check firing on a tree that
+should fail. Until that happens its silence means nothing, which is this repo's standing rule for
+detectors and applies to this one as much as to the ambient probe it was written in response to.
+
+**astubbs/parallel-consumer#361 removes the signal it depends on.** Direct pull hands work SELECTION
+to the workers - they block on the shards and take their own records rather than the control loop
+pushing into an executor queue - so `executorQueueDepth()` would read zero permanently and the
+condition would never be reachable again. It would not fail; it would go quiet, which is worse. Any
+version of this check that is meant to survive that stack has to source "work PC is holding" from
+something direct pull still has, not from the executor's queue.
+
+**And the finding itself may not be novel.** astubbs/parallel-consumer#336 derives the poller load
+gate by conservation rather than from maintained totals, and the note on
+`numberRecordsOutForProcessing` describes it as the last counter of its family after the others were
+dissolved into derived views. astubbs/parallel-consumer#335 adds `ExecutionState` for concurrent
+claims. The disagreement recorded above sits inside the area that stack is rebuilding, so it must be
+checked against those branches before being treated as a new defect - and the throughput regression
+is measured separately and does not depend on it either way.
+
 ## Why it matters beyond the branch that found it
 
 If cluster 2 is implicated, the question is not only "fix it" but whether that work belongs on a PR

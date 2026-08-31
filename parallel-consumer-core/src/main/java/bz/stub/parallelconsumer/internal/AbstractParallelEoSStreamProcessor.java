@@ -2216,13 +2216,64 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * @return a single line safe to put in an assertion message or a log
      */
     public String describeProgress() {
-        return "workRemaining=" + workRemaining()
-                + " recordsOutForProcessing=" + wm.getNumberRecordsOutForProcessing()
+        long incomplete = workRemaining();
+        int outForProcessing = wm.getNumberRecordsOutForProcessing();
+        int queued = executorQueueDepth();
+        return "workRemaining=" + incomplete
+                + " recordsOutForProcessing=" + outForProcessing
+                + " executorQueue=" + queued
                 + " state=" + state
                 + " closedOrFailed=" + isClosedOrFailed()
                 // Splits an idle instance into its two opposite causes: paused (back-pressure held on)
                 // or simply not being given work. Without it, both read as zero-and-zero.
-                + " " + brokerPollSubsystem.describePauseObservation();
+                + " " + brokerPollSubsystem.describePauseObservation()
+                + coherenceWarning(incomplete, outForProcessing, queued);
+    }
+
+    /**
+     * Depth of the worker pool's queue, or {@code -1} when the pool is not up.
+     *
+     * <p>Included in the progress description because it is the ONLY one of these numbers sourced
+     * from outside PC's own bookkeeping - it is the executor's own count. The others are things PC
+     * believes; this is a thing that is true. When they disagree, that asymmetry is what tells you
+     * which one to doubt.
+     */
+    private int executorQueueDepth() {
+        var pool = workerThreadPool.get();
+        return pool == null ? -1 : pool.getQueue().size();
+    }
+
+    /**
+     * Flags a state PC should never be in: <b>work queued for execution while it believes no offsets
+     * are incomplete and nothing is out for processing.</b>
+     *
+     * <p><b>A different KIND of check from the probes that already exist.</b> Those watch liveness -
+     * is the system still progressing - and answer it by sampling one number over time. This watches
+     * COHERENCE: whether PC's separate views of its own state can all be true at once. A liveness
+     * probe cannot see this at all, because a system can be perfectly live while lying about what it
+     * holds, and it will report healthy right up until the lie matters.
+     *
+     * <p><b>Why this exact triple.</b> {@code getNumberOfIncompleteOffsets()} sums over ASSIGNED
+     * partitions, so it returns zero whenever that map is empty - regardless of how much work is
+     * queued. That makes "queued but nothing incomplete" reachable without anything throwing, and it
+     * was observed on three consecutive log lines during the confluentinc#857 throughput
+     * investigation: an executor queue of 319 against a target of 320, with both counters reading
+     * zero.
+     *
+     * <p><b>It reports; it does not assert.</b> The two reads are not atomic, so a queue that drains
+     * between them produces a false positive, and a single sample is not evidence. Whoever turns this
+     * into a gate must require the contradiction to PERSIST across samples and must show it firing on
+     * a tree that should fail before trusting a quiet one - this repo's standing rule for detectors.
+     * Recorded as an observation for now:
+     * {@code docs/inflight/test-857-branch-red-lanes-cause-unestablished.md}.
+     *
+     * @return an empty string when coherent, so the common case adds nothing to the line
+     */
+    private String coherenceWarning(long incomplete, int outForProcessing, int queued) {
+        boolean incoherent = queued > 0 && incomplete == 0 && outForProcessing == 0;
+        return incoherent
+                ? " INCOHERENT=work-queued-but-nothing-incomplete"
+                : "";
     }
 
     /**
