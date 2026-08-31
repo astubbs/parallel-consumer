@@ -38,11 +38,14 @@ anything below was written; most held, and these did not survive contact:
   proxy module shell (extraction A5 below) exists on `master`.
 - **astubbs#295 (verdict-free work return) is buried, not lost.** Its closing comment says the
   commit was cherry-picked onto `feats/proxy-requirements` unchanged - it is `4b4ff1968` on that
-  branch, already package-renamed. Resurrection route (owner's call): **reopen the existing PR
-  FIRST, then force-push** the renamed cherry-pick, rebased onto current `master`, to
-  `feats/proxy-verdict-free-return`. The ordering is load-bearing - GitHub refuses to reopen a PR
-  whose head branch was force-pushed after it closed. Reopening keeps the PR's review history and
-  gives the stack a real `depends on` anchor.
+  branch. This plan first claimed that commit was already package-renamed; execution refuted that
+  - it predates the rename even on the proxy branch, so its hunks were re-applied into the renamed
+  tree by hand, and the engine had moved under it besides (the atomic execution-state work made
+  half of the original's resets structural). Resurrection route (owner's call): **reopen the
+  existing PR FIRST, then force-push** the re-cut commit to `feats/proxy-verdict-free-return`.
+  The ordering is load-bearing - GitHub refuses to reopen a PR whose head branch was force-pushed
+  after it closed. Reopening keeps the PR's review history and gives the stack a real
+  `depends on` anchor.
 - **The Streams forest predates the package rename** (sources still `io.confluent.*`). Not a
   deciding argument for any strategy - the rename mechanics run on predated branches routinely,
   that being how the fork migrated in the first place. It is simply a step any copy or promotion
