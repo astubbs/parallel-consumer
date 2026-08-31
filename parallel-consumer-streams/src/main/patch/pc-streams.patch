@@ -1,0 +1,209 @@
+diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java kafka-patched/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java
+--- a/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java	2026-02-07 12:00:08.000000000 +1300
++++ b/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java	2026-08-31 13:51:00.760206957 +1200
+@@ -44,8 +44,13 @@
+     private final Serde<?> keySerde;
+     private final Serde<?> valueSerde;
+     private boolean initialized;
+-    protected ProcessorRecordContext recordContext;
+-    protected ProcessorNode<?, ?, ?, ?> currentNode;
++    // PC dispatch (astubbs#255): thread-confined. Stock Streams gets away with one instance per task because
++    // exactly one StreamThread ever touches it; under PC, N worker threads are inside process() on the same
++    // task at once and would otherwise scribble over each other's current record and current node.
++    // These were `protected` fields read directly by subclasses - ProcessorContextImpl had to be converted to
++    // the accessors below in the same change, or the confinement is silently bypassed by getfield/putfield.
++    private final ThreadLocal<ProcessorRecordContext> recordContext = new ThreadLocal<>();
++    private final ThreadLocal<ProcessorNode<?, ?, ?, ?>> currentNode = new ThreadLocal<>();
+     private long cachedSystemTimeMs;
+     protected ThreadCache cache;
+     private ProcessorMetadata processorMetadata;
+@@ -131,66 +136,66 @@
+ 
+     @Override
+     public String topic() {
+-        if (recordContext == null) {
++        if (recordContext.get() == null) {
+             // This is only exposed via the deprecated ProcessorContext,
+             // in which case, we're preserving the pre-existing behavior
+             // of returning dummy values when the record context is undefined.
+             // For topic, the dummy value is `null`.
+             return null;
+         } else {
+-            return recordContext.topic();
++            return recordContext.get().topic();
+         }
+     }
+ 
+     @Override
+     public int partition() {
+-        if (recordContext == null) {
++        if (recordContext.get() == null) {
+             // This is only exposed via the deprecated ProcessorContext,
+             // in which case, we're preserving the pre-existing behavior
+             // of returning dummy values when the record context is undefined.
+             // For partition, the dummy value is `-1`.
+             return -1;
+         } else {
+-            return recordContext.partition();
++            return recordContext.get().partition();
+         }
+     }
+ 
+     @Override
+     public long offset() {
+-        if (recordContext == null) {
++        if (recordContext.get() == null) {
+             // This is only exposed via the deprecated ProcessorContext,
+             // in which case, we're preserving the pre-existing behavior
+             // of returning dummy values when the record context is undefined.
+             // For offset, the dummy value is `-1L`.
+             return -1L;
+         } else {
+-            return recordContext.offset();
++            return recordContext.get().offset();
+         }
+     }
+ 
+     @Override
+     public Headers headers() {
+-        if (recordContext == null) {
++        if (recordContext.get() == null) {
+             // This is only exposed via the deprecated ProcessorContext,
+             // in which case, we're preserving the pre-existing behavior
+             // of returning dummy values when the record context is undefined.
+             // For headers, the dummy value is an empty headers collection.
+             return new RecordHeaders();
+         } else {
+-            return recordContext.headers();
++            return recordContext.get().headers();
+         }
+     }
+ 
+     @Override
+     public long timestamp() {
+-        if (recordContext == null) {
++        if (recordContext.get() == null) {
+             // This is only exposed via the deprecated ProcessorContext,
+             // in which case, we're preserving the pre-existing behavior
+             // of returning dummy values when the record context is undefined.
+             // For timestamp, the dummy value is `0L`.
+             return 0L;
+         } else {
+-            return recordContext.timestamp();
++            return recordContext.get().timestamp();
+         }
+     }
+ 
+@@ -209,27 +214,27 @@
+ 
+     @Override
+     public void setRecordContext(final ProcessorRecordContext recordContext) {
+-        this.recordContext = recordContext;
++        this.recordContext.set(recordContext);
+     }
+ 
+     @Override
+     public ProcessorRecordContext recordContext() {
+-        return recordContext;
++        return recordContext.get();
+     }
+ 
+     @Override
+     public Optional<RecordMetadata> recordMetadata() {
+-        return Optional.ofNullable(recordContext);
++        return Optional.ofNullable(recordContext.get());
+     }
+ 
+     @Override
+     public void setCurrentNode(final ProcessorNode<?, ?, ?, ?> currentNode) {
+-        this.currentNode = currentNode;
++        this.currentNode.set(currentNode);
+     }
+ 
+     @Override
+     public ProcessorNode<?, ?, ?, ?> currentNode() {
+-        return currentNode;
++        return currentNode.get();
+     }
+ 
+     @Override
+diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java kafka-patched/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java
+--- a/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java	2026-02-07 12:00:08.000000000 +1300
++++ b/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java	2026-08-31 13:51:00.760915375 +1200
+@@ -243,7 +243,11 @@
+                     "multiple times.");
+         }
+ 
+-        final ProcessorRecordContext previousContext = recordContext;
++        // PC dispatch (astubbs#255): read through the accessor, not the inherited `recordContext` field. This
++        // getfield/putfield pair IS the save/restore stack that makes nested forward() work, so if it keeps
++        // touching the field directly then thread-confining that field in AbstractProcessorContext changes
++        // nothing here and the confinement is defeated without a single compile error to say so.
++        final ProcessorRecordContext previousContext = recordContext();
+ 
+         try {
+             // we don't want to set the recordContext if it's null, since that means that
+@@ -255,13 +259,14 @@
+             // too much about heterogeneous applications, in which the upstream processor is
+             // implementing the new API and the downstream one is implementing the old API.
+             // So, this seems like a fine compromise for now.
+-            if (recordContext != null && (record.timestamp() != timestamp() || record.headers() != headers())) {
+-                recordContext = new ProcessorRecordContext(
++            // previousContext is the current record context - nothing has changed it since it was read above.
++            if (previousContext != null && (record.timestamp() != timestamp() || record.headers() != headers())) {
++                setRecordContext(new ProcessorRecordContext(
+                     record.timestamp(),
+-                    recordContext.offset(),
+-                    recordContext.partition(),
+-                    recordContext.topic(),
+-                    record.headers());
++                    previousContext.offset(),
++                    previousContext.partition(),
++                    previousContext.topic(),
++                    record.headers()));
+             }
+ 
+             if (childName == null) {
+@@ -279,7 +284,7 @@
+             }
+ 
+         } finally {
+-            recordContext = previousContext;
++            setRecordContext(previousContext);
+             setCurrentNode(previousNode);
+         }
+     }
+diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java kafka-patched/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java
+--- a/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java	2026-02-07 12:00:08.000000000 +1300
++++ b/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java	2026-08-31 13:51:00.761925919 +1200
+@@ -64,6 +64,7 @@
+ import java.util.Objects;
+ import java.util.Optional;
+ import java.util.Set;
++import java.util.concurrent.ConcurrentHashMap;
+ import java.util.concurrent.atomic.AtomicReference;
+ 
+ import static org.apache.kafka.streams.processor.internals.ClientUtils.producerRecordSizeInBytes;
+@@ -80,7 +81,10 @@
+ 
+     private final StreamsMetricsImpl streamsMetrics;
+     private final Sensor droppedRecordsSensor;
+-    private final Map<String, Sensor> producedSensorByTopic = new HashMap<>();
++    // PC dispatch (astubbs#255): the send callback runs on the producer's I/O thread and computeIfAbsent's here
++    // are triggered by whichever worker thread hit a dynamically routed topic first - a plain HashMap can
++    // corrupt its table under that. Concurrent map also makes computeIfAbsent create the sensor exactly once.
++    private final Map<String, Sensor> producedSensorByTopic = new ConcurrentHashMap<>();
+ 
+     private final AtomicReference<KafkaException> sendException;
+ 
+@@ -116,7 +120,9 @@
+                 ));
+         }
+ 
+-        this.offsets = new HashMap<>();
++        // PC dispatch (astubbs#255): written from the producer callback for every in-flight send at once, and
++        // snapshotted by the committing thread in offsets().
++        this.offsets = new ConcurrentHashMap<>();
+     }
+ 
+     @Override

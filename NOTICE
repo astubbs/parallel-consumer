@@ -8,3 +8,21 @@ Apache License, Version 2.0.
 
 This fork is maintained independently at:
   https://github.com/astubbs/parallel-consumer
+
+The parallel-consumer-streams artifact contains MODIFIED versions of these classes
+from Apache Kafka:
+
+  org.apache.kafka.streams.processor.internals.AbstractProcessorContext
+  org.apache.kafka.streams.processor.internals.ProcessorContextImpl
+  org.apache.kafka.streams.processor.internals.RecordCollectorImpl
+
+Apache Kafka
+Copyright 2024 The Apache Software Foundation
+Licensed under the Apache License, Version 2.0.
+https://kafka.apache.org
+
+These files have been CHANGED by Antony Stubbs and contributors, to make Kafka Streams'
+processor context and record collector safe to drive from more than one thread. The
+changes are expressed as, and limited to, the patch tracked at
+parallel-consumer-streams/src/main/patch/pc-streams.patch; no Apache Kafka source is
+redistributed in this repository. See parallel-consumer-streams/README.md.

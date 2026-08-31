@@ -1,0 +1,167 @@
+diff -ruN kafka-test-pristine/org/apache/kafka/test/InternalMockProcessorContext.java kafka-test-patched/org/apache/kafka/test/InternalMockProcessorContext.java
+--- a/org/apache/kafka/test/InternalMockProcessorContext.java	2026-02-07 12:00:08.000000000 +1300
++++ b/org/apache/kafka/test/InternalMockProcessorContext.java	2026-08-08 03:17:20.356524003 +1200
+@@ -239,13 +239,18 @@
+                 appConfigs(),
+                 IQ_CONSISTENCY_OFFSET_VECTOR_ENABLED,
+                 false);
+-        this.recordContext = new ProcessorRecordContext(
++        // PC dispatch (astubbs#255): converted to the AbstractProcessorContext accessors. This fixture is a
++        // subclass, so as shipped it reads/writes the inherited `recordContext` / `currentNode` fields
++        // directly. Those fields are now thread-confined and private, and a compiled-against-the-field
++        // call site is a NoSuchFieldError at runtime - which is what took out all 59 RecordCollectorTest
++        // cases before this. Same conversion the tracked patch applies to ProcessorContextImpl.
++        setRecordContext(new ProcessorRecordContext(
+                 0,
+                 0,
+                 0,
+                 "topic",
+                 new RecordHeaders()
+-        );
++        ));
+     }
+ 
+     @Override
+@@ -330,17 +335,23 @@
+     @SuppressWarnings("unchecked")
+     @Override
+     public <K extends KOut, V extends VOut> void forward(final Record<K, V> record, final String childName) {
+-        if (recordContext != null && record.timestamp() != recordContext.timestamp()) {
++        // PC dispatch (astubbs#255): converted to the AbstractProcessorContext accessors. This fixture is a
++        // subclass, so as shipped it reads/writes the inherited `recordContext` / `currentNode` fields
++        // directly. Those fields are now thread-confined and private, and a compiled-against-the-field
++        // call site is a NoSuchFieldError at runtime - which is what took out all 59 RecordCollectorTest
++        // cases before this. Same conversion the tracked patch applies to ProcessorContextImpl.
++        final ProcessorRecordContext currentContext = recordContext();
++        if (currentContext != null && record.timestamp() != currentContext.timestamp()) {
+             setTime(record.timestamp());
+         }
+-        final ProcessorNode<?, ?, ?, ?> thisNode = currentNode;
++        final ProcessorNode<?, ?, ?, ?> thisNode = currentNode();
+         try {
+             for (final ProcessorNode<?, ?, ?, ?> childNode : thisNode.children()) {
+-                currentNode = childNode;
++                setCurrentNode(childNode);
+                 ((ProcessorNode<K, V, ?, ?>) childNode).process(record);
+             }
+         } finally {
+-            currentNode = thisNode;
++            setCurrentNode(thisNode);
+         }
+     }
+ 
+@@ -356,11 +367,16 @@
+         if (toInternal.hasTimestamp()) {
+             setTime(toInternal.timestamp());
+         }
+-        final ProcessorNode<?, ?, ?, ?> thisNode = currentNode;
++        // PC dispatch (astubbs#255): converted to the AbstractProcessorContext accessors. This fixture is a
++        // subclass, so as shipped it reads/writes the inherited `recordContext` / `currentNode` fields
++        // directly. Those fields are now thread-confined and private, and a compiled-against-the-field
++        // call site is a NoSuchFieldError at runtime - which is what took out all 59 RecordCollectorTest
++        // cases before this. Same conversion the tracked patch applies to ProcessorContextImpl.
++        final ProcessorNode<?, ?, ?, ?> thisNode = currentNode();
+         try {
+             for (final ProcessorNode<?, ?, ?, ?> childNode : thisNode.children()) {
+                 if (toInternal.child() == null || toInternal.child().equals(childNode.name())) {
+-                    currentNode = childNode;
++                    setCurrentNode(childNode);
+                     final Record<Object, Object> record = new Record<>(key, value, toInternal.timestamp(), headers());
+                     ((ProcessorNode<Object, Object, ?, ?>) childNode).process(record);
+                     toInternal.update(to); // need to reset because MockProcessorContext is shared over multiple
+@@ -368,31 +384,38 @@
+                 }
+             }
+         } finally {
+-            currentNode = thisNode;
++            setCurrentNode(thisNode);
+         }
+     }
+ 
+     // allow only setting time but not other fields in for record context,
+     // and also not throwing exceptions if record context is not available.
+     public void setTime(final long timestamp) {
+-        if (recordContext != null) {
+-            recordContext = new ProcessorRecordContext(
++        // PC dispatch (astubbs#255): converted to the AbstractProcessorContext accessors. This fixture is a
++        // subclass, so as shipped it reads/writes the inherited `recordContext` / `currentNode` fields
++        // directly. Those fields are now thread-confined and private, and a compiled-against-the-field
++        // call site is a NoSuchFieldError at runtime - which is what took out all 59 RecordCollectorTest
++        // cases before this. Same conversion the tracked patch applies to ProcessorContextImpl.
++        final ProcessorRecordContext currentContext = recordContext();
++        if (currentContext != null) {
++            setRecordContext(new ProcessorRecordContext(
+                 timestamp,
+-                recordContext.offset(),
+-                recordContext.partition(),
+-                recordContext.topic(),
+-                recordContext.headers()
+-            );
++                currentContext.offset(),
++                currentContext.partition(),
++                currentContext.topic(),
++                currentContext.headers()
++            ));
+         }
+         this.timestamp = timestamp;
+     }
+ 
+     @Override
+     public long timestamp() {
+-        if (recordContext == null) {
++        final ProcessorRecordContext currentContext = recordContext();
++        if (currentContext == null) {
+             return timestamp;
+         }
+-        return recordContext.timestamp();
++        return currentContext.timestamp();
+     }
+ 
+     @Override
+@@ -407,34 +430,38 @@
+ 
+     @Override
+     public String topic() {
+-        if (recordContext == null) {
++        final ProcessorRecordContext currentContext = recordContext();
++        if (currentContext == null) {
+             return null;
+         }
+-        return recordContext.topic();
++        return currentContext.topic();
+     }
+ 
+     @Override
+     public int partition() {
+-        if (recordContext == null) {
++        final ProcessorRecordContext currentContext = recordContext();
++        if (currentContext == null) {
+             return -1;
+         }
+-        return recordContext.partition();
++        return currentContext.partition();
+     }
+ 
+     @Override
+     public long offset() {
+-        if (recordContext == null) {
++        final ProcessorRecordContext currentContext = recordContext();
++        if (currentContext == null) {
+             return -1L;
+         }
+-        return recordContext.offset();
++        return currentContext.offset();
+     }
+ 
+     @Override
+     public Headers headers() {
+-        if (recordContext == null) {
++        final ProcessorRecordContext currentContext = recordContext();
++        if (currentContext == null) {
+             return new RecordHeaders();
+         }
+-        return recordContext.headers();
++        return currentContext.headers();
+     }
+ 
+     @Override

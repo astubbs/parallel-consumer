@@ -38,6 +38,12 @@
         <module>parallel-consumer-vertx</module>
         <module>parallel-consumer-reactor</module>
         <module>parallel-consumer-mutiny</module>
+        <!-- Alpha/experimental (astubbs#255), and NOT published - its own pom carries the deploy and
+             signing skips plus skipPublishing, and says why. Ordered before parallel-consumer-examples,
+             which is the other module that skips publishing: the examples pom records a
+             central-publishing-maven-plugin bug where a skipPublishing module LAST in reactor order
+             suppressed the whole bundle, so neither of them may be the final entry above. -->
+        <module>parallel-consumer-streams</module>
         <module>parallel-consumer-examples</module>
     </modules>
 
