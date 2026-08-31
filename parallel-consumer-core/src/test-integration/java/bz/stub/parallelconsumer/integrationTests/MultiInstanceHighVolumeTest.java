@@ -7,6 +7,7 @@ package bz.stub.parallelconsumer.integrationTests;
 
 import bz.stub.parallelconsumer.internal.utils.ProgressBarUtils;
 import bz.stub.parallelconsumer.internal.utils.StringUtils;
+import bz.stub.parallelconsumer.internal.utils.ThroughputReport;
 import bz.stub.parallelconsumer.internal.utils.TrimListRepresentation;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
@@ -22,8 +23,6 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
-import bz.stub.parallelconsumer.internal.utils.ThroughputReport;
-
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -133,13 +132,10 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
                         all.assertAll();
                     });
         } catch (ConditionTimeoutException e) {
-            ThroughputReport.report("MultiInstanceHighVolumeTest", consumedKeys.size(), expectedMessageCount,
-                    waitStarted, StringUtils.msg("commitMode={} order={} maxPoll={} outcome=FAILED",
-                            commitMode, order, maxPoll));
+            reportThroughput(expectedMessageCount, waitStarted, "FAILED");
             fail(failureMessage + "\n" + e.getMessage());
         }
-        ThroughputReport.report("MultiInstanceHighVolumeTest", consumedKeys.size(), expectedMessageCount,
-                waitStarted, StringUtils.msg("commitMode={} order={} maxPoll={}", commitMode, order, maxPoll));
+        reportThroughput(expectedMessageCount, waitStarted, "PASSED");
 
         assertThat(processedCount.get())
                 .as("messages processed and produced by parallel-consumer should be equal")
@@ -149,6 +145,20 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
         assertThat(expectedMessageCount).isEqualTo(processedCount.get());
 
         bars.forEach(ProgressBar::close);
+    }
+
+    /**
+     * One reporter for both exits of the wait, so the two lines cannot drift apart in what they
+     * carry. They already had: the failing line named {@code outcome=FAILED} and the passing line
+     * carried no {@code outcome} field at all, so a collector could only tell a green run from a
+     * schema change by the absence of a key - which is exactly the reading a
+     * {@code key=value} line exists to remove. Both now say which they are, matching the
+     * {@code PC-DEADLINE-HEADROOM} line the ambient probe emits.
+     */
+    private void reportThroughput(int expectedMessageCount, Instant waitStarted, String outcome) {
+        ThroughputReport.report("MultiInstanceHighVolumeTest", consumedKeys.size(), expectedMessageCount,
+                waitStarted, StringUtils.msg("commitMode={} order={} maxPoll={} outcome={}",
+                        commitMode, order, maxPoll, outcome));
     }
 
     private ParallelEoSStreamProcessor<String, String> buildPc(String inputTopicName, int maxPoll, ProcessingOrder order, CommitMode commitMode) {
