@@ -201,7 +201,16 @@ public class ManagedPCInstance implements Runnable {
             }
 
             // started flag is set in start(), not here — prevents double-submission
-            log.info("Running consumer instance {}", instanceId);
+
+            // The commit mode and ordering are logged HERE, from the harness, rather than left to
+            // PC's own "Options: {}" boot line: that line is on `bz.stub.parallelconsumer`, pinned
+            // to warn by the test log config, so it never appears and the mode a run actually used
+            // is unobservable after the fact. `bz.stub.parallelconsumer.integrationTests` is at
+            // info, so this one is always in the log and in the siloed harness stream. Scripts read
+            // it to report the mode a soak OBSERVED instead of the mode it believed it requested;
+            // bin/torture-overnight.sh's header owns why that distinction is load-bearing here.
+            log.info("Running consumer instance {} with commitMode={} ordering={}",
+                    instanceId, config.commitMode, config.order);
 
             Properties consumerProps = new Properties();
             consumerProps.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, config.maxPoll);
