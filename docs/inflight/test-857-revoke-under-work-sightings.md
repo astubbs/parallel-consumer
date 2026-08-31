@@ -1,10 +1,11 @@
-# `ChaosRevokeUnderWork*` sightings - the two that are mode-compatible with astubbs#29 <!-- post-merge: checked -->
+# `ChaosRevokeUnderWork*` sightings - the variants whose mode permits astubbs#29's cycle <!-- post-merge: checked -->
 
 <!-- inflight-type: register -->
 
 **Commit mode: `PERIODIC_CONSUMER_SYNC`** - inherited from `AbstractRevokeUnderWorkScenario`, which
-both the eager (`ChaosRevokeUnderWorkIT`) and cooperative
-(`ChaosRevokeUnderWorkCooperativeIT`) variants extend. Verified in source.
+every `ChaosRevokeUnderWork*` variant extends: the eager and cooperative arms, both of their drain
+variants, and the key-order one. Verified in source - none of them overrides `commitMode`, so the
+mode is a property of the family rather than of the two arms this file was opened for.
 
 <!-- post-merge: checked -->
 That makes these **the only sightings in the family whose mode permits astubbs#29's AB-BA cycle to
@@ -447,3 +448,56 @@ eager arm errored, the cooperative arm passed. All three confirmed eager stalls 
 a green cooperative arm in the same run, which is the second sighting's "eager-protocol-specific"
 reading holding across three independent occurrences. The third sighting is still the only
 cooperative red, and still unconfirmed as a stall, so it still does not overturn that reading.
+
+<!-- post-merge: checked-begin - written as a dated record of an experiment that has already run;
+     the astubbs#29 mentions below describe what its fix DOES and what this run could not measure
+     about it, not that it is open -->
+
+## 2026-08-31 replay of the cooperative-drain capture: it does NOT reproduce off-CI
+
+The twentieth family capture named `ChaosRevokeUnderWorkCooperativeDrainIT` and seed
+`1159274055608047297`, with the poll thread BLOCKED on a monitor held by `pc-control` inside
+`commitOffsetsThatAreReady` reached from `onPartitionsRevoked`. The family ledger records twice that
+nobody had replayed that seed. This is that replay, and a plain replay does not settle it.
+
+**Arms differing by one term.** The control was cut from astubbs#29's own HEAD with
+`if (commitLock.tryLock())` replaced by `commitLock.lock(); if (true)` - blocking rather than
+declining, restoring the pre-fix pair. The long-lived `experiment/857-deadlock-control-arm` worktree
+was deliberately not used: it is far enough behind that its chaos scenario code differs, so the seed
+would have replayed a different schedule and the comparison would have carried two terms instead of
+one.
+
+**Prediction, stated before running:** the control reproduces the BLOCKED discriminator at some
+rate; the fix arm does not, and logs a decline instead.
+
+**Result: no reproduction on either arm.** Five reps per arm, alternated so machine conditions were
+shared rather than blocked by arm. Every run went green, none printed
+`POLL THREAD AT TIMEOUT: BLOCKED`, none recorded a commit response timeout, and the fix arm logged
+no declines at all.
+
+**That is void, not a pass for the fix.** The control carries the pre-fix blocking lock, so had the
+seed replayed the schedule behind the capture, that arm should have deadlocked. It did not, so the
+run says nothing about whether the fix covers this path. Two cheaper explanations were ruled out
+rather than assumed: every run genuinely executed the scenario (the failsafe report names the class
+with real elapsed test time, so this is not `failIfNoSpecifiedTests` waving through an empty run),
+and the scenario inherits `PERIODIC_CONSUMER_SYNC`, the one mode in which the cycle can close.
+
+**What it does establish is worth more than the arm result.** A chaos seed drives the CONDUCTOR's
+schedule - when instances stop, drain and rejoin - and not the interleaving of the poll and control
+threads, which is what the AB-BA close is a race between. So "replay the seed" was always weaker
+evidence than the ledger's phrasing implies, and a green replay is not a clearance. The remaining
+suspected variable is load: the capture came from CI's chaos lane, and this ran on a desktop whose
+documented capacity baseline is a fraction of that runner's.
+
+**Reproduction rate: zero of five on the control arm**, at desktop scale, `PERIODIC_CONSUMER_SYNC`,
+seed `1159274055608047297`. That is "did not reproduce", not "does not happen", and astubbs#29's
+coverage of the cooperative revoke path stays an inference from where the fix sits rather than a
+measurement.
+
+**It also found an instrumentation hole, now closed.** Entry to `tryCommitOffsetsOnRevoke` was
+logged at DEBUG while only the decline was at INFO, so at default verbosity "the revoke path never
+contended" and "the revoke path never ran" were indistinguishable - and the decline is precisely
+what does not arrive when the window stays shut. Both branches of that fork now log at INFO, so a
+future replay can show whether the window opened instead of inferring it from an absence.
+
+<!-- post-merge: checked-end -->

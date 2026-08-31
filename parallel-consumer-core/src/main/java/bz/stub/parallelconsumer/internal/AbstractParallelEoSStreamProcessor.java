@@ -637,7 +637,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private void tryCommitOffsetsOnRevoke() {
         if (commitLock.tryLock()) {
             try {
-                log.debug("Acquired commitLock on revoke, committing offsets");
+                // INFO, not DEBUG, and deliberately paired with the decline below at the same level:
+                // the two branches are the two outcomes of one fork, and logging only one of them
+                // makes "the revoke path never contended" indistinguishable from "the revoke path
+                // never ran". A seed replay cannot tell whether the deadlock window opened without
+                // this line, which is what voided the 2026-08-31 cooperative replay.
+                log.info("Acquired commitLock on revoke without contention - committing offsets " +
+                        "inline. See confluentinc#857.");
                 committer.retrieveOffsetsAndCommit();
                 clearCommitCommand();
                 this.lastCommitTime = Instant.now();
