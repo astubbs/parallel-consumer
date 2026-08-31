@@ -11,7 +11,8 @@
 # worse than one that is absent, because the suite reports green on its say-so.
 #
 # METHOD: replay the reproducing seed N times and CLASSIFY every failing run by what actually caught
-# it. A run that passes is not a data point here - only failures carry the question.
+# it. A run that passes is not a data point here - only failures carry the question, and neither is a
+# run that executed no test at all.
 #
 #   no-progress   - the detector fired. Working as intended.
 #   other-probe   - a different detector caught it. Not a miss; a different signature.
@@ -20,30 +21,25 @@
 #   unclassified  - read it by hand; the classifier is not the oracle.
 #
 # Reads the siloed probes.log (docs/logging.md) so "which detector fired" is a small file.
+#
+# `-e` is deliberately omitted - a failing iteration is the data. bin/lib/chaos-experiment-common.sh
+# owns that reasoning, along with the maven invocation and the classifiers every runner here shares.
 set -u
+# shellcheck source=bin/lib/chaos-experiment-common.sh
+source "${BASH_SOURCE[0]%/*}/lib/chaos-experiment-common.sh"
+
 SEED=9086872209853284830
 D="$(git rev-parse --show-toplevel)"
 OUT=/tmp/detector-audit; mkdir -p "$OUT"
 for i in $(seq 1 "${1:-8}"); do
     log="$OUT/run-$i.log"; pcl="$OUT/pc-logs-$i"
-    JAVA_HOME="${JAVA_HOME:-/Users/astubbs/.sdkman/candidates/java/17.0.18-tem}" \
-      "$D/mvnw" -f "$D/pom.xml" -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
-        -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed="$SEED" \
-        -Dit.test=ChaosChurnStormIT -Dpc.log.dir="$pcl" \
-        -Dfailsafe.failIfNoSpecifiedTests=false -Dcopyright.skip=true -Djacoco.skip=true \
-        > "$log" 2>&1
-    rpt="$D/parallel-consumer-core/target/failsafe-reports"
-    stats=$(grep -ohE 'errors="[0-9]+" skipped="[0-9]+" failures="[0-9]+"' \
-              "$rpt"/TEST-*ChurnStorm*.xml 2>/dev/null | tail -1)
-    if ! printf '%s' "$stats" | grep -qE 'errors="[1-9]|failures="[1-9]'; then
-        printf '%s\trun=%s\tPASSED - not a data point\n' "$(date -u +%FT%TZ)" "$i" >> "$OUT/tally.tsv"
+    pc_run_chaos "$D" "$SEED" "$log" -Dpc.log.dir="$pcl"
+    outcome=$(pc_failsafe_outcome "$D" ChurnStorm)
+    if [ "$outcome" != FAILED ]; then
+        printf '%s\trun=%s\t%s - not a data point\n' "$(pc_now)" "$i" "$outcome" >> "$OUT/tally.tsv"
         continue
     fi
-    np=$(grep -c 'NO_PROGRESS' "$log" 2>/dev/null || echo 0)
-    other=$(grep -cE 'ZOMBIE_MEMBER|INSTANCE_STALL|LEDGER_KEY_ORDER' "$log" 2>/dev/null || echo 0)
-    if   [ "$np"    -gt 0 ]; then verdict=no-progress
-    elif [ "$other" -gt 0 ]; then verdict=other-probe
-    else verdict=LEDGER-ONLY-MISS-CASE; fi
+    pc_detector_verdict "$log"
     printf '%s\trun=%s\tFAILED\tverdict=%s\tno_progress=%s\tother_probe=%s\tprobes_log=%s\n' \
-        "$(date -u +%FT%TZ)" "$i" "$verdict" "$np" "$other" "$pcl/probes.log" >> "$OUT/tally.tsv"
+        "$(pc_now)" "$i" "$PC_VERDICT" "$PC_NO_PROGRESS" "$PC_OTHER_PROBE" "$pcl/probes.log" >> "$OUT/tally.tsv"
 done

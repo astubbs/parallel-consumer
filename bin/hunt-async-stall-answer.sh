@@ -12,28 +12,28 @@
 #
 # Reads the siloed streams that docs/logging.md owns rather than the raw run log - probes.log is the
 # detectors, so "did it fire" is a small file instead of a grep of tens of thousands of lines.
+#
+# `-e` is deliberately omitted - a failing iteration is the data. bin/lib/chaos-experiment-common.sh
+# owns that reasoning, along with the maven invocation and the parsing every runner here shares.
 set -u
+# shellcheck source=bin/lib/chaos-experiment-common.sh
+source "${BASH_SOURCE[0]%/*}/lib/chaos-experiment-common.sh"
+
 SEED=9086872209853284830
 D="$(git rev-parse --show-toplevel)"
 OUT=/tmp/async-answer
 mkdir -p "$OUT"
 for i in $(seq 1 "${1:-10}"); do
     log="$OUT/run-$i.log"
-    JAVA_HOME="${JAVA_HOME:-/Users/astubbs/.sdkman/candidates/java/17.0.18-tem}" \
-      "$D/mvnw" -f "$D/pom.xml" -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
-        -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed="$SEED" \
-        -Dit.test=ChaosChurnStormIT -Dchaos.diagnoseStallRecovery=true \
-        -Dpc.log.dir="$OUT/pc-logs-run-$i" \
-        -Dfailsafe.failIfNoSpecifiedTests=false -Dcopyright.skip=true -Djacoco.skip=true \
-        > "$log" 2>&1
-    fired=$(grep -oE 'violations=[1-9][0-9]*' "$log" | head -1)
-    printf '%s\trun=%s\tfired=%s\tfinal=%s\n' "$(date -u +%FT%TZ)" "$i" "${fired:-none}" \
-        "$(grep -oE 'consumed=[0-9]+/100000' "$log" | tail -1)" >> "$OUT/tally.tsv"
+    pc_run_chaos "$D" "$SEED" "$log" \
+        -Dchaos.diagnoseStallRecovery=true -Dpc.log.dir="$OUT/pc-logs-run-$i"
+    fired=$(pc_first_violation "$log")
+    printf '%s\trun=%s\tfired=%s\tfinal=%s\n' "$(pc_now)" "$i" "${fired:-none}" \
+        "$(grep -oE 'consumed=[0-9]+/[0-9]+' "$log" | tail -1)" >> "$OUT/tally.tsv"
     if [ -n "$fired" ]; then
         {   echo "FIRED on run $i. Consumed trajectory from the violation onward -"
             echo "climbing means it DRAINED (timing proxy); flat means a real WEDGE."
-            awk '/violations=[1-9]/{f=1} f' "$log" \
-                | grep -oE 'consumed=[0-9]+/100000 started=[0-9]+ inFlight=[0-9]+'
+            pc_trajectory_after_violation "$log"
         } > "$OUT/ANSWER.txt"
         break
     fi

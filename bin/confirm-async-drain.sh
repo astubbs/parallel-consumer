@@ -18,35 +18,37 @@
 #   consumed flat, inFlight stuck         -> WEDGE. A real defect, and the family's fourth mechanism.
 #
 # A run that does not fire is not a data point - the diagnostic only engages on a violation.
+#
+# `-e` is deliberately omitted - a failing iteration is the data. bin/lib/chaos-experiment-common.sh
+# owns that reasoning, along with the maven invocation and the parsing every runner here shares -
+# including this script's own hard-won lesson about reading the two trajectory ends separately.
 set -u
-W=/Users/astubbs/github/parallel-consumer/.claude/worktrees
+# shellcheck source=bin/lib/chaos-experiment-common.sh
+source "${BASH_SOURCE[0]%/*}/lib/chaos-experiment-common.sh"
+
+W="$(pc_worktree_root)"
 T=/tmp/drain-confirm; mkdir -p "$T"
-J="${JAVA_HOME:-/Users/astubbs/.sdkman/candidates/java/17.0.18-tem}"
 SEED=9086872209853284830
 for tree in pr29 pre-344; do
   d="$W/$tree"
-  [ -d "$d" ] || { printf '%s\t%s\tMISSING TREE\n' "$(date -u +%FT%TZ)" "$tree" >> "$T/tally.tsv"; continue; }
+  [ -d "$d" ] || { printf '%s\t%s\tMISSING TREE\n' "$(pc_now)" "$tree" >> "$T/tally.tsv"; continue; }
   for i in 1 2 3 4 5; do
     lg="$T/$tree-$i.log"
-    JAVA_HOME="$J" "$d/mvnw" -f "$d/pom.xml" -Pci -pl parallel-consumer-core -am verify \
-      -DskipUTs=true -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed="$SEED" \
-      -Dit.test=ChaosChurnStormIT -Dchaos.diagnoseStallRecovery=true \
-      -Dfailsafe.failIfNoSpecifiedTests=false -Dcopyright.skip=true -Djacoco.skip=true > "$lg" 2>&1
-    fired=$(grep -oE 'violations=[1-9][0-9]*' "$lg" | head -1)
+    pc_run_chaos "$d" "$SEED" "$lg" -Dchaos.diagnoseStallRecovery=true
+    fired=$(pc_first_violation "$lg")
     if [ -z "$fired" ]; then
-      printf '%s\t%s\trun=%s\tdid-not-fire - NOT a data point\n' "$(date -u +%FT%TZ)" "$tree" "$i" >> "$T/tally.tsv"
+      printf '%s\t%s\trun=%s\tdid-not-fire - NOT a data point\n' "$(pc_now)" "$tree" "$i" >> "$T/tally.tsv"
       continue
     fi
-    # First and last consumed reading after the violation. Climbing = drained.
-    # Read the two numbers SEPARATELY. An earlier version joined them with `paste -sd'->'`, where
-    # -d is a character LIST not a string, so it joined with '-'; the sed then looked for '->',
-    # matched nothing, and the integer test failed silently into the else branch - labelling four
-    # runs that plainly drained as FLAT. The data was right and every verdict was wrong.
-    first=$(awk '/violations=[1-9]/{f=1} f' "$lg" | grep -oE 'consumed=[0-9]+' | head -1 | cut -d= -f2)
-    last=$(awk '/violations=[1-9]/{f=1} f' "$lg" | grep -oE 'consumed=[0-9]+' | tail -1 | cut -d= -f2)
-    traj="${first:-?}->${last:-?}"
-    if [ -n "$first" ] && [ -n "$last" ] && [ "$last" -gt "$first" ] 2>/dev/null; then v=DRAINED; else v=FLAT-OR-UNCLEAR; fi
-    printf '%s\t%s\trun=%s\tFIRED\t%s\ttrajectory=%s\n' "$(date -u +%FT%TZ)" "$tree" "$i" "$v" "$traj" >> "$T/tally.tsv"
+    pc_consumed_bounds "$lg"
+    traj="${PC_CONSUMED_FIRST:-?}->${PC_CONSUMED_LAST:-?}"
+    if [ -n "$PC_CONSUMED_FIRST" ] && [ -n "$PC_CONSUMED_LAST" ] \
+        && [ "$PC_CONSUMED_LAST" -gt "$PC_CONSUMED_FIRST" ] 2>/dev/null; then
+      v=DRAINED
+    else
+      v=FLAT-OR-UNCLEAR
+    fi
+    printf '%s\t%s\trun=%s\tFIRED\t%s\ttrajectory=%s\n' "$(pc_now)" "$tree" "$i" "$v" "$traj" >> "$T/tally.tsv"
   done
 done
-printf '%s\tDRAIN CONFIRMATION COMPLETE\n' "$(date -u +%FT%TZ)" >> "$T/tally.tsv"
+printf '%s\tDRAIN CONFIRMATION COMPLETE\n' "$(pc_now)" >> "$T/tally.tsv"
