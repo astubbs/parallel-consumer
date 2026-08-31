@@ -144,6 +144,28 @@ modules:
       You are writing or reviewing a proxy client. This is the reference surface the other languages
       mirror, and parallel-consumer-proxy-protocol/docs/client-authoring-guide.md is what to read
       beside it.
+  - artifact: parallel-consumer-proxy-conformance
+    maturity: alpha
+    minimum_java: 17
+    reliability_confidence: >-
+      A test module, not a product one: no main sources, no published artifact, and nothing downstream
+      may depend on it. What it evidences belongs to the clients it drives and is recorded on their
+      rows. Its own claim is narrower and worth stating because a suite that cannot fail is worse than
+      no suite: five scenarios run against two bindings - Parallel Consumer driven by a plain Java
+      function, and the direct client bound in-process to it - and each was proven able to fail by
+      breaking the engine-side behaviour it pins and watching exactly that row go red.
+    api_expectation: >-
+      There is no API. The scenario names are stable because they are the shared vocabulary every
+      client's tests use, and the runner contract is frozen in the same sense - adding a behaviour
+      token is a change to every client.
+    support_posture: >-
+      Experimental. Published to no registry, has no main sources, and is not runnable except through
+      this repository's build.
+    evidence_id: proxy-conformance-suite
+    tracking: astubbs#242
+    use_this_if: >-
+      You are writing a proxy client in any language, or changing what the product promises one. This
+      module is where "correct" is defined, once, for all of them.
   - artifact: parallel-consumer-examples
     maturity: reference-example
     reliability_confidence: Exercises supported module use cases; it is not a runtime library dependency.

@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-clients</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Cross-Language Conformance</name>
+    <artifactId>parallel-consumer-proxy-conformance</artifactId>
+
+    <!--
+        THE SHARED CONFORMANCE SUITE: one Java test module holding the scenarios and the assertions
+        every client is driven through, so that "correct" is defined once for every language rather
+        than once per language (astubbs#242, confluentinc#154). The contract the other side of it
+        implements is in this module's README.md.
+
+        NO MAIN SOURCES, DELIBERATELY. Everything here is a test: the scenarios, the assertions and
+        the fixture. Nothing downstream may depend on it, which is what keeps it a leaf.
+
+        WHAT IT DRIVES TODAY: the core control arm - Parallel Consumer itself, driven by a plain
+        Java function - and java-direct, the client API bound in-process to core. The java-grpc cell
+        needs a sidecar with an engine in it and this stack has none, so it is left for the engine
+        rung and guarded rather than noted: TheEngineArrivingMustBringTheGrpcBindingTest fails the
+        build if the engine ever reaches this classpath while the binding is still absent. The ten
+        foreign clients and the machinery that spawns their runners are extraction A9 of
+        docs/plans/2026-08-31-001-process-god-branch-decomposition-plan.md.
+
+        IT DOES NOT DEPEND ON THE SIDECAR, AND THAT IS THIS RUNG'S SHORTEST PROOF. On
+        feats/proxy-requirements this module test-depends on parallel-consumer-proxy for the engine
+        lane of the harness. Nothing here needs it: the harness drives core, and the one binding
+        with a wire has no wire. The measurement, not an assertion - this must print no
+        parallel-consumer-proxy line:
+
+            ./mvnw -pl :parallel-consumer-proxy-conformance -am validate
+
+        Rerun it before adding any dependency here. The reason it matters is the reactor rather than
+        the classpath: a test-scope dependency is not transitive on the classpath but IS an edge in
+        the Maven reactor, and bin/build.sh opens with `clean`, so an accidental edge would make a
+        routine build of this module delete sidecar jars other tests spawn.
+        parallel-consumer-proxy-client-java-harness records the same hazard from its side.
+    -->
+
+    <properties>
+        <!--
+            The client modules this suite drives are Java 17 (see java-grpc's pom), and a module
+            whose test classpath holds them must compile at the same level.
+        -->
+        <release.target>17</release.target>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <!--
+                The matrix is one parameterised method over (binding x scenario) - a method per
+                binding is how ten clients end up with ten slightly different definitions of the
+                same scenario. Declared here because the root pom's global test dependencies stop
+                at junit-jupiter-api/engine; core, reactor and mutiny each declare this the same way.
+            -->
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-params</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!--
+                The engine the control arm drives, and the mock-client machinery the harness stands
+                on - LongPollingMockConsumer, CommitHistory and the shared ArchUnit rule library all
+                live in the test-jar. Test scope, not compile: nothing here is published, and
+                compile scope would make core a transitive dependency of a module that must remain a
+                leaf.
+            -->
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!--
+                Declared explicitly rather than leaned on transitively: core's test-jar reaches for
+                commons-lang3, and test scope is not transitive, so relying on core to supply it
+                would break the moment core stopped using it.
+            -->
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+            THE JVM CLIENT THIS SUITE DRIVES AS AN OBJECT RATHER THAN AS A CHILD PROCESS.
+
+            A foreign client is reached by spawning a binary a registry names, so the suite needs no
+            Maven dependency on it at all - the only thing it will know about Go is a path. A JVM
+            client is reached by constructing it, so it has to be on this module's test classpath,
+            and JvmClientBinding's javadoc carries the reasoning for driving them that way.
+
+            Only the direct transport, and its pom's own bannedDependencies rule is why that costs
+            this module nothing: no protobuf and no gRPC arrive with it. The gRPC transport is not
+            here because there is nothing for it to connect to - see the note above.
+        -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-proxy-client-java-direct</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+</project>
