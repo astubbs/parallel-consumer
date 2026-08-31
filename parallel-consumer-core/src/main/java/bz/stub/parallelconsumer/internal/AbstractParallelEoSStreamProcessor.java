@@ -2192,6 +2192,37 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     /**
+     * A cheap, side-effect-free description of how much work this instance is holding, for a caller
+     * that is waiting on it and needs to know WHY the wait is not ending.
+     * <p>
+     * <b>It reports both ends on purpose.</b> {@link #workRemaining()} alone cannot tell "nothing is
+     * finishing" from "nothing is happening" - a fleet inside a slow user function reads as a flat
+     * line while entirely busy, and a wedged one reads identically. Pairing outstanding work with the
+     * number of records currently out for processing separates them: work outstanding AND records
+     * out means the instance is occupied, while work outstanding and nothing out means it is not
+     * trying. That distinction is the difference between a slow test and a defect, and without it a
+     * timeout says only that a deadline passed.
+     * <p>
+     * <b>The out-for-processing figure is a diagnostic estimate, not a value to branch on.</b> It is
+     * read without a fence - {@code WorkManager.numberRecordsOutForProcessing} is a plain
+     * {@code int} mutated on controller-thread paths, which is a known defect in its own right
+     * ({@code docs/inflight/bug-number-records-out-for-processing-is-a-plain-int.md}). A stale read
+     * costs a slightly wrong diagnostic line; it must never decide control flow.
+     * <p>
+     * Public because the callers who need it are outside this package - integration tests and
+     * applications diagnosing a stall - and because a diagnostic that requires reflection to reach
+     * does not get used at the moment it is needed.
+     *
+     * @return a single line safe to put in an assertion message or a log
+     */
+    public String describeProgress() {
+        return "workRemaining=" + workRemaining()
+                + " recordsOutForProcessing=" + wm.getNumberRecordsOutForProcessing()
+                + " state=" + state
+                + " closedOrFailed=" + isClosedOrFailed();
+    }
+
+    /**
      * Plugin a function to run at the end of each main loop.
      * <p>
      * Useful for testing and controlling loop progression.
