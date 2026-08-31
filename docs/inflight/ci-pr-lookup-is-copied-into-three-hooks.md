@@ -54,43 +54,16 @@ inherits more than the three hooks named above:
   non-zero only on failure. Its slug derivation also predates the `file://` fix. Read it for the
   shape of the problem, not for code to lift.
 
-<!-- post-merge: checked-begin -->
-**The INPUT to the lookup was wrong too, and that half is now fixed**
-(astubbs/parallel-consumer#382, 2026-08-31). Every copy fed
-it `git rev-parse --abbrev-ref HEAD` read in the hook process's own directory, which is the
-SESSION's - not the directory the guarded command runs in. With several worktrees checked out at
-once the lookup therefore asked about an unrelated branch and answered confidently. Seen twice in one
-session, both times reported against `docs/god-branch-decomposition-plan`, the plan worktree that
-session occupied: a force-push of `feats/proxy-verdict-free-return`
-(astubbs/parallel-consumer#295 - an open PR *with review history*, the exact case the guard exists to
-name) and a `git commit --amend` inside the `feats/ks-streams-fork-machinery` worktree.
-
-The fix takes the branch from the push refspec when the command names one, and otherwise from a
-leading `cd <path>`, the payload's `cwd`, or the hook's own directory in that order - with the
-refusal saying which it used. **The dedup decision above is untouched by it**, and it adds a fourth
-thing that now exists twice: the refspec rule, as `hook_push_head_ref` in
-`.claude/hooks/lib/hook-common.sh` (bash) and as `push_head_ref` inside
-`.claude/hooks/check-history-rewrite.sh` (python), duplicated for the same fail-open reason that
-keeps the lookup itself duplicated. Whoever folds these together folds that in too.
-
-`.claude/hooks/check-merge-outstanding-work.sh` was judged against the same defect and left alone: it
-reads the PR number out of `gh pr merge <n>` first, and its `HEAD` fallback is only reached for a
-bare `gh pr merge`, which resolves the current branch exactly as the fallback does. Correct, rather
-than merely untouched.
-
-**A third sighting, in a hook with no PR lookup at all, and it widens the class.**
-`.claude/hooks/pre-commit-gate.sh` took its working tree from `$CLAUDE_PROJECT_DIR`, which names the
-SESSION's project root - so a *subagent*, which has its own working directory, was gated against the
-session's most recent worktree. On 2026-08-31 a subagent committing in
-`.claude/worktrees/proxy-server-shell` was gated against `.claude/worktrees/bench-harness`:
-`bin/check-file-refs.sh` failed on citations to `bench/` files absent from its branch while its own
-tree ran the same gate clean, and five commits went through with `--no-verify`. The mirror image
-leaves no trace at all - a red tree passes because the session's is green - and nobody investigates a
-commit that was allowed. Fixed the same way: `git -C`, then a leading `cd`, then the payload's `cwd`,
-with `$CLAUDE_PROJECT_DIR` kept as a labelled last resort.
-
-So the derivation rule now has **three** consumers rather than the two named above, and only two of
-them can share `hook-common.sh`. What generalises is not the code: it is that **a hook process's own
-directory and environment describe the session, never the command**, and every guard here that reads
-either has to be re-checked against that.
-<!-- post-merge: checked-end -->
+**The INPUT to the lookup was wrong too, and that half is now fixed - it adds a fourth duplicated
+thing this dedup task inherits.** Full incident and mechanism:
+[`a-hook-processes-own-directory-describes-the-session-not-the-command-2026-08-31.md`](../solutions/workflow-issues/a-hook-processes-own-directory-describes-the-session-not-the-command-2026-08-31.md).
+In short - every copy derived the branch from the hook process's own directory (the session's, not
+the guarded command's), fixed by deriving it from the push refspec, then a leading `cd`, then the
+payload's `cwd`, then the hook's own directory as a labelled last resort. That adds a **fourth**
+duplicated thing: the refspec rule now exists twice for the same fail-open reason the lookup itself
+is triplicated - `hook_push_head_ref` in `.claude/hooks/lib/hook-common.sh` (bash) and
+`push_head_ref` inside `.claude/hooks/check-history-rewrite.sh` (python). The derivation rule now has
+**three** consumers in total (the two above plus `.claude/hooks/pre-commit-gate.sh`'s own directory
+derivation), and only the advisory push hooks that already source `hook-common.sh` can share
+`hook_push_head_ref` - the two that refuse still have to inline, for the reason astubbs#341 gives
+above. Whoever folds the three lookups together folds this in too.
