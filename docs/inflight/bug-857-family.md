@@ -147,7 +147,7 @@ consumer-commit modes - so the cycle **cannot close in `PERIODIC_TRANSACTIONAL_P
 **Which leaves at least one confirmed defect the fix cannot reach**: the unbounded revoke wait in
 transactional mode, `while (isTransactionCommittingInProgress()) Thread.sleep(100)` on the poll
 thread inside `poll()`, bounded only by `max.poll.interval.ms`. It carries astubbs#44
-(confluentinc#803), **the only issue upstream ever labelled a verified bug**, and its own note says
+(confluentinc#803), **an issue carrying upstream's verified-bug label**, and its own note says
 its fix is blocked on an unsettled design decision rather than on effort -
 [`bug-857-transactional-revoke-wait.md`](bug-857-transactional-revoke-wait.md).
 

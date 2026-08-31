@@ -69,7 +69,12 @@ while second instance starts"* - matches this mechanism exactly: second instance
 fires, poll thread spins here, `max.poll.interval.ms` is breached, the group reports *"group is
 already rebalancing"*, and the run ends on `commitLockAcquisitionTimeout`.
 
-It is the **only** issue on the upstream tracker ever labelled *verified bug*. It was re-triaged off
+It carries upstream's *verified bug* label. **This note previously called it the ONLY such issue,
+which is false** - a couple of dozen upstream issues carry that label, and this claim propagated
+from here into a roadmap entry, a plan, several notes and a PR body before anyone ran
+`gh issue list -R confluentinc/parallel-consumer --state all --label "verified bug"`. The label
+still matters - it means a maintainer confirmed the report rather than merely triaging it - but
+it does not make this issue unique. It was re-triaged off
 <!-- post-merge: checked -->
 astubbs#29 and onto this block on 2026-08-18; its `pr-available` label was removed, because no open
 PR addresses it.

@@ -342,3 +342,7 @@ does not change that.
 Nor does any cluster address the transactional-mode unbounded revoke wait
 (`docs/inflight/bug-857-transactional-revoke-wait.md`), which carries
 astubbs/parallel-consumer#44 - the only issue upstream ever labelled a verified bug.
+[Correction, 2026-09-01: that last clause is false and is left standing because this is a dated
+record. Upstream carries the `verified bug` label on a couple of dozen issues; confluentinc#803
+is one of them, not the only one. Checked with `gh issue list -R confluentinc/parallel-consumer
+--state all --label "verified bug"`.]

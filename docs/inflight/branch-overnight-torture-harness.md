@@ -30,7 +30,7 @@ became a mechanism.
 The AB-BA revoke deadlock is **fixed and verified** - see below. What remains unaccounted for:
 
 - **The unbounded revoke wait in transactional mode.** Carries astubbs#44 / confluentinc#803, the
-  only issue upstream ever labelled a verified bug. **This harness does not hunt it** - no chaos
+  an issue carrying upstream's verified-bug label (one of a couple of dozen, not the only one). **This harness does not hunt it** - no chaos
   scenario is built for `PERIODIC_TRANSACTIONAL_PRODUCER`, so no rotation can reach it; see "Known
   gaps that remain" below.
   See `bug-857-transactional-revoke-wait.md` - its design decision is explicitly unsettled, so **do

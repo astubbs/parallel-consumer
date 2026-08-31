@@ -2,11 +2,27 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: stranded-work -->
-<!-- inflight-state: deferred - the diagnosis is still moving; run this once it settles -->
+<!-- inflight-state: deferred - one lesson left; the rest are discharged, see below -->
 
-**Deliberately deferred, recorded so it is not lost.** The operator's call, 2026-09-01: the material
-is real but the investigation is still live, and compounding a moving target produces write-ups that
-are wrong by the time they land.
+**Mostly discharged as of 2026-09-01.** It was deferred while the diagnosis was still moving, on the
+grounds that compounding a moving target produces write-ups that are wrong by the time they land.
+The diagnosis settled - the cause was found, fixed and measured - and the pass then ran.
+
+**What landed, and where**, so nobody compounds the same lesson twice:
+
+- The empty-search-result lesson is
+  [`../solutions/workflow-issues/a-title-grep-is-not-a-search-2026-08-31.md`](../solutions/workflow-issues/a-title-grep-is-not-a-search-2026-08-31.md).
+- The detector-bound lesson, the filtered-diagnostic lesson and the narrative of two hypotheses dying
+  to one line of output are all in
+  [`../solutions/best-practices/silence-from-an-instrument-that-could-not-have-spoken-is-not-evidence.md`](../solutions/best-practices/silence-from-an-instrument-that-could-not-have-spoken-is-not-evidence.md),
+  which also added `Filtered diagnostic` to `CONCEPTS.md`.
+- Gate-on-progress-report-timing was already owned by
+  [`../solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`](../solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md);
+  what this work added is the instrument rather than the principle, so it was cited, not restated.
+
+**One lesson is still uncompounded**: a capability absent by accident reads as absent by decision.
+It is being written now; when it lands, this note has nothing left and should be deleted rather than
+kept as an empty ledger.
 
 This note exists because that reminder would otherwise live only in a conversation. The lessons below
 are currently spread across commit messages, which is the one place this repo says knowledge goes to
@@ -33,7 +49,7 @@ Several distinct lessons, each with a worked incident already in the log:
   paused consumption. Both were what an experienced reader would have assumed.
 - **A capability absent by accident reads as absent by decision.** The chaos suite had no
   transactional scenario because a producer was never wired, not because anyone decided against it -
-  and the family's only upstream-verified bug lives in that mode.
+  and an upstream-verified member of the family lives in that mode.
 
 ## When
 

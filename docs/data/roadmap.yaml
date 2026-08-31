@@ -85,8 +85,8 @@ entries:
       (confluentinc#857) is no longer a drafted mitigation: astubbs#29 carries a fix measured
       against a control that differs by one term, on both rebalance assignors, with the pre-fix arm
       failing every repetition and the fixed arm none. It remains unmerged, and the family is not
-      closed by it - the transactional revoke wait (astubbs#44, the only issue upstream ever
-      labelled a verified bug) is a separate defect in a commit mode that fix cannot reach.
+      closed by it - the transactional revoke wait (astubbs#44, which carries
+      upstream's verified-bug label) is a separate defect in a commit mode that fix cannot reach.
     why_now: The release claim rests on it, and the evidence has to be inspectable rather than asserted.
     done_when: >-
       No known critical defect open in release scope, and each resolution has a named guard that
