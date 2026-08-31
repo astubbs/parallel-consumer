@@ -831,7 +831,7 @@ public class PcTaskDispatcher implements Closeable {
      * have been to poll. It is not a small effect. With the pause switched off, so that nothing else bounds
      * inflow, peak occupancy over a 600-record backlog measured <b>36 with an unconditional wait and 596
      * without it</b> - one term changed, same broker, topology, data and machine. That is a sixteen-fold
-     * throttle, and it arrived as a *second* memory bound nobody designed: it silently made the control arm
+     * throttle, and it arrived as a <em>second</em> memory bound nobody designed: it silently made the control arm
      * of the memory-bound proof look almost bounded, which is worse than the throughput cost, because a
      * contaminated control arm turns a measurement into a reassurance.
      *
