@@ -51,6 +51,12 @@ second reproduced the identical failure at the same execution on the same artifa
 - **A green lane is therefore not evidence this is closed.** It is closed when the unpack executions
   stop reaching Central at all - see *Delete when* below.
 
+**And it has nothing to do with the diff, which a control arm now settles rather than argues.** The
+run after the green one carried a **markdown-only commit** - no Java, no pom, no workflow - and
+reproduced the identical failure on both lanes. There is no reading of that in which the change under
+review is implicated. If you are looking at a red Unit lane on this module and wondering what you
+broke, this paragraph is the answer.
+
 ## Candidate fix
 
 Add the classifier artifacts to what `prepare-deps` pulls, so the warm cache actually contains
