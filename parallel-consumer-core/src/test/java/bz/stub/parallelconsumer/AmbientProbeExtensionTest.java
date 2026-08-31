@@ -10,6 +10,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import bz.stub.parallelconsumer.integrationTests.AmbientProbeExtension;
 import bz.stub.parallelconsumer.integrationTests.NoAmbientProbe;
+import bz.stub.parallelconsumer.integrationTests.chaostests.ChaosSeed;
 import bz.stub.parallelconsumer.integrationTests.chaostests.ProgressProbe;
 import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import org.apache.kafka.common.TopicPartition;
@@ -30,6 +31,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
@@ -265,6 +267,52 @@ class AmbientProbeExtensionTest {
         assertThat(autopsy).doesNotContain("probe clean");
     }
 
+    /**
+     * A non-gating observation did not cause the failure being autopsied, but a reader diagnosing one
+     * needs to know a watermark sat pinned while it happened - and since 2026-08-25 the autopsy and the
+     * chaos job summary are the ONLY places a Class 2 finding can appear at all. If this section stops
+     * rendering, the finding does not go red anywhere; it simply becomes invisible.
+     */
+    @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
+    void autopsyListsNonGatingObservationsSeparatelyFromViolations() {
+        var probe = observerProbe();
+        probe.getObservations().add("CLASS2_STALL/LAG_STAGNATION: partition in-topic-21 lag=2974 "
+                + "with committed offset stagnant at 91 for 153s (bound 150s).");
+
+        String autopsy = AmbientProbeExtension.buildAutopsy(
+                contextFor(PlainFixture.class, "plainMethod"), probe, null);
+
+        assertThat(autopsy).contains("observations, non-gating (1):");
+        assertThat(autopsy).contains("CLASS2_STALL/LAG_STAGNATION: partition in-topic-21");
+        assertWithMessage("an observation must never be counted as a violation - that conflation is the "
+                + "regression this section exists to make visible")
+                .that(autopsy).contains("violations (0):");
+        assertWithMessage("an observation is something observed, so the clean-probe shortcut must not fire")
+                .that(autopsy).doesNotContain("probe clean");
+    }
+
+    /**
+     * Whenever the autopsy renders its sections at all, "no observations" is STATED rather than left
+     * to be inferred from an absent heading. The probe here is non-clean (a frozen partition), because
+     * a wholly clean probe takes the "probe clean" shortcut and renders no sections - that shortcut is
+     * asserted separately, and this test exists to prove the zero case inside the normal path.
+     */
+    @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
+    void autopsyStatesWhenThereWereNoObservations() {
+        var probe = observerProbe();
+        var tp = new TopicPartition("in-topic", 3);
+        probe.getPartitionLagSnapshots().put(tp,
+                new ProgressProbe.PartitionLagSnapshot(tp, 100, 2200, 2100, Instant.now().minusSeconds(120)));
+
+        String autopsy = AmbientProbeExtension.buildAutopsy(
+                contextFor(PlainFixture.class, "plainMethod"), probe, null);
+
+        assertThat(autopsy).contains("observations, non-gating (0):");
+        assertThat(autopsy).contains("  (none)");
+    }
+
     @Test
     void frozenPartitionLinesFilterOutHealthyPartitions() {
         var probe = observerProbe();
@@ -278,6 +326,83 @@ class AmbientProbeExtensionTest {
                 new ProgressProbe.PartitionLagSnapshot(freshlyCommitted, 100, 400, 300, Instant.now()));
 
         assertThat(AmbientProbeExtension.frozenPartitionLines(probe)).isEmpty();
+    }
+
+    // --- chaos seed replay handle ---
+
+    /**
+     * The seed is the only handle that replays a chaos failure, and the run-start console line carrying
+     * it is precisely what a truncated CI log eats - so it has to be in the autopsy, which travels as
+     * {@code system-out} inside the uploaded failsafe XML. Resolved here the way a scenario resolves it,
+     * so this covers the real {@code -Dchaos.seed} path and not a hand-built value.
+     */
+    @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
+    @SetSystemProperty(key = ChaosSeed.SEED_PROPERTY, value = "4734674029169027864")
+    void autopsyCarriesTheChaosSeedAndItsReplayCommand() {
+        ChaosSeed seed = ChaosSeed.resolve();
+        assertThat(seed.getValue()).isEqualTo(4734674029169027864L);
+
+        var context = contextFor(PlainFixture.class, "plainMethod");
+        doReturn(Optional.of(new SeededFixture(seed))).when(context).getTestInstance();
+        // the capture point: the live test instance is only guaranteed to be there this early
+        new AmbientProbeExtension().afterTestExecution(context);
+
+        String autopsy = AmbientProbeExtension.buildAutopsy(context, observerProbe(), new AssertionError("stalled"));
+
+        assertThat(autopsy).contains("chaos seed: 4734674029169027864");
+        assertThat(autopsy).contains("chaos replay: ./mvnw -Pci -pl parallel-consumer-core -am verify"
+                + " -DskipUTs=true -Dincluded.groups=chaos -Dexcluded.groups="
+                + " -Dchaos.seed=4734674029169027864");
+    }
+
+    /** Every other broker IT is unseeded - it must not grow two lines of empty chaos boilerplate. */
+    @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
+    void autopsyOmitsTheSeedLinesForTestsThatHaveNone() {
+        var context = contextFor(PlainFixture.class, "plainMethod");
+        doReturn(Optional.of(new PlainFixture())).when(context).getTestInstance();
+        new AmbientProbeExtension().afterTestExecution(context);
+
+        String autopsy = AmbientProbeExtension.buildAutopsy(context, observerProbe(), new AssertionError("stalled"));
+
+        assertThat(autopsy).doesNotContain("chaos seed:");
+        assertThat(autopsy).doesNotContain("chaos replay:");
+    }
+
+    /** A scenario that failed before resolving a seed holds null - the capture must not publish it. */
+    @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
+    void autopsyOmitsTheSeedLinesWhenTheScenarioNeverResolvedOne() {
+        var context = contextFor(PlainFixture.class, "plainMethod");
+        doReturn(Optional.of(new SeededFixture(null))).when(context).getTestInstance();
+        new AmbientProbeExtension().afterTestExecution(context);
+
+        String autopsy = AmbientProbeExtension.buildAutopsy(context, observerProbe(), new AssertionError("stalled"));
+
+        assertThat(autopsy).doesNotContain("chaos seed:");
+    }
+
+    /** Unset means a fresh schedule every run - a resolve() that returned a constant would be silent. */
+    @Test
+    @ClearSystemProperty(key = ChaosSeed.SEED_PROPERTY)
+    void chaosSeedIsRandomisedWhenTheReplayPropertyIsUnset() {
+        assertThat(ChaosSeed.resolve().getValue()).isNotEqualTo(ChaosSeed.resolve().getValue());
+    }
+
+    /** Stands in for {@code ChaosScenarioBase}, which cannot be loaded here - it extends
+     * {@code BrokerIntegrationTest}, whose static initialiser starts a Kafka Testcontainer. */
+    static class SeededFixture implements ChaosSeed.Holder {
+        private final ChaosSeed seed;
+
+        SeededFixture(ChaosSeed seed) {
+            this.seed = seed;
+        }
+
+        @Override
+        public ChaosSeed getChaosSeed() {
+            return seed;
+        }
     }
 
     // --- beforeEach fallback paths + callback no-ops ---
@@ -393,6 +518,10 @@ class AmbientProbeExtensionTest {
         });
         when(context.getTestMethod()).thenReturn(method);
         when(context.getDisplayName()).thenReturn("mockedTest()");
+        // one real store per context: the extension hands state from its callbacks to buildAutopsy
+        // through it, so a null (unstubbed) store would only ever exercise half the path
+        var store = new StubStore();
+        doReturn(store).when(context).getStore(any(ExtensionContext.Namespace.class));
         return context;
     }
 

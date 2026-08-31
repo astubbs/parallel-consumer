@@ -70,4 +70,4 @@ batches that would otherwise never have been reviewed.
 
 - Facts and cohort policy: `upstream-map.yaml`, `sweep-2023-*` entries and their section header.
 - Tooling and its blind spots: `docs/upstream.md`, "Checking upstream for new activity".
-- Open follow-up work: `docs/inflight/next-upstream-coverage-completeness.md` and siblings.
+- Open follow-up work: `docs/inflight/upstream-coverage-completeness.md` and siblings.

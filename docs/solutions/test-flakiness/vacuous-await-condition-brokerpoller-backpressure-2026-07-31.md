@@ -143,3 +143,46 @@ private void awaitProcessedRecords(double expected, String... pcInstanceTags)
 
 Note the failure mode is load-dependent, so a green local run proves nothing - the original raced on
 every record and simply won each time.
+
+## Third instance: CommitResponseTimeoutSymptomTest (2026-08-06) - and how to tell the two directions apart
+
+Found by applying the rule above to a new test rather than by a failure. The useful part is that the
+same file contains **one site of each direction**, so it makes the distinction concrete: the rule is
+not "never await one thing and assert another", it is "never await a signal that *leads* the value
+you assert".
+
+**The bad direction, fixed.** The test awaited a `Set` populated inside the user function, then read
+a rejection counter incremented on the broker-poll thread inside `commitSync`:
+
+```java
+await().untilAsserted(() -> assertThat(succeeded).hasSize(KEYS));  // user-function thread
+assertThat(commitsRejected.get()).isAtLeast(MIN_REJECTIONS);       // broker-poll thread, unordered
+```
+
+Two threads, neither ordering the other. The margin is genuinely large - feeding spans tens of commit
+intervals - which is exactly what a latent race looks like right up until it loses. Now awaited on
+the value actually asserted, which cannot mask anything: if the rejections never arrive it still
+fails.
+
+**The safe direction, deliberately left alone and commented so.** The other test awaits
+`isClosedOrFailed()` and then asserts `getFailureCause()`:
+
+```java
+await().untilAsserted(() -> assertThat(pc.isClosedOrFailed()).isTrue());
+assertThat(pc.getFailureCause()).isNotNull();
+```
+
+This is fine, because `supervisorLoop()` assigns `failureReason` **before** `doClose()` sets
+`state=CLOSED` and before the throw that completes `controlThreadFuture` - and `isClosedOrFailed()`
+reads only those two later signals. The awaited signal **lags** the asserted value. The volatile
+read inside `FutureTask.isDone()` also supplies the happens-before edge that publishes
+`failureReason` to the asserting thread.
+
+Converting that second site to "await `getFailureCause()` non-null" would be a real regression in
+test strength: a null cause is precisely what a bug here produces, so awaiting it would convert a
+failure into a timeout at best, and hide it at worst.
+
+**Refined rule: establish which of the two values is written first.** If the awaited signal is
+written *after* the asserted one, the await is sound and tightening it weakens the test. If it is
+written *before* - a user-side counter, a log line, a queue depth - it leads, and the assertion is
+racing. Read the production ordering; do not infer it from which value looks more "final".

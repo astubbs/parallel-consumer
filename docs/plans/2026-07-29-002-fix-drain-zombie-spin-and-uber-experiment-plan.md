@@ -53,7 +53,7 @@ whether the combined fixes eliminate the residual stalls.
 
 ## Context & Research (session-verified facts)
 
-- Fix site: `parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/BrokerPollSystem.java`
+- Fix site: `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/BrokerPollSystem.java`
   — `drain()` calls `consumerManager.signalStop()`; `transitionToClosing()` **already calls
   `signalStop()`**, so the fix is deleting the call in `drain()` (plus comment). `handlePoll()`'s comment
   ("if draining - subs will be paused, so use this to just sleep") states the design intent.
@@ -140,7 +140,7 @@ whether the combined fixes eliminate the residual stalls.
 - [ ] **Unit 1 (Commit A): characterization test of the drain defect**
 
 **Files:**
-- Create: `parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/internal/BrokerPollSystemDrainTest.java`
+- Create: `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/internal/BrokerPollSystemDrainTest.java`
 
 **Approach:** extend `AbstractParallelEoSStreamProcessorTestBase`. Start PC over `consumerSpy`; feed
 records; user function parks on a latch (work in-flight). Call `pc.close(DrainingMode.DRAIN)` on a
@@ -160,10 +160,10 @@ report + names the desired behaviour). Release latch; assert close completes cle
 - [ ] **Unit 2 (Commit B): collapse the duplicated lifecycle flag, test flipped to guard it**
 
 **Files:**
-- Modify: `parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/ConsumerManager.java`
+- Modify: `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/ConsumerManager.java`
   (delete `shutdownRequested` + `signalStop()`; poll guard, SASL `retryBackOff` abort, and commitSync
   retry abort consult an injected `BooleanSupplier abortSignal`; `close()` keeps its local deadline)
-- Modify: `parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/BrokerPollSystem.java`
+- Modify: `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/BrokerPollSystem.java`
   (remove both `signalStop()` calls; expose the lifecycle predicate, e.g. `isTransitioningToClose()` =
   `runState == CLOSING || CLOSED`; wire it into `ConsumerManager` — comment explains the
   2s-poll-as-sleep intent + report link)

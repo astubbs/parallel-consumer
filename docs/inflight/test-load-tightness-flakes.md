@@ -1,5 +1,10 @@
 # Load-tightness flake family (undiagnosed)
 
+<!-- inflight-type: bug -->
+<!-- inflight-labels: concurrency -->
+<!-- inflight-impact: blind-spot -->
+
+
 Shared signature: a **fast-failing** assertion or timeout under heavy contention, passing in isolation
 or on rerun. Roster and rates from the 20-run fork16 acceptance hunt on astubbs#80's branch (2026-07-30);
 baseline for comparison is 15/20 runs fully clean, zero stall-class failures.
@@ -11,6 +16,8 @@ baseline for comparison is 15/20 runs fully clean, zero stall-class failures.
 | `DbTest` | 2/20 | postgres container start under contention |
 | `KafkaSanityTests`, `TransactionMarkersTest` | singles | residual, uncategorised |
 | `PartitionStateCommittedOffsetIT.committedOffsetRemoved[3] none` | 1 sighting (2026-08-05) | `RebalanceInProgressException` out of the test's own setup |
+| `PartitionStateCommittedOffsetIT.committedOffsetRemoved[2] earliest` | 1 sighting (2026-08-25, astubbs#353, [job 97859037375](https://github.com/astubbs/parallel-consumer/actions/runs/32865269364/job/97859037375)) | `checkHowManyRecordsWithKeyPresent` expected 2 got 1 - the `[1] latest` assertion signature (solved 2026-08-05 as a nudge race) appearing on the `earliest` parameter; `probe clean` autopsy (test-side, not consumer-group progress), on a branch with no Java <!-- post-merge: checked --> |
+| `TransactionTimeoutsTest.commitTimeout[2]` | 1 sighting (2026-08-06, astubbs#204) | incompletes `[8]` where the parameter pins `[8, 12]` |
 
 **A third member has now left the family, and it left by being reclassified rather than fixed-as-tight.**
 `TransactionTimeoutsTest.commitTimeout[1]` failed once on CI (2026-08-07,
@@ -79,3 +86,82 @@ bug in exactly this area (a rebalance-time commit killing the broker-poll thread
 **Explicitly NOT a member: `RebalanceEoSDeadlockTest.noDeadlockOnRevoke`** (1/20). Per the astubbs#68 record
 its contended failure maps to the real confluentinc#857 deadlock - that sighting is live confirmation the
 deadlock is still on master, with its fix waiting in astubbs#29.
+
+## `commitTimeout[2]`, for whoever picks it up (seen 2026-08-06 on astubbs#204)
+
+**A different parameter and a different mechanism from the `commitTimeout[1]` entry above**, which left
+the family by reclassification (an unforceable trigger). This one is about the assertion, not the
+trigger, so neither entry supersedes the other.
+
+Failed with incompletes `[8]` where the `multiple=50` parameter pins `[8, 12]`. The test's own javadoc
+names **both** outcomes as physically possible - "just the failed offset (for case where processing
+finishes during shutdown timeout)" versus "both offsetToError and offsetToGoVerySlow ... when sleep is
+longer than the shutdown timeout" - and the parameterisation pins one of them. So the assertion
+encodes a *timing* outcome as if it were deterministic, which is the family signature: correct under
+quiet conditions, arbitrary under contention. Ambient probe agreed unprompted: *"probe clean - no
+rebalance dwell, no lag stagnation, no frozen partitions observed: the fault is likely in the test
+itself, not consumer-group progress."*
+
+**Ruled out as a regression from astubbs#204's `ConsumerManager.commitSync` retry-budget change**, on
+four independent grounds, recorded because that PR touches commit-timeout behaviour and the name
+collision invites exactly the wrong conclusion:
+
+1. **Wrong code path.** This test runs `CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER`, and
+   `AbstractParallelEoSStreamProcessor` selects `committer = producerManager` for transactional mode.
+   `ConsumerManager.commitSync` has exactly one caller in main - `consumerMgr.commitSync(offsetsToSend)`
+   in `ConsumerOffsetCommitter` - which is only reached in the consumer-sync modes. The changed method
+   is never invoked here.
+2. **Wrong direction.** That change makes `commitSync` give up *earlier*. Earlier shutdown leaves
+   *more* work incomplete, i.e. pushes toward `[8, 12]`. The observed failure is `[8]` - fewer
+   incompletes - which is the opposite of what the change could produce even if it were on the path.
+3. **Passes locally with the change in place**: `TransactionTimeoutsTest` 3 tests, 0 failures.
+4. **Pre-existing membership.** This class is already named as load-sensitive in
+   `pc-silent-stall-under-contention-2026-07-29.md` and
+   `parallel-integration-tests-flaky-under-concurrency-2026-07-28.md`, and its sibling
+   `produceTimeout` is already in the table above.
+
+Do not "fix" this by widening the expected set to accept both outcomes - that would make the test
+vacuous, since `[8]` and `[8, 12]` are the only two possibilities. If it is to be deterministic, the
+shutdown timeout and the sleep have to be separated far enough that only one outcome is reachable;
+otherwise it belongs in the quarantine lane rather than the gating suite.
+
+### The same defect from the other side: `commitTimeout[1]` produced `[2]`'s outcome (2026-08-25)
+<!-- post-merge: checked-begin -->
+
+`Integration Tests` on astubbs#348's head `58d6d38ce`
+([job 97653156995](https://github.com/astubbs/parallel-consumer/actions/runs/32797974288/job/97653156995)),
+`forkCount=4`. The **`[1]`** arm (`multiple=2`) failed at the committed-offset assertion:
+
+    expected to contain: 12   but was: [8]
+
+**This is the strongest evidence yet for the section above, because it is the mirror image of it.**
+The `[2]` sighting had the `multiple=50` arm - the one that pins `[8, 12]`, i.e. "the sleep outlasted
+the shutdown timeout" - produce the *other* javadoc'd outcome, `[8]`. This sighting has the
+`multiple=2` arm - the one that pins offset 12, i.e. "processing finished during the shutdown
+timeout" - produce `[8]` as well, which is `[2]`'s pinned outcome. **Both parameters have now been
+observed producing the outcome the other one pins.** Neither arm's expectation is a property of its
+parameter; both are properties of a race the test does not control. `[2]` passed in this very run, so
+the two arms are not even consistently wrong together.
+
+Ambient probe agreed unprompted, in the same words as the earlier sighting: *"probe clean - no
+rebalance dwell, no lag stagnation, no frozen partitions observed: the fault is likely in the test
+itself, not consumer-group progress."*
+
+**This does NOT reopen the `commitTimeout[1]` reclassification above.** That entry left the family
+because its *trigger* was unforceable - a 35s await on `isClosedOrFailed` that could never fire in
+some interleavings, fixed test-side and written up in
+[`unforceable-trigger-commit-lock-timeout-2026-08-07.md`](../solutions/test-flakiness/unforceable-trigger-commit-lock-timeout-2026-08-07.md).
+That await passed here; what failed is the *post-shutdown assertion*, three statements later. Same
+test method, different mechanism, and the reclassification stands.
+
+**Master state, not astubbs#348's.** That head's delta from the one that passed this same suite was
+two markdown files, and the `jcstress-poc` module it added has no `<parent>` and no root `<modules>`
+entry, so no reactor build compiles it. Nothing in the change was reachable from the code under test.
+
+**Flaky, not deterministic - and that is a measurement, not an assumption.** The next head of the
+same branch (`02233811c`, a one-file markdown delta) ran the same suite and `commitTimeout[1]`
+passed. So the arm is not simply wrong on this runner; it is wrong when the race falls the other
+way, which is what the family signature says. Still worth noting how thin the evidence for
+"non-deterministic" is on a single retry: it separates *always red* from *not always red*, and
+nothing more.
+<!-- post-merge: checked-end -->

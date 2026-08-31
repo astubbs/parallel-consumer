@@ -40,7 +40,7 @@ boundaries:
   - The parallel stage is a separate consumer group with its own offsets, so it is outside the topology's exactly-once boundary, state stores and punctuators. Any end-to-end guarantee has to be built from the two halves.
   - The intermediate topic's partitioning and the chosen ordering mode determine what concurrency is available; see ordering-modes.yaml.
   - The example module is a reference example and is not published to Maven Central.
-  - Running a Streams topology on Parallel Consumer's worker pool is a separate, unlanded alpha experiment, tracked in ../inflight/next-experimental-module-records.md.
+  - Running a Streams topology on Parallel Consumer's worker pool is a separate, unlanded alpha experiment, tracked in ../inflight/release-experimental-module-records.md.
 references:
   - label: Using with Kafka Streams
     path: README.adoc#streams-usage

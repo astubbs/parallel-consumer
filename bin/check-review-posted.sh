@@ -57,8 +57,11 @@
 # It was not abandoned because it was wrong. It was abandoned because of what ENFORCING it
 # cost, and because the coverage it was protecting turned out to come from somewhere else:
 #
-#   * PER-PUSH COVERAGE ALREADY EXISTS. A separate reviewer auto-reviews every push. Strictness
-#     here was buying a guarantee that was already being provided, at a price paid on every PR.
+#   * PER-PUSH COVERAGE EXISTED ELSEWHERE. A separate reviewer auto-reviewed every push, so
+#     strictness here was buying a guarantee already being provided, at a price paid on every PR.
+#     THAT AUTO-REVIEW WAS SWITCHED OFF ON 2026-08-19 on cost grounds and is now on request only.
+#     The gap is accepted deliberately rather than covered, and re-adding freshness here is the
+#     wrong answer to it - the reasoning is in docs/ci.md, "The gate asks ...", which owns it.
 #   * IT NEEDED CONTESTABLE TIMESTAMPS. Deciding "newer than the head" meant choosing between
 #     the contributor-controlled committer date and the server-side check-suite time, handling
 #     same-second ties, and paginating an endpoint with undocumented ordering - three rounds of

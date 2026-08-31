@@ -69,9 +69,15 @@ that line, leave it in the code - it will show up here.
 - todo move into {@link WorkManager} as it's specific to WM having enough work?
 - todo can sleep for less than this time? is this lower bound required? given that if we're starved - the failed work will most likely be selected? And even if not selected - then we will no longer be starved.
 
+**`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/ConsumerManager.java`**
+
+- TODO(refactor): a user-facing failure wants a PC-named type - see
+
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/ConsumerOffsetCommitter.java`**
 
 - todo keep work in limbo until async response is received?
+- TODO(refactor): a user-facing failure wants a PC-named type, not "internal runtime" -
+- TODO(refactor): a user-facing failure wants a PC-named type - see
 
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/DynamicLoadFactor.java`**
 
@@ -84,7 +90,7 @@ that line, leave it in the code - it will show up here.
 
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/ProducerManager.java`**
 
-- TODO(refactor): InternalRuntimeException misnames a failed send; throw a specific subclass and rename `exception` to `sendFailure`
+- TODO(refactor): PCInternalRuntimeException misnames a failed send; throw a specific subclass and rename `exception` to `sendFailure`
 - todo consider wrapping all client calls with a catch and new exception in the ProducerWrapper, so can get stack traces
 - TODO talk about alternatives to this brute force approach for retrying committing transactions
 
@@ -99,7 +105,7 @@ that line, leave it in the code - it will show up here.
 
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/offsets/EncodedOffsetPair.java`**
 
-- throw new InternalRuntimeException("Invalid state"); // todo why is this needed? what's not covered?
+- throw new PCInternalRuntimeException("Invalid state"); // todo why is this needed? what's not covered?
 
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/offsets/OffsetBitSet.java`**
 
@@ -142,7 +148,11 @@ that line, leave it in the code - it will show up here.
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/PartitionStateManager.java`**
 
 - todo remove static
-- OffsetMapCodecManager<K, V> om = new OffsetMapCodecManager<>(module); // todo remove throw away instance creation - confluentinc#233
+- TODO(refactor): decode-only + single-threaded today, so sharing one instance is safe; NOT
+
+**`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/ShardManager.java`**
+
+- TODO(refactor): walks every shard queue, and ConcurrentSkipListMap.size() is O(n), so each
 
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/WorkContainer.java`**
 
@@ -151,7 +161,9 @@ that line, leave it in the code - it will show up here.
 **`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/WorkManager.java`**
 
 - todo make private
+- TODO(refactor): rename to partitionManager - `pm` also abbreviates ProducerManager elsewhere in core
 - todo make private
+- TODO(refactor): rename to shardManager - see the note beside `pm`; both getters are public API
 
 **`parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/AmbientProbeExtension.java`**
 

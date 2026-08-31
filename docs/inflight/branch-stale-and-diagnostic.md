@@ -1,11 +1,19 @@
 # Branches safe to delete, and one to salvage
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: stranded-work -->
+
+
 **Diagnostic-only, investigations landed:** `debug/committedoffset-firstpoll-stall` and
 `debug/chaos-w4-red-commit-response-stall` (astubbs#80 and astubbs#100, both with write-ups in `docs/solutions/`).
 
-**Superseded:** `cherry-pick/893-offset-reset`, `cherry-pick/905-max-shard-metric`, `upstream-pr-893`,
-`upstream-pr-905`, `pr-909-temp`, `bugs/859-pcmetrics-leak-v2` - all folded into astubbs#57. Plus
-`ci/reenable-parallel-tests` and `backup/*`.
+<!-- post-merge: checked-begin -->
+**Superseded:** `cherry-pick/905-max-shard-metric`, `upstream-pr-905`, `pr-909-temp`,
+`bugs/859-pcmetrics-leak-v2` - all folded into astubbs#57. `cherry-pick/893-offset-reset` and
+`upstream-pr-893` were folded in there too until 2026-08-24, when the confluentinc#893 cherry-pick
+was split out to astubbs#337, so their work is that PR's now. Plus `ci/reenable-parallel-tests` and
+`backup/*`.
+<!-- post-merge: checked-end -->
 
 **`refactor/test-hardening` - superseded now, but it was not when this list first said so.** It held
 the only copy of a 455-line audit of disabled, kneecapped and weakened tests, committed "not yet

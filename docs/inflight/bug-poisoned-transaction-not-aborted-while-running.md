@@ -1,5 +1,9 @@
 # A terminally failed send leaves the transaction abortable but unaborted
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: stall -->
+
+
 Opened by astubbs#261, which fixed the data-correctness half of this and deliberately left the
 liveness half. Read that PR's "what this does not fix" section first; this note is the follow-up it
 owes.
@@ -52,7 +56,7 @@ away.
 
 - **No DLQ exists.** `docs/refactoring.md` records the deleted `poisonPillGoesToDeadLetterQueue`
   stub and confirms zero DLQ occurrences in `src/main/java`. Tracked as astubbs#149
-  (`confluentinc#310`), with `confluentinc#366` the closed prior attempt. `docs/inflight/next-candidates.md`
+  (`confluentinc#310`), with `confluentinc#366` the closed prior attempt. `docs/inflight/process-candidate-ranking.md`
   ranks it the most-demanded missing feature.
 - **Retry is unbounded and purely time-based.** `defaultMessageRetryDelay` / `retryDelayProvider`
   set *when* to retry, never *whether to stop*. There is no max-attempt count and no terminal
@@ -70,7 +74,7 @@ away.
   `upstream-map.yaml`; `confluentinc#242` is not sweep-affected, having been closed as completed by
   astubbs in 2022.
 - **The send failure's own exception is misnamed**, which costs a rediscovery every time: the
-  non-transactional path throws `InternalRuntimeException` for what is an expected operational
+  non-transactional path throws `PCInternalRuntimeException` for what is an expected operational
   state. Tracked in `docs/refactoring.md` under `internal/ProducerManager.java`; naming only, no
   behaviour change, and it does not wait on the retry work.
 - **The failure-history control is inert.** See `bug-max-failure-history-is-inert.md` - a related

@@ -1,5 +1,9 @@
 # Package-rename grand sweep — plan and handoff
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: refactor -->
+
+
 **Status: planned, not started.** Two rehearsals are done and green; this is the execution plan for the
 real thing. Written to be picked up by a session with no memory of the rehearsals.
 
@@ -211,8 +215,18 @@ come after.
 
 ### The 38 branches
 
-Open PRs, excluding astubbs#1 (`codeql`, 2021) and astubbs#8 (`features/retry-dlq`, 2022) as too old, astubbs#277 (the rename
-plan itself) and astubbs#280 (the tooling).
+Open PRs, excluding astubbs#8 (`features/retry-dlq`, 2022) as too old, astubbs#277 (the rename
+plan itself) and astubbs#280 (the tooling). astubbs#1 (`codeql`) was on that too-old list until its
+branch was reset onto renamed master and repurposed as documentation, so it carries no Java and
+needs no sweep.
+
+<!-- post-merge: checked-begin -->
+**This roster is the set of open PRs at the time the plan was written, not a live worklist** - the
+status above is "planned, not started", so a row whose PR has since merged records what the sweep
+was scoped to cover and needs no edit when that happens. `gh pr list` answers which are still open.
+<!-- post-merge: checked-end -->
+
+<!-- post-merge: checked-begin -->
 
 | PR | head ref | PR | head ref |
 |---|---|---|---|
@@ -236,6 +250,9 @@ plan itself) and astubbs#280 (the tooling).
 | 207 | `fix/offset-encoding-policy-bypass` | 290 | `test/apache-kafka-broker-image` |
 | | | 292 | `fix/chaos-harness-double-start-race` |
 | | | 293 | `feats/proxy-requirements` |
+<!-- post-merge: checked-end -->
+
+<!-- post-merge: checked-end -->
 
 **astubbs#266, astubbs#268, astubbs#269 and astubbs#271 touch the five near-identical
 `TestConventionsArchTest.java` files.** Neither rehearsal exercised a branch that genuinely edits them

@@ -1,25 +1,87 @@
 # Flakes CI was hiding, none of them tracked when found
 
+<!-- inflight-type: register -->
+<!-- inflight-impact: misdirection -->
+
 Found 2026-08-07 by scanning surefire `Flakes:` markers across the 45 most recent CI runs (Integration
 and Unit lanes). 8 of 45 runs carried markers. None of these tests appear in any ledger.
 
 The retry that hid them is gone - that half is done and written up in
 [`docs/solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md`](../solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md),
-which also has the scan method. What is open is the tests themselves - two of the scan's three, plus
-one met later. The scan's third,
-`ParallelEoSStreamProcessorTest.queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown`
-(3/45), is fixed and gone from this ledger: astubbs#260 established the extra commit was correct
-product behaviour and the assertion was wrong, so no product change was needed.
+which also has the scan method. What is open is the tests themselves - the ones met after it. All
+three the scan found are fixed and out of this ledger: astubbs#260,
+astubbs#265, and `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing`
+(4/45, the most frequent), which asserted an offset that back pressure exists to stop advancing -
+written up in
+[`back-pressure-freezes-the-frontier-the-test-asserted-2026-08-24.md`](../solutions/test-flakiness/back-pressure-freezes-the-frontier-the-test-asserted-2026-08-24.md).
+Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutions/).
 
 | Test | Rate | Why it is worth attention |
 |---|---|---|
-| `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` | 4/45 | The most frequent. UNDIAGNOSED but quarantined by explicit rule-1 exception - see below. Backpressure area - compare `vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md`, a *different* class in the same area, so rule it in or out rather than assuming |
-| `PCMetricsTest.metricsRegisterBinding` | 4 seen | Released by astubbs#265, failed twice consecutively on one head, **re-quarantined unowned** in astubbs#116. Mechanism only half-known: the fix closed the metric-ahead direction, the failures are metric-behind-and-never-converging - see below |
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. Mechanism known and owned (astubbs#262), quarantined - see below |
+| `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 3 seen (2026-08-18, 2026-08-19, 2026-08-25) | Not from the original scan - each found while babysitting a branch carrying **no main Java**. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third sighting carries the failing batch contents and they point at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
 
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
 door, and for the same reason: two of that family turned out to be real product bugs, and the third
 was neither tight nor a stall but a test that could not force its own trigger.
+
+### `simpleBatchTest` - three modules, one shared helper, and a lead nobody has tested
+
+2026-08-18 it was `ReactorBatchTest`. 2026-08-19 it was `MutinyBatchTest`, on
+astubbs/parallel-consumer#320 - and the failure is the same one, not a similar one: the alias, the
+30-second timeout and the lambda all come from `BatchTestMethods` in **core**, which both wrapper
+modules drive. One sighting looked like a Reactor flake. Two, in different modules, means the
+Reactor and Mutiny wrappers are not the variable.
+
+The 2026-08-19 assertion is the useful part, because it is off by exactly one in the direction that
+matters: **`Expected size: 3 but was: 4`** - grep `BatchTestMethods` for `expected number of
+batches`. The test received the right records in one batch too many, so this is a batch-BOUNDARY
+question, not a lost-work question. Two readings, and they need separating rather than assuming:
+
+- **Contention.** The runner is slow or loaded, so work arrives spread out and the batcher closes a
+  batch early. Test-side, and the honest fix is making the test drive the boundary it asserts
+  instead of racing it.
+- **Product.** The batcher can split a batch under a timing the library is supposed to tolerate,
+  in which case an over-eager boundary is a real defect and the test is right to complain.
+
+**No sighting is on a branch whose diff contains main Java**, which is what rules out "a PR broke
+it" and makes it master state - the same reasoning applied to `ProducerManagerTest` below. That is
+also why none was quarantined on the branch that met it: quarantine is master-state and needs a
+diagnosis, and no sighting has one.
+
+The 2026-08-18 sighting passed on re-run, and so did the 2026-08-25 one - three consecutive clean
+re-runs of the same test, so **1 failure in 4 local runs, not deterministic**. A re-run is diagnosis
+here, not a way to go green - it distinguishes flaky from deterministic - and AGENTS.md's ban is on
+the automatic `surefire.rerunFailingTestsCount` that hid this whole ledger, not on re-running a job
+to learn something.
+
+#### The 2026-08-25 sighting: a third module, and the first look at what was in the batches
+
+`VertxBatchTest`, KEY ordering, on a local macOS full unit run of the branch that added
+`ShardMapIsNeverReplacedArchTest` - one new core test class plus docs, no main Java. Same
+`Expected size: 3 but was: 4`. **Three modules now, so the wrapper is definitively not the
+variable.**
+
+What is new is the payload the assertion printed. The five records carried keys `29, 36, 36, 36,
+71` - a **three-way key collision** - and arrived as `{o0, o4}`, `{o1}`, `{o2}`, `{o3}`, so every
+key-36 record came alone. Meanwhile `simpleBatchTest` computes its expectation from the record count
+and nothing else: grep `BatchTestMethods` for `expectedNumOfBatches`, which is
+`ceil(numRecsExpected / batchSizeSetting)` for every ordering except PARTITION. **The keys are
+random** - `KafkaTestUtils.getRandomKey` draws from `defaultKeys`, a hundred integers - so the shard
+distribution the batcher works against varies run to run while the expected batch count does not.
+
+That is a third reading to separate, not a diagnosis, and it displaces neither of the two above:
+
+- **Expectation-versus-input.** The test randomises the key distribution and then asserts a batch
+  count that only holds for some distributions. A rare draw would explain a rare failure without any
+  contention or product defect at all.
+
+The experiment that settles it is cheap and has a control arm, and **nobody has run it**: pin the
+keys through the Lombok setter on `KafkaTestUtils`'s `defaultKeys`, force a three-way collision
+under KEY ordering, and predict a deterministic failure; then five distinct keys, and predict it
+always passes. If both hold, this is
+the test's own input and neither the runner nor the batcher. If the collision case passes, the draw
+is a red herring and contention-versus-product stands as before.
 
 ### `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` - a helper defect, not a test defect
 
@@ -44,24 +106,40 @@ however long arming plus lambda setup takes. Under load that gap widens past a m
 `isAtLeast` fails a correct implementation. Any test using this helper can show the same signature,
 which is why it is filed against the helper.
 
-**Owned: astubbs#262** stamps `armedAtNanos` immediately before `schedule()` and asserts against that
-instead. Its own comment is honest about the residual: the window measured is now slightly *longer*
-than the true one, so the error is sub-millisecond and in the safe direction - a genuinely early
-return is still caught unless it is early by less than the arming cost.
+**The mechanism above no longer exists, and this entry's open task has changed accordingly.** Two
+PRs proposed different fixes - astubbs#262 stamping `armedAtNanos` just before `schedule()` so the
+measurement is correct, and astubbs#265 deleting the wall-clock assertion outright. This ledger
+predicted the collision and called it a real decision: measure it correctly, or stop measuring it.
+**astubbs#265 landed second and chose to stop measuring it.**
 
-**Note astubbs#265 touches the same line differently**, deleting the assertion along with the sleeps
-it removes. Whichever of the two lands second will conflict here, and the conflict is a real
-decision - measure it correctly, or stop measuring it - not a mechanical merge.
+`BlockedThreadAsserter#assertUnblocksAfter` now asserts an ordering fact - both events take a tick
+from a shared monotonic sequence and the return must come after the unblock - so there is no elapsed
+clock left to be short, and `isAtLeast(unblocksAfter)`/`getElapsed()` are gone from the helper. Its
+javadoc states the new contract: *"That is a causality assertion, so it is asserted as an ordering
+fact rather than as a duration."*
+
+**So the diagnosis this test is quarantined under describes code that is not there.** Measured
+2026-08-17 on `master` merged in: 4 runs, 4 passes, 2.66-4.37s (astubbs#265 reported the same test
+going from 23.06s to 3.32s). Run it with
+`bin/quarantined-test.sh` or `-Dincluded.groups=quarantined` - a plain `-Dtest=` run reports
+`Tests run: 0` because the gating suites exclude it, which is not a pass.
+
+**What is open is the re-enable, not the fix.** Under rule 3 of
+[`docs/quarantined-tests.md`](../quarantined-tests.md) the annotation and the registry entry come out
+together, in the owning change, after merging master. astubbs#262 is still open and still named as
+the owner, but its fix is now redundant - so whoever picks this up should decide whether astubbs#262
+still carries the re-enable or whether it belongs in a change of its own.
 
 **Why it was not in this ledger already.** The 2026-08-07 scan read surefire `Flakes:` markers, which
 only appear when the retry re-ran a test and it then passed. This one failed the run outright, so it
 left no marker and no scan would have found it. Flakes now get quarantined as they are met, rather
 than waiting for a sweep.
 
-### `PCMetricsTest.metricsRegisterBinding` - second sighting, and it is a test defect
+### Controls for these flakes - the void one, and the one that works
 
-Seen again 2026-08-11 on astubbs#286, a PR containing **no Java and no `pom.xml`** - workflow and
-markdown only.
+Method for the two tests still open, not a diagnosis of any one of them. It is written from a
+2026-08-11 sighting on astubbs#286, a PR containing **no Java and no `pom.xml`** - workflow and
+markdown only - which is what made the control question sharp enough to answer.
 
 **Record the control that was tried and was void, because it is the trap next door.** The first
 attempt at one was "`master` at `a797f756`, the exact base commit, passed the same suite 35 minutes
@@ -74,106 +152,15 @@ Anyone reaching for a green master run as a baseline for these tests is holding 
 
 **The control that does work** is other PR runs of the same lane. On 2026-08-11 the unit lane was
 green on eight consecutive `pull_request` runs across three branches - `docs/citation-anchors`,
-`ci/on-demand-code-review`, `docs/v6-release-ideas`, and **this branch's own previous head** - with
-only `821a91af` failing.
-
-```
-[ERROR] PCMetricsTest.metricsRegisterBinding:115
-  expected: 203.0
-   but was: 207.0
-```
-
-The mechanism is visible in the source rather than inferred. The test snapshots a **test-side**
-counter to build its expectations:
-
-```java
-int highestProcessedOffsetP0 = counterP0.get() - 1;      // reads 204 -> expects 203
-...
-assertThat(registeredGaugeValueFor(PARTITION_HIGHEST_COMPLETED_OFFSET, 0))
-        .isEqualTo(highestProcessedOffsetP0);            // gauge has moved on to 207
-```
-
-Two independently-advancing values are sampled at different instants, with nothing holding the system
-still between them. Processing had completed four more records for partition 0 between the counter
-read and the gauge read. Nothing is wrong with the metric - it was **more** current than the
-expectation built to test it.
-
-Same family as the fix in `16ac63b1` ("await the metric, not a counter that leads it"), running the
-other way round: there the counter led the metric, here a stale counter snapshot trails it. The rule
-generalises - **do not compare two moving values; await a quiescent state, then read both.**
-
-Rate is now 2 sightings rather than the 1/45 that could be dismissed.
-
-#### Sightings 3 and 4 (2026-08-14, astubbs#116) - released too early, and failing the other way
-
-`astubbs#265` released this test from quarantine on a **causal** fix, explicitly not a run count, and
-said so: *"if it flakes on master, re-quarantining is the inverse of that commit."* It has, so it is
-re-quarantined here. The release was reasoned, not careless - but the fix closed one direction of a
-two-directional defect.
-
-The fix addressed the metric being **more current** than the expectation: the `Thread.sleep(1000)`
-became `await().untilAsserted(...)` on the trailing meters, which is right if the metric merely lags
-and then catches up. Both new sightings are the metric **behind and never catching up** - the await
-burns its full 120s:
-
-```
-PCMetricsTest.metricsRegisterBinding
-  the await on PARTITION_LAST_COMMITTED_OFFSET vs counterP1 + p1StartingOffset (partition 1)
-  attempt 1: expected: 1213.0  but was: 1209.0     (4 short)
-  attempt 2: expected: 1207.0  but was: 1195.0    (12 short)
-```
-
-A third failure the same day settles rule 2, on **`tooling/agent-harness-hooks`** - a branch with no
-connection to this one (run 31772010940, 05:07):
-
-```
-  expected: 1211.0  but was: 1201.0    (10 short)
-```
-
-This is the control the section above already establishes as the only working one: the unit lane
-exists on `pull_request` only, so a green or absent master run proves nothing, and other branches'
-lane runs are the evidence. Three post-fix failures, two unrelated branches, shortfalls of 4, 10 and
-12.
-
-**Both of the first two are on the same head, back to back** - the second is a rerun of the first, so
-this is no longer a flapper you can rerun past. And the shortfall is not a fixed off-by-N: 4 then 12. No amount of
-waiting closes a gap that varies, which is what distinguishes this from the lag the await was
-written for.
-
-Two things worth ruling in or out before anyone "fixes" it again:
-
-1. **It shares that sibling doc's symptom, but not its defect - do not "fix" the assertion.**
-   `assert-the-commit-frontier-not-the-tick-path.md`
-   (written 2026-08-13, one day earlier, for `processInKeyOrder`) lists the symptom *"the await burns
-   its full 30s: once the tick has landed, the condition is permanently false"*, and its
-   `applies_when` covers any assertion over a PC commit history in a core unit test. But
-   `PARTITION_LAST_COMMITTED_OFFSET` *is* the committed frontier, and the counter it is compared against is
-   frozen by then (every worker is latched past the block point) - so this test already does what that doc
-   prescribes: await quiescence, then compare frontiers. The frontier simply never arrives. Changing the
-   assertion style is therefore the one fix that cannot work, and the real question stays open below.
-2. **It rhymes with the undiagnosed entry next door.**
-   `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing`
-   is recorded as *"the committed high-water mark never reaches `expectedHighestSeen` (139), with a
-   different actual each run (136 and 132 seen)"*. Same sentence shape as ours. Two tests whose
-   committed offset stalls short of expectation by a varying amount may be one phenomenon, and that
-   entry is the most frequent tracked flake in the repo. Worth testing as one hypothesis rather than
-   two coincidences.
-
-**Do not assume this is a test defect.** The open question is whether the un-committed tail is a wrong
-assumption in the test or real commit behaviour under a paused/blocked partition; the file's own
-standing rule is to classify before touching, and two of the load-tightness family turned out to be
-product bugs.
-
-The integration failure alongside it on the same run was unrelated infrastructure -
-`ContainerLaunchException: Container startup failed for image confluentinc/cp-kafka:7.9.0` - and
-passed on rerun. Worth separating: one rerun cleared the container flake and did **not** clear this.
+`ci/on-demand-code-review`, `docs/v6-release-ideas`, and `ci/claude-yml-script-grant`'s own previous
+head - with only `821a91af` failing.
 
 ### The rerun failed somewhere else - which is weaker evidence than it first looks
 
 Re-running the identical job on the identical commit did not reproduce it. It failed at
 `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing`
-instead - `ConditionTimeout`, `expected: 139 but was: 136 within 30 seconds` - which is **row 1 of
-the table above**, the 4/45 entry.
+instead - `ConditionTimeout`, `expected: 139 but was: 136 within 30 seconds` - the 4/45 entry, since
+diagnosed and removed from this ledger (see the header).
 
 An earlier revision of this entry called that "the strongest evidence", on the reasoning that a code
 regression fails the same way twice and this did not. **That reasoning does not hold and is withdrawn.**
@@ -183,54 +170,5 @@ that the first did not reproduce. Review caught this; it is exactly the invalid-
 that AGENTS.md warns about, and left standing it would have licensed quarantining a real product bug.
 
 What the rerun **does** establish: the failure is not deterministic, and the unit lane is currently
-producing red from more than one already-tracked test. The load-bearing evidence for the
-`PCMetricsTest` diagnosis is the source-level read above - the counter snapshot and the gauge are
-read at different instants - not the rerun.
-
-### `OffsetEncodingBackPressureTest.backPressure...` is NOT diagnosed - quarantined anyway, by explicit exception
-
-It was quarantined on astubbs#286 and **removed again in the same PR**, because the diagnosis was
-wrong. Recorded here so the mistake is not repeated.
-
-The failure was attributed to the retry section - "sleeps out the static retry delay instead of
-awaiting the retry event" - and owned by astubbs#265, which replaces that
-`sleepQuietly(DEFAULT_STATIC_RETRY_DELAY)` with an `await`. Review checked the line number instead of
-the narrative and found it does not fit:
-
-- The failure is at line 211 of the commit CI ran, which is the
-  `waitAtMost(defaultTimeout).untilAsserted(...)` block asserting the committed offset metadata -
-  specifically `Truth8.assertThat(incompletes.getHighestSeenOffset()).hasValue(expectedHighestSeen)`.
-  The `value of: optional.get()` in the failure text is that `Optional`.
-  (Citation repair: "the commit CI ran" is never named, so that 211 cannot be resolved by a reader,
-  and on master today it lands on a *different* `waitAtMost` block - the one asserting
-  `isBlocked()` - which is close enough to the description to be believed. The durable anchor is the
-  assertion already quoted: grep `hasValue(expectedHighestSeen)` in
-  `OffsetEncodingBackPressureTest`, exactly one hit. The number is left in place because it is what
-  the failure report said, not a pointer this note chose.)
-- That block runs **before** the retry section astubbs#265 rewrites. A change downstream of a failing
-  assertion cannot fix it.
-
-So the true cause is a timeout waiting for the high-water mark to reach `expectedHighestSeen`
-(actuals vary run to run - 136 and 132 have both been seen against an expected 139), and nothing
-currently explains why. Rule 1 - no quarantine without diagnosis - would keep it in the gating lane,
-but it fails often enough (4/45, the most frequent tracked flake) that leaving it red blocked every
-PR. **The repository owner decided to quarantine it anyway as an explicit rule-1 exception**: the
-registry entry carries no Owner (unowned, flagged advisory by the audit), `flapping = true`, and the
-diagnosis below remains the open task. The exception is a pressure-release, not a resolution - this
-entry stays open until the test is understood and fixed.
-
-**The open lead - an UNVERIFIED hypothesis, test it before acting on it.** The test computes
-`expectedHighestSeen = numberOfRecordsToPrimeWith + extraRecordsToBlockWithThresholdBlocks - 1`, and
-the extra records exist precisely to push the offset encoding past the size threshold that makes the
-partition block and stop taking records. If back-pressure engages before the last extra record is
-polled, the expectation is **unreachable rather than late** - matching the varying shortfall and the
-fact that a 30-second wait never rescues it. Falsification: if the actual value tracks the encoding
-block point, the hypothesis holds; if the high-water mark eventually reaches 139 given long enough,
-it is dead and this is a slowness problem. Compare
-`vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md` (same area, different test,
-`root_cause: test_design_bug`) - rule it in or out, don't assume.
-
-The general lesson is the one that produced the error: the fix PR was matched to the failure by
-**subject-matter resemblance** (both concern this test, both concern waiting) rather than by checking
-that the changed lines execute before the failing assertion. Match a `fixedBy` to a stack line, not
-to a theme.
+producing red from more than one already-tracked test. What it is *not* is evidence about any one
+test's mechanism - that has always come from a source-level read, never from a rerun's landing spot.

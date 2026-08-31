@@ -16,13 +16,60 @@ you have read this file.
   surefire and included in failsafe.
 - **Kafka version matrix**: CI tests against multiple Kafka versions via `-Dkafka.version=X.Y.Z`.
 
+- **A new test class is not running until you have watched it run.** `PCMetricsTest859` matched none of
+  Surefire's include patterns (`Test*`, `*Test`, `*Tests`, `*TestCase` - this repo declares no
+  `<includes>`, so the defaults apply), so its six regression tests were never collected, and sat
+  dormant across four commits while CI stayed green. Put the issue number *before* the suffix:
+  `PCMetrics859Test`. Prove it with `./mvnw -pl <module> -am test -Dtest=<Name> -DfailIfNoTests=true`
+  (which turns "matched nothing" into a failure instead of a silent no-op), or check that
+  `target/surefire-reports/<FQCN>.txt` exists - an absent report means the class never ran, and nothing
+  warns you. `TestConventionRules` now fails the build for this, but it is wired per module by a thin
+  `TestConventionsArchTest`, so **a new module has no guard until you add one**. Integration tests are
+  selected by package instead, so an `*IT` name there is correct.
+
+## A run that prints nothing is normal, and the flag that changes it
+
+`parallel-consumer-core/src/test/resources/logback-test.xml` sets the root logger to
+`${pc.log.level:-warn}`, so a passing run emits **nothing** from the library. That is deliberate - a
+suite that floods stdout hides the one failure worth reading - but it looks identical to a run that
+never executed, and the reflex is to start debugging the harness. Check
+`target/surefire-reports/<FQCN>.txt` before concluding anything: an absent report means the class
+really did not run.
+
+Turn it up per command, never by editing the file:
+
+```bash
+./mvnw test -Dtest=TheOneTest -Dpc.log.level=info    # the library's own progress
+./mvnw test -Dtest=TheOneTest -Dpc.log.level=debug   # per-record decisions
+./mvnw test -Dtest=TheOneTest -Dpc.log.level=trace   # everything PC emits
+```
+
+A committed logger at `debug` or `trace` is a separate failure this repo already gates - see
+`bin/check-test-log-config.sh`, which pins the four library modules to this harness and fails any
+such logger, because the resulting flood is silent in exactly the way an empty run is.
+
 ## The ambient probe: contention artifact, or genuine bug?
 
-Every broker integration test failure log includes an `=== AMBIENT PROBE AUTOPSY ===` block (grep
-for it) with rebalance-dwell and lag-stagnation violations plus per-partition frozen-committed
-detail. It answers the contention-versus-bug question before you start manual diagnosis. Disable it
-with `-Dambient.probe=off` or `@NoAmbientProbe` only when the probe itself is the problem (see
+Every broker integration test failure **emits** an `AMBIENT PROBE AUTOPSY` block (grep for
+it) with rebalance-dwell and lag-stagnation violations plus per-partition frozen-committed detail.
+It answers the contention-versus-bug question before you start manual diagnosis. Disable it with
+`-Dambient.probe=off` or `@NoAmbientProbe` only when the probe itself is the problem (see
 `AmbientProbeExtension`'s javadoc).
+
+**Emitted reliably; found reliably only off the console.** The block is captured into the failsafe
+XML that CI uploads, so it survives a truncated console log - and a fetched CI log here has been
+cut mid-job twice, silently, with the autopsy past the cut. Fetch it from a route that cannot
+truncate, and check the log you did fetch is complete before diagnosing from it:
+[`docs/solutions/workflow-issues/gh-run-view-log-truncation.md`](solutions/workflow-issues/gh-run-view-log-truncation.md)
+**owns those routes** and the completeness check.
+
+**A failing chaos test's autopsy carries its own replay.** `chaos seed:` and `chaos replay:` sit
+directly under the failure line, the replay command complete - the `chaos` tag is excluded by
+default, so the seed alone does not select the test. **First move on a chaos failure is to run that
+command, not to reason from the log**: the replay is the deciding experiment, and every sighting in
+the confluentinc#857 ledger was settled by one. How the seed reaches the block, and why it lives
+there rather than only in the run-start log line: `ChaosSeed` and `AmbientProbeExtension`'s
+`captureChaosSeed`.
 
 **`probe clean` is only informative when the probe's detectors could have fired.** Lag stagnation
 needs `LAG_STAGNATION_MIN_LAG` (50) of real lag sustained past `LAG_STAGNATION_BOUND` (150s), and
@@ -69,8 +116,10 @@ legal and flagged as an advisory, not an error.
 
 Rules:
 
-1. **No quarantine without diagnosis** - undiagnosed red stays red and blocks, on purpose. The
-   repository owner can grant an explicit, recorded exception - see the registry's rule list.
+1. **No quarantine without evidence** - a diagnosed mechanism, or a recorded sighting ledger
+   proving the failure is master-state. A hunch stays red and blocks, on purpose.
+   [`docs/quarantined-tests.md`](quarantined-tests.md) **owns the full rule** and the reasoning
+   behind the 2026-08-19 change from "diagnosis" to "evidence".
 2. **Quarantine is master-state, not PR-state** - see AGENTS.md, Testing.
 3. **The owning fix PR deletes the annotation AND its registry entry in the same commit** after
    merging master, atomically restoring the test to the gating lane. An owning PR is the goal, not
@@ -79,18 +128,128 @@ Rules:
 A non-empty lane blocks releases - see [`docs/releasing.md`](releasing.md). Run the lane locally
 with `bin/quarantined-test.sh`.
 
+## Does a test earn its place? Mutate a guard and see who notices (optional)
+
+**Reach for this when a test's value is disputed** - two reviewers wanting opposite things, or a
+slow/flaky test somebody wants to keep on the grounds that it "covers" something. It is not a routine
+step; it costs a few builds, and most tests never need it.
+
+The method, which settles the argument instead of continuing it:
+
+1. Name the guards in the code under test - the specific conditionals or flags the test claims to
+   protect.
+2. **Break ONE at a time**, in main code, locally, never committed.
+3. Run every candidate test against each mutant.
+4. Tabulate which tests go red for which break. A test that kills no mutant another test does not
+   already kill is **redundant for the guards you mutated** - which is not the same as covering nothing.
+   A finite, hand-picked mutant set cannot show that: the test may uniquely assert an output, an ordering
+   property, or a race that none of your mutations disturbs. So the table is evidence for a deletion
+   argument, never the whole of one - read the test and say what else it could be asserting before you
+   remove it.
+
+**Worked example, and why it was worth the builds.** `ManagedPCInstanceLifecycleTest` existed to catch
+the astubbs#292 double-submission race. Four reviewers flagged it and split between "delete it" and
+"harden it", so nobody acted. Three mutants over the four guards in `ManagedPCInstance` settled it:
+the test killed **none** - including the scenario its own javadoc named - while the older
+`ManagedPCInstanceLifecycleIT` killed both real mutants deterministically, broker-free, in a hundredth
+of the time. Deleted, with the table in the commit message.
+
+Two things that make the result trustworthy:
+
+- **Fix the test's own bugs before measuring**, or you measure a broken test. That one bypassed the
+  guard it was verifying in its own setup, and had to be corrected first.
+- **Watch for equivalent mutants.** A mutant that changes no observable behaviour is not evidence
+  about anything - one of the three above was probably equivalent, and the write-up says so rather
+  than counting it.
+
+A `@RepeatedTest` is the shape to look at hardest: repetition is what you reach for when you cannot
+force a race and hope to draw it, so it is often a hope-based test sitting in a gating lane.
+
 ## Chaos Pain Suite (on-demand bug detector - never gates)
 
 A seeded, calibrated chaos suite (`integrationTests.chaostests`: `ChaosConductor`, `ProgressProbe`,
-`ChaosScenarioBase`, plus scenarios `ChaosChurnStormIT` W1 and `ChaosRevokeUnderWorkIT` W4) that
-hunts the "alive but not progressing" bug class: rebalance-dwell zombies, protocol-invisible
-per-partition lag stagnation (Class 2, W4's prey), drain overruns, and record loss or duplication.
-Tagged `@Tag("chaos")` and excluded from all default and gating suites via `pom.xml`'s
+`ChaosScenarioBase`) that hunts the "alive but not progressing" bug class: rebalance-dwell zombies,
+protocol-invisible per-partition lag stagnation (Class 2), drain overruns, and record loss or
+duplication. Tagged `@Tag("chaos")` and excluded from all default and gating suites via `pom.xml`'s
 `excluded.groups` default.
+
+**What it can assert, so you know whether a question is already answerable.** Reach for an existing
+capability before building one - the calibration behind each of these is the expensive part, not the
+code:
+
+| Capability | Where | What it catches |
+|---|---|---|
+| Loss and bounded duplication | `ProgressProbe`'s ledger | a record never arrives, or arrives more often than a disturbance explains |
+| **Per-key ORDERING and concurrency** | `KeyOrderLedger` | a key's offsets going backwards, or two deliveries of one key in flight at once |
+| **A stalled instance** | `InstanceStallProbeIT`, `ProgressProbe` | a member present and heartbeating while making no progress |
+| Lag stagnation (Class 2) - **reports, never gates** | `ProgressProbe` observations | a committed offset frozen while lag grows, group STABLE. **A timing measurement: crossing the bound does not fail the run** - see below |
+| **Watching a stall instead of killing it** | `-Dchaos.diagnoseStallRecovery=true` | keeps a stalled run alive so its state can be read |
+
+**Class 2 lag stagnation reports, and only reports - read its findings as speed, never as a verdict.**
+`CLASS2_STALL/LAG_STAGNATION` lands in `ProgressProbe`'s `observations`, not its `violations`: it is
+printed in the run summary and the ambient autopsy, and it fails nothing. The detector watches a
+partition's COMMITTED offset, which one incomplete record legitimately pins while the shard behind it
+completes work normally - so a busy fleet and a wedged one are indistinguishable to it. Three replays
+say so: seeds `4734674029169027864`, `6825864417772979246` and `4044221734199516240` all cross the
+bound and then drain completely, the latter two being the seeds
+[`bug-857-family.md`](inflight/bug-857-family.md) nominated as its strongest evidence.
+
+**Two consequences worth carrying.** A `lagStagnation` peak in the 151-155s band is what a crossed
+150s bound looks like *whatever crossed it* - the probe samples every 5s, so the number is bound plus
+detection latency and encodes no severity; do not read a tight cluster of them across runs as
+corroboration. And the liveness claim the bound was standing in for now belongs to
+`INSTANCE_STALL/NO_WORK_COMPLETED`, which watches COMPLETIONS - any returned work result re-arms it -
+so it structurally cannot fire on slow-but-progressing. A run where Class 2 observes and
+`INSTANCE_STALL` stays silent is measured slow, not wedged. `Class2ObservationIT` guards the routing;
+it is untagged deliberately, so it gates every default integration build.
+
+**The demotion REDUCED per-shard coverage, and that is a known gap rather than a relocation.**
+`INSTANCE_STALL` is per-INSTANCE, so one wedged shard on an instance whose other shards keep
+completing fires nothing that gates - and the correctness ledger does not close it either, because it
+counts records processed rather than offsets durably committed. What is uncovered, and the correlated
+gate that would close it (with the red control it must have first), is tracked in
+[`test-per-shard-liveness-has-no-gate.md`](inflight/test-per-shard-liveness-has-no-gate.md). Do not
+read "Class 2 was demoted" as "that case is covered elsewhere".
+
+**Recorded but not yet analysed - reach for this before adding instrumentation.** The ledger is an
+event register: it writes down facts and lets the end-of-run assessment decide what they mean. So
+some questions need only a new *analysis*, not new *recording*. Every `KeyOrderLedger.Delivery`
+already carries `incarnationId`, `partition`, `epoch`, `key`, `offset`, `startSeq` and `endSeq`
+(`null` while still running), and the full history is retained - the per-window grouping is a choice
+`check()` makes, not a limit on what was captured.
+
+The worked example is cross-epoch comparison. Nothing today compares deliveries across an epoch
+boundary, but the data to do it is present: a delivery with `endSeq == null` in one epoch, against a
+delivery of the same key and partition in a later epoch whose `startSeq` falls after it. **If a test
+needs that, write the comparison - do not add instrumentation for it.** The work is the calibration,
+not the capture: a revoked owner finishing its in-flight record is legitimate, so such a check needs a
+defensible bound on how long an old-epoch delivery may still run before it counts as a violation.
+
+Scenario cells, each isolating one disturbance shape: `ChaosChurnStormIT` (W1, continuous churn),
+`ChaosRevokeUnderWorkIT` (W4, revoke while work is in flight), `ChaosKeyOrderIT` (key-ordered
+processing under churn), `ChaosRevokeUnderWorkKeyOrderIT` (key order under revoke), and
+`ChaosRevokeUnderWorkDrainIT` / `ChaosRevokeUnderWorkCooperativeDrainIT` - a 2x2 control arm over
+assignor and stop-mode, whose weights are shared through `drainOnlyChaosWeights()` so the two cannot
+drift apart.
+
+**Two limits worth knowing before you trust a verdict.** `KeyOrderLedger` compares only within one
+incarnation, partition, epoch and key - so a **cross-epoch overlap** (an old owner still running past
+a revoke while the new owner takes the same key) lands in two windows and is not reported. It is
+**not** unanswerable, though: every delivery records its epoch and incarnation and the full history is
+kept, so the check is a function nobody has written rather than data nobody has. What it would need is
+a calibrated bound on how long a revoked owner may legitimately still be finishing - see the class
+javadoc. That shape is a real defect this repo has already fixed once (astubbs#80). The second limit used to
+be that `CLASS2_STALL` **gated** on a timing bound - it no longer does, and the reason is the limit:
+it measures how long a committed offset stayed pinned, which one incomplete record does
+legitimately, so a crossing only ever proved the bound was met and never that the backlog failed to
+drain. Replays crossed it and drained completely. It now records a non-gating **observation**, which
+is why the chaos job summary prints the peak rather than a verdict - read it as a speed number. See
+`docs/solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`.
 
 - **Run locally** (requires Docker; ~5-6 min):
   `./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dincluded.groups=chaos -Dexcluded.groups=`
-- **Replay a schedule**: every run logs its seed and the full replay command; add
+- **Replay a schedule**: every run logs its seed and the full replay command, and a failure repeats
+  both inside its autopsy block (above, where truncation cannot reach them); add
   `-Dchaos.seed=<seed>`.
 - **CI**: per same-repo PR commit via the highcpu fast-feedback lane (check `highcpu / Chaos Pain
   Suite` - not optional: a chaos RED shows red); on-demand seeded hunts via `chaos-pain.yml`, e.g.
@@ -106,6 +265,92 @@ Tagged `@Tag("chaos")` and excluded from all default and gating suites via `pom.
 - **A RED run is investigation food, not flake noise.** The probes are calibrated against the real
   historical drain-zombie defect (RED on pre-fix compositions, GREEN on fixed; thresholds sit in
   measured gaps). **Never loosen a probe to go green** - tune the workload or conductor instead.
+
+## Lincheck lane (`@Tag("lincheck")`) - scheduler-controlled concurrency testing, never gates
+
+Lincheck declares a class's operations and explores thread interleavings against a sequential
+specification. It is the only tool class here that finds torn reads **nobody has named yet** - the
+racing-double seam tests can only re-prove seams somebody already found by hand.
+
+**Static analysis reaches one of the four calibration targets, not none of them.** Stock SpotBugs at
+`effort=Max` and ArchUnit see nothing in the family, and that single configuration is the whole
+measurement the original "nothing static sees this class" framing rested on - one analyser,
+generalised to all of them. astubbs#356 measured fb-contrib's `MUI_CONTAINSKEY_BEFORE_GET` naming
+`ShardManager.removeWorkFromShardFor` - astubbs#345's `containsKey`/`get`/dereference seam -
+statically, in seconds, with no harness and no annotation. astubbs#345 has since removed that seam,
+so the rule reports zero there; the measurement stands, the live finding does not. The other three stay out of reach:
+astubbs#346's seam is a stale-check rather than `containsKey`-before-`get`, and the two
+value-divergence torn reads are not what a check-then-act detector looks for. The clause above
+survives intact, because the seam fb-contrib names is one somebody had already found by hand, while
+the defect Lincheck turned up was on nobody's list.
+
+Harnesses live in core's `bz.stub.parallelconsumer.state` package next to the classes they model:
+`ShardManagerLincheckTest`, `PartitionStateLincheckTest`, `WorkManagerLincheckTest`, plus two
+controls. **That placement is forced, not stylistic, so do not move them to a `lincheck`
+sub-package**: `ShardManagerLincheckTest` drives the package-private `ShardManager.addWorkContainer`
+and `removeAnyShardEntriesReferencedFrom`, and `PartitionStateLincheckTest` calls the `protected`
+`PartitionState.createOffsetAndMetadata`. A harness models a seam, and the seams worth modelling are
+usually the ones the class does not expose. Moving them out would mean widening main-code visibility
+to suit a test, which trades a real encapsulation boundary for a tidier package tree; splitting only
+the two that *could* move is worse still, because then the lane has no single home to document. The
+two toolchain controls stay with them for that reason alone - they model nothing in `state`. The `lincheck` tag sits in the pom's default `excluded.groups`, and each gating wrapper
+repeats it in its own hardcoded list - `QuarantinedAnnotationContractTest` is what fails when the two
+disagree, because a tag the pom excludes and a wrapper does not runs in the GATING suite.
+
+- **Run it**: `bin/lincheck-test.sh` (whole lane, about two and a half minutes - almost all of it
+  `WorkManagerLincheckTest`, which since its inversion can never stop early and pays its whole bound
+  on every run), or `LINCHECK_TEST=ShardManagerLincheckTest bin/lincheck-test.sh` for one class. Do not hand-roll the
+  `./mvnw` line - **five flags have to line up and each fails silently on its own**: the group filters
+  (an include alone selects nothing, the same trap the performance lane documents), `-Plincheck` for
+  the JDK module opens the model checker needs, `-Dparallel-tests=false` (Lincheck installs a
+  JVM-wide agent, so two of its classes in one fork share it), `-Djacoco.skip=true` (coverage
+  probes are shared state and bury the trace), and `-Dpc.log.level=info`.
+- **Read the trace**: that last flag is what makes a found interleaving printable at all - the
+  harness logs it at INFO, and `logback-test.xml` defaults to warn.
+- **STRESS only, over the product classes, and that is a tool constraint rather than a preference.**
+  Lincheck's model checker cannot run on any Lombok `@EqualsAndHashCode(callSuper = true)` value type
+  - `ShardKey` is one - and the commit path is not deterministic enough for it to replay.
+  `LincheckSuperHashCodeProbeTest` is the tripwire that fires when that is fixed upstream.
+- **`LincheckToolchainProbeTest` is a RED CONTROL and must never be deleted.** Lincheck degrades
+  silently: a classpath conflict once left it reporting SUCCESS having instrumented nothing. A
+  deliberately broken probe with a known answer is the only thing that tells a real "no violations"
+  from a tool that was not looking.
+- **A harness asserts a bug EXISTS only until its fix lands, and the flip is not always the clean
+  one the contract promised.** Three shapes are in the lane now, and each javadoc says which it is:
+  designed-red (`PartitionStateLincheckTest`, waiting on astubbs#344); inverted to Lincheck's own
+  linearizability check (`RetryQueueLincheckTest`, `WorkManagerLincheckTest`); and still expecting a
+  violation but asserting it is no longer the FIXED one (`ShardManagerLincheckTest`, which reports a
+  different defect through the same operations). **The reason for the third shape is the rule that
+  governs all of them: a harness pointed at one seam explores the others, so it can stop finding its
+  own bug without going quiet - and its next assertion is not derivable from its own diff.** Re-run
+  the whole lane when you land any fix it names, and re-check every harness, not just yours.
+  `docs/inflight/test-lincheck-lane-open-items.md` carries the measurements.
+- **Measure a new harness's hit rate across several runs before believing it.** An under-budgeted
+  stress arm is a flake, and a flake fails this build with no retry, by design. Three green runs
+  cannot tell a 0% miss rate from a 10% one, and `WorkManagerLincheckTest` shipped its first bound on
+  exactly that evidence. **Deliberately under-budget instead**: run the harness at a bound low enough
+  to miss most of the time, and the observed miss fraction gives the per-iteration probability, which
+  prices every bound at once. Then raise `iterations` - never `@RepeatedTest`, never a retry, never a
+  weaker assertion, all three of which destroy the signal the harness exists to produce. The
+  arithmetic and a worked example are in the correction to §3.1 of
+  [`docs/plans/2026-08-25-001-test-lincheck-poc-plan.md`](plans/2026-08-25-001-test-lincheck-poc-plan.md).
+- **Raising `iterations` costs nothing on the path that matters.** Lincheck stops at the first
+  violation, so a harness that finds its bug never reaches the extra iterations; only the run that
+  was going to fail gets longer. Budget these arms for the miss case you can tolerate, not for the
+  hit case you will actually see.
+
+Calibration result, the obstacles, and the cost tables:
+[`docs/plans/2026-08-25-001-test-lincheck-poc-plan.md`](plans/2026-08-25-001-test-lincheck-poc-plan.md).
+
+## Mutation-check every new assertion, not just the risky-looking ones
+
+Delete the guard an assertion claims to pin, run the test, confirm it fails, restore. An assertion
+that cannot fail is worse than none, because everyone after you counts it as coverage - and reading
+does not find one: three assertions written on astubbs#296 all read as strong, and all passed
+against a deleted guard, the last of them surviving two review rounds. The mechanism (a loop whose
+first pass moved the state out of the branch it was counting), the repair, and the
+counting-assertion heuristics:
+[`docs/solutions/test-flakiness/vacuous-counting-assertion-loop-changed-its-own-precondition-2026-08-18.md`](solutions/test-flakiness/vacuous-counting-assertion-loop-changed-its-own-precondition-2026-08-18.md).
 
 ## Reusing test utilities
 
