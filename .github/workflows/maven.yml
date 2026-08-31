@@ -173,8 +173,11 @@ jobs:
         include:
           - suite: unit
             name: "Unit Tests"
-            cmd: "bin/ci-unit-test.sh"
-            timeout: 15
+            # The Lincheck lane rides this row as a ~40s tail step rather than owning a matrix row: it
+            # must be its own maven invocation (JVM-wide instrumentation agent, serial execution - the
+            # script header owns the why), but it is far too cheap to earn a separate check name.
+            cmd: "bin/ci-unit-test.sh && bin/lincheck-test.sh"
+            timeout: 20
           - suite: integration
             name: "Integration Tests"
             # Forked (process-parallel) mode: each JVM fork gets its own TestContainers

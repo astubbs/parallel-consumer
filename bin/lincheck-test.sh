@@ -4,7 +4,10 @@
 #
 
 # Run the Lincheck lane - scheduler-controlled concurrency testing over parallel-consumer-core's state
-# classes. Non-gating and opt-in, the same shape as bin/chaos-test.sh.
+# classes. Runs in CI as a tail step of the Unit Tests row in maven.yml (the whole lane costs ~40s,
+# build included, so it rides the existing job rather than owning a lane) and stays runnable by hand.
+# It CANNOT join the ordinary suites' JVMs: Lincheck installs a JVM-wide instrumentation agent and
+# needs serial execution (flag 4 below), so a separate maven invocation is the only correct shape.
 #
 # FIVE flags have to line up, which is why this script exists rather than an mvnw line in a doc - and
 # every one of them fails SILENTLY on its own:
@@ -94,7 +97,7 @@ fi
 # expectation, and the two cancel to a green. A derived count could only ever catch the include
 # pattern, never the roster - so the hand-maintained number is not a compromise here, it is the only
 # version that can fail.
-EXPECTED_LINCHECK_CLASSES=5
+EXPECTED_LINCHECK_CLASSES=7
 if [ -z "${LINCHECK_TEST:-}" ] && [ "$selected" -ne "$EXPECTED_LINCHECK_CLASSES" ]; then
     printf 'Lincheck report files: %s, EXPECTED %s.\n' "$selected" "$EXPECTED_LINCHECK_CLASSES"
     printf 'The lane selected the wrong roster. Either a harness stopped being selected (a rename, a\n'
