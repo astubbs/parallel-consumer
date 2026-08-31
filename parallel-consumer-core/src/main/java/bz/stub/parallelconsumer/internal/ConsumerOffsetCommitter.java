@@ -208,7 +208,7 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
                     String diagnosis = owningThread
                             .map(PollThreadStallDiagnosis::diagnose)
                             .orElse("UNAVAILABLE - no poll thread has claimed this committer yet");
-                    throw InternalRuntimeException.msg(
+                    throw PCInternalRuntimeException.msg(
                             "Timeout waiting for commit response {} to request {} - the broker poll thread is the " +
                                     "only producer of commit responses, and it has not died with an exception, so it is " +
                                     "not answering: it is blocked or slower than the configured offsetCommitTimeout. Had " +
@@ -223,7 +223,7 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
                 log.debug("Interrupted waiting for commit response", e);
             }
         }
-        throw new InternalRuntimeException("Too many attempts taking commit responses");
+        throw new PCInternalRuntimeException("Too many attempts taking commit responses");
     }
 
     /**
@@ -255,7 +255,7 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
                 : "request " + commitRequest + " can never be answered";
         // TODO(refactor): a user-facing failure wants a PC-named type - see
         // docs/inflight/core-exception-hierarchy-cleanup.md
-        throw new InternalRuntimeException(
+        throw new PCInternalRuntimeException(
                 "The broker poll thread has died, so {} - its own error is the cause of this one",
                 death, context);
     }

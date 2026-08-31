@@ -4,7 +4,11 @@
 `test/lincheck-poc-torn-read-calibration`, not merged.
 **Written:** 2026-08-25
 **Executes:** `docs/inflight/test-lincheck-jcstress-evaluation.md`, items 1 and 3 (the Lincheck half). The jcstress half is a sibling piece of work and is not covered here.
-<!-- file-refs: N/A - the evaluation note and the dossier arrive on master with astubbs#344; until it merges they exist only on fix/encoder-reads-highest-succeeded-after-the-snapshot, so their paths are named deliberately rather than broken. -->
+<!-- file-refs: N/A - the dossier arrives on master with astubbs#344. The evaluation note cited above never
+     reached master: it was deleted on that same PR once both its arms had executed, so no commit on master
+     holds it and there is no history pointer to give. Its scope survives in the successor notes it handed
+     its open items to - test-lincheck-lane-open-items.md and test-jcstress-probe-module-open-items.md - and
+     the note's own text is on astubbs/parallel-consumer#344. -->
 
 ---
 
@@ -167,6 +171,15 @@ java.lang.ArrayIndexOutOfBoundsException: Index 11 out of bounds for length 10
 encode - on a path that runs on the control thread or the broker-poll thread depending on commit
 mode. Written up in `docs/inflight/bug-pcmetrics-registered-meters-is-a-plain-arraylist.md`, with a
 second sighting from the rebalance path.
+
+> **Citation repair, 2026-08-26.** That note was deleted when astubbs#57 landed the fix it was holding
+> evidence for. Read it as this plan read it with
+> `git show fa701e876:docs/inflight/bug-pcmetrics-registered-meters-is-a-plain-arraylist.md` - the
+> last commit that still contains it, named directly because the deleting commit is the one carrying
+> this repair. What
+> survived it: the `ArrayList` reproduction moved into `PCMetrics859Test`'s class javadoc, and the
+> second sighting - the plain `HashMap` counter maps, which astubbs#57 does not touch - into
+> `docs/inflight/bug-metrics-counter-maps-are-plain-hashmaps.md`.
 
 This is the answer to "can it find what we have not already found", which the calibration proper
 cannot address by construction. One proof of concept, one new defect, on a hot path, unprompted.

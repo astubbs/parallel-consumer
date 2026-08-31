@@ -11,7 +11,7 @@ package bz.stub.parallelconsumer.offsets;
  * @see <a href="https://github.com/apache/kafka/blob/cc77a38d280657a0e3969b255f103af4d11c7914/streams/src/main/java/org/apache/kafka/streams/processor/internals/TopicPartitionMetadata.java#L33">Kafka Streams magic number</a>
  * @author Nacho Munoz
  */
-// Hand-written ctors (not Lombok @StandardException) - see InternalRuntimeException for why.
+// Hand-written ctors (not Lombok @StandardException) - see PCInternalRuntimeException for why.
 public class KafkaStreamsEncodingNotSupported extends EncodingNotSupportedException{
     private static final String ERROR_MESSAGE = "It looks like you might be reusing a Kafka Streams consumer group id, as KS magic numbers were found in the serialised payload, instead of our own. Using PC on top of KS commit data isn't supported. Please, use a fresh consumer group, unique to PC.";
 

@@ -1,19 +1,19 @@
-# MANUAL-ONLY full mutation sweep (PIT). Deliberately has no `pull_request` and no `schedule` trigger.
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# Full mutation sweep (PIT). Runs NIGHTLY, plus manual dispatch. Deliberately no `pull_request` -
+# the PR-scoped lane in maven.yml covers that. Why nightly rather than per-merge, including the
+# measurement that decided it against this file's own earlier advice, is in the `on:` block.
 #
-# WHY STILL MANUAL: not because it cannot finish - it does, see MEASURED below - but because nobody has
-# yet decided whether 22 minutes per master push is worth paying. The sweep this replaces - `internal.*` -
-# never once completed (42+ min on CI before cancellation, 83+ locally with minions dying on
-# MEMORY_ERROR), and it used to run on every push, holding a 16-core runner for its whole timeout to
-# produce nothing.
+# IT WAS MANUAL-ONLY UNTIL 2026-08-26, and the reason is worth keeping because it is the opposite of
+# the usual one: not that it could not finish, but that nobody had decided whether ~31 minutes of
+# runner time per master push was worth paying. The sweep this replaces - `internal.*` - never once completed (42+ min
+# on CI before cancellation, 83+ locally with minions dying on MEMORY_ERROR) while running on every
+# push, holding a 16-core runner for its whole timeout to produce nothing. That history is why this
+# one was left unwired until its runtime had been MEASURED; scheduling on a hoped-for runtime is how
+# the last one went unnoticed for so long.
 #
-# That history is why this one was left unwired until it had been measured. It is NOT an argument against
-# ever scheduling it: the target has moved to `offsets.*`, where mutants are decidable, so the old "it
-# never finishes" reasoning no longer applies. Scheduling on a hoped-for runtime is how the last one went
-# unnoticed for so long - so the runtime came first, and the trigger is now a cost decision.
-#
-# WHEN IT GETS A TRIGGER, prefer `push: branches: [master]` over a cron. A mutation score changes only
-# when the code changes, so a nightly recomputes an identical answer on any night master did not move,
-# and attributes a failure to a date instead of to a merge.
+# What settled it: the box now runs nothing per-PR at all, so the machine is otherwise idle, and an
+# unmeasured whole-tree mutation score was the thing it still existed for.
 #
 # THE TARGET IS `offsets.*`, NOT `internal.*`, and that is the point of the whole exercise. `internal.*`
 # is the concurrency core, where mutants to lock acquisition, loop conditions and timeouts HANG by
@@ -50,12 +50,45 @@
 # rename or move it on a branch, dispatching that branch fails with "could not find any workflows named
 # mutation-full-sweep" until the rename reaches master. That is GitHub's rule, not a typo.
 #
-# SECURITY: `workflow_dispatch` only, so this can only be started by someone with write access - a fork
-# PR can never reach the self-hosted runner through this file. See docs/self-hosted-runner.md.
+# SECURITY: the two triggers are `schedule` and `workflow_dispatch`. Neither can be initiated by a
+# pull request, and dispatch requires write access - so a fork PR can never reach the self-hosted
+# runner through this file. There is deliberately no `pull_request` trigger, which is what would
+# change that. See docs/self-hosted-runner.md.
 
 name: mutation-full-sweep
 
 on:
+  # NIGHTLY, and this overrides the argument the header of this file used to make for
+  # `push: branches: [master]`. That argument - a mutation score changes only when the code changes,
+  # so a nightly recomputes an identical answer on a night master did not move - is sound in general
+  # and WRONG FOR THIS REPOSITORY, because it assumes a quiet master. Master is not quiet.
+  #
+  # MEASURED over the last 60 master commits: up to 32 commits in a single day, a MEDIAN GAP OF 0
+  # MINUTES (squash-merges land in bursts), and 83% of gaps shorter than the sweep's own 31m27s
+  # JOB-ELAPSED runtime. Job elapsed is the right clock for this question - it is how long a push has
+  # to arrive within to kill a running sweep - and it is NOT the 21m55s figure usually quoted, which
+  # is only the PIT phase. n=1, so treat it as an order of magnitude.
+  # Per-push therefore fails in both possible configurations:
+  #
+  #   * with no concurrency group, sweeps pile up - dozens a day, several at once, on one box;
+  #   * with a cancelling group, four out of five runs are killed by the next push before they
+  #     finish, so the sweep essentially never completes - which is precisely the failure mode
+  #     (`internal.*`, never once completed) that this whole lane was rebuilt to escape.
+  #
+  # A nightly on a master that moves EVERY DAY is not "recomputing an identical answer"; it is
+  # "after today's merges", which is the thing per-push was trying to approximate. The cost is real
+  # and is accepted: a regression is attributed to a date rather than to a merge, so `git log` over
+  # that day is the first step of any triage. A sweep that finishes and names a day beats one that
+  # names a commit and never runs.
+  #
+  # This is a deliberate exception to docs/ci.md's "there is no scheduled build" rule, recorded
+  # there rather than left to contradict it silently. The rule's test - "does time alone change the
+  # answer?" - is the right test and this lane fails it on paper; what makes it an exception is that
+  # the honest per-merge trigger is unusable at this repository's merge rate.
+  #
+  # 14:00 UTC = 02:00 NZST, when the box is not otherwise in use. Nothing depends on the hour.
+  schedule:
+    - cron: '0 14 * * *'
   workflow_dispatch:
     inputs:
       target-classes:
@@ -74,30 +107,52 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  # SAME group as every chaos run and the Performance suite. This job asks for 16 PIT minion JVMs at
-  # -Xmx2g each on the same physical box, so a dispatched sweep beside a chaos run contaminates that
-  # run's timing bounds far more thoroughly than the Performance suite this group was widened for.
-  # Being manual-only is not protection - it is the opposite: whoever dispatches a sweep is thinking
-  # about mutation scores, not about which PR is mid-chaos-measurement.
-  #
-  # THE COST, stated because it is larger here than anywhere else in this group: this job's timeout is
-  # 360 minutes, and GitHub keeps one running plus one pending per group. So a long sweep can mean PRs
-  # get no chaos measurement for hours - their runs queue and are discarded. That is the same trade
-  # the group already makes everywhere else ("no measurement beats a measurement taken under
-  # contention", docs/ci.md), just with a much wider window. If that window ever bites, the answer is
-  # the dedicated single-slot runner docs/self-hosted-runner.md describes, not dropping out of here.
-  group: highcpu-box-exclusive
-  cancel-in-progress: false   # a sweep is a measurement too - queue, never kill
+# NO `concurrency:` HERE, deliberately - and this workflow is why the shared group had to go rather
+# than be tuned. It used to sit in a repo-wide `highcpu-box-exclusive` group with every chaos run, and
+# its own comment recorded the consequence: with a 360-minute timeout and a group that holds one
+# running plus at most ONE pending, a long sweep meant PRs got no chaos measurement for hours because
+# their runs were DISCARDED, not queued. That is a concurrency group being used as a mutex, which it
+# cannot be. How many jobs the box runs at once is the BOX's decision, made by how many runner
+# processes it runs. A sweep now occupies a runner slot for as long as it needs and everything else
+# queues normally behind the slots that remain. See docs/ci.md, "The box decides its own concurrency".
 
 jobs:
   full-sweep:
-    name: "Mutation (PIT, full sweep - manual)"
-    runs-on: [self-hosted, highcpu]
-    # Advisory, like every other mutation lane: a mutation score is a conversation starter, not a gate.
+    # TWO ARMS, so the "does this need the box?" question gets an answer instead of an assumption -
+    # the same way chaos was settled. Both run on a master push; compare their wall-clock and, more
+    # importantly, their SCORE. A hosted arm that reaches the same score is the argument for dropping
+    # the self-hosted one; a slower-but-equal one is still a fine safety net.
+    #
+    # NEITHER IS REQUIRED and both are continue-on-error - a mutation score is a conversation starter,
+    # not a gate. The hosted arm especially is a trial.
+    #
+    # THREADS DIFFER BY ARM, and this is a RAM ceiling rather than a preference: each PIT minion gets
+    # -Xmx2g, so threads x 2g is the floor on memory. 16 threads = 32g, which is fine on the 16-core
+    # box and would OOM a GitHub-hosted runner (4 vCPU / 16 GB for a public repo). 4 threads = 8g
+    # fits. Expect the hosted arm to be several times slower for that reason alone - the question is
+    # whether it FINISHES and AGREES, not whether it wins on wall-clock.
+    #
+    # Job time is not the constraint people assume: GitHub-hosted jobs may run for SIX HOURS
+    # (`timeout-minutes` merely defaults to 360). At ~31 min job-elapsed on 16 cores there is a lot
+    # of headroom even at 4x slower. Extrapolate the hosted arm from JOB ELAPSED, not from the 21m55s
+    # PIT-phase figure - mixing those two clocks is how this baseline has already been misread.
+    name: "Mutation (PIT, full sweep - ${{ matrix.arm }})"
+    runs-on: ${{ fromJSON(matrix.runs-on-json) }}
     continue-on-error: true
-    # Generously long ON PURPOSE - the whole point of moving off the PR lane is that taking hours here
-    # costs nobody their feedback loop. If it hits this, the target is still too hang-prone (see header).
+    strategy:
+      fail-fast: false          # the arms are independent; one failing must not hide the other
+      matrix:
+        include:
+          - arm: "self-hosted"
+            runs-on-json: '["self-hosted", "highcpu"]'
+            threads: "16"
+          - arm: "hosted"
+            runs-on-json: '["ubuntu-latest"]'
+            threads: "4"
+    # Generously long ON PURPOSE - nothing waits on this lane, so taking hours costs nobody their
+    # feedback loop. If it hits this, the target is still too hang-prone (see header). Note the gap
+    # between this ceiling and the ~31 min measured job-elapsed runtime: that is deliberate headroom,
+    # not an expectation, and a run that approaches it is a finding rather than a slow day.
     timeout-minutes: 360
     steps:
       - name: Checkout
@@ -115,18 +170,22 @@ jobs:
           java -version
           echo "cpus: $(nproc)"
 
+      # EVERY `inputs.*` NEEDS A FALLBACK. `inputs` is populated for workflow_dispatch and is EMPTY
+      # on a scheduled run, so the nightly would otherwise expand these to nothing at all - an empty
+      # target glob and a bare `-Dthreads=`. The defaults below must stay in step with the `on:` block's
+      # dispatch defaults; only `threads` legitimately differs, because it is per-arm (see the job).
       - name: Full mutation sweep
         env:
           # Makes bin/ci-mutation-test.sh ignore any base ref and mutate the whole target glob.
           PIT_FULL_SWEEP: 'true'
-          PIT_TARGET_CLASSES: ${{ inputs.target-classes }}
-          PIT_TARGET_TESTS: ${{ inputs.target-tests }}
-        run: time bin/ci-mutation-test.sh -Dverbose=true -Dthreads=${{ inputs.threads }}
+          PIT_TARGET_CLASSES: ${{ inputs.target-classes || 'bz.stub.parallelconsumer.offsets.*' }}
+          PIT_TARGET_TESTS: ${{ inputs.target-tests || 'bz.stub.parallelconsumer.*' }}
+        run: time bin/ci-mutation-test.sh -Dverbose=true -Dthreads=${{ inputs.threads || matrix.threads }}
 
       - name: Upload PIT report
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: pit-full-sweep-report-${{ github.run_number }}
+          name: pit-full-sweep-report-${{ matrix.arm }}-${{ github.run_number }}
           path: '**/target/pit-reports/**'
           retention-days: 14

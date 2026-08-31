@@ -79,15 +79,51 @@ ranking. Where a note sits is `inflight-state`'s job; what it is ranked against 
 New prefixes are fine when something genuinely does not fit **and names an area, not a status**. Do
 not add subdirectories - the prefix is the grouping.
 
+### The number, when a note has one
+
+A note that maps to exactly one issue puts that number between the area and the slug -
+`<area>-<NNN>-<slug>.md`, as in `core-139-public-api-thread-safety-contract.md`. It is optional; the
+slug alone is fine for notes that belong to no single issue, and the population-level and register
+notes carry none.
+
+**The number is always this fork's**, never confluentinc's. Two reasons, and the second is the
+binding one: it is the number `gh issue view` resolves without `-R`, and it is the only one that
+always exists - every upstream issue is mirrored here, but plenty of fork issues have no upstream
+counterpart, so upstream numbering cannot name the whole directory.
+
+This is a rule because a filename cannot be qualified. Prose has
+[`docs/issue-references.md`](../issue-references.md) and a gate behind it, precisely because a bare
+number below the threshold is a coin flip between two repos that both have one. A filename is bare by
+construction, so the convention is the only thing standing between a reader and the wrong issue.
+
+**Older names predate this and disagree** - `bug-857-family.md` and `branch-912-vertx-leak.md` carry
+confluentinc numbers, `perf-192-followups.md` carries a fork one. They are left alone rather than
+swept, because renaming a note breaks every citation of it for no gain in what the note says. Read an
+existing number by its prefix and check it; write new ones the way this section says.
+
+`pr-` is the deliberate exception: its number is a fork **PR**, which is what that prefix is for.
+
 ## Rules
 
 - **Track only what is currently OPEN**, plus cross-branch context a future branch should inherit.
-  When something closes, **`git rm` its file**. Do not rewrite it into a "FIXED/DONE" narrative:
-  making a stale entry *accurate* is the wrong move. If it leaves open follow-ups, shrink the file to
-  those and rename it.
-- **Work your current PR resolves is tracked by that PR - delete its file in that PR.** Never leave a
-  "delete this when #NN merges" marker on `master`. The merge is exactly when nobody is looking here,
-  so the marker outlives the work and the next reader inherits a stale note that reads as live.
+  Do not rewrite a closed item into a "FIXED/DONE" narrative: making a stale entry *accurate* is the
+  wrong move.
+- **When your PR resolves what a note tracks, that note has stopped describing reality - so bring it
+  back in touch, in that PR. Deleting is one of four outcomes, not the rule.** Take them in order:
+  - **Migrate what outlives the work, first.** A finding, a measurement, a decision or a rejected
+    alternative still true after this PR lands has a durable owner - `docs/refactoring.md` for a
+    deferred refactor small enough to be a line, `docs/solutions/` for a solved problem,
+    `CONCEPTS.md` for vocabulary, the topic doc for a rule. A note is where knowledge is *staged*,
+    not where it is buried.
+  - **Keep the note when live content remains**, shrunk to what is still open and renamed if its
+    area changed. A note is not obliged to die with the PR that prompted it.
+  - **Split when what remains is a different item** - open a new note for it and `git rm` the old
+    one, so one item per file survives the transition.
+  - **`git rm` it only when nothing left in it is both true and unowned elsewhere.**
+
+  Never leave a "delete this when #NN merges" marker on `master`. The merge is exactly when nobody
+  is looking here, so the marker outlives the work and the next reader inherits a stale note that
+  reads as live.
 - **Known problems with the code on this branch belong here**, even when a GitHub issue exists - link
   the issue and keep it short. An agent picking up work scans this directory; it will not read every
   issue on the tracker. An unrecorded defect is one the next session rediscovers, or ships on top of.
@@ -105,9 +141,40 @@ not add subdirectories - the prefix is the grouping.
 
   Record what no command knows: why something is parked, what blocks it, which decision is pending,
   what collides.
-- **No committed index.** An index file would be edited by every PR, which is the problem this
-  directory exists to solve. `ls docs/inflight/` and `grep -r` are the index. (`docs/todo-index.md` is
-  the cautionary case: committed, generated, and stale until a reviewer caught it on astubbs#110.)
+- **No committed index OF THESE NOTES.** An index of the notes would be edited by every PR, which is
+  the problem this directory exists to solve. `ls docs/inflight/` and `grep -r` are the index.
+  (`docs/todo-index.md` is the cautionary case: committed, generated, and stale until a reviewer
+  caught it on astubbs#110.)
+
+  **[`issue-index.md`](issue-index.md) is not that**, and is here on purpose - do not delete it
+  citing the rule above. It indexes GITHUB ISSUES, not notes, so no PR edits it except one that
+  regenerates it deliberately, and the churn the rule guards against cannot arise. It exists because
+  `gh issue list --state all` is the most-skipped of the root `AGENTS.md` prior-art checks - an agent
+  must think of querying GitHub, whereas it greps by reflex. It is dated, it says twice that it goes
+  stale silently, and it sends the reader to `gh issue view` before acting, which is what keeps it a
+  discovery aid rather than the second tracker "never write down what a command can answer" forbids.
+  Regenerate with `bin/issue-index.sh`; the script's header records why it has no `--check` gate.
+- **A note that maps to a GitHub issue carries a DRAFT response to that issue before its PR merges**
+  (operator ruling, 2026-08-25). The agents who did the work hold the best context at merge time; by
+  release time it has to be re-mined from commit logs. Draft in the branch as an
+  `issue-response-<NNN>.md` file, and **post only on explicit instruction** - the never-post-unasked
+  rule is untouched. The aspiration behind it: every GitHub issue should have a mapped inflight note,
+  so no issue's resolution moment passes uncaptured.
+
+  **A DRAFT IS NOT DELETED WITH ITS PR. It is deleted when it is posted, and not before** - the
+  drafts accumulate here and are consumed by one sweep before a release, which posts them together
+  with a common view of what shipped. This entry read "delete the drafts with the note" until
+  2026-08-26, and that plus "post only on explicit instruction" meant a draft nobody was asked about
+  before the merge was destroyed **at the merge** - the exact moment nobody is looking, which is the
+  failure this whole directory is organised against, and the one
+  [`the four outcomes`](#what-belongs-here-and-what-belongs-in-docsrefactoringmd) above was written
+  to stop. It cost three separate rounds of an agent asking the owner to post-or-lose a draft that
+  was never meant to be at risk.
+
+  **The name carries the ISSUE number, not the PR's**, for the same reason: the draft outlives the PR
+  that wrote it, so a `pr-NN-` prefix would name something gone by the time anyone posts it. It is
+  also the exception to "the prefix names an area": `issue-response-` names a *lifecycle stage* with
+  exactly one exit, and the sweep is what empties it.
 - **If you are given new guidance about how these notes are written, update this file too**, so other
   sessions inherit the rule instead of rediscovering it.
 

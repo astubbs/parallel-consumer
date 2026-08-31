@@ -40,6 +40,26 @@ None of these has an issue of its own - they were found by reading code to diagn
   that way. Fixed in `CoreApp.java`, since the README embeds that snippet by asciidoc include, and
   `README.adoc` regenerated.
 
+<!-- post-merge: checked-begin -->
+- **astubbs#337** - fixes astubbs#121 (confluentinc#894), the offset-encode/commit dirty read.
+  **Give this one a release note of its own, and say what it actually is.** The reported symptom is
+  an `auto.offset.reset` under frequent rebalancing, and that is what the issue title says - but the
+  same root cause has a second, quieter mode where the committed offset tracks the log end exactly,
+  nothing goes red anywhere, and real records are dismissed as already-completed and never processed.
+  That is silent record loss, it is present in **every released 0.5.x line**, and no bug report
+  describes it because nobody could have noticed it. A note phrased only as "offset accuracy on
+  assignment" would understate it to exactly the users who need to read it.
+  Mechanism, preconditions (it needs all four, so it is uncommon to trigger and persistent once
+  triggered) and the evidence:
+  [`docs/solutions/logic-errors/commit-offset-read-twice-shifts-every-encoded-incomplete-offset.md`](../solutions/logic-errors/commit-offset-read-twice-shifts-every-encoded-incomplete-offset.md).
+  **Responses to the three issues this closes are already drafted** - astubbs#121, confluentinc#894
+  and confluentinc#893 - in
+  [`release-0.6.0.0-issue-response-drafts.md`](release-0.6.0.0-issue-response-drafts.md), written at
+  merge while the context was fresh and deliberately held for this release rather than posted then.
+  Post them with this note, on the operator's explicit instruction, and delete that file in the same
+  change.
+<!-- post-merge: checked-end -->
+
 ## Breaking changes that have already landed
 
 Two, both from astubbs#296 (`fix(core) astubbs#209`, commit `79a7b6c62`, whose body carries the full
@@ -57,6 +77,17 @@ user of `ParallelStreamProcessor` is not affected, and neither is a subclass tha
 the population is people extending the internal controller. Say that plainly in the notes: an
 unqualified "breaking" on a stability release will cost more upgrade hesitancy than these two are
 worth.
+
+<!-- post-merge: checked-begin -->
+- **`WorkManager.getSuccessfulWorkListeners()` is gone**, replaced by `addSuccessfulWorkListener` (astubbs#267).
+  **Almost nobody is affected**: it is on `internal`-adjacent state, had no in-tree caller, and a user of
+  `ParallelStreamProcessor` never touches it - but it was `public` on a Maven-Central artefact, so an external
+  caller cannot be ruled out by grep, which is the only reason it is written down. Handing out the mutable list let
+  a caller register from any thread onto a collection the control loop iterates every cycle - the
+  `ConcurrentModificationException` that silently stopped the consumer, and the defect astubbs#267 fixed.
+  **What to do:** call `addSuccessfulWorkListener(listener)` instead of mutating the returned list; there is no
+  replacement for *reading* the registered set, which was never a use the API intended to support.
+<!-- post-merge: checked-end -->
 
 - **A subclass overriding `setupWorkerPool` must now return a pool whose `RejectedExecutionHandler` is
   a `ThreadPoolExecutor.AbortPolicy`** (a subclass of `AbortPolicy` counts - the requirement is the
@@ -203,6 +234,27 @@ All four now exist as data. Each keeps its planning note, which holds the reason
   `docs/plans/2026-08-10-004-docs-feature-catalogue-plan.md`.
 
 What does not exist yet is the rendered documentation an agent generates from all of it.
+
+**Fifth item, added 2026-08-25: the correctness campaign as a story.** In one week the torn-read
+hunt (`bug-torn-read-family.md`) found five concurrency defects sharing one root shape - two of them
+silent record loss present in every released 0.5.x line, invisible to users and to every static
+analyser tried - reproduced each one deterministically with control arms, and fixed them. That
+narrative is announcement material in its own right: it says, more credibly than any feature list,
+that the fork's priority is correctness, and it speaks directly to the users who reported
+confluentinc#894 and confluentinc#857. Tell it plainly and without alarm - the same register as the
+release-note guidance recorded for astubbs#337 (its entry in this file arrives on that PR's branch):
+what was found, the narrow preconditions, that every release since 0.5.0.0 carried it, and that it
+is fixed and regression-guarded.
+
+**And the detectors are a testing FEATURE for the announcement, not just process.** The
+racing-double seam tests are a reusable deterministic technique for race reproduction, and the
+Lincheck / jcstress evaluation resolved to adopt both arms:
+the Lincheck lane (astubbs#347) and the jcstress probe module (astubbs#348) both merged 2026-08-25,
+the calibration having held - Lincheck refound four real races unaided. That gives the fork
+scheduler-controlled concurrency testing as a standing lane, something upstream never had, and it is
+shipped rather than roadmap material. **Owed before the release: an entry in
+`docs/data/testing-evidence.yaml`** alongside the suite-as-evidence material, which is where this
+paragraph always said landed PoCs belong.
 
 ## 0.5.3.3 was never released, by anyone
 

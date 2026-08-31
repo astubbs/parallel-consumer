@@ -2,6 +2,7 @@
 <!--
 
     Copyright (C) 2020-2026 Confluent, Inc. and contributors
+    Modifications Copyright (C) 2026 Antony Stubbs and contributors
 
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
@@ -1119,7 +1120,7 @@
                     <!-- Performance tests are excluded by default. There is no performance.yml and no
                          dedicated hardware: what actually runs them is the "Performance Tests" leg of
                          maven.yml (ubuntu-latest, a REQUIRED check on every PR, via bin/performance-test.sh)
-                         and the highcpu lane of pr-highcpu-fast-feedback.yml on the self-hosted runner.
+                         and chaos-pain.yml on the self-hosted runner.
                          Select them with BOTH -Dincluded.groups=performance AND -Dexcluded.groups= - which is
                          what bin/performance-test.sh does, and the reason to use it rather than a hand-rolled
                          mvnw line. The include alone selects nothing: exclusion beats inclusion in JUnit
@@ -1215,8 +1216,10 @@
                     <excludeFilterFile>${maven.multiModuleProjectDirectory}/config/spotbugs-exclude.xml</excludeFilterFile>
                     <plugins>
                         <!-- fb-contrib earns its place on measurement, not reputation: its
-                             MUI_CONTAINSKEY_BEFORE_GET names ShardManager.removeWorkFromShardFor,
-                             which is astubbs#345's check-then-get seam, with no harness. -->
+                             MUI_CONTAINSKEY_BEFORE_GET named ShardManager.removeWorkFromShardFor's
+                             check-then-get seam with no harness at all - the defect astubbs#345
+                             then fixed. It reports zero there now, which is the expected state, not
+                             the rule going quiet: docs/inflight/static-spotbugs-rule-registry.md. -->
                         <plugin>
                             <groupId>com.mebigfatguy.fb-contrib</groupId>
                             <artifactId>fb-contrib</artifactId>

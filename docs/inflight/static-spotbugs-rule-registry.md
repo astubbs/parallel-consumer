@@ -80,26 +80,30 @@ and the reason its tier is marked *proposed* rather than settled below.
 
 ## Tier 1 - ON, and the reason the extensions are worth having
 
-**`MUI_CONTAINSKEY_BEFORE_GET`, `ShardManager.removeWorkFromShardFor` - CHECKED, and it is
-astubbs#345.** The source reads `if (processingShards.containsKey(shardKey))`, then
-`processingShards.get(shardKey)`, then dereferences the result. That is the check-then-get seam of
-that bug exactly, and fb-contrib names it statically in seconds with no harness, no annotation and
-no interleaving search.
+<!-- post-merge: checked-begin -->
+**`MUI_CONTAINSKEY_BEFORE_GET`, `ShardManager.removeWorkFromShardFor` - CHECKED in the source, and
+the reason the extensions were adopted.** The method read `if (processingShards.containsKey(shardKey))`,
+then `processingShards.get(shardKey)`, then dereferenced the result. fb-contrib named that
+check-then-get seam statically in seconds, with no harness, no annotation and no interleaving
+search - a real defect, reproduced and fixed by astubbs#345, which replaced the pair with the
+single-read `getShard` idiom.
 
-**This finding has a shelf life, and the note should not outlive it.** astubbs#345 is **open, not
-merged** - the seam is still on master, which is why the detector sees it. When that PR lands the
-`containsKey`/`get` pair goes away and `MUI_CONTAINSKEY_BEFORE_GET` reports **zero**. That does not
-weaken the case for fb-contrib; it means this paragraph stops describing a live finding and starts
-describing history, and somebody should reword it rather than leave a reader hunting for a race that
-is fixed. This PR does not depend on astubbs#345, so the two can land in either order.
+**The rule now reports ZERO on main code, and that is the expected state rather than a regression.**
+This paragraph is history, not a live finding: do not go hunting for the race, and do not read the
+silence as the detector having stopped working. It stays ON because the argument for fb-contrib is
+that it named this shape unaided, so the next instance is what it is there to catch; the red control
+below (`LincheckToolchainProbeTest`) is what proves it still fires.
+<!-- post-merge: checked-end -->
 
+<!-- post-merge: checked-begin -->
 This **narrows a standing claim** that both concurrency PoCs rest on. The evaluation note says "no
 static analysis the repo runs can see the class", which remains true - stock SpotBugs at max effort
 does not. But the register's stronger gloss, "nothing static does", is now measurably wrong for one
-member of the family. The honest rate is **one of the four known instances**: astubbs#346's seam is a
-stale-check followed by a lookup, not `containsKey` before `get`, so this detector does not fire on
-it, and the two torn-read value-divergence instances are outside what any check-then-act detector
-looks for.
+member of the family. The honest rate is **one of the four known instances**: the seam astubbs#346
+fixed was a stale-check followed by a lookup, not `containsKey` before `get`, so this detector never
+fired on it while it was there, and the two torn-read value-divergence instances are outside what any
+check-then-act detector looks for.
+<!-- post-merge: checked-end -->
 
 Also ON, each a single finding unless noted, all in code that matters:
 
@@ -281,10 +285,11 @@ the arm proving Lincheck can see the defect class at all. Fixing the finding wou
 calibration into what its own commit message calls "a green lamp wired to nothing".
 
 **The suppression names the class, never the rule**, and the distinction is the whole point:
-`MUI_CONTAINSKEY_BEFORE_GET` is the finding that justified adopting fb-contrib - it names
-`ShardManager.removeWorkFromShardFor`, a real defect - so switching it off globally to quieten a
-deliberate fixture would trade the headline result for silence. Asserted after the change rather
-than assumed: the rule reports **0** on the probe and still reports on `ShardManager`.
+`MUI_CONTAINSKEY_BEFORE_GET` is the finding that justified adopting fb-contrib - it named
+`ShardManager.removeWorkFromShardFor`, a real defect, since fixed - so switching it off globally to
+quieten a deliberate fixture would trade the headline result for silence, and leave the next
+instance of the shape unreported. Asserted after the change rather than assumed: the rule reported
+**0** on the probe and still reported on `ShardManager`.
 
 **It also narrowed a claim in that probe's own javadoc**, which said SpotBugs reported nothing on
 this shape. True of the stock detectors, and measured; with fb-contrib the shape is named in

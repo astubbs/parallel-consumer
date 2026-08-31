@@ -23,8 +23,14 @@
 # each has a green near-miss one character away from it - the shape bin/test-check-shell-lint.sh
 # established on this branch.
 #
-# NO MAVEN RUNS HERE. Every case either exits before the build (the scoping arms) or feeds a
-# captured PIT log through PIT_DRY_RUN_LOG (the verdict arms). The whole file is seconds.
+# NO REAL MAVEN RUNS HERE, and note the word REAL - the earlier wording was "NO MAVEN RUNS HERE",
+# which described a blind spot as a feature. Every case used to either exit before the build (the
+# scoping arms) or feed a captured PIT log through PIT_DRY_RUN_LOG (the verdict arms), so NOTHING
+# exercised the branch that actually invokes Maven. A comment inside that invocation's backslash
+# continuation then truncated the command - dropping `-pl parallel-consumer-core -am` so the lane
+# mutated every module, dropping the exclusions, and exiting 127 from the orphaned argument - and
+# every arm in this file stayed green through it. The argv arms at the end close that: they run the
+# real branch against a STUB `./mvnw` that records what it was handed. Still seconds.
 
 set -euo pipefail
 
@@ -65,6 +71,20 @@ make_fixture() {
     printf '%s' "$tmp"
 }
 
+# Commits an edit to one file inside a fixture, which is how a case becomes "a PR that changed X".
+# Written out four times before this existed, exactly like the verdict block below it - and the same
+# drift had started, so it is one helper for the same reason.
+# $1 fixture root, $2 path to edit, relative to that root.
+commit_edit() {
+    local root="$1" path="$2"
+    (
+        cd "$root" || exit 1
+        printf '// edited\n' >> "$path"
+        git add -A
+        git -c user.email=t@t -c user.name=t commit -q -m change
+    ) > /dev/null 2>&1
+}
+
 # Runs the subject inside a fixture and asserts the exit code.
 # $1 name, $2 expected exit code, $3 path a modification is written to (empty = no change),
 # $4 extra env assignments as a string, $5 optional substring the output must contain.
@@ -95,12 +115,7 @@ assert_exit() {
     local tmp out rc
     tmp="$(make_fixture)"
     if [ -n "$touch_path" ]; then
-        (
-            cd "$tmp" || exit 1
-            printf '// edited\n' >> "$touch_path"
-            git add -A
-            git -c user.email=t@t -c user.name=t commit -q -m change
-        ) > /dev/null 2>&1
+        commit_edit "$tmp" "$touch_path"
     fi
     # `env` rather than an exported assignment: each case must start from a clean environment, or a
     # variable set by an earlier case silently changes a later one's scope.
@@ -212,12 +227,7 @@ widened_scope_case() {
     log="$tmp/pit.log"
     write_pit_log "$log" 7
     write_pit_report "$tmp" 7
-    (
-        cd "$tmp" || exit 1
-        printf '// edited\n' >> parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/ShardManager.java
-        git add -A
-        git -c user.email=t@t -c user.name=t commit -q -m change
-    ) > /dev/null 2>&1
+    commit_edit "$tmp" parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/ShardManager.java
     set +e
     out="$(cd "$tmp" && env PIT_BASE_REF=master \
         PIT_DECIDABLE_PACKAGES='^bz\.stub\.parallelconsumer\.(offsets|state)\.' \
@@ -291,12 +301,7 @@ assert_verdict() {
     if [ -n "$generated" ] && [ "$status" != "none" ]; then
         write_pit_report "$tmp" "$generated" "$status"
     fi
-    (
-        cd "$tmp" || exit 1
-        printf '// edited\n' >> parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/offsets/RunLengthEncoder.java
-        git add -A
-        git -c user.email=t@t -c user.name=t commit -q -m change
-    ) > /dev/null 2>&1
+    commit_edit "$tmp" parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/offsets/RunLengthEncoder.java
     set +e
     # shellcheck disable=SC2086  # $envs is a deliberate word-split list of KEY=VALUE assignments
     out="$(cd "$tmp" && env PIT_BASE_REF=master PIT_DRY_RUN_LOG="$log" $envs bin/ci-mutation-test.sh 2>&1)"
@@ -369,6 +374,89 @@ assert_verdict "green near-miss: the same 42, this time KILLED, passes" 0 "42" \
 # under - so the survivor table is the product and the exit code only answers "did it measure".
 assert_verdict "green: NO_COVERAGE counts as evaluated - it is a finding, not a failure" 0 "42" \
     "42 evaluated" "" "NO_COVERAGE"
+
+echo
+echo "=== Argv arms: the lane is only PR-scoped if the flags survive the invocation ==="
+
+# The only arms that reach the real `./mvnw` branch. They do not run Maven: the fixture drops an
+# executable `mvnw` stub at its root which records its argv and prints a canned statistics block, so
+# the run still reaches a verdict. What is under test is not PIT - it is whether the flags this lane
+# depends on arrive at all.
+#
+# $1 name, $2 the flag the recorded argv must contain, $3 optional following argv word.
+assert_mvn_argv() {
+    local name="$1" want="$2" want_next="${3:-}"
+    local tmp argv out
+    tmp="$(make_fixture)"
+    argv="$tmp/argv.txt"
+    commit_edit "$tmp" parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/offsets/RunLengthEncoder.java
+    (
+        cd "$tmp" || exit 1
+        cat > mvnw <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$PIT_STUB_ARGV"
+printf -- '- Statistics\n'
+printf '>> Generated 42 mutations Killed 42 (100%%)\n'
+STUB
+        chmod +x mvnw
+    ) > /dev/null 2>&1
+    # The report must AGREE with the count the stub's log claims, and must be written by
+    # write_pit_report rather than by hand: the subject only recognises the single-quoted
+    # `status='...'` that helper emits. A hand-rolled `status="KILLED"` parses as zero evaluated
+    # mutants, which ends the run on the "scored NOTHING" verdict instead of the clean one this
+    # helper's comment describes - invisibly, because these arms judge the argv and not the exit code.
+    write_pit_report "$tmp" 42 KILLED
+
+    # The exit code is deliberately NOT asserted here: these arms answer "did the flags arrive",
+    # which the verdict arms above cannot, and the verdict itself is already their subject.
+    set +e
+    out="$(cd "$tmp" && env PIT_BASE_REF=master PIT_STUB_ARGV="$argv" bin/ci-mutation-test.sh 2>&1)"
+    set -e
+
+    if [ ! -s "$argv" ]; then
+        printf 'FAIL: %s (the stub mvnw was never invoked - the run never reached the build branch)\n%s\n' \
+            "$name" "$out"
+        fail=$((fail + 1))
+        rm -rf "$tmp"
+        return
+    fi
+
+    local got=""
+    if grep -qxF -- "$want" "$argv"; then
+        if [ -z "$want_next" ]; then
+            got="yes"
+        elif grep -qxF -- "$want_next" <<< "$(grep -A1 -xF -- "$want" "$argv")"; then
+            got="yes"
+        fi
+    fi
+
+    if [ "$got" = "yes" ]; then
+        printf 'ok:   %s\n' "$name"
+        pass=$((pass + 1))
+    else
+        printf 'FAIL: %s (argv did not carry %s%s). Recorded argv:\n%s\n' \
+            "$name" "$want" "${want_next:+ followed by $want_next}" "$(cat "$argv")"
+        fail=$((fail + 1))
+    fi
+    rm -rf "$tmp"
+}
+
+# --- The flag whose loss made the lane mutate every module ----------------------------------------
+# Without this the run is not PR-scoped at all: it walks the whole reactor, spends ~24 minutes on
+# core and then dies in a module the PR never touched. That is what shipped.
+assert_mvn_argv "argv: the module scope reaches Maven" "-pl" "parallel-consumer-core"
+assert_mvn_argv "argv: -am reaches Maven so core's deps build" "-am"
+
+# --- The exclusions the truncated comment was describing ------------------------------------------
+# The comment explaining why the Lincheck harnesses are excluded is what deleted the exclusion.
+assert_mvn_argv "argv: the Lincheck test exclusions reach Maven" \
+    "-DexcludedTestClasses=bz.stub.parallelconsumer.integrationTests.*,bz.stub.parallelconsumer.state.*Lincheck*"
+
+# --- The rest of the tail, which went the same way ------------------------------------------------
+# These were dropped by the same truncation. Individually minor; collectively they are the evidence
+# that everything after the comment was gone, not just the next line.
+assert_mvn_argv "argv: the report formats reach Maven" "-DoutputFormats=XML,HTML"
+assert_mvn_argv "argv: the timeout factor reaches Maven" "-DtimeoutFactor=3.0"
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
