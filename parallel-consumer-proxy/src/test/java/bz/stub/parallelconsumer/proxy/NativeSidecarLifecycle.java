@@ -135,8 +135,12 @@ public final class NativeSidecarLifecycle {
         var process = builder.start();
 
         ManagedChannel channel = null;
-        try {
-            int port = awaitAnnouncedPort(process);
+        // The reader wraps the process's stdout, so it is opened and closed alongside the process rather than
+        // abandoned inside the helper that reads one line from it. Closing it closes that pipe, which is why
+        // it happens here at the end and not the moment the port line has been parsed.
+        try (var announced = new BufferedReader(
+                new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+            int port = awaitAnnouncedPort(process, announced);
             assertTrue(port > 0, "an ephemeral port was requested, so it must be a real bound port");
             pass("started with an empty environment and announced port " + port + " on stdout line one");
 
@@ -209,9 +213,8 @@ public final class NativeSidecarLifecycle {
      * the stream is also what proves the line arrives FIRST: a client parses line one, so anything the process
      * printed before it would show up here as a parse failure rather than being skipped over.
      */
-    private static int awaitAnnouncedPort(Process process) throws IOException {
-        var reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
-        String line = reader.readLine();
+    private static int awaitAnnouncedPort(Process process, BufferedReader stdout) throws IOException {
+        String line = stdout.readLine();
         if (line == null) {
             throw new AssertionError("the sidecar printed nothing before exiting; exit value "
                     + (process.isAlive() ? "(still running)" : String.valueOf(process.exitValue())));
