@@ -12,8 +12,7 @@ themselves; model root: [`core-admission-scheduling-model.md`](core-admission-sc
 A trace tells you what executed. Decision lineage tells you **what could have executed, what did,
 why, and what that execution caused** - "waited 4.2s because salesforce/acme had no lease, chosen
 ahead of 12,000 eligible records because of deadline, executed on node N under epoch 17". Nearly
-free FOR THE EPHEMERAL HALF - corrected by the cross-model review (2026-08-31, finding 6,
-[`2026-08-31-codex-adversarial-review.md`](../ideation/2026-08-31-codex-adversarial-review.md)): retaining one scheduler reason is cheap, but a *durable* graph of attempts,
+free FOR THE EPHEMERAL HALF - corrected by the cross-model review (2026-08-31, finding 6): retaining one scheduler reason is cheap, but a *durable* graph of attempts,
 state versions, effects and causal ancestry is another state system (atomicity with application
 state, its own restoration source, retention/GC, privacy controls, a query substrate; sidecar
 storage avoids contaminating values but not write amplification). Split the two: ephemeral

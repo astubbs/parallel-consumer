@@ -109,7 +109,7 @@ a replacement coordinator cannot re-mint an interval. Even cheaper first rung: *
 by active instance count** - membership already comes from Kafka, wasteful under uneven demand but
 safe, and no new distributed algorithm at all. The acceptance demonstration: twenty instances
 hammering one fake API under churn - **corrected by the cross-model adversarial review
-(2026-08-31, finding 1, preserved at [`2026-08-31-codex-adversarial-review.md`](../ideation/2026-08-31-codex-adversarial-review.md)): the honest promise is BOUNDED OVERSHOOT,
+(2026-08-31, finding 1): the honest promise is BOUNDED OVERSHOOT,
 not a hard ceiling.** Kafka ownership fences Kafka operations, not the external calls a
 GC-paused or partitioned old holder makes with credits it still holds after a successor minted
 new ones - and the external service validates no fencing token. So the design needs a durable
@@ -228,8 +228,7 @@ should start from rather than invent
 - The design objective all of it serves: **do all distributed arbitration before the work becomes
   runnable, so the final admission decision is local** - coordination latency hidden under
   waiting the work was doing anyway, the scheduling analogue of CPU prefetching.
-- **These are analogies, not transferred guarantees** (cross-model review 2026-08-31, finding 8,
-  [`2026-08-31-codex-adversarial-review.md`](../ideation/2026-08-31-codex-adversarial-review.md)): preclaiming's "we do know the full set" assumes declarations are complete -
+- **These are analogies, not transferred guarantees** (cross-model review 2026-08-31, finding 8): preclaiming's "we do know the full set" assumes declarations are complete -
   dynamic application dependencies and preclaiming's utilization/starvation costs do not vanish;
   Calvin's guarantees rest on deterministic locking, replication and known access sets that a
   single sequencer topic alone does not supply (grants, authority failure, cancellation and

@@ -80,8 +80,7 @@ becomes merely log-acquisition ownership.
 
 ## Corrected by the cross-model adversarial review (2026-08-31, finding 2)
 
-**A scalar offset F is incompatible with the engine's own sparse execution model** (review
-preserved at [`2026-08-31-codex-adversarial-review.md`](../ideation/2026-08-31-codex-adversarial-review.md)). "Offset F-1 runs on v7, offset F runs on v8" quietly assumes
+**A scalar offset F is incompatible with the engine's own sparse execution model.** "Offset F-1 runs on v7, offset F runs on v8" quietly assumes
 offset-contiguous execution - the exact assumption PC exists to break: at cutover, v7 can still
 be running an earlier record whose ordering domain has work beyond F, and across partitions
 there is no single F at all. The protocol therefore needs a **partition-vector frontier plus

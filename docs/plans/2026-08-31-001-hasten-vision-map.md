@@ -109,7 +109,7 @@ it; the cost model says where attention goes.
 
 v6 and the open PR stack are untouched by all of the above. The build order is the
 **falsification staircase** the cross-model review substituted for navigator-then-lighthouse
-([`2026-08-31-codex-adversarial-review.md`](../ideation/2026-08-31-codex-adversarial-review.md), finding 4): (1) a local admission A/B against a conventional limiter, (2) the
+(finding 4): (1) a local admission A/B against a conventional limiter, (2) the
 twenty-node lease-conservation test under churn measuring overshoot bounds, (3) one stateless
 frontier cutover with failure injection - each rung with a null arm, metric, threshold and stop
 rule; the twelve-dimension lighthouse only if all three survive. The navigator micro-MVP is the
@@ -121,7 +121,7 @@ STRATEGY.md adoption waits for the owner's triage and the ce-strategy run.
 ## Risks register
 
 Recorded at capture time so future sessions can correct course, not just admire the map. A
-cross-model adversarial review ran 2026-08-31 (preserved at [`2026-08-31-codex-adversarial-review.md`](../ideation/2026-08-31-codex-adversarial-review.md)); its eight findings
+cross-model adversarial review ran 2026-08-31; its eight findings
 are folded into the owning notes and reflected below. Each
 entry: the risk, the tell that it is materialising, and the correction already on the record (or
 named here for the first time). Consult this before expanding any track.
@@ -218,7 +218,7 @@ named here for the first time). Consult this before expanding any track.
   stated. The owner's recorded position: *if those two never work, the remainder still stands on
   its own.* *Tell:* another track's design quietly depending on a hard ceiling or a seamless
   cutover. *Correction:* both notes now carry the corrected, weaker promises (bounded overshoot;
-  stateless-first vector frontiers - [`2026-08-31-codex-adversarial-review.md`](../ideation/2026-08-31-codex-adversarial-review.md)); no other note may assume the strong forms.
+  stateless-first vector frontiers -); no other note may assume the strong forms.
 - **Positioning misread as abandonment.** To an outside user, "PC is now the kernel of a
   scheduler runtime" can read as "the consumer library is deprecated". *Tell:* issues or comments
   asking whether PC is still maintained; v6 messaging leading with the vision. *Correction:* v6

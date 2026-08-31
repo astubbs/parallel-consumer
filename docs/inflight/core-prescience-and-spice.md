@@ -79,7 +79,7 @@ The handoff supplement (sections 11-17) firms this up in five ways, detail there
   depth, heads, and independent-work counts, making **100% Prescience a plausible standalone
   Parallel Consumer feature today**, before any of the rest of the runtime exists. At that point
   PC is a semantic queue over Kafka on its own. **Downgraded to hypothesis by the cross-model
-  review (2026-08-31, finding 5, [`2026-08-31-codex-adversarial-review.md`](../ideation/2026-08-31-codex-adversarial-review.md)): this prices the postings list and ignores the
+  review (2026-08-31, finding 5): this prices the postings list and ignores the
   system around it** - Kafka still transfers and decompresses whole batches; an index needs
   ownership, checkpoints, freshness, retention-loss behaviour, rebalance recovery and a hydration
   protocol; rebuilding a "disposable" full index can take hours or become impossible after source

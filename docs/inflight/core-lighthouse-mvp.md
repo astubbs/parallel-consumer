@@ -53,7 +53,7 @@ complexity than the value it removes. Surviving those makes the case; assuming t
 This is the repo's own falsification discipline
 ([`docs-research-program.md`](docs-research-program.md)) applied to the architecture itself.
 
-**Upgraded by the cross-model review (2026-08-31, finding 4, [`2026-08-31-codex-adversarial-review.md`](../ideation/2026-08-31-codex-adversarial-review.md)): names are not
+**Upgraded by the cross-model review (2026-08-31, finding 4): names are not
 preregistration.** Each falsifier needs a null arm, a metric, a rejection threshold and a stop
 rule - and the sequencing becomes a **falsification staircase** instead of navigator-then-broad-
 lighthouse: (1) a local admission A/B against a conventional limiter, (2) the twenty-node lease

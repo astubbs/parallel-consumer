@@ -119,7 +119,7 @@ execution kernel beneath an architecture.
 And the Share Groups irony completes the granularity argument: Kafka itself now concedes that
 partition ownership is too coarse for some execution models (KIP-932) - but *record* is also
 sometimes the wrong scheduling granularity. **The ordering domain is the granularity that
-actually matters.** Narrowed by the cross-model review (2026-08-31, finding 7, [`2026-08-31-codex-adversarial-review.md`](../ideation/2026-08-31-codex-adversarial-review.md)):
+actually matters.** Narrowed by the cross-model review (2026-08-31, finding 7):
 "the only thing scheduling at it" does not survive prior art - Pulsar Key_Shared, Restate's
 durable per-key queues, Temporal's slot-reserving workers and Flink's key-order guarantees are
 real neighbours, each in its own substrate. The defensible claim is the capability-matrix form:
