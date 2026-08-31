@@ -86,6 +86,44 @@ work: a record is the durable representation of intent, and the scheduler grants
 effects to begin* - which is also why records turn out to be one source of obligations among
 several ([`core-scheduled-intent.md`](core-scheduled-intent.md)).
 
+## Refinements from the JMS archaeology (2026-08-31)
+
+The csid-jms-bridge deep-dive ([`process-csid-repo-archaeology.md`](process-csid-repo-archaeology.md))
+sharpened five things:
+
+- **Some "missing broker features" are scheduler features, not storage features.** Priority,
+  delay, selectors, expiry and arguably routing were forced into physical topic structure only
+  because the consumer lacked knowledge and scheduling authority. The principle: **do not encode
+  execution semantics into physical transport unless the transport genuinely must enforce them.**
+- **Semantic position virtualisation** - the deepest form of the thesis: Kafka's
+  (topic, partition, offset) stays the beautiful immutable physical coordinate, but *physical log
+  position is provenance; semantic position determines execution* - position in an ordering
+  domain, in causal history, relative to a deadline, in a workflow, in the completion frontier.
+  PC proved offset order is not execution order; this generalises it.
+- **The DLQ formulation, final form**: the bridge faced the forced choice "block progress or
+  remove the failed thing"; the sparse frontier adds the third option - leave it exactly where it
+  is and progress everything it does not constrain. **Do not DLQ on failure; DLQ only when the
+  original execution position is deliberately abandoned** (a compatibility projection, not a
+  mechanism). Feeds astubbs#149's requirements work.
+- **The effect frontier.** The bridge's documented crash windows are the generic problem: three
+  frontiers per execution - source durable / effect performed / completion authoritative - and
+  recovery reconciles them via stable effect identity, execute, authoritative check
+  (PRESENT/ABSENT/UNKNOWN), optional compensation. (The "recoverable side-effect boundary" this
+  names comes from uncaptured weekend exchanges - same flag as in
+  [`core-decision-lineage.md`](core-decision-lineage.md).)
+- **Compatibility layers as a falsification method.** For each foreign model (JMS, Orleans/Akka,
+  Temporal, Celery, cron): can its execution semantics be expressed as combinations of existing
+  primitives *without a bespoke distributed subsystem*? JMS compresses remarkably well
+  (priority->selection, expiry->validity deadline, selector->eligibility, request/reply->addressed
+  work + logical continuation identity, redelivery->incarnation, HA->ownership, DLQ->abandoned
+  position). If most models reduce this way, that is evidence; if each needs new machinery, the
+  architecture is less general than claimed. The adapter test: if a JMS layer still builds its own
+  HA, priority, retries and DLQ, the substrate failed.
+
+The past/present/future symmetry that closes it: **lineage asks what caused this; Why Wait asks
+what prevents this; Prescience and the scheduler ask what should happen next** - three tenses of
+one graph.
+
 ## The lineage, for the record
 
 Adaptive concurrency -> "more concurrency does not help, the downstream is saturated" -> model the

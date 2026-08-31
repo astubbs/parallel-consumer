@@ -35,6 +35,31 @@ compatibility layer as projections of engine primitives - another rung for
 "specialist system deletes generic distributed machinery" test applied to a product the owner
 already built the hard way.
 
+### The deep-dive upgrade (2026-08-31): a historical requirements document
+
+Read closely, the bridge is a catalogue of the semantic gaps that recur whenever a richer
+execution model is projected onto Kafka - identity, routing, eligibility, ordering, durability,
+failover, retries, transactions, control state - i.e. exactly the territory the admission model
+makes generic. Its three best exhibits, each now landed on its owner: the **journal pattern**
+(Kafka WAL -> Streams fold -> materialized state; ack on WAL durability; the journal is a
+*recovery substrate*, not the live store - so Kafka is the durable authority from which the
+runtime reconstructs whatever live structure it wants, and durability and semantic completion are
+separate facts); the **startup barrier** (epoch marker + wait for the projection -
+[`core-frontier-handover.md`](core-frontier-handover.md) now owns the primitive); and **HA via
+consumer-group membership** replacing a filesystem lock (production evidence for "prefer deriving
+coordination from ownership that already exists" - distributed primitives as projections of
+durable state + exclusive ownership + epochs). Its crash-window diagrams are the effect-frontier
+problem drawn by hand, and its key-extraction config is the ordering/routing/ownership coupling PC
+attacks, met a project earlier. One warning kept: the bridge *embedded Artemis* rather than
+reimplementing JMS - the right instinct for any future protocol surface (find the seam where the
+existing model delegates generic mechanics; don't replace the specialist, delete the generic
+machinery underneath it).
+
+**Next archaeology worth running**: the old PC issue tracker and design discussions - feature
+requests that felt awkward or out-of-scope at the time are likely more "the scheduler trying to
+emerge before the abstraction existed". The repo already has the greppable substrate:
+[`issue-index.md`](issue-index.md) and the upstream-mirror sweep.
+
 ## csid-secrets-providers - pattern donor only, licensing caution
 
 **Do not reuse code without checking**: its README declares CSID Accelerator status with

@@ -34,6 +34,26 @@ benchmark) applied to a new index. The knowledge hierarchy: record metadata -> p
 Prescience (exact offsets) -> app demand -> cluster -> global (counts, weighted demand, deadlines
 only). 100% Prescience never means one centralised index - exact locally, aggregate globally.
 
+## The reframing that names it (2026-08-31): an inverted EXECUTION index, not a cache
+
+A cache accelerates retrieving something whose identity you already know; **an index creates new
+access paths** - and Prescience exists so the runtime can discover candidate work by semantic
+property: which work is eligible, blocked, shares a domain, depends on this state, becomes
+runnable if this resource grows. The search-engine analogy is load-bearing: Lucene does not
+reorganise source documents per query - it builds inverted indexes. Likewise the engine never
+reorganises topics into priority/retry/DLQ/per-tenant queues; it keeps the immutable log and
+builds `priority/critical -> offsets`, `resource/salesforce -> offsets`,
+`eligible-before/T -> offsets`, and selection is intersection. The operational vocabulary maps
+wholesale (segments, immutable generations, incremental indexing, hot postings in RAM, cold on
+NVMe, index generation = routing epoch = fencing), so 100% Prescience never implies one
+monolithic structure. The one-line definition: **Kafka lets you read the log by physical
+position; Prescience indexes the log by execution meaning.** And the mature decision surface
+holds more than records - state versions, continuations, timers, leases, barriers - "how much of
+the committed future execution state can the engine reason about", with record coverage as the
+first measurable form. Lineage ([`core-decision-lineage.md`](core-decision-lineage.md)) is the
+same construction pointed backward: derived semantic indexes over durable facts, one of possible
+futures, one of realised pasts.
+
 ## Producer declarations create a feedback loop, and topology extends the horizon
 
 Declared demand can be checked against observed usage: "this class declares {db} but consumed

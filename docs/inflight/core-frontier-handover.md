@@ -41,6 +41,19 @@ wrong moment, a participant that cannot learn whether the commit happened must s
 no-duplicates, no-loss and no-pause cannot all be guaranteed under arbitrary coordination loss.
 Committing far ahead makes the window vanishingly small; it does not make it zero.
 
+## Frontier barriers are the underlying primitive - and the bridge already built one
+
+The csid-jms-bridge's startup does exactly this in production shape: write an epoch marker into
+its Kafka WAL and refuse to activate until the materialized projection has processed past it. The
+generalisation is stronger than "wait for offset N": **"this materialized semantic view is
+causally caught up to frontier X"** - needed before failover activation, before restored state is
+serving-ready, before a routing epoch activates, at drain completion, and before a snapshot is
+declared consistent. First-class primitive, not a per-feature reimplementation; the Future
+Frontier Agreement above is one user of it. And the accompanying design smell test: **whenever an
+authoritative distributed decision can later be superseded, ask what fences the stale knowledge**
+- epochs are not optional decoration, and even Prescience needs one (100% coverage is meaningless
+except relative to a captured committed frontier).
+
 ## The separation the protocol forces, and it is thesis-grade
 
 Kafka's group coordinator cannot express "v7 owns this partition until offset F, then v8" - so

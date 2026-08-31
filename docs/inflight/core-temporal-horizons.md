@@ -21,6 +21,10 @@ What falls out:
   40ms; admit DB-only work whose predicted duration fits the gap, and avoid the 2-second DB job
   that would idle the GPU later. Work becomes `resource vector x expected duration x eligibility
   window`; non-preemptive reservation planning over a short temporal horizon.
+- **Eligibility time is not validity deadline** (2026-08-31, via JMS expiry): "do not run
+  before X" and "no longer worth running after Y" are different predicates with different
+  terminal outcomes - expiry is a policy completion (EXPIRED), not a failure
+  ([`core-work-identity-model.md`](core-work-identity-model.md) owns the disposition vocabulary).
 - **Feasibility, not just eligibility.** Deadline 12:00, needs 5s of R, R fenced until 12:03:
   the work is not "waiting" - it is **INFEASIBLE now**, and policy can act immediately
   (escalate, compensate, relax, reroute) instead of discovering the SLO miss after the fact.
