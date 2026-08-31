@@ -303,7 +303,7 @@ Diagrams are directional guidance; the prose in KTD1-KTD10 and the governed requ
 - **Goal:** The user function's context can answer "what is ineligible, why, and what rate is available" - side-effect-free, empty when inert.
 - **Requirements:** R18 (KD7, KTD9).
 - **Dependencies:** U2, U3.
-- **Files:** a narrow read-only view interface in the navigator package; `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/PollContext.java` and `internal/PollContextInternal.java` (carry the view); the two `PollContextInternal` construction sites in `AbstractParallelEoSStreamProcessor.java`.
+- **Files:** a narrow read-only view interface in the navigator package; `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/PollContext.java` and `PollContextInternal.java` beside it (carry the view); the two `PollContextInternal` construction sites in `AbstractParallelEoSStreamProcessor.java`.
 - **Approach:**
   1. Define the view: ineligible-entry counts per ordering shard, per-resource `availableAt` and available rate (instance-local and global).
   2. Thread it as a constructor parameter at the two construction sites - the processor already holds the module; expose the narrow view, not `PCModule`.

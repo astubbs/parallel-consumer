@@ -103,7 +103,8 @@ name for the branch: the navigator module. Then the v1 below is the scale-up of 
 
 ### The in-process rung landed (2026-09-01)
 
-Branch `feats/hasten-micro-mvp`, PR astubbs/parallel-consumer#392. The checklist above is now
+<!-- post-merge: checked -->
+Landed by astubbs/parallel-consumer#392. The checklist above is now
 demonstrated, in-process: the seams exist and hold their contracts (`ResourceContract`
 registration, per-instance resource tags on the options, ONE application-supplied allocator
 shared across instances behind the `ResourceAllocator` interface the distributed plane will
