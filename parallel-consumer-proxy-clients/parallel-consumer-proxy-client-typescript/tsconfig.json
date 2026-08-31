@@ -1,0 +1,11 @@
+{
+  "//": "Copyright (C) 2026 Antony Stubbs and contributors. Output goes under target/ so Maven's default clean removes it.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "strict": true,
+    "rootDir": "src",
+    "outDir": "target/tsc"
+  },
+  "include": ["src/**/*.ts"]
+}
