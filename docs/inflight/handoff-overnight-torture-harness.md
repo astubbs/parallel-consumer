@@ -78,9 +78,15 @@ thing that ran.
 
 ## Where things sit
 
-Branch `feats/overnight-torture-harness`, cut from master, one commit, no PR yet.
+The harness now lives on `bugs/857-paused-consumption-multi-consumers-bug` (astubbs#29), which
+absorbed `feats/overnight-torture-harness` whole. That branch gets no PR of its own: it contained
+astubbs#29 in its entirety, so a PR from it would have shown that whole diff for a two-file
+addition. It is now only a pointer, and can be deleted once astubbs#29 lands.
 
-The 857 work lives on `bugs/857-paused-consumption-multi-consumers-bug` (astubbs#29). It is NOT
-mergeable yet, and for reasons unrelated to code: its records must be migrated out of
-`pr-29-857-deadlock-and-what-the-measuring-taught.md` before that note is deleted on merge, and its
-title and body are stale in four ways. `docs/merge-checklist.md` owns the rest.
+The test infrastructure the harness depends on - the log silos and the scenario-wide recovery
+diagnostic - was extracted to astubbs#381 and cut fresh from master, so it is no longer gated behind
+the deadlock fix. If you need only the harness and its logging, that PR is the one to watch.
+
+astubbs#29 itself is NOT mergeable yet, and for reasons unrelated to code: its records must be
+migrated out of `pr-29-857-deadlock-and-what-the-measuring-taught.md` before that note is deleted on
+merge, and its title and body are stale in four ways. `docs/merge-checklist.md` owns the rest.
