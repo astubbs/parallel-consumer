@@ -305,3 +305,16 @@ books, and here is the list you are expected to shorten".
   confusion.** It is told apart by asking whether what the test actually saw is *also correct*: the
   other three all mean the expected thing did not happen, while a tick-path assertion means something
   equally valid happened instead.
+
+**Navigator**
+The subsystem that shares named, rate-limited resources between processing instances. A resource is
+registered with a policy (rate plus burst); a function's registration tags the resources it needs;
+the navigator delegates renewable pieces of the resource's capacity to instances, which spend them
+locally at admission. It is a subsystem name, not a module: the promise it makes is soft - a
+cooperative, best-effort bound with declared overshoot, not a hard semaphore.
+
+**Credit**
+The navigator's unit of delegated capacity: permission for one execution against a named resource,
+minted per quantum (the fixed time slice a grant covers), spent locally at the moment a record is
+claimed for dispatch, and expiring unspent at the quantum's end. Death of a holder loses its
+credits; nothing re-mints an issued quantum - so failure wastes capacity but never creates it.
