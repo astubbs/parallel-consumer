@@ -7,9 +7,10 @@ package bz.stub.parallelconsumer.internal.navigator;
 import lombok.Value;
 
 /**
- * A point-in-time snapshot of one resource's credit accounting (KTD2): four monotonic counters, with
- * outstanding credit DERIVED - never maintained, never clamped - so a bookkeeping mismatch shows up as a
- * broken identity rather than being papered over (the counter-clamp learning).
+ * A point-in-time snapshot of one resource's credit accounting (KTD2): the four monotonic identity counters
+ * plus the beyond-burst monitor, with outstanding credit DERIVED - never maintained, never clamped - so a
+ * bookkeeping mismatch shows up as a broken identity rather than being papered over (the counter-clamp
+ * learning).
  * <p>
  * The identity is {@code minted + overdraft == spent + expired + outstanding} at every observation point.
  * {@link #getOutstanding()} computes the left-hand definition from the counters; {@link #getLiveCredits()} is
@@ -44,9 +45,21 @@ public class ConservationLedger {
 
     /**
      * Debits taken when no live credit remained - expiry raced the spend, or a concurrent claimer got there
-     * first (KTD1, KD10). Monotonic; bounded by burst under R8's invariant, never "repaid".
+     * first (KTD1, KD10). Monotonic, never "repaid". The contract's burst BUDGETS this overshoot per quantum
+     * (R8) rather than bounding it - {@link #getOverdraftBeyondBurst()} counts the debits that exceeded the
+     * budget.
      */
     long overdraft;
+
+    /**
+     * The subset of {@link #getOverdraft()} that landed after its quantum's cumulative overdraft had already
+     * consumed the contract's declared burst (R8's overshoot budget, observed rather than enforced - KTD1
+     * forbids refusing the debit). Monotonic, never clamped. Deliberately NOT a term of the conservation
+     * identity: every beyond-burst debit is already counted in {@link #getOverdraft()}, so this field is a
+     * monitor, not a ledger column - zero while the single-threaded selection engine keeps debits within
+     * budget structurally, nonzero when concurrent direct-pull claimers outrun the declared policy.
+     */
+    long overdraftBeyondBurst;
 
     /**
      * Independently-scanned sum of live lease credits at snapshot time - the cross-check for

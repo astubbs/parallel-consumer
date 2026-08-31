@@ -89,7 +89,11 @@ public interface ResourceAllocator {
      * resource. <b>Always succeeds</b>: normally it decrements the member's live credit; when no live credit
      * remains (the quantum rolled between the eligibility read and this call, or a concurrent claimer spent
      * it) the debit lands as OVERDRAFT - a monotonic counter, never negative bookkeeping, never a refund,
-     * never re-minting (KD10). R8's burst term budgets exactly this overshoot.
+     * never re-minting (KD10). R8's burst term BUDGETS exactly this overshoot - it never caps it: within-burst
+     * overdraft is the expected racing debit, and a debit pushing a quantum's overdraft beyond the budget still
+     * succeeds, surfaced on {@link ConservationLedger#getOverdraftBeyondBurst()} instead of refused. The
+     * single-threaded selection engine keeps debits within budget structurally; concurrent direct-pull
+     * claimers are why the monitor exists.
      */
     void spend(String memberId, String resourceName, Instant now);
 

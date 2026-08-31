@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.internal.navigator;
  */
 
 import com.google.errorprone.annotations.concurrent.GuardedBy;
+import lombok.extern.slf4j.Slf4j;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -54,6 +55,7 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  * the quantum after its own, so a mutating call folds stale leases into the expired counter and a pure ledger
  * read counts them lazily without mutating - the identity holds at every observation point.
  */
+@Slf4j
 public class StubResourceAllocator implements ResourceAllocator {
 
     /**
@@ -276,18 +278,53 @@ public class StubResourceAllocator implements ResourceAllocator {
             settle(now);
             Counters resourceCounters = countersFor(resourceName);
             resourceCounters.spent.add(1);
+            long quantumIndex = quantumIndexOf(now, contract.getQuantum());
             Map<String, LeaseState> memberLeases = leases.get(memberId);
             LeaseState lease = memberLeases == null ? null : memberLeases.get(resourceName);
             boolean liveCreditRemains = lease != null
-                    && lease.quantumIndex == quantumIndexOf(now, contract.getQuantum())
+                    && lease.quantumIndex == quantumIndex
                     && lease.unspent() > 0;
             if (liveCreditRemains) {
                 lease.spent++;
             } else {
                 // The always-succeeds rule (KTD1): the credit observed at eligibility is gone - the quantum
                 // rolled, or a concurrent claimer spent it. Overdraft, monotonic; never negative bookkeeping,
-                // never a refund, never re-minting. R8's burst term budgets exactly this.
+                // never a refund, never re-minting. R8's burst term BUDGETS exactly this - it does not cap
+                // it, so the budget is watched below rather than enforced.
                 resourceCounters.overdraft.add(1);
+                trackOverdraftAgainstBurstBudget(resourceCounters, contract, quantumIndex);
+            }
+        }
+    }
+
+    /**
+     * R8's overshoot budget, made observable - never enforced, because KTD1 forbids refusing the debit. The
+     * contract's burst is how much overdraft one quantum is EXPECTED to accumulate: the racing debits that land
+     * between an eligibility read and the spend. A debit pushing the quantum's cumulative overdraft BEYOND that
+     * budget still succeeded and is already in the ordinary overdraft counter (the conservation identity is
+     * untouched); additionally it moves the monotonic beyond-burst counter and, once per (resource, quantum),
+     * WARNs. The single-threaded selection engine keeps debits within budget structurally, so a nonzero count
+     * means concurrent direct-pull claimers - or a caller outside the engine's discipline - are outrunning the
+     * declared policy.
+     */
+    @GuardedBy("stateLock")
+    private void trackOverdraftAgainstBurstBudget(Counters resourceCounters, ResourceContract contract,
+                                                  long quantumIndex) {
+        if (resourceCounters.overdraftBudgetQuantumIndex != quantumIndex) {
+            // the quantum rolled since the last overdraft landed - a fresh budget, reset lazily like expiry
+            resourceCounters.overdraftBudgetQuantumIndex = quantumIndex;
+            resourceCounters.overdraftInQuantum = 0;
+        }
+        resourceCounters.overdraftInQuantum++;
+        if (resourceCounters.overdraftInQuantum > contract.getBurst()) {
+            resourceCounters.overdraftBeyondBurst.add(1);
+            if (resourceCounters.overdraftInQuantum == contract.getBurst() + 1L) { // the crossing: once per quantum
+                log.warn("Resource '{}': quantum {}'s cumulative overdraft ({}) has exceeded the declared burst "
+                                + "budget of {}. The debit still succeeded (KTD1's always-succeeds rule) and the "
+                                + "conservation ledger is untouched - but spends are outrunning R8's "
+                                + "rate x window + burst bound; the pc.navigator.credits.overdraft.beyond.burst "
+                                + "meter counts these debits. Warning once per quantum.",
+                        contract.getName(), quantumIndex, resourceCounters.overdraftInQuantum, contract.getBurst());
             }
         }
     }
@@ -407,6 +444,7 @@ public class StubResourceAllocator implements ResourceAllocator {
                     resourceCounters.spent.sum(),
                     resourceCounters.expired.sum() + lazilyExpired,
                     resourceCounters.overdraft.sum(),
+                    resourceCounters.overdraftBeyondBurst.sum(),
                     liveCredits);
         }
     }
@@ -576,13 +614,28 @@ public class StubResourceAllocator implements ResourceAllocator {
     }
 
     /**
-     * One resource's monotonic conservation counters (KTD2). {@link LongAdder}s, moved only under the
-     * allocator's monitor so ledger snapshots are consistent; outstanding is always derived, never stored.
+     * One resource's monotonic conservation counters (KTD2), plus the burst-budget watch. {@link LongAdder}s,
+     * moved only under the allocator's monitor so ledger snapshots are consistent; outstanding is always
+     * derived, never stored. The plain {@code long} budget fields are accessed only under the owning
+     * allocator's {@code stateLock} (the {@link LeaseState} access pattern).
      */
     private static final class Counters {
         private final LongAdder minted = new LongAdder();
         private final LongAdder spent = new LongAdder();
         private final LongAdder expired = new LongAdder();
         private final LongAdder overdraft = new LongAdder();
+
+        /**
+         * Overdraft debits that pushed their quantum's cumulative overdraft beyond the contract's burst budget
+         * (R8 observed, never enforced). A subset annotation of {@link #overdraft} - deliberately NOT a term
+         * of the conservation identity.
+         */
+        private final LongAdder overdraftBeyondBurst = new LongAdder();
+
+        /** Which quantum {@link #overdraftInQuantum} counts - reset lazily when an overdraft lands later. */
+        private long overdraftBudgetQuantumIndex = Long.MIN_VALUE;
+
+        /** The current quantum's cumulative overdraft - the burst budget's consumption, NOT monotonic. */
+        private long overdraftInQuantum;
     }
 }

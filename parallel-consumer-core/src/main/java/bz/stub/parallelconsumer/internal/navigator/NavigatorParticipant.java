@@ -400,7 +400,7 @@ public final class NavigatorParticipant {
     /**
      * Registers the {@code pc.navigator.*} meters (U4): the deferred-count, latest-reason and
      * allocator-failure gauges, one episode counter per {@link NavigatorDecisionReason}, and
-     * per-tagged-resource spent/overdraft/next-credit
+     * per-tagged-resource spent/overdraft/overdraft-beyond-burst/next-credit
      * gauges read live from the allocator's {@link ConservationLedger} - mirrors
      * {@code AdmissionController#initMetrics}'s mode-gated pattern. A NO-OP for {@link #inert()} (R3: an
      * untagged instance registers nothing) or when {@code pcMetrics} is null. Called once, by
@@ -437,6 +437,11 @@ public final class NavigatorParticipant {
             pcMetrics.gaugeFromMetricDef(PCMetricsDef.NAVIGATOR_CREDITS_OVERDRAFT, this,
                     p -> p.guardedGaugeRead(
                             () -> p.allocator.conservationLedger(resourceName, clock.instant()).getOverdraft(), 0),
+                    resourceTag);
+            pcMetrics.gaugeFromMetricDef(PCMetricsDef.NAVIGATOR_CREDITS_OVERDRAFT_BEYOND_BURST, this,
+                    p -> p.guardedGaugeRead(
+                            () -> p.allocator.conservationLedger(resourceName, clock.instant())
+                                    .getOverdraftBeyondBurst(), 0),
                     resourceTag);
             pcMetrics.gaugeFromMetricDef(PCMetricsDef.NAVIGATOR_NEXT_CREDIT_AT, this,
                     p -> p.guardedGaugeRead(() -> p.allocator.nextCreditAt(resourceName, clock.instant())

@@ -23,7 +23,8 @@ import static com.google.common.truth.Truth.assertThat;
 /**
  * The navigator's {@code pc.navigator.*} meters (U4): the deferred-count and latest-reason gauges, one episode
  * counter per {@link NavigatorDecisionReason} (hand-assigned values), and the per-tagged-resource
- * spent/overdraft/next-credit gauges read live from the allocator's {@link ConservationLedger} - mirrors
+ * spent/overdraft/overdraft-beyond-burst/next-credit gauges read live from the allocator's
+ * {@link ConservationLedger} - mirrors
  * {@code AdmissionMetricsTest}'s structure for the sibling subsystem. Drives {@link NavigatorParticipant}
  * directly (bypassing {@code PCModule}) since {@link NavigatorParticipant#initMetrics} is the whole registration
  * surface; the log-line and real-engine dedup half lives in
@@ -136,6 +137,29 @@ class NavigatorAttributionMetricsTest {
 
         assertWithResourceTag(PCMetricsDef.NAVIGATOR_CREDITS_SPENT, API_A, 1.0);
         assertWithMessageOverdraft(1.0);
+        // one overdraft against a burst budget of 1: within budget, so the beyond-burst monitor stays zero
+        assertWithResourceTag(PCMetricsDef.NAVIGATOR_CREDITS_OVERDRAFT_BEYOND_BURST, API_A, 0.0);
+    }
+
+    /**
+     * The R8 overshoot budget's meter: a second no-credit spend exceeds the burst-1 budget, and the
+     * beyond-burst gauge reads it live from the ledger - while the ordinary overdraft gauge still counts BOTH
+     * debits (the beyond-burst count is a subset annotation, not a ledger column).
+     */
+    @Test
+    void overdraftBeyondBurstGaugeReadsLiveFromTheConservationLedger() {
+        var allocator = new StubResourceAllocator(clock);
+        allocator.register(new ResourceContract(API_A, 1.0, 1, Duration.ofSeconds(1)));
+        var participant = NavigatorParticipant.activeMember(allocator, UniLists.of(API_A), MEMBER);
+        pcMetrics = new PCMetrics(registry, UniLists.of(), "navigator-metrics-test");
+        participant.initMetrics(pcMetrics, clock);
+
+        // no quantum ever pulled: both debits land as overdraft, and the second exceeds the burst budget of 1
+        participant.spendOneCreditPerTag(clock.instant());
+        participant.spendOneCreditPerTag(clock.instant());
+
+        assertWithMessageOverdraft(2.0);
+        assertWithResourceTag(PCMetricsDef.NAVIGATOR_CREDITS_OVERDRAFT_BEYOND_BURST, API_A, 1.0);
     }
 
     @Test

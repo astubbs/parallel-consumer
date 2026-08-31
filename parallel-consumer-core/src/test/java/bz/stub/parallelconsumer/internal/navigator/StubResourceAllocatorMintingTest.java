@@ -21,8 +21,8 @@ import static com.google.common.truth.Truth.assertWithMessage;
 
 /**
  * The U2 mechanics of {@link StubResourceAllocator} on the virtual clock (R14): quantum-indexed lazy minting,
- * equal share with rotating remainder, membership lifecycle with lease TTL, expiry, soft-debit overdraft, and
- * the conservation identity (KTD2, KTD4, R5, R6, R16, R17).
+ * equal share with rotating remainder, membership lifecycle with lease TTL, expiry, soft-debit overdraft with
+ * its per-quantum burst overshoot budget (R8), and the conservation identity (KTD2, KTD4, R5, R6, R16, R17).
  * <p>
  * All time comes from a field-held {@link MutableClock} shared with the allocator at construction (KTD4's one
  * canonical clock; the {@code AdmissionControllerTest} drive pattern) - no wall clock anywhere. The demo policy
@@ -484,6 +484,74 @@ class StubResourceAllocatorMintingTest {
         assertThat(snapshot.getOverdraft()).isEqualTo(1);
         assertThat(snapshot.getExpired()).isEqualTo(2); // the whole stale lease expired
         assertThat(snapshot.getOutstanding()).isEqualTo(0);
+        assertIdentityCloses();
+    }
+
+    /**
+     * Covers R8/KTD1. Overdraft WITHIN the declared burst is the BUDGETED overshoot - the expected racing
+     * debits between an eligibility read and the spend landing. The beyond-burst monitor must not move, and
+     * the identity must still close.
+     */
+    @Test
+    void overdraftWithinTheBurstBudgetIsCountedButNeverFlaggedBeyondBurst() {
+        join("a");
+        nextQuantum();
+        read("a"); // sole member: both of the quantum's 2 credits
+        spend("a");
+        spend("a"); // live credit exhausted
+
+        spend("a");
+        spend("a"); // two overdrafts - exactly the demo policy's burst budget of 2
+
+        ConservationLedger snapshot = ledger();
+        assertThat(snapshot.getOverdraft()).isEqualTo(2);
+        assertThat(snapshot.getOverdraftBeyondBurst()).isEqualTo(0);
+        assertIdentityCloses();
+    }
+
+    /**
+     * Covers R8/KTD1. A quantum's cumulative overdraft pushing BEYOND the declared burst still succeeds - no
+     * clamp, no refusal, the conservation identity untouched (KTD1) - but every such debit moves the monotonic
+     * beyond-burst monitor, which proves {@code spend} actually reads the contract's burst.
+     */
+    @Test
+    void overdraftBeyondTheBurstBudgetSucceedsAndMovesTheBeyondBurstMonitor() {
+        join("a");
+        nextQuantum();
+        read("a");
+        spend("a");
+        spend("a"); // the two live credits
+
+        for (int i = 0; i < 5; i++) {
+            spend("a"); // five overdrafts: 2 consume the burst budget, 3 land beyond it
+        }
+
+        ConservationLedger snapshot = ledger();
+        assertThat(snapshot.getSpent()).isEqualTo(7); // every debit succeeded (KTD1's always-succeeds rule)
+        assertThat(snapshot.getOverdraft()).isEqualTo(5);
+        assertThat(snapshot.getOverdraftBeyondBurst()).isEqualTo(3);
+        assertIdentityCloses();
+    }
+
+    /**
+     * Covers R8/KTD4. The overshoot budget is PER QUANTUM: consuming the whole burst in quantum N and again in
+     * quantum N+1 flags nothing - only a budget that failed to reset at the quantum roll (the bug shape) would
+     * read the second quantum's within-burst overdraft as beyond-burst.
+     */
+    @Test
+    void quantumRollResetsTheBurstBudgetSoWithinBurstOverdraftNeverFlagsTwiceOver() {
+        join("a");
+        nextQuantum();
+        spend("a");
+        spend("a"); // nothing read this quantum: two overdrafts, exactly the burst budget
+
+        nextQuantum();
+        spend("a");
+        spend("a"); // fresh quantum, fresh budget - exactly the burst again
+
+        ConservationLedger snapshot = ledger();
+        assertThat(snapshot.getOverdraft()).isEqualTo(4);
+        assertThat(snapshot.getOverdraftBeyondBurst()).isEqualTo(0);
         assertIdentityCloses();
     }
 
