@@ -346,10 +346,12 @@ grants stay in `settings.local.json`, still ignored.
   fetched `origin/master`, never fetched astubbs#205's own two-week-stale ref, re-did a package
   rename of 239 files, resolved 43 conflicts on top, and learned at the rejected push that all of it
   was already published. Its own header owns the incident.
-- The push detection and the portable `stat` both live in `.claude/hooks/lib/hook-common.sh`, shared
-  by the two push hooks. Each had been got wrong once in a way that made a hook *silently stop
-  working* - `git -C <path> push` unmatched, `stat -c` unavailable on BSD - and a second copy hides
-  the next such bug until somebody re-runs the same experiment on the same platform.
+- The push detection, the portable `stat` and the **pushed-branch derivation** all live in
+  `.claude/hooks/lib/hook-common.sh`, shared by the two push hooks. Each had been got wrong once in a
+  way that made a hook *silently stop working, or answer about the wrong thing* - `git -C <path> push`
+  unmatched, `stat -c` unavailable on BSD, and `git rev-parse --abbrev-ref HEAD` naming whichever
+  worktree the SESSION sat in rather than the branch the command names. A second copy hides the next
+  such bug until somebody re-runs the same experiment on the same platform.
 - `PreToolUse` on `Bash`, **with no `if`** - runs `.claude/hooks/check-history-rewrite.sh`, one of
   the two guards here that **refuse**: it stops a force-push, rebase, amend or any other ref-moving
   command while a review is in flight, because a rewrite orphans inline review threads and destroys

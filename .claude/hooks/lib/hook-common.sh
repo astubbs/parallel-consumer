@@ -102,6 +102,79 @@ hook_git_subcommands() { # <payload-json>
     hook_git_invocations "$1" | cut -f1
 }
 
+# Prints the REMOTE-side branch name that the payload's `git push` names, or nothing when it names
+# none. Nothing is a real answer here: it means the caller must fall back to a working directory,
+# and must SAY that it did.
+#
+# WHY THE COMMAND AND NOT `HEAD`. A hook process does not run in the directory its guarded command
+# runs in, and this repository keeps many worktrees checked out at once - so
+# `git rev-parse --abbrev-ref HEAD` answers about whichever branch the SESSION happens to sit on,
+# confidently and wrongly. On 2026-08-31 that made check-history-rewrite.sh report
+# "no open pull request has `docs/god-branch-decomposition-plan` as its head branch" while refusing a
+# force-push of `feats/proxy-verdict-free-return`, which had an open PR with review history - the
+# exact thing that hook exists to name. When the command spells the refspec out, that is the only
+# authoritative answer available, and it is free.
+#
+# THE PR HEAD IS THE DESTINATION, NOT THE SOURCE: `git push origin src:dst` publishes `dst`, so
+# `dst` is what a pull request has as its head branch. `+src` is the force spelling of `src`, and
+# `refs/heads/x` is the long spelling of `x`.
+#
+# FOUR SHAPES DELIBERATELY RETURN NOTHING, because each names something this cannot read as a branch:
+# a push with no refspec (`git push -f`), `HEAD` (which means the command's own directory, the thing
+# a hook cannot see), a bare `refs/`-something (a tag or a note), and `tag <name>`.
+#
+# A MULTI-REFSPEC PUSH IS ANSWERED WITH ITS FIRST REFSPEC, which is incomplete rather than wrong -
+# that branch really is one of the branches being pushed, so a refusal naming it is about work the
+# command actually touches. Falling back to the working directory instead would trade an incomplete
+# answer for an unrelated one.
+#
+# THE SAME RULE IS SPELLED OUT A SECOND TIME, in python, inside check-history-rewrite.sh - which
+# refuses tool calls and therefore may not depend on a library it might fail to source
+# (astubbs/parallel-consumer#341). That duplication is deliberate and is tracked with the rest of it
+# in docs/inflight/ci-pr-lookup-is-copied-into-three-hooks.md; change one and change the other.
+hook_push_head_ref() { # <payload-json>
+    local line args t spec dst count skip
+    while IFS= read -r line; do
+        case "$line" in push|push$'\t'*) ;; *) continue ;; esac
+        # `hook_git_invocations` already stopped this invocation's arguments at the next shell
+        # operator, so everything here belongs to this push and nothing to the command after it.
+        args="${line#push}"
+        count=0
+        spec=""
+        skip=0
+        while IFS= read -r t; do
+            [ -n "$t" ] || continue
+            if [ "$skip" = 1 ]; then skip=0; continue; fi
+            case "$t" in
+                # Push options that consume a SEPARATE value token. Dropping only the flag would
+                # leave its value where the repository or the refspec should be - the same class of
+                # bug this file records above for `git -C /path push`.
+                -o|--push-option|--receive-pack|--exec|--repo) skip=1; continue ;;
+                -?*) continue ;;
+            esac
+            count=$((count + 1))
+            # positional 1 is the repository, positional 2 is the first refspec.
+            if [ "$count" = 2 ]; then spec="$t"; break; fi
+        done <<EOF
+$(printf '%s' "$args" | tr '\t' '\n')
+EOF
+        [ -n "$spec" ] || continue
+        [ "$spec" = "tag" ] && continue
+        case "$spec" in
+            *:*) dst="${spec#*:}" ;;
+            *)   dst="$spec" ;;
+        esac
+        dst="${dst#+}"
+        dst="${dst#refs/heads/}"
+        case "$dst" in ''|HEAD|refs/*) continue ;; esac
+        printf '%s\n' "$dst"
+        return 0
+    done <<EOF
+$(hook_git_invocations "$1")
+EOF
+    return 0
+}
+
 # True when the payload runs ANY of the named git subcommands. One tokeniser spawn for the whole
 # question: `hook_git_runs a || hook_git_runs b` paid python3 twice to walk the same token list.
 hook_git_runs_any() { # <payload-json> <subcommand>...

@@ -51,7 +51,19 @@ root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$root" ] || exit 0
 cd "$root" 2>/dev/null || exit 0
 
-branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+# WHICH BRANCH IS BEING PUSHED - the command's refspec first, this directory's HEAD only as a
+# fallback. A hook does not run in the directory its guarded command runs in, and this repository
+# keeps many worktrees checked out at once, so HEAD alone answers about whichever branch the SESSION
+# sits on: `git push origin other-branch` from here would look up THIS branch's PR and quote
+# `docs/inflight/pr-<n>-*.md` for work the push does not touch. Observed on 2026-08-31 in the sibling
+# guard, twice, on two different branches - .claude/hooks/check-history-rewrite.sh records both under
+# "WHICH BRANCH". `hook_push_head_ref` owns the refspec rules.
+inferred_branch=0
+branch="$(hook_push_head_ref "$payload")"
+if [ -z "$branch" ]; then
+    inferred_branch=1
+    branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+fi
 [ -n "$branch" ] && [ "$branch" != "HEAD" ] || exit 0
 
 # THROTTLE. Same branch, same hour, one reminder.
@@ -179,10 +191,19 @@ outstanding="$(awk '/^## Already fixed/ {exit} {print}' "$note" 2>/dev/null)"
 export NOTE_BODY="$outstanding"
 export NOTE_PATH="$note"
 export PR_NUM="$pr_num"
+# SAY WHEN THE BRANCH WAS A GUESS. A bare `git push` names no refspec, so the branch came from this
+# directory's HEAD - and "You are pushing to astubbs/parallel-consumer#N" is then a claim the hook
+# cannot support. The reminder is still worth making; presenting it as a fact is not.
+if [ "$inferred_branch" = 1 ]; then
+    export BRANCH_CAVEAT="The command names no branch, so this was looked up for \`$branch\`, the current HEAD of $root. If you are pushing something else, ignore all of this and read that branch's own note. "
+else
+    export BRANCH_CAVEAT=""
+fi
 python3 -c '
 import json, os
 print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
     "additionalContext": (
+        os.environ["BRANCH_CAVEAT"] +
         "READINESS IS THE OPERATOR\u2019S CALL, NOT YOURS. Do not tell them this PR is ready, "
         "mergeable or good to go. `MERGEABLE/CLEAN` from gh is a GIT fact - it means no conflicts - "
         "and saying it in prose reaches them earlier than any guard can fire, because a hook can "

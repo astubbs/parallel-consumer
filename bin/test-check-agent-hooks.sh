@@ -1572,6 +1572,41 @@ out="$(push_fire 'npm push')"
 [ -z "$out" ] && got=silent || got=fired
 assert "a non-git binary does not fire" silent "$got"
 
+# WHICH BRANCH IT IS REMINDING ABOUT. Same defect as the history-rewrite guard's, in the hook whose
+# entire output is a claim about a named PR: `git push origin other-branch` from this directory used
+# to look up THIS branch's PR and quote its inflight note, opening with "You are pushing to
+# astubbs/parallel-consumer#N" - a flat statement about a branch the command does not touch. The stub
+# above answers 90003 whatever it is asked, so the observable is the argv, as it is for the sibling.
+push_log_stub="$(mktemp -d)"
+cat > "$push_log_stub/gh" <<GH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$push_log_stub/argv.log"
+echo 90003
+GH
+chmod +x "$push_log_stub/gh"
+push_fire_logged() { # <command> -> stdout of the hook
+    rm -f "$PUSH_TMPDIR"/pc-push-reminder-* 2>/dev/null
+    : > "$push_log_stub/argv.log"
+    printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$1" \
+        | PATH="$push_log_stub:$PATH" TMPDIR="$PUSH_TMPDIR" bash "$PUSH_HOOK" 2>/dev/null
+}
+push_head() { awk '{for (i = 1; i < NF; i++) if ($i == "--head") { print $(i+1); exit }}' "$push_log_stub/argv.log"; }
+
+push_fire_logged 'git push origin feats/somewhere-else' >/dev/null
+assert "the reminder looks up the branch the push names" feats/somewhere-else "$(push_head)"
+[ "$(push_head)" = "selftest/push-fixture" ] && got=the_pre_fix_answer || got=not_the_cwd_branch
+assert "and not the branch this directory is on" not_the_cwd_branch "$got"
+
+# A bare push has no refspec, so the directory is all there is - and the reminder must say the branch
+# was inferred rather than asserting it.
+out="$(push_fire_logged 'git push')"
+assert "a bare push falls back to this directory's branch" selftest/push-fixture "$(push_head)"
+case "$out" in *"names no branch"*) got=says_it_inferred ;; *) got=presented_as_fact ;; esac
+assert "and the reminder says the branch was inferred" says_it_inferred "$got"
+case "$out" in *'"deny"'*) got=blocked ;; *) got=advisory ;; esac
+assert "the caveat did not turn the reminder into a deny" advisory "$got"
+rm -rf "$push_log_stub"
+
 # THROTTLED, or a push loop repeats the whole note and teaches the reader to skip it.
 printf '{"tool_name":"Bash","tool_input":{"command":"git push"}}' | PATH="$push_stub:$PATH" TMPDIR="$PUSH_TMPDIR" bash "$PUSH_HOOK" >/dev/null 2>&1
 out="$(printf '{"tool_name":"Bash","tool_input":{"command":"git push"}}' | PATH="$push_stub:$PATH" TMPDIR="$PUSH_TMPDIR" bash "$PUSH_HOOK" 2>/dev/null)"
@@ -1831,6 +1866,99 @@ assert "a PR with nothing outstanding still states the risk" states_the_risk "$g
 hist_out="$(hist 'git push --force origin main')"
 case "$hist_out" in *"LAST step before a merge"*) got=explains ;; *) got=bare_refusal ;; esac
 assert "the refusal says when a rewrite IS allowed" explains "$got"
+
+# --- WHICH BRANCH THE REFUSAL IS ABOUT -------------------------------------------------------
+#
+# A hook does NOT run in the directory its guarded command runs in, and this repository keeps many
+# worktrees checked out at once - so `git rev-parse --abbrev-ref HEAD` in the hook process answers
+# about whichever branch the SESSION sits on. Twice on 2026-08-31 that made this hook's most
+# confident sentence describe an unrelated branch: a force-push of `feats/proxy-verdict-free-return`
+# (open PR astubbs/parallel-consumer#295, with review history) and a `git commit --amend` inside the
+# `feats/ks-streams-fork-machinery` worktree were both reported against
+# `docs/god-branch-decomposition-plan`, the plan worktree that session occupied.
+#
+# THE OBSERVABLE IS THE ARGV gh WAS HANDED, not the message - a lookup for the wrong branch succeeds
+# and reads exactly like a correct one, which is what let this run for as long as it did. Same
+# technique as case 3 of the lookup section below, for the same reason.
+#
+# EACH CASE ASSERTS BOTH HALVES: the branch asked about is the one the command names, AND it is not
+# the branch the working directory is on. The second half is the negative control - it is precisely
+# the pre-fix answer, so a fixture that stopped reaching the defect (both names collapsing to one)
+# fails rather than passing vacuously.
+hb_prev_cwd="$PWD"
+hb_cwd_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+hb_stub="$(mktemp -d)"
+cat > "$hb_stub/gh" <<GH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$hb_stub/argv.log"
+case "\$*" in
+    *"pr list"*)   echo 90007 ;;
+    *"/comments"*) echo 0 ;;
+    *"run list"*)  echo 0 ;;
+esac
+GH
+chmod +x "$hb_stub/gh"
+
+# A SECOND WORKTREE, standing in for the one the session is not sitting in. Hosted `origin` because
+# both the slug derivation and the refusal depend on it - see the push fixture's own note.
+hb_other="$(mktemp -d)"
+(
+  cd "$hb_other" || exit 1
+  git init -q .
+  git checkout -q -b selftest/other-worktree 2>/dev/null || git branch -q -m selftest/other-worktree
+  git remote add origin https://github.com/astubbs/parallel-consumer.git
+  : > .keep
+  git add .keep
+  git -c user.email=selftest@example.invalid -c user.name=selftest commit -qm "fixture"
+)
+
+hb_fire() { # <command> [payload-cwd] -> stdout of the hook
+    : > "$hb_stub/argv.log"
+    printf '{"tool_name":"Bash","cwd":"%s","tool_input":{"command":"%s"}}' "${2:-$PWD}" "$1" \
+        | PATH="$hb_stub:$PATH" bash "$HIST_HOOK" 2>/dev/null
+}
+# No pipeline: `grep -o ... | head -1` is the early-exiting-reader shape bin/AGENTS.md warns about,
+# and this suite runs under pipefail.
+hb_head() { awk '{for (i = 1; i < NF; i++) if ($i == "--head") { print $(i+1); exit }}' "$hb_stub/argv.log"; }
+
+hb_out="$(hb_fire 'git push --force origin feats/elsewhere')"
+assert "a force-push names the branch its refspec names" feats/elsewhere "$(hb_head)"
+[ "$(hb_head)" = "$hb_cwd_branch" ] && got=the_pre_fix_answer || got=not_the_cwd_branch
+assert "and not the branch this directory happens to be on" not_the_cwd_branch "$got"
+[ -n "$hb_out" ] && got=DENY || got=ALLOW
+assert "naming the branch from the command still REFUSES" DENY "$got"
+
+# THE PR HEAD IS THE DESTINATION of a `src:dst` refspec, not the source - `dst` is what a pull
+# request has as its head branch.
+hb_fire 'git push --force origin HEAD:feats/destination' >/dev/null
+assert "a src:dst refspec is read at its destination" feats/destination "$(hb_head)"
+hb_fire 'git push origin --delete doomed-branch' >/dev/null
+assert "a remote branch deletion names the branch being deleted" doomed-branch "$(hb_head)"
+
+# NO REFSPEC IS A REAL ANSWER: the working directory is all there is, and the refusal has to say so
+# rather than presenting a guess as a measurement.
+hb_out="$(hb_fire 'git push -f')"
+assert "a push with no refspec falls back to this directory" "$hb_cwd_branch" "$(hb_head)"
+case "$hb_out" in *"DOES NOT NAME A BRANCH"*) got=says_it_guessed ;; *) got=presented_as_fact ;; esac
+assert "and the refusal says the branch was not named by the command" says_it_guessed "$got"
+
+# THE AMEND CASE, which is the second half of the 2026-08-31 incident: a non-push rewrite has no
+# refspec to read, so the only improvement available is to look in the right DIRECTORY and to say
+# which one. A leading `cd <path> &&` is the command saying where it runs, and outranks everything.
+hb_fire "cd $hb_other && git commit --amend --no-edit" >/dev/null
+assert "an amend behind a cd prefix is looked up in THAT worktree" selftest/other-worktree "$(hb_head)"
+[ "$(hb_head)" = "$hb_cwd_branch" ] && got=the_pre_fix_answer || got=not_the_cwd_branch
+assert "and not in the directory the hook itself runs in" not_the_cwd_branch "$got"
+
+# ...and with no `cd`, the tool call's own `cwd` from the payload, which is the field the pre-fix
+# hook ignored entirely in favour of its own process directory.
+hb_out="$(hb_fire 'git commit --amend --no-edit' "$hb_other")"
+assert "an amend is looked up in the tool call's own directory" selftest/other-worktree "$(hb_head)"
+case "$hb_out" in *"$hb_other"*) got=names_the_directory ;; *) got=unattributed ;; esac
+assert "the refusal names the directory it derived the branch from" names_the_directory "$got"
+
+rm -rf "$hb_stub" "$hb_other"
+cd "$hb_prev_cwd" || exit 1
 echo
 echo "--- the PR lookup, in the three hooks that make one ---"
 
