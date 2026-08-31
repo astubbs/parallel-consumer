@@ -91,6 +91,27 @@ Recorded here because each is a candidate refinement of the thesis section this 
   merge-gate-shaped consequence: no new standalone demo codebase gets built when a stage of the
   progression could carry it.
 
+## The retrospective reframing that closed the weekend (2026-08-30, 7:23pm)
+
+The conversation's last move was to reread PC's existing machinery through the admission model
+([`core-admission-scheduling-model.md`](core-admission-scheduling-model.md)) - and every piece
+turns out to have been the scheduler's first implementation without knowing it: the sparse
+completion frontier is native unresolved-work semantics, not clever offset management; key
+ordering is the ordering-domain primitive; a shard is a virtual partition; the work queue is the
+beginning of the execution buffet; retry is durable causal position; adaptive concurrency is
+local admission control feeding a global resource model; and PC's *location* - between Kafka
+ownership and user execution - is the architecturally valuable asset. The story changes from "a
+clever faster Kafka consumer" to: **Parallel Consumer discovered that Kafka ownership and
+execution do not have to be the same thing; the rest follows that observation to its logical
+conclusion.** Which is also the moat statement - there is no longer one trick to copy; PC is the
+execution kernel beneath an architecture.
+
+And the Share Groups irony completes the granularity argument: Kafka itself now concedes that
+partition ownership is too coarse for some execution models (KIP-932) - but *record* is also
+sometimes the wrong scheduling granularity. **The ordering domain is the granularity that
+actually matters**, and this project is the only thing scheduling at it. (Candidate `CONCEPTS.md`
+vocabulary when this is adopted.)
+
 ## The specific gaps named in STRATEGY.md
 
 **Which copy, because it changes the list: the one on `research/market-analysis-recut`, not the one

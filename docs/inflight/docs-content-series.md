@@ -48,6 +48,8 @@ feature behind these):
   re-implements badly" line already in [`core-auto-scaling.md`](core-auto-scaling.md).
 - Broadest, candidate positioning rather than a post title: *Kafka tells us what work we own.
   Parallel Consumer figures out how to run it.*
+- The developer-facing pitch in one line (2026-08-30): *Tell it what your work needs. Don't
+  write code that waits for it* - the programming-model form of the admission model.
 - The category framing, sharpest of the lot: *the real competitor is manual concurrency
   management* - `maxConcurrency = 100` as this generation's manual memory management, expected to
   look as archaic as hand-sizing a web server's per-endpoint thread counts.
