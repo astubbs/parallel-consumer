@@ -7,6 +7,15 @@
 > the v1 proxy protocol is frozen but has never carried production traffic. Build it from this
 > checkout, read it, test it - do not depend on it. Tracking: astubbs#242.
 
+> **⚠️ NO RECORD HAS CROSSED THE WIRE ON THIS BRANCH, and this module has not spoken to a sidecar at
+> all.** The sidecar in `parallel-consumer-proxy` hosts no Parallel Consumer engine yet - it answers
+> every session `UNIMPLEMENTED` (astubbs/parallel-consumer#384) - and this module's toolchain lives
+> in a container with no JVM in it, so the against-a-real-sidecar handshake check the eight
+> host-toolchain clients carry has nowhere to run here. What is evidenced is this library's own logic,
+> run inside the build image, and the portability of what that image produced. The dispatch behaviour
+> described below is implemented and reviewed; it has never run against an engine. See
+> [`docs/inflight/test-conformance-cells-waiting-on-the-sidecar-engine.md`](../../docs/inflight/test-conformance-cells-waiting-on-the-sidecar-engine.md).
+
 ## What it is
 
 Key-ordered concurrent Kafka processing from Swift, with the Parallel Consumer engine running as a

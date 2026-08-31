@@ -7,6 +7,17 @@
 > the v1 proxy protocol is frozen but has never carried production traffic. Build it from this
 > checkout, read it, test it - do not depend on it. Tracking: astubbs#242.
 
+> **⚠️ NO RECORD HAS CROSSED THE WIRE ON THIS BRANCH, and that bounds every claim below.** The
+> sidecar in `parallel-consumer-proxy` hosts no Parallel Consumer engine yet: it binds, announces
+> its port, admits one connection under the transport's rules, and answers every session
+> `UNIMPLEMENTED` (astubbs/parallel-consumer#384). So what is *evidenced* here is the client half of
+> the session up to and including the handshake - against a real sidecar process, which is what the
+> handshake test spawns - plus this library's own logic over fixtures it writes itself. The dispatch
+> behaviour described below is implemented and reviewed; it has never run against an engine. The
+> shared conformance suite is where that will be settled, and its cell for this language is deferred
+> until the engine lands - see
+> [`docs/inflight/test-conformance-cells-waiting-on-the-sidecar-engine.md`](../../docs/inflight/test-conformance-cells-waiting-on-the-sidecar-engine.md).
+
 A Kotlin client for the Parallel Consumer language proxy: key-ordered concurrent Kafka processing
 from Kotlin, with the Java engine running as a sidecar child process and your function running as an
 ordinary **suspending lambda**. The session itself is the shared
@@ -85,12 +96,12 @@ and nothing to install beyond the repo's own JDK 17.
 # compile and run the unit tests (no sidecar involved)
 bin/build.sh -pl :parallel-consumer-proxy-client-kotlin -am
 
-# the end-to-end test against the REAL sidecar; -Dpc.foreignClients is what supplies
+# the handshake test against the REAL sidecar; -Dpc.foreignClients is what supplies
 # the harness classpath (see the kotlin-sidecar-harness profile in pom.xml)
 ./mvnw --batch-mode test -pl :parallel-consumer-proxy-client-kotlin -am -Dpc.foreignClients
 ```
 
-The end-to-end test spawns `Main` as an ordinary child process, so it exercises the
+The handshake test spawns `Main` as an ordinary child process, so it exercises the
 whole lifecycle contract - launch, port line, loopback connect, handshake, dispatch, report,
 half-close, reap - rather than an in-process shortcut. It **fails** rather than skips when its
 classpath file is missing, and names the command that produces it.
@@ -112,7 +123,7 @@ with its reason rather than a config file quietly disabling the rule everywhere.
 
 Wave one of the Kotlin client (astubbs#242): connect, `Configure`, dispatch waves, the user's
 function, per-record reports with the token echoed verbatim, records produced back on success, and a
-clean client-initiated shutdown - proven end to end against the sidecar.
+clean client-initiated shutdown. How far that has been demonstrated is the note at the top.
 
 This client declares exactly the `dispatch` capability, so the proxy expects nothing of it that it
 does not do. **Un-negotiated rather than half-built**, and not implemented here: the liveness lease

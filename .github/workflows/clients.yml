@@ -17,10 +17,12 @@
 # itself, absence means the setup step did not do what it claimed, and a green skip would be
 # docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md again.
 #
-# WHAT THIS WORKFLOW DELIBERATELY DOES NOT DO YET: no protoc provisioning, no conformance suite, no
-# per-language static analysis, no per-language dependency audit. All four exist on
-# astubbs/parallel-consumer#293 and all four are about content this rung does not ship. They arrive
-# with the rungs that add what they check.
+# WHAT THIS WORKFLOW DELIBERATELY DOES NOT DO YET: no conformance lane, no per-language static
+# analysis, no per-language dependency audit. All three exist on astubbs/parallel-consumer#293. The
+# conformance lane has nothing to run - driving a client's runner needs an engine behind the sidecar
+# and there is none - and the analysis and audit lanes are their own extraction, tracked in
+# docs/inflight/static-polyglot-client-analysers.md. Each module's own build already gates on what
+# its language treats as a compile error, which for .NET, Rust, Swift and Scala is most of it.
 #
 # Caching: the same discipline as maven.yml - explicit restore with a rotating save key, never a
 # setup action's built-in `cache:`, whose immutable keys can freeze an incomplete cache
@@ -93,22 +95,27 @@ jobs:
             module: parallel-consumer-proxy-client-dotnet
             runner: ubuntu-latest
             toolchain: '9.0.x'
-          # The runner image's own compilers. There is no version to pin and nothing to install:
-          # the module compiles one translation unit with `c++`, which every ubuntu image has.
+          # C++ AND SWIFT BUILD IN CONTAINERS, AND BOTH ROWS THEREFORE PIN AN IMAGE RATHER THAN A
+          # TOOLCHAIN. Each module carries a multi-stage Dockerfile whose FROM line is the pin, and
+          # bin/build-client.sh drives BuildKit and exports the artifact stage; the image also runs
+          # the module's own tests and its static analysis, so a red one fails the row. Neither
+          # language can be served from the host: gRPC and protobuf reach C++ as system DEV
+          # PACKAGES rather than as a versioned toolchain, and Swift.org publishes no toolchain in
+          # the ubuntu images. `toolchain` is therefore empty and `docker` is what the probe below
+          # checks.
+          #
+          # SWIFT MOVED OFF macos-latest WITH THE REAL CLIENT. While the module printed one line it
+          # needed a compiler and nothing else, and the macOS image's bundled Swift was the cheapest
+          # answer; the real client needs grpc-swift, swift-protobuf and two protoc plugins built
+          # from source, which is what the image already assembles and caches. A macOS row would
+          # have to reproduce all of it outside a container.
           - language: cpp
             module: parallel-consumer-proxy-client-cpp
             runner: ubuntu-latest
             toolchain: ''
-          # SWIFT RUNS ON macOS, AND THAT IS THE CHEAPEST HONEST OPTION. Swift.org publishes no
-          # toolchain in the ubuntu images, so a Linux row needs either a third-party setup action
-          # or a container - and astubbs/parallel-consumer#293 takes the container route precisely
-          # because its C++ and Swift clients need gRPC and protobuf development packages. This
-          # module needs a compiler and nothing else, so the macOS image's bundled Swift answers
-          # the whole question with no extra moving part. Revisit when the real Swift client
-          # arrives and brings its own dependency needs.
           - language: swift
             module: parallel-consumer-proxy-client-swift
-            runner: macos-latest
+            runner: ubuntu-latest
             toolchain: ''
 
     steps:
@@ -158,6 +165,21 @@ jobs:
           rustup toolchain install ${{ matrix.toolchain }} --profile minimal
           rustup default ${{ matrix.toolchain }}
 
+      # protoc, for the ONE row whose build runs it on the runner. That is a smaller set than
+      # "generates from the schema": Go, Ruby and TypeScript commit their stubs, .NET's Grpc.Tools
+      # package ships its own protoc, and C++ and Swift generate inside their images. Rust's
+      # build.rs runs prost/tonic codegen on every `cargo build`, so without this the row fails in
+      # the build, the test and the analysis step identically.
+      #
+      # apt rather than a setup action: the well-known types have to come from the same
+      # distribution as the binary, and the distro package puts them where protoc looks by itself.
+      - name: Install protoc (rust generates from the frozen schema on every build)
+        if: matrix.language == 'rust'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends protobuf-compiler
+          protoc --version
+
       # Prove the toolchain is where the strict guard will look for it. A setup action that
       # silently no-ops leaves a row whose only symptom is a red build several steps later blaming
       # the module, so the row says what it installed before it uses it.
@@ -170,16 +192,17 @@ jobs:
             rust)       cargo --version ;;
             ruby)       ruby --version ;;
             dotnet)     dotnet --version ;;
-            cpp)        c++ --version ;;
-            swift)      swift --version ;;
+            # Both container rows: what has to be present is Docker, not a language toolchain.
+            cpp | swift) docker --version && docker buildx version ;;
             *)          echo "::error::no toolchain probe for ${{ matrix.language }} - add one when you add the row"; exit 1 ;;
           esac
 
       # -Dpc.foreignClients puts this module in the reactor at all; the compile phase runs its
-      # native build and the test phase runs its program and asserts the fixture line. --fail-at-end
-      # for the reason the reactor lanes in bin/ci-*.sh carry it: one run, as much breakage as it
-      # can find.
-      - name: Build and run the hello fixture (${{ matrix.module }})
+      # native build and the test phase runs its own suite - which for eight of the ten includes a
+      # handshake against a real sidecar process this reactor has just built, so `-am` is what makes
+      # parallel-consumer-proxy exist for it to spawn. --fail-at-end for the reason the reactor lanes
+      # in bin/ci-*.sh carry it: one run, as much breakage as it can find.
+      - name: Build and test (${{ matrix.module }})
         run: >-
           ./mvnw --batch-mode -Pci --fail-at-end package
           -pl :${{ matrix.module }} -am -Dpc.foreignClients

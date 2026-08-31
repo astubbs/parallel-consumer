@@ -7,13 +7,24 @@
 > the v1 proxy protocol is frozen but has never carried production traffic. Build it from this
 > checkout, read it, test it - do not depend on it. Tracking: astubbs#242.
 
+> **⚠️ NO RECORD HAS CROSSED THE WIRE ON THIS BRANCH, and that bounds every claim below.** The
+> sidecar in `parallel-consumer-proxy` hosts no Parallel Consumer engine yet: it binds, announces
+> its port, admits one connection under the transport's rules, and answers every session
+> `UNIMPLEMENTED` (astubbs/parallel-consumer#384). So what is *evidenced* here is the client half of
+> the session up to and including the handshake - against a real sidecar process, which is what the
+> handshake test spawns - plus this library's own logic over fixtures it writes itself. The dispatch
+> behaviour described below is implemented and reviewed; it has never run against an engine. The
+> shared conformance suite is where that will be settled, and its cell for this language is deferred
+> until the engine lands - see
+> [`docs/inflight/test-conformance-cells-waiting-on-the-sidecar-engine.md`](../../docs/inflight/test-conformance-cells-waiting-on-the-sidecar-engine.md).
+
 Key-ordered concurrent Kafka consumption from Node, without raising partition counts. The
 application's records are processed by a function it supplies; Kafka itself is owned by a sidecar
 proxy process running the Java engine, which this library speaks to over one gRPC stream.
 
 **Wave one.** Connect, `Configure`, receive a `Dispatch` wave, run the user's function, report the
-outcome with the token echoed verbatim, produce records back on success, shut down cleanly - proven
-end to end against the real sidecar. Not implemented, and **un-negotiated rather than
+outcome with the token echoed verbatim, produce records back on success, shut down cleanly. How far
+that has been demonstrated on this branch is the note above. Not implemented, and **un-negotiated rather than
 half-built**: leases and heartbeats, the manifest reconnect, worker-death reporting, terminal
 outcomes, the `Shutdown` drain, the demo, and npm publishing. This client declares
 `capabilities: ["dispatch"]`, so the proxy grants it nothing it does not perform.
@@ -71,12 +82,13 @@ and the executors are separate async loops.
 
 ## Building, testing, and the local gate
 
-Requires Node 20.11+ (CI pins 22.17.0) and, for the end-to-end test, a JDK 17.
+Requires Node 20.11+ (CI pins the version in the clients workflow) and, for the handshake test, a
+JDK 17.
 
 ```bash
 npm ci                # dependencies, from the committed lockfile
 npm run check         # THE LOCAL GATE: tsc --build (strict) then type-aware eslint
-npm test              # the suite; the end-to-end test needs the sidecar classpath below
+npm test              # the suite; the handshake test needs the sidecar classpath below
 npm run proto         # regenerate src/generated/ from the frozen proxy.proto
 npm run proto:check   # ...and fail if the committed stubs have drifted
 npm run clean         # remove dist/ - every emitted file
@@ -129,11 +141,11 @@ the `foreign-clients` profile in the clients aggregator ([`../pom.xml`](../pom.x
   clean lifecycle never reaching `validate` where the enforcer is bound.
 - **`-P foreign-clients` is not a synonym for `-Dpc.foreignClients` here.** It activates the module,
   but the `typescript-sidecar-harness` profile below activates on the *property*, so under `-P` the
-  classpath file is never written and the end-to-end test fails looking for it. That has its uses:
+  classpath file is never written and the handshake test fails looking for it. That has its uses:
   `-P` leaves the engine out of the reactor - three modules instead of six, and no JDK 17 needed -
   which makes it the quicker loop when all you want is `tsc`.
 
-### The end-to-end test needs the proxy module built
+### The handshake test needs the proxy module built
 
 The test spawns the real sidecar (`Main`, the proxy module's production entry point), so
 it needs that jar and its classpath. This module deliberately has **no** Maven dependency on the

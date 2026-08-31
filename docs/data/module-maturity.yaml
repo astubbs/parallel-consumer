@@ -144,6 +144,216 @@ modules:
       You are writing or reviewing a proxy client. This is the reference surface the other languages
       mirror, and parallel-consumer-proxy-protocol/docs/client-authoring-guide.md is what to read
       beside it.
+  - artifact: parallel-consumer-proxy-client-kotlin
+    maturity: alpha
+    reliability_confidence: >-
+      A dispatch-only client, and the "only" is a negotiated fact rather than a caveat: it declares
+      the `dispatch` capability and no other, so an engine that already supports leases, heartbeats,
+      reconnect and a shutdown drain will not use any of them with this client. Kotlin shape: a JVM module in the ordinary reactor; a coroutine per record over the Java gRPC transport.
+      What is evidenced is the client half of the session up to and including the handshake, against
+      a real sidecar where this language can reach one, plus the library's own logic over fixtures.
+    api_expectation: >-
+      Pre-1.0 and expected to change. It mirrors the Java reference surface
+      (parallel-consumer-proxy-client-java), and that surface is what moves first; nothing here is a
+      compatibility promise in Kotlin's own idiom.
+    support_posture: >-
+      Experimental. Published to no package registry - the whole clients tree skips deploy and
+      install - so the only way to use it is from this checkout.
+    evidence_id: proxy-client-kotlin
+    tracking: astubbs#242
+    use_this_if: >-
+      You are writing or reviewing a Kotlin client for the proxy sidecar. Read
+      parallel-consumer-proxy-protocol/docs/client-authoring-guide.md beside it; this module is that
+      guide carried out.
+  - artifact: parallel-consumer-proxy-client-scala
+    maturity: alpha
+    reliability_confidence: >-
+      A dispatch-only client, and the "only" is a negotiated fact rather than a caveat: it declares
+      the `dispatch` capability and no other, so an engine that already supports leases, heartbeats,
+      reconnect and a shutdown drain will not use any of them with this client. Scala shape: a JVM module in the ordinary reactor; a Future-returning surface over the Java gRPC transport.
+      What is evidenced is the client half of the session up to and including the handshake, against
+      a real sidecar where this language can reach one, plus the library's own logic over fixtures.
+    api_expectation: >-
+      Pre-1.0 and expected to change. It mirrors the Java reference surface
+      (parallel-consumer-proxy-client-java), and that surface is what moves first; nothing here is a
+      compatibility promise in Scala's own idiom.
+    support_posture: >-
+      Experimental. Published to no package registry - the whole clients tree skips deploy and
+      install - so the only way to use it is from this checkout.
+    evidence_id: proxy-client-scala
+    tracking: astubbs#242
+    use_this_if: >-
+      You are writing or reviewing a Scala client for the proxy sidecar. Read
+      parallel-consumer-proxy-protocol/docs/client-authoring-guide.md beside it; this module is that
+      guide carried out.
+  - artifact: parallel-consumer-proxy-client-go
+    maturity: alpha
+    reliability_confidence: >-
+      A dispatch-only client, and the "only" is a negotiated fact rather than a caveat: it declares
+      the `dispatch` capability and no other, so an engine that already supports leases, heartbeats,
+      reconnect and a shutdown drain will not use any of them with this client. Go shape: goroutines, its own generated stubs, committed rather than generated at build time.
+      What is evidenced is the client half of the session up to and including the handshake, against
+      a real sidecar where this language can reach one, plus the library's own logic over fixtures.
+    api_expectation: >-
+      Pre-1.0 and expected to change. It mirrors the Java reference surface
+      (parallel-consumer-proxy-client-java), and that surface is what moves first; nothing here is a
+      compatibility promise in Go's own idiom.
+    support_posture: >-
+      Experimental. Published to no package registry - the whole clients tree skips deploy and
+      install - so the only way to use it is from this checkout.
+    evidence_id: proxy-client-go
+    tracking: astubbs#242
+    use_this_if: >-
+      You are writing or reviewing a Go client for the proxy sidecar. Read
+      parallel-consumer-proxy-protocol/docs/client-authoring-guide.md beside it; this module is that
+      guide carried out.
+  - artifact: parallel-consumer-proxy-client-python
+    maturity: alpha
+    reliability_confidence: >-
+      A dispatch-only client, and the "only" is a negotiated fact rather than a caveat: it declares
+      the `dispatch` capability and no other, so an engine that already supports leases, heartbeats,
+      reconnect and a shutdown drain will not use any of them with this client. Python shape: worker PROCESSES forked before any channel exists, because gRPC Core does not survive a fork.
+      What is evidenced is the client half of the session up to and including the handshake, against
+      a real sidecar where this language can reach one, plus the library's own logic over fixtures.
+    api_expectation: >-
+      Pre-1.0 and expected to change. It mirrors the Java reference surface
+      (parallel-consumer-proxy-client-java), and that surface is what moves first; nothing here is a
+      compatibility promise in Python's own idiom.
+    support_posture: >-
+      Experimental. Published to no package registry - the whole clients tree skips deploy and
+      install - so the only way to use it is from this checkout.
+    evidence_id: proxy-client-python
+    tracking: astubbs#242
+    use_this_if: >-
+      You are writing or reviewing a Python client for the proxy sidecar. Read
+      parallel-consumer-proxy-protocol/docs/client-authoring-guide.md beside it; this module is that
+      guide carried out.
+  - artifact: parallel-consumer-proxy-client-typescript
+    maturity: alpha
+    reliability_confidence: >-
+      A dispatch-only client, and the "only" is a negotiated fact rather than a caveat: it declares
+      the `dispatch` capability and no other, so an engine that already supports leases, heartbeats,
+      reconnect and a shutdown drain will not use any of them with this client. TypeScript shape: one event loop, its stubs committed and its build type-checked with tsc.
+      What is evidenced is the client half of the session up to and including the handshake, against
+      a real sidecar where this language can reach one, plus the library's own logic over fixtures.
+    api_expectation: >-
+      Pre-1.0 and expected to change. It mirrors the Java reference surface
+      (parallel-consumer-proxy-client-java), and that surface is what moves first; nothing here is a
+      compatibility promise in TypeScript's own idiom.
+    support_posture: >-
+      Experimental. Published to no package registry - the whole clients tree skips deploy and
+      install - so the only way to use it is from this checkout.
+    evidence_id: proxy-client-typescript
+    tracking: astubbs#242
+    use_this_if: >-
+      You are writing or reviewing a TypeScript client for the proxy sidecar. Read
+      parallel-consumer-proxy-protocol/docs/client-authoring-guide.md beside it; this module is that
+      guide carried out.
+  - artifact: parallel-consumer-proxy-client-rust
+    maturity: alpha
+    reliability_confidence: >-
+      A dispatch-only client, and the "only" is a negotiated fact rather than a caveat: it declares
+      the `dispatch` capability and no other, so an engine that already supports leases, heartbeats,
+      reconnect and a shutdown drain will not use any of them with this client. Rust shape: tokio tasks, with the stubs generated from the frozen schema on every build.
+      What is evidenced is the client half of the session up to and including the handshake, against
+      a real sidecar where this language can reach one, plus the library's own logic over fixtures.
+    api_expectation: >-
+      Pre-1.0 and expected to change. It mirrors the Java reference surface
+      (parallel-consumer-proxy-client-java), and that surface is what moves first; nothing here is a
+      compatibility promise in Rust's own idiom.
+    support_posture: >-
+      Experimental. Published to no package registry - the whole clients tree skips deploy and
+      install - so the only way to use it is from this checkout.
+    evidence_id: proxy-client-rust
+    tracking: astubbs#242
+    use_this_if: >-
+      You are writing or reviewing a Rust client for the proxy sidecar. Read
+      parallel-consumer-proxy-protocol/docs/client-authoring-guide.md beside it; this module is that
+      guide carried out.
+  - artifact: parallel-consumer-proxy-client-ruby
+    maturity: alpha
+    reliability_confidence: >-
+      A dispatch-only client, and the "only" is a negotiated fact rather than a caveat: it declares
+      the `dispatch` capability and no other, so an engine that already supports leases, heartbeats,
+      reconnect and a shutdown drain will not use any of them with this client. Ruby shape: threads, with the stubs committed and the surface checked by rubocop's lint and security cops.
+      What is evidenced is the client half of the session up to and including the handshake, against
+      a real sidecar where this language can reach one, plus the library's own logic over fixtures.
+    api_expectation: >-
+      Pre-1.0 and expected to change. It mirrors the Java reference surface
+      (parallel-consumer-proxy-client-java), and that surface is what moves first; nothing here is a
+      compatibility promise in Ruby's own idiom.
+    support_posture: >-
+      Experimental. Published to no package registry - the whole clients tree skips deploy and
+      install - so the only way to use it is from this checkout.
+    evidence_id: proxy-client-ruby
+    tracking: astubbs#242
+    use_this_if: >-
+      You are writing or reviewing a Ruby client for the proxy sidecar. Read
+      parallel-consumer-proxy-protocol/docs/client-authoring-guide.md beside it; this module is that
+      guide carried out.
+  - artifact: parallel-consumer-proxy-client-dotnet
+    maturity: alpha
+    reliability_confidence: >-
+      A dispatch-only client, and the "only" is a negotiated fact rather than a caveat: it declares
+      the `dispatch` capability and no other, so an engine that already supports leases, heartbeats,
+      reconnect and a shutdown drain will not use any of them with this client. .NET shape: async tasks, with Roslyn analyzers as the gate and warnings as errors.
+      What is evidenced is the client half of the session up to and including the handshake, against
+      a real sidecar where this language can reach one, plus the library's own logic over fixtures.
+    api_expectation: >-
+      Pre-1.0 and expected to change. It mirrors the Java reference surface
+      (parallel-consumer-proxy-client-java), and that surface is what moves first; nothing here is a
+      compatibility promise in .NET's own idiom.
+    support_posture: >-
+      Experimental. Published to no package registry - the whole clients tree skips deploy and
+      install - so the only way to use it is from this checkout.
+    evidence_id: proxy-client-dotnet
+    tracking: astubbs#242
+    use_this_if: >-
+      You are writing or reviewing a .NET client for the proxy sidecar. Read
+      parallel-consumer-proxy-protocol/docs/client-authoring-guide.md beside it; this module is that
+      guide carried out.
+  - artifact: parallel-consumer-proxy-client-cpp
+    maturity: alpha
+    reliability_confidence: >-
+      A dispatch-only client, and the "only" is a negotiated fact rather than a caveat: it declares
+      the `dispatch` capability and no other, so an engine that already supports leases, heartbeats,
+      reconnect and a shutdown drain will not use any of them with this client. C++ shape: a thread pool, built and tested inside a container because gRPC arrives as system dev packages.
+      What is evidenced is the client half of the session up to and including the handshake, against
+      a real sidecar where this language can reach one, plus the library's own logic over fixtures.
+    api_expectation: >-
+      Pre-1.0 and expected to change. It mirrors the Java reference surface
+      (parallel-consumer-proxy-client-java), and that surface is what moves first; nothing here is a
+      compatibility promise in C++'s own idiom.
+    support_posture: >-
+      Experimental. Published to no package registry - the whole clients tree skips deploy and
+      install - so the only way to use it is from this checkout.
+    evidence_id: proxy-client-cpp
+    tracking: astubbs#242
+    use_this_if: >-
+      You are writing or reviewing a C++ client for the proxy sidecar. Read
+      parallel-consumer-proxy-protocol/docs/client-authoring-guide.md beside it; this module is that
+      guide carried out.
+  - artifact: parallel-consumer-proxy-client-swift
+    maturity: alpha
+    reliability_confidence: >-
+      A dispatch-only client, and the "only" is a negotiated fact rather than a caveat: it declares
+      the `dispatch` capability and no other, so an engine that already supports leases, heartbeats,
+      reconnect and a shutdown drain will not use any of them with this client. Swift shape: structured concurrency under Swift 6 strict checking, built and tested inside a container.
+      What is evidenced is the client half of the session up to and including the handshake, against
+      a real sidecar where this language can reach one, plus the library's own logic over fixtures.
+    api_expectation: >-
+      Pre-1.0 and expected to change. It mirrors the Java reference surface
+      (parallel-consumer-proxy-client-java), and that surface is what moves first; nothing here is a
+      compatibility promise in Swift's own idiom.
+    support_posture: >-
+      Experimental. Published to no package registry - the whole clients tree skips deploy and
+      install - so the only way to use it is from this checkout.
+    evidence_id: proxy-client-swift
+    tracking: astubbs#242
+    use_this_if: >-
+      You are writing or reviewing a Swift client for the proxy sidecar. Read
+      parallel-consumer-proxy-protocol/docs/client-authoring-guide.md beside it; this module is that
+      guide carried out.
   - artifact: parallel-consumer-proxy-conformance
     maturity: alpha
     minimum_java: 17

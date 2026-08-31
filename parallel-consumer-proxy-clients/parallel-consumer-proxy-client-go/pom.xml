@@ -34,13 +34,28 @@
 
         The Go test still fails rather than skipping when the sidecar is absent, because a test that
         quietly does not run is not a passing test.
+
+        TWO FLAGS ON THE TEST COMMAND, AND NEITHER IS DECORATION.
+
+        -count=1 DEFEATS GO'S TEST CACHE, and it is here because the cache produced a false pass that
+        was caught by accident. `go test` caches a package's result keyed on its own inputs, and the
+        sidecar this module spawns is not one of them - so breaking the sidecar's refusal on purpose,
+        to prove the handshake test could fail, returned `ok (cached)` and the arm read as green.
+        A CI row is a fresh checkout and never sees it; a developer changing the engine and re-running
+        the Go client does, silently, which is the worse half.
+
+        -race is the Go client's own concurrency check, and it is the cheapest real win available on
+        the whole polyglot surface: this is the client with the executor fan-out, the detector is
+        built into the toolchain, and it costs one flag.
+        docs/inflight/static-polyglot-client-analysers.md ranked it first of five and recorded that
+        the gating recipe did not use it while a per-language note claimed it did.
     -->
     <properties>
         <pc.foreign.skip>false</pc.foreign.skip>
         <pc.foreign.build.executable>bash</pc.foreign.build.executable>
         <pc.foreign.build.args>${pc.foreign.step} --tool go -- go build ./...</pc.foreign.build.args>
         <pc.foreign.test.executable>bash</pc.foreign.test.executable>
-        <pc.foreign.test.args>${pc.foreign.step} --tool go -- go test ./...</pc.foreign.test.args>
+        <pc.foreign.test.args>${pc.foreign.step} --tool go -- go test -race -count=1 ./...</pc.foreign.test.args>
     </properties>
 
     <profiles>

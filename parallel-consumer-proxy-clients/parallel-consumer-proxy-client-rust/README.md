@@ -7,6 +7,17 @@
 > the v1 proxy protocol is frozen but has never carried production traffic. Build it from this
 > checkout, read it, test it - do not depend on it. Tracking: astubbs#242.
 
+> **⚠️ NO RECORD HAS CROSSED THE WIRE ON THIS BRANCH, and that bounds every claim below.** The
+> sidecar in `parallel-consumer-proxy` hosts no Parallel Consumer engine yet: it binds, announces
+> its port, admits one connection under the transport's rules, and answers every session
+> `UNIMPLEMENTED` (astubbs/parallel-consumer#384). So what is *evidenced* here is the client half of
+> the session up to and including the handshake - against a real sidecar process, which is what the
+> handshake test spawns - plus this library's own logic over fixtures it writes itself. The dispatch
+> behaviour described below is implemented and reviewed; it has never run against an engine. The
+> shared conformance suite is where that will be settled, and its cell for this language is deferred
+> until the engine lands - see
+> [`docs/inflight/test-conformance-cells-waiting-on-the-sidecar-engine.md`](../../docs/inflight/test-conformance-cells-waiting-on-the-sidecar-engine.md).
+
 Key-ordered concurrent Kafka processing from Rust, with the Parallel Consumer engine running as a
 sidecar process. The crate speaks the frozen v1 proxy protocol
 ([`protocol-specification.md`](../../parallel-consumer-proxy/docs/protocol-specification.md),
@@ -128,7 +139,7 @@ than being rescued by a spare core:
 | `src/options.rs` | `ClientOptions` and the capability tokens; its `Debug` redacts `kafka_properties` |
 | `src/outcome.rs` | The processor trait, `Outcome`, and `ProcessingError` - the no-exceptions answer |
 | `src/sidecar.rs` | The child process and the lifecycle pipe that reaps it |
-| `tests/session.rs` | The one-record conformance scenario, end to end against the sidecar |
+| `tests/handshake.rs` | The handshake against a real sidecar process, and its control arm |
 | `tests/harness/mod.rs` | Locating and spawning the JVM-side sidecar |
 
 Findings, divergences and what wave two owes are in

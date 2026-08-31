@@ -7,14 +7,26 @@
 > the v1 proxy protocol is frozen but has never carried production traffic. Build it from this
 > checkout, read it, test it - do not depend on it. Tracking: astubbs#242.
 
+> **⚠️ NO RECORD HAS CROSSED THE WIRE ON THIS BRANCH, and that bounds every claim below.** The
+> sidecar in `parallel-consumer-proxy` hosts no Parallel Consumer engine yet: it binds, announces
+> its port, admits one connection under the transport's rules, and answers every session
+> `UNIMPLEMENTED` (astubbs/parallel-consumer#384). So what is *evidenced* here is the client half of
+> the session up to and including the handshake - against a real sidecar process, which is what the
+> handshake test spawns - plus this library's own logic over fixtures it writes itself. The dispatch
+> behaviour described below is implemented and reviewed; it has never run against an engine. The
+> shared conformance suite is where that will be settled, and its cell for this language is deferred
+> until the engine lands - see
+> [`docs/inflight/test-conformance-cells-waiting-on-the-sidecar-engine.md`](../../docs/inflight/test-conformance-cells-waiting-on-the-sidecar-engine.md).
+
 Ordered concurrent Kafka consumption from a single consumer - by key or by partition - with the
 user's function running in **worker processes**, so the GIL is not the ceiling. Kafka itself is
 spoken by a sidecar proxy process this library starts and owns; nothing in the application process
 holds a broker connection.
 
 This is the flagship non-JVM client of the language-proxy work (astubbs#242). It is **wave one**:
-the vertical slice below works end to end against the real protocol, and the sections marked *not
-yet* are the following waves' - each is additive, and none of them changes what is here.
+the vertical slice below is written against the real protocol, and the sections marked *not yet*
+are the following waves' - each is additive, and none of them changes what is here. How far that
+slice has been *demonstrated* on this branch is the note above.
 
 ## What works today
 
@@ -96,7 +108,7 @@ each wave adds its token alongside its duty.
 
 ```bash
 make build        # install into .venv, then parse every source file - what Maven's compile runs
-make test         # the suite, including the end-to-end test against the real sidecar
+make test         # the suite, including the handshake against a real sidecar process
 make lint         # ruff - the same check CI runs
 make proto        # regenerate the stubs from the frozen proxy.proto
 make proto-check  # regenerate and fail if the committed stubs have drifted
