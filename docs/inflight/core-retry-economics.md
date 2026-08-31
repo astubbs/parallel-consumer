@@ -11,7 +11,11 @@ already keeps:
   100,000 units of progress identically. PC knows the difference: same-key records queued behind
   it, whether it holds the commit frontier, how much completed work sits beyond it. Recommend (or
   policy-drive) quarantine/DLQ by the *economic cost of continuing to retry*, not the attempt
-  count. Waits on the DLQ direction (astubbs#149 requirements, astubbs#8 draft); until an action
+  count - **balanced, per the GitHub Codex review, 2026-08-31, against the cost of ABANDONMENT: the record
+  blocking 100,000 successors is often the one they all causally depend on, so ranking by blast
+  radius alone pushes the most important records toward terminal loss. The policy compares
+  retry/recovery cost against abandonment cost, and defaults to escalation (a human decision)
+  when the abandonment cost is unknown.** Waits on the DLQ direction (astubbs#149 requirements, astubbs#8 draft); until an action
   exists this ships as the recommendation panel in [`web-control-plane.md`](web-control-plane.md).
 - **Retry amplification.** Input 20k records/s, handler invocations 31.4k/s: amplification 1.57x -
   per function, so `customer API 3.71x` stands out against four healthy siblings. Distinguishes

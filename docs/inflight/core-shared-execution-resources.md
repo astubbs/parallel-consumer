@@ -219,8 +219,11 @@ should start from rather than invent
   intersect (a partial order), not globally. A single-partition Kafka topic is a gloriously
   boring durable sequencer, used **only** for conjunctive multi-resource claims; single-resource
   work never needs a global order. With a common claim sequence, every resource queue sorts
-  identically and A-before-B holds everywhere they conflict: multi-lock admission without
-  distributed negotiation.
+  identically and A-before-B holds everywhere they conflict - deadlock-free ORDERING without
+  negotiation, which (per the GitHub Codex review, 2026-08-31) is not the whole protocol: atomically reserving
+  capacity across separately owned resources, and deciding release-vs-commit after an owner
+  fails, still needs a grant/commit/fencing exchange. The sequence removes the ordering
+  negotiation, not the agreement protocol.
 - **C/D-RAS** (conjunctive resource allocation) for the safety/liveness mathematics; **advance
   reservation / co-allocation** (grid) for the Capacity Horizon; **DRF** for multi-resource
   fairness. Separation of concerns: preclaiming gives safety, DRF gives fairness, the objective

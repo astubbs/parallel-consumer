@@ -62,6 +62,12 @@ because the resulting state lives inside the execution fabric - queryable, actor
 lineage-participating, observed beside the work that updates it.
 
 Also swept in from the handoff's cron section: **backfill and bounded replay through the same
-runtime** - select a topic/range/key/time/version scope, make the resulting work *eligible*, and
-the normal scheduler executes it under production QoS and resource constraints
-([`core-scheduled-intent.md`](core-scheduled-intent.md) owns the eligibility half).
+runtime** - select a topic/range/key/time/version scope and let the normal scheduler execute the
+resulting work under production QoS and resource constraints. Corrected by the GitHub Codex review, 2026-08-31:
+records below the committed frontier cannot be re-delivered by an eligibility change - replay
+needs its own *acquisition* (a separate position/group), stable replay identities, and an
+explicit duplicate-effect boundary; seeking the live group backward would disturb commits and
+mix replay with current work. Acquisition is distinct from eligibility
+([`core-work-identity-model.md`](core-work-identity-model.md)'s replay-as-new-incarnation is the
+identity model for it; [`core-scheduled-intent.md`](core-scheduled-intent.md) owns the
+eligibility half).

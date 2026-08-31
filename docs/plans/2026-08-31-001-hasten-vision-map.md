@@ -211,7 +211,8 @@ named here for the first time). Consult this before expanding any track.
   declared-vs-observed feedback loop in
   [`core-prescience-and-spice.md`](../inflight/core-prescience-and-spice.md)), keep a safe
   opaque-work lane for undeclared handlers, and treat control metadata as an authorization
-  surface, not trusted input.
+  surface, not trusted input - with ownership/version authorization on contract IDs, validated
+  parameter binding, and fail-closed defaults (GitHub Codex review, 2026-08-31).
 - **The two hard-mode features, ring-fenced by the owner's ruling (2026-08-31).** The review's
   two deepest findings - hard global rate ceilings (lease fencing against external services) and
   frontier-based cutover (scalar F vs sparse execution) - may be unachievable as originally

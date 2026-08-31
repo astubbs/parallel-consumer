@@ -42,7 +42,12 @@ the remedy ladder that mostly avoids repartitioning.
   from "partitions bind" to "here is the layout that would not".
 - **Virtual records** (handoff §44): a logical record over one or more physical records -
   transparent large-message chunking where an incomplete logical record is simply *ineligible*,
-  and ordering, lineage, DLQ semantics and Why Wait all operate on the logical identity. The full
+  and ordering, lineage, DLQ semantics and Why Wait all operate on the logical identity. The
+  GitHub Codex review, 2026-08-31 added the recovery gap: ineligibility does not resolve a producer that crashed
+  mid-chunk - orphan chunks can pin the frontier forever, and retention can drop an early chunk
+  before a late one arrives - so chunking needs atomic same-partition publication or a manifest
+  with timeout, integrity check and a durable terminal disposition for abandoned assemblies
+  (EXPIRED/ABANDONED per [`core-work-identity-model.md`](core-work-identity-model.md)). The full
   virtualization stack: virtual record -> offset -> shard -> partition -> topic -> topology
   generation, which is [`core-work-identity-model.md`](core-work-identity-model.md)'s
   identity/position split applied at every granularity.

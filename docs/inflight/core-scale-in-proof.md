@@ -32,6 +32,14 @@ CURRENT INSTANCES  12   ESTIMATED REQUIRED  7   PROVEN SAFE  8   OVERPROVISIONIN
   commercially valuable than another 2x benchmark, and feeds the economics track
   ([`perf-benchmark-cost-to-slo.md`](perf-benchmark-cost-to-slo.md)).
 
+Corrected by the GitHub Codex review, 2026-08-31: throttling twelve live instances to 11/12ths is NOT
+equivalent to removing one - the simulated run keeps every partition assignment, state store,
+cache and placement, while real scale-in triggers a rebalance that may concentrate hot
+partitions, force state restore, or expose a partition-placement ceiling. "Proven safe" may only
+be displayed when the proof also canaries the actual ownership/state transition or simulates the
+post-removal assignment and restore cost; the admission-constraint counterfactual alone proves
+capacity headroom, not removal safety.
+
 Caveat to keep: a scale-in proof is valid for the traffic it ran under. It must state its window
 and confidence ("proven safe at Tuesday-morning load"), and the seasonality dimension of
 [`core-capacity-fingerprinting.md`](core-capacity-fingerprinting.md) is what stops an overnight

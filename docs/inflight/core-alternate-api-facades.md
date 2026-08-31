@@ -32,7 +32,12 @@ The safe-exposure problem, the 1.0 gate (astubbs#158, astubbs#139) and the exist
 [`next-expose-consumer-and-admin-apis.md`][next-expose-consumer-and-admin-apis] - this note adds
 only the framing that was missing there: the facade is not just "expose consumer ops to PC users",
 it is a **drop-in migration path** - keep the familiar low-level API, replace the execution model
-underneath. That is the mirror image of Streams-on-PC (keep the familiar high-level API, replace
+underneath. **Bounded by the GitHub Codex review, 2026-08-31: a poll-shaped facade returns records to the USER'S
+loop, so dispatch, invocation, retries and completion stay under user control - PC cannot
+transparently replace that execution model without the application moving to a callback/handler
+registration, which is a different contract. The KafkaConsumer rung is therefore honest as *API
+compatibility plus observation* (the migration advisor below); transparent execution replacement
+begins at the rungs that own dispatch.** That is the mirror image of Streams-on-PC (keep the familiar high-level API, replace
 the execution model), and the symmetry is the product philosophy: preserve the application model,
 improve the engine.
 

@@ -17,8 +17,12 @@ From the follow-up Codex conversation, 2026-08-30 (model root:
 ## The implementation the conversation called stupid-simple
 
 A compacted schedule topic (`scheduleId -> cron expression, target, timezone, enabled, nextFire,
-generation`) materialised as a table. The owner of a schedule's key notices `nextFire <= now` and
-transactionally produces the invocation and advances `nextFire`. Everything after that is
+generation`) materialised as a table - **plus the piece the GitHub Codex review, 2026-08-31 caught missing: a
+table keyed by scheduleId has no access path for "all rows with nextFire <= now", so each owner
+also maintains a partition-local due-time index (a heap or time-ordered store) over its
+schedules, rebuilt from the table on failover; that index, its recovery and clock handling ARE
+the scheduler, not a free consequence of EOS.** The owner of a due schedule then transactionally
+produces the invocation and advances `nextFire`. Everything after that is
 ordinary engine machinery - admission, resources, QoS, retries, Why Wait. What falls out free:
 
 - **Distributed singleton cron** - keyed ownership already gives one active processor per

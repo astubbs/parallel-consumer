@@ -22,8 +22,13 @@ completion of astubbs#227's "stop making users pick maxConcurrency": stop making
 
 What stacks on it, each a separate stage:
 
-- **SLO violation as the scale signal.** "No concurrency value on this instance satisfies the
-  declared objective" is a stronger +1 than any CPU or lag threshold - and its converse is the
+- **SLO violation as the scale signal - gated on attribution** (corrected by the
+  GitHub Codex review, 2026-08-31: unsatisfiable-here is NOT itself a +1, since it is equally true under
+  downstream saturation, irreducible handler latency, or exhausted key parallelism). The +1
+  requires the conjunction: objective unsatisfiable AND unserved independently-executable work
+  exists AND the attributed binding constraint is removable local/placement capacity
+  ([`core-bottleneck-attribution.md`](core-bottleneck-attribution.md) supplies the attribution).
+  So gated, it is stronger than any CPU or lag threshold - and its converse is the
   strongest do-NOT-scale signal: if probing upward worsened latency without raising throughput,
   the dependency is saturated and five more instances would hammer it harder. Two applications
   with identical "p99 > 2s" symptoms get opposite recommendations, from experiments

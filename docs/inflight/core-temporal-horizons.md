@@ -20,7 +20,12 @@ What falls out:
   work keeps its ownership. Instead: GPU frees in 40ms, DB is free now - do not hold DB idle for
   40ms; admit DB-only work whose predicted duration fits the gap, and avoid the 2-second DB job
   that would idle the GPU later. Work becomes `resource vector x expected duration x eligibility
-  window`; non-preemptive reservation planning over a short temporal horizon.
+  window`; non-preemptive reservation planning over a short temporal horizon. Corrected by the
+  GitHub Codex review, 2026-08-31: this is non-preemptive *backfilling*, and it stands on duration/release
+  predictions that heavy-tailed user functions violate - an underestimated gap-filler delays
+  exactly the work the policy protects. Prediction error, distribution shift and
+  starvation/regret need explicit fallback behaviour, and admission promises ("~4.2s") are not
+  available until that is modelled.
 - **Eligibility time is not validity deadline** (2026-08-31, via JMS expiry): "do not run
   before X" and "no longer worth running after Y" are different predicates with different
   terminal outcomes - expiry is a policy completion (EXPIRED), not a failure

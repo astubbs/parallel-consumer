@@ -45,9 +45,13 @@ permanent configuration, and the reason field gives the incident review its time
    accounting (astubbs#336) already enforces it.
 5. **True lag** - the same breakdown exported as a *metric*, because broker lag lies about an
    out-of-order processor: "Kafka says 82,431 behind; effectively 5,327 remain" once
-   completed-awaiting-frontier records are subtracted. The counterintuitive headline is the
-   feature, and the dashboard's offset ribbon (astubbs#268) already draws the underlying truth -
-   this publishes it where autoscalers and alerts can read it.
+   completed-awaiting-frontier records are subtracted. Corrected by the GitHub Codex review, 2026-08-31: broker
+   lag is an offset-DISTANCE (compaction, transaction markers and control records leave gaps),
+   while the execution populations count observed RECORDS - subtracting across the two units
+   yields a number that is neither. Report unresolved known records and unscanned offset
+   distance as two figures (or derive both from one exact population under full Prescience);
+   never publish the subtraction to autoscalers. The dashboard's offset ribbon (astubbs#268)
+   already draws the underlying truth.
 
 ## The split the owner drew (2026-08-31): embedded UI vs control-plane app
 
