@@ -43,6 +43,12 @@ machine under self-inflicted load is neither. This note IS the start of that led
 rather than rewriting it, and if CI produces one, that is the evidence the quarantine registry
 wants.
 
+## Sightings
+
+| When | Where | What was seen |
+|---|---|---|
+| 2026-09-01 | `feats/proxy-dispatch-clients` (the ten foreign dispatch clients), full reactor `test` with `-Dpc.foreignClients`, macOS | `processInKeyOrder(CommitMode)[1]` red on the **sanity check**, `actual size is 0 while expected size is 9` - the same assertion and the same shape as the original sighting, a different parameterisation again. Same load condition: a second agent was running `parallel-consumer-core` tests in another worktree on the same box at the time. The diff touches no file under `parallel-consumer-core`. |
+
 The fix, when somebody takes it, is the same rule the solutions write-up already states: await the
 condition the test actually depends on (every seeded record polled) rather than a fixed number of
 loop cycles, so the sanity check cannot be reached before it can be true.
