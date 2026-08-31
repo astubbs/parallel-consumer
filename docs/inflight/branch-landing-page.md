@@ -9,6 +9,8 @@ Branch `web/landing-page` (head commit `284e685fb`) carries the landing-page pro
 decision: a branch to save the work, **no PR yet**. The design reasoning is in the originating
 commit bodies on the source branch (`79aee3780`, `d0b31ece2`) - read them before reworking the page;
 they record a deliberate departure from the brief and a known visual-identity gap.
+<!-- file-refs: N/A - the landing-page paths live on web/landing-page, the branch this note tracks, not on master -->
+
 
 **The branch is deliberately red on four gates**, and its PR-time work is exactly those fixes:
 
