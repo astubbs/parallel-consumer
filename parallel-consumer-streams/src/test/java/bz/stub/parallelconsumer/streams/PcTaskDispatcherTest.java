@@ -1581,21 +1581,30 @@ class PcTaskDispatcherTest {
      */
     @Test
     void aCleanCloseThatHasToForceThePoolDoesNotAdvanceTheMarkOverTheWorkItKilled() {
+        // A local dispatcher rather than the field, because this test closes it itself - and therefore in a
+        // try/finally, because the class runs SAME_THREAD and a dispatcher left open by a failing assertion
+        // stays registered on that thread. Sabotaging the low-water arm made exactly that happen: this test
+        // failed at its precondition and the NEXT test's unrelated signal-registration count read 2.
         PcTaskDispatcher forced = new PcTaskDispatcher("task-st-forced-close", INPUT_PARTITIONS, 4);
-        forced.registerRecords(PARTITION, UniLists.of(
-                record(PARTITION, 0, 10L, "key-a"),
-                record(PARTITION, 1, 900L, "key-b")));
+        try {
+            forced.registerRecords(PARTITION, UniLists.of(
+                    record(PARTITION, 0, 10L, "key-a"),
+                    record(PARTITION, 1, 900L, "key-b")));
 
-        CountDownLatch bothStarted = new CountDownLatch(2);
-        CountDownLatch neverReleased = new CountDownLatch(1);
-        forced.dispatchAvailable(rec -> prepared(rec, () -> {
-            bothStarted.countDown();
-            awaitLatch(neverReleased);
-        }));
-        awaitLatch(bothStarted);
-        assertThat(forced.getStreamTimeLowWaterMark())
-                .as("precondition: the mark is held down by the record at 10, which is inside the chain")
-                .isEqualTo(10L);
+            CountDownLatch bothStarted = new CountDownLatch(2);
+            CountDownLatch neverReleased = new CountDownLatch(1);
+            forced.dispatchAvailable(rec -> prepared(rec, () -> {
+                bothStarted.countDown();
+                awaitLatch(neverReleased);
+            }));
+            awaitLatch(bothStarted);
+            assertThat(forced.getStreamTimeLowWaterMark())
+                    .as("precondition: the mark is held down by the record at 10, which is inside the chain")
+                    .isEqualTo(10L);
+        } catch (Throwable failure) {
+            forced.abortClose();
+            throw failure;
+        }
 
         // A clean close. shutdown() will not stop the latched workers, awaitTermination expires, and
         // shutdownNow() interrupts them - the path this test is about.
