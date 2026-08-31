@@ -88,14 +88,36 @@ modules:
       bin/check-proto-breaking.sh fails a change that tries. A capability token, not a version
       number, is how a client learns what an addition means.
     support_posture: >-
-      Experimental. Published to no registry, and the sidecar and client libraries this schema exists
-      for are not on master yet, so there is nothing yet to be compatible with.
+      Experimental. Published to no registry; no client library speaks it, and the sidecar on master
+      hosts no engine, so nothing has yet had to be compatible with it.
     evidence_id: proxy-protocol
     tracking: astubbs#242
     use_this_if: >-
       You are writing a client against the proxy protocol. The two artifacts to work from are the
       schema and parallel-consumer-proxy-protocol/docs/protocol-specification.md; the client-authoring
       guide beside them says what an implementation must do.
+  - artifact: parallel-consumer-proxy
+    maturity: alpha
+    minimum_java: 17
+    reliability_confidence: >-
+      What is evidenced is the process boundary, and only that: the sidecar binds loopback on an
+      ephemeral port, announces it, admits exactly one stream, rejects an unlisted declared authority
+      before the service method runs, and releases the socket when its parent dies. It hosts NO
+      Parallel Consumer engine - a session is answered UNIMPLEMENTED - so nothing here evidences a
+      record being processed, an offset being committed, or any protocol behaviour beyond the
+      handshake being refused.
+    api_expectation: >-
+      Pre-1.0 and expected to change substantially: the engine, its connect-time configuration and
+      the shutdown drain are still to arrive, and the seam they plug into is the one thing here most
+      likely to move.
+    support_posture: >-
+      Experimental. Published to no registry, and there is no supported way to run it against a
+      broker yet because it cannot be configured.
+    evidence_id: proxy-sidecar
+    tracking: astubbs#242
+    use_this_if: >-
+      You are reviewing or extending the sidecar's packaging and process lifecycle. There is no
+      user-facing reason to depend on it yet.
   - artifact: parallel-consumer-examples
     maturity: reference-example
     reliability_confidence: Exercises supported module use cases; it is not a runtime library dependency.
