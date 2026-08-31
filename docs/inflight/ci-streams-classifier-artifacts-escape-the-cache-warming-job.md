@@ -39,12 +39,17 @@ That write-up's own conclusion is the relevant one: **re-running does not reliab
 runner is often reassigned to the same region, and the fix that worked was pre-warming so nothing is
 fetched from Central during the build. This module is the one place that was left outside the fix.
 
-**That prediction has now been tested and held.** A fresh push on the error-surfacing rung re-ran the
-lanes and reproduced the identical failure, at the same execution, on the same artifact - and this
-time it took the **Integration lane down with the Unit lane**, on the same run. So the exposure is not
-"one lane occasionally", it is *every lane that builds this module*, and re-running is not a
-workaround anyone should keep reaching for. It is a blocker for any PR touching this module, and it
-cannot be cleared from inside one.
+**That prediction has now been tested, and "not reliably" is exactly the right strength - read it as
+written rather than as "never".** On the error-surfacing rung it fired on two consecutive runs: the
+second reproduced the identical failure at the same execution on the same artifact, and took the
+**Integration lane down with the Unit lane** on the same run. A third run then passed every lane. So:
+
+- **The exposure is not "one lane occasionally"** - it is *every lane that builds this module*, and
+  they fail together, because they share the runner's route to Central.
+- **It is per-run, not per-branch.** A run either has the problem or does not, so a re-run is a coin
+  flip rather than a fix, and a green run is luck that says nothing about the next one.
+- **A green lane is therefore not evidence this is closed.** It is closed when the unpack executions
+  stop reaching Central at all - see *Delete when* below.
 
 ## Candidate fix
 
@@ -56,11 +61,21 @@ log a cache hit rather than a `Downloading from central` line.
 
 ## Until it is fixed, what a blocked PR should do
 
-**Not keep re-running.** Say in the PR that the red lane is this, name this note, and let the
-module's own lane stand as the evidence the code is healthy: run the module's whole `test` phase and
-its integration lane locally, and read the counts out of the report directories. A local run has the
-artifacts in `~/.m2` already, which is exactly why it never reproduces there - and exactly why
-"green locally" is a real signal about the code and no signal at all about this.
+**Read the log before concluding anything.** The lane is named "Unit Tests" and no test ran, so the
+first job is to recognise it: the module dies at `unpack-kafka-streams-sources`, every other module
+succeeds, and the message names Central and the `sources` classifier.
+
+Then **say in the PR that the red lane is this, name this note, and put the module's own local lane
+up as the evidence the code is healthy** - the whole `test` phase and the integration lane, counts
+read out of the report directories. A local run has the artifacts in `~/.m2` already, which is why it
+never reproduces there, and why "green locally" is a real signal about the code and none at all about
+this.
+
+**Re-running is legitimate here and is not a retry-into-green** - it is not a flaky test being
+papered over, it is an artifact download that either reached Central or did not, and no test outcome
+is being hidden. What it is not is a fix: it is a coin flip, it can take several attempts, and the
+green it eventually produces is not evidence the problem is gone. So re-run if you need the lane, and
+**do not let the green talk you out of leaving the record behind**.
 
 ## Delete when
 
