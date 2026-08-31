@@ -173,6 +173,30 @@ Master is clean under load it has not been pushed past - more records, a tighter
 `max.poll.interval.ms`, or a second instance were not tried. A latent master defect needing sharper
 conditions is not excluded by this.
 
+### Not paused - so not "paused consumption" at all, 2026-09-01
+
+With pause state added to the diagnostic, the failing run now says:
+
+```
+pc: workRemaining=0 recordsOutForProcessing=0 state=RUNNING closedOrFailed=false
+    pausedPartitions=0 (observed 1358ms ago)
+```
+
+**Nothing is paused, and the poll thread is alive** - the observation is barely a second old, so the
+loop is still completing its pause passes. The instance is polling, unpaused, with an empty pipeline,
+while records sit unconsumed on the topic.
+
+**That eliminates the reading this note was built around.** The zero-and-zero state looked like the
+confluentinc#857 symptom - paused consumption - and it is not. PC is not being stopped from fetching;
+it is fetching and ending up with no work. The candidate area moves to INGESTION: records polled and
+then discarded or never registered, which epoch or staleness filtering would do silently and which
+would produce exactly this signature. `EpochAndRecordsMap` and `PartitionStateManager` are both
+touched by the branch and both sit on that path.
+
+**Two hypotheses have now died to this instrument** - cluster 2 overhead, then paused consumption -
+which is the argument for the instrument rather than for either guess. Each was plausible, each was
+what an experienced reader would have assumed, and each took one line of output to refute.
+
 ## Why it matters beyond the branch that found it
 
 If cluster 2 is implicated, the question is not only "fix it" but whether that work belongs on a PR

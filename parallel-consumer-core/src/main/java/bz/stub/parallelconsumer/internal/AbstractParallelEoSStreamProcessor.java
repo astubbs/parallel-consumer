@@ -2219,7 +2219,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         return "workRemaining=" + workRemaining()
                 + " recordsOutForProcessing=" + wm.getNumberRecordsOutForProcessing()
                 + " state=" + state
-                + " closedOrFailed=" + isClosedOrFailed();
+                + " closedOrFailed=" + isClosedOrFailed()
+                // Splits an idle instance into its two opposite causes: paused (back-pressure held on)
+                // or simply not being given work. Without it, both read as zero-and-zero.
+                + " " + brokerPollSubsystem.describePauseObservation();
     }
 
     /**
