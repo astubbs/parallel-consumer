@@ -12,6 +12,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -56,8 +57,8 @@ class EveryModuleWiresUpArchUnitTest {
      * <p>What lifts it: extracting {@code TestConventionRules} into a small test-support artifact that neither
      * core nor the clients own. Worth doing when a second module hits the same wall, not before.
      */
-    private static final List<String> EXEMPT_BECAUSE_THEY_CANNOT_DEPEND_ON_CORES_TEST_JAR =
-            Collections.singletonList("parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/"
+    private static final Set<String> EXEMPT_BECAUSE_THEY_CANNOT_DEPEND_ON_CORES_TEST_JAR =
+            Collections.singleton("parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/"
                     + "parallel-consumer-proxy-client-java-api/src/test/java");
 
     @Test

@@ -41,6 +41,12 @@ public class CommitHistory {
      * <p>
      * The raw list is copied before reading: it is a {@code CopyOnWriteArrayList} being appended to by the
      * commit thread while a test reads it.
+     * <p>
+     * <b>The parameter is a {@code List} and must stay one, though a {@code Collection} would compile.</b>
+     * Everything this class answers is positional - {@link #highestCommit()} and {@link #getEncoding()} read
+     * the LAST element, which is the most recent commit - so encounter order is the whole meaning of the input.
+     * A {@code Collection} parameter would accept a set and return an arbitrary commit while looking correct,
+     * which is worse than not compiling. SpotBugs suggests the widening; it is declined for that reason.
      */
     public static CommitHistory forPartition(final List<Map<TopicPartition, OffsetAndMetadata>> rawHistory,
                                              final TopicPartition partition) {
