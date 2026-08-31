@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
+<!-- inflight-labels: concurrency -->
 
 **This file exists because the work had no home.** `bug-857-mirror-attributions-unconfirmed.md`
 correctly says the honest options are "reproduce and diagnose, or close on their own merits" - but it
