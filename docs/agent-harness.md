@@ -74,6 +74,11 @@ containing `@AGENTS.md`, which imports it:
 - `bin/CLAUDE.md` -> imports `bin/AGENTS.md`, arriving when you touch a script
 - `docs/inflight/CLAUDE.md` -> imports `docs/inflight/AGENTS.md`, arriving when you touch a note
 
+A bridge does not have to import an `AGENTS.md`. `<module>/src/test/CLAUDE.md` imports
+`docs/testing-at-write-time.md` - a short slice of `docs/testing.md` holding only what must fire
+while a test is being written - so those rules arrive when a test file is touched rather than when
+someone thinks to open the testing doc. Same mechanism, different source file.
+
 **The nested ones are the interesting half.** They load *at the moment you work in that directory* -
 which is exactly the "inject the right prompt at the right time" that a routing table in a doc
 cannot do. Adding a nested `AGENTS.md` without its `CLAUDE.md` sibling means Claude Code never sees
@@ -217,14 +222,22 @@ silent misses.
 **What it reads is the working tree, not the index.** That gap is documented in the hook's own
 header and listed under *Known gaps* below; it is an open decision, not an oversight.
 
-**The three `CLAUDE.md` bridges** - `CLAUDE.md`, `bin/CLAUDE.md`, `docs/inflight/CLAUDE.md`, each a
-pure `@AGENTS.md` import. They are **tracked**, which took a `.gitignore` change: a bare `CLAUDE.md`
+**The `CLAUDE.md` bridges** - the ones above plus the package-root bridge under
+`parallel-consumer-core/src/main/java/`, each a pure `@AGENTS.md` import, and the test-tree family
+described below. They are **tracked**, which took a `.gitignore` change: a bare `CLAUDE.md`
 rule there (the one whose comment begins "A `CLAUDE.md` is ignored BY DEFAULT") dated from when
-these were personal scratch files, so all three were ignored and existed only on the author's
+these were personal scratch files, so every one of them was ignored and existed only on the author's
 machine. Everything looked correctly wired locally and would have
-merged as a no-op - `git ls-files | grep -c CLAUDE.md` returned **0**. The three paths are now
-negated individually rather than with a blanket `!CLAUDE.md`; the reasoning is in `.gitignore`
+merged as a no-op - `git ls-files | grep -c CLAUDE.md` returned **0**. The `@AGENTS.md` bridges are
+now negated individually rather than with a blanket `!CLAUDE.md`; the reasoning is in `.gitignore`
 itself, next to the rule.
+
+**One family is scoped rather than enumerated: `!**/src/test/CLAUDE.md`.** There is one per module
+test tree, they are generated from a single shape, and they all import the same file - so
+enumerating them would silently drop a new module's bridge, which is the very
+everything-looked-wired-up-locally failure above, arriving when somebody is adding a module rather
+than thinking about harnesses. The pattern can only ever match a module's test tree, so it is not
+the blanket negation the enumerated rule rejects. That argument is in `.gitignore` too.
 
 **`.claude/settings.json`** - fourteen hook scripts across sixteen registrations, and the file is
 **tracked**. The entries below are the ones whose design decisions are worth recording here;
@@ -519,7 +532,10 @@ one is a case in that file, and the suite goes red against the old parser.
   exactly how it came to have a blind spot worth fixing.
 - **Nothing enforces that a nested `AGENTS.md` has its `CLAUDE.md` bridge.** A check could;
   see below. Until then the `.gitignore` negation is the only place the question is asked - which is
-  why the three bridges are enumerated there rather than blanket-negated.
+  why the `@AGENTS.md` bridges are enumerated there rather than blanket-negated. **The test-tree
+  bridges are the exception and are not covered by that habit at all**: they are pattern-negated, so
+  adding a module asks nobody anything - a new module's test tree simply has no bridge, and nothing
+  goes red. Same missing check, reached from the other direction.
 - **Tracking `.claude/settings.json` silently overwrites the local one it replaces - once.** Git
   refuses to clobber an *untracked* file and clobbers an *ignored* one without a word, and this file
   was ignored in every clone until it became tracked. So the first pull past that commit replaces
