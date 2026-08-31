@@ -207,13 +207,15 @@ left the live threads without a home. Append here as you go rather than reconstr
 
 **Merge mechanics not yet done**
 
-- **Review is DEFERRED on purpose, decided 2026-08-19 - do not request it yet.** `reviewDecision` is
-  empty and a red `claude-review` is the expected state meanwhile, not a fault. The merge order is
-  astubbs#204, then astubbs#31, then astubbs#57, then this PR, then astubbs#267, so three PRs land
-  under this branch before it merges; reviewing now spends a review cycle on a tree that is about to
-  change and buys a second one later. **Sequence: let those merge -> merge master here -> re-verify
-  -> then request review** (`@claude review this` on the PR; it does not run on push). A human LGTM
-  is required regardless of CI.
+- **Review deferral: its precondition is now MET, 2026-09-01.** It was deferred on 2026-08-19 until
+  astubbs#204, astubbs#31, astubbs#57 and astubbs#267 had landed, because reviewing a tree about to
+  change spends a cycle and buys a second one later. All four have merged, master has been merged in,
+  and the deadlock fix was re-verified afterwards on a four-cell control across both assignors. So
+  the sequence is discharged and review is now the right next step - `@claude review this` on the PR,
+  which does not run on push. A human LGTM is still required regardless of CI.
+  **Two NEW parents now sit under this branch** and were not part of the 2026-08-19 order:
+  astubbs#381 and astubbs#393. The dependency gate blocks the merge until they land, but neither
+  changes this tree, so neither is a reason to defer the review again.
 - **What the re-verification must cover when that happens**, because a clean textual merge proves
   nothing here: astubbs#31 is "replace a stale container at a reused offset after rebalance", which
   is this PR's own territory - epoch fencing, revocation, stale work - and astubbs#57 touches
@@ -221,15 +223,20 @@ left the live threads without a home. Append here as you go rather than reconstr
   `Rebalance857CommitSyncDeadlockProbeIT` (the 60/60 to 0/60 proof, 20 tests / ~5.6 min),
   `ShardManagerStaleContainerTest`, `OutForProcessingCounterDriftProbeTest` and
   `InstanceStallProbeIT`. Compiling is not evidence that the fencing argument survived.
-- **A roadmap edit falls due at merge, and no gate will ask for it.** `docs/data/roadmap.yaml`'s
-  `known-defects-cleared` entry says the deadlock's "mitigation drafted on astubbs#29", which stops
-  being true when this merges. `roadmap-stage-gate.js` (arrived on master in `a78299794`) only fires
-  for entries carrying a `pull_request:` field, and this entry has none, so it is out of reach by
-  design. `stage` stays `in-progress` - this PR does not clear every known critical - so it is the
-  `stage_detail` wording only, and it must not be edited before the merge, when it would assert
-  something not yet true.
-- **A merge strategy has not been recommended**, and the squash message has not been offered - both
-  are owed before merge (`docs/merge-checklist.md`).
+- **DONE 2026-09-01: the roadmap edit.** `known-defects-cleared`'s `stage_detail` no longer says
+  "mitigation drafted"; it records a fix measured against a one-term control on both assignors, and
+  states that the family is NOT closed by it because the transactional revoke wait (astubbs#44) is a
+  separate defect in a commit mode this fix cannot reach. `stage` stays `in-progress`, as this entry
+  required. The 2026-08-19 constraint - do not edit early, because it would assert something not yet
+  true - is respected: the wording says the fix is measured and unmerged, which is what is true now.
+  Still out of reach of `roadmap-stage-gate.js`, which only fires for entries carrying a
+  `pull_request:` field.
+- **DONE 2026-09-01: merge strategy recommended and the squash message written.** Squash, not
+  re-cut: the separable workstreams have already left as astubbs#375, astubbs#376, astubbs#381 and
+  astubbs#393, so what remains is one idea with a long research narrative - and a re-cut means a
+  force-push onto a PR carrying inline review comments, which re-anchors or orphans them. The
+  message lives in the session scratchpad, deliberately NOT in the PR body, per
+  `docs/merge-checklist.md`.
 - **Duplicate-code and file-similarity reports** need reading once review runs; clones introduced by
   this PR are in scope, pre-existing ones are not.
 

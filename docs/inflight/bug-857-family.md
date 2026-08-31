@@ -129,6 +129,33 @@ full evidence is the last section of this file; three consequences bind anyone p
   that superseded it for the lag bound is
   [`a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`](../solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md).)
 
+## Does astubbs#119 close when the deadlock fix lands? NO - settled 2026-09-01
+
+**Migrated here from astubbs/parallel-consumer#29's own note, which is deleted when that PR lands.**
+The answer was established there and would have gone with it. This ledger is the durable owner of the
+family's accounting, so it is the right home.
+
+**No, because astubbs#119 is a symptom bucket rather than a defect.** It collects reports of
+consumption stopping after a rebalance; the AB-BA commit deadlock is one member of the family behind
+those reports, and fixing it removes one cause of the symptom rather than the symptom.
+
+**What that fix does and does not reach.** The cycle it breaks needs `onPartitionsRevoked` to block
+acquiring the commit lock while the control thread holds it inside a commit only the poll thread can
+complete. That second edge lives in `ConsumerOffsetCommitter`, which is constructed only for the
+consumer-commit modes - so the cycle **cannot close in `PERIODIC_TRANSACTIONAL_PRODUCER` at all**.
+
+**Which leaves at least one confirmed defect the fix cannot reach**: the unbounded revoke wait in
+transactional mode, `while (isTransactionCommittingInProgress()) Thread.sleep(100)` on the poll
+thread inside `poll()`, bounded only by `max.poll.interval.ms`. It carries astubbs#44
+(confluentinc#803), **the only issue upstream ever labelled a verified bug**, and its own note says
+its fix is blocked on an unsettled design decision rather than on effort -
+[`bug-857-transactional-revoke-wait.md`](bug-857-transactional-revoke-wait.md).
+
+**So closing astubbs#119 on the deadlock fix would take the rest of the family with it**, which is
+the specific damage the merge checklist warns about: partly addressing an issue and closing it anyway
+retires the remainder silently. Say which part landed and leave it open.
+
+
 ## Commit mode decides which defect can explain a sighting
 
 Added 2026-08-18, after a re-read found the mode recorded for **none** of the six sightings this file
