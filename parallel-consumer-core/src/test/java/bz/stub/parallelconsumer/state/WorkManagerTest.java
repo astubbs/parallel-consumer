@@ -47,6 +47,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.*;
 import static java.time.Duration.ofSeconds;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static pl.tlinkowski.unij.api.UniLists.of;
 
@@ -977,4 +978,234 @@ public class WorkManagerTest {
         return onPartition;
     }
 
+
+    // -----------------------------------------------------------------------------------------------------
+    // Verdict-free work return (astubbs#242) - a record can go back to scheduling with no verdict at all,
+    // without the return counting as a processing attempt. Used by external engines when the process holding
+    // a record disappears before reporting on it.
+    // -----------------------------------------------------------------------------------------------------
+
+    /**
+     * Returns work through the real dispatch path rather than calling the result handler directly, so the
+     * branch selection in {@link WorkManager#handleFutureResult} is what is under test.
+     */
+    private void abandon(WorkContainer<String, String> wc) {
+        wc.markAbandoned(wc.getDeliveryCount());
+        wm.handleFutureResult(wc);
+    }
+
+    @Test
+    void abandonedWorkBecomesSelectableAgain() {
+        setupUnordered();
+        registerSomeWork();
+
+        var taken = wm.getWorkIfAvailable(1);
+        assertThat(taken).hasSize(1);
+        var wc = taken.get(0);
+
+        abandon(wc);
+
+        var retaken = wm.getWorkIfAvailable(1);
+        assertThat(retaken)
+                .as("work returned without a verdict is immediately selectable again - it earned no retry delay")
+                .hasSize(1);
+        assertThat(retaken.get(0).offset()).isEqualTo(wc.offset());
+    }
+
+    @Test
+    void abandoningDoesNotConsumeARetryAttempt() {
+        setupUnordered();
+        registerSomeWork();
+
+        var wc = wm.getWorkIfAvailable(1).get(0);
+        assertThat(wc.getNumberOfFailedAttempts()).isEqualTo(0);
+
+        abandon(wc);
+
+        assertThat(wc.getNumberOfFailedAttempts())
+                .as("a dropped connection is not a processing attempt")
+                .isEqualTo(0);
+        assertThat(wc.getLastFailedAt()).isEmpty();
+    }
+
+    /**
+     * Covers AE9: a worker killed while holding a record on its second attempt must see that record redelivered
+     * still reporting one prior failure, not two.
+     */
+    @Test
+    void abandonAfterAPriorFailureKeepsTheAttemptCount() {
+        setupUnordered();
+        registerSomeWork();
+
+        var wc = wm.getWorkIfAvailable(1).get(0);
+        fail(wc);
+        assertThat(wc.getNumberOfFailedAttempts()).isEqualTo(1);
+
+        advanceClockByDelay();
+        var retaken = wm.getWorkIfAvailable(1);
+        assertThat(retaken).hasSize(1);
+        var second = retaken.get(0);
+        assertThat(second.offset()).isEqualTo(wc.offset());
+
+        abandon(second);
+
+        assertThat(second.getNumberOfFailedAttempts())
+                .as("attempt count is unchanged by a verdict-free return")
+                .isEqualTo(1);
+
+        // Without clearing the stale verdict on redelivery, this record still carries
+        // maybeUserFunctionSucceeded == false from its earlier failure, takes the failure path, and lands in the
+        // retry queue behind a delay it never earned - so it would NOT be selectable here.
+        var third = wm.getWorkIfAvailable(1);
+        assertThat(third)
+                .as("selectable immediately - an abandoned record earns no retry delay, even after a prior failure")
+                .hasSize(1);
+        assertThat(third.get(0).getNumberOfFailedAttempts())
+                .as("redelivered still reporting one prior failure, not two")
+                .isEqualTo(1);
+    }
+
+    /**
+     * The in-flight counter gates the broker poller. Drift in it stalls the consumer silently while it still
+     * looks alive, so this asserts the exact number rather than merely that work keeps flowing.
+     */
+    @Test
+    void abandonReturnsTheInFlightCounterToItsPreviousValue() {
+        setupUnordered();
+        registerSomeWork();
+
+        long baseline = wm.getNumberRecordsOutForProcessing();
+        assertThat(baseline).isEqualTo(0);
+
+        var taken = wm.getWorkIfAvailable(2);
+        assertThat(taken).hasSize(2);
+        assertThat(wm.getNumberRecordsOutForProcessing()).isEqualTo(2);
+
+        abandon(taken.get(0));
+        assertThat(wm.getNumberRecordsOutForProcessing())
+                .as("exactly one decrement per abandoned record")
+                .isEqualTo(1);
+
+        abandon(taken.get(1));
+        assertThat(wm.getNumberRecordsOutForProcessing())
+                .as("counter is back to where it started, with no work lost")
+                .isEqualTo(baseline);
+    }
+
+    @Test
+    void aDuplicateReturnAfterRedeliveryIsIgnored() {
+        setupUnordered();
+        registerSomeWork();
+
+        var wc = wm.getWorkIfAvailable(1).get(0);
+        long firstDelivery = wc.getDeliveryCount();
+        assertThat(wm.getNumberRecordsOutForProcessing()).isEqualTo(1);
+
+        abandon(wc);
+        assertThat(wm.getNumberRecordsOutForProcessing()).isEqualTo(0);
+
+        // The control loop drains returns and re-selects in the same iteration, so by the time a duplicate
+        // arrives the record is live again on a later delivery.
+        var redelivered = wm.getWorkIfAvailable(1);
+        assertThat(redelivered).hasSize(1);
+        assertThat(redelivered.get(0)).isSameAs(wc);
+        assertThat(wm.getNumberRecordsOutForProcessing()).isEqualTo(1);
+
+        // the late duplicate, carrying the delivery it was actually raised for
+        wc.markAbandoned(firstDelivery);
+        wm.handleFutureResult(wc);
+
+        assertThat(wm.getNumberRecordsOutForProcessing())
+                .as("the superseded return is ignored - it must not end the live delivery's flight")
+                .isEqualTo(1);
+        assertThat(wc.isInFlight())
+                .as("the live delivery is still in flight")
+                .isTrue();
+    }
+
+    @Test
+    void aSupersededReturnDoesNotOrphanTheAwaitingSelectionCount() {
+        setupUnordered();
+        registerSomeWork();
+
+        var wc = wm.getWorkIfAvailable(1).get(0);
+        long firstDelivery = wc.getDeliveryCount();
+        abandon(wc);
+
+        var redelivered = wm.getWorkIfAvailable(1).get(0);
+        wc.markAbandoned(firstDelivery);
+        wm.handleFutureResult(wc);
+
+        // the live delivery now completes normally
+        succeed(redelivered);
+
+        assertThat(wm.getNumberRecordsOutForProcessing())
+                .as("counter nets out - a superseded return must not decrement")
+                .isEqualTo(0);
+        assertThat(wm.getNumberOfWorkQueuedInShardsAwaitingSelection())
+                .as("two of three records remain selectable; a superseded return must not orphan an increment")
+                .isEqualTo(2);
+    }
+
+    @Test
+    void aSupersededReturnOnARevokedPartitionDoesNotDecrement() {
+        setupUnordered();
+        registerSomeWork();
+
+        var wc = wm.getWorkIfAvailable(1).get(0);
+        long firstDelivery = wc.getDeliveryCount();
+        abandon(wc);
+        var redelivered = wm.getWorkIfAvailable(1).get(0);
+        assertThat(wm.getNumberRecordsOutForProcessing()).isEqualTo(1);
+
+        // the partition goes away while the duplicate is still in flight
+        wm.onPartitionsRevoked(UniLists.of(topicPartitionOf(0)));
+
+        wc.markAbandoned(firstDelivery);
+        wm.handleFutureResult(wc);
+
+        assertThat(wm.getNumberRecordsOutForProcessing())
+                .as("the superseded check runs before the stale-partition branch, which decrements unconditionally")
+                .isEqualTo(1);
+    }
+
+    @Test
+    void workWithNeitherVerdictNorAbandonMarkerStillThrows() {
+        setupUnordered();
+        registerSomeWork();
+
+        var wc = wm.getWorkIfAvailable(1).get(0);
+
+        assertThatThrownBy(() -> wm.handleFutureResult(wc))
+                .as("an empty verdict with no abandon marker is still the bug it always was")
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("without a success flag");
+    }
+
+    /**
+     * Covers AE15: every worker disconnecting is not an end-of-life signal. The returned records stay in
+     * scheduling rather than being dropped or retried.
+     */
+    @Test
+    void everyWorkerDisconnectingLeavesAllWorkInScheduling() {
+        setupUnordered();
+        registerSomeWork();
+
+        var taken = wm.getWorkIfAvailable(3);
+        assertThat(taken).hasSize(3);
+        assertThat(wm.getNumberOfWorkQueuedInShardsAwaitingSelection()).isEqualTo(0);
+
+        // the whole fleet goes away without reporting on anything
+        taken.forEach(this::abandon);
+
+        assertThat(wm.getNumberRecordsOutForProcessing()).isEqualTo(0);
+        assertThat(wm.getNumberOfWorkQueuedInShardsAwaitingSelection())
+                .as("all three records are back awaiting selection, none discarded")
+                .isEqualTo(3);
+
+        var retaken = wm.getWorkIfAvailable(3);
+        assertThat(retaken)
+                .as("and all three are handed out again once a worker reconnects")
+                .hasSize(3);
+    }
 }

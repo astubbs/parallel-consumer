@@ -55,6 +55,72 @@ jobs:
             setup-java-Linux-x64-maven-
       - name: Download all dependencies
         run: ./mvnw --batch-mode -Pci dependency:go-offline -DincludeScope=test -U
+      # First of two plugin-resolves-for-itself misses, same class, different plugin. go-offline does
+      # not fetch the platform protoc / protoc-gen-grpc-java EXECUTABLES that protobuf-maven-plugin
+      # resolves at generate time, so left cold every downstream job fetches them from Central and
+      # inherits the Azure West US CDN route lottery in
+      # docs/solutions/build-errors/maven-central-timeout-azure-west-regions-2026-04-21.md - a 240s
+      # hang, then a hard NullPointerException out of Aether rather than a retry. Measured on
+      # astubbs/parallel-consumer#293: in one run "Unit Tests" fetched protoc in 272ms while
+      # "Integration Tests" hung the full 240s on the identical URL, and it failed 2 of 6 consecutive
+      # runs. The classifier is linux-x86_64 because this job declares ubuntu-latest. (astubbs#242)
+      - name: Warm plugin-resolved protoc binaries
+        run: |
+          set -euo pipefail
+          evaluate() {
+            ./mvnw -q --batch-mode -pl parallel-consumer-proxy-protocol \
+              -Dexpression="$1" -DforceStdout \
+              org.apache.maven.plugins:maven-help-plugin:3.5.2:evaluate 2>/dev/null | tail -1
+          }
+          # A renamed property makes help:evaluate print "null object or invalid expression", which
+          # dependency:get would happily turn into a warm of the wrong coordinate - warming nothing is
+          # indistinguishable from a cache hit until it fails four jobs downstream, so require a
+          # version-shaped answer rather than merely a non-empty one.
+          require_version() {
+            case "$2" in
+              [0-9]*) : ;;
+              *) echo "::error::$1 did not resolve to a version from parallel-consumer-proxy-protocol/pom.xml (got '$2') - the protoc cache warm would be a silent no-op"; exit 1 ;;
+            esac
+          }
+          protoc_version=$(evaluate proxy.protoc)
+          grpc_version=$(evaluate grpc.version)
+          require_version proxy.protoc "$protoc_version"
+          require_version grpc.version "$grpc_version"
+          get() {
+            ./mvnw --batch-mode -ntp \
+              org.apache.maven.plugins:maven-dependency-plugin:3.11.0:get -Dartifact="$1"
+          }
+          get "com.google.protobuf:protoc:${protoc_version}:exe:linux-x86_64"
+          get "io.grpc:protoc-gen-grpc-java:${grpc_version}:exe:linux-x86_64"
+          # Assert the binaries are on disk: the exit code says the goal ran, only the file says the
+          # cache this job exists to populate actually got populated.
+          test -s ~/.m2/repository/com/google/protobuf/protoc/"${protoc_version}"/protoc-"${protoc_version}"-linux-x86_64.exe
+          test -s ~/.m2/repository/io/grpc/protoc-gen-grpc-java/"${grpc_version}"/protoc-gen-grpc-java-"${grpc_version}"-linux-x86_64.exe
+      # go-offline resolves declared dependencies and plugin JARs, but NOT what a plugin resolves
+      # FOR ITSELF at execution time - and scala-maven-plugin fetches the Scala compiler and the
+      # zinc compiler-bridge sources jar that way, so neither is declared anywhere and both stay
+      # cold. Measured on astubbs/parallel-consumer#293 (run 32008526667): "Unit Tests" spent 4m01s
+      # on scala-compiler before Central gave up and it fell to the mirror, then was still fetching
+      # compiler-bridge sources 3m12s later when the lane's cap killed the job. Same CDN route
+      # lottery as docs/solutions/build-errors/maven-central-timeout-azure-west-regions-2026-04-21.md
+      # and it cost the whole job rather than one step.
+      #
+      # Warmed by COMPILING the module rather than by naming coordinates: the bridge version comes
+      # from the plugin's own zinc dependency and no pom property carries it, so a `dependency:get`
+      # would need a literal that rots silently the next time the plugin is bumped - and warming
+      # the wrong coordinate is indistinguishable from a cache hit until it fails four jobs
+      # downstream. (astubbs#242)
+      #
+      # `test-compile`, NOT `compile`, and the difference is load-bearing rather than a wider net.
+      # The Scala module now depends on the gRPC transport, which reaches the protocol module, which
+      # TEST-depends on parallel-consumer-core's test-jar. Maven resolves an inter-module test-jar
+      # from the reactor only once the producing module has reached test-compile; stopped at
+      # `compile` it falls back to the repository, and on a runner with an empty ~/.m2 that is
+      # `Could not find artifact ...core:jar:tests` - which fails this job, and with it the cache
+      # save every other lane restores from. Nothing about this is local: a developer's ~/.m2 holds
+      # the artifact from any earlier build, so the failure only exists on a cold machine.
+      - name: Warm scala-maven-plugin's compiler and zinc bridge
+        run: ./mvnw --batch-mode -Pci -pl :parallel-consumer-proxy-client-scala -am test-compile
       - name: Save Maven cache (rotating key)
         if: success()
         uses: actions/cache/save@v4
@@ -251,6 +317,45 @@ jobs:
         run: bash bin/test-check-docs-data.sh
       - name: Validate release-documentation data structure
         run: bin/check-docs-data.sh
+
+  # Protocol freeze gate: the proxy wire schema may only GAIN, never change (the language-proxy
+  # plan's freeze, astubbs#242). `buf breaking` in the FILE category - configured in
+  # parallel-consumer-proxy-protocol/buf.yaml, FILE because WIRE would tolerate source-breaking
+  # renames the compatibility promise forbids - compares the PR's schema against the frozen one on
+  # origin/master. bin/check-proto-breaking.sh passes with a notice while master has no frozen
+  # schema yet, so the job arms itself the moment the freeze lands.
+  #
+  # It also carries the schema's STATIC ANALYSIS - `buf lint`, via bin/check-proto-lint.sh - because
+  # the two share a toolchain install and a checkout, and splitting them would buy a second job for
+  # one binary. The job's NAME is deliberately unchanged: it is a required check, and renaming a
+  # required check silently un-gates every open PR. The lint runs FIRST: a schema that does not lint
+  # is a schema whose breaking-change comparison is answering a question nobody asked yet. The
+  # protocol earns its own analysis because it is the artifact all eleven clients are generated
+  # from - one defect there arrives in every language at once (docs/client-static-analysis.md).
+  proto-breaking:
+    if: github.event_name == 'pull_request'
+    name: "proto: breaking"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0          # the baseline is origin/master, which a shallow clone lacks
+      - name: Install buf
+        uses: bufbuild/buf-action@v1
+        with:
+          setup_only: true
+      - name: Lint the schema (buf lint)
+        run: bin/check-proto-lint.sh
+      # Self-test first, the same order as the docs-data and copyright scanners: this gate's
+      # ability to say no was demonstrated once, by hand, and never since - so the cases that pin
+      # it (a deletion, a renumber, a rename, and a renamed module that must not re-enter the
+      # "nothing frozen yet" branch) run here, where a regression is visible. It mutates the schema
+      # one way at a time and restores it, so the gate below still sees an untouched tree.
+      - name: Self-test the gate (prove it can still say no)
+        run: bash bin/test-check-proto-breaking.sh
+      - name: Enforce the frozen schema (additions only)
+        run: bin/check-proto-breaking.sh
 
   # Experimental Kafka 4.x compatibility check. Non-blocking.
   # DISABLED pending the Kafka 4.x migration work: the experimental 4.x build currently fails and just adds

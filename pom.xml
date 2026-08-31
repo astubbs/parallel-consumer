@@ -38,6 +38,14 @@
         <module>parallel-consumer-vertx</module>
         <module>parallel-consumer-reactor</module>
         <module>parallel-consumer-mutiny</module>
+        <!-- In the DEFAULT reactor, unlike the eight foreign client modules below it: this one is an
+             ordinary JVM module whose only extra requirement is a protoc the build downloads from
+             Maven Central itself, so it needs nothing installed and there is nothing for
+             -Dpc.foreignClients to guard. -->
+        <module>parallel-consumer-proxy-protocol</module>
+        <!-- Same reasoning as the protocol module above: an ordinary JVM module, in the default reactor. -->
+        <module>parallel-consumer-proxy</module>
+        <module>parallel-consumer-proxy-clients</module>
         <module>parallel-consumer-examples</module>
     </modules>
 
@@ -61,6 +69,9 @@
     </scm>
 
     <properties>
+        <!-- Set true by the foreign-clients profile below; the notice only fires when the foreign
+             client modules are ABSENT from the build (astubbs#242). -->
+        <pc.foreign.notice.skip>false</pc.foreign.notice.skip>
         <source.version>17</source.version>
         <release.target>8</release.target>
 
@@ -120,6 +131,28 @@
         <pitest.version>1.25.8</pitest.version>
         <pitest-junit5.version>1.2.3</pitest-junit5.version>
         <central-publishing-maven-plugin.version>0.11.0</central-publishing-maven-plugin.version>
+
+        <!-- language proxy (astubbs#242) -->
+        <!-- ONE PIN FOR EVERY MODULE THAT SPEAKS THE PROTOCOL, AND IT HAS TO BE ONE. The generated
+             stubs (parallel-consumer-proxy-protocol) are the only consumer today; the sidecar's
+             server transport and the Java client's channel arrive on later rungs and speak the same
+             gRPC runtime. A version they disagree on is a runtime failure in a downstream consumer
+             rather than a build failure here.
+
+             It was declared separately in all three on astubbs#293, each with a comment saying "must
+             match the protocol module's pin" - three places to bump, and a bump that updated two of
+             them looked green. That is not hypothetical: a CVE fix on that branch had to find and
+             edit all three by hand. Inheriting one property from this pom is what the three comments
+             were asking for; Maven properties do not flow between siblings, but they do flow down. It
+             is declared here now, while there is one consumer and nothing to reconcile, rather than
+             after the second one arrives.
+
+             NOT protobuf.version, which stays in parallel-consumer-proxy-protocol/pom.xml: it is
+             declared exactly once, it pairs with the protoc binary that module downloads
+             (proxy.protoc), and .github/workflows/maven.yml reads `<protobuf.version>` out of that
+             pom BY PATH to warm the protoc cache. Moving it would be a rename with a reader that
+             hard-errors, for no drift being fixed. -->
+        <grpc.version>1.75.0</grpc.version>
 
         <!-- core -->
         <slf4j.version>2.0.18</slf4j.version>
@@ -185,6 +218,46 @@
     </properties>
 
     <profiles>
+
+        <!--
+            SAY WHAT IS MISSING, AND ONLY WHEN SOMETHING IS. There is one notice, not a pair: a build
+            that includes the foreign clients needs no announcement that it did, so this profile
+            fires only when they are absent and is silent otherwise.
+
+            parallel-consumer-proxy-clients/pom.xml OWNS the exclusion - which modules leave the
+            reactor and why; this only decides what the root module says about it. Adding a language
+            means editing the notice text below as well as that pom.
+
+            ONE PROFILE ID, ONE SWITCH. `foreign-clients` exists in this pom and in the clients
+            aggregator, so every way of turning it on turns all of it on:
+
+                ./mvnw -Dpc.foreignClients ...      the switch
+                ~/.m2/settings.xml, a profile that SETS that property, for a machine that always
+                wants them
+
+            NOT -P foreign-clients: it activates both profiles by id, but anything downstream that
+            activates on the PROPERTY (a per-module profile, and the CI rows' own flags) never sees
+            it - so the clients build with the engine missing from the reactor. Measured: 6 modules
+            under -P against 12 under -D.
+
+            The notice is correspondingly NOT gated on a negated `!pc.foreignClients` property -
+            a negated-property profile cannot be switched off by activating something by id, so
+            `-P foreign-clients` would have built the clients while the notice still said they were
+            absent. It is always declared, and this profile silences it, which every activation
+            route reaches.
+        -->
+        <profile>
+            <id>foreign-clients</id>
+            <activation>
+                <property>
+                    <name>pc.foreignClients</name>
+                </property>
+            </activation>
+            <properties>
+                <pc.foreign.notice.skip>true</pc.foreign.notice.skip>
+            </properties>
+        </profile>
+
         <profile>
             <!-- override source and target when working from IDE -->
             <id>intellij-idea-only</id>
@@ -925,6 +998,41 @@
                             <arguments>
                                 <argument>${project.basedir}/bin/check-copyright-headers.sh</argument>
                             </arguments>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- THE ABSENT-TOOLCHAIN NOTICE, once at the root (inherited=false).
+
+                 An ordinary build does not contain the eight foreign-language proxy clients - the
+                 clients aggregator keeps them out of its default <modules> - and a reactor that
+                 silently omits eight modules is indistinguishable from one that never had them.
+                 So the root module says so, at `validate`, in four lines: what is missing, the flag
+                 that adds it, and what that flag needs installed.
+
+                 Silent when they ARE in the build: the foreign-clients profile above sets
+                 ${pc.foreign.notice.skip}, so nothing is printed on the run that needs no telling.
+                 (astubbs#242) -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+                <inherited>false</inherited>
+                <executions>
+                    <execution>
+                        <id>foreign-clients-notice</id>
+                        <phase>validate</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <skip>${pc.foreign.notice.skip}</skip>
+                            <target>
+                                <echo level="info">Parallel Consumer - JVM modules only.</echo>
+                                <echo level="info">- NOT in this build: the 8 foreign-language proxy clients (go, python, typescript, rust, dotnet, ruby, cpp, swift).</echo>
+                                <echo level="info">- Add -Dpc.foreignClients to build and run their hello fixtures.</echo>
+                                <echo level="info">- A language whose toolchain is absent is reported and skipped; add -Dpc.foreign.strict=1 to make that red instead.</echo>
+                            </target>
                         </configuration>
                     </execution>
                 </executions>

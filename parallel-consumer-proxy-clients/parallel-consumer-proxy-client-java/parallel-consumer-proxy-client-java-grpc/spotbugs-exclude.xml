@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+    SpotBugs exclusions for the gRPC transport (astubbs#242; the policy is in
+    docs/client-static-analysis.md). The gate itself is bound in the parent pom.
+
+    Every entry names one class and one pattern, and mostly one method, so a NEW site of the same
+    shape still fails the build. Every entry is a judgement, not a mute: if you are adding one,
+    write why, or fix the code. The detector's other findings on this module were fixed rather than
+    listed here - two ignored CountDownLatch.await results in SessionEndTest, which were a real hole
+    (a timed-out await returned the same success the assertions expect).
+
+-->
+<FindBugsFilter>
+
+    <!--
+        THE SUGGESTED WIDENING WOULD WEAKEN A FROZEN CONTRACT, which is the same call
+        astubbs/parallel-consumer#383 made for WireDurations.toJava and WireTimestamps.toJava and
+        for the same reason. A DispatchRecord is a message somebody could have sent; a
+        DispatchRecordOrBuilder also admits a mutable, mid-construction builder, so widening the
+        parameter would let a caller obtain an InboundRecord for a value that was never on any wire.
+        In the class whose entire job is "what exactly was in the message", that is the wrong
+        direction to trade for a wider parameter type.
+    -->
+    <Match>
+        <Class name="bz.stub.parallelconsumer.client.grpc.WireMapping"/>
+        <Method name="toInboundRecord"/>
+        <Bug pattern="OCP_OVERLY_CONCRETE_PARAMETER"/>
+    </Match>
+
+    <!--
+        THE OVERWRITE THE DETECTOR FEARS CANNOT HAPPEN, and the guard that prevents it is three lines
+        above the assignment: pollAsync sets `polled` under synchronized(this) and throws
+        IllegalStateException on a second call, so the field is assigned at most once per client. The
+        API states that at-most-once rule on both poll methods, the direct transport enforces the
+        same one, and DirectParallelConsumerClientTest#pollMayBeCalledAtMostOnce pins it. Shutting
+        down a pool that is never replaced would be dead code; the shutdown that does matter is in
+        close(), which SpotBugs cannot connect to this assignment.
+    -->
+    <Match>
+        <Class name="bz.stub.parallelconsumer.client.grpc.GrpcParallelConsumerClient"/>
+        <Method name="pollAsync"/>
+        <Bug pattern="HES_EXECUTOR_OVERWRITTEN_WITHOUT_SHUTDOWN"/>
+    </Match>
+
+    <!--
+        STATIC WOULD BE A BUG, NOT A TIDY-UP. dispatchQueueDepth is the in-flight ceiling THIS
+        session negotiated - it is written from the Configured reply, per client - so making it
+        static would share one session's ceiling with every other client in the JVM and put a
+        stranger's number in the protocol-violation message. The detector reaches this suggestion
+        because the field's only write is inside an inner class; the field is per-instance by
+        construction.
+
+        Scoped to the one field's class and pattern, so any other field on it that really is a
+        constant is still reported.
+    -->
+    <Match>
+        <Class name="bz.stub.parallelconsumer.client.grpc.GrpcParallelConsumerClient"/>
+        <Field name="dispatchQueueDepth"/>
+        <Bug pattern="SPP_FIELD_COULD_BE_STATIC"/>
+    </Match>
+
+    <!--
+        THE CONSTRAINT THE DETECTOR CANNOT SEE IS ONE FRAME UP. awaitConnected turns the three
+        checked exceptions of Future#get into unchecked ones, and fb-contrib calls the method
+        "unconstrained" because, being private, it could simply declare them. It could - and its only
+        caller could not: pollAsync implements ParallelConsumerClient, whose signature declares no
+        checked exception and is mirrored by nine other languages, several with no checked exceptions
+        at all. The softening has to happen between those two frames; doing it in the caller instead
+        would move the same three catch blocks into the middle of the poll path to satisfy a detector,
+        without changing what any caller can observe.
+
+        Scoped to the one method. Any OTHER method here that softens a checked exception is still
+        reported, which is the case worth hearing about.
+    -->
+    <Match>
+        <Class name="bz.stub.parallelconsumer.client.grpc.GrpcParallelConsumerClient"/>
+        <Method name="awaitConnected"/>
+        <Or>
+            <Bug pattern="EXS_EXCEPTION_SOFTENING_NO_CONSTRAINTS"/>
+            <!--
+                And the lost stack trace is the same unwrap the API's own Outcomes.unwrap performs,
+                for the same stated reason: an ExecutionException is the wrapper the completion
+                machinery adds, not anything the proxy did. Rethrowing the ProxyProtocolViolation
+                itself hands the caller the exception that was actually constructed at the violation,
+                with its own stack; re-wrapping it would name the plumbing instead.
+            -->
+            <Bug pattern="LEST_LOST_EXCEPTION_STACK_TRACE"/>
+        </Or>
+    </Match>
+
+    <!--
+        Same shape, in a test fixture: FakeProxy#reportsBeforeHalfClose records how many verdicts had
+        arrived when THAT proxy was half-closed, and both tests construct their own proxy. Static
+        would carry one test's count into the next. Again the only write is inside an anonymous
+        StreamObserver, which is what the detector is reading.
+    -->
+    <Match>
+        <Class name="bz.stub.parallelconsumer.client.grpc.SessionEndTest$FakeProxy"/>
+        <Field name="reportsBeforeHalfClose"/>
+        <Bug pattern="SPP_FIELD_COULD_BE_STATIC"/>
+    </Match>
+
+</FindBugsFilter>

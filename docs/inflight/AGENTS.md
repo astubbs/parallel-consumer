@@ -77,7 +77,10 @@ ranking. Where a note sits is `inflight-state`'s job; what it is ranked against 
 | `web-` | The web GUI / demo |
 
 New prefixes are fine when something genuinely does not fit **and names an area, not a status**. Do
-not add subdirectories - the prefix is the grouping.
+not add subdirectories - the prefix is the grouping. One deliberate exception exists:
+`clients/<lang>.md` holds the language-proxy fan-out's per-language notes (astubbs#242) - a family of
+parallel same-shape items where a prefix would just re-spell the directory; do not add a second
+subdirectory without the same argument.
 
 ### The number, when a note has one
 

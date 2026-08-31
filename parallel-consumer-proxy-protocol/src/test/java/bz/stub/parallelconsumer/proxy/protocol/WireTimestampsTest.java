@@ -1,0 +1,100 @@
+package bz.stub.parallelconsumer.proxy.protocol;
+/*-
+ * Copyright (C) 2026 Antony Stubbs and contributors
+ */
+
+import org.junit.jupiter.api.Test;
+
+import java.time.Instant;
+import java.util.List;
+
+import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
+
+/**
+ * The edge-case table that pinned {@link WireTimestamps} when the sidecar's encoder and the Java client's
+ * decoder - which had never seen each other, living in different modules - were folded into it. Every row was
+ * run against both existing bodies first, and all of them agreed, including a full instant-to-wire-to-instant
+ * round trip across the two halves.
+ * <p>
+ * A plain list rather than a {@code @ParameterizedTest} for the reason {@link WireDurationsTest} gives.
+ *
+ * @author Antony Stubbs
+ */
+class WireTimestampsTest {
+
+    private static final List<WireBridgeRow> TABLE = List.of(
+            new WireBridgeRow("epoch", 0L, 0),
+            new WireBridgeRow("whole seconds", 1_700_000_000L, 0),
+            new WireBridgeRow("one nano", 0L, 1),
+            new WireBridgeRow("sub-second nanos", 1_700_000_000L, 500_000_000),
+            new WireBridgeRow("maximal nanos", 1_700_000_000L, 999_999_999),
+            // the bounds the protobuf Timestamp documentation states: 0001-01-01 to 9999-12-31
+            new WireBridgeRow("protobuf maximum, 9999-12-31", 253_402_300_799L, 999_999_999),
+            new WireBridgeRow("protobuf minimum, 0001-01-01", -62_135_596_800L, 0),
+            // and the wider bounds java.time actually carries, which the two fields also survive
+            new WireBridgeRow("Instant.MAX", 31_556_889_864_403_199L, 999_999_999),
+            new WireBridgeRow("Instant.MIN", -31_557_014_167_219_200L, 0));
+
+    @Test
+    void everyRepresentableValueRoundTripsThroughTheWireAndBack() {
+        for (WireBridgeRow row : TABLE) {
+            var backToWire = WireTimestamps.toWire(WireTimestamps.toJava(wire(row)));
+
+            assertWithMessage("%s: seconds survived the round trip", row.name())
+                    .that(backToWire.getSeconds()).isEqualTo(row.seconds());
+            assertWithMessage("%s: nanos survived the round trip", row.name())
+                    .that(backToWire.getNanos()).isEqualTo(row.nanos());
+        }
+    }
+
+    @Test
+    void theInstantCarriesTheSecondsAndNanosItWasGiven() {
+        for (WireBridgeRow row : TABLE) {
+            var asJava = WireTimestamps.toJava(wire(row));
+
+            assertWithMessage("%s: epoch second", row.name())
+                    .that(asJava.getEpochSecond()).isEqualTo(row.seconds());
+            assertWithMessage("%s: nanos", row.name()).that(asJava.getNano()).isEqualTo(row.nanos());
+        }
+    }
+
+    /** Same normalising contract as the duration bridge: the wire may send more than a second's worth of nanos. */
+    @Test
+    void nanosBeyondASecondCarryIntoSeconds() {
+        var wire = com.google.protobuf.Timestamp.newBuilder().setSeconds(0).setNanos(1_500_000_000).build();
+
+        assertThat(WireTimestamps.toJava(wire)).isEqualTo(Instant.ofEpochMilli(1500));
+    }
+
+    /**
+     * Pre-epoch instants, both encodings. The wire's canonical form shares a sign between the two fields;
+     * {@link WireTimestamps#toWire} emits {@link Instant}'s non-negative-nano form, which does not. Both decode
+     * to the same instant, which is the property that matters - see the class javadoc for why the encoding is
+     * carried across unchanged rather than re-derived.
+     */
+    @Test
+    void bothPreEpochEncodingsDecodeToTheSameInstant() {
+        var canonical = com.google.protobuf.Timestamp.newBuilder()
+                .setSeconds(-1).setNanos(-500_000_000).build();
+        var nonNegativeNano = com.google.protobuf.Timestamp.newBuilder()
+                .setSeconds(-2).setNanos(500_000_000).build();
+
+        assertThat(WireTimestamps.toJava(canonical)).isEqualTo(Instant.ofEpochMilli(-1500));
+        assertThat(WireTimestamps.toJava(nonNegativeNano)).isEqualTo(Instant.ofEpochMilli(-1500));
+    }
+
+    /** The encoding a pre-epoch instant actually gets, recorded rather than left to be rediscovered. */
+    @Test
+    void aPreEpochInstantEncodesInInstantsNonNegativeNanoForm() {
+        var wire = WireTimestamps.toWire(Instant.ofEpochMilli(-1500));
+
+        assertThat(wire.getSeconds()).isEqualTo(-2);
+        assertThat(wire.getNanos()).isEqualTo(500_000_000);
+        assertThat(WireTimestamps.toJava(wire)).isEqualTo(Instant.ofEpochMilli(-1500));
+    }
+
+    private static com.google.protobuf.Timestamp wire(WireBridgeRow row) {
+        return com.google.protobuf.Timestamp.newBuilder().setSeconds(row.seconds()).setNanos(row.nanos()).build();
+    }
+}

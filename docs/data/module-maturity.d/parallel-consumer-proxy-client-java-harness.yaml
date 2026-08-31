@@ -1,0 +1,14 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# module-maturity corpus, and only the Java reference implementation work ever edits it.
+
+schema_version: 1
+kind: module-maturity
+modules:
+  - artifact: parallel-consumer-proxy-client-java-harness
+    deferred:
+      reason: >-
+        A build-graph module, not a product one: it holds the JVM side's single dependency on the engine so that no module a client wraps carries one, and it runs the gRPC transport's harness-backed conformance suite. It has no main sources and publishes no artifact, so there is no maturity or support claim to make about it.
+      lifted_by: >-
+        Nothing is expected to lift it. If this module ever grows a published surface, that change records its first real row here.

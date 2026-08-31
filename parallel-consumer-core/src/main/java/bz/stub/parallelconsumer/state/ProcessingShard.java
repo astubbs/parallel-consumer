@@ -203,6 +203,22 @@ public class ProcessingShard<K, V> {
         includeInSelection(failedWork);
     }
 
+    /**
+     * Work returned without a verdict. It never failed, so no retry is scheduled and no attempt is consumed - but
+     * it must become selectable again, so it re-joins the selection population exactly as a failure would.
+     * <p>
+     * Deliberately its own entry point rather than a call to {@link #onFailure}: the two say different things
+     * about the record, and it is {@link ShardManager} that acts on the difference by skipping the retry queue.
+     * Naming the shard-level step after the failure it is not would put the one seam that distinguishes them
+     * behind a method whose name denies it.
+     * <p>
+     * Idempotent for the same reason {@link #onFailure} is - the claim is a compare-and-set, so calling this twice
+     * for the same container includes it once.
+     */
+    public void onAbandoned(WorkContainer<?, ?> abandonedWork) {
+        includeInSelection(abandonedWork);
+    }
+
 
     public boolean isEmpty() {
         return workMap.isEmpty();

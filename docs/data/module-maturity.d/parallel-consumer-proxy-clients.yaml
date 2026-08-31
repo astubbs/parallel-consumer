@@ -1,0 +1,14 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# module-maturity corpus, and only the language-proxy branch work ever edits it.
+
+schema_version: 1
+kind: module-maturity
+modules:
+  - artifact: parallel-consumer-proxy-clients
+    deferred:
+      reason: >-
+        Aggregator packaging pom for the eleven client modules, seeded complete ahead of the fan-out. It publishes no artifact of its own, and every client beneath it is an unstarted skeleton.
+      lifted_by: >-
+        astubbs#242 - the language-proxy plan's release-documentation pass decides this aggregator's row once client waves have shipped.

@@ -1800,6 +1800,49 @@ which is why the capture is worth attributing to the merge rather than to the br
 
 <!-- post-merge: checked-end -->
 
+<!-- post-merge: checked-begin -->
+**Twenty-first sighting, 2026-08-17 - the eager `CLASS2_STALL` again, a DIFFERENT arm from the
+fleet `NO_PROGRESS` pair above, and it reproduces the second sighting almost exactly.**
+(Observed before the eighth, and numbered last because it arrived by merge rather than in date
+order - it was recorded on astubbs/parallel-consumer#293 first as that branch's seventh and then as
+its thirteenth, both numbers master had since given to different sightings.)
+`ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` killed fail-fast by
+`ProgressProbe` on
+[job 95331078881](https://github.com/astubbs/parallel-consumer/actions/runs/32011246250/job/95331078881),
+on astubbs/parallel-consumer#293 at head `b94e85d64`:
+
+```
+CLASS2_STALL/LAG_STAGNATION: partition ChaosRevokeUnderWorkIT-w4-204589915-25 lag=2885 with
+committed offset stagnant at 296 for 154s (bound 150s) - protocol-invisible
+```
+
+Two violations, eight frozen partitions (lag 79-1676, stagnant 12-23s), `peaks:
+rebalanceDwell=10990ms lagStagnation=154235ms`. **Replay seed `1870799285619636118`**:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=1870799285619636118
+
+**Why this one is worth more than another tally mark: it is the same variant and the same signature
+as the second sighting**, four days apart on an unrelated branch - eager assignor, `CLASS2_STALL`/
+`LAG_STAGNATION`, and 154s of stagnation against the same 150s bound. The second sighting stands as
+the family's strongest datapoint partly because it was single; it is not any more.
+
+**Control arm, from the same run:** both siblings passed - `ChaosRevokeUnderWorkCooperativeIT` on
+seed `4957387373444835170` and `ChaosChurnStormIT` on `9069097373343684126`. Same runner, same
+broker image, same minute, so this is not an ambient property of the machine, and the cooperative
+variant again did not draw it.
+
+**Branch context: astubbs/parallel-consumer#293 is not a suspect.** It adds a proxy sidecar and
+eleven language clients; nothing in it touches the rebalance, poll, commit or shutdown path in
+`parallel-consumer-core`, and the same lane was green on the previous head of that branch two
+runs earlier with different seeds.
+
+**One correction to the retrieval note above: this time the autopsy WAS in the console log**, read
+straight out of `gh api .../actions/jobs/<id>/logs`. The truncation that hid it on 2026-08-12 is
+intermittent, not the rule - go to the artifact when the console lacks the block, not instead of
+looking.
+<!-- post-merge: checked-end -->
+
 ## Delete when
 
 The `CLASS2_STALL` entries above are superseded by this section and kept only as the record of how a
@@ -1810,7 +1853,9 @@ astubbs/parallel-consumer#353 before this section existed and merged in after it
 of the same crossings rather than an exception to them; the counts here are left as they were
 written rather than silently re-derived. The seventeenth to nineteenth arrive the same way, from
 astubbs/parallel-consumer#57 - the same crossings again, which is why they take the numbers after
-the sixteenth despite two of them predating it.
+the sixteenth despite two of them predating it. The twenty-first is the same crossing once more,
+from astubbs/parallel-consumer#293, and its own parenthetical records that it has now been
+renumbered twice for it.
 <!-- post-merge: checked-end --> This file may be retired once astubbs#29 lands and the
 remaining open item - the original deadlock - has its own solutions write-up.
 

@@ -18,6 +18,28 @@
 #    9. a required field EMPTIED rather than removed                    -> FAIL (1)
 #   10. a field the kind never declared, where it declares an optional  -> FAIL (1)
 #   11. an optional list with no required partner to extend             -> FAIL (1)
+#   12. two independently added fragments both read; deferrals NAMED    -> pass (0)
+#   13. a reactor module with no row and no deferral                    -> FAIL (1)
+#   14. a module added only to a NESTED aggregator's <modules>          -> FAIL (1)
+#   15. a feature record naming a module in no <modules> list           -> FAIL (1)
+#   16. a maturity row naming a module in no <modules> list             -> FAIL (1)
+#   17. the same module keyed in both a fragment and the root file      -> FAIL (1)
+#   18. an evidence_id that resolves to no module_evidence entry        -> FAIL (1)
+#   19. a maturity row's feature path that does not resolve             -> FAIL (1)
+#   20. a deferral missing its reason                                   -> FAIL (1)
+#   21. a deferral written into the shared ROOT file                    -> FAIL (1)
+#   22. a fragment whose artifact does not match its filename           -> FAIL (1)
+#   23. a fragment carrying the wrong kind for its directory            -> FAIL (1)
+#   24. a fragment_collection naming a collection no contract governs   -> FAIL (1)
+#   25. two module_evidence entries sharing one id                      -> FAIL (1)
+#   26. a deferral as a SCALAR (`deferred: true`), not a mapping        -> FAIL (1)
+#
+# Cases 12-26 pin the reactor cross-checks and the per-module fragment split. Case 13 is the gap
+# the cross-check exists to close: a module in a <modules> list with no maturity row used to pass
+# clean, and the repo carries the scar of the reverse direction (cases 15/16) - feature records
+# whose published coordinates could not resolve. Case 17 is the failure mode the fragment merge
+# itself introduces, and 22 pins the property the split exists for: the filename is the ownership
+# claim, so no two waves can write the same module's data.
 #
 # Case 2 is the one worth keeping. The guard's first cross-reference check only resolved a string
 # that was ENTIRELY a path, so it caught `path: foo.yaml` and missed `... see foo.yaml.` - which is
@@ -41,20 +63,25 @@ cd "$(dirname "$0")/.."
 
 GUARD=bin/check-docs-data.sh
 failures=0
-restore_path=""
-restore_copy=""
+restore_paths=()
+restore_copies=()
 
 # Restore by copying bytes back, not by replaying a shell variable: command substitution strips
 # trailing newlines, so a variable round-trip silently rewrites every fixture file it touches. The
 # first version of this self-test did exactly that and left four corpus files modified while
-# reporting every case green.
+# reporting every case green. Mutations stack (case 12 mutates three fragments into one corpus),
+# so restore walks the stack in reverse - last mutation undone first, which also makes repeated
+# mutation of the same file within a case land back on the original bytes.
 restore() {
-  if [ -n "$restore_path" ] && [ -f "$restore_copy" ]; then
-    cp "$restore_copy" "$restore_path"
-    rm -f "$restore_copy"
-    restore_path=""
-    restore_copy=""
-  fi
+  local i
+  for ((i = ${#restore_paths[@]} - 1; i >= 0; i--)); do
+    if [ -f "${restore_copies[i]}" ]; then
+      cp "${restore_copies[i]}" "${restore_paths[i]}"
+      rm -f "${restore_copies[i]}"
+    fi
+  done
+  restore_paths=()
+  restore_copies=()
 }
 trap restore EXIT
 
@@ -112,11 +139,36 @@ expect_problems() {
   fi
 }
 
+# expect_mentioning <expected-exit> <pattern> <label> -- asserts the verdict AND that the guard said why
+#
+# `expect` checks only the exit code, and `expect_problems` additionally pins an exact problem
+# count - too strict for the reactor cross-checks, where one fixture legitimately trips several
+# related findings at once (a renamed fragment artifact is simultaneously a filename mismatch, a
+# coverage gap and an unresolvable module). This asserts the verdict plus the one line that
+# matters, and also serves the passing direction: exit 0 plus a DEFERRED line proves a fragment
+# was read, which a bare exit code cannot.
+expect_mentioning() {
+  local want=$1 pattern=$2 label=$3 got output
+  output=$("$GUARD" 2>&1)
+  got=$?
+  # Herestring, not a pipe into grep -q - same SIGPIPE trap as expect_problems above.
+  if [ "$got" -eq "$want" ] && grep -q "$pattern" <<<"$output"; then
+    printf 'ok:   %s (exit %s, mentioning %s)\n' "$label" "$got" "$pattern"
+  else
+    printf 'FAIL: %s - expected exit %s mentioning "%s", got exit %s. The guard said:\n' \
+      "$label" "$want" "$pattern" "$got"
+    printf '%s\n' "$output" | sed 's/^/      | /'
+    failures=$((failures + 1))
+  fi
+}
+
 # mutate <file> <python-expression-on-t> - edits in place, remembering how to put it back
 mutate() {
-  restore_path=$1
-  restore_copy=$(mktemp)
-  cp "$1" "$restore_copy"
+  local copy
+  copy=$(mktemp)
+  cp "$1" "$copy"
+  restore_paths+=("$1")
+  restore_copies+=("$copy")
   python3 - "$1" "$2" <<'PYTHON'
 import pathlib
 import re
@@ -187,6 +239,127 @@ restore
 mutate docs/data/schema.yaml \
   't.replace("  roadmap:\n    required:\n", "  roadmap:\n    stray_optional:\n      - x\n    required:\n", 1)'
 expect 1 "an optional list with no required partner is caught"
+restore
+
+# Case 12: fragments written by independent waves in independent files are all read into one
+# corpus, and every deferral is named on a GREEN run - a deferral that only surfaced on failure
+# would be forgotten precisely while everything passes. The deferrals asserted on are FIXTURES
+# mutated in, never the corpus's live ones: a live deferral is lifted by the unrelated PR that
+# starts its module's wave, and this case must not go red on that PR. Patterns are anchored
+# through the ' - ' delimiter and pin the fixture's own reason, because 'parallel-consumer-proxy'
+# is a prefix of every client module's name and an unanchored pattern matches all of their
+# DEFERRED lines - passing for the wrong reason.
+mutate docs/data/module-maturity.d/parallel-consumer-proxy.yaml \
+  '"schema_version: 1\nkind: module-maturity\nmodules:\n  - artifact: parallel-consumer-proxy\n    deferred:\n      reason: Fixture deferral alpha.\n      lifted_by: The self-test restores the real fragment.\n"'
+mutate docs/data/module-maturity.d/parallel-consumer-example-core.yaml \
+  '"schema_version: 1\nkind: module-maturity\nmodules:\n  - artifact: parallel-consumer-example-core\n    deferred:\n      reason: Fixture deferral beta.\n      lifted_by: The self-test restores the real fragment.\n"'
+mutate docs/data/testing-evidence.d/parallel-consumer-proxy.yaml \
+  '"schema_version: 1\nkind: testing-evidence\nmodule_evidence:\n  - artifact: parallel-consumer-proxy\n    deferred:\n      reason: Fixture deferral gamma.\n      lifted_by: The self-test restores the real fragment.\n"'
+expect_mentioning 0 "DEFERRED: module-maturity for parallel-consumer-proxy - Fixture deferral alpha." \
+  "a deferred fragment passes, and the deferral is named in the output"
+expect_mentioning 0 "DEFERRED: module-maturity for parallel-consumer-example-core - Fixture deferral beta." \
+  "a second, independently added fragment in the same corpus is also read"
+expect_mentioning 0 "DEFERRED: testing-evidence for parallel-consumer-proxy - Fixture deferral gamma." \
+  "the testing-evidence corpus reads its fragments too"
+restore
+
+# Case 13: the gap the cross-check closes. Emptying the module's fragment leaves a reactor module
+# with no row and no deferral, which used to pass clean.
+mutate docs/data/module-maturity.d/parallel-consumer-proxy.yaml \
+  '"# fragment emptied: this module now has no row and no deferral anywhere\n"'
+expect_problems 1 "module 'parallel-consumer-proxy' has no module-maturity row" \
+  "a reactor module with no row and no deferral is caught, naming the module"
+restore
+
+mutate parallel-consumer-examples/pom.xml \
+  't.replace("<module>parallel-consumer-example-core</module>", "<module>parallel-consumer-example-core</module>\n        <module>parallel-consumer-example-phantom</module>", 1)'
+expect_problems 1 "parallel-consumer-example-phantom" \
+  "a module added only to a nested aggregator's <modules> is caught"
+restore
+
+mutate docs/features/commit-modes.yaml \
+  't.replace("module: parallel-consumer-core\n", "module: parallel-consumer-ghost\n", 1)'
+expect_problems 1 "parallel-consumer-ghost" \
+  "a feature record naming a module in no <modules> list is caught"
+restore
+
+# Renaming the row's artifact trips the reverse check AND leaves the real module uncovered, so
+# this asserts the line rather than a count.
+mutate docs/data/module-maturity.yaml \
+  't.replace("artifact: parallel-consumer-vertx\n", "artifact: parallel-consumer-vertxx\n", 1)'
+expect_mentioning 1 "names module 'parallel-consumer-vertxx', which is in no pom.xml" \
+  "a maturity row naming a module in no <modules> list is caught"
+restore
+
+mutate docs/data/module-maturity.yaml \
+  't.replace("modules:\n", "modules:\n  - artifact: parallel-consumer-proxy\n    maturity: alpha\n    reliability_confidence: Fixture row.\n    api_expectation: Fixture row.\n    support_posture: Fixture row.\n    evidence_id: core\n    use_this_if: Fixture row.\n", 1)'
+expect_problems 1 "duplicate module-maturity record for module 'parallel-consumer-proxy'" \
+  "the same module keyed in a fragment and the root file is caught, not silently merged"
+restore
+
+mutate docs/data/module-maturity.yaml \
+  't.replace("evidence_id: vertx\n", "evidence_id: no-such-evidence\n", 1)'
+expect_problems 1 "no-such-evidence" \
+  "an evidence_id resolving to no module_evidence entry is caught"
+restore
+
+mutate docs/data/module-maturity.yaml \
+  't.replace("feature: ../features/mutiny-integration.yaml\n", "feature: ../features/no-such-feature.yaml\n", 1)'
+expect_problems 1 "no-such-feature.yaml" \
+  "a maturity row's feature path that does not resolve is caught"
+restore
+
+# A fixture deferral, not an edit of the live one, for the case-12 reason: the live deferral's
+# shape (or the deferral itself) goes away when the module's wave starts, and this case must
+# keep testing the checker, not the corpus.
+mutate docs/data/module-maturity.d/parallel-consumer-proxy.yaml \
+  '"schema_version: 1\nkind: module-maturity\nmodules:\n  - artifact: parallel-consumer-proxy\n    deferred:\n      lifted_by: The self-test restores the real fragment.\n"'
+expect_problems 1 "requires 'reason'" \
+  "a deferral missing its reason is caught"
+restore
+
+# A deferral in the ROOT file also duplicates the fragment's key, so assert the line, not a count.
+mutate docs/data/module-maturity.yaml \
+  't.replace("modules:\n", "modules:\n  - artifact: parallel-consumer-proxy\n    deferred:\n      reason: Fixture.\n      lifted_by: Fixture.\n", 1)'
+expect_mentioning 1 "deferral lives in the module's own fragment" \
+  "a deferral written into the shared root file is caught"
+restore
+
+# The rename is at once a filename mismatch, a coverage gap and an unresolvable module - assert
+# the ownership line specifically.
+mutate docs/data/module-maturity.d/parallel-consumer-proxy.yaml \
+  't.replace("artifact: parallel-consumer-proxy\n", "artifact: parallel-consumer-prox\n", 1)'
+expect_mentioning 1 "the filename is the ownership claim" \
+  "a fragment whose artifact does not match its filename is caught"
+restore
+
+mutate docs/data/module-maturity.d/parallel-consumer-proxy.yaml \
+  't.replace("kind: module-maturity\n", "kind: testing-evidence\n", 1)'
+expect_mentioning 1 "must carry kind 'module-maturity'" \
+  "a fragment carrying the wrong kind for its directory is caught"
+restore
+
+mutate docs/data/schema.yaml \
+  't.replace("fragment_collection: modules\n", "fragment_collection: modulez\n", 1)'
+expect_mentioning 1 "no item contract governs" \
+  "a fragment_collection no item contract governs is caught in the schema itself"
+restore
+
+# Case 25: same insertion pattern as case 17, one field over - the id, which evidence_id
+# resolution keys on. The fixture entry's artifact is unique so only the id check can fire, and
+# module_evidence artifacts are deliberately not reverse-checked against the reactor.
+mutate docs/data/testing-evidence.yaml \
+  't.replace("module_evidence:\n", "module_evidence:\n  - id: core\n    artifact: parallel-consumer-fixture\n    coverage: Fixture row.\n    inspect: Fixture row.\n    limitation: Fixture row.\n", 1)'
+expect_problems 1 "duplicate module_evidence id 'core'" \
+  "two module_evidence entries sharing one id are caught - resolution needs exactly one target"
+restore
+
+# Case 26: `deferred: true` answers "why is no claim published" with a boolean. The scalar branch
+# must report it as a shape error; without it the entry still counts as deferred and sails green.
+mutate docs/data/module-maturity.d/parallel-consumer-proxy.yaml \
+  '"schema_version: 1\nkind: module-maturity\nmodules:\n  - artifact: parallel-consumer-proxy\n    deferred: true\n"'
+expect_problems 1 "deferred should be a mapping, found bool" \
+  "a deferral written as a scalar instead of a mapping is caught"
 restore
 
 expect 0 "restored: the corpus is valid again"

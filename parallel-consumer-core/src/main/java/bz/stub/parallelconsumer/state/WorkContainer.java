@@ -345,6 +345,36 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      */
     private final AtomicLong deliveryCount = new AtomicLong(0);
 
+    /**
+     * The delivery this record was abandoned on - returned to scheduling with no verdict at all - or {@code -1}
+     * if it has never been abandoned. An external engine whose worker disconnects mid-record has no verdict to
+     * report, but the record must not be treated as a failure either: a dropped connection is not a processing
+     * attempt and must not consume a retry.
+     * <p>
+     * <b>Keyed by delivery rather than a plain boolean, and deliberately NOT cleared on redelivery.</b> An
+     * abandoned record is immediately re-selectable, and the control loop drains returns and re-selects work in
+     * the same iteration - so without a delivery identity, a return arriving late for delivery <em>n</em> is
+     * indistinguishable from a return for the live delivery <em>n+1</em>, and acting on it ends a flight that is
+     * still running and decrements {@code numberRecordsOutForProcessing} twice. Keeping the marker keyed means a
+     * stale one identifies itself ({@link #isReturnForSupersededDelivery()}) instead of needing to be cleared by
+     * the claim winner and racing it.
+     * <p>
+     * <b>Why this is not an {@link ExecutionState}</b>, given that {@link #state} exists precisely so that two
+     * fields cannot contradict each other. The hazard that collapsing fixed was a claim decision <em>reading</em>
+     * one field and being contradicted by the other; nothing reads this one to decide a claim. It is not a
+     * lifecycle position but a note left by the returner for {@link WorkManager#handleFutureResult} - "there is
+     * no verdict coming, and that is expected" - which is the same reason {@link #selectionClaimed} is its own
+     * field: the state at an instant records what the container is, never who acted on it. An abandoned record
+     * that has left flight is {@link ExecutionState#AVAILABLE}, which is exactly what it is, and is claimable on
+     * that basis alone.
+     * <p>
+     * Atomic rather than a plain field because the marker is written by whichever thread noticed the worker was
+     * gone and read by the controller, with no lock between them.
+     *
+     * @see #markAbandoned(long)
+     */
+    private final AtomicLong abandonedAtDelivery = new AtomicLong(-1);
+
     @Getter
     @Setter(AccessLevel.PUBLIC)
     private Future<List<?>> future;
@@ -552,6 +582,42 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
 
     public boolean isInFlight() {
         return state.get().state().isInFlight();
+    }
+
+    /**
+     * Marks the given delivery of this work as returned without a verdict, so
+     * {@link WorkManager#handleFutureResult} returns it to scheduling rather than throwing. Does not touch the
+     * failure count or the retry delay - the record is redelivered as the same attempt it already was.
+     *
+     * @param delivery the {@link #getDeliveryCount()} value observed when the record was handed out. Callers
+     *                 must capture it at dispatch, not read it at return time: by then the record may already
+     *                 have been redelivered, and passing the current value would make a stale return look live.
+     * @see #abandonedAtDelivery
+     */
+    public void markAbandoned(long delivery) {
+        log.trace("Abandoning delivery {} without verdict {}", delivery, this);
+        abandonedAtDelivery.set(delivery);
+    }
+
+    /**
+     * @return true when this record was abandoned on the delivery that is currently outstanding
+     * @see #abandonedAtDelivery
+     */
+    public boolean isAbandonedForCurrentDelivery() {
+        return abandonedAtDelivery.get() == deliveryCount.get();
+    }
+
+    /**
+     * @return true when a return carries no verdict and its abandon marker belongs to a delivery that has
+     *         already ended - a late duplicate, which must be ignored rather than acted on
+     * @see #abandonedAtDelivery
+     */
+    public boolean isReturnForSupersededDelivery() {
+        long abandonedAt = abandonedAtDelivery.get();
+        // not isEmpty() - core compiles to Java 8 bytecode, where that Optional method does not exist
+        return !getMaybeUserFunctionSucceeded().isPresent()
+                && abandonedAt >= 0
+                && abandonedAt != deliveryCount.get();
     }
 
     /**

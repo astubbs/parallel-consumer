@@ -14,6 +14,9 @@
 
 set -euo pipefail
 
+# --fail-at-end so one run reports every independent module's verdict rather than stopping at the
+# first failure; the reasoning, and why the exit code survives it, is in bin/ci-build.sh's header.
+#
 # Group exclusions are HARDCODED here, not inherited from the pom default - enforced by
 # QuarantinedAnnotationContractTest (pom inheritance once made the quarantine exclusion a
 # silent no-op for unit tests). Keep in sync with the pom excluded.groups default - the two lists
@@ -21,6 +24,7 @@ set -euo pipefail
 # here, in the GATING suite, which is how the Lincheck lane would have arrived if nobody looked.
 ./mvnw --batch-mode \
   -Pci \
+  --fail-at-end \
   clean test \
   -Dexcluded.groups=performance,chaos,quarantined,lincheck \
   "$@"

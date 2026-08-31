@@ -148,6 +148,21 @@ jobs:
       - name: Confirm shellcheck runs, so a shell-lint exit 2 means a real defect
         run: shellcheck --version
 
+      # Same environment gap, third instance, and the one this lane most needs to close:
+      # bin/test-check-proto-breaking.sh exits 2 "cannot run" without buf, and the gate it protects
+      # is the only one in bin/ that reads its inputs into ARRAYS - which is where the bash-3.2
+      # divergence this whole job exists for actually lives. It shipped with a `mapfile` (bash 4;
+      # exit 127 on 3.2, a gate reporting neither verdict) and every ubuntu runner passed it. The
+      # setup action rather than `brew install buf`: it is already pinned in maven.yml's
+      # `proto: breaking` job, so the two lanes cannot end up on different buf versions.
+      - name: Install the self-tests' buf dependency
+        uses: bufbuild/buf-action@v1
+        with:
+          setup_only: true
+
+      - name: Confirm buf runs, so a proto-breaking exit 2 means a real defect
+        run: buf --version
+
       - name: Pin bash to the system 3.2
         run: |
           mkdir -p "$RUNNER_TEMP/bash32"

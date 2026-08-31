@@ -75,9 +75,15 @@ grep -qE "[[:space:]]$method[[:space:]]*\\(" /dev/null' \
 # astubbs/parallel-consumer#355, not this one. This case is a green assertion on purpose: if a
 # future ShellCheck gains version awareness it will go red, and that is the signal to widen this
 # lane and narrow astubbs#355's claim.
+# The claim above has narrowed since it was written: `mapfile` and `readarray` now have a
+# bash-4-builtin row in bin/check-shell-hazards.sh, added when the proto freeze gate shipped with a
+# mapfile and exited 127 on a developer box. ShellCheck still cannot see either, and the macOS lane
+# is still what catches an UNLISTED bash-4 builtin - but the two spellings this repo reaches for are
+# caught statically now.
+# hazard-ok: the fixture below is the hazard, and the test name says the word; nothing here runs
 assert_case "green (documented gap): bash-4 mapfile is INVISIBLE to shellcheck" pass \
     '#!/usr/bin/env bash
-mapfile -t xs < <(printf "a\nb\n")
+mapfile -t xs < <(printf "a\nb\n")   # hazard-ok: fixture body, handed to shellcheck as text
 echo "${xs[0]}"'
 
 # --- RED CONTROL: the directive that silently disabled the linter --------------------------------

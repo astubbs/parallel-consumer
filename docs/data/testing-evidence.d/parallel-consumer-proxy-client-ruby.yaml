@@ -1,0 +1,49 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# testing-evidence corpus, and only the Ruby client wave ever edits it.
+
+schema_version: 1
+kind: testing-evidence
+module_evidence:
+  - id: proxy-client-ruby
+    artifact: parallel-consumer-proxy-client-ruby
+    coverage: >-
+      One conformance scenario, a-processed-record-advances-the-committed-offset, run end to end over
+      real gRPC against the test-mode sidecar: the sidecar is spawned as a child process, its port read
+      from the lifecycle channel, the fresh-session handshake completed, a dispatch wave queued and
+      handed to a thread executor, the user's block run, the outcome reported with the token echoed
+      verbatim, and the session closed by half-close and the lifecycle pipe. The assertion that it can
+      fail was established by a negative control - raising inside the user's block instead of returning
+      produced three deliveries with the attempt count incrementing and the failure reason coming back
+      verbatim, and the spec went red. Static analysis is RuboCop, configured as a bug finder
+      (Lint/ and Security/ at full strength), and its ability to fail was established the same way: an
+      injected useless assignment and an injected unreachable statement each turned it red.
+      Beside that, and not replacing it, Ruby is wired into the shared cross-language conformance
+      suite: a conformance runner at scripts/conformance-runner implements the contract every
+      language implements, and the suite drives it through all five scenarios the harness serves -
+      the processed record, the unreported record, the failure-and-redelivery history, a held record
+      admitting a concurrent delivery on another key, and the in-flight ceiling holding this client to exactly two unresolved records at once - asserting engine state Ruby
+      cannot see. The fifth, the in-flight ceiling, was proven able to fail once for every language rather than here - in Go and in Kotlin, by declaring double the ceiling the scenario prescribed - and the conformance module's own evidence records it. Each of the first four was proven able to fail by sabotaging the runner, including the one
+      sabotage that works on the ordering scenario: a mutex around the whole processor, which
+      deadlocks and exits 1. That sweep is also what found the failure-reason divergence: a raised exception's reason reached
+      the wire prefixed with its class, which no sibling client does and this module's own README
+      already contradicted. A spec now pins the translation, and it was proven red against the
+      prefix.
+    inspect:
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-ruby/scripts/conformance-runner
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-ruby/spec/failure_reason_spec.rb
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-ruby/spec/one_record_end_to_end_spec.rb
+      - parallel-consumer-proxy-clients/parallel-consumer-proxy-client-ruby/.rubocop.yml
+    limitation: >-
+      One scenario of eleven, and the harness negotiates only the dispatch capability, so every liveness,
+      reconnect, worker-death, terminal and drain duty is untested because it is un-negotiated rather
+      than because it passed. The dispatch queue's own rules are implemented but unexercised: no test
+      drives FIFO hand-out with fewer executors than records, and the overflow path - which the client
+      answers by cancelling the call - has never run, because a correct proxy cannot produce it.
+      Subscription is not a live variable either: the mock harness seeds its records regardless of the
+      topic a client subscribes to, so a wrong-topic run still passes and cannot be used as a control.
+      The regenerate-and-diff check on the committed stubs is not wired into the build yet -
+      parallel-consumer-proxy-clients/parallel-consumer-proxy-client-ruby/scripts/generate-proto.sh is
+      run by hand. Everything here was verified on Ruby 4.0.6 while the CI matrix row pins 3.4.4, and
+      no run has yet happened on 3.4.

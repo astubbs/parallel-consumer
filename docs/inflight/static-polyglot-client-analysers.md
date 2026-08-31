@@ -168,13 +168,19 @@ Scala are not listed at all. For none of these is the build the blocker.
 | Python | **Nothing mature exists.** The GIL prevents corruption of interpreter internals; it does not prevent a check-then-act race in client code, and no analyser looks for one. |
 | Ruby | **Nothing.** Same reasoning. |
 
-### The one concrete concurrency gap the survey found
+### The one concrete concurrency gap the survey found - now closed
 
-**The Go client's gating test command does not use the race detector.** The module's pom declares
-`<pc.foreign.test.args>test ./...</pc.foreign.test.args>` - no `-race`. Yet
-`docs/inflight/clients/go.md` says of a demo assertion "Covered by `go test -race`", which is a
-developer-run claim the recipe that actually gates does not make.
-<!-- file-refs: N/A - the Go module and its per-language note ship on the polyglot branches, not on master -->
+**The Go client's gating test command did not use the race detector.** The module's pom declared its
+test args with no `-race`, while `docs/inflight/clients/go.md` said of a demo assertion "Covered by
+`go test -race`" - a developer-run claim the recipe that actually gated did not make.
+<!-- file-refs: N/A - the per-language note this contradicted ships on the polyglot branches, not on master -->
+
+**Closed by the rung that landed the real Go client**: the module's `pc.foreign.test.args` now carry
+`-race`, so the gating recipe and the claim agree. Its pom's own header carries the reasoning, beside
+a second flag that arrived with it - `-count=1`, which defeats Go's test cache. That one was not on
+this survey's list and is worth recording here because it is the same shape: the sidecar a Go test
+spawns is not one of the package's cached inputs, so breaking the sidecar deliberately returned
+`ok (cached)` and a sabotage arm read as green.
 
 
 Go's race detector is built into the toolchain, costs one flag, and this is the client with the
@@ -323,8 +329,7 @@ Named so the same suggestions do not come back around.
 
 ## If someone picks this up, in order
 
-1. **Add `-race` to the Go module's test args.** Free, and it is the only built-in race detector on
-   the whole polyglot surface.
+1. ~~**Add `-race` to the Go module's test args.**~~ **Done** - see the section above.
 2. **Add Go, TypeScript, Ruby, C++, C#, and Rust to CodeQL default setup**, and verify Ruby's
    version ceiling before counting it. Six languages, one settings change.
 3. **Verify whether the Kotlin client is actually extracted** by the `java-kotlin` analysis already

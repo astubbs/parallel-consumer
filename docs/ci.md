@@ -70,6 +70,8 @@ document. This section is the detail behind it.
   master runs a single full `bin/ci-build.sh` on the default Kafka version to gate SNAPSHOT
   publishing. All jobs use explicit `cache/restore` with rotating keys from the `prepare-deps`
   job - never `setup-java cache: 'maven'`.
+  It also carries **`proto: breaking`**, the freeze gate over the proxy wire schema - see
+  ["`proto: breaking` runs three things, in an order that matters"](#proto-breaking-runs-three-things-in-an-order-that-matters).
 - **`publish.yml`** - publishes to Maven Central on every push to `master`. The pom version is the
   source of truth: `-SNAPSHOT` versions deploy as snapshots, non-snapshot versions deploy as full
   releases (and create a git tag + GitHub release). See [`docs/releasing.md`](releasing.md).
@@ -92,6 +94,51 @@ document. This section is the detail behind it.
   astubbs/parallel-consumer#N` lines from the PR body and blocks the child until every parent has
   merged. Produces the **required** check `Check PR Dependencies`, so a stacked PR cannot merge out
   of order.
+- **`clients.yml`** - "Clients". One row per proxy-client language (astubbs#242): install that
+  language's toolchain, then build, test, run the shared conformance suite, run the language's own
+  static analysis, and **audit that language's dependencies for published vulnerabilities** via
+  `bin/client-audit.sh`. `fail-fast: false`, so one language's breakage cannot hide another's. The
+  workflow's own header owns the rest (the maturity gate, the caching rule, the toolchain pins).
+  - **Every row sets `PC_FOREIGN_CLIENTS_STRICT`**, which turns "toolchain not on PATH" from the
+    skip a developer's machine wants into the failure a provisioned runner needs.
+    `bin/foreign-client-step.sh` owns that contract; a row that stops setting it goes green having
+    built nothing.
+  - **The three Java client modules have no row here.** They are ordinary Maven modules in the
+    default reactor, so `maven.yml` already builds them and runs their tests. Kotlin and Scala do
+    have rows: both are JVM but neither is Java, and each has its own analyser to run.
+  - **C++ and Swift build in containers, on `ubuntu-latest`.** Each module carries a multi-stage
+    Dockerfile whose `FROM` line is that row's real pin, and `bin/build-client.sh` drives BuildKit
+    and exports the artifact stage. Neither language can be served from the host: gRPC and protobuf
+    reach C++ as system dev packages rather than as a versioned toolchain, and the ubuntu images
+    ship no Swift.
+  - **What the audit covers that nothing else does.** `dependency-audit.yml` above scans the Maven
+    tree; Go, Rust, npm, Ruby, Python and .NET dependencies were scanned by nothing at all, which is
+    how a stale gRPC pin carrying a published CVE shipped on the proxy branch. Dependabot does not
+    close it either, even with those ecosystems declared: it reads the **default branch**, and a pin
+    chosen at the start of a long-lived branch goes stale *during* the branch. This lane runs on the
+    branch, which is the only place that is visible.
+  - **Each language's own auditor**, because each reads its own lockfile and its own advisory
+    database - `govulncheck` even resolves whether the vulnerable *symbol* is reachable. npm and the
+    .NET SDK ship theirs; `govulncheck`, `bundler-audit` and `pip-audit` are pinned in the module's
+    own manifest exactly as its linters are; `cargo-audit` is the one with no manifest slot, so the
+    Rust row installs it pinned. **Swift and C++ have no auditor** - SwiftPM has no audit command and
+    the C++ module has no package manager - and both say so on every run rather than skipping
+    silently. A language with no recorded decision **fails**.
+  - **The exit code of an auditor is not a verdict, and that is why there is a script.** Measured:
+    `govulncheck -format json` and `dotnet list package --vulnerable` both print findings and **exit
+    0**; `npm audit` and `bundler-audit` use exit 1 for *found something* and for *could not find a
+    lockfile*. Each language is therefore classified structurally from its report, with the same
+    exit-code split as `bin/check-ossindex-audit.sh` - **1** the lane is broken and nothing was
+    learned, **2** the tree has a finding. `bin/test-client-audit.sh` runs first and is hermetic:
+    every auditor is replaced by a shim replaying recorded real output, so the two exit-0-with-
+    findings cases are *shown* to go red rather than assumed to.
+  - **Suppress a false positive in that ecosystem's own ignore mechanism** (`.cargo/audit.toml`,
+    `.bundler-audit.yml`, `pip-audit --ignore-vuln`), not in a registry here - a second list would
+    drift from the tool's, which is the defect the root pom's exclusion list already needs a guard
+    for.
+  - **The Go row's patch pin is load-bearing.** `govulncheck` reports advisories against the
+    toolchain's own stdlib, so a `toolchain:` behind on Go security releases reddens the row, naming
+    them. That is the freshness signal, and the fix is one line in the matrix.
 - **`repo-hygiene.yml`** - cheap repo-wide static checks needing no broker, no Docker and no build.
   **ONE job, `repo: hygiene`, which DISCOVERS rather than enumerates**: it runs
   `bin/check-all.sh --with-tests`, globbing `bin/check-*.sh` and `bin/test-*.sh`. It was one job per
@@ -122,24 +169,7 @@ document. This section is the detail behind it.
   - **`check-test-log-config.sh`** pins the four library modules' `logback-test.xml` to the
     `pc.log.level`-driven harness and fails any logger committed at debug/trace - otherwise silent:
     the log floods, nothing goes red, and the volume alone has timed tests out.
-
-  **A JDK is set up even though nothing here builds**: `bin/test-check-infer.sh` FAILS rather than
-  skips when no JDK resolves under `CI`, so without it the lane would pass only because the runner
-  image happens to ship one.
-
-  **Adding a required check is ordered, and getting it wrong blocks every open PR.** A required
-  context that no run produces leaves every PR pending until it merges master. So removals go first
-  (they can never block anything) and additions wait until the job exists on master - which is why
-  `shell: sigpipe` and `workflows: action versions` were dropped from the ruleset in the same change
-  that deleted those jobs. **Neither name exists any more, and neither is required.** `repo: hygiene`,
-  the single lane that replaced them (and the rest of `repo-hygiene.yml`'s old per-concern jobs), is
-  **also absent from the required list** as of the last live check -
-  `gh api repos/astubbs/parallel-consumer/rulesets/15055005` enumerates every required context by
-  name and `repo: hygiene` is not among them. Whether that is the pending "addition" this paragraph
-  describes, still waiting for its turn, or simply missed when the jobs were collapsed, is not
-  settled here - confirm against the live ruleset rather than assuming either.
-  - `cve-exclusions` runs `bin/check-cve-exclusions.sh`, which **expires temporary CVE
-    exclusions**. Entries in the root pom's `excludeVulnerabilityIds` come in two kinds: *standing*
+  - **`check-cve-exclusions.sh`** **expires temporary CVE exclusions**. Entries in the root pom's `excludeVulnerabilityIds` come in two kinds: *standing*
     (retiring them needs someone else to act, on no timetable we control) and *temporary* (the
     upstream fix is merged, and the entry exists only because no release carries it yet). A
     temporary entry is marked `TEMPORARY-SINCE: YYYY-MM-DD` in the comment above it, and the check
@@ -156,8 +186,87 @@ document. This section is the detail behind it.
     clearable in one reviewable line: retire the entry if the fix shipped, or re-date / reclassify
     it having re-checked upstream. It lives here rather than in the audit job because that job is
     skipped for fork PRs and dies early on a token expiry, so the list would go unwatched exactly
-    when it matters most. **`deps: CVE exclusion expiry` is a new job name and is NOT yet a required
-    status check** - adding it to the master ruleset is a separate, deliberate act.
+    when it matters most.
+  - **`check-deferred-modules.sh`** is the **reverse** of the gate in `clients.yml`. That workflow skips a language row while the module's maturity fragment carries
+    `deferred:`, which is right for a seeded skeleton and has no counterpart the other way: a wave
+    that writes a real client and forgets to lift the deferral gets a row reporting green while
+    building, testing and linting nothing, and `lifted_by:` is a note to a human. Source beyond the
+    skeleton plus `deferred:` still set fails, naming the module and the one edit that fixes it.
+    What counts as skeleton is an **allowlist** stated in the script's header - deliberately, since
+    an extension list would go stale silently, which is the failure the check exists to prevent.
+    Scope is whatever `clients.yml`'s matrix has a row for, read from the workflow, so a new row is
+    covered the day it is added; the rest of the maturity corpus is out of scope because `deferred:`
+    there also means "an aggregator or test module with no maturity claim to make", which skips
+    nothing.
+  - **`check-client-scanners.sh`** guards the other way a client row can report green having
+    checked nothing. `clients.yml` skips a row's static-analysis step when
+    its `scanner-cmd` is empty, which the Swift row needs - its module builds in a container that
+    already lints on the way to the artifact stage, so a host step would be the same command
+    written twice. Emptiness is therefore legal only for a language listed in the script's
+    `DELEGATED` table, and the entry is a claim the check tests: the named file must exist and must
+    still run the named analyser, so taking the lint out of that Dockerfile fails here rather than
+    silently. It also asks that every row name its `scanner`, and that a `scanner-cmd` pointing at
+    a module script (`scripts/analyse.sh`) points at one that is there.
+  - **`check-dependabot-coverage.sh`** asserts that `.github/dependabot.yml` and the manifests
+    actually in the tree agree, **in both directions**. An
+    ecosystem Dependabot was never told about produces no error, no warning and no PR, so it is
+    indistinguishable from an ecosystem with nothing to update - which is how seven of this repo's
+    nine ecosystems went unwatched for the whole of the language-proxy work, surfacing only when a
+    gRPC CVE was found by a CI scan rather than by a bot. A manifest with no entry covering it fails
+    (the recurring direction: a new language arrives), and so does an entry whose `directory` does
+    not exist or holds no manifest of its ecosystem, because Dependabot reports *that* only in a
+    repository settings page nobody opens. It checks coverage **only** - never grouping, schedule or
+    ignores, which are policy the config argues for itself entry by entry. `parallel-consumer-proxy-
+    client-cpp` is genuinely uncoverable (no package manager) and is printed on every run, green ones
+    included, so it stays a stated fact rather than an absence. **Exit 1** = the check could not run
+    (no config, unparseable YAML); **exit 2** = a real coverage gap - the
+    `bin/check-ossindex-audit.sh` split, for the same reason.
+
+  **A JDK is set up even though nothing here builds**: `bin/test-check-infer.sh` FAILS rather than
+  skips when no JDK resolves under `CI`, so without it the lane would pass only because the runner
+  image happens to ship one.
+
+  **Adding a required check is ordered, and getting it wrong blocks every open PR.** A required
+  context that no run produces leaves every PR pending until it merges master. So removals go first
+  (they can never block anything) and additions wait until the job exists on master - which is why
+  `shell: sigpipe` and `workflows: action versions` were dropped from the ruleset in the same change
+  that deleted those jobs. **Neither name exists any more, and neither is required.** `repo: hygiene`,
+  the single lane that replaced them (and the rest of `repo-hygiene.yml`'s old per-concern jobs), is
+  **also absent from the required list** as of the last live check -
+  `gh api repos/astubbs/parallel-consumer/rulesets/15055005` enumerates every required context by
+  name and `repo: hygiene` is not among them. Whether that is the pending "addition" this paragraph
+  describes, still waiting for its turn, or simply missed when the jobs were collapsed, is not
+  settled here - confirm against the live ruleset rather than assuming either.
+
+### `proto: breaking` runs three things, in an order that matters
+
+The job name says one thing and the job does three, because they share a `buf` install and a checkout
+and splitting them would buy a second job for one binary. In order:
+
+1. **`bin/check-proto-lint.sh`** - `buf lint` over the schema. First, because a schema that does not
+   lint is one whose breaking-change comparison is answering a question nobody asked yet. The rule set
+   and its two exceptions live in `parallel-consumer-proxy-protocol/buf.yaml`, not in the script.
+2. **`bin/test-check-proto-breaking.sh`** - the gate's own self-test, ahead of the gate, the same
+   ordering the docs-data and copyright scanners use. It mutates the real schema one way at a time
+   (delete, renumber, rename, add) and asserts the verdict, then restores it.
+3. **`bin/check-proto-breaking.sh`** - the gate. `buf breaking` in the **FILE** category against
+   `origin/master`.
+
+Three things about it are easy to get wrong:
+
+- **FILE, not WIRE, and the self-test is what pins that.** A renamed field is wire-compatible, so
+  `WIRE` would pass it - and nothing else in the repository would notice `buf.yaml` being weakened.
+  The rename case exists to fail if it ever is.
+- **A pass can mean "nothing to compare against".** Until the frozen schema is on `master` the gate
+  passes with a notice saying so, which is why the self-test asserts the *reason* and not only the
+  exit code. Once the schema lands, the baseline is `master` and therefore **moves** - so the gate
+  catches a break on the PR that introduces it and never again. That gap is open and recorded in
+  [`docs/inflight/ci-pin-the-proto-freeze-baseline.md`](inflight/ci-pin-the-proto-freeze-baseline.md).
+- **`fetch-depth: 0` is load-bearing.** The baseline is a git ref; a shallow clone makes the gate exit
+  2 (cannot run) rather than silently passing.
+
+`proto: breaking` is a **new job name and is NOT yet a required status check** - adding it to the
+master ruleset is a separate, deliberate act.
 
 ### `CodeQL` is a required check that no workflow file produces
 

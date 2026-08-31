@@ -1,0 +1,66 @@
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+    Settings shared by every project in this module. Directory.Build.props is imported by MSBuild
+    from the nearest ancestor directory, so the library and the test project pick this up without
+    either of them repeating it - and nothing outside this module directory is affected.
+
+    THE ANALYSIS SETTINGS BELOW ARE THE MODULE'S LINT, AND THEY RUN ON AN ORDINARY `dotnet build`.
+    That is deliberate: a lint that only exists in CI is a lint nobody runs before pushing. C#'s
+    mature analysis is the one already in the SDK - the Roslyn analyzers - so there is no
+    third-party analyzer package here and no separate lint command to remember.
+
+-->
+<Project>
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!--
+        Nullable reference types are load-bearing rather than stylistic here: the wire distinguishes
+        a null key from an empty one (a tombstone is not a zero-length value), so the surface has to
+        distinguish them too, and `byte[]?` versus `byte[]` is how C# says it.
+    -->
+    <Nullable>enable</Nullable>
+
+    <!--
+        latest-recommended plus warnings-as-errors is the whole lint. `latest` resolves to whatever
+        the building SDK ships, so this machine's SDK 10 applies a superset of the CI row's pinned
+        8.0.404 - the safe direction of that skew, because a rule the local build enforces and CI
+        does not can only fail early, never late.
+
+        EnforceCodeStyleInBuild is deliberately NOT set. It promotes the IDExxxx formatting rules to
+        build diagnostics, and that set genuinely differs between SDK 8 and SDK 10 in both
+        directions - which with TreatWarningsAsErrors would make the CI row red on code the local
+        build accepts, for formatting. Formatting is checked separately by `dotnet format`, which
+        the CI row already runs; correctness is checked here.
+    -->
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+
+    <!--
+        The protobuf and gRPC stubs are generated into obj/ by Grpc.Tools on every build. They are
+        machine-generated and not this module's code to fix, so analyzers must not judge them: the
+        `generated_code = true` entry in .editorconfig marks them, and this stops the compiler's own
+        XML-documentation warning from firing on them under TreatWarningsAsErrors.
+    -->
+    <NoWarn>$(NoWarn);1591</NoWarn>
+
+    <!--
+        Package versions live here so the library and the test project cannot drift apart on the
+        protobuf runtime - Grpc.Tools generates code that the Google.Protobuf runtime must match.
+    -->
+    <GrpcVersion>2.71.0</GrpcVersion>
+    <ProtobufVersion>3.31.1</ProtobufVersion>
+
+    <!--
+        The FROZEN protocol schema, by path. No Maven dependency and no copy: this module generates
+        from the one authoritative .proto, which is the arrangement every non-JVM client uses.
+    -->
+    <ProxyProtoRoot>$(MSBuildThisFileDirectory)../../parallel-consumer-proxy-protocol/src/main/proto</ProxyProtoRoot>
+  </PropertyGroup>
+
+</Project>

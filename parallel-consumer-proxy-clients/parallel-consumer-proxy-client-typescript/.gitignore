@@ -1,0 +1,9 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+# The repository root ignores `target`, which covers Maven's output here. These are the Node
+# toolchain's. `src/generated/` is deliberately NOT ignored: protoc's output is committed, so an
+# npm consumer never needs a protoc (see scripts/generate-proto.mjs).
+
+node_modules/
+dist/
+*.tsbuildinfo

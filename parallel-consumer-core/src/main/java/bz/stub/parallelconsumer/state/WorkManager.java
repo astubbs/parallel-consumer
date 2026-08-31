@@ -276,6 +276,33 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         numberRecordsOutForProcessing--;
     }
 
+    /**
+     * Work returned with no verdict at all - neither succeeded nor failed. Reached when the process holding a
+     * record goes away before reporting on it: the record has to go back into scheduling without the return
+     * counting as a processing attempt.
+     * <p>
+     * Deliberately not {@link #onFailureResult}: that increments the failure counter, records failure history
+     * against the partition, and queues a retry the record never earned. The only thing shared is the in-flight
+     * bookkeeping, which must net out exactly - {@link #numberRecordsOutForProcessing} gates the broker poller,
+     * and drift in it stalls the consumer silently while it still looks alive.
+     * <p>
+     * Not an entry point. Engines mark the delivery with {@link WorkContainer#markAbandoned(long)} and hand the
+     * container back through {@link #handleFutureResult}, which owns the superseded-delivery and revoked-partition
+     * checks. Calling this directly skips both, and an increment landing on a revoked shard is never swept.
+     */
+    void onAbandonedResult(WorkContainer<K, V> wc) {
+        if (wc.isNotInFlight()) {
+            log.warn("Abandoned work is not in flight, ignoring the return {}", wc);
+            return;
+        }
+
+        log.debug("Work returned without a verdict, returning to scheduling {}", wc);
+
+        wc.endFlight();
+        sm.onAbandoned(wc);
+        numberRecordsOutForProcessing--;
+    }
+
     public long getNumberOfIncompleteOffsets() {
         return pm.getNumberOfIncompleteOffsets();
     }
@@ -408,7 +435,20 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         return sm.getNumberOfWorkQueuedInShardsAwaitingSelection() > 0;
     }
 
+    /**
+     * Control thread only. {@link #numberRecordsOutForProcessing} is a plain {@code int} mutated here and in
+     * {@link #getWorkIfAvailable(int)}; an engine that completes work on another thread must hand results back
+     * through the controller's mailbox rather than calling this directly.
+     */
     public void handleFutureResult(WorkContainer<K, V> wc) {
+        // Must come before the stale-partition branch, which decrements unconditionally. An abandoned record is
+        // immediately re-selectable and the control loop re-selects in the same iteration it drains returns, so
+        // a late duplicate would otherwise end a live delivery's flight and decrement a second time.
+        if (wc.isReturnForSupersededDelivery()) {
+            log.debug("Ignoring a verdict-free return for a delivery that has already ended {}", wc);
+            return;
+        }
+
         // Third of the three staleness checkpoints - see PartitionState#epochIsStale for the scheme.
         // Work that went stale mid-flight never reaches onSuccessResult/onFailureResult, which is what
         // stops a returning stale result removing a FRESH container that replaced it at the same offset.
@@ -434,6 +474,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
                 } else {
                     onFailureResult(wc, partitionState);
                 }
+            } else if (wc.isAbandonedForCurrentDelivery()) {
+                onAbandonedResult(wc);
             } else {
                 throw new IllegalStateException("Work returned, but without a success flag - report a bug");
             }

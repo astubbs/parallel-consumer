@@ -21,6 +21,48 @@ Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutio
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. Mechanism known and owned (astubbs#262), quarantined - see below |
 | `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 3 seen (2026-08-18, 2026-08-19, 2026-08-25) | Not from the original scan - each found while babysitting a branch carrying **no main Java**. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third sighting carries the failing batch contents and they point at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
 
+### Four more seen under concurrent agent load, 2026-08-15 - unclassified
+
+<!-- post-merge: checked-begin -->
+Recorded because this ledger exists so a flake is not met twice as a surprise, not because any of
+them is diagnosed. All four surfaced while several agents built the reactor at once (`-am` drags
+core's full suite into every client build), **every one passed on retry**, and none is a client
+defect:
+
+- `ParallelEoSStreamProcessorTest.executorThreadsInterruptedOnShutdownTimeout`
+- `CheckQuarantineOwnersScriptTest` - two different methods, on different runs
+- `ProxyProcessorLivenessTest.aSlowWorkerKeepsItsRecordWhileHeartbeatsContinueAndLosesItWhenTheyStop`
+- `JStreamParallelEoSStreamProcessorTest.testConsumeAndProduce` - added 2026-08-17, seen with ~60
+  worktrees live on the box; passed in isolation and in the same session's full post-change run
+
+**Do not quarantine any of them on this evidence.** Contention on a box running many JVMs is exactly
+the condition rule 2 exists to rule out, and the first uncontended full run of
+astubbs/parallel-consumer#293 passed all
+of them - see [`branch-clean-verification-2026-08-15.md`](branch-clean-verification-2026-08-15.md),
+which also records the one test that did survive that filter. What they earn is a name here, so the
+next sighting is a second sighting rather than a first.
+
+The liveness one is worth a closer look than the others if it recurs: it was new code when
+astubbs/parallel-consumer#293 met it,
+it asserts on a lease deadline, and a test that measures elapsed time under load is the shape this
+repo has been bitten by twice already.
+
+**One candidate explanation for this group has since been found and fixed - check for it before
+diagnosing the next sighting.** A fixture race with exactly the "only under load" story was diagnosed
+on the Kotlin client's CI row and fixed on astubbs/parallel-consumer#293: the mock consumer's
+partitions were assigned
+before their beginning offsets were recorded, and a poll landing in that window killed PC's
+broker-poll thread, so the test failed on whatever deadline it was awaiting. Mechanism, control arm
+and the fix are in
+[`assign-the-mock-consumer-after-seeding-its-offsets-2026-08-15.md`](../solutions/test-flakiness/assign-the-mock-consumer-after-seeding-its-offsets-2026-08-15.md).
+It is a *candidate*, not a retraction of any entry above: two of the three tests named here reach
+their fixture through the helper that had the window
+(`AbstractParallelEoSStreamProcessorTestBase` and `EngineFixture` both call
+`subscribeWithRebalanceAndAssignment`), but the sightings' logs were not checked for it. **The check
+is one grep of the failing job's log for `didn't have beginning offset specified`** - present means
+it was this and is now fixed, absent means it was not and the entry stands.
+<!-- post-merge: checked-end -->
+
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
 door, and for the same reason: two of that family turned out to be real product bugs, and the third
 was neither tight nor a stall but a test that could not force its own trigger.
