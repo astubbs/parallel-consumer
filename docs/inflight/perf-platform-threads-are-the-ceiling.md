@@ -1,7 +1,7 @@
 # The in-flight ceiling is platform threads. Proven with no Kafka and no Parallel Consumer.
 
-<!-- inflight-type: perf -->
-<!-- inflight-impact: performance -->
+<!-- inflight-type: bug -->
+<!-- inflight-impact: throughput -->
 <!-- inflight-labels: release-note, needs-measurement -->
 
 Settled 2026-08-21. **The owner proposed this early, I argued against it, and it is correct.**
