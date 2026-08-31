@@ -18,6 +18,20 @@ reader is meant to scan.
 
 **What lifts it.** The rung that gives a client module real content gives it a row at the same time.
 
+**The scaffolding rung was asked to carry the mechanism, and declined for a reason worth
+recording.** The hygiene sweep of astubbs/parallel-consumer#293 (astubbs#378) recommended that the
+`docs/data/*.d/` fragment machinery ride the polyglot scaffolding, on the grounds that extracting
+only its generic half is surgery and that it would collide with that rung's own client fragments.
+The second premise does not hold: the rung ships no fragments. And the first half of the machinery
+cannot be used here even if it were carried, because the two halves disagree about these modules -
+`bin/check-deferred-modules.sh` (the gate that makes a `deferred:` fragment honest) **fails a module
+that has source beyond a named skeleton allowlist**, and every one of these modules has exactly
+that: a dependency manifest and a program. So the only fragment they could carry is a real maturity
+row, which is the thing this note says they have nothing to put in. Carrying the mechanism would
+have meant importing a merge path, a schema extension and a gate with nothing on `master` for any
+of them to act on.
+<!-- file-refs: N/A - bin/check-deferred-modules.sh ships on feats/proxy-requirements and is named here as the reason this rung did not import it; read it with `git show origin/feats/proxy-requirements:bin/check-deferred-modules.sh` -->
+
 **The mechanism that would make this loud already exists, elsewhere.** astubbs/parallel-consumer#293
 carries a per-module fragment scheme - `docs/data/module-maturity.d/<artifact>.yaml` merged at check
 time, with a `deferred: {reason, lifted_by}` block, plus a cross-check that every module in any

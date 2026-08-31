@@ -144,3 +144,108 @@ updates:
       # three reference immutable release tags, at which point they should be watched like
       # any other action. See astubbs#212 for the per-fork state and what "done" looks like.
       - dependency-name: "astubbs/*"
+
+  # ══ The proxy clients' seven foreign ecosystems (astubbs#242) ════════════════════════════
+  #
+  # `maven` and `github-actions` above were the ONLY two ecosystems declared until the
+  # polyglot client modules brought seven more manifests into the tree. A missing ecosystem
+  # produces no error, no warning and no PR - it is indistinguishable from an ecosystem with
+  # nothing to update - so the entries below exist the same commit their manifests do, and
+  # bin/check-dependabot-coverage.sh fails the build if a future language arrives without one.
+  #
+  # WHAT THEY WATCH TODAY IS ALMOST NOTHING, AND THAT IS THE POINT OF DECLARING THEM NOW.
+  # These modules are build scaffolding: each one compiles a program that prints a line, and
+  # most of the manifests below declare no dependency at all. Declaring the ecosystem while it
+  # is empty costs nothing and means the coverage is already there on the day a client acquires
+  # a real dependency - which is the day it starts to matter and the day nobody would think to
+  # come back here.
+  #
+  # DAILY AND GROUPED, matching the maven block's trade rather than the actions one. A foreign
+  # client's dependency reaches exactly one module, whose whole build is one CI row, so a broken
+  # bump reddens that row and nothing else - the isolation a per-dependency PR buys is worth
+  # less here than the review attention grouping saves. Minor and patch group; MAJORS ARRIVE
+  # SINGLY AND UNGROUPED, again the maven shape, because a major is a migration that wants its
+  # own PR and must never be silently ignored.
+  #
+  # NO IGNORES ON ANY OF THESE, deliberately. Nothing here is hand-managed, and this file's own
+  # rule is that an ignore is invisible - nothing reports the PR that was never opened - so one
+  # written on speculation is worse than the bump it pre-empts.
+  #
+  # C++ IS COVERED BY NOTHING, and is named here so it does not read as an oversight.
+  # parallel-consumer-proxy-client-cpp has no manifest of any kind: its build is a single
+  # compiler invocation against the standard library, so there is no version for any updater to
+  # bump. Dependabot supports no C++ ecosystem. bin/check-dependabot-coverage.sh prints that
+  # module on every run, including green ones, so the absence stays a stated fact.
+  #
+  # The three JVM clients (Java, Kotlin, Scala) need no entry: they are Maven modules, so the
+  # `maven` block at the top of this file already covers them.
+
+  - package-ecosystem: "gomod"
+    directory: "/parallel-consumer-proxy-clients/parallel-consumer-proxy-client-go"
+    schedule:
+      interval: "daily"
+    groups:
+      go-non-major:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "cargo"
+    directory: "/parallel-consumer-proxy-clients/parallel-consumer-proxy-client-rust"
+    schedule:
+      interval: "daily"
+    groups:
+      cargo-non-major:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "npm"
+    directory: "/parallel-consumer-proxy-clients/parallel-consumer-proxy-client-typescript"
+    schedule:
+      interval: "daily"
+    groups:
+      npm-non-major:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "pip"
+    directory: "/parallel-consumer-proxy-clients/parallel-consumer-proxy-client-python"
+    schedule:
+      interval: "daily"
+    groups:
+      pip-non-major:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "bundler"
+    directory: "/parallel-consumer-proxy-clients/parallel-consumer-proxy-client-ruby"
+    schedule:
+      interval: "daily"
+    groups:
+      bundler-non-major:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "nuget"
+    directory: "/parallel-consumer-proxy-clients/parallel-consumer-proxy-client-dotnet"
+    schedule:
+      interval: "daily"
+    groups:
+      nuget-non-major:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "swift"
+    directory: "/parallel-consumer-proxy-clients/parallel-consumer-proxy-client-swift"
+    schedule:
+      interval: "daily"
+    groups:
+      swift-non-major:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]

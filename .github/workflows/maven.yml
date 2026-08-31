@@ -55,6 +55,24 @@ jobs:
             setup-java-Linux-x64-maven-
       - name: Download all dependencies
         run: ./mvnw --batch-mode -Pci dependency:go-offline -DincludeScope=test -U
+      # go-offline resolves declared dependencies and plugin JARs, but NOT what a plugin resolves
+      # FOR ITSELF at execution time - and scala-maven-plugin fetches the Scala compiler and the
+      # zinc compiler-bridge sources jar that way, so neither is declared anywhere and both stay
+      # cold. Measured on astubbs/parallel-consumer#293 (run 32008526667): "Unit Tests" spent 4m01s
+      # on scala-compiler before Central gave up and it fell to the mirror, then was still fetching
+      # compiler-bridge sources 3m12s later when the lane's cap killed the job. Same CDN route
+      # lottery as docs/solutions/build-errors/maven-central-timeout-azure-west-regions-2026-04-21.md
+      # and it cost the whole job rather than one step.
+      #
+      # Warmed by COMPILING the module rather than by naming coordinates: the bridge version comes
+      # from the plugin's own zinc dependency and no pom property carries it, so a `dependency:get`
+      # would need a literal that rots silently the next time the plugin is bumped - and warming
+      # the wrong coordinate is indistinguishable from a cache hit until it fails four jobs
+      # downstream. `-am` keeps this to the Scala module's own reactor chain, which is the root
+      # pom, the clients aggregator and the module itself: it declares no Parallel Consumer
+      # dependency, so nothing else is built here. (astubbs#242)
+      - name: Warm scala-maven-plugin's compiler and zinc bridge
+        run: ./mvnw --batch-mode -Pci -pl :parallel-consumer-proxy-client-scala -am compile
       - name: Save Maven cache (rotating key)
         if: success()
         uses: actions/cache/save@v4
