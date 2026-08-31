@@ -24,12 +24,14 @@ an ENTRY refresh (before `pollingBroker` is set, preserving the CME fix);
   (`PERIODIC_CONSUMER_SYNC`, KEY) plausibly shares the cause - the pause-cache mechanism is
   commit-mode-independent - but that is an expectation, not a measurement. Verify the lane after
   this fix lands.
-- **A residual throughput gap vs master remains, milder and unexplained.** Two alternated runs per
-  arm, debug on: fixed branch 1444-1833 rec/s, master control 2465-3107 rec/s, every repetition on
-  both arms green and well inside the deadline (the second branch run sat at higher ambient load
-  than its adjacent master run, so the ratio is bounded, not precise). It is a separate, milder
-  defect than the one fixed - and cluster 2 per-call overhead is NOT convicted of it (JFR showed no
-  contention).
+- **RESOLVED 2026-09-01: the "residual throughput gap" was a measurement artifact, not a defect.**
+  It was measured under `-Dpc.log.level=debug` with five concurrent repetitions, which depresses both
+  arms and the branch more. Re-measured in the conditions the original regression was measured in -
+  no debug logging, arms alternated, three repetitions each at rising load - master ran 4,507-6,106
+  records/second and the fixed branch 4,360-5,181, overlapping, with zero failures on either arm.
+  Against the pre-fix branch's 648-1,777, the regression is gone and there is no residual to explain.
+  Kept as an entry rather than deleted, because a plausible unexplained residual is exactly the kind
+  of open thread that survives for months on nobody's list.
 - **The "incoherent counters" observation stands but its reading changed.** The 0-vs-319
   disagreement was sampled by the TEST thread at failure time, while the 319 came from the control
   thread - and `numberRecordsOutForProcessing` is a plain int with no fence
