@@ -1,7 +1,7 @@
 # The eleven proxy-client modules have no module-maturity or testing-evidence row
 
 <!-- inflight-type: task -->
-<!-- inflight-impact: blind-spot -->
+<!-- inflight-impact: process -->
 <!-- inflight-state: deferred - until a client module has content a reader could depend on -->
 
 `parallel-consumer-proxy-clients` and its eleven language modules are in the reactor and in no
