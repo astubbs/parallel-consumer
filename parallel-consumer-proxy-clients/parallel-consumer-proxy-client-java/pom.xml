@@ -38,7 +38,49 @@
     <modules>
         <module>parallel-consumer-proxy-client-java-api</module>
         <module>parallel-consumer-proxy-client-java-direct</module>
+        <module>parallel-consumer-proxy-client-java-grpc</module>
     </modules>
+
+    <!--
+        THE gRPC GRAPH'S TWO PINS, DECLARED ONCE FOR THE TREE THAT NEEDS THEM. Only the modules that
+        put gRPC on a classpath resolve either artifact, so grpc and harness inherit these and api
+        and direct are unaffected - direct's bannedDependencies rule proves that, since a pin here
+        adds nothing to a graph that has no gRPC in it.
+
+        parallel-consumer-proxy's pom OWNS the reasoning for both and carries it in full. In one line
+        each: gRPC drags error_prone_annotations in at several versions and resolution settles on the
+        lowest, which the root pom's requireUpperBoundDeps refuses; and grpc-core brings gson 2.11.0
+        at runtime, the version OSS Index matches for CVE-2025-53864 - an advisory about a library
+        this repository does not depend on, pinned forward rather than excluded because an exclusion
+        would carry a retirement condition nobody could ever discharge.
+
+        WHY HERE AND NOT THE ROOT POM. That is the question the proxy module's pom already answered
+        for itself, and nothing here re-opens it: what is different is only that this aggregator has
+        two children needing the same pin, and dependencyManagement does not flow between siblings.
+        Declaring it in each of them would have been the third and fourth copy of the same two lines.
+        Do NOT hoist it further - the root's ${error-prone.version} pins the Error Prone COMPILER,
+        deliberately below current for an unrelated and temporary reason, and putting a differently
+        motivated number beside it is how the two come to be "fixed" into agreement.
+
+        The numbers match parallel-consumer-proxy's because this tree's highest requester is the same
+        one, NOT because two poms are kept equal by hand. The protocol module's error_prone pin is
+        deliberately a version lower, since its highest requester differs; equalising the three would
+        break one of them.
+    -->
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>com.google.errorprone</groupId>
+                <artifactId>error_prone_annotations</artifactId>
+                <version>2.48.0</version>
+            </dependency>
+            <dependency>
+                <groupId>com.google.code.gson</groupId>
+                <artifactId>gson</artifactId>
+                <version>2.14.0</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <build>
         <plugins>
