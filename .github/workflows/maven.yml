@@ -114,6 +114,51 @@ jobs:
       # dependency, so nothing else is built here. (astubbs#242)
       - name: Warm scala-maven-plugin's compiler and zinc bridge
         run: ./mvnw --batch-mode -Pci -pl :parallel-consumer-proxy-client-scala -am compile
+      # THIRD of the same plugin-resolves-for-itself class, and the one that arrived last: SpotBugs'
+      # DETECTOR plugins are declared under <configuration><plugins> in the root pom, not as build
+      # dependencies, so go-offline never sees them. Until the Java proxy client bound spotbugs:check
+      # into the DEFAULT reactor this cost nothing, because SpotBugs only ran in its own
+      # `static: spotbugs` job; now every lane in the `test` matrix resolves them, and a cold cache
+      # puts each one on the Azure West US CDN route lottery in
+      # docs/solutions/build-errors/maven-central-timeout-azure-west-regions-2026-04-21.md.
+      # Measured on astubbs/parallel-consumer#386: "Unit Tests" passed while "Integration Tests"
+      # hung the documented 240s on fb-contrib-7.7.4.jar and failed the job with zero tests run - the
+      # same split-by-region signature the protoc warm above records. (astubbs#242)
+      - name: Warm SpotBugs' detector plugins
+        run: |
+          set -euo pipefail
+          evaluate() {
+            ./mvnw -q --batch-mode -N \
+              -Dexpression="$1" -DforceStdout \
+              org.apache.maven.plugins:maven-help-plugin:3.5.2:evaluate 2>/dev/null | tail -1
+          }
+          # Same guard as the protoc warm: a renamed property makes help:evaluate print "null object
+          # or invalid expression", which dependency:get would happily turn into a warm of the wrong
+          # coordinate - and warming nothing is indistinguishable from a cache hit until it fails a
+          # job downstream.
+          require_version() {
+            case "$2" in
+              [0-9]*) : ;;
+              *) echo "::error::$1 did not resolve to a version from the root pom (got '$2') - the SpotBugs detector cache warm would be a silent no-op"; exit 1 ;;
+            esac
+          }
+          get() {
+            ./mvnw --batch-mode -ntp \
+              org.apache.maven.plugins:maven-dependency-plugin:3.11.0:get -Dartifact="$1"
+          }
+          warm() { # property, groupId:artifactId, path under ~/.m2/repository
+            version=$(evaluate "$1")
+            require_version "$1" "$version"
+            get "$2:$version"
+            # Assert the jar is on disk: the exit code says the goal ran, only the file says the
+            # cache this job exists to populate actually got populated.
+            artifact="${2##*:}"
+            test -s ~/.m2/repository/"$3"/"$artifact"/"$version"/"$artifact"-"$version".jar
+          }
+          warm fb-contrib.version      com.mebigfatguy.fb-contrib:fb-contrib      com/mebigfatguy/fb-contrib
+          warm findsecbugs.version     com.h3xstream.findsecbugs:findsecbugs-plugin com/h3xstream/findsecbugs
+          warm findbugs-slf4j.version  jp.skypencil.findbugs.slf4j:bug-pattern    jp/skypencil/findbugs/slf4j
+          warm spotbugs.version        com.github.spotbugs:spotbugs               com/github/spotbugs
       - name: Save Maven cache (rotating key)
         if: success()
         uses: actions/cache/save@v4
