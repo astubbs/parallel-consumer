@@ -27,6 +27,13 @@ seam off: once in seven consecutive runs of the module's whole `test` phase on o
 the immediate re-run, and green in every other run, including both arms of that work's before/after
 control. Lower than the original rate, on one machine, which is a data point rather than a new
 measurement.
+
+**And then on CI, on the very next run** - the `Unit Tests` lane of the same PR, failing on
+parameterisation `[3]` with the whole upstream execution otherwise clean. That is worth more than
+another tally mark: every sighting until now had been on a developer machine, so "a loaded laptop"
+was still available as an explanation. It is not any more. This flake reaches the shared lane, where
+it costs every branch in the chain a red build and a re-run, and where the temptation to re-run until
+green is strongest.
 <!-- post-merge: checked-end -->
 
 ## Why this matters more than one flaky test
