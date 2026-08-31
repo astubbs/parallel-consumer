@@ -39,6 +39,13 @@ That write-up's own conclusion is the relevant one: **re-running does not reliab
 runner is often reassigned to the same region, and the fix that worked was pre-warming so nothing is
 fetched from Central during the build. This module is the one place that was left outside the fix.
 
+**That prediction has now been tested and held.** A fresh push on the error-surfacing rung re-ran the
+lanes and reproduced the identical failure, at the same execution, on the same artifact - and this
+time it took the **Integration lane down with the Unit lane**, on the same run. So the exposure is not
+"one lane occasionally", it is *every lane that builds this module*, and re-running is not a
+workaround anyone should keep reaching for. It is a blocker for any PR touching this module, and it
+cannot be cleared from inside one.
+
 ## Candidate fix
 
 Add the classifier artifacts to what `prepare-deps` pulls, so the warm cache actually contains
@@ -46,6 +53,14 @@ everything a build needs. `dependency:go-offline` will not do it on its own; the
 running the module's `generate-sources` phase in the warming job, or a `dependency:get` per artifact
 item. Whichever is chosen, the check that it worked is that the streams module's `unpack` executions
 log a cache hit rather than a `Downloading from central` line.
+
+## Until it is fixed, what a blocked PR should do
+
+**Not keep re-running.** Say in the PR that the red lane is this, name this note, and let the
+module's own lane stand as the evidence the code is healthy: run the module's whole `test` phase and
+its integration lane locally, and read the counts out of the report directories. A local run has the
+artifacts in `~/.m2` already, which is exactly why it never reproduces there - and exactly why
+"green locally" is a real signal about the code and no signal at all about this.
 
 ## Delete when
 
