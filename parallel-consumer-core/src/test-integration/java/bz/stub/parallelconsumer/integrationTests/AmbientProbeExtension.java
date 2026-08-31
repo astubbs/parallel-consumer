@@ -12,12 +12,15 @@ import org.junit.jupiter.api.extension.AfterEachCallback;
 import org.junit.jupiter.api.extension.AfterTestExecutionCallback;
 import org.junit.jupiter.api.extension.BeforeEachCallback;
 import org.junit.jupiter.api.extension.ExtensionContext;
+import org.junit.platform.commons.support.AnnotationSupport;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.TestWatcher;
 
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Optional;
 import java.util.Locale;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -197,6 +200,64 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
                 .orElse(false);
     }
 
+    /**
+     * Names the detectors whose bounds are longer than the enclosing test could possibly run for.
+     *
+     * <p><b>Why a clean probe needed a caveat.</b> "Probe clean" reads as evidence that consumer-group
+     * progress was healthy. For a short test it is often arithmetic instead: {@code INSTANCE_STALL}
+     * and {@code LAG_STAGNATION} are calibrated for chaos runs and bound at
+     * {@link ProgressProbe#LAG_STAGNATION_BOUND}, so inside a test with a shorter deadline they
+     * <b>cannot fire whatever happens</b>. Silence from a detector that was never able to speak is
+     * not a clean bill of health, and printing it as one sent a real defect's diagnosis toward "the
+     * test is broken" for weeks - the failing run was a consumer that had stopped fetching entirely.
+     *
+     * <p>The rule this encodes is the one {@code ChaosScenarioBase} states for its recovery
+     * diagnostic: a watch longer than the timeout enclosing it does not become a shorter watch, it
+     * becomes an uninterpretable one. Here the watch cannot be shortened - the bounds are calibrated
+     * against measured healthy peaks - so the honest move is to say which ones did not apply.
+     *
+     * <p>Resolved from the test's own {@code @Timeout} where it has one, the same way the chaos
+     * diagnostic resolves its cap. With no annotation there is no ceiling to compare against and
+     * nothing is claimed, which is why absence prints its own line rather than nothing at all.
+     */
+    private static void appendUnfireableDetectors(StringBuilder sb, ExtensionContext context) {
+        Optional<Duration> ceiling = context.getTestClass()
+                .flatMap(c -> AnnotationSupport.findAnnotation(c, Timeout.class))
+                .map(t -> Duration.ofMillis(t.unit().toMillis(t.value())));
+
+        if (!ceiling.isPresent()) {
+            sb.append("  detector reach: UNKNOWN - this test declares no @Timeout, so nothing here ")
+                    .append("says whether the long-bound detectors had time to fire\n");
+            return;
+        }
+
+        Duration limit = ceiling.get();
+        List<String> unfireable = new ArrayList<>();
+        addIfUnreachable(unfireable, limit, "INSTANCE_STALL/NO_WORK_COMPLETED",
+                ProgressProbe.INSTANCE_STALL_BOUND);
+        addIfUnreachable(unfireable, limit, "CLASS2_STALL/LAG_STAGNATION",
+                ProgressProbe.LAG_STAGNATION_BOUND);
+        addIfUnreachable(unfireable, limit, "DRAIN overrun", ProgressProbe.DRAIN_BOUND);
+        addIfUnreachable(unfireable, limit, "NO_PROGRESS", ProgressProbe.NO_PROGRESS_WINDOW);
+        addIfUnreachable(unfireable, limit, "ZOMBIE/rebalance dwell", ProgressProbe.REBALANCE_DWELL_BOUND);
+
+        if (unfireable.isEmpty()) {
+            sb.append("  detector reach: every detector could have fired within this test's ")
+                    .append(limit.getSeconds()).append("s ceiling, so the clean result above means something\n");
+        } else {
+            sb.append("  COULD NOT FIRE within this test's ").append(limit.getSeconds())
+                    .append("s ceiling, so their silence says NOTHING: ")
+                    .append(String.join(", ", unfireable)).append('\n');
+        }
+    }
+
+    /** A detector whose bound is at or past the ceiling has no room to trigger inside it. */
+    private static void addIfUnreachable(List<String> into, Duration ceiling, String name, Duration bound) {
+        if (bound.compareTo(ceiling) >= 0) {
+            into.add(name + " (bound " + bound.getSeconds() + "s)");
+        }
+    }
+
     private static ProgressProbe probeOf(ExtensionContext context) {
         return context.getStore(NAMESPACE).get(PROBE_KEY, ProgressProbe.class);
     }
@@ -226,7 +287,9 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
                 && probe.getPeakRebalanceDwellMs() == 0 && probe.getPeakLagStagnationMs() == 0;
         if (nothingObserved) {
             sb.append("probe clean - no rebalance dwell, no lag stagnation, no frozen partitions observed: ")
-                    .append("the fault is likely in the test itself, not consumer-group progress\n");
+                    .append("the fault is likely in the test itself, not consumer-group progress")
+                    .append(" - IF YOU TRUST THIS TEST, AND IF THE DETECTORS BELOW COULD HAVE FIRED\n");
+            appendUnfireableDetectors(sb, context);
         } else {
             appendSection(sb, "violations (" + violations.size() + ")", violations,
                     "(none crossed the chaos-calibrated bounds - see peaks/frozen detail below)");

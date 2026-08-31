@@ -159,6 +159,20 @@ not report pause state, and it cannot simply call `consumer.paused()` - that wou
 `ThreadConfinedConsumer`'s ownership guard from the test thread. Establishing it needs pause state
 tracked somewhere reachable, which is the next step and a small one.
 
+### Master does not reproduce it - six reps, 2026-09-01
+
+Thirty test executions on master: no failures, no idle reading, 6,061-8,125 records/second
+throughout. The branch idles and fails repeatedly in the same conditions at 648-1,777.
+
+**So this is a regression the branch introduces, not a latent master defect it exposes.** That was
+worth settling explicitly, because "a fix branch reproduces the symptom its family is about" invites
+the reading that it has surfaced one of the reported bugs. On this evidence it has not.
+
+**The limit, stated rather than glossed:** these were the SAME conditions repeated, not harsher ones.
+Master is clean under load it has not been pushed past - more records, a tighter
+`max.poll.interval.ms`, or a second instance were not tried. A latent master defect needing sharper
+conditions is not excluded by this.
+
 ## Why it matters beyond the branch that found it
 
 If cluster 2 is implicated, the question is not only "fix it" but whether that work belongs on a PR
