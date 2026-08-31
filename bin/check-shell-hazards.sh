@@ -17,6 +17,19 @@
 # control flow. The first category is GNU-vs-BSD coreutils divergence; the shape suits anything with
 # the same signature: silent, platform- or version-dependent, invisible to a linter.
 #
+# THE THIRD CATEGORY IS BUILTIN-OPTION-LOOKALIKE, and it is the same signature reached from a
+# different direction: nothing about the machine varies, but an ARGUMENT is read as a flag. A quoted
+# `printf` format beginning with a hyphen is the instance that arrived - the builtin rejects it,
+# returns 2, and `set -e` publishes that as the script's verdict. It stayed invisible for exactly the
+# reason this table exists: the only caller that reached it ran on CI, where $GITHUB_STEP_SUMMARY is
+# set, so every local run was green. ShellCheck does not model builtin option parsing and passed it.
+#
+# ITS REGEX SPELLS THE OPENING QUOTE AS punctuation-that-is-not-a-dash, NOT AS A QUOTE CLASS, and
+# that is forced rather than clever: this table is a quoted heredoc inside a command substitution,
+# and bash 3.2 - the bash macOS ships, which this repo supports - mis-parses an UNBALANCED quote
+# character in one. A row containing a quote class fails to parse the whole script. Verified against
+# 3.2.57 directly; every other row happens to balance its quotes and so has never met this.
+#
 # THE SECOND CATEGORY IS SHARED-GIT-STATE, and it is what the generic shape was for. `git fetch
 # --depth` is portable and correct on every platform; what it does silently is write the `shallow`
 # file in the shared --git-common-dir, truncating history for every worktree of the clone. Same
@@ -91,6 +104,7 @@ gnu-bsd	(^|[^[:alnum:]_-])([[:alnum:]_]*[_-])?grep[[:space:]]+(-[[:alnum:]]+[[:s
 gnu-bsd	(^|[^[:alnum:]_-])([[:alnum:]_]*[_-])?sort[[:space:]]+(-[[:alnum:]]+[[:space:]]+)*-V([[:space:]]|$)	`sort -V` is GNU; BSD sort has no version sort and treats it as an error.
 gnu-bsd	(^|[^[:alnum:]_-])([[:alnum:]_]*[_-])?base64[[:space:]]+(-[[:alnum:]]+[[:space:]]+)*-w[0-9]*([[:space:]]|$)	`base64 -w` is GNU; BSD base64 does not wrap and rejects -w.
 gnu-bsd	(^|[^[:alnum:]_-])([[:alnum:]_]*[_-])?sed[[:space:]]+(-[[:alnum:]]+[[:space:]]+)*-r([[:space:]]|$)	`sed -r` is GNU; -E works on both and means the same thing.
+builtin-option-lookalike	(^|[^[:alnum:]_-])printf[[:space:]]+[^-[:space:][:alnum:]]-	A quoted `printf` format that STARTS with a hyphen is read as an OPTION by bash's builtin printf: it fails with "invalid option", returns 2, and under `set -e` that becomes the script's exit code. Write `printf -- '-...'`. Observed live: a skip banner appended to $GITHUB_STEP_SUMMARY turned every CI skip into a failed row while every developer box stayed green, because the variable is only set on a runner.
 shared-git-state	(^|[^[:alnum:]_-])([[:alnum:]_]*[_-])?git[[:space:]]+((-[^[:space:]]+)([[:space:]]+[^-[:space:]][^[:space:]]*)?[[:space:]]+)*(fetch|pull)([[:space:]]+[^[:space:]]+)*[[:space:]]+--(depth|shallow-since|shallow-exclude)	`git fetch --depth` (and `git pull --depth`) writes the `shallow` file, which lives in the SHARED --git-common-dir - so it truncates history for EVERY worktree of the clone at once, and merge-base and ahead/behind then answer confidently wrong instead of erroring. Fetch into a throwaway git dir and read FETCH_HEAD there; mark it hazard-ok when the fetch target really is disposable.
 HZ
 )

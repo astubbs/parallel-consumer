@@ -92,6 +92,22 @@ assert "absent toolchain under strict" 2 "$rc"
 out="$(PC_FOREIGN_CLIENTS_STRICT=false bash "$STEP" --tool pc-definitely-not-installed -- true 2>&1)"; rc=$?
 assert "absent toolchain, strict explicitly off" 0 "$rc"
 
+# THE RUNNER'S ENVIRONMENT, WHICH A DEVELOPER BOX DOES NOT HAVE. GITHUB_STEP_SUMMARY is set on
+# every CI runner and unset everywhere else, so the branch it enables ran nowhere until CI ran it -
+# and when it did, a `printf` format string beginning with a hyphen was read as an option, returned
+# 2, and `set -e` turned a lenient SKIP into a failed row. Every local run had been green.
+# Two assertions, because the exit code alone would pass again on a summary that was never written.
+summary="$TMP/step-summary.md"
+: > "$summary"
+out="$(GITHUB_STEP_SUMMARY="$summary" bash "$STEP" --tool pc-definitely-not-installed --hello ruritanian -- true 2>&1)"; rc=$?
+assert "absent toolchain with a job summary present" 0 "$rc"
+assert_contains "the skip is written to the job summary" "pc-definitely-not-installed" "$(cat "$summary")"
+
+: > "$summary"
+out="$(GITHUB_STEP_SUMMARY="$summary" PC_FOREIGN_CLIENTS_STRICT=1 bash "$STEP" --tool pc-definitely-not-installed -- true 2>&1)"; rc=$?
+assert "absent toolchain with a job summary, under strict" 2 "$rc"
+assert_contains "the strict failure is written to the job summary" "pc-definitely-not-installed" "$(cat "$summary")"
+
 # ── the hello fixture ───────────────────────────────────────────────────────────────────────────
 say() { # <language> <what the fake program prints>
     printf '#!/usr/bin/env bash\nprintf %s\n' "'$2'" > "$TMP/bin/pc-fake-hello"

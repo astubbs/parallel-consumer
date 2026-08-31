@@ -97,8 +97,15 @@ report_absent() { # <tool> <label>
     printf '\n'
     # A GitHub job summary, when there is one. Absent locally, so the banner above is the only
     # channel there; on a runner this puts the same sentence where a reader looks first.
+    #
+    # `printf --` IS LOAD-BEARING, not punctuation. The format string starts with a hyphen, so
+    # bash's builtin printf reads it as an option, fails with "invalid option", and returns 2 -
+    # which `set -e` then makes this script's exit code. Without the `--`, a lenient skip on a
+    # machine with GITHUB_STEP_SUMMARY set (that is: every CI runner) exited 2 and failed the row
+    # it was supposed to skip, while every developer box passed because the variable is unset there.
+    # ShellCheck does not flag it and neither did the local run; the CI lane did.
     if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-        printf '- **%s**: `%s` not on PATH - %s\n' "$label" "$tool" "$verdict" \
+        printf -- '- **%s**: `%s` not on PATH - %s\n' "$label" "$tool" "$verdict" \
             >> "$GITHUB_STEP_SUMMARY"
     fi
 }
