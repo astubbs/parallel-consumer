@@ -5,9 +5,14 @@
 <!-- inflight-state: deferred - after v6, tooling investment -->
 
 
-Nothing is switched off. There is no `archunit.properties`, no `FreezingArchRule`, no `@Disabled`,
-no `allowEmptyShould` suppression anywhere in the repo. Every rule that exists runs on every PR at
-ArchUnit's defaults, and they pass because the codebase complies.
+Nothing is switched off at the FRAMEWORK level. There is no `archunit.properties`, no
+`FreezingArchRule`, no `@Disabled`, no `allowEmptyShould` suppression anywhere in the repo. Every
+rule that exists runs on every PR at ArchUnit's defaults.
+
+**They no longer all pass because the codebase complies.** `rebalanceCallbacksMustNotBlock` carries a
+hand-rolled allowlist - see "The allowlist this file warned about, and it exists now" below. This
+paragraph said "nothing is switched off" full stop until 2026-08-31, which was true when written and
+quietly stopped being true; the framework-level claim is the part that still holds.
 
 The reason no findings are ever seen is that the rules police **hygiene and a handful of named
 invariants**, not structure:
@@ -142,3 +147,34 @@ advisory". Add one rule at a time, green on arrival, each with a mutation check 
 **An allowlist of the methods that already violate a rule is a frozen baseline wearing a source-code
 disguise**, and it is the form the trap actually takes when `FreezingArchRule` is off the table. The
 shard-map accessor rule above is the worked example of turning one down.
+
+## The allowlist this file warned about, and it exists now
+
+`ArchitectureTest.rebalanceCallbacksMustNotBlock` carries `KNOWN_BLOCKING_VIOLATIONS`, which is
+exactly the shape named above. It arrived with one entry - the confluentinc#857 transactional revoke
+wait, owned by astubbs#44 - and grew on 2026-08-31 when the rule's deny list was widened during a
+defect-class sweep and immediately found a second, pre-existing defect on master
+([`bug-retry-queue-write-lock-on-the-rebalance-path.md`](bug-retry-queue-write-lock-on-the-rebalance-path.md)).
+
+**The tension is real and is not resolved here.** The argument for the entries: each names a defect
+that exists on master, has a tracking note, and was not introduced by the branch that had to decide
+what to do about it - the alternative was leaving a rule permanently red on inherited work, which
+teaches people to ignore it. The argument against is the paragraph above, and it does not stop being
+true because the entries are honest ones.
+
+**What was learned by growing it, and it sharpens the warning rather than softening it:** the
+allowlist was keyed on the ROOT method, so exempting one violation silenced that callback for every
+blocking call - and it was concealing a second, unrelated violation *inside the method it exempted*,
+which only appeared when the key was narrowed to `root => target`. So the trap is worse than "a
+documented invariant nobody enforces": a coarse allowlist hides findings nobody documented at all.
+If an allowlist is kept, **key it as narrowly as the tool allows**.
+
+Two things follow for whoever picks this file up:
+
+- The re-enable path is per entry, not per rule. Delete one pair, run the rule, and what it reports
+  is the debt that entry was carrying - which is not always what its comment claims.
+- `KNOWN_BLOCKING_VIOLATIONS` has no counterpart in the SpotBugs or Error Prone registries, which
+  are per-analyser and do not know about ArchUnit. That is the actual gap in suppression tracking -
+  not a missing cross-tool register, which those two already cover for their own tools, but that
+  ArchUnit's accepted violations are recorded only in the source file that holds them.
+

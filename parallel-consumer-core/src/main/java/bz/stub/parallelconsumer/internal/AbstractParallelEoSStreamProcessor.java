@@ -2255,6 +2255,27 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         }
     }
 
+    /**
+     * <b>Cleared suspicion, 2026-08-31 - this monitor is NOT a residual confluentinc#857 edge.</b>
+     * Recorded here because the suspicion is the obvious one to form when reading this file: the
+     * revoke path calls this method, so the poll thread does still enter a monitor inside a rebalance
+     * callback, which is the shape of the deadlock that {@link #tryCommitOffsetsOnRevoke()} exists to
+     * break.
+     * <p>
+     * It is not the same defect, and the discriminator is what a holder DOES rather than that it
+     * holds. An AB-BA cycle needs one thread holding lock A while blocked on lock B. Every holder of
+     * this monitor - {@link #requestCommitAsap()}, {@link #isCommandedToCommit()} and this method -
+     * does one {@code AtomicBoolean} get or set and nothing else, so a hold here cannot span a wait
+     * and there is no edge for a cycle to close on. The control thread's own commit takes
+     * {@code commitLock} across the blocking {@code retrieveOffsetsAndCommit()} and enters this
+     * monitor only after that call has returned.
+     * <p>
+     * <b>What would reopen it:</b> anything blocking added inside one of those three
+     * {@code synchronized (commitCommand)} blocks, or a fourth holder that waits while holding. No
+     * gate protects this - {@code ArchitectureTest.rebalanceCallbacksMustNotBlock} matches method
+     * calls, and a {@code synchronized} block is a {@code MONITORENTER} instruction it cannot see, so
+     * the rule is green here whether the invariant holds or not.
+     */
     private void clearCommitCommand() {
         synchronized (commitCommand) {
             if (commitCommand.get()) {
