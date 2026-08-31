@@ -63,11 +63,15 @@
     </dependencyManagement>
 
     <dependencies>
-        <dependency>
-            <groupId>bz.stub.parallelconsumer</groupId>
-            <artifactId>parallel-consumer-core</artifactId>
-            <version>${project.version}</version>
-        </dependency>
+        <!--
+            parallel-consumer-core is DELIBERATELY ABSENT from compile scope, and it is absent as
+            evidence rather than as an oversight: what this module contains today is a process and a
+            gRPC listener, and neither needs an engine. The transport's contract with the service it
+            hosts is io.grpc.BindableService, so nothing here references a Parallel Consumer type at
+            all - which is the whole reason this module can be reviewed without reading one. It comes
+            back with the engine that needs it. (The test-jar below is a different artifact and is
+            used, for the shared ArchUnit convention rules.)
+        -->
         <!--
             The protocol module: proxy.proto's generated messages and gRPC stubs. Per the
             language-proxy plan's KTD34, the dependency arrow runs engine -> protocol and never
