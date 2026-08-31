@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.LongAdder;
 
@@ -164,9 +165,22 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      * <p>
      * Final and immutable, so it needs no {@code @GuardedBy}: it is written before this container is published
      * into a shard's entry map, the same publication edge {@link #shardOccupancy}'s javadoc describes, and the
-     * participant itself is stateless - all synchronisation lives inside the allocator (the plan's KTD11).
+     * participant's own counters are final references to internally-thread-safe types (KTD11) - all
+     * synchronisation lives inside the allocator or those types themselves, never here.
      */
     private final NavigatorParticipant navigator;
+
+    /**
+     * U4's per-record attribution dedup marker: true while this record's CURRENT resource-deferral episode has
+     * already been attributed (its defer-moment log line emitted, its episode counted). CAS-guarded rather than
+     * a plain boolean because the direct-pull engine can have several workers observe the SAME record's refusal
+     * concurrently (the shard-walk refusal branch's own precedent - see {@code ProcessingShard}'s javadoc on
+     * concurrent claimers): only the CAS winner may log or count the transition. Cleared the moment the record
+     * next dispatches ({@link #onQueueingForExecution()}) or otherwise leaves the shard while still deferred
+     * (revocation, a stale sweep - {@code ProcessingShard}'s retirement paths), so the NEXT deferral episode
+     * starts fresh. Needs no {@code @GuardedBy}: {@link AtomicBoolean} is self-guarding.
+     */
+    private final AtomicBoolean resourceDeferralAttributed = new AtomicBoolean(false);
 
     /**
      * Assignment generation this record comes from. Used for fencing messages after partition loss, for work lingering
@@ -466,6 +480,11 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
         // gone since the eligibility read lands as overdraft in the allocator, never a refusal here.
         if (navigator.isActive()) {
             navigator.spendOneCreditPerTag(module.clock().instant());
+            // U4: a dispatch ends any open deferral episode - CAS true->false so the count is decremented
+            // exactly once, whichever thread's claim wins the race against a concurrent attribution read.
+            if (resourceDeferralAttributed.compareAndSet(true, false)) {
+                navigator.onDeferralEpisodeEnded();
+            }
         }
         return true;
     }
@@ -688,6 +707,38 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
             return Optional.empty();
         }
         return navigator.availableAt(module.clock().instant());
+    }
+
+    /**
+     * U4's dedup marker read: true while this record's current resource-deferral episode has already been
+     * attributed. Package-private - only {@code ProcessingShard}'s attribution site reads it.
+     */
+    boolean isResourceDeferralAttributed() {
+        return resourceDeferralAttributed.get();
+    }
+
+    /**
+     * Marks a NEW deferral episode as attributed (U4) - CAS false-&gt;true, so only the caller that wins the
+     * race may log the defer-moment line or count the episode.
+     *
+     * @return true only on the transition (this caller won); false when another caller already attributed the
+     *         SAME episode (the direct-pull engine's concurrent-claimers case) or the marker was already set
+     */
+    boolean markResourceDeferralAttributedIfNew() {
+        return resourceDeferralAttributed.compareAndSet(false, true);
+    }
+
+    /**
+     * Clears the dedup marker without decrementing the navigator's deferred-count gauge (U4) - the caller
+     * ({@code ProcessingShard}'s retirement paths) owns pairing the clear with
+     * {@code NavigatorParticipant#onDeferralEpisodeEnded()} when the marker WAS set, since only the caller knows
+     * whether an episode was genuinely open.
+     *
+     * @return true when an episode was open (the marker was set before this call), so the caller must also
+     *         call {@code onDeferralEpisodeEnded()}; false when there was nothing to close
+     */
+    boolean clearResourceDeferralAttributionIfSet() {
+        return resourceDeferralAttributed.compareAndSet(true, false);
     }
 
     /**

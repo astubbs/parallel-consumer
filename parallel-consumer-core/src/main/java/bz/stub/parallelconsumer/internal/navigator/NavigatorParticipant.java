@@ -4,11 +4,21 @@ package bz.stub.parallelconsumer.internal.navigator;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.metrics.PCMetrics;
+import bz.stub.parallelconsumer.metrics.PCMetricsDef;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Tag;
+
+import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.LongAdder;
 
 /**
  * One PC instance's membership of the shared {@link ResourceAllocator} (U3's engine seam): the instance's stable
@@ -32,6 +42,15 @@ import java.util.Optional;
  * the allocator implementation (KTD11). Every {@code now} passed in must come from the one canonical clock the
  * allocator and its members share (KTD4): in production both the module clock and the allocator's
  * construction-time clock are UTC; the virtual-clock test lane shares one {@code MutableClock} across both.
+ * <p>
+ * <b>A third category, U4's attribution bookkeeping</b> - {@link #onDeferralEpisodeStarted},
+ * {@link #onDeferralEpisodeEnded}, {@link #blockingResourceDeferrals}, {@link #initMetrics}. Called from the
+ * shard-walk refusal branches (the defer-transition observation site) and the claim-success path. Its counters
+ * ({@link #deferredRecordCount}, {@link #lastReasonValue}, {@link #deferralEpisodeCounters}) are final
+ * references to internally-thread-safe types ({@link LongAdder}, {@link AtomicInteger},
+ * {@link ConcurrentHashMap}) - the same "final reference to a self-guarding type needs no {@code @GuardedBy}"
+ * shape {@code StubResourceAllocator.Counters} uses, so immutability of the FIELD still holds even though the
+ * VALUE it refers to mutates.
  *
  * @author Antony Stubbs
  */
@@ -48,6 +67,34 @@ public final class NavigatorParticipant {
 
     /** Null exactly when this participant is {@link #inert()}; otherwise stable for the instance's lifetime. */
     private final String memberId;
+
+    /**
+     * The greppable log prefix every navigator attribution line carries (U4, mirrors the admission package's own
+     * {@code "Adaptive concurrency"} convention) - public so {@code ProcessingShard}'s attribution site, the
+     * actual log-emission location, uses the SAME literal rather than a drifting duplicate.
+     */
+    public static final String LOG_PREFIX = "Navigator";
+
+    private static final String RESOURCE_TAG_KEY = "resource";
+
+    /**
+     * Records currently resource-deferred for this participant (U4's deferred-count gauge) - incremented on the
+     * transition INTO a deferral episode, decremented on the transition OUT (dispatch, or the record leaving the
+     * shard while still deferred). Deliberately never clamped: a pairing bug should show as a wrong number, not
+     * be hidden (the counter-clamp learning). Zero for {@link #inert()}, and never touched on that path (R3).
+     */
+    private final LongAdder deferredRecordCount = new LongAdder();
+
+    /** Which {@link NavigatorDecisionReason} bound the MOST RECENT deferral episode - the gauge value (KTD6). */
+    private final AtomicInteger lastReasonValue = new AtomicInteger(NavigatorDecisionReason.NO_DEFERRAL_VALUE);
+
+    /**
+     * One Micrometer {@link Counter} per {@link NavigatorDecisionReason}, tagged by reason name - populated by
+     * {@link #initMetrics} and incremented once per deferral EPISODE (never per re-evaluation pass) by
+     * {@link #onDeferralEpisodeStarted}. Empty (and every increment a no-op) until {@link #initMetrics} runs, and
+     * permanently empty for {@link #inert()}.
+     */
+    private final Map<NavigatorDecisionReason, Counter> deferralEpisodeCounters = new ConcurrentHashMap<>();
 
     private NavigatorParticipant(ResourceAllocator allocator, List<String> resourceTags, String memberId) {
         this.allocator = allocator;
@@ -147,6 +194,120 @@ public final class NavigatorParticipant {
             }
         }
         return Optional.ofNullable(earliest);
+    }
+
+    /**
+     * U4's attribution read: EVERY currently-blocking tagged resource paired with its own next-credit time -
+     * never a chosen one (R9's all-binding-predicates clause). {@link #availableAt} and
+     * {@link #earliestBlockedResourceNextCreditAt} reduce this same set to its max/min; this is the unreduced
+     * form the defer-moment log line and {@link NavigatorDecision} need. Empty when nothing is blocking, or when
+     * {@link #inert()} (R3).
+     */
+    public List<ResourceDeferral> blockingResourceDeferrals(Instant now) {
+        List<String> blocked = blockedTags(now);
+        if (blocked.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<ResourceDeferral> deferrals = new ArrayList<>(blocked.size());
+        for (String tag : blocked) {
+            deferrals.add(new ResourceDeferral(tag, allocator.nextCreditAt(memberId, tag, now)));
+        }
+        return Collections.unmodifiableList(deferrals);
+    }
+
+    /**
+     * U4's attribution decision: {@link #blockingResourceDeferrals} plus whether admission slots are ALSO
+     * binding, assembled into a {@link NavigatorDecision} - or empty when nothing is currently blocking (the
+     * refusal branch that called {@code onQueueingForExecution()} was refused for a different reason, e.g. the
+     * record is still in flight). Pure - never mutates the counters below; the caller decides whether this is a
+     * NEW episode (see {@link #onDeferralEpisodeStarted}).
+     */
+    public Optional<NavigatorDecision> currentDecision(Instant now, boolean admissionSlotsAlsoBinding) {
+        List<ResourceDeferral> blocking = blockingResourceDeferrals(now);
+        if (blocking.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(NavigatorDecision.of(blocking, admissionSlotsAlsoBinding));
+    }
+
+    // ------------------------------------------------------------------
+    // U4's attribution bookkeeping - called once per deferral EPISODE transition, never per pass
+    // ------------------------------------------------------------------
+
+    /**
+     * Called exactly once per deferral episode, at the transition INTO resource-deferred (the caller - the
+     * shard-walk refusal branch - deduplicates via the record's own CAS-guarded marker; this method trusts that
+     * it is only called on a genuine transition). Bumps the deferred-count gauge, records the reason as the
+     * latest-reason gauge value, and increments that reason's episode counter. A no-op counter map entry (before
+     * {@link #initMetrics} runs, or for {@link #inert()}, which never reaches here) is silently skipped rather
+     * than thrown - metrics registration is best-effort observability, never load-bearing for the decision.
+     */
+    public void onDeferralEpisodeStarted(NavigatorDecision decision) {
+        deferredRecordCount.increment();
+        lastReasonValue.set(decision.getReason().getValue());
+        Counter counter = deferralEpisodeCounters.get(decision.getReason());
+        if (counter != null) {
+            counter.increment();
+        }
+    }
+
+    /**
+     * Called exactly once per deferral episode, at the transition OUT of resource-deferred - a successful claim
+     * (the credit spend site) or the record leaving the shard while still deferred (revocation, a stale sweep).
+     * Never touches the allocator's conservation counters (KTD10: revocation is a credit no-op) - this is a
+     * SEPARATE, purely observational count.
+     */
+    public void onDeferralEpisodeEnded() {
+        deferredRecordCount.decrement();
+    }
+
+    /** The deferred-count gauge's live value (U4) - the {@link PCMetrics} extractor target. */
+    public long currentlyDeferredCount() {
+        return deferredRecordCount.sum();
+    }
+
+    /** The latest-reason gauge's live value (U4, KTD6) - {@link NavigatorDecisionReason#NO_DEFERRAL_VALUE} before any episode. */
+    public int lastReasonValue() {
+        return lastReasonValue.get();
+    }
+
+    /**
+     * Registers the {@code pc.navigator.*} meters (U4): the deferred-count and latest-reason gauges, one
+     * episode counter per {@link NavigatorDecisionReason}, and per-tagged-resource spent/overdraft/next-credit
+     * gauges read live from the allocator's {@link ConservationLedger} - mirrors
+     * {@code AdmissionController#initMetrics}'s mode-gated pattern. A NO-OP for {@link #inert()} (R3: an
+     * untagged instance registers nothing) or when {@code pcMetrics} is null. Called once, by
+     * {@code PCModule#navigatorParticipant()} immediately after construction.
+     * <p>
+     * {@code clock} is captured by the per-resource gauge lambdas below and read at EVERY scrape (KTD4's one
+     * canonical clock, not {@code Instant.now()}) - production passes the module's own UTC clock; the
+     * virtual-clock test lane passes the shared {@code MutableClock}, so a gauge read in a test advances exactly
+     * as the engine's own eligibility checks do.
+     */
+    public void initMetrics(PCMetrics pcMetrics, Clock clock) {
+        if (!isActive() || pcMetrics == null) {
+            return;
+        }
+        pcMetrics.gaugeFromMetricDef(PCMetricsDef.NAVIGATOR_DEFERRED_RECORDS, this,
+                NavigatorParticipant::currentlyDeferredCount);
+        pcMetrics.gaugeFromMetricDef(PCMetricsDef.NAVIGATOR_DEFERRAL_REASON, this,
+                NavigatorParticipant::lastReasonValue);
+        for (NavigatorDecisionReason reason : NavigatorDecisionReason.values()) {
+            Counter counter = pcMetrics.getCounterFromMetricDef(PCMetricsDef.NAVIGATOR_DEFERRAL_EPISODES,
+                    Tag.of("reason", reason.name()));
+            deferralEpisodeCounters.put(reason, counter);
+        }
+        for (String resourceName : resourceTags) {
+            Tag resourceTag = Tag.of(RESOURCE_TAG_KEY, resourceName);
+            pcMetrics.gaugeFromMetricDef(PCMetricsDef.NAVIGATOR_CREDITS_SPENT, this,
+                    p -> p.allocator.conservationLedger(resourceName, clock.instant()).getSpent(), resourceTag);
+            pcMetrics.gaugeFromMetricDef(PCMetricsDef.NAVIGATOR_CREDITS_OVERDRAFT, this,
+                    p -> p.allocator.conservationLedger(resourceName, clock.instant()).getOverdraft(), resourceTag);
+            pcMetrics.gaugeFromMetricDef(PCMetricsDef.NAVIGATOR_NEXT_CREDIT_AT, this,
+                    p -> p.allocator.nextCreditAt(resourceName, clock.instant())
+                            .map(Instant::getEpochSecond).orElse(-1L),
+                    resourceTag);
+        }
     }
 
     // ------------------------------------------------------------------

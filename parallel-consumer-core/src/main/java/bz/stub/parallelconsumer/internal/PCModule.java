@@ -248,8 +248,27 @@ public class PCModule<K, V> {
                     ? NavigatorParticipant.activeMember(allocator.get(), resourceTags,
                     pcMetrics().getInstanceTag().getValue())
                     : NavigatorParticipant.inert();
+            // U4: registers the pc.navigator.* meters once, immediately after construction - a no-op for the
+            // inert (untagged) shape, mirroring AdmissionController#initMetrics's mode-gated pattern (R3).
+            navigatorParticipant.initMetrics(pcMetrics(), clock());
         }
         return navigatorParticipant;
+    }
+
+    /**
+     * Whether admission SLOTS are the binding constraint RIGHT NOW (pure read, U4/KTD6's slots-constrained
+     * marker) - the fact {@code NavigatorDecisionReason#RESOURCE_AND_SLOTS_BLOCKED} names alongside a resource
+     * block. Mirrors {@link #admissionTargetSlots()}'s own state-derivation exactly, so the two seams can never
+     * disagree about what "binding" means: active enforcement, and every admission-target slot already occupied
+     * by an active user-function task. False whenever adaptive enforcement is inactive or no processor is
+     * attached yet (bare-module test envs) - matching {@link #admissionTargetSlots()}'s own fallback.
+     */
+    public boolean isAdmissionSlotsCurrentlyBinding() {
+        AbstractParallelEoSStreamProcessor<K, V> processor = parallelEoSStreamProcessor;
+        if (processor == null || !processor.adaptiveEnforcementActive()) {
+            return false;
+        }
+        return processor.userFunctionTaskAccounting().getActive() >= admissionTargetSlots();
     }
 
     /**

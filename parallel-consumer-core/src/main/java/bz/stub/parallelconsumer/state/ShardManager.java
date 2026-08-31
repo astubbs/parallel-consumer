@@ -297,7 +297,7 @@ public class ShardManager<K, V> {
 
         // don't need to synchronise on /adding/ elements, as the iterator would just stop early
         var shard = processingShards.computeIfAbsent(shardKey,
-                ignore -> new ProcessingShard<>(shardKey, options, wm.getPm(), recordPopulation, dispatchScanMeter));
+                ignore -> new ProcessingShard<>(shardKey, options, wm.getPm(), recordPopulation, dispatchScanMeter, module));
         shard.addWorkContainer(wc);
     }
 

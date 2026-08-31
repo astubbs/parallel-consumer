@@ -7,12 +7,17 @@ package bz.stub.parallelconsumer.state;
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
+import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.internal.RateLimiter;
+import bz.stub.parallelconsumer.internal.navigator.NavigatorDecision;
+import bz.stub.parallelconsumer.internal.navigator.NavigatorParticipant;
+import bz.stub.parallelconsumer.internal.navigator.ResourceDeferral;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -72,7 +77,28 @@ public class ProcessingShard<K, V> {
      */
     private final DispatchScanMeter scanMeter;
 
+    /**
+     * U4's attribution seam - the navigator participant (defer-moment log + episode counters), the module clock
+     * (KTD4's one canonical clock), and {@link PCModule#isAdmissionSlotsCurrentlyBinding()} (the slots-also-
+     * binding marker) are all reached through this, the same DI seam {@code WorkContainer} already holds
+     * (feedback_di_system: wire through {@code PCModule}, never a bespoke narrow interface). An untagged
+     * instance's {@link NavigatorParticipant#isActive()} is false, so {@link #attributeResourceDeferralMaybe}
+     * costs one field read per refused claim and touches nothing else (R3).
+     */
+    private final PCModule<?, ?> module;
+
     private final RateLimiter slowWarningRateLimit = new RateLimiter(5);
+
+    /**
+     * How often the steady-state "still deferred" line re-fires while a shard has ANY resource-deferred record
+     * (U4, KTD6 - the {@code constraintReportLimiter} pattern), independent of the once-per-episode defer-moment
+     * line. Same interval as {@code AdmissionController}'s own constraint report, for one greppable cadence
+     * across both subsystems' steady-state narration.
+     */
+    private static final int NAVIGATOR_CONSTRAINT_REPORT_INTERVAL_SECONDS = 5;
+
+    private final RateLimiter navigatorConstraintReportLimiter =
+            new RateLimiter(NAVIGATOR_CONSTRAINT_REPORT_INTERVAL_SECONDS);
 
     /**
      * Approximately how many of this shard's {@link #entries} are selectable as work right now.
@@ -340,6 +366,7 @@ public class ProcessingShard<K, V> {
                 } else {
                     log.trace("Skipping {} as work, not available to take as work", workContainer);
                     addToSlowWorkMaybe(slowWork, workContainer);
+                    attributeResourceDeferralMaybe(workContainer);
                 }
 
                 // can't take any more work from this shard, due to ordering restrictions - and the break is
@@ -411,6 +438,7 @@ public class ProcessingShard<K, V> {
                 } else {
                     log.trace("Skipping {} as work, not available to take as work", workContainer);
                     addToSlowWorkMaybe(slowWork, workContainer);
+                    attributeResourceDeferralMaybe(workContainer);
                 }
             } else {
                 // Same reasoning as the ordered walk: everything in this shard is on one partition, so a partition
@@ -458,8 +486,82 @@ public class ProcessingShard<K, V> {
     }
 
     private static String cantTakeAsWorkMsg(WorkContainer<?, ?> workContainer, Duration timeInFlight) {
-        var msgTemplate = "Can't take as work: Work ({}). Must all be true: Delay passed= {}. Is not in flight= {}. Has not succeeded already= {}. Time spent in execution queue: {}.";
-        return msg(msgTemplate, workContainer, workContainer.isDelayPassed(), workContainer.isNotInFlight(), !workContainer.isUserFunctionSucceeded(), timeInFlight);
+        // Names the resource term (U4) alongside the state terms it joins in the single-claim evaluation
+        // (KTD1) - resourceAvailableAt() is empty for an untagged instance or a resource-eligible record, so
+        // this costs one field read and never claims a resource block that is not the one this trace is about.
+        var msgTemplate = "Can't take as work: Work ({}). Must all be true: Delay passed= {}. Is not in flight= {}. Has not succeeded already= {}. Resource available at= {}. Time spent in execution queue: {}.";
+        return msg(msgTemplate, workContainer, workContainer.isDelayPassed(), workContainer.isNotInFlight(), !workContainer.isUserFunctionSucceeded(), workContainer.resourceAvailableAt(), timeInFlight);
+    }
+
+    // ------------------------------------------------------------------
+    // U4: resource-deferral attribution - the defer-moment log line, its dedup, and steady-state re-report
+    // ------------------------------------------------------------------
+
+    /**
+     * The defer-transition observation site (U4, R9): called for every refused claim, on the controller thread
+     * (or a worker thread under the direct-pull engine's concurrent claimers - see {@code WorkContainer}'s dedup
+     * marker javadoc). A no-op in one field read for an untagged instance or a record refused for a NON-resource
+     * reason (still in flight, retry delay not yet passed) - {@link WorkContainer#resourceAvailableAt()} is
+     * empty in both cases, so {@link NavigatorParticipant#blockingResourceDeferrals} is never even reached.
+     * <p>
+     * On a genuine resource block: attributes the FIRST observation of this deferral episode (the defer-moment
+     * log line, once - {@link WorkContainer#markResourceDeferralAttributedIfNew()} dedups across the many
+     * control-loop passes one episode spans) and, independently, re-fires a rate-limited steady-state line every
+     * {@link #NAVIGATOR_CONSTRAINT_REPORT_INTERVAL_SECONDS} while the block persists - the
+     * {@code constraintReportLimiter} pattern, so an operator who missed the defer-moment line still sees the
+     * constraint named periodically.
+     */
+    private void attributeResourceDeferralMaybe(WorkContainer<K, V> workContainer) {
+        NavigatorParticipant navigator = module.navigatorParticipant();
+        if (!navigator.isActive()) {
+            return; // R3's zero-cost path
+        }
+        Instant now = module.clock().instant();
+        Optional<NavigatorDecision> maybeDecision =
+                navigator.currentDecision(now, module.isAdmissionSlotsCurrentlyBinding());
+        if (!maybeDecision.isPresent()) {
+            // refused for a non-resource reason - close any episode this record still thinks is open (it
+            // regained eligibility on a resource without ever winning the claim, e.g. a retry delay elsewhere)
+            closeAnyOpenDeferralEpisode(workContainer, navigator);
+            return;
+        }
+        NavigatorDecision decision = maybeDecision.get();
+        if (workContainer.markResourceDeferralAttributedIfNew()) {
+            navigator.onDeferralEpisodeStarted(decision);
+            log.info(NavigatorParticipant.LOG_PREFIX + " ({}): record {} entered resource deferral - {} - "
+                            + "blocked by: {}{}.",
+                    navigator.memberId(), workContainer, decision.getReason(),
+                    renderBlockingResources(decision.getBlockingResources()),
+                    admissionSlotsSuffix(decision));
+        }
+        navigatorConstraintReportLimiter.performIfNotLimited(() ->
+                log.info(NavigatorParticipant.LOG_PREFIX + " ({}): resource deferral continues on shard {} - {} "
+                                + "- blocked by: {}{}.",
+                        navigator.memberId(), getKey(), decision.getReason(),
+                        renderBlockingResources(decision.getBlockingResources()),
+                        admissionSlotsSuffix(decision)));
+    }
+
+    /**
+     * Closes a still-open dedup marker without a matching current block (KTD10-adjacent: this touches only the
+     * OBSERVATIONAL episode count, never the allocator's conservation counters).
+     */
+    private void closeAnyOpenDeferralEpisode(WorkContainer<?, ?> workContainer, NavigatorParticipant navigator) {
+        if (workContainer.clearResourceDeferralAttributionIfSet()) {
+            navigator.onDeferralEpisodeEnded();
+        }
+    }
+
+    /** R9's all-binding-predicates rendering: every blocking resource's name and next-credit time, never one chosen. */
+    private static String renderBlockingResources(List<ResourceDeferral> blocking) {
+        return blocking.stream()
+                .map(deferral -> deferral.getResourceName() + " (next credit "
+                        + deferral.getNextCreditAt().map(Object::toString).orElse("unknown") + ")")
+                .collect(Collectors.joining(", "));
+    }
+
+    private static String admissionSlotsSuffix(NavigatorDecision decision) {
+        return decision.isAdmissionSlotsAlsoBinding() ? "; admission slots also binding this pass" : "";
     }
 
     private boolean isOrderRestricted() {
@@ -506,6 +608,14 @@ public class ProcessingShard<K, V> {
         occupancy.onRetired(removed.offset());
         if (removed.isNotInFlight()) {
             dcrAvailableWorkContainerCntByDelta(1);
+        }
+        // U4: a record leaving the shard while still resource-deferred (revocation, a stale sweep) ends its
+        // episode too - otherwise the deferred-count gauge would leak upward forever for records that never
+        // come back. Touches only the observational episode count, never the allocator's conservation ledger
+        // (KTD10: revocation is a credit no-op - this is a SEPARATE counter). The marker check is the R3
+        // zero-cost gate: an untagged record's marker is never set, so this never reaches the module.
+        if (removed.isResourceDeferralAttributed()) {
+            closeAnyOpenDeferralEpisode(removed, module.navigatorParticipant());
         }
     }
 }
