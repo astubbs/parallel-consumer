@@ -224,7 +224,7 @@ entries:
   - id: virtual-threads
     title: Support virtual threads
     serves: [performance, flexibility]
-    horizon: next-0x
+    horizon: "0.6.0.0"
     blocks_1_0: false
     stage: idea
     stage_detail: >-
