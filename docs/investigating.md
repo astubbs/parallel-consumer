@@ -41,8 +41,17 @@ the output before believing any instrumented result. Two traps have each voided 
   reaches `target/test-classes` and your new logging silently does not exist.
 
 Use `./mvnw -pl parallel-consumer-core -am verify` (what `bin/soak-test.sh` runs) and confirm
-`BUILD SUCCESS` on the compile step. Better, assert the setting in the run's own output - PC logs
-its full options at INFO on init, so the arm proves itself.
+`BUILD SUCCESS` on the compile step. Better, assert the setting in the run's own output, so the arm
+proves itself.
+
+**PC's own options line is NOT that assertion, though it reads like the obvious candidate.** It logs
+at INFO on init - but on logger `bz.stub.parallelconsumer`, which both test log profiles pin to
+`warn`, so it never appears and grepping for it returns nothing whether the setting reached the run
+or not. That is a silent false negative in the check meant to prevent silent false negatives. Assert
+something the run emits at a level that reaches the file you are grepping: harness classes under
+`bz.stub.parallelconsumer.integrationTests` sit at `info`, which is why `ManagedPCInstance` logs the
+commit mode itself and `bin/torture-overnight.sh` reads the mode from there.
+[`docs/logging.md`](logging.md) owns the profiles and the levels.
 
 ## Designing a liveness check
 
