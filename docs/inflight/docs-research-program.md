@@ -36,6 +36,13 @@ project needs: publishing "we predicted FFI would win and it did not" is what ma
 5. **What does it cost to cross from a JVM engine into foreign user code?** The FFI-vs-sidecar
    measurements across ~ten languages (astubbs#242 work) are a dataset with an audience well
    beyond Kafka.
+6. **Where does the broker actually change outcomes?** (Added from the 2026-08-29/30 follow-up.)
+   PC holds application logic, concurrency policy, ordering, retries and the language boundary
+   constant while the broker varies - Kafka, Redpanda, WarpStream, AutoMQ - which makes it an
+   unusually clean broker-comparison harness. Research/content, not product. The trap is already
+   on record: the share-groups broker arm would not reproduce its own numbers across three brokers
+   in one day (astubbs#362), and broker benchmarking is exactly where that class lives - no figure
+   publishes until it reproduces at its own operating point.
 
 ## Mechanism
 

@@ -57,6 +57,24 @@ over a classic group. Same vocabulary, opposite direction, different constraints
 **Cost:** the review called it "almost embarrassingly cheap" given the existing batch API - mostly
 API vocabulary and lifecycle translation. Treat that as a prediction to be tested, not an estimate.
 
+## Addition from the follow-up conversation (2026-08-29/30): the migration advisor
+
+The KafkaConsumer facade gains an adoption mechanism: run an existing consumer through it in
+**observation mode** - parallel execution off - and let PC measure the workload it was never
+allowed to parallelise: unique active keys, key-distribution shape, estimated exploitable key
+concurrency versus the partition count. The pitch stops being "PC might make your application
+faster" and becomes "we observed your workload; here is the parallelism your current consumer
+leaves unused." It is research question 1 of
+[`docs-research-program.md`](docs-research-program.md) run against the prospect's own traffic, and
+composes with [`perf-workload-replay-simulator.md`](perf-workload-replay-simulator.md) for the
+shadow-simulation step ("KEY ordering with adaptive concurrency would have exposed ~70x more
+parallelism").
+
+**Honesty bound:** observation mode sees keys, arrival pattern and poll cadence - it does not see
+per-record handler time, because the user's loop processes records outside PC. Key-structure
+estimates (exploitable concurrency) are solid; handler-time claims ("97.8% of handler time had
+independent work waiting") need the poll-gap inference named as an inference.
+
 <!-- These notes live on `research/market-analysis-recut`, not master. Pinned to a commit
      so the links keep resolving after the branch moves or merges. -->
 [next-expose-consumer-and-admin-apis]: https://github.com/astubbs/parallel-consumer/blob/cd2156ce9/docs/inflight/next-expose-consumer-and-admin-apis.md

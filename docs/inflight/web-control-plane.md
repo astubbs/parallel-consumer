@@ -43,6 +43,11 @@ permanent configuration, and the reason field gives the incident review its time
    eligible-awaiting-capacity / retrying), click any population to drill in. A `top` for Kafka
    execution - and the reconciliation property is real, not aspirational: the conservation
    accounting (astubbs#336) already enforces it.
+5. **True lag** - the same breakdown exported as a *metric*, because broker lag lies about an
+   out-of-order processor: "Kafka says 82,431 behind; effectively 5,327 remain" once
+   completed-awaiting-frontier records are subtracted. The counterintuitive headline is the
+   feature, and the dashboard's offset ribbon (astubbs#268) already draws the underlying truth -
+   this publishes it where autoscalers and alerts can read it.
 
 ## Two consequences to keep visible
 

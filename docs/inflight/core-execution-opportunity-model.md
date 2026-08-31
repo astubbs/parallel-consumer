@@ -58,3 +58,12 @@ raise throughput, because this downstream has saturated" is a statement no resou
 make. The deeper abstraction is not adaptive concurrency; it is **continuously measuring the gap
 between the work an application could execute and the work it should execute, and understanding
 why the two differ**. Adaptive concurrency is merely the first consumer of that knowledge.
+
+## The standing task this implies
+
+Systematically inventory what PC uniquely knows at the boundary where Kafka semantics meet
+application execution - Kafka does not know what the handler is doing, Kubernetes does not
+understand keys and ordering, OpenTelemetry does not understand the commit frontier, language
+runtimes do not understand Kafka ownership; PC sees all four. The 2026-08-29/30 batch mined that
+seam ad hoc and found a dozen features; the inventory is how the next dozen get found on purpose
+rather than by conversation.
