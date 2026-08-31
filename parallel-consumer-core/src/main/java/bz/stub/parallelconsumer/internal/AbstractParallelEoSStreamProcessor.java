@@ -1079,6 +1079,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         } else {
             log.info("Signaling to close...");
 
+            // navigator membership ends at close ENTRY, before any drain (the plan's R16/KTD10): the share is
+            // dropped at the next quantum without waiting for the lease TTL, and the drain tail's dispatches
+            // spend whatever live credits remain until the allocator expires them - bounded by R12's overshoot
+            // framing. Deliberately BEFORE the state transition, so no drain-pass quantum read can renew a
+            // membership that is already leaving. A close() the control loop initiates itself (an internal
+            // error path) never reaches here; the membership lease TTL is exactly the backstop for that -
+            // a control loop that stopped reading quanta lapses.
+            leaveNavigatorOnCloseEntry();
+
             switch (drainMode) {
                 case DRAIN -> {
                     log.info("Will wait for all in flight to complete before");
@@ -1352,6 +1361,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             state = RUNNING;
         }
 
+        // navigator membership begins at the running transition (the plan's R16) - a constructed-but-unstarted
+        // instance must not dilute running members' shares, so the join is here rather than in the constructor
+        joinNavigatorOnRunning();
+
         // broker poll subsystem
         brokerPollSubsystem.start(options.getManagedExecutorService());
 
@@ -1453,6 +1466,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         // AFTER the snapshot so a window closing this pass includes it
         sampleAdmissionInFlight();
         tickAdmissionController();
+        tickNavigatorQuantumRead();
 
         // run call back
         log.trace("Loop: Running {} loop end plugin(s)", controlLoopHooks.size());
@@ -1588,6 +1602,56 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         }
         if (targetAfter > targetBefore) {
             maybeWakeupPoller();
+        }
+    }
+
+    /**
+     * THE navigator's per-pass quantum pull (the plan's KTD4), one mutating allocator touch per
+     * {@link #controlLoop} pass beside {@link #tickAdmissionController()}: it renews this instance's membership
+     * lease and materialises the current quantum's share into local credits - which is what keeps the claim-path
+     * eligibility read pure (KTD1), and what keeps an idle-but-live instance a member (R17: the control loop
+     * ticks regardless of demand, so only a STOPPED control loop lets the lease TTL fire).
+     * <p>
+     * Gated to {@link State#RUNNING} and {@link State#PAUSED}: a paused instance is alive and keeps its share
+     * (pause is a credit no-op, KTD10), while DRAINING/CLOSING follow {@link #leaveNavigatorOnCloseEntry()} -
+     * the membership has already left, and a post-leave lease renewal, though harmless to the division (the
+     * leave event wins from the next quantum), would be noise in the allocator's records.
+     * <p>
+     * Untagged instances (R3): one inert-participant check, nothing else.
+     */
+    void tickNavigatorQuantumRead() {
+        if (state != RUNNING && state != PAUSED) {
+            return;
+        }
+        var navigator = module.navigatorParticipant();
+        if (navigator.isActive()) {
+            navigator.readQuantum(module.clock().instant());
+        }
+    }
+
+    /**
+     * Navigator membership join, called once at the running transition in {@link #supervisorLoop} (the plan's
+     * R16 lifecycle anchor). Package-private so the per-call contract is testable without driving a real
+     * control loop - the {@link #tickAdmissionController()} pattern.
+     */
+    void joinNavigatorOnRunning() {
+        var navigator = module.navigatorParticipant();
+        if (navigator.isActive()) {
+            navigator.join(module.clock().instant());
+        }
+    }
+
+    /**
+     * Navigator membership leave, called at close ENTRY - before the drain - from {@link #close(DrainingMode)}
+     * (the plan's R16): an explicit close drops the share at the next quantum without waiting for the lease
+     * TTL (AE2). Idempotent in effect: a second leave for a member already gone changes nothing in the
+     * allocator's division. Package-private for the same direct-testability reason as
+     * {@link #joinNavigatorOnRunning()}.
+     */
+    void leaveNavigatorOnCloseEntry() {
+        var navigator = module.navigatorParticipant();
+        if (navigator.isActive()) {
+            navigator.leave(module.clock().instant());
         }
     }
 
@@ -2202,10 +2266,48 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Package-private with no {@code get} prefix (Truth-generator constraint, see
      * {@link #userFunctionTaskAccounting()}) so the KTD7 bound is testable without a control loop.
      *
-     * @return either the duration until next commit, or next work retry
+     * @return either the duration until next commit, or next work retry - additionally bounded, on a
+     *         resource-tagged instance with work waiting, by the earliest next-credit time
+     *         ({@link #boundByResourceNextCredit})
      * @see ParallelConsumerOptions#getTargetAmountOfRecordsInFlight()
      */
     Duration timeToBlockFor() {
+        return boundByResourceNextCredit(timeToBlockForIgnoringResources());
+    }
+
+    /**
+     * The navigator's wakeup term (the plan's KTD5), deliberately its OWN branch rather than a tenant of the
+     * retry branch above: a resource-deferred pass has no failed-retry work, so the retry branch's guards never
+     * admit it, and that branch's {@code getDefaultMessageRetryDelay()} floor would swallow a sub-second
+     * next-credit time. This bound has no floor - a credit due in 200ms caps the block at 200ms.
+     * <p>
+     * Soft and resource-keyed, per KTD5: no per-record queue is consulted - when this instance is tagged and
+     * ANY work is waiting in the shards, the block time is capped by the earliest next-credit time over the
+     * resources currently blocking. That fires on some passes where the waiting work was not resource-deferred
+     * at all (a retry-parked record, an ordered shard blocked by flight), costing one early wake per quantum at
+     * worst; the alternative - tracking which records deferred for which reason this pass - is exactly the
+     * per-record state KTD5 forbids. Untagged instances return the base time untouched via one inert check (R3).
+     */
+    private Duration boundByResourceNextCredit(Duration base) {
+        var navigator = module.navigatorParticipant();
+        if (!navigator.isActive() || wm.getNumberOfWorkQueuedInShardsAwaitingSelection() <= 0) {
+            return base;
+        }
+        Instant now = module.clock().instant();
+        Optional<Instant> earliestNextCredit = navigator.earliestBlockedResourceNextCreditAt(now);
+        if (!earliestNextCredit.isPresent()) {
+            // nothing is blocking (or a blocking resource mints nothing, in which case there is no time to
+            // wake for) - the base arithmetic stands
+            return base;
+        }
+        Duration untilCredit = Duration.between(now, earliestNextCredit.get());
+        if (untilCredit.isNegative()) {
+            untilCredit = Duration.ZERO;
+        }
+        return untilCredit.compareTo(base) < 0 ? untilCredit : base;
+    }
+
+    private Duration timeToBlockForIgnoringResources() {
         // if less than target work already in flight, don't sleep longer than the next retry time for failed work, if it exists - so that we can wake up and maybe retry the failed work
         if (!wm.isWorkInFlightMeetingTarget()) {
             // though check if we have work awaiting retry

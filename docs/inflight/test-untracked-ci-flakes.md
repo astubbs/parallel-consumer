@@ -16,14 +16,29 @@ written up in
 [`back-pressure-freezes-the-frontier-the-test-asserted-2026-08-24.md`](../solutions/test-flakiness/back-pressure-freezes-the-frontier-the-test-asserted-2026-08-24.md).
 Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutions/).
 
+### The key-order point check again, on the navigator U3 selection-path full run, 2026-09-01
+
+<!-- post-merge: checked-begin -->
+A full core unit run on `feats/hasten-micro-mvp` (the navigator U3 selection-path wiring) failed
+once: `processInKeyOrder(CommitMode)[1][2][3]`, all three parameterizations, at
+`[sanity check input data]` - `polled` size 0 against expected 9, the symptom this ledger owns.
+Class-level re-run green on the same build (58/58); the other 832 tests of the run were green. The
+U3 change is non-suspect for a reason the diagnosis can name: the failing assertion is about the
+test harness's own mock-poll FEED (records delivered to the engine), upstream of claim evaluation,
+and this test's instance is untagged, so the new claim term is a single inert-participant boolean
+read (R3's zero-cost path). Filed for rate. One failure in this session's two full-run starts.
+<!-- post-merge: checked-end -->
+
 ### The key-order point check again, on the navigator allocator's full run, 2026-09-01
 
+<!-- post-merge: checked-begin -->
 A full core unit run on `feats/hasten-micro-mvp` (the navigator U2 allocator work) failed once:
 `processInKeyOrder(CommitMode)[1][2][3]` at `[sanity check input data]` - the symptom this ledger
 already owns below. In isolation the class went green, and the immediate second full run went
 green whole-suite. The navigator change cannot reach it: nothing outside the new navigator
 package invokes the allocator yet, so the recorded point-check diagnosis holds and the sighting
 is filed for rate, not novelty.
+<!-- post-merge: checked-end -->
 
 ### Two more point checks in the same class, 2026-08-23
 

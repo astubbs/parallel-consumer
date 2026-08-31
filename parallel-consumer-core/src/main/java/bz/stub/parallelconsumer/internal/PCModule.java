@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.internal;
  */
 
 import bz.stub.parallelconsumer.internal.admission.AdmissionController;
+import bz.stub.parallelconsumer.internal.navigator.NavigatorParticipant;
 import bz.stub.parallelconsumer.internal.navigator.ResourceAllocator;
 import bz.stub.parallelconsumer.internal.utils.TimeUtils;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
@@ -16,7 +17,10 @@ import lombok.Setter;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.producer.Producer;
 
+import com.google.errorprone.annotations.concurrent.GuardedBy;
+
 import java.time.Clock;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -188,6 +192,7 @@ public class PCModule<K, V> {
         return new AdmissionController(options(), clock(), pcMetrics());
     }
 
+    @GuardedBy("this")
     private Optional<ResourceAllocator> resourceAllocator;
 
     /**
@@ -196,21 +201,55 @@ public class PCModule<K, V> {
      * reads a plain {@link Optional#empty()} rather than every future caller null-checking
      * {@link ParallelConsumerOptions#getResourceAllocator()} itself.
      * <p>
-     * <b>Unsynchronised, unlike {@link #admissionController()} - reasoned the same way that accessor's javadoc
-     * demands.</b> As of THIS unit (U1, the declaration side only) nothing wires the allocator into the
-     * selection path or the control loop: the only callers are single-threaded processor construction and test
-     * code holding the module directly, the same shape {@link #workManager()} and {@link #producerManager()}
-     * already have unsynchronised. That changes once a later unit reaches this accessor from the control
-     * thread's per-pass quantum read (KTD4) and the broker-poll thread's membership join/leave (R16) - at that
-     * point this accessor needs {@link #admissionController()}'s mutual-exclusion treatment for the same reason:
-     * two racing first-touches would each wrap a fresh {@code Optional}, and the loser's caller would keep a
-     * stale handle. Re-examine this comment when that wiring lands rather than assuming the shape still holds.
+     * <b>{@code synchronized}, for {@link #admissionController()}'s reason - the re-examination that accessor's
+     * U1-era javadoc demanded, performed when U3 landed the wiring.</b> Since U3 this accessor is reached at
+     * runtime from more than one thread: {@link #navigatorParticipant()} (itself touched by the control thread's
+     * per-pass quantum read and every thread that constructs a {@code WorkContainer}) calls it, and test code
+     * holding the module remains a documented seam. Unsynchronised, two racing first-touches would each wrap a
+     * fresh {@code Optional} and the loser's caller would keep a stale handle; the lock both serialises the
+     * check-then-create and publishes the write, and is reentrant, so the call from
+     * {@link #navigatorParticipant()} (which holds the same monitor) is safe.
      */
-    public Optional<ResourceAllocator> resourceAllocator() {
+    public synchronized Optional<ResourceAllocator> resourceAllocator() {
         if (resourceAllocator == null) {
             resourceAllocator = Optional.ofNullable(options().getResourceAllocator());
         }
         return resourceAllocator;
+    }
+
+    @GuardedBy("this")
+    private NavigatorParticipant navigatorParticipant;
+
+    /**
+     * This instance's navigator membership (U3's engine seam): member id, tagged resources and allocator handle
+     * resolved ONCE per instance - {@link NavigatorParticipant#inert()} when the instance tags nothing, which is
+     * R3's zero-cost path (callers check {@link NavigatorParticipant#isActive()} and go no further).
+     * <p>
+     * <b>{@code synchronized} for {@link #admissionController()}'s reason</b>: first touch happens at runtime
+     * from whichever thread gets there first - {@code WorkContainer} construction (broker-poll or control
+     * thread, and worker threads under direct pull), the control loop's per-pass quantum read, and the lifecycle
+     * join on the caller's thread. Two racing constructions of an ACTIVE participant would be benign in state
+     * (the participant is immutable and both would carry the same member id) but the losing caller would keep an
+     * unpublished handle; mutual exclusion makes the question moot at the cost of one uncontended acquire.
+     * Callers on hot paths hold the returned reference in a final field rather than re-calling per record - see
+     * {@code WorkContainer}'s field.
+     * <p>
+     * The member id is the SAME identity {@link PCMetrics} publishes as the {@code pcinstance} meter tag (and
+     * {@code AbstractParallelEoSStreamProcessor} derives its log id from): a user-supplied
+     * {@link ParallelConsumerOptions#getPcInstanceTag()} verbatim, or the generated UUID - so an allocator-side
+     * membership view, a metric and a log line all name the instance the same way.
+     */
+    public synchronized NavigatorParticipant navigatorParticipant() {
+        if (navigatorParticipant == null) {
+            List<String> resourceTags = options().getResourceTags();
+            Optional<ResourceAllocator> allocator = resourceAllocator();
+            boolean tagged = allocator.isPresent() && resourceTags != null && !resourceTags.isEmpty();
+            navigatorParticipant = tagged
+                    ? NavigatorParticipant.activeMember(allocator.get(), resourceTags,
+                    pcMetrics().getInstanceTag().getValue())
+                    : NavigatorParticipant.inert();
+        }
+        return navigatorParticipant;
     }
 
     /**

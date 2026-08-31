@@ -39,11 +39,24 @@ public class PCModuleTestEnv extends PCModule<String, String> {
     public PCModuleTestEnv(final ParallelConsumerOptions<String, String> optionsInstance,
                            final CountDownLatch latch) {
         super(optionsInstance);
+        this.mutableClock = MutableClock.epochUTC();
         this.workManagerController = Optional.of(latch);
     }
 
     public PCModuleTestEnv(ParallelConsumerOptions<String, String> optionsInstance) {
+        this(optionsInstance, MutableClock.epochUTC());
+    }
+
+    /**
+     * A module whose virtual clock is SUPPLIED rather than owned, for the navigator lane's one-canonical-clock
+     * rule (the plan's KTD4): a {@code StubResourceAllocator} must be constructed with the same
+     * {@link MutableClock} the module serves from {@link #clock()}, and the allocator has to exist before the
+     * options (it rides {@code ParallelConsumerOptions#resourceAllocator}) - so the test creates the clock
+     * first, builds the allocator and options from it, and hands the same clock in here.
+     */
+    public PCModuleTestEnv(ParallelConsumerOptions<String, String> optionsInstance, MutableClock sharedClock) {
         super(optionsInstance);
+        this.mutableClock = sharedClock;
 
         ParallelConsumerOptions<String, String> override = enhanceOptions(optionsInstance);
 
@@ -108,7 +121,7 @@ public class PCModuleTestEnv extends PCModule<String, String> {
     }
 
     @Getter
-    private final MutableClock mutableClock = MutableClock.epochUTC();
+    private final MutableClock mutableClock;
 
     @Override
     public Clock clock() {
