@@ -70,6 +70,8 @@ document. This section is the detail behind it.
   master runs a single full `bin/ci-build.sh` on the default Kafka version to gate SNAPSHOT
   publishing. All jobs use explicit `cache/restore` with rotating keys from the `prepare-deps`
   job - never `setup-java cache: 'maven'`.
+  It also carries **`proto: breaking`**, the freeze gate over the proxy wire schema - see
+  ["`proto: breaking` runs three things, in an order that matters"](#proto-breaking-runs-three-things-in-an-order-that-matters).
 - **`publish.yml`** - publishes to Maven Central on every push to `master`. The pom version is the
   source of truth: `-SNAPSHOT` versions deploy as snapshots, non-snapshot versions deploy as full
   releases (and create a git tag + GitHub release). See [`docs/releasing.md`](releasing.md).
@@ -170,6 +172,36 @@ document. This section is the detail behind it.
     skipped for fork PRs and dies early on a token expiry, so the list would go unwatched exactly
     when it matters most. **`deps: CVE exclusion expiry` is a new job name and is NOT yet a required
     status check** - adding it to the master ruleset is a separate, deliberate act.
+
+### `proto: breaking` runs three things, in an order that matters
+
+The job name says one thing and the job does three, because they share a `buf` install and a checkout
+and splitting them would buy a second job for one binary. In order:
+
+1. **`bin/check-proto-lint.sh`** - `buf lint` over the schema. First, because a schema that does not
+   lint is one whose breaking-change comparison is answering a question nobody asked yet. The rule set
+   and its two exceptions live in `parallel-consumer-proxy-protocol/buf.yaml`, not in the script.
+2. **`bin/test-check-proto-breaking.sh`** - the gate's own self-test, ahead of the gate, the same
+   ordering the docs-data and copyright scanners use. It mutates the real schema one way at a time
+   (delete, renumber, rename, add) and asserts the verdict, then restores it.
+3. **`bin/check-proto-breaking.sh`** - the gate. `buf breaking` in the **FILE** category against
+   `origin/master`.
+
+Three things about it are easy to get wrong:
+
+- **FILE, not WIRE, and the self-test is what pins that.** A renamed field is wire-compatible, so
+  `WIRE` would pass it - and nothing else in the repository would notice `buf.yaml` being weakened.
+  The rename case exists to fail if it ever is.
+- **A pass can mean "nothing to compare against".** Until the frozen schema is on `master` the gate
+  passes with a notice saying so, which is why the self-test asserts the *reason* and not only the
+  exit code. Once the schema lands, the baseline is `master` and therefore **moves** - so the gate
+  catches a break on the PR that introduces it and never again. That gap is open and recorded in
+  [`docs/inflight/ci-pin-the-proto-freeze-baseline.md`](inflight/ci-pin-the-proto-freeze-baseline.md).
+- **`fetch-depth: 0` is load-bearing.** The baseline is a git ref; a shallow clone makes the gate exit
+  2 (cannot run) rather than silently passing.
+
+`proto: breaking` is a **new job name and is NOT yet a required status check** - adding it to the
+master ruleset is a separate, deliberate act.
 
 ### `CodeQL` is a required check that no workflow file produces
 

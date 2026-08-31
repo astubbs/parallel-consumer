@@ -38,6 +38,11 @@
         <module>parallel-consumer-vertx</module>
         <module>parallel-consumer-reactor</module>
         <module>parallel-consumer-mutiny</module>
+        <!-- In the DEFAULT reactor, unlike the eight foreign client modules below it: this one is an
+             ordinary JVM module whose only extra requirement is a protoc the build downloads from
+             Maven Central itself, so it needs nothing installed and there is nothing for
+             -Dpc.foreignClients to guard. -->
+        <module>parallel-consumer-proxy-protocol</module>
         <module>parallel-consumer-proxy-clients</module>
         <module>parallel-consumer-examples</module>
     </modules>
@@ -124,6 +129,28 @@
         <pitest.version>1.25.8</pitest.version>
         <pitest-junit5.version>1.2.3</pitest-junit5.version>
         <central-publishing-maven-plugin.version>0.11.0</central-publishing-maven-plugin.version>
+
+        <!-- language proxy (astubbs#242) -->
+        <!-- ONE PIN FOR EVERY MODULE THAT SPEAKS THE PROTOCOL, AND IT HAS TO BE ONE. The generated
+             stubs (parallel-consumer-proxy-protocol) are the only consumer today; the sidecar's
+             server transport and the Java client's channel arrive on later rungs and speak the same
+             gRPC runtime. A version they disagree on is a runtime failure in a downstream consumer
+             rather than a build failure here.
+
+             It was declared separately in all three on astubbs#293, each with a comment saying "must
+             match the protocol module's pin" - three places to bump, and a bump that updated two of
+             them looked green. That is not hypothetical: a CVE fix on that branch had to find and
+             edit all three by hand. Inheriting one property from this pom is what the three comments
+             were asking for; Maven properties do not flow between siblings, but they do flow down. It
+             is declared here now, while there is one consumer and nothing to reconcile, rather than
+             after the second one arrives.
+
+             NOT protobuf.version, which stays in parallel-consumer-proxy-protocol/pom.xml: it is
+             declared exactly once, it pairs with the protoc binary that module downloads
+             (proxy.protoc), and .github/workflows/maven.yml reads `<protobuf.version>` out of that
+             pom BY PATH to warm the protoc cache. Moving it would be a rename with a reader that
+             hard-errors, for no drift being fixed. -->
+        <grpc.version>1.75.0</grpc.version>
 
         <!-- core -->
         <slf4j.version>2.0.18</slf4j.version>

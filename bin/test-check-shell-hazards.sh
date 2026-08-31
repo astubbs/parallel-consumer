@@ -80,6 +80,18 @@ arm "printf -v is a real option"         clean 'printf -v out "%s" "$v"'
 arm "a dash inside the format is fine"   clean 'printf "%s - %s" "$a" "$b"'
 arm "a dash-led string that is not a format" clean 'echo "$m" | grep -F -- "- %s"'
 
+# BASH 4 BUILTINS - nothing about the OPTIONS varies; the builtin itself is absent. macOS ships bash
+# 3.2, where `mapfile` is not a command at all, so the script exits 127 and a gate reports neither
+# verdict. The positive arms are the two spellings of the line that shipped in
+# bin/check-proto-breaking.sh and failed bin/check-all.sh on a developer box while passing every
+# ubuntu runner. ShellCheck has no bash-version awareness at all, which is asserted from the other
+# side in bin/test-check-shell-lint.sh.
+arm "mapfile into an array"              fire  'mapfile -t here < <(list_them)'
+arm "readarray is the same builtin"      fire  'readarray -t here < <(list_them)'
+# NOT THE HAZARD: the portable replacement, and a word that merely contains the builtin's name.
+arm "the while-read replacement is fine" clean 'while IFS= read -r x; do here+=("$x"); done < <(list_them)'
+arm "a word containing mapfile is fine"  clean 'remapfiles --now'
+
 # NOT A USE - this repo is full of prose about exactly these flags.
 arm "a comment about sed -i is fine"  clean '# Not sed -i: GNU takes the suffix attached, BSD as the next arg'
 arm "an indented comment is fine"     clean '    # stat -c is GNU and BSD rejects it'

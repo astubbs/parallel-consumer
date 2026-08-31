@@ -75,6 +75,27 @@ modules:
     evidence_id: mutiny
     feature: ../features/mutiny-integration.yaml
     use_this_if: Your processing uses SmallRye Mutiny.
+  - artifact: parallel-consumer-proxy-protocol
+    maturity: alpha
+    minimum_java: 17
+    reliability_confidence: >-
+      The v1 wire schema is frozen and its encoding is pinned by checked-in golden bytes, but no
+      engine and no client has carried a record over it on this branch - so what is evidenced is
+      encoding fidelity and specification coverage, not protocol behaviour.
+    api_expectation: >-
+      FROZEN, which is a stronger promise than the pre-1.0 modules make and a narrower one: the wire
+      may only GAIN. Nothing in it may be removed, renumbered, retyped or renamed, and
+      bin/check-proto-breaking.sh fails a change that tries. A capability token, not a version
+      number, is how a client learns what an addition means.
+    support_posture: >-
+      Experimental. Published to no registry, and the sidecar and client libraries this schema exists
+      for are not on master yet, so there is nothing yet to be compatible with.
+    evidence_id: proxy-protocol
+    tracking: astubbs#242
+    use_this_if: >-
+      You are writing a client against the proxy protocol. The two artifacts to work from are the
+      schema and parallel-consumer-proxy-protocol/docs/protocol-specification.md; the client-authoring
+      guide beside them says what an implementation must do.
   - artifact: parallel-consumer-examples
     maturity: reference-example
     reliability_confidence: Exercises supported module use cases; it is not a runtime library dependency.

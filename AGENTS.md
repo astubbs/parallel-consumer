@@ -315,6 +315,7 @@ bin/performance-test.sh      # performance tests (substantial hardware)
 | `parallel-consumer-vertx` | Vert.x integration for async HTTP |
 | `parallel-consumer-reactor` | Project Reactor integration |
 | `parallel-consumer-mutiny` | SmallRye Mutiny integration (Quarkus) |
+| `parallel-consumer-proxy-protocol` | The **frozen** v1 wire contract for the language proxy: `proxy.proto`, its specification and client-authoring guide, and the tests and `buf` gates that keep it frozen. The wire may only gain - `bin/check-proto-breaking.sh` enforces it, and that module's `README.md` owns the detail |
 | `parallel-consumer-proxy-clients` | Eleven language client modules. **Build scaffolding only today** - toolchain, compile, run, one fixture line; no Kafka and no PC semantics. The eight non-JVM ones are outside the reactor unless `-Dpc.foreignClients` is passed, and an absent toolchain is reported and skipped rather than failing. That directory's `README.md` owns the detail |
 | `parallel-consumer-examples` | Example implementations for each module |
 
