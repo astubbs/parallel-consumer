@@ -19,7 +19,10 @@ and better still a record can carry just `executionContractId + parameters` ("co
 42") with the contract defining the resource template. The boundary that keeps this safe and
 general: **the engine understands what work needs, never what work means** - no business
 awareness, so the Java and Python producers only agree on the envelope, and everything global
-works identically across languages.
+works identically across languages. (2026-08-31 addition: one semantic extractor should feed
+both Spice and lineage/OTel export, with *knowing* and *exporting* as separate first-class
+visibility policies - [`core-decision-lineage.md`](core-decision-lineage.md) carries the privacy
+warning the CSID whitelists taught.)
 
 ## The index, and where this fork has unfair prior expertise
 

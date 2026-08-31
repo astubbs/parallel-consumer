@@ -4,7 +4,10 @@
 <!-- inflight-state: deferred - needs per-gate timestamps; astubbs#359 stamps only the endpoints -->
 
 From the follow-up Codex strategy conversation, weekend of 2026-08-29/30 (breakdown root:
-[`core-engine-thesis.md`](core-engine-thesis.md)).
+[`core-engine-thesis.md`](core-engine-thesis.md)). **Matured 2026-08-31:**
+[`core-decision-lineage.md`](core-decision-lineage.md) generalises this per-record timeline into
+the causal graph across work, state and effects, and owns the model; this note stays the
+timeline instrument.
 
 PC owns a record's whole lifecycle, so it can produce what generic OpenTelemetry instrumentation
 cannot reconstruct: a per-record timeline of *why it waited* - behind its own key, for admission,
