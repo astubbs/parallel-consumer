@@ -156,6 +156,24 @@ module_evidence:
       - parallel-consumer-examples/parallel-consumer-example-streams/src/test/java/bz/stub/parallelconsumer/examples/streams/integrationTests/StreamsAppTest.java
       - parallel-consumer-examples/parallel-consumer-example-metrics/src/test/java/bz/stub/parallelconsumer/examples/metrics/integrationTests/CoreAppMetricsIntegrationTest.java
     limitation: Examples demonstrate wiring and operability; they are not a runtime-library compatibility guarantee.
+  - id: proxy-protocol
+    artifact: parallel-consumer-proxy-protocol
+    coverage: >-
+      Codegen wiring proven by compiled protobuf and gRPC stubs; full-field round-trips of every frozen
+      message including optional-field presence and unknown-field preservation; a checked-in canonical
+      session asserted in BOTH directions, because a same-runtime round trip only proves Java agrees with
+      Java and these bytes are the fixed point independently generated parsers must meet; and the
+      specification-to-schema diff enforced empty from the generated descriptors. Compatibility is
+      enforced outside the JVM suite by bin/check-proto-breaking.sh, whose own ability to say no is
+      pinned by bin/test-check-proto-breaking.sh.
+    inspect:
+      - parallel-consumer-proxy-protocol/src/test/java/bz/stub/parallelconsumer/proxy/protocol/GoldenSessionBytesTest.java
+      - parallel-consumer-proxy-protocol/src/test/java/bz/stub/parallelconsumer/proxy/protocol/SpecificationCoverageTest.java
+      - bin/test-check-proto-breaking.sh
+    limitation: >-
+      This is evidence about a CONTRACT, not about behaviour. It proves the schema encodes, decodes and
+      is documented as it claims; it proves nothing about a proxy serving it or a client speaking it,
+      because neither exists on master yet.
   - id: streams-alpha
     artifact: parallel-consumer-streams-spike
     coverage: Planned alpha evidence must exercise the release artifact's opt-in boundary, comparison switch and supported topology/recovery claims.
