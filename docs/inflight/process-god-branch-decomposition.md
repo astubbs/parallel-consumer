@@ -16,8 +16,9 @@ What no command will tell you:
   Wagon A rungs that need the verdict-free path carry `depends on` it. The re-cut was not a clean
   cherry-pick: the source commit predates the package rename and the atomic execution-state work
   reshaped the engine under it, so review it as a port, not a replay.
-- **`feats/native-image-sidecar` contains the whole demo chain** (sibling of astubbs#340's
-  branch, on top of `feats/polyglot-demos`) - it is a stack rung today, not a `master` candidate.
+- **`feats/native-image-sidecar` is superseded by astubbs#385 and retained as evidence** -
+  [`branch-native-image-sidecar.md`](branch-native-image-sidecar.md) owns its status, including
+  when it may be deleted.
 - **The extractions are stacks, not independent branches** - cut by partitioning the god tip's
   tree, each rung on its parent with a `depends on` line. Only the astubbs#295 resurrection and
   the hygiene audit are `master`-based singletons. Check
