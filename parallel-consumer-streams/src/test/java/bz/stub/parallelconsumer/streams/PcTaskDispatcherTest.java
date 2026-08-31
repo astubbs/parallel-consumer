@@ -20,6 +20,7 @@ import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.junit.jupiter.api.parallel.Isolated;
 
+import pl.tlinkowski.unij.api.UniLists;
 import pl.tlinkowski.unij.api.UniSets;
 
 import java.nio.charset.StandardCharsets;
@@ -39,6 +40,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongFunction;
 
+import static bz.stub.parallelconsumer.streams.PreparedRecords.prepared;
+import static bz.stub.parallelconsumer.streams.PreparedRecords.record;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
@@ -310,13 +313,13 @@ class PcTaskDispatcherTest {
 
         PcTaskDispatcher.WorkPreparer preparer = record -> {
             String key = new String(record.key(), StandardCharsets.UTF_8);
-            return () -> {
+            return prepared(record, () -> {
                 if (poisonKey.equals(key)) {
                     poisonAttempts.incrementAndGet();
                     throw new IllegalStateException("processor blew up on " + key);
                 }
                 completedKeys.add(key);
-            };
+            });
         };
 
         dispatcher.registerRecords(PARTITION, records(12, offset -> "key-" + (offset % 4)));
@@ -375,12 +378,7 @@ class PcTaskDispatcherTest {
                                                                 final LongFunction<String> keyForOffset) {
         List<ConsumerRecord<byte[], byte[]>> batch = new ArrayList<>();
         for (long offset = 0; offset < count; offset++) {
-            batch.add(new ConsumerRecord<>(
-                    partition.topic(),
-                    partition.partition(),
-                    offset,
-                    keyForOffset.apply(offset).getBytes(StandardCharsets.UTF_8),
-                    ("value-" + offset).getBytes(StandardCharsets.UTF_8)));
+            batch.add(record(partition, offset, keyForOffset.apply(offset)));
         }
         return batch;
     }
@@ -408,10 +406,10 @@ class PcTaskDispatcherTest {
         }
 
         @Override
-        public Runnable prepare(final ConsumerRecord<byte[], byte[]> record) {
+        public PcTaskDispatcher.PreparedRecord prepare(final ConsumerRecord<byte[], byte[]> record) {
             String key = new String(record.key(), StandardCharsets.UTF_8);
             long offset = record.offset();
-            return () -> {
+            return prepared(record, () -> {
                 int concurrent = inFlight.incrementAndGet();
                 peakConcurrency.accumulateAndGet(concurrent, Math::max);
 
@@ -432,7 +430,7 @@ class PcTaskDispatcherTest {
                     inFlight.decrementAndGet();
                     completed.add(new Completion(key, offset));
                 }
-            };
+            });
         }
 
         private int distinctKeysInFlight() {
@@ -521,7 +519,7 @@ class PcTaskDispatcherTest {
                 .as("nothing has completed yet - registration alone is not commit-worthy")
                 .isFalse();
 
-        boolean quiescent = dispatcher.pumpUntilQuiescent(record -> () -> { }, PUMP_TIMEOUT);
+        boolean quiescent = dispatcher.pumpUntilQuiescent(noOpPreparer(), PUMP_TIMEOUT);
         assertThat(quiescent).as("three no-op records must drain").isTrue();
 
         assertThat(dispatcher.hasCommitDataOutstanding())
@@ -541,7 +539,7 @@ class PcTaskDispatcherTest {
     void collectionDoesNotClearDirtyButTheSuccessAckDoes() {
         dispatcher = new PcTaskDispatcher("task-ack", INPUT_PARTITIONS, 4);
         dispatcher.registerRecords(PARTITION, records(2, offset -> "one-key"));
-        dispatcher.pumpUntilQuiescent(record -> () -> { }, PUMP_TIMEOUT);
+        dispatcher.pumpUntilQuiescent(noOpPreparer(), PUMP_TIMEOUT);
 
         var collected = dispatcher.collectCommitData();
         assertThat(dispatcher.hasCommitDataOutstanding())
@@ -569,7 +567,7 @@ class PcTaskDispatcherTest {
         dispatcher.abortClose();
         dispatcher.abortClose(); // idempotent - a second crash of a dead dispatcher is a no-op
 
-        assertThat(dispatcher.dispatchAvailable(record -> () -> { }))
+        assertThat(dispatcher.dispatchAvailable(noOpPreparer()))
                 .as("a crashed dispatcher hands out nothing")
                 .isZero();
 
@@ -585,10 +583,10 @@ class PcTaskDispatcherTest {
         PcTaskDispatcher second = new PcTaskDispatcher("task-multi-b", INPUT_PARTITIONS, 4);
         try {
             PcTaskDispatcher.abortAllActive();
-            assertThat(dispatcher.dispatchAvailable(record -> () -> { }))
+            assertThat(dispatcher.dispatchAvailable(noOpPreparer()))
                     .as("first dispatcher crashed")
                     .isZero();
-            assertThat(second.dispatchAvailable(record -> () -> { }))
+            assertThat(second.dispatchAvailable(noOpPreparer()))
                     .as("second dispatcher crashed too - the registry covers every live instance")
                     .isZero();
         } finally {
@@ -624,10 +622,10 @@ class PcTaskDispatcherTest {
         final CountDownLatch inChain = new CountDownLatch(1);
         final CountDownLatch releaseWorker = new CountDownLatch(1);
         dispatcher.registerRecords(PARTITION, records(1, offset -> "held-key"));
-        dispatcher.dispatchAvailable(record -> () -> {
+        dispatcher.dispatchAvailable(record -> prepared(record, () -> {
             inChain.countDown();
             awaitLatch(releaseWorker);
-        });
+        }));
 
         assertThat(inChain.await(30, TimeUnit.SECONDS))
                 .as("the worker must actually be inside the chain before the predicates are read, or this "
@@ -650,7 +648,7 @@ class PcTaskDispatcherTest {
             releaseWorker.countDown();
         }
 
-        dispatcher.pumpUntilQuiescent(record -> () -> { }, PUMP_TIMEOUT);
+        dispatcher.pumpUntilQuiescent(noOpPreparer(), PUMP_TIMEOUT);
 
         assertThat(dispatcher.hasCommitDataOutstanding())
                 .as("once complete and fed back, the work is commit data")
@@ -682,9 +680,9 @@ class PcTaskDispatcherTest {
         dispatcher = new PcTaskDispatcher("task-failed-not-stuck", INPUT_PARTITIONS, 4);
         dispatcher.registerRecords(PARTITION, records(3, offset -> "same-key"));
 
-        dispatcher.pumpUntilQuiescent(record -> () -> {
+        dispatcher.pumpUntilQuiescent(record -> prepared(record, () -> {
             throw new IllegalStateException("KABOOM");
-        }, PUMP_TIMEOUT);
+        }), PUMP_TIMEOUT);
 
         assertThat(dispatcher.getRecordsFailed())
                 .as("precondition: the record really did fail")
@@ -753,7 +751,7 @@ class PcTaskDispatcherTest {
     void theOutstandingWorkQueryIsAnswerableFromAForeignThread() throws Exception {
         dispatcher = new PcTaskDispatcher("task-foreign-query", INPUT_PARTITIONS, 4);
         dispatcher.registerRecords(PARTITION, records(2, offset -> "k" + offset));
-        dispatcher.pumpUntilQuiescent(record -> () -> { }, PUMP_TIMEOUT);
+        dispatcher.pumpUntilQuiescent(noOpPreparer(), PUMP_TIMEOUT);
 
         assertThat(dispatcher.hasUncommittedWork())
                 .as("precondition: there is completed, uncommitted work to report")
@@ -851,7 +849,7 @@ class PcTaskDispatcherTest {
     void aReplacementDispatcherOverTheSamePartitionsRunsWorkTheClosedOneCouldNot() {
         final PcTaskDispatcher closedOne = new PcTaskDispatcher("task-revive-old", INPUT_PARTITIONS, 4);
         closedOne.registerRecords(PARTITION, records(2, offset -> "k" + offset));
-        closedOne.pumpUntilQuiescent(record -> () -> { }, PUMP_TIMEOUT);
+        closedOne.pumpUntilQuiescent(noOpPreparer(), PUMP_TIMEOUT);
         closedOne.close();
 
         assertThat(closedOne.isClosed()).as("precondition: the old dispatcher went down with the task").isTrue();
@@ -864,7 +862,7 @@ class PcTaskDispatcherTest {
                 .isFalse();
 
         dispatcher.registerRecords(PARTITION, records(3, offset -> "revived-" + offset));
-        dispatcher.pumpUntilQuiescent(record -> () -> { }, PUMP_TIMEOUT);
+        dispatcher.pumpUntilQuiescent(noOpPreparer(), PUMP_TIMEOUT);
 
         assertThat(dispatcher.getRecordsSucceeded())
                 .as("and it dispatches, which is the whole difference between a revived task that runs and "
@@ -924,17 +922,17 @@ class PcTaskDispatcherTest {
         final CountDownLatch inChain = new CountDownLatch(1);
         final CountDownLatch releaseWorker = new CountDownLatch(1);
         dispatcher.registerRecords(second, records(second, 1, offset -> "doomed"));
-        dispatcher.dispatchAvailable(record -> () -> {
+        dispatcher.dispatchAvailable(record -> prepared(record, () -> {
             inChain.countDown();
             awaitLatch(releaseWorker);
-        });
+        }));
         assertThat(inChain.await(30, TimeUnit.SECONDS)).as("the record is in flight").isTrue();
 
         // The rebalance lands while the record is still inside the chain.
         dispatcher.updatePartitions(UniSets.of(PARTITION));
         releaseWorker.countDown();
 
-        dispatcher.pumpUntilQuiescent(record -> () -> { }, PUMP_TIMEOUT);
+        dispatcher.pumpUntilQuiescent(noOpPreparer(), PUMP_TIMEOUT);
 
         assertThat(dispatcher.collectCommitData())
                 .as("the late outcome belongs to a partition this instance no longer owns - committing its "
@@ -950,7 +948,7 @@ class PcTaskDispatcherTest {
 
         dispatcher.updatePartitions(UniSets.of(PARTITION));
 
-        dispatcher.pumpUntilQuiescent(record -> () -> { }, PUMP_TIMEOUT);
+        dispatcher.pumpUntilQuiescent(noOpPreparer(), PUMP_TIMEOUT);
         assertThat(dispatcher.getRecordsSucceeded())
                 .as("Kafka calls the assignment paths on every rebalance; a spurious epoch bump here would "
                         + "discard work that was never reassigned")
@@ -971,7 +969,7 @@ class PcTaskDispatcherTest {
         final int activeBefore = PcTaskDispatcher.activeCount();
         dispatcher = new PcTaskDispatcher("task-teardown-contract", INPUT_PARTITIONS, 4);
         dispatcher.registerRecords(PARTITION, records(2, offset -> "k" + offset));
-        dispatcher.pumpUntilQuiescent(record -> () -> { }, PUMP_TIMEOUT);
+        dispatcher.pumpUntilQuiescent(noOpPreparer(), PUMP_TIMEOUT);
 
         assertThat(PcTaskDispatcher.activeCount())
                 .as("precondition: the dispatcher is live in the JVM-wide registry")
@@ -1099,7 +1097,7 @@ class PcTaskDispatcherTest {
         dispatcher = new PcTaskDispatcher("task-cross-thread-query", INPUT_PARTITIONS, 4);
         dispatcher.registerRecords(PARTITION, records(1, offset -> "one-key"));
 
-        assertThat(dispatcher.dispatchAvailable(record -> () -> { }))
+        assertThat(dispatcher.dispatchAvailable(noOpPreparer()))
                 .as("the single record goes to a worker")
                 .isEqualTo(1);
 
@@ -1149,9 +1147,9 @@ class PcTaskDispatcherTest {
         dispatcher = new PcTaskDispatcher("task-failure-not-outstanding", INPUT_PARTITIONS, 4);
         dispatcher.registerRecords(PARTITION, records(1, offset -> "one-key"));
 
-        dispatcher.dispatchAvailable(record -> () -> {
+        dispatcher.dispatchAvailable(record -> prepared(record, () -> {
             throw new IllegalStateException("processing blew up");
-        });
+        }));
         await().atMost(PUMP_TIMEOUT).until(() -> dispatcher.getRecordsFailed() == 1);
 
         assertThat(dispatcher.hasCommitDataOutstanding())
@@ -1185,6 +1183,474 @@ class PcTaskDispatcherTest {
                 .as("and acknowledging a commit writes partition state, so it does too")
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("onCommitSuccess");
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // Stream time (astubbs#255, U13). The arithmetic, with Kafka Streams out of the picture - which is the
+    // only place it CAN be pinned: Kafka's own upstream suites turned out to be unable to measure this
+    // unit, so these are the gate rather than a supplement to it.
+    // ------------------------------------------------------------------------------------------------
+
+    @Test
+    void streamTimeIsUnknownUntilSomethingIsDispatched() {
+        dispatcher = new PcTaskDispatcher("task-st-unknown", INPUT_PARTITIONS, 4);
+
+        assertThat(dispatcher.getStreamTimeLowWaterMark())
+                .as("UNKNOWN, the same -1 PartitionGroup starts at - which is what lets "
+                        + "maybePunctuateStreamTime's existing guard keep working untouched")
+                .isEqualTo(ConsumerRecord.NO_TIMESTAMP);
+    }
+
+    /**
+     * The degenerate case, and the one behaviour preservation rests on: with one worker there is never more
+     * than one record in flight, so a min over a singleton is that record's timestamp - which is precisely
+     * what stock holds, because stock advances stream time at selection, before processing.
+     * <p>
+     * <b>Asserted after each pump rather than from inside the worker, and that is a real property rather
+     * than a test convenience.</b> The publish happens at the tail of the dispatch batch, because publishing
+     * after each individual hold would let the monotone clamp fix the mark on a partial batch. So a worker
+     * can start before the mark that includes it is published, and what it reads is a LOWER bound - which is
+     * the safe direction, and is why {@code currentStreamTimeMs()} inside {@code process()} is a bound rather
+     * than a value a processor can pin its own record against.
+     */
+    @Test
+    void withOneWorkerTheMarkIsTheRunningRecordsTimestampJustAsStockHolds() {
+        dispatcher = new PcTaskDispatcher("task-st-sequential", INPUT_PARTITIONS, 1);
+        // ONE key, deliberately. Across several keys PC selects by shard rather than by offset, so the order
+        // is PC's and not stock's - an earlier version of this test asserted [0,1,2] across three keys and
+        // measured [0,2,2], which is the seam working as designed rather than a defect. That case is not
+        // deleted; it is pinned by theMarkOvertakesStockWhereDispatchOrderDiffers below. Pinning to a single
+        // key isolates the property under test: a pool of one, a queue of one, and the mark on the record
+        // actually running.
+        dispatcher.registerRecords(PARTITION, records(3, offset -> "the-only-key"));
+
+        List<Long> markAfterEachDispatch = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            // One dispatch at a time, not pumpUntilQuiescent - that loops until nothing is left, so it would
+            // run all three and read the same final mark three times.
+            dispatcher.dispatchAvailable(noOpPreparer());
+            markAfterEachDispatch.add(dispatcher.getStreamTimeLowWaterMark());
+            await().atMost(PUMP_TIMEOUT).until(() -> dispatcher.getInFlightCount() == 0);
+        }
+
+        assertThat(markAfterEachDispatch)
+                .as("records carry offset-as-timestamp; with a pool of one the mark is always exactly the "
+                        + "timestamp of the record now in flight - which is what stock holds, because stock "
+                        + "advances at selection, before processing. No lead, no lag.")
+                .containsExactly(0L, 1L, 2L);
+    }
+
+    /**
+     * The whole design in one test: four records in flight with out-of-order timestamps, released one at a
+     * time. The mark tracks the LOWEST still running, never the highest dispatched, until the pool empties.
+     */
+    @Test
+    void theMarkFollowsTheLowestTimestampStillInFlight() {
+        dispatcher = new PcTaskDispatcher("task-st-lowwater", INPUT_PARTITIONS, 4);
+
+        // Distinct keys so all four are dispatchable at once; timestamps deliberately out of offset order.
+        long[] timestamps = {100L, 200L, 50L, 300L};
+        List<ConsumerRecord<byte[], byte[]>> batch = new ArrayList<>();
+        for (int i = 0; i < timestamps.length; i++) {
+            batch.add(record(PARTITION, i, timestamps[i], "key-" + i));
+        }
+        dispatcher.registerRecords(PARTITION, batch);
+
+        Map<Long, CountDownLatch> releaseByTimestamp = new ConcurrentHashMap<>();
+        CountDownLatch allStarted = new CountDownLatch(timestamps.length);
+        for (long timestamp : timestamps) {
+            releaseByTimestamp.put(timestamp, new CountDownLatch(1));
+        }
+
+        dispatcher.dispatchAvailable(rec -> prepared(rec, () -> {
+            allStarted.countDown();
+            awaitLatch(releaseByTimestamp.get(rec.timestamp()));
+        }));
+        awaitLatch(allStarted);
+
+        assertThat(dispatcher.getStreamTimeLowWaterMark())
+                .as("all four running: the mark is the LOWEST in flight, not the highest dispatched - "
+                        + "stock would be at 300 here, and 300 would close a window over the record at 50")
+                .isEqualTo(50L);
+
+        releaseAndDrain(releaseByTimestamp, 50L, 3);
+        assertThat(dispatcher.getStreamTimeLowWaterMark())
+                .as("50 finished, so the lowest still running is 100")
+                .isEqualTo(100L);
+
+        releaseAndDrain(releaseByTimestamp, 300L, 2);
+        assertThat(dispatcher.getStreamTimeLowWaterMark())
+                .as("the HIGHEST finishing moves nothing - the mark is held by 100, which is still running")
+                .isEqualTo(100L);
+
+        releaseAndDrain(releaseByTimestamp, 100L, 1);
+        assertThat(dispatcher.getStreamTimeLowWaterMark())
+                .as("only 200 left running")
+                .isEqualTo(200L);
+
+        releaseAndDrain(releaseByTimestamp, 200L, 0);
+        assertThat(dispatcher.getStreamTimeLowWaterMark())
+                .as("nothing in flight, so the mark converges on the highest dispatched - which is exactly "
+                        + "what stock holds once its queue has drained. Late, never early.")
+                .isEqualTo(300L);
+    }
+
+    /**
+     * <b>The divergence, pinned rather than deleted.</b> This case was measured while writing
+     * {@link #withOneWorkerTheMarkIsTheRunningRecordsTimestampJustAsStockHolds}, diagnosed correctly as PC's
+     * shard ordering, and then narrowed away to make that test pass - which removed the only coverage of the
+     * one behaviour a reader most needs to know about. Code review caught the deletion.
+     * <p>
+     * Three records on <b>one partition</b> with three distinct keys, a pool of one. Stock walks them in
+     * order and reports {@code [0, 1, 2]}. PC hands them out per KEY shard, so between shards the pool empties
+     * and the empty arm publishes the highest ever dispatched: {@code [0, 2, 2]}. <b>At step two the mark sits
+     * above a record that has not run yet</b>, which is what makes "never ahead of stock" false - no
+     * concurrency, no second partition, and the module's core use case.
+     * <p>
+     * The exact sequence is PC's shard iteration order and is not itself a contract; what is asserted is the
+     * property that survives - the mark ends where stock ends, and reaches stock's final value early.
+     */
+    @Test
+    void theMarkOvertakesStockWhereDispatchOrderDiffers() {
+        dispatcher = new PcTaskDispatcher("task-st-overtake", INPUT_PARTITIONS, 1);
+        dispatcher.registerRecords(PARTITION, records(3, offset -> "key-" + offset));
+
+        List<Long> markAfterEachDispatch = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            dispatcher.dispatchAvailable(noOpPreparer());
+            markAfterEachDispatch.add(dispatcher.getStreamTimeLowWaterMark());
+            await().atMost(PUMP_TIMEOUT).until(() -> dispatcher.getInFlightCount() == 0);
+        }
+
+        assertThat(markAfterEachDispatch)
+                .as("stock reports [0, 1, 2] here. PC reaches 2 one record early, because it dispatches per "
+                        + "KEY shard and the empty pool publishes the highest ever dispatched - so the mark "
+                        + "is ABOVE a record that has not run yet")
+                .containsExactly(0L, 2L, 2L);
+
+        assertThat(markAfterEachDispatch.get(markAfterEachDispatch.size() - 1))
+                .as("and it converges on stock's final value rather than overshooting it")
+                .isEqualTo(2L);
+    }
+
+    /**
+     * Kafka's {@code streamTime} only ever rises, and {@code PunctuationQueue} reschedules off the timestamp
+     * it fired at - so a mark that went backwards would re-fire punctuators over windows already closed.
+     */
+    @Test
+    void theMarkNeverGoesBackwardsWhenAnOlderRecordIsDispatchedLater() {
+        dispatcher = new PcTaskDispatcher("task-st-monotone", INPUT_PARTITIONS, 4);
+
+        dispatcher.registerRecords(PARTITION,
+                Collections.singletonList(record(PARTITION, 0, 300L, "key-high")));
+        dispatcher.pumpUntilQuiescent(noOpPreparer(), PUMP_TIMEOUT);
+        assertThat(dispatcher.getStreamTimeLowWaterMark()).isEqualTo(300L);
+
+        dispatcher.registerRecords(PARTITION,
+                Collections.singletonList(record(PARTITION, 1, 150L, "key-late")));
+        dispatcher.pumpUntilQuiescent(noOpPreparer(), PUMP_TIMEOUT);
+
+        assertThat(dispatcher.getStreamTimeLowWaterMark())
+                .as("a record older than the mark does not drag it back - that record is simply late, which "
+                        + "is a thing stock has too")
+                .isEqualTo(300L);
+        assertThat(dispatcher.getDispatchesBehindStreamTime())
+                .as("and it is counted, because how much extra lateness this seam creates is the number a "
+                        + "future windowed-operator decision turns on")
+                .isEqualTo(1L);
+    }
+
+    /**
+     * With retries disabled a failed record's KEY shard blocks for the life of the task. If its hold survived
+     * the failure the mark would be pinned at its timestamp forever and punctuation would never fire again -
+     * the stall this releases at the drain, whatever the outcome, to avoid.
+     */
+    @Test
+    void aFailedRecordReleasesItsHoldRatherThanPinningStreamTimeForever() {
+        dispatcher = new PcTaskDispatcher("task-st-failure", INPUT_PARTITIONS, 4);
+
+        dispatcher.registerRecords(PARTITION, UniLists.of(
+                record(PARTITION, 0, 10L, "key-poison"),
+                record(PARTITION, 1, 90L, "key-fine")));
+
+        dispatcher.pumpUntilQuiescent(rec -> prepared(rec, () -> {
+            if (rec.timestamp() == 10L) {
+                throw new IllegalStateException("processor blew up");
+            }
+        }), PUMP_TIMEOUT);
+
+        assertThat(dispatcher.getStreamTimeLowWaterMark())
+                .as("the failed record at 10 must not hold the mark down - its shard is blocked forever, so "
+                        + "a surviving hold is a permanent punctuation stall")
+                .isEqualTo(90L);
+    }
+
+    /**
+     * The one test that can tell the two timestamps apart, and the only thing protecting the
+     * {@code WorkPreparer} signature change from being reverted as pointless.
+     * <p>
+     * Every other stream-time test here reaches the dispatcher through {@link PreparedRecords#prepared},
+     * which derives the stream timestamp from the record - so in all of them the extracted and broker
+     * timestamps are the same number <em>by construction</em>, and swapping the production read to
+     * {@code work.getCr().timestamp()} would leave the whole suite green. This one builds a
+     * {@link PcTaskDispatcher.PreparedRecord} directly with a timestamp the record does not carry, which is
+     * exactly the shape a payload-time {@code TimestampExtractor} produces - the topologies the design
+     * argument is about.
+     */
+    @Test
+    void theMarkFollowsTheTimestampThePreparerSuppliedNotTheBrokersOwn() {
+        dispatcher = new PcTaskDispatcher("task-st-extracted", INPUT_PARTITIONS, 4);
+        // Broker timestamp 0; the extractor will say 5000.
+        dispatcher.registerRecords(PARTITION,
+                Collections.singletonList(record(PARTITION, 0, 0L, "key-a")));
+
+        dispatcher.pumpUntilQuiescent(
+                rec -> new PcTaskDispatcher.PreparedRecord(() -> { }, 5_000L), PUMP_TIMEOUT);
+
+        assertThat(dispatcher.getStreamTimeLowWaterMark())
+                .as("the extractor's timestamp, not ConsumerRecord.timestamp() - taking the broker's would "
+                        + "be silently wrong on exactly the topologies that care most about stream time, "
+                        + "and every other test here cannot tell the two apart")
+                .isEqualTo(5_000L);
+    }
+
+    @Test
+    void aRecordDroppedDuringPreparationContributesNoTimestamp() {
+        dispatcher = new PcTaskDispatcher("task-st-dropped", INPUT_PARTITIONS, 4);
+        dispatcher.registerRecords(PARTITION, records(3, offset -> "key-" + offset));
+
+        int consumed = dispatcher.dispatchAvailable(rec -> null);
+
+        assertThat(consumed).as("still consumed, still progress").isEqualTo(3);
+        assertThat(dispatcher.getStreamTimeLowWaterMark())
+                .as("a record dropped for a bad timestamp has no timestamp to give, and stock does not "
+                        + "advance stream time over one either")
+                .isEqualTo(ConsumerRecord.NO_TIMESTAMP);
+    }
+
+    /**
+     * The extension seam fails at construction rather than on a worker (astubbs#255, U13).
+     * <p>
+     * Without this, a {@code WorkPreparer} that returned a {@code PreparedRecord} wrapping a null
+     * {@code Runnable} produced an NPE inside {@link PcTaskDispatcher#runOnWorker}, which classifies it as a
+     * <em>processing</em> failure - so with retries disabled the record's KEY shard blocked for the life of
+     * the task and the user was told their topology threw.
+     */
+    @Test
+    void aPreparedRecordWithNothingToRunIsRejectedAtItsConstructorNotOnAWorker() {
+        assertThatThrownBy(() -> new PcTaskDispatcher.PreparedRecord(null, 1L))
+                .as("the module's public extension seam fails where the mistake is, naming the alternative")
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("return null from WorkPreparer.prepare");
+    }
+
+    /**
+     * The counterpart of {@code PartitionGroup.setPartitionTime}: without it, routing
+     * {@code StreamTask.streamTime()} through this dispatcher makes stream time restart at UNKNOWN, which
+     * Kafka's own {@code shouldReadCommittedStreamTime*} cases caught.
+     */
+    @Test
+    void aCommittedPartitionTimeSeedsTheMarkAndOnlyEverRaisesIt() {
+        dispatcher = new PcTaskDispatcher("task-st-seed", INPUT_PARTITIONS, 4);
+
+        dispatcher.seedStreamTime(500L);
+        assertThat(dispatcher.getStreamTimeLowWaterMark())
+                .as("restored from the committed partition time, exactly as stock restores it")
+                .isEqualTo(500L);
+
+        dispatcher.seedStreamTime(200L);
+        assertThat(dispatcher.getStreamTimeLowWaterMark())
+                .as("a lower seed cannot lower the mark - it is a max, like every other move")
+                .isEqualTo(500L);
+
+        dispatcher.registerRecords(PARTITION,
+                Collections.singletonList(record(PARTITION, 0, 700L, "key-a")));
+        dispatcher.pumpUntilQuiescent(noOpPreparer(), PUMP_TIMEOUT);
+        assertThat(dispatcher.getStreamTimeLowWaterMark())
+                .as("and a record beyond the seed still moves it")
+                .isEqualTo(700L);
+    }
+
+    /**
+     * A seed arriving while records are in flight must not lift the mark over them (astubbs#255, U13 - the
+     * empty-pool case was the only one covered).
+     * <p>
+     * The seed raises {@code maxDispatchedStreamTimestamp}, which is the value the <em>empty</em> arm
+     * publishes; with a hold registered the low-water arm wins, so the mark stays on the running record.
+     */
+    @Test
+    void aSeedArrivingWhileWorkIsInFlightDoesNotLiftTheMarkOverIt() {
+        dispatcher = new PcTaskDispatcher("task-st-seed-in-flight", INPUT_PARTITIONS, 4);
+        dispatcher.registerRecords(PARTITION,
+                Collections.singletonList(record(PARTITION, 0, 100L, "key-running")));
+
+        CountDownLatch inChain = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        dispatcher.dispatchAvailable(rec -> prepared(rec, () -> {
+            inChain.countDown();
+            awaitLatch(release);
+        }));
+        awaitLatch(inChain);
+
+        dispatcher.seedStreamTime(9_000L);
+
+        assertThat(dispatcher.getStreamTimeLowWaterMark())
+                .as("the record at 100 is still inside the chain, so a seed at 9000 must not advance the "
+                        + "mark past it - a punctuation there would close a window over live work")
+                .isEqualTo(100L);
+
+        release.countDown();
+        dispatcher.pumpUntilQuiescent(noOpPreparer(), PUMP_TIMEOUT);
+        assertThat(dispatcher.getStreamTimeLowWaterMark())
+                .as("and once it finishes the seed is honoured, because it was folded into the max rather "
+                        + "than discarded")
+                .isEqualTo(9_000L);
+    }
+
+    @Test
+    void theMarkIsReadableFromAForeignThreadAndReadingItMutatesNothing() throws InterruptedException {
+        dispatcher = new PcTaskDispatcher("task-st-foreign", INPUT_PARTITIONS, 4);
+        dispatcher.registerRecords(PARTITION, records(2, offset -> "key-" + offset));
+        dispatcher.pumpUntilQuiescent(noOpPreparer(), PUMP_TIMEOUT);
+
+        AtomicReference<Long> seenOffThread = new AtomicReference<>();
+        assertThat(runOffOwnerThread("test-StateUpdater-1",
+                () -> seenOffThread.set(dispatcher.getStreamTimeLowWaterMark())))
+                .as("stream time is a question, and a question may not be owner-thread-guarded - "
+                        + "TaskExecutor.punctuate() can run on a task-executor thread")
+                .isNull();
+        assertThat(seenOffThread.get()).isEqualTo(1L);
+
+        assertThat(dispatcher.getStreamTimeLowWaterMark())
+                .as("and the read changed nothing")
+                .isEqualTo(1L);
+    }
+
+    /**
+     * A closed dispatcher's mark freezes at the last honest value it had. Republishing over a cleared map
+     * would advance it to the highest dispatched - over records the abort killed mid-flight, which is the one
+     * unsafe direction.
+     */
+    @Test
+    void anAbortedDispatcherDoesNotAdvanceTheMarkOverWorkItKilled() {
+        dispatcher = new PcTaskDispatcher("task-st-abort", INPUT_PARTITIONS, 4);
+        dispatcher.registerRecords(PARTITION, UniLists.of(
+                record(PARTITION, 0, 10L, "key-a"),
+                record(PARTITION, 1, 900L, "key-b")));
+
+        CountDownLatch bothStarted = new CountDownLatch(2);
+        CountDownLatch neverReleased = new CountDownLatch(1);
+        dispatcher.dispatchAvailable(rec -> prepared(rec, () -> {
+            bothStarted.countDown();
+            awaitLatch(neverReleased);
+        }));
+        awaitLatch(bothStarted);
+        assertThat(dispatcher.getStreamTimeLowWaterMark()).isEqualTo(10L);
+
+        dispatcher.abortClose();
+
+        assertThat(dispatcher.getStreamTimeLowWaterMark())
+                .as("the record at 10 never completed, so the mark must not jump to 900 - a crash is not a "
+                        + "reason to claim progress over work that died")
+                .isEqualTo(10L);
+    }
+
+    /**
+     * The branch {@code dropStreamTimeHoldsWithoutPublishing()} is named for, and which nothing exercised
+     * until this test - only the abort path was covered (astubbs#255, U13).
+     * <p>
+     * A <b>clean</b> close whose pool does not drain in time calls {@code shutdownNow()}, which interrupts
+     * the running chains; each throws into {@code recordFailure}, and the very next statement in
+     * {@code close()} is the drain. Without the freeze this class now raises at the top of both close paths,
+     * that drain releases the killed records' holds and republishes - advancing the mark to the highest
+     * timestamp ever dispatched, over work the shutdown had just destroyed.
+     * <p>
+     * The interrupt is what makes this deterministic: {@code awaitLatch} rethrows rather than looping, so the
+     * chain really does end when {@code shutdownNow()} fires rather than waiting out the close timeout.
+     */
+    @Test
+    void aCleanCloseThatHasToForceThePoolDoesNotAdvanceTheMarkOverTheWorkItKilled() {
+        PcTaskDispatcher forced = new PcTaskDispatcher("task-st-forced-close", INPUT_PARTITIONS, 4);
+        forced.registerRecords(PARTITION, UniLists.of(
+                record(PARTITION, 0, 10L, "key-a"),
+                record(PARTITION, 1, 900L, "key-b")));
+
+        CountDownLatch bothStarted = new CountDownLatch(2);
+        CountDownLatch neverReleased = new CountDownLatch(1);
+        forced.dispatchAvailable(rec -> prepared(rec, () -> {
+            bothStarted.countDown();
+            awaitLatch(neverReleased);
+        }));
+        awaitLatch(bothStarted);
+        assertThat(forced.getStreamTimeLowWaterMark())
+                .as("precondition: the mark is held down by the record at 10, which is inside the chain")
+                .isEqualTo(10L);
+
+        // A clean close. shutdown() will not stop the latched workers, awaitTermination expires, and
+        // shutdownNow() interrupts them - the path this test is about.
+        forced.close();
+
+        assertThat(forced.getStreamTimeLowWaterMark())
+                .as("the two records were killed by the forced shutdown, not completed, so close()'s own "
+                        + "drain must not publish 900 over them. Frozen at the last honest value.")
+                .isEqualTo(10L);
+    }
+
+    /**
+     * The pool rejecting a submission must not strand a stream-time hold (astubbs#255, U13).
+     * <p>
+     * {@code abortAllActive()} crashes every live dispatcher from a foreign thread <em>by design</em>, so a
+     * pump can pass the {@code closed} check and then find the pool shut down at
+     * {@code workerPool.execute}. Every increment made before that submission has to be compensated, and the
+     * hold is the one that used to be missed: it pins the mark at the rejected record's timestamp forever,
+     * which is a stopped punctuation clock rather than merely a wrong counter.
+     * <p>
+     * The abort is fired from <b>inside the preparer</b> rather than from a second thread, which makes the
+     * ordering deterministic instead of a race this test would sometimes lose.
+     */
+    @Test
+    void aRejectedPoolSubmissionReleasesItsStreamTimeHold() {
+        dispatcher = new PcTaskDispatcher("task-st-rejected", INPUT_PARTITIONS, 4);
+        dispatcher.registerRecords(PARTITION, UniLists.of(
+                record(PARTITION, 0, 10L, "key-a"),
+                record(PARTITION, 1, 900L, "key-b")));
+
+        // Shut the pool down while the pump is between its `closed` check and its first execute().
+        dispatcher.dispatchAvailable(rec -> {
+            dispatcher.abortClose();
+            return prepared(rec, () -> { });
+        });
+
+        assertThat(dispatcher.getRecordsFailed())
+                .as("precondition: the submissions really were rejected and accounted for as failures, "
+                        + "rather than silently vanishing from PC's books")
+                .isEqualTo(2L);
+        assertThat(dispatcher.getInFlightCount())
+                .as("and the in-flight count was compensated too - nothing is running")
+                .isZero();
+    }
+
+    /**
+     * Release one worker by timestamp, wait for it to actually leave the pool, and pump once so the
+     * completion is folded back in and the mark republished.
+     * <p>
+     * Deliberately NOT {@code pumpUntilQuiescent}: the other workers are still latched, so it could never
+     * reach quiescence and would spin for its whole timeout - long enough for those workers' own waits to
+     * expire, failing them and releasing every hold at once. Two nested timeouts, and the test measures the
+     * collision rather than the mark.
+     */
+    private void releaseAndDrain(final Map<Long, CountDownLatch> releaseByTimestamp,
+                                 final long timestamp,
+                                 final int expectedStillInFlight) {
+        releaseByTimestamp.get(timestamp).countDown();
+        await().atMost(PUMP_TIMEOUT)
+                .until(() -> dispatcher.getInFlightCount() == expectedStillInFlight);
+        dispatcher.dispatchAvailable(noOpPreparer());
+    }
+
+    /** The bodyless preparer, named rather than repeated - it appears at a dozen call sites. */
+    private static PcTaskDispatcher.WorkPreparer noOpPreparer() {
+        return rec -> prepared(rec, () -> { });
     }
 
     /**

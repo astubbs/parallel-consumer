@@ -22,6 +22,8 @@ import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
+import static bz.stub.parallelconsumer.streams.PreparedRecords.prepared;
+import static bz.stub.parallelconsumer.streams.PreparedRecords.record;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
@@ -219,7 +221,7 @@ class PcWorkSignalTest {
         CountDownLatch started = new CountDownLatch(1);
 
         registerOneRecord();
-        int dispatched = dispatcher.dispatchAvailable(record -> () -> {
+        int dispatched = dispatcher.dispatchAvailable(rec -> prepared(rec, () -> {
             started.countDown();
             try {
                 release.await();
@@ -227,7 +229,7 @@ class PcWorkSignalTest {
                 Thread.currentThread().interrupt();
             }
             throw new IllegalStateException("processor blew up");
-        });
+        }));
         assertThat(dispatched).isEqualTo(1);
         awaitWorkerRunning(started);
 
@@ -476,14 +478,14 @@ class PcWorkSignalTest {
         registerOneRecord();
 
         CountDownLatch started = new CountDownLatch(1);
-        int dispatched = dispatcher.dispatchAvailable(record -> () -> {
+        int dispatched = dispatcher.dispatchAvailable(rec -> prepared(rec, () -> {
             started.countDown();
             try {
                 release.await();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
-        });
+        }));
         assertThat(dispatched)
                 .as("the fixture must actually dispatch, or every timing assertion below measures nothing")
                 .isEqualTo(1);
@@ -492,12 +494,9 @@ class PcWorkSignalTest {
 
     private void registerOneRecord() {
         List<ConsumerRecord<byte[], byte[]>> batch = new ArrayList<>();
-        batch.add(new ConsumerRecord<>(
-                TOPIC,
-                PARTITION.partition(),
-                0L,
-                "the-key".getBytes(StandardCharsets.UTF_8),
-                "the-value".getBytes(StandardCharsets.UTF_8)));
+        // The shared fixture, not a hand-rolled ConsumerRecord: the short constructor leaves the timestamp
+        // at NO_TIMESTAMP, and prepared() takes the stream timestamp from the record (astubbs#255, U13).
+        batch.add(record(PARTITION, 0L, "the-key"));
         dispatcher.registerRecords(PARTITION, batch);
     }
 
