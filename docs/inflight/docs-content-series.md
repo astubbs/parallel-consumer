@@ -62,7 +62,12 @@ feature behind these):
 
 **Streams:**
 - *We ran Kafka Streams' test suite against a different execution model* - the sober one; failures
-  almost as interesting as passes. Avoid antagonistic framings toward maintainers; the underlying
+  almost as interesting as passes.
+- The recursion arc, from the 2026-08-29/30 follow-up - the narrative piece rather than a title:
+  the machinery built to eliminate unnecessary waiting inside one Kafka consumer becomes the JVM
+  runtime that gives every language Kafka Streams, then the engine that gives Streams itself
+  key-level concurrency, then the scheduler through which that Rust workload joins a company-wide
+  system whose whole purpose is eliminating unnecessary waiting. Avoid antagonistic framings toward maintainers; the underlying
   line worth keeping is *architecture arguments eventually become executable hypotheses*.
 
 **Method:**

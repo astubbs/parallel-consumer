@@ -11,7 +11,7 @@ strategy, and extends the FRONT ENDS row of the engine-thesis taxonomy.
 ## The two-layer model
 
 ```
-Layer 1 - native bindings (astubbs#242, #293 stack)   proves the engine works everywhere
+Layer 1 - native bindings (astubbs#242, astubbs#293 stack)   proves the engine works everywhere
 Layer 2 - ecosystem adapters                          how adoption actually happens
           Spring Kafka -> PC        MassTransit (.NET) -> PC     Watermill (Go) -> PC
           rust-rdkafka stream -> PC  <Python survey> -> PC        <Nest-style TS> -> PC

@@ -71,7 +71,14 @@ do not apply there yet because the section they are about has not landed.
    Streams branches as strategy-touching. The doc's thesis is still "a smarter consumer".
 2. **Polyglot Streams absent** - astubbs#334 (Streams described from Python, run in a JVM engine) is
    the most differentiated composition of the two experiments and the "Other runtimes" section
-   predates it.
+   predates it. The 2026-08-29/30 follow-up sharpened the positioning to two lines - **Kafka
+   Streams is the programming model; PC is the execution model** - and what makes it literal
+   rather than marketing is astubbs#334's handles-not-IDL design: the engine assembles a real
+   `StreamsBuilder`, so a Python or Rust application gets Kafka Streams *itself*, not a
+   Streams-inspired API, with an execution model Streams does not currently provide. The follow-up
+   also ran a novelty search and found no existing implementation of that composition - one
+   external model's single search, recorded as a lead and not a survey; do the prior-art sweep
+   before any public "first" claim.
 3. **Self-tuning track blurb does not carry the two-loop shape** - fast loop: instance discovers
    sustainable internal concurrency; slow loop: fleet decides instance count.
    [`core-auto-scaling.md`](core-auto-scaling.md) has the full design; the strategy summary should
