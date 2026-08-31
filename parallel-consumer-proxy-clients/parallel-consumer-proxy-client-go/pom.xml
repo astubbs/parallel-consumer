@@ -60,30 +60,24 @@
 
     <profiles>
         <!--
-            THE SIDECAR THE HANDSHAKE TEST DRIVES, AND WHY IT IS A DEPENDENCY.
+            THE SIDECAR THIS MODULE'S HANDSHAKE TEST SPAWNS, AND WHY IT IS A DEPENDENCY.
 
-            handshake_test.go spawns parallel-consumer-proxy's production Main over the real wire.
-            Declaring the module here is what makes the CI matrix row's exact command build it first
-            and resolve it; build-classpath below writes the resulting classpath to
-            target/sidecar-classpath.txt, where internal/harness reads it.
-
-            TEST SCOPE, THOUGH NOTHING HERE LINKS AGAINST IT. The sidecar is a PROCESS this test
-            spawns, and Go cannot link a Java class either way - the scope says WHEN the artifact is
-            needed, which is only when the test suite runs. includeScope=test below is what puts the
-            proxy's OWN output on the written classpath: build-classpath emits dependencies, never
-            the project's own, so a narrower scope silently produced a classpath with every
-            transitive jar on it and no Main to run. The engine rung adds the proxy's TEST jar here
-            too, for the harness that lives in it.
+            That test starts parallel-consumer-proxy's real Main as a child process and speaks the
+            protocol to it, so `-am` has to build the proxy first - which it will not do for a module
+            that declares no dependency on it. Declaring one here is what makes the CI matrix row's
+            exact command work; the execution that writes the resolved classpath where the test reads
+            it is managed ONCE in the clients aggregator, and this module opts in by declaring the
+            plugin below.
 
             SCOPED TO THIS PROFILE DELIBERATELY. No client depends on the sidecar, and with the
-            profile inactive - every ordinary build - there is no dependency edge here at all, so an
-            ordinary scoped build still runs no Go toolchain and never reaches it. The Go client
-            itself obtains the protocol the way every non-JVM client does, by generating from the
-            .proto by path, with no Maven dependency.
+            profile inactive - every ordinary build - there is no dependency edge here at all. The
+            client obtains the protocol the way every non-JVM client does, by generating from the
+            .proto by path with no Maven dependency; this edge is test-scoped harness plumbing in the
+            opt-in lane and nothing this client ships.
 
-            NOT NEEDED BY THE CONFORMANCE RUNNER. cmd/conformance-runner is driven by the shared
-            suite (parallel-consumer-proxy-conformance), which hosts the engine in its OWN JVM and
-            hands the runner a sidecar to spawn - so that lane needs nothing from here.
+            TEST SCOPE, THOUGH nothing here links against it - the sidecar is a PROCESS. The scope
+            says WHEN the artifact is needed, which is only when the suite runs. The engine rung adds
+            the proxy's TEST jar here too, for the harness that lives in it.
         -->
         <profile>
             <id>go-sidecar-harness</id>
@@ -102,25 +96,10 @@
             </dependencies>
             <build>
                 <plugins>
+                    <!-- Opts this module into the aggregator's managed sidecar-classpath execution. -->
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-dependency-plugin</artifactId>
-                        <!-- version from the root pom's pluginManagement -->
-                        <executions>
-                            <execution>
-                                <id>sidecar-classpath</id>
-                                <!-- After the dependencies above are resolvable, before the test
-                                     phase where the Go suite runs and reads the file. -->
-                                <phase>generate-test-resources</phase>
-                                <goals>
-                                    <goal>build-classpath</goal>
-                                </goals>
-                                <configuration>
-                                    <outputFile>${project.build.directory}/sidecar-classpath.txt</outputFile>
-                                    <includeScope>test</includeScope>
-                                </configuration>
-                            </execution>
-                        </executions>
                     </plugin>
                 </plugins>
             </build>

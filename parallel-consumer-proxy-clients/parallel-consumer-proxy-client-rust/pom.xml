@@ -65,21 +65,24 @@
 
     <profiles>
         <!--
-            THE SIDECAR THE END-TO-END TEST DRIVES, AND WHY IT IS A DEPENDENCY.
+            THE SIDECAR THIS MODULE'S HANDSHAKE TEST SPAWNS, AND WHY IT IS A DEPENDENCY.
 
-            tests/harness spawns the real sidecar over the real wire, which needs the
-            proxy module's test jar (Main and the harness) and its main jar. Declaring them
-            here is what makes the CI row's own command build the proxy before this module's test
-            phase; the row runs `package` rather than `test` for the other half of it, because the
-            harness looks for jar FILES and `test` stops one phase short of producing them.
+            That test starts parallel-consumer-proxy's real Main as a child process and speaks the
+            protocol to it, so `-am` has to build the proxy first - which it will not do for a module
+            that declares no dependency on it. Declaring one here is what makes the CI matrix row's
+            exact command work; the execution that writes the resolved classpath where the test reads
+            it is managed ONCE in the clients aggregator, and this module opts in by declaring the
+            plugin below.
 
-            SCOPED TO THIS PROFILE DELIBERATELY. No client depends on the engine, and with the
-            profile inactive - every ordinary build - there is no dependency edge here at all, so a
-            scoped build still runs no Rust toolchain and never reaches the engine. Modelled on the
-            go-sidecar-harness profile, which was written when the Go row failed this same way.
+            SCOPED TO THIS PROFILE DELIBERATELY. No client depends on the sidecar, and with the
+            profile inactive - every ordinary build - there is no dependency edge here at all. The
+            client obtains the protocol the way every non-JVM client does, by generating from the
+            .proto by path with no Maven dependency; this edge is test-scoped harness plumbing in the
+            opt-in lane and nothing this client ships.
 
-            The crate obtains the protocol the way every non-JVM client does, by generating from
-            the .proto by path in build.rs, with no Maven dependency.
+            TEST SCOPE, THOUGH nothing here links against it - the sidecar is a PROCESS. The scope
+            says WHEN the artifact is needed, which is only when the suite runs. The engine rung adds
+            the proxy's TEST jar here too, for the harness that lives in it.
         -->
         <profile>
             <id>rust-sidecar-harness</id>
@@ -98,37 +101,10 @@
             </dependencies>
             <build>
                 <plugins>
+                    <!-- Opts this module into the aggregator's managed sidecar-classpath execution. -->
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-dependency-plugin</artifactId>
-                        <!-- version from the root pom's pluginManagement -->
-                        <executions>
-                            <execution>
-                                <!--
-                                    THIS FILE IS THE HARNESS'S ONLY ROUTE, and that is a
-                                    simplification rather than a narrowing. It used to hunt the
-                                    proxy module's jars on disk and resolve the dependency list
-                                    with a nested `./mvnw`; both halves are wrong in a reactor run
-                                    that stops at `test`, where a module's output is a class
-                                    DIRECTORY and no jar exists to find - which reads as "the proxy
-                                    is not built" on a build that had just built it. Written here,
-                                    from the reactor that already has every module resolved, the
-                                    answer is exact. Same arrangement, and now the same filename, as
-                                    the Go, Python and TypeScript modules.
-                                -->
-                                <id>sidecar-classpath</id>
-                                <!-- After the dependencies above resolve, before the test phase
-                                     where the foreign suite runs and reads the file. -->
-                                <phase>generate-test-resources</phase>
-                                <goals>
-                                    <goal>build-classpath</goal>
-                                </goals>
-                                <configuration>
-                                    <outputFile>${project.build.directory}/sidecar-classpath.txt</outputFile>
-                                    <includeScope>test</includeScope>
-                                </configuration>
-                            </execution>
-                        </executions>
                     </plugin>
                 </plugins>
             </build>

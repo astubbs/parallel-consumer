@@ -4,6 +4,7 @@
 # the Dockerfile beside it: gRPC and protobuf arrive as system DEV PACKAGES rather than as a
 # versioned toolchain, which is the whole reason C++ is one of the two languages mise cannot serve
 # here (docs/inflight/parked-containerised-toolchains-and-runtime.md).
+# file-refs: N/A - that note ships on feats/proxy-requirements; read it with `git show origin/feats/proxy-requirements:docs/inflight/parked-containerised-toolchains-and-runtime.md`
 #
 # It replaced a `LANGUAGES NONE` skeleton and a separate toolchain-smoke/ project. The smoke's own
 # header said to delete it "once a real target proves the same three things" - generates, links,
@@ -17,7 +18,6 @@
 #                              happens to look like the image and the static link proved nothing.
 #   pc-cpp-conformance-runner  this language's half of the shared conformance suite
 #   pc-cpp-tests               the module's own tests, run by ctest inside the image
-<!-- file-refs: N/A - that note ships on feats/proxy-requirements; read it with `git show origin/feats/proxy-requirements:docs/inflight/parked-containerised-toolchains-and-runtime.md` -->
 
 cmake_minimum_required(VERSION 3.20)
 

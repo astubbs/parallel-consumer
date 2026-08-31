@@ -159,11 +159,16 @@ jobs:
         with:
           ruby-version: ${{ matrix.toolchain }}
           bundler-cache: false
+      # `--component clippy` is NOT optional decoration on a minimal profile: this module's build
+      # command IS `cargo clippy` (the Rust wave's decision - its pom carries the reasoning), and a
+      # minimal toolchain ships rustc and cargo and nothing else, so the row failed with
+      # "'cargo-clippy' is not installed for the toolchain" before the crate was ever compiled.
       - name: Set up Rust toolchain (rustup is preinstalled on the runner image)
         if: matrix.language == 'rust'
         run: |
-          rustup toolchain install ${{ matrix.toolchain }} --profile minimal
+          rustup toolchain install ${{ matrix.toolchain }} --profile minimal --component clippy
           rustup default ${{ matrix.toolchain }}
+          cargo clippy --version
 
       # protoc, for the ONE row whose build runs it on the runner. That is a smaller set than
       # "generates from the schema": Go, Ruby and TypeScript commit their stubs, .NET's Grpc.Tools

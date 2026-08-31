@@ -78,29 +78,40 @@
 
 
     <!--
-        MODULE-LOCAL, and they must stay module-local. This module depends on the gRPC transport, and
-        gRPC is the only thing in this repository that drags error_prone_annotations in twice at
-        different versions - grpc-stub asks for 2.30.0 directly while the guava it also brings asks
-        for 2.47.0 - so resolution settles on the lower one and the root pom's requireUpperBoundDeps
-        fails the build. Managing it up to what the highest requester asks for is the fix that rule
-        prescribes, and parallel-consumer-proxy-protocol's pom carries the full reasoning, including
-        why this is NOT the root pom's ${error-prone.version}. Kept here rather than moved up because
-        dependencyManagement is not inherited across siblings, so each module that pulls gRPC in
-        transitively states it for itself.
+        THE gRPC GRAPH'S TWO PINS, AGAIN - because dependencyManagement does not flow between
+        siblings, and this module depends on the gRPC transport.
+
+        parallel-consumer-proxy's pom OWNS the reasoning for both and carries it in full;
+        parallel-consumer-proxy-client-java's aggregator repeats the summary for its own children.
+        In one line each: gRPC drags error_prone_annotations in at several versions and resolution
+        settles on the LOWEST, which the root pom's requireUpperBoundDeps refuses; and grpc-core
+        brings gson 2.11.0 at runtime, the version OSS Index matches for CVE-2025-53864 - pinned
+        forward rather than excluded, because an exclusion would carry a retirement condition nobody
+        could discharge.
+
+        THE NUMBERS MATCH THE JAVA CLIENT AGGREGATOR'S because this module's graph IS that graph
+        with a Kotlin or Scala surface on top - the same highest requester, not two poms kept equal
+        by hand. Do not hoist either to the root pom: its ${error-prone.version} pins the Error Prone
+        COMPILER, deliberately below current for an unrelated reason.
     -->
     <dependencyManagement>
         <dependencies>
             <dependency>
                 <groupId>com.google.errorprone</groupId>
                 <artifactId>error_prone_annotations</artifactId>
-                <version>2.47.0</version>
+                <version>2.48.0</version>
+            </dependency>
+            <dependency>
+                <groupId>com.google.code.gson</groupId>
+                <artifactId>gson</artifactId>
+                <version>2.14.0</version>
             </dependency>
             <!--
-                Kotlin's own split of the same shape: kotlin-stdlib asks for org.jetbrains:annotations
-                13.0 while kotlinx-coroutines-core asks for 23.0.0, so resolution settles on 13.0 and
-                the same rule fails. Managed up to the highest requester, which is what that rule
-                prescribes. Not a version this module chooses - it moves when the Kotlin or coroutines
-                pins below move.
+                Kotlin's own split of the same shape, and not a gRPC one: kotlin-stdlib asks for
+                org.jetbrains:annotations 13.0 while kotlinx-coroutines-core asks for 23.0.0, so
+                resolution settles on 13.0 and requireUpperBoundDeps fails. Managed up to the highest
+                requester, which is what that rule prescribes. Not a version this module chooses - it
+                moves when the Kotlin or coroutines pins below move.
             -->
             <dependency>
                 <groupId>org.jetbrains</groupId>
@@ -184,25 +195,10 @@
             </dependencies>
             <build>
                 <plugins>
+                    <!-- Opts this module into the aggregator's managed sidecar-classpath execution. -->
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-dependency-plugin</artifactId>
-                        <!-- version from the root pom's pluginManagement -->
-                        <executions>
-                            <execution>
-                                <id>sidecar-classpath</id>
-                                <!-- after the dependencies above resolve, before the test phase
-                                     that reads the file -->
-                                <phase>generate-test-resources</phase>
-                                <goals>
-                                    <goal>build-classpath</goal>
-                                </goals>
-                                <configuration>
-                                    <outputFile>${project.build.directory}/sidecar-classpath.txt</outputFile>
-                                    <includeScope>test</includeScope>
-                                </configuration>
-                            </execution>
-                        </executions>
                     </plugin>
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>

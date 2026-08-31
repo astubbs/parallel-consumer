@@ -39,24 +39,24 @@
 
     <profiles>
         <!--
-            THE SIDECAR THE END-TO-END TEST DRIVES, AND WHY IT IS A DEPENDENCY.
+            THE SIDECAR THIS MODULE'S HANDSHAKE TEST SPAWNS, AND WHY IT IS A DEPENDENCY.
 
-            The suite's end-to-end test spawns the real sidecar over the real wire, which
-            needs the proxy module's own artefact and its dependencies, and
-            core's test jar underneath. Declaring them here is what makes
-            `./mvnw test -pl :parallel-consumer-proxy-client-typescript -am -Dpc.foreignClients` -
-            the CI matrix row's exact command - build those modules first and resolve them;
-            build-classpath below then writes the classpath where the test reads it.
+            That test starts parallel-consumer-proxy's real Main as a child process and speaks the
+            protocol to it, so `-am` has to build the proxy first - which it will not do for a module
+            that declares no dependency on it. Declaring one here is what makes the CI matrix row's
+            exact command work; the execution that writes the resolved classpath where the test reads
+            it is managed ONCE in the clients aggregator, and this module opts in by declaring the
+            plugin below.
 
-            SCOPED TO THIS PROFILE DELIBERATELY. No client depends on the engine, and with the
+            SCOPED TO THIS PROFILE DELIBERATELY. No client depends on the sidecar, and with the
             profile inactive - every ordinary build - there is no dependency edge here at all. The
-            client itself obtains the protocol the way every non-JVM client does, by generating
-            from the .proto by path, with no Maven dependency; this edge is a test-scoped harness
-            dependency in the opt-in lane and nothing this client ships.
+            client obtains the protocol the way every non-JVM client does, by generating from the
+            .proto by path with no Maven dependency; this edge is test-scoped harness plumbing in the
+            opt-in lane and nothing this client ships.
 
-            Modelled on the Python client's python-sidecar-harness profile, which solved the same
-            problem first. The Go wave recorded the unsolved version of it as a plan defect: `-am`
-            alone cannot order a build this module has no dependency on.
+            TEST SCOPE, THOUGH nothing here links against it - the sidecar is a PROCESS. The scope
+            says WHEN the artifact is needed, which is only when the suite runs. The engine rung adds
+            the proxy's TEST jar here too, for the harness that lives in it.
         -->
         <profile>
             <id>typescript-sidecar-harness</id>
@@ -75,25 +75,10 @@
             </dependencies>
             <build>
                 <plugins>
+                    <!-- Opts this module into the aggregator's managed sidecar-classpath execution. -->
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-dependency-plugin</artifactId>
-                        <!-- version from the root pom's pluginManagement -->
-                        <executions>
-                            <execution>
-                                <id>sidecar-classpath</id>
-                                <!-- After the dependencies above resolve, before the test phase
-                                     where the Node suite runs and reads the file. -->
-                                <phase>generate-test-resources</phase>
-                                <goals>
-                                    <goal>build-classpath</goal>
-                                </goals>
-                                <configuration>
-                                    <outputFile>${project.build.directory}/sidecar-classpath.txt</outputFile>
-                                    <includeScope>test</includeScope>
-                                </configuration>
-                            </execution>
-                        </executions>
                     </plugin>
                 </plugins>
             </build>
