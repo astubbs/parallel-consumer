@@ -142,6 +142,7 @@ and hands back a `Future` that never completes. An unbounded queue removes *satu
 *rejection* - a distinction a review of astubbs#296 got wrong in the direction of weakening the guard,
 now pinned by `anUnboundedQueueDoesNotMakeALosingHandlerHarmless`.
 
+<!-- post-merge: checked-begin -->
 Recorded on astubbs#216 ("Metrics: expose the buffers that have no upper bound"), which astubbs#116
 names as the mitigation for buffers that cannot be bounded. That queue is unbounded by *type* but
 self-limited by the control loop's in-flight target, so it is not the JStream failure mode - its bound
@@ -149,3 +150,4 @@ is emergent from `numberRecordsOutForProcessing` bookkeeping rather than structu
 
 There is no general "bound our queues" initiative to attach to: astubbs#116 settled that the JStream
 deque is unbounded by design, and observability is the answer instead.
+<!-- post-merge: checked-end -->

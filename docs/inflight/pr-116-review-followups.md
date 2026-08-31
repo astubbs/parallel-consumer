@@ -1,5 +1,10 @@
 # astubbs#116 - what the multi-agent review left open
 
+<!-- post-merge: exempt-file -->
+<!-- This note IS the PR-116 follow-up list, so every mention of astubbs#116 in it names the note's
+     own subject rather than making a present-tense claim about an open branch. It is deleted when
+     the last item below is closed. -->
+
 Full report and per-reviewer JSON were in a scratch dir that is gone; this is the durable residue.
 Reviewed at `fdbaaf476`. Eight reviewers, one validation pass. Verdict was **not ready** - not
 because the fix is wrong (the `Spliterator` diagnosis and the live-stream design both survived
@@ -25,12 +30,17 @@ review) but because two review threads block merge and one of them attacks the r
    *finish*. But `testVertxFunctionFail` uses `closeDontDrainFirst()` for the same shape, and a
    reviewer independently proposed matching it. Reply with the timing, mirror the non-draining
    close in the helper, resolve.
-3. **`volatile` on the termination signal.** `AbstractParallelEoSStreamProcessor`'s `state` and
-   `controlThreadFuture` are non-volatile and unsynchronised, and are now read from the consumer
-   thread via `isClosedOrFailed()`. The closing thread never takes the queue lock the consumer polls
-   on, so nothing publishes `CLOSED`. It works today only because the 100ms poll's lock stops the
-   compiler hoisting the read - an accident of `LinkedBlockingQueue`'s internals, not something this
-   code states. Two keywords.
+3. **`volatile` on the termination signal - HALF-CLOSED by master, 2026-08-31 merge.**
+   `AbstractParallelEoSStreamProcessor`'s `state` and `controlThreadFuture` were both non-volatile and
+   unsynchronised, and are now read from the consumer thread via `isClosedOrFailed()`. The closing
+   thread never takes the queue lock the consumer polls on, so nothing published `CLOSED`. It worked
+   only because the 100ms poll's lock stopped the compiler hoisting the read - an accident of
+   `LinkedBlockingQueue`'s internals, not something the code stated. Master's astubbs#342
+   (`8455a9c3e`) made `state` volatile for its own reasons, which publishes the `state == CLOSED`
+   half. `controlThreadFuture` is still a plain field and `isClosedOrFailed()` does read it, so that
+   half is unchanged - but its failure mode is now benign rather than a hang: a consumer thread seeing
+   a stale `Optional.empty()` falls through to the volatile `state` read, which is correct. One
+   keyword left, no longer load-bearing for this fix.
 4. **No test for the self-close-on-error path.** `Java8StreamUtils`' own comment justifies
    `isClosedOrFailed()` over a poison pill *because* the control thread can self-close on an
    unhandled error. Every test terminates through an explicit close, and `Java8StreamUtilsTest`
