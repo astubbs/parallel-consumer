@@ -1445,6 +1445,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             commitOffsetsReportingPollerDeath();
         }
 
+        // The navigator's quantum pull comes BEFORE this pass distributes work, not beside the admission tick
+        // below where U3 first placed it. The order is load-bearing: the resource wakeup unblocks the mailbox
+        // drain above exactly at the quantum boundary, so a tick placed after distribution mints the new
+        // quantum's credit only after eligibility was evaluated against the expired old lease - every wake
+        // re-defers to the NEXT boundary and the fresh credit expires unspent, which starved both tagged
+        // instances to a single firing in NavigatorRateShareTest (the wall-clock lane; the virtual-clock lane
+        // drives the hooks directly and cannot see in-pass ordering).
+        tickNavigatorQuantumRead();
+
         // distribute more work - or, under direct pull, tell the workers there may be some and let them take it
         // themselves. The mailbox drain above is where new records are registered and where returned records become
         // selectable again, so one announcement per pass covers every way work appears.
@@ -1466,7 +1475,6 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         // AFTER the snapshot so a window closing this pass includes it
         sampleAdmissionInFlight();
         tickAdmissionController();
-        tickNavigatorQuantumRead();
 
         // run call back
         log.trace("Loop: Running {} loop end plugin(s)", controlLoopHooks.size());
@@ -1607,10 +1615,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     /**
      * THE navigator's per-pass quantum pull (the plan's KTD4), one mutating allocator touch per
-     * {@link #controlLoop} pass beside {@link #tickAdmissionController()}: it renews this instance's membership
-     * lease and materialises the current quantum's share into local credits - which is what keeps the claim-path
-     * eligibility read pure (KTD1), and what keeps an idle-but-live instance a member (R17: the control loop
-     * ticks regardless of demand, so only a STOPPED control loop lets the lease TTL fire).
+     * {@link #controlLoop} pass, BEFORE that pass distributes work (see the call site's comment for why the
+     * order is load-bearing): it renews this instance's membership lease and materialises the current
+     * quantum's share into local credits - which is what keeps the claim-path eligibility read pure (KTD1),
+     * and what keeps an idle-but-live instance a member (R17: the control loop ticks regardless of demand, so
+     * only a STOPPED control loop lets the lease TTL fire).
      * <p>
      * Gated to {@link State#RUNNING} and {@link State#PAUSED}: a paused instance is alive and keeps its share
      * (pause is a credit no-op, KTD10), while DRAINING/CLOSING follow {@link #leaveNavigatorOnCloseEntry()} -

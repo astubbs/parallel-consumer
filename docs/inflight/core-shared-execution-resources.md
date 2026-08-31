@@ -101,6 +101,29 @@ bottleneck as *rate limit* (not CPU, not keys), and each instance is seen firing
 resource, two nodes, the constraint visibly shared and correctly attributed. The owner's working
 name for the branch: the navigator module. Then the v1 below is the scale-up of the same thing.
 
+### The in-process rung landed (2026-09-01)
+
+Branch `feats/hasten-micro-mvp`, PR astubbs/parallel-consumer#392. The checklist above is now
+demonstrated, in-process: the seams exist and hold their contracts (`ResourceContract`
+registration, per-instance resource tags on the options, ONE application-supplied allocator
+shared across instances behind the `ResourceAllocator` interface the distributed plane will
+implement); the soft-credit system works as designed (quantum-indexed lazy minting, equal-share
+division with membership at lifecycle anchors, spend-after-claim with overdraft absorbing the
+races, a conservation ledger whose identity closes at every observation point); attribution
+answers "why wait" from the admission subsystem's own logs, `pc.navigator.*` meters and the
+read-only `PollContext` view; and the observable moment itself ran wall-clock -
+`NavigatorRateShareTest`: two tagged instances at ~1Hz each against a real broker, an untagged
+bystander untouched and attribution-free, kill-one convergence to ~2Hz, the aggregate inside the
+rate-plus-burst bound. The wall-clock lane earned its keep on the way in: it caught a
+control-loop ordering bug (quantum pull after work distribution starved a purely-throttled
+instance to a standstill) that the virtual-clock lane structurally could not see.
+
+What the next rung inherits: the Kafka coordination plane behind the SAME `ResourceAllocator`
+seam - swap transport, not the seam; useful-demand signals feeding the division (equal share is
+the placeholder); and the successor/epoch no-re-mint proof - v1's no-re-mint is determinism plus
+ledgers inside one allocator instance, and the epoch-fenced successor-cannot-re-mint-an-interval
+guarantee is deliberately still owed by the distributed rung.
+
 ## The v1 the conversation itself insisted on
 
 One hard distributed **rate** resource. Kafka-elected owner mints finite short-lived credits;
