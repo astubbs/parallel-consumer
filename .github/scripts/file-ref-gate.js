@@ -236,7 +236,16 @@ function citationsIn(line) {
   // count in the failure headline stops matching what a reader can see.
   const out = new Set();
   for (const m of clean.matchAll(TOKEN)) {
-    const token = m[0];
+    // A LEADING `@` is Claude Code's import prefix, not part of the path. `@` is in TOKEN's
+    // character class, so `@../../../docs/x.md` in a nested CLAUDE.md bridge arrives here with the
+    // prefix attached - and resolves() then normalises `<dir>/@../../..`, where `@..` is an
+    // ordinary segment that eats one of the `..` pops. The citation lands inside the module instead
+    // of at the repo root and a real, resolving path is reported dangling.
+    //
+    // It stayed invisible while every bridge was a same-directory `@AGENTS.md`: TOKEN needs two
+    // segments, so a single-segment import was never a citation at all. The first bridge to import
+    // ACROSS directories exposed it, in every module test tree at once.
+    const token = m[0].startsWith("@") ? m[0].slice(1) : m[0];
     if (NOT_A_PATH.test(token) || isPlaceholder(token)) continue;
     if (m.index > 0 && TAIL_OF_SOMETHING_ELSE.test(clean[m.index - 1])) continue;
     if (GIT_REVISION.test(clean.slice(0, m.index))) continue;
