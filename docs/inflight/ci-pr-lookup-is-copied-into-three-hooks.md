@@ -54,7 +54,9 @@ inherits more than the three hooks named above:
   non-zero only on failure. Its slug derivation also predates the `file://` fix. Read it for the
   shape of the problem, not for code to lift.
 
-**The INPUT to the lookup was wrong too, and that half is now fixed** (2026-08-31). Every copy fed
+<!-- post-merge: checked-begin -->
+**The INPUT to the lookup was wrong too, and that half is now fixed**
+(astubbs/parallel-consumer#382, 2026-08-31). Every copy fed
 it `git rev-parse --abbrev-ref HEAD` read in the hook process's own directory, which is the
 SESSION's - not the directory the guarded command runs in. With several worktrees checked out at
 once the lookup therefore asked about an unrelated branch and answered confidently. Seen twice in one
@@ -75,3 +77,4 @@ keeps the lookup itself duplicated. Whoever folds these together folds that in t
 reads the PR number out of `gh pr merge <n>` first, and its `HEAD` fallback is only reached for a
 bare `gh pr merge`, which resolves the current branch exactly as the fallback does. Correct, rather
 than merely untouched.
+<!-- post-merge: checked-end -->
