@@ -244,6 +244,29 @@ fi
 # come from the demo itself.
 DEMO_BINARY="$PWD/$DEMO_DIR/../target/pc-go-demo"
 echo "Building the demo..."
-(cd "$DEMO_DIR" && go build -o "$DEMO_BINARY" .)
+# PC_DEMO_EMBEDDED adds a third arm that runs the engine INSIDE this process, over the C ABI of a
+# GraalVM shared library. It is a build tag rather than a runtime flag because cgo has to be
+# compiled in, and it is off by default because bin/ci-demo-conformance.sh compares every language's
+# output skeleton and knows only the AK-CORE and SIDECAR roles.
+#
+# An environment variable rather than an eighth flag, matching PC_DEMO_SIDECAR and the Python
+# demo's PC_DEMO_EMBEDDED - the demo contract fixes the flag table at seven across eleven languages.
+FFI_DIR="$PWD/$DEMO_DIR/../ffi"
+GO_BUILD_TAGS=()
+case "${PC_DEMO_EMBEDDED:-}" in
+    1 | true | yes | TRUE | YES)
+        if [ -z "${PC_EMBEDDED_LIBRARY:-}" ] && [ ! -e "$FFI_DIR/build/libpc.dylib" ] \
+           && [ ! -e "$FFI_DIR/build/libpc.so" ]; then
+            echo "PC_DEMO_EMBEDDED is set but no shared library was found. Build it with:" >&2
+            echo "  $FFI_DIR/build-shared-library.sh session" >&2
+            echo "or point PC_EMBEDDED_LIBRARY at one." >&2
+            exit 1
+        fi
+        GO_BUILD_TAGS=(-tags pcffi)
+        echo "Embedded arm enabled: building with -tags pcffi"
+        ;;
+esac
+
+(cd "$DEMO_DIR" && go build "${GO_BUILD_TAGS[@]}" -o "$DEMO_BINARY" .)
 
 "$DEMO_BINARY" ${args[@]+"${args[@]}"}

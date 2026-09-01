@@ -102,6 +102,8 @@ says which and why this demo runs ``confluent-kafka``.
 """
 
 PYTHON_GRPC = "pc-python-grpc (this client)"
+#: The same client, with the engine linked into THIS process over the C ABI.
+PYTHON_FFI = "pc-python-ffi (embedded)"
 """The sidecar arm, labelled with what drives it: this repository's own Python client library."""
 
 SIDECAR_MAIN = "bz.stub.parallelconsumer.proxy.Main"
@@ -109,6 +111,24 @@ SIDECAR_MAIN = "bz.stub.parallelconsumer.proxy.Main"
 mattering the moment a native binary exists."""
 
 ARM_BUDGET_SECONDS = 600.0
+
+#: Opt-in for the embedded arm. An ENVIRONMENT VARIABLE and not an eighth flag, for the same
+#: reason PC_DEMO_SIDECAR is one: the demo contract fixes the flag table at seven across eleven
+#: languages, and this arm is a property of the machine rather than of the run.
+#:
+#: Off by default, and that is load-bearing. bin/ci-demo-conformance.sh compares every language's
+#: stdout skeleton after normalising arm names to the roles AK-CORE and SIDECAR, so a third arm in
+#: the default run would put Python in permanent violation of a cross-language gate.
+EMBEDDED_ENV = "PC_DEMO_EMBEDDED"
+
+
+def embedded_wanted() -> bool:
+    """Whether to run the embedded arm. Never inferred from whether a library happens to exist.
+
+    Asking explicitly is what makes a missing library an ERROR rather than a silently skipped arm -
+    a run that was meant to exercise the embedded engine must not quietly prove nothing.
+    """
+    return os.environ.get(EMBEDDED_ENV, "").strip().lower() in {"1", "true", "yes"}
 """No arm may take longer than this before the demo calls it stalled rather than slow."""
 
 
@@ -227,6 +247,8 @@ def run(options: demo_options.DemoOptions, sidecar: SidecarCommand, topic: str) 
         ak_core_arm(options, topic, options.records),
         sidecar_arm(options, sidecar, topic, options.records),
     ]
+    if embedded_wanted():
+        small.append(embedded_arm(options, topic, options.records))
     report(f"Small replay - every arm over the same {options.records} records (the comparison)",
            small, baseline_of(small), across_replays=False)
 
@@ -242,6 +264,8 @@ def run(options: demo_options.DemoOptions, sidecar: SidecarCommand, topic: str) 
     # demo that makes a reader wait that long to learn nothing new is not worth the wall clock.
     serial_estimate = duration(total * options.delay_ms)
     big = [sidecar_arm(options, sidecar, topic, total)]
+    if embedded_wanted():
+        big.append(embedded_arm(options, topic, total))
     report(f"Big replay - {total} records, parallel arms only (AK core is serial and would take "
            f"{serial_estimate}+)", big, baseline_of(small), across_replays=True)
 
@@ -297,6 +321,24 @@ def ak_core_arm(options: demo_options.DemoOptions, topic: str, target: int) -> A
 
 def sidecar_arm(options: demo_options.DemoOptions, sidecar: SidecarCommand, topic: str,
                 target: int) -> ArmResult:
+    """The client library over a real sidecar. See :func:`proxy_arm` for the shared body."""
+    return proxy_arm(options, topic, target, arm=PYTHON_GRPC, sidecar=sidecar,
+                     group=group_id("pc-python-grpc"), embedded=False)
+
+
+def embedded_arm(options: demo_options.DemoOptions, topic: str, target: int) -> ArmResult:
+    """The same arm with the engine INSIDE this process - no sidecar, no gRPC, no JVM.
+
+    Everything below the options is shared with the sidecar arm on purpose: the two rows then
+    differ by transport and by nothing else, which is the only thing that makes comparing them
+    honest. A copied loop is how two arms quietly start differing by something else.
+    """
+    return proxy_arm(options, topic, target, arm=PYTHON_FFI, sidecar=None,
+                     group=group_id("pc-python-ffi"), embedded=True)
+
+
+def proxy_arm(options: demo_options.DemoOptions, topic: str, target: int, *, arm: str,
+              sidecar: SidecarCommand | None, group: str, embedded: bool) -> ArmResult:
     """The client library over a real sidecar - the arm the whole design exists for.
 
     On this path the application does no Kafka I/O: it spawns a binary, receives records over a
@@ -310,7 +352,7 @@ def sidecar_arm(options: demo_options.DemoOptions, sidecar: SidecarCommand, topi
     **Nothing here speaks the protocol by hand**, deliberately. An earlier version of the seed did
     exactly that, and it proved the engine worked while saying nothing about the client library.
     """
-    print(f"\n=== {PYTHON_GRPC} starting over {target} records "
+    print(f"\n=== {arm} starting over {target} records "
           f"({options.max_concurrency} worker processes) ===")
 
     # THE COUNTERS ARE multiprocessing PRIMITIVES, AND THAT IS NOT A STYLE CHOICE. The user's
@@ -344,16 +386,16 @@ def sidecar_arm(options: demo_options.DemoOptions, sidecar: SidecarCommand, topi
         return None
 
     client_options = ClientOptions(
+        embedded=embedded,
         topics=[topic],
         max_concurrency=options.max_concurrency,
         ordering=ProcessingOrder.UNORDERED,
-        kafka_properties=demo_kafka.consumer_properties(
-            options.bootstrap or "", group_id(PYTHON_GRPC)),
+        kafka_properties=demo_kafka.consumer_properties(options.bootstrap or "", group),
     )
     with ParallelConsumerClient(client_options, sidecar=sidecar) as client:
         client.poll(process)
         if not finished_event.wait(ARM_BUDGET_SECONDS):
-            raise RuntimeError(f"{PYTHON_GRPC} stalled at {counted.value} of {target}")
+            raise RuntimeError(f"{arm} stalled at {counted.value} of {target}")
         elapsed = ended_at.value - started_at.value
         processed = counted.value
 
@@ -361,8 +403,8 @@ def sidecar_arm(options: demo_options.DemoOptions, sidecar: SidecarCommand, topi
     # too. Without this a broken run prints a plausible row at a plausible rate and exits 0, which
     # is the worst thing a demo whose shape ten languages copy can do.
     if processed < target:
-        raise RuntimeError(f"{PYTHON_GRPC} ended early at {processed} of {target}")
-    return finished(PYTHON_GRPC, elapsed, processed, keys)
+        raise RuntimeError(f"{arm} ended early at {processed} of {target}")
+    return finished(arm, elapsed, processed, keys)
 
 
 def simulate_work(seconds: float) -> None:

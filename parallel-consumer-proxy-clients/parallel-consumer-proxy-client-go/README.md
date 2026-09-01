@@ -82,6 +82,63 @@ condition, so the library never drops a record or grows the queue to absorb it.
 in an error, and never writes it to argv, an environment variable or a temp file - it travels the
 stream and nowhere else. Hold your own code to the same rule.
 
+## Two transports: the sidecar, and the engine in this process
+
+By default this client spawns the sidecar and talks to it over gRPC. It can instead link Parallel
+Consumer **into your process** as a GraalVM shared library, over a C ABI - no sidecar, no gRPC, no
+JVM. Same client, same protocol frames, one option.
+
+```go
+parallelconsumer.Open(ctx, parallelconsumer.Options{
+    Embedded: true,        // instead of SidecarPath; the two are mutually exclusive
+    Topics:   []string{"orders"},
+})
+```
+
+**It needs a build tag**, because cgo has to be compiled in: without `-tags pcffi` this package
+contains no cgo at all, and `Embedded: true` returns an error naming what is missing rather than
+falling back to the sidecar. A silent fallback would let a run that was meant to exercise the
+embedded engine prove nothing.
+
+### Running the demo both ways
+
+```bash
+# the ordinary demo: AK core + sidecar, two arms
+demo/run.sh
+
+# build the shared library once - about 90 seconds, needs GraalVM with native-image
+ffi/build-shared-library.sh session
+
+# the same demo with a third arm, the engine inside the process
+PC_DEMO_EMBEDDED=1 demo/run.sh
+```
+
+Go through `run.sh` rather than building the demo by hand: it adds `-tags pcffi`, and it also
+handles the Go toolchain. This module needs a newer Go than many machines have, and `run.sh` sets
+`GOTOOLCHAIN=auto` when that is the case - a bare `go build` just fails. If the library is missing
+it stops and tells you how to build it, rather than quietly running two arms.
+
+`PC_DEMO_EMBEDDED` is an environment variable rather than an eighth flag, matching
+`PC_DEMO_SIDECAR` and the Python demo - the demo contract fixes the flag table at seven across
+eleven languages.
+
+The third arm appears only in a `-tags pcffi` build. That is deliberate:
+`bin/ci-demo-conformance.sh` compares every language's output skeleton after reducing arm names to
+the roles `AK-CORE` and `SIDECAR`, so a third arm in the default build would put Go in permanent
+violation of a cross-language gate.
+
+```
+  arm                          records     keys    elapsed        msg/s   vs AK core
+  AK core (franz-go)             2,000    1,000       8.0s          249         1.0x
+  pc-go-grpc (this client)       2,000    1,000       3.6s          555         2.2x
+  pc-go-ffi (embedded)           2,000    1,000       3.3s          604         2.4x
+```
+
+**Do not read a transport result off those rates.** The embedded arm is an ahead-of-time native
+image and the sidecar arm is a JIT-compiled JVM, so the gap measures compilation as much as
+transport. See
+[`docs/plans/2026-08-22-001-feat-shared-c-transport-plan.md`](../../docs/plans/2026-08-22-001-feat-shared-c-transport-plan.md).
+
 ## Status
 
 Wave one implements exactly one path: connect → `Configure` → receive a `Dispatch` wave → run the

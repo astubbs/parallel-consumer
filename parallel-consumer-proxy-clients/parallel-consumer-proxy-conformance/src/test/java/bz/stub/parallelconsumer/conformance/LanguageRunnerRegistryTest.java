@@ -10,6 +10,7 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 
 import static com.google.common.truth.Truth.assertWithMessage;
@@ -35,8 +36,21 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  */
 class LanguageRunnerRegistryTest {
 
-    /** The Java reference client is not a spawned runner - it is driven in-process, by its own bindings. */
-    private static final String NOT_A_SPAWNED_RUNNER = "java";
+    /**
+     * Client directories that are deliberately not spawned conformance runners, each with the reason it is
+     * not one. <b>Kept as a reason-carrying map rather than a growing list of constants</b>: the exemption
+     * started as a single string for {@code java}, and the second case arrived with a completely different
+     * justification - so a bare second constant would have recorded that two things are exempt and nothing
+     * about why either is, which is what makes an exemption list rot into a mute.
+     * <p>
+     * Being on this map is a claim about the module, not a way to quiet the test. A directory that speaks the
+     * v1 protocol over a socket and could be driven belongs in {@link LanguageRunners#all()}, not here.
+     */
+    private static final Map<String, String> NOT_SPAWNED_RUNNERS = Map.of(
+            "java", "the reference client is driven in-process by its own bindings, never spawned",
+            "c", "a reach probe for the C ABI rather than a protocol client: it links the engine in through "
+                    + "GraalVM's shared library and speaks no gRPC at all, so there is no sidecar for a "
+                    + "conformance runner to spawn and nothing for the shared scenarios to drive");
 
     @Test
     void everyClientModuleOnDiskHasARunnerRegisteredAndTheReverse() {
@@ -114,7 +128,7 @@ class LanguageRunnerRegistryTest {
             return modules.map(path -> path.getFileName().toString())
                     .filter(name -> name.startsWith("parallel-consumer-proxy-client-"))
                     .map(name -> name.substring("parallel-consumer-proxy-client-".length()))
-                    .filter(language -> !NOT_A_SPAWNED_RUNNER.equals(language))
+                    .filter(language -> !NOT_SPAWNED_RUNNERS.containsKey(language))
                     .sorted()
                     .toList();
         } catch (IOException e) {

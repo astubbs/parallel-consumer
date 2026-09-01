@@ -1,0 +1,382 @@
+---
+title: Shared C Transport - Plan
+type: feat
+date: 2026-08-22
+artifact_contract: ce-unified-plan/v1
+artifact_readiness: implementation-ready
+product_contract_source: legacy-requirements
+execution: code
+origin: docs/inflight/perf-embedding-the-engine-over-ffi.md
+---
+
+# Shared C Transport - Plan
+
+Tracking issue: astubbs#242 (the language-proxy fan-out). Parent plan:
+[`2026-08-14-001-feat-language-proxy-plan.md`](2026-08-14-001-feat-language-proxy-plan.md).
+Proven in **four languages** on branch `feats/go-vendored-pc`: Go over cgo, Python over ctypes,
+Node over a hand-written N-API addon, C over nanopb.
+
+**Identifiers in this document are prefixed `CT` (requirement) and `CTD` (key technical decision),
+never `R` or `KTD`.** The parent plan states that no ID may mean two things across documents, and it
+is still allocating in the `R`/`KTD` space. Where this plan cites a parent decision it uses the
+parent's ID unchanged.
+
+## Goal Capsule
+
+**One shared native library exposing the proxy protocol as a C ABI, so any FFI-capable language can
+run Parallel Consumer in-process instead of beside it - without any language reimplementing
+anything.**
+
+This is not a C client and it is not librdkafka's architecture. Protobuf codegen still produces
+every language's real client. The library replaces **only the transport**: where a client today
+writes a `ClientMessage` onto a gRPC stream and reads a `ProxyMessage` back, it instead pushes and
+pulls the same serialised bytes across a function call.
+
+The Go proof exists and is measured -
+[`perf-embedding-the-engine-over-ffi.md`](../inflight/perf-embedding-the-engine-over-ffi.md).
+This plan is about whether and how that generalises, and it is **gated**: CTD1 is a decision, not a
+task.
+
+## Why this is now possible, when the parent plan rejected it
+
+Two objections carried the rejection, and the Go work moved both.
+
+**The callback problem was the decisive one and it does not arise.**
+[`parked-a-c-client-and-the-ffi-question.md`](../inflight/parked-a-c-client-and-the-ffi-question.md)
+carries a per-language callback table introduced as the breakdown that "decides the whole proposal".
+It assumes the engine calls *out* of native-image Java into the host on many threads - hence the
+GIL, the global VM lock, and Node's single-threaded event loop as the hard cases. **The surface
+built instead never calls out.** The host pulls work frames and pushes verdict frames on its own
+threads. Go's "medium" ranking was never exercised because none of the mechanism it describes is
+used.
+
+**`native-image --shared` was rejected on four untested differences from the executable build.**
+Two are now tested and fine (entry-point surface; isolate and thread attachment). Two remain
+untested (GC coexistence under host allocation pressure; foreign-thread callback re-entry - avoided
+by design, so it is not on the critical path). The associated "worst shape for agentic development,
+failures are segfaults with no stack trace" objection did not materialise across the Go work.
+
+**What did NOT move**, and it governs this whole plan: the release-matrix objection. See CTD1.
+
+## Product Contract
+
+### CT1 - The library is a transport, not a client
+
+The library MUST expose only session lifecycle and opaque frame exchange. It MUST NOT expose typed
+records, ordering modes, verdicts, or any other protocol semantics as C types. Any language binding
+that needs to understand a frame MUST do so with its existing generated protobuf code.
+
+*Why it is a requirement and not a style note: the moment one protocol concept becomes a C struct,
+every protocol change becomes an ABI change, and the eleven clients stop being the source of truth
+for their own encoding.*
+
+### CT2 - The frames are the same frames
+
+The bytes crossing the ABI MUST be the identical serialised `ClientMessage` and `ProxyMessage` that
+the gRPC transport carries. No embedded-only message, field or framing.
+
+### CT3 - Pull, never push
+
+The library MUST NOT invoke host code. All movement is initiated by the host calling in.
+
+### CT4 - A binding is a transport swap, not a fork
+
+Adding a language MUST NOT require changes to that language's client beyond substituting its
+transport. The Go proof sets the bar: a `Send`/`Recv`/`CloseSend` implementation, and a
+four-line change to the client.
+
+### CT5 - Conformance decides equivalence
+
+An embedded binding MUST pass the existing conformance suite as an additional dialect of a language
+already covered. It MUST NOT introduce new scenarios. Behaving identically is the claim; the suite
+is what tests it.
+
+### CT6 - The default build stays native-free
+
+For every language, the ordinary package MUST NOT require the shared library, an FFI toolchain, or
+a platform-matched binary. Embedded support is opt-in, and an opt-in that cannot be satisfied MUST
+fail loudly rather than fall back to the sidecar.
+
+*A silent fallback makes a run that was meant to exercise the embedded engine prove nothing. The Go
+implementation does this with a build tag.*
+
+### CT7 - One library, all languages
+
+There MUST be exactly one shared library per platform, serving every binding. A per-language library
+would multiply the release matrix by eleven, and CTD1 is already the hardest constraint here.
+
+## Key technical decisions
+
+### CTD1 - ANSWERED 2026-08-22: the release matrix is a build pipeline, and the sidecar still ships
+
+**An embedded engine rebuilds and re-releases on every Kafka version bump, because the Kafka client
+is inside the binary.** The parked note calls this decisive and nothing in the Go proof makes it
+cheaper. It is also the exact opposite of this fork's currency argument, where a Kafka bump is a
+dependency change.
+
+**Owner's answer: automate the matrix build and stop thinking about it.** A per-platform release is
+a pipeline written once, and the objection does not survive contact with the fact that every
+C-based channel needs per-platform binaries anyway.
+
+**And the sidecar is not replaced by this - both ship.** Anyone who wants currency to remain a pure
+version bump keeps that option, with one portable artifact and nothing to rebuild. Embedding is the
+answer for teams that will not run a second process and for targets that cannot.
+
+The concern was raised and is recorded rather than deleted, because it is the obvious objection and
+a reader should be able to see that it was answered rather than overlooked. **U1 is therefore build
+work, not a decision**, and no longer blocks the other units.
+
+### CTD2 - The kill criterion, written before building
+
+The parked note requires this and it is honoured here. **The embedded track is deleted, not fixed,
+if any of these holds:**
+
+- The controlled measurement (CTD3) shows the embedded transport is **not meaningfully faster** than
+  a native-image sidecar for fast-record workloads, **and** removing the second process turns out
+  not to matter to anyone. Both halves are now required, because CTD1's answer makes "no second
+  process" cheap enough to be worth having on its own - so a flat measurement alone no longer kills
+  the track, it only removes the performance argument for it.
+- GC coexistence under host allocation pressure produces failures that cannot be diagnosed from the
+  host's own tooling. That was the "worst shape for agentic development" objection and it would be
+  confirmed rather than refuted.
+- A second language cannot be bound within the CT4 bar. If it takes a fork rather than a transport
+  swap, the generalisation claim is false and the Go result was a special case.
+  **NOT TRIGGERED, 2026-08-22.** Python bound at the bar: a transport implementation plus a switch,
+  with the session state machine untouched. Its gRPC stream is a request iterator rather than a send
+  method, so the transport is shaped quite differently from Go's, and the protocol shape still
+  survived. One kill condition down, two open.
+
+### CTD3 - The measurement must compare like with like
+
+Any throughput comparison MUST run the sidecar arm as a **native image**, not a JVM. The Go
+measurement recorded so far did not, and its ~9% margin is therefore uncontrolled for AOT-versus-JIT
+and is not quotable as a transport result.
+
+The output should be a **crossover point** - the per-record processing duration at which the hop
+stops mattering - measured across a sweep (nothing, 1ms, 10ms, 100ms, 1s), reporting warm and cold
+separately. A single duration cannot show a crossover, and the crossover is the number that is
+useful in documentation whichever side wins.
+
+### CTD4 - The isolate thread is looked up per call, never cached
+
+A GraalVM isolate thread belongs to the OS thread it was attached on. Runtimes that migrate work
+between OS threads - Go's scheduler, .NET's thread pool, any M:N runtime - make a cached
+`graal_isolatethread_t*` silently wrong, and the failure is memory corruption rather than an error.
+Every entry point calls `graal_get_current_thread` and attaches if it returns null.
+
+**This is the single most transferable hazard in the whole design** and every binding MUST document
+that it does this.
+
+### CTD4b - The isolate must never be inherited across a fork
+
+A process that forks while holding a GraalVM isolate inherits an isolate whose threads do not exist
+in the child. Any binding in a language that forks - Python's worker pool, preforking servers,
+`multiprocessing` - MUST create the isolate only after the last fork, or confine it to one process.
+
+Python happens to be safe already: its worker pool is forked before any transport exists, for the
+unrelated reason that gRPC Core cannot survive a fork. **That is luck, not design**, and the next
+binding may not inherit it.
+
+### CTD8 - Node stays on the sidecar, and the reason is architectural rather than difficulty
+
+Node CAN embed - measured. The pull must run on a worker thread, because a blocking pull on the main
+thread takes the event loop to zero turns, and a worker restores baseline.
+
+**It should not, and the argument is specific to Node rather than the generic one about slow work.**
+Embedding exists to remove a hop. libuv watches network sockets on the loop thread itself, so a
+frame from the sidecar reaches application code in one hop and lands where that code already runs.
+The embedded path removes that socket hop and inserts a worker-thread hop plus a structured-clone
+copy:
+
+| | Path a frame takes |
+|---|---|
+| Sidecar | socket -> libuv -> application, on the main thread |
+| Embedded | `pc_next` -> worker -> `postMessage` -> main thread -> application |
+
+**This is reasoning, not measurement, and is labelled as such wherever it is written down.** Two
+things would overturn it: transferable `ArrayBuffer`s or `SharedArrayBuffer` remove the copy, and a
+loopback or Unix-socket hop is already cheap. If anyone races the two paths and the embedded one
+wins, this decision is void and the numbers replace it.
+
+Recorded in the client's own README as well as here, because "not done yet" and "decided against"
+are indistinguishable from outside and the next contributor will otherwise re-derive it.
+
+### CTD7 - No FFI layer that executes calls on its own stack
+
+A binding MUST call the library down the calling OS thread's real stack. FFI layers that run
+foreign calls on a stack they allocate themselves are incompatible with a GraalVM shared library,
+which derives its stack guard zones from the thread's actual stack.
+
+**Measured, 2026-08-22.** koffi - the maintained Node FFI library - dies inside
+`graal_create_isolate` with a fatal `StackOverflowError`. Its own configurable `sync_stack_size` is
+the tell that it swaps stacks; raising it from 1 MiB to koffi's 16 MiB maximum changes nothing,
+because size was never the problem. An N-API addon against the same library in the same process
+worked first time.
+
+**The symptom does not point at the cause**, which is why this is a decision rather than a
+footnote. The error's own first suggested explanation is "the wrong IsolateThread", and the thread
+was correct. Any binding built on `cffi`'s ABI mode, a stack-switching coroutine runtime, or a
+similar layer needs checking against this before it is attempted.
+
+### CTD5 - Host-thread serialisation is the binding's responsibility
+
+`ConfigureHandler.SessionObserver` documents that its state needs no locking **because gRPC
+serialises a stream's inbound callbacks**. Nothing serialises a foreign host's threads. The C
+surface re-establishes that guarantee with an explicit lock, and any future entry point MUST too.
+Getting this wrong corrupts the handshake state machine under concurrency rather than throwing.
+
+### CTD6 - SUPERSEDED 2026-08-22: bind every language, measure, then choose
+
+**Owner's direction, and it replaces the tiering below rather than adjusting it.** Every language
+gets bound and moves forward together; the choice between embedded and sidecar is then made per
+language *on measurement* - throughput and stability - instead of on a table predicting which ones
+are worth it.
+
+That is a better method than what CTD6 originally did, and this work is why. The table below
+predicted Python "hard mechanically" and it was not; it ranked Go "medium" on a callback mechanism
+the design never uses; and it had nothing to say about Node's real obstacle, which turned out to be
+an FFI library's stack handling. **Three of its predictions were wrong in three different ways.** A
+prediction table was the right tool when binding a language was expensive; four bindings later it
+is cheaper to measure than to argue.
+
+What survives from below: the per-language mechanism notes, which are now evidence rather than
+guesses, and the observation that the difficulty and demand rankings happened to align. What does
+not survive: the "do not build" verdict, and any use of this table to decide what gets attempted.
+
+**The kill criterion is untouched.** CTD2 still applies, CTD1 still gates shipping, and binding a
+language remains a long way from defaulting it to embedded.
+
+### CTD6 (historical) - Languages ranked by value, not by ease
+
+The parked note's finding that difficulty and demand rank together survives, but the pull model
+changes the difficulty column, so the ranking is now driven by demand alone:
+
+| Tier | Languages | Reasoning |
+|---|---|---|
+| **Build** | Rust, C++ | Edge and embedded targets where a second process is unavailable, plus the latency-sensitive fast-record workloads where the hop is the cost |
+| **Cheap to add** | Swift, C#, Go | Straightforward FFI, real parallelism; Go is already done |
+| **Do not build** | Python, Ruby, Node, PHP, Java | Their work is I/O-bound and slow, so the hop is noise. The pull model removes their *mechanical* difficulty but not the reason it is not worth doing. Java has `java-direct` already |
+
+**Node is measured too, and it defines the shape of the hardest case.** A blocking pull on the
+main thread takes the event loop to *zero* turns - a stall, not a degradation - and a worker thread
+restores it to baseline. So Node is possible, at the cost of a worker thread and a native addon,
+and it stays in "do not build" on the same value argument as the rest of the row.
+
+**Python is now the measured case, and it is in the "do not build" row on purpose.** It binds
+cleanly and its GIL objection is dead (1142x, measured against a `PyDLL` control). It stays here
+because "hard" and "not worth it" were always two arguments, the parked note ran them together, and
+only the first one fell. A binding that exists as an experiment is not the same as one we ship.
+
+**Python, Ruby and Node move from "hard" to "possible but pointless".** That is a real change in the
+reasoning and should not be mistaken for a change in the recommendation.
+
+## Planning Contract
+
+**Settled by the Go proof, do not re-derive:** the C surface shape; that `ConfigureHandler.session`
+is the seam; that the sidecar's captured reachability metadata covers the `--shared` build unchanged;
+that a client's transport coupling is small enough to narrow to an interface without behaviour
+change.
+
+**Open, and each is a unit below:** CTD1's answer; the controlled measurement; GC coexistence; the
+second language.
+
+## Implementation Units
+
+### U1. Automate the per-platform matrix build - DECIDED, now build work
+
+CTD1 is answered. This is a release pipeline producing one shared library per platform per Kafka
+version, and it no longer gates the other units. The sidecar's single-artifact path continues
+alongside it.
+
+### U2. Give the Go demo `PC_DEMO_SIDECAR`, on the demos branch
+
+The Go demo can only launch a JVM sidecar, which is why CTD3's control arm was unavailable. Python,
+Ruby, C++ and .NET already honour `PC_DEMO_SIDECAR`. This is a parity gap, unrelated to Graal, so it
+belongs on `feats/polyglot-demos` and merges down. Tracked in
+[`branch-polyglot-demos.md`](../inflight/branch-polyglot-demos.md) item 4, which already records that
+the sidecar-location variable has three names.
+
+Files: `parallel-consumer-proxy-clients/parallel-consumer-proxy-client-go/demo/sidecar.go`, and its
+demo README. Test: the existing demo option tests, plus a case asserting an absolute
+`PC_DEMO_SIDECAR` wins over the classpath route.
+
+### U3. The controlled measurement (CTD3)
+
+Depends on U2. Build the sidecar as a native image, run both arms AOT, sweep the processing
+duration, report warm and cold separately, publish the crossover point. **Feeds CTD2's first kill
+condition**, so the result is allowed to end this plan.
+
+### U4. Extract the C surface into a first-class module
+
+Today the entry points live in
+`parallel-consumer-proxy-clients/parallel-consumer-proxy-client-go/ffi/java/`, which is the wrong
+home for something CT7 says all languages share. Move to its own module producing one library per
+platform, with the Go binding as its first consumer and no Go-specific content remaining.
+
+Test: the Go demo's embedded arm keeps reporting its deterministic records/keys pair after the move.
+
+### U5. Bind every language, one step at a time - IN PROGRESS
+
+Four done: Go, Python, Node (probe only, and deliberately - see CTD8), C. Each has produced a
+constraint the others did not, which is the argument for continuing rather than stopping at three.
+
+**Next, chosen for what each would teach rather than for coverage:**
+
+- **Elixir/Erlang.** The only runtime that *actively polices* blocking foreign calls: a NIF that
+  holds a scheduler beyond about a millisecond is a documented violation, and BEAM ships dirty NIFs
+  as the designed answer. So the question is not "does blocking hurt" but "does the pull model land
+  on a runtime that already has a first-class concept for it".
+- **Haskell.** GHC's green threads make `foreign import ccall safe` versus `unsafe` the same
+  question as CDLL versus PyDLL, exposed as a keyword - a control arm the language hands us.
+- **LuaJIT.** Declares C signatures in Lua source with no compiler and no build step, and its
+  coroutines run on their own stacks - which is what killed koffi, so it re-tests CTD7 directly.
+
+**And the group the reach argument is actually about**, which is not "languages that have gRPC and
+would rather not": R, Zig, Nim, Crystal, Julia and the enterprise tail have **no usable Kafka client
+at any level**. For those the base-client wrapper matters more than Parallel Consumer does - they
+need `consume` before they need key-ordered concurrency. See STRATEGY.md.
+
+**Originally scoped as "bind a second language" - DONE, ahead of U4**
+
+Python, 2026-08-22, before the library was extracted. **CTD2's third kill condition is not
+triggered.** Doing it before U4 was not the plan and it surfaced U4's cost immediately: the Python
+binding's default library path points at a shared home that does not exist yet, so it has to be told
+where the library is with `PC_EMBEDDED_LIBRARY`.
+
+### U6. GC coexistence under pressure
+
+Depends on U4. Drive the embedded engine while the host allocates hard, and record whether failures
+are diagnosable from the host's own tooling. **Feeds CTD2's second kill condition.**
+
+### U7. Reachability beyond the happy path
+
+The captured metadata covers one unordered run with no failures, retries, rebalance or transactional
+commit. Those fail at *runtime*, invisibly at build time. Prefer a test that **asserts** reachability
+over extending the trace, because a one-off capture goes stale silently. An exactly-once scenario is
+the sharpest single addition.
+
+## Verification Contract
+
+- The embedded dialect passes the existing conformance suite for every bound language (CT5).
+- Every demo with an embedded arm reports the same deterministic records/keys pair as its sidecar
+  arm - the pair, never the rate, is the oracle.
+- The default (non-embedded) build of every client continues to pass with no native library present,
+  and `bin/ci-demo-conformance.sh` sees no additional arms (CT6).
+- CTD3's measurement runs both arms as native images, or is not reported.
+
+## Definition of Done
+
+CTD1 answered in writing; one shared library serving at least two languages; both passing
+conformance as an extra dialect; the crossover point published; and CTD2's kill criterion either not
+triggered or acted on by deleting the track.
+
+## Deferred / Open Questions
+
+- **Crash isolation is lost and there is no mitigation proposed.** A segfault or OOM in the embedded
+  engine takes the host process down, where the sidecar's process boundary contained it. This is not
+  solvable within the design; it is a property users must be told about.
+- **Whether the pull model reopens Python, Ruby and Node** is now a genuinely open question rather
+  than a settled no. CTD6 still says do not build them, on value rather than difficulty.
+- **Unix domain sockets versus the C ABI.** UDS already removes the network hop while keeping process
+  isolation. If CTD3's crossover shows the remaining gap is small, UDS may dominate this entire plan
+  on cost - it needs no per-platform binary and no Kafka-bump rebuild.

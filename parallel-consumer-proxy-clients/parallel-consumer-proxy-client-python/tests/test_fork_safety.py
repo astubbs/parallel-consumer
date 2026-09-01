@@ -18,7 +18,7 @@ import pathlib
 import pytest
 
 from parallel_consumer import ClientOptions, ParallelConsumerClient
-from parallel_consumer import _session as session_module
+from parallel_consumer import _transport as transport_module
 from parallel_consumer import client as client_module
 from parallel_consumer._generated import proxy_pb2 as pb
 from parallel_consumer._pool import WorkerPool
@@ -87,8 +87,8 @@ def trace(monkeypatch):
         return original_launch.__func__(cls, processor)  # type: ignore[attr-defined]
 
     monkeypatch.setattr(client_module._sidecar, "Sidecar", FakeSidecar)
-    monkeypatch.setattr(session_module.grpc, "insecure_channel", fake_channel)
-    monkeypatch.setattr(session_module.pb_grpc, "ProxyServiceStub", fake_stub)
+    monkeypatch.setattr(transport_module.grpc, "insecure_channel", fake_channel)
+    monkeypatch.setattr(transport_module.pb_grpc, "ProxyServiceStub", fake_stub)
     monkeypatch.setattr(WorkerPool, "launch", traced_launch)
     return events
 

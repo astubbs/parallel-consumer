@@ -53,10 +53,18 @@ class ParallelConsumerClient:
     """
 
     def __init__(self, options: ClientOptions,
-                 *, sidecar: _sidecar.SidecarCommand | str | os.PathLike[str],
+                 *, sidecar: _sidecar.SidecarCommand | str | os.PathLike[str] | None = None,
                  drain_timeout: float = 30.0) -> None:
         self._options = options
-        self._command = _sidecar.SidecarCommand.coerce(sidecar)
+        if options.embedded:
+            if sidecar is not None:
+                raise ValueError("embedded and sidecar are mutually exclusive - "
+                                 "an embedded engine has no sidecar to launch")
+            self._command = None
+        else:
+            if sidecar is None:
+                raise ValueError("sidecar is required unless ClientOptions.embedded is set")
+            self._command = _sidecar.SidecarCommand.coerce(sidecar)
         self._drain_timeout = drain_timeout
         self._lock = threading.Lock()
         self._sidecar: _sidecar.Sidecar | None = None
@@ -90,9 +98,12 @@ class ParallelConsumerClient:
         #    They idle until step 3 tells the pool how many to run.
         self._pool = WorkerPool.launch(processor)
 
-        # 2. The sidecar: a child process, launched directly, told nothing by argv.
-        self._sidecar = _sidecar.Sidecar(self._command)
-        port = self._sidecar.start()
+        # 2. The sidecar: a child process, launched directly, told nothing by argv. The embedded
+        #    engine has no step 2 at all - that is the whole point of it.
+        port: int | None = None
+        if self._command is not None:
+            self._sidecar = _sidecar.Sidecar(self._command)
+            port = self._sidecar.start()
 
         # 3. Only now the channel, the handshake, and the count that sizes the pool.
         session = Session(port, self._options, self._pool, drain_timeout=self._drain_timeout)
