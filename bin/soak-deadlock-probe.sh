@@ -2,6 +2,10 @@
 #
 # Copyright (C) 2026 Antony Stubbs and contributors
 #
+# shell-justified: a thin loop around mvn invocations whose entire content is the exact flag set -
+# no -Pci, no forking - that keeps the probe's window open. The value is in the flags being visible
+# and copy-pasteable next to the note that explains them; wrapping them in Node would add a layer
+# between the reader and the command line they need to reproduce by hand.
 # Overnight A/B soak on the DETERMINISTIC deadlock probe. docs/inflight/test-857-deadlock-ab-soak-harness.md
 # owns the method, the two settings that silently destroy the experiment, and the results.
 #

@@ -2,6 +2,13 @@
 #
 # Copyright (C) 2026 Antony Stubbs and contributors
 #
+# shell-justified: process orchestration is the core of this harness, not incidental to it - watchdog
+# timers, jstack against a live PID, killing a wedged JVM, traps and wall-clock budgets across an
+# eight-hour run. That is bash's domain and Node would wrap it rather than replace it. The part the
+# Node-default rule is actually aimed at - the verdict logic that decides what a run MEANT - is the
+# part of this file that HAS been wrong three times, and it is covered by bin/test-torture-overnight.sh
+# for that exact reason. Stating the weakness rather than claiming there isn't one: if the verdict
+# logic grows further, it should move out of here into .mjs, not be defended by this comment.
 # OVERNIGHT TORTURE HARNESS - MVP spike. Runs for hours in short cycles, hunting the lock-ups and
 # data-skips confluentinc#857's family has not yet accounted for, and packages everything an agent
 # needs to review it in the morning without asking anyone a question.

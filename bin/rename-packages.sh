@@ -517,7 +517,7 @@ FREEZE_ID_ERE='freeze-(begin|end)[(]([A-Za-z0-9_.-]+)[)]'
 
 # Excluded from both the rewrite and the completeness check, because they must carry the old spelling
 # as DATA. Matched on BASENAME, not on a hardcoded path, so moving or renaming this script cannot
-# silently switch the exclusion off - the lesson bin/check-shell-sigpipe.sh already learned.
+# silently switch the exclusion off - the lesson the `sigpipe-into-grep-q` rule already learned.
 SELF_BASENAMES="\
 rename-packages.sh
 test-rename-packages.sh"
@@ -1319,7 +1319,7 @@ ensure_modifications_line() { # <path>
     header="$(head -"$HEADER_WINDOW" "$f")"
     # Herestrings, never `printf | grep -q`: grep -q exits at its first match, the writer takes
     # SIGPIPE, and under pipefail the pipeline then reads as FALSE - so a file that DID match is
-    # classified as one that did not. bin/check-shell-sigpipe.sh fails the build over this.
+    # classified as one that did not. bin/lib/source-patterns.mjs fails the build over this.
     grep -q "Copyright (C).*Confluent" <<<"$header" || return 0
     if grep -q "Modifications Copyright (C).*${MODS_HOLDER}" <<<"$header"; then
         MODS_LINE_PRESENT=$((MODS_LINE_PRESENT + 1))

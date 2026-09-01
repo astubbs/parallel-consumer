@@ -52,13 +52,13 @@ summary() {
         # from meaning "nobody reads it" - the peak is the number a timing regression moves.
         # Every read here uses a whole-file `grep` with no early-exiting reader downstream: `| head`
         # would close the pipe and pipefail would promote the writer's EPIPE to a failure, which
-        # bin/AGENTS.md bans and bin/check-shell-sigpipe.sh enforces.
+        # bin/AGENTS.md bans and the `sigpipe-into-grep-q` rule enforces.
         # One pass over the reports, feeding the loop by process substitution rather than a pipe:
         # `find | while` runs the loop in a SUBSHELL, so per-file counts cannot accumulate and a
         # second full scan was needed to answer "did anything observe?". These XMLs embed captured
         # stdout and reach hundreds of MB, so the extra scan was not free. Same shape as
         # bin/quarantine-lane-report.sh. No early-exiting reader is introduced, so the
-        # check-shell-sigpipe.sh ban is not implicated.
+        # `sigpipe-into-grep-q` ban is not implicated.
         local any_observations=0
         echo "| Test class | Time | Lag stagnation peak | Class 2 observations |"
         echo "|---|---|---|---|"

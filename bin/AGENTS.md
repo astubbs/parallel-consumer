@@ -4,11 +4,57 @@ Repo scripts. This doc owns the conventions for writing a script in `bin/`; the 
 routes here and keeps only what binds every session. Two conventions live here because nothing else
 enforces them.
 
+## Write it in Node unless you can say why not
+
+**New scripts in `bin/` are Node (`.mjs`). Shell needs a stated reason.** Operator ruling,
+2026-09-01. [`bin/check-source-patterns.mjs`](check-source-patterns.mjs) enforces it against anything
+NEW since the merge base; existing scripts are grandfathered and are **not** a migration backlog,
+because churn is its own risk.
+
+**The reason is silent wrong answers, not taste.** In one session: a gate written with gawk's
+`ENDFILE` parsed cleanly under mawk - the default `awk` here - matched nothing, and printed its success
+line over a file containing the exact defect it was written to catch. `exp` turned out to be a reserved
+awk function name. And the structural evidence is stronger than either anecdote: **a whole slice of
+this directory exists only to police shell's traps** - [`check-shell-hazards.sh`](check-shell-hazards.sh),
+the `sigpipe-into-grep-q` row in [`bin/lib/source-patterns.mjs`](lib/source-patterns.mjs) (its own gate
+until it was folded in), and a shared helper for `grep -c` printing `0` and exiting `1`. When that much
+of the tooling guards the tooling, the language is the problem.
+
+**Node, not Python**, and the repo already chose: `.github/scripts/` holds four JS gate
+implementations, each with a `.test.js` sibling, against one Python file in the tree. Node is the
+established second language *and* already carries the testing convention `bin/` lacks.
+
+**Shell is still right sometimes, and the escape hatch is a sentence rather than a flag** - put
+`shell-justified: <reason>` in a comment. A written reason is one somebody can disagree with later.
+Reasons that qualify: a handful of lines wrapping a single command; something that must run before
+Node is available; a git hook where a runtime's startup is a real fraction of the latency budget.
+**"It is what the neighbouring scripts are" does not qualify** - that is how a default outlives its
+reason.
+
+**A new rule is a row, not a script.** Most gates here are the same program - walk files, match a
+regex, complain - each re-implementing walking, exclusions, an opt-out and an exit-code contract, in a
+language where each of those is a paragraph. [`bin/lib/source-patterns.mjs`](lib/source-patterns.mjs)
+holds the table and `check-source-patterns.mjs` is the one runner they share. A check that has to
+*think* - parse XML, call an API, compare numbers - is a real program and still gets its own file.
+
+**Node scripts are compile-checked by `pr-checklist.yml` and self-tested by `repo-hygiene.yml`**,
+which runs `bin/check-all.sh --with-tests` and so discovers `bin/test-*.mjs` by glob. They are two
+different workflows on purpose - naming only the first sends anyone repairing the test wiring to a
+job that never runs the tests. `node --check` is a
+compile, not static analysis; JavaScript is the one language CodeQL's default setup here does not
+scan, which is tracked separately.
+
 ## Naming a script here can grant it to the PR reviewer
 
 `bin/check-*.sh` and `bin/test-check-*.sh` are granted to the review agent **by pattern**, so a
 script matching either prefix becomes runnable by the reviewer the moment it is on the default
 branch. Nobody approves it; the name is the grant.
+
+**A `.mjs` gate needs its own grant, and the pattern does not cover it.** The allowlist entries are
+`Bash(bin/check-*.sh:*)` - a Node gate is invoked as `node bin/check-x.mjs`, which matches nothing, so
+the reviewer silently cannot run it. `Bash(node bin/check-*.mjs:*)` and `Bash(node bin/test-*.mjs:*)`
+are granted alongside the shell ones for that reason. Adding a language to `bin/` without adding its
+grant leaves the reviewer quietly running fewer checks than the directory contains.
 
 **So do not give that prefix to a script that writes, publishes, deploys, or reaches the network
 beyond `gh` reads.** The two prefixes were chosen to keep `deploy.sh`, `chaos-test.sh`,
@@ -20,7 +66,7 @@ grant, and why a grant must land before the pull request that needs it - is in
 
 ## Run them all with `bin/check-all.sh`, not from memory
 
-**Before you push: `bin/check-all.sh`.** By default it globs `bin/check-*.sh` and runs them concurrently - seconds, not minutes, because a sweep slow enough to skip protects nothing. `--with-tests` adds `bin/test-*.sh`, the self-tests, which answer a different question ("do the gates still work") and are CI's job. Either way it globs, so a gate
+**Before you push: `bin/check-all.sh`.** By default it globs `bin/check-*.sh` **and `bin/check-*.mjs`**, dispatching each by extension, and runs them concurrently - seconds, not minutes, because a sweep slow enough to skip protects nothing. `--with-tests` adds `bin/test-*.sh` and `bin/test-*.mjs`, the self-tests, which answer a different question ("do the gates still work") and are CI's job. Either way it globs, so a gate
 added tomorrow is swept with no edit anywhere - nobody has to remember to register it, and nobody
 has to remember it exists.
 
@@ -93,14 +139,16 @@ Two structural guards exist and are worth copying into any new checker's self-te
 - **No `printf | grep -q` or `| awk` under `set -o pipefail`.** The early-exiting reader closes the
   pipe, the writer takes `EPIPE`, and `pipefail` promotes 141 to the pipeline's status - so *matching*
   becomes a failure. It needs more than one pipe buffer (64 KiB) of trailing input to bite, which is
-  why it survives small fixtures. Use a herestring. **`bin/check-shell-sigpipe.sh` enforces this
+  why it survives small fixtures. Use a herestring. **`bin/lib/source-patterns.mjs` (rule `sigpipe-into-grep-q`) enforces this
   across every script in this directory** and runs in CI, so a new violation fails the build rather
   than waiting to be noticed - `bin/check-review-posted.sh` shipped with one and misreported four
   PRs first. `shellcheck` does **not** catch this pattern (verified against the known-bad line,
   which it passed clean), which is why the guard is a bespoke grep rather than a linter. It
   matches every flag spelling - `-q`, `-qE`, `-Eq`, split flags (`grep -v -q`), `--quiet`,
-  `--silent` - and skips exactly two files, itself and its self-test, because both must carry
-  the anti-pattern as data. Anything else it skipped would be a violation in hiding.
+  `--silent` - and skips nothing by name. The gate it replaced had to exclude itself and its own
+  self-test, because both carried the anti-pattern as data; a rule in a `.mjs` table does not match
+  `\.(sh|bash)$` and so cannot flag itself. Its cases live in
+  [`bin/test-check-source-patterns.mjs`](test-check-source-patterns.mjs).
 - **Fixtures big enough to reach the failure.** The review gate's self-test has cases for a match
   buried mid-body and a match at the very end, and neither can trigger the bug - the first is small,
   the second has nothing following it. A case that reaches it is added in astubbs#210.

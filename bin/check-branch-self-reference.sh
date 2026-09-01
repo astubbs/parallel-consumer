@@ -148,7 +148,7 @@ for cand in "$base_ref" master; do
     git rev-parse --verify --quiet "$cand" >/dev/null 2>&1 || continue
     merge_base="$(git merge-base HEAD "$cand" 2>/dev/null || true)"
     # `if`, not `[ -n ... ] && break`: under `set -e` a false test as the last command of the loop
-    # body is fatal, which is the foot-gun bin/check-shell-sigpipe.sh's header warns about.
+    # body is fatal, which is the foot-gun the `sigpipe-into-grep-q` rule's `why` warns about.
     if [ -n "$merge_base" ]; then
         base_used="$cand"
         break

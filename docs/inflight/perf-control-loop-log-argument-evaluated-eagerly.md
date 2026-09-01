@@ -52,14 +52,14 @@ returns the NOP builder when trace is disabled, and the NOP builder never invoke
 
 Two mechanisms guard it, because neither can see what the other sees:
 
-- `bin/check-hot-log-args.sh` - a source gate. It sees the guard; ArchUnit cannot, because a guard is
-  control flow and ArchUnit reads the call graph, so an ArchUnit rule would flag the correctly-guarded
-  sites identically. Its header carries that reasoning and the denylist of scanning accessors.
+- A source gate existed and was **deleted** - one script for one rule is what
+  `bin/lib/source-patterns.mjs` replaced, and the rule was not carried over as a row. So no gate
+  catches the eager form at a new call site today; that is a known gap, not an oversight.
 - `HotPathLogArgumentsAreDeferredTest` - asserts the SLF4J behaviour the fix rests on, at a pinned
   level, with the eager form as its control arm. A source check cannot see runtime behaviour, so an
   SLF4J upgrade that evaluated suppliers eagerly would break the fix silently.
 
-The gate's own self-test, `bin/test-check-hot-log-args.sh`, exists because the check's first draft
+That gate's self-test, deleted with it, existed because the check's first draft
 used gawk's `ENDFILE` on a box whose `awk` is mawk: it parsed, ran nothing, and printed its success
 line over a file containing this exact defect.
 

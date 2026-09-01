@@ -2,6 +2,9 @@
 #
 # Copyright (C) 2026 Antony Stubbs and contributors
 #
+# shell-justified: it sources bin/torture-overnight.sh to call its functions directly, which is the
+# only way to test the verdict logic without running an eight-hour build. A Node test cannot source
+# bash functions; it could only shell out to the whole script, which is the thing being avoided.
 # Self-test for the parts of bin/torture-overnight.sh that decide what a run MEANT, plus the
 # argument parsing that decides whether it runs at all - which is where this harness has been wrong
 # three times. Nothing here needs Docker, a JDK or a broker: the reporting cases run against

@@ -1319,7 +1319,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         // including the levels production runs at. Under KEY ordering the shard map is keyed per record key, so
         // the scan grows with in-flight key cardinality exactly when the loop is spinning fastest.
         // atTrace() returns the NOP builder when trace is off, and NOP's addArgument(Supplier) never calls get()
-        // - which is what makes this free rather than merely cheap. bin/check-hot-log-args.sh enforces the rule.
+        // - which is what makes this free rather than merely cheap. HotPathLogArgumentsAreDeferredTest pins it.
         log.atTrace()
                 .addArgument(timeToBlockFor)
                 .addArgument(shouldTryCommitNow)

@@ -29,12 +29,15 @@ import static com.google.common.truth.Truth.assertThat;
  * builder regardless of level - the fix would silently stop working and nothing else in the build would notice:
  * the source still reads correctly, and the cost is a throughput number nobody is gating on.
  * <p>
- * The complementary half is {@code bin/check-hot-log-args.sh}, which catches the other direction - somebody
- * writing the eager form again. A source check cannot see SLF4J's runtime behaviour, and this test cannot see the
- * source; neither one alone closes the gap.
+ * <b>This test is the only automated guard on the rule.</b> A dedicated source gate existed briefly and was
+ * deleted: one bespoke script for one pattern is what {@code bin/lib/source-patterns.mjs} exists to replace, and
+ * the rule was not carried over as a row there. So nothing mechanical catches somebody writing the eager form
+ * again at a NEW call site - this test only proves SLF4J still behaves the way the fix depends on. If that gap
+ * ever costs something, a row in the rule table is the cheap fix, not another script.
  * <p>
- * Background: the eager form reached the control loop on astubbs/parallel-consumer#29 and is the leading candidate
- * for that branch's unexplained throughput shortfall - see
+ * Background: the eager form reached the control loop on astubbs/parallel-consumer#29, and a controlled
+ * measurement established it as the cause of that branch's throughput shortfall - roughly 43,500 records/second
+ * failing, 77,000 passing, one main-code term changed, corroborated by a two-arm local run. See
  * {@code docs/inflight/perf-control-loop-log-argument-evaluated-eagerly.md}.
  */
 class HotPathLogArgumentsAreDeferredTest {

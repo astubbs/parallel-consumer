@@ -77,22 +77,26 @@ invokes the supplier. That is what makes it free rather than merely cheap. An `i
 guard is equally correct and was the existing local idiom; the fluent form was chosen because it
 keeps the arguments beside the message instead of introducing a block. Requires SLF4J 2.x.
 
-## Two mechanisms guard it, because neither can see what the other sees
+## What guards it now, and what deliberately does not
 
-- **A source gate** (`bin/check-hot-log-args.sh`) - finds an unguarded scanning accessor in a log
-  argument. ArchUnit cannot express this: a guard is *control flow*, ArchUnit reads the call graph,
-  so it would flag the correctly-guarded neighbours identically, and a rule with permanent
-  exceptions is one nobody trusts.
-- **A behavioural test** (`HotPathLogArgumentsAreDeferredTest`) - asserts the SLF4J behaviour the fix
-  *rests on*, at a pinned level, with the eager form as its control arm. A source check cannot see
-  runtime behaviour, so a future SLF4J that evaluated suppliers eagerly would break the fix silently
-  while the source still read correctly.
+**`HotPathLogArgumentsAreDeferredTest`** asserts the SLF4J behaviour the fix *rests on*, at a pinned
+level, with the eager form as its control arm. Without it, an SLF4J upgrade that evaluated suppliers
+eagerly would break the fix silently while the source still read correctly.
 
-**The gate needed its own self-test, and that is not ceremony.** Its first draft used gawk's
-`ENDFILE` on a box whose `awk` is mawk: it parsed, matched nothing, and printed its success line over
-a file containing this exact defect. Verified against the fixed tree only, it would have shipped as a
-gate that passes everything - the false-green class this repo documents separately under
-`../workflow-issues/a-check-that-reports-success-without-having-run.md`.
+**Nothing catches the eager form being written at a NEW call site.** A bespoke source gate for this
+one pattern was written and then deleted, on the ruling that a rule should be a row in
+`bin/lib/source-patterns.mjs` rather than a script of its own. It was not carried over as a row, so
+the gap is real and known rather than overlooked. ArchUnit is not the answer either: a guard is
+*control flow*, ArchUnit reads the call graph, so it would flag the correctly-guarded neighbours
+identically, and a rule with permanent exceptions is one nobody trusts.
+
+**Building that gate taught something worth keeping even though the gate is gone.** Its first draft
+used gawk's `ENDFILE` on a box whose `awk` is mawk: it parsed, matched nothing, and printed its
+success line over a file containing this exact defect. Verified against the fixed tree only, it would
+have shipped as a gate that passes everything - the false-green class documented under
+`../workflow-issues/a-check-that-reports-success-without-having-run.md`. **A gate written to catch a
+defect must be run against a tree that still has it**, and that applies to a table row as much as to
+a script.
 
 ## What the fix was worth
 
@@ -112,5 +116,5 @@ made the comparison a control arm rather than a coincidence.
 
 `grep` for a log call whose argument list contains `(` - a method call rather than a field - and ask
 whether that method is O(1). The dangerous shape is specifically an accessor that *scans*, on a path
-that runs per-iteration. `bin/check-hot-log-args.sh` encodes the known scanning accessors; extend its
-denylist when a new one appears rather than relying on review to catch it.
+that runs per-iteration. There is no gate for it today, so this is a review-time check - and if it
+ever bites twice, the fix is a row in `bin/lib/source-patterns.mjs`, not another script.
