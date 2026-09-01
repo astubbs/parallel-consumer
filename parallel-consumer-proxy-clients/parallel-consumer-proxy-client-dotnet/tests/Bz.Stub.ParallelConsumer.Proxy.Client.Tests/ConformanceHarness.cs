@@ -22,8 +22,9 @@ internal static class Scenarios
 /// <para>THERE ARE TWO, AND THEY ANSWER DIFFERENT QUESTIONS. Both are classpath invocations rather
 /// than binaries - so "the sidecar binary" for a test is the JVM launcher and the classpath is an
 /// argument, and everything awkward about that lives here rather than in each test.</para>
-/// <para><see cref="EngineLessSidecar"/> runs <c>parallel-consumer-proxy</c>'s production
-/// <c>Main</c>. It hosts no Parallel Consumer engine: it binds, announces its port, admits one
+/// <para><see cref="EngineLessSidecar"/> runs <c>parallel-consumer-proxy</c>'s
+/// <c>NoEngineMain</c>, shipped in that module's TEST jar beside <c>TestModeMain</c>. It hosts no
+/// Parallel Consumer engine: it binds, announces its port, admits one
 /// connection under the transport's rules, and answers every session UNIMPLEMENTED
 /// (astubbs/parallel-consumer#384). A test that spawns it exercises the whole client-side path up
 /// to and including the handshake and stops exactly where the engine would begin.</para>
@@ -33,7 +34,7 @@ internal static class Scenarios
 /// </remarks>
 internal sealed record ConformanceHarness(string Path, IReadOnlyList<string> Arguments)
 {
-    private const string MainClass = "bz.stub.parallelconsumer.proxy.Main";
+    private const string MainClass = "bz.stub.parallelconsumer.proxy.NoEngineMain";
 
     private const string TestModeMainClass = "bz.stub.parallelconsumer.proxy.testmode.TestModeMain";
 

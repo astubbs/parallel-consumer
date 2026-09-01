@@ -17,8 +17,8 @@ two runs is a transport's bug rather than the suite's ambiguity.
 | Module | What it is |
 |---|---|
 | [`java-api`](parallel-consumer-proxy-client-java-api/README.md) | The user-facing surface both transports implement and the nine other languages mirror. Dependency-free: no engine, no protocol module, no protobuf, no gRPC |
-| [`java-direct`](parallel-consumer-proxy-client-java-direct/README.md) | The engine bound in-process. **Never speaks the protocol** - so it is the control arm for the shared API |
-| [`java-grpc`](parallel-consumer-proxy-client-java-grpc/README.md) | The surface over the v1 wire to a sidecar. The JVM reference implementation, which Kotlin and Scala wrap |
+| [`pc-java-direct`](parallel-consumer-proxy-client-pc-java-direct/README.md) | The engine bound in-process. **Never speaks the protocol** - so it is the control arm for the shared API |
+| [`pc-java-grpc`](parallel-consumer-proxy-client-pc-java-grpc/README.md) | The surface over the v1 wire to a sidecar. The JVM reference implementation, which Kotlin and Scala wrap |
 | [`java-harness`](parallel-consumer-proxy-client-java-harness/README.md) | **Not a product module**: the one place on the JVM side that depends on the engine, so a client wrapping a transport does not drag it into the reactor |
 
 ## What it can do today, and what it cannot
@@ -29,17 +29,17 @@ back on success, observe the session's end through `sessionEnd()`, and close cle
 
 Neither implements leases and heartbeats, the manifest reconnect, worker-death reporting, terminal
 outcomes or the shutdown drain - **un-negotiated capabilities rather than half-built features**;
-`java-grpc` declares `["dispatch"]` and nothing else, and those concepts have no meaning at all one
-layer below the wire where `java-direct` lives.
+`pc-java-grpc` declares `["dispatch"]` and nothing else, and those concepts have no meaning at all one
+layer below the wire where `pc-java-direct` lives.
 
 ## Building and testing
 
 ```bash
 ./mvnw test -pl :parallel-consumer-proxy-client-java-api -am
-./mvnw test -pl :parallel-consumer-proxy-client-java-direct -am
-./mvnw test -pl :parallel-consumer-proxy-client-java-grpc -am
+./mvnw test -pl :parallel-consumer-proxy-client-pc-java-direct -am
+./mvnw test -pl :parallel-consumer-proxy-client-pc-java-grpc -am
 ./mvnw test -pl :parallel-consumer-proxy-client-java-harness -am
-./mvnw test -pl :parallel-consumer-proxy-conformance -am -Dpc.conformance.language=java-direct,java-grpc
+./mvnw test -pl :parallel-consumer-proxy-conformance -am -Dpc.conformance.language=pc-java-direct,pc-java-grpc
 ```
 
 No Docker, no broker, and no `-Dpc.foreignClients` - these are JVM modules and the ordinary lane

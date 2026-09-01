@@ -21,13 +21,16 @@ import lombok.extern.slf4j.Slf4j;
  * fabricated {@code Configured} would be the alternative, and it would let a client believe it had
  * configured an engine that does not exist.
  *
- * <p><b>It is replaced, not extended.</b> The engine rung supplies the real
- * {@code ProxyServiceGrpc.ProxyServiceImplBase} - the connect-time configuration handler - to
- * {@code Main#sessionServiceFactory()}, and this class goes away with it. Nothing should come to depend on
- * it; the reason it is a named class rather than an anonymous subclass at the call site is so that
- * replacement is one grep rather than a reading exercise.
+ * <p><b>It was replaced in production and kept as a fixture, which is the outcome the sidecar-shell rung
+ * (astubbs/parallel-consumer#384) named in advance when it deferred the engine.</b>
+ * {@code Main#sessionServiceFactory()} now supplies the real connect-time configuration handler, so this
+ * class moved to the test tree rather than being deleted: the eight cross-language
+ * {@code SidecarHandshakeTest}s and the transport's own tests need a {@link io.grpc.BindableService} that
+ * hosts nothing, and {@link NoEngineMain} is the entry point they spawn to get one. Deleting it would have
+ * removed their subject rather than their scaffolding.
  *
  * @author Antony Stubbs
+ * @see NoEngineMain
  */
 @Slf4j
 class NoEngineSessionService extends ProxyServiceGrpc.ProxyServiceImplBase {

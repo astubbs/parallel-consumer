@@ -353,15 +353,15 @@ ${COPYRIGHT_CHECK_EXTRA_EXTRACTIONS:-}
 #
 # Demo.java is the code behind the asciinema cast README_TEMPLATE.adoc links
 # (https://asciinema.org/a/404299), written at Confluent in 2021 on `origin/presentation` and never
-# merged to any master. THE ENTRY IS AHEAD OF ITS FILE, as the extraction above is: Demo.java is
-# not tracked on master, it arrives with the classic-comparison demo work on
-# `origin/feats/classic-vertx-demo`, and only tracked files are checked - so listing it early is
-# inert rather than wrong, and stops the check ambushing that branch at merge. Its rescue ledger
-# lands on the same branch, which is why no path to it is cited here: a citation that resolves on
-# no branch a reader can reach is worse than none, and `bin/check-file-refs.sh` cannot catch one
-# written in a shell script (it reads .md/.adoc/.txt/.html only). What the verification below needs
-# is that `ffda9c6a` stays REACHABLE - archive the branch as a tag before deleting it, or the check
-# degrades from FAIL to a warning.
+# merged to any master. On master the entry is ahead of its file - Demo.java is not tracked there,
+# and only tracked files are checked, so listing it early is inert rather than wrong. ON THIS
+# BRANCH THE FILE HAS ARRIVED, together with its rescue ledger
+# `docs/inflight/branch-classic-comparison-demo.md`, so the path is cited here rather than left out:
+# the reason master omits it is that it resolved on no branch a reader could reach, and
+# `bin/check-file-refs.sh` reads .md/.adoc/.txt/.html only, so it could not have caught a stale one
+# written in a shell script. The ledger records that `origin/presentation` is to be archived as a
+# tag once the rescue lands - what the verification below needs is that `ffda9c6a` stays REACHABLE,
+# so deleting the branch without a tag degrades this check from FAIL to a warning.
 RECOVERED_FROM_UPSTREAM_BRANCH="
 parallel-consumer-vertx/src/test-integration/java/bz/stub/parallelconsumer/vertx/integrationTests/Demo.java|ffda9c6a3a9e06d948cc6130d7694b3562f63b92
 ${COPYRIGHT_CHECK_EXTRA_RECOVERIES:-}

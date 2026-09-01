@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.client.harness;
 import bz.stub.parallelconsumer.client.ClientOptions;
 import bz.stub.parallelconsumer.client.grpc.GrpcParallelConsumerClient;
 import bz.stub.parallelconsumer.proxy.Main;
+import bz.stub.parallelconsumer.proxy.NoEngineMain;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import org.junit.jupiter.api.Test;
@@ -33,12 +34,16 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 /**
  * <b>The Java client's handshake, against the real sidecar rather than a stand-in.</b> The gRPC transport
  * builds its own channel, sends {@code Configure} as the stream's first message, and reports what came back;
- * this drives that path end to end through {@code parallel-consumer-proxy}'s production entry point - the real
- * bind, the real authority allowlist, the real single-connection guard, and the real session service.
+ * this drives that path end to end through {@code parallel-consumer-proxy}'s <b>no-engine</b> entry point,
+ * {@code NoEngineMain} - the real bind, the real authority allowlist, the real single-connection guard, and a
+ * real session service, all of them the production lifecycle with one supplier swapped.
  * <p>
- * <b>What it can prove on this branch, and what it deliberately cannot.</b> The sidecar here hosts no Parallel
+ * <b>What it can prove, and what it deliberately cannot.</b> The sidecar here hosts no Parallel
  * Consumer engine and answers every session {@code UNIMPLEMENTED}, so there is no dispatch to observe and none
- * is faked. What remains is worth its own test anyway, because it is the one claim a client library makes that
+ * is faked. That is now a deliberate choice of entry point rather than the state of the build: the production
+ * {@code Main} hosts the engine, and the engine-backed run belongs to the tests that spawn it.
+ * <p>
+ * What remains is worth its own test anyway, because it is the one claim a client library makes that
  * nothing else on this rung touches: <b>the wire reaches the service, and the transport hands the caller what
  * the service said.</b> {@code SessionEndTest} drives the same transport against a fake proxy in-JVM, which
  * proves the transport's reaction to a scripted stream and nothing about whether a real server would ever
@@ -157,7 +162,7 @@ class SidecarHandshakeTest {
 
     private static Future<Integer> runSidecar(ExecutorService pool, ByteArrayOutputStream out,
                                               InputStream lifeline) {
-        return pool.submit(() -> Main.run(new String[0],
+        return pool.submit(() -> NoEngineMain.run(new String[0],
                 new PrintStream(out, true, StandardCharsets.UTF_8),
                 new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8),
                 lifeline));

@@ -25,15 +25,19 @@
         aggregator above it - the Java implementation work adds files inside these three modules,
         not entries here.
 
-        The fourth module, harness, is the one addition to that seed and it is a BUILD-GRAPH
-        module rather than a product one: it holds the engine dependency, so no module a client
-        wraps carries one. Its pom explains what that bought and how to measure it.
+        Two modules were added to that seed, and neither is a client. Harness is a BUILD-GRAPH
+        module: it holds the engine dependency, so no module a client wraps carries one. Demo is
+        the reference demo of plan unit U35 - the runnable comparison every other language's demo
+        is transcribed from, which lives beside the client library precisely so that it exercises
+        it. Both are leaves nothing depends on, which is what lets them hold an engine edge safely.
+        Each pom explains what that bought and how to measure it.
     -->
     <modules>
         <module>parallel-consumer-proxy-client-java-api</module>
         <module>parallel-consumer-proxy-client-java-direct</module>
         <module>parallel-consumer-proxy-client-java-grpc</module>
         <module>parallel-consumer-proxy-client-java-harness</module>
+        <module>parallel-consumer-proxy-client-java-demo</module>
     </modules>
 
     <!--
@@ -103,8 +107,9 @@
                 dependency-free by design. So a dismissal goes in that module's own
                 spotbugs-exclude.xml, named class by class and pattern by pattern with the reason
                 written beside it. A module-wide or pattern-wide exclusion is the thing to refuse:
-                it silences the finding for code nobody has written yet. Only the api module needs
-                one today; every other module here is clean with no filter at all.
+                it silences the finding for code nobody has written yet. Two modules need one today
+                - api, for the zero-copy contract, and demo, whose output IS pre-rendered text; the
+                rest are clean with no filter at all.
             -->
             <plugin>
                 <groupId>com.github.spotbugs</groupId>

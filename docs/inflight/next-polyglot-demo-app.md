@@ -29,3 +29,10 @@ Next step when picked up: choose an idea (21, the skateboard stack, is the faste
 running; 23, the bring-your-own-topic what-if machine, is the owner's own direction and the
 strongest adoption artifact; 25, the live performance show, is the most fully specified) and take
 it through brainstorm to a plan on `feats/proxy-requirements`.
+
+**Being partly pre-empted, deliberately (2026-08-20):**
+[`branch-classic-comparison-demo.md`](branch-classic-comparison-demo.md) takes a narrow, early cut of
+idea 23 - the classic README comparison (native client vs PC), one demo per language, with idea 23's
+dials - without waiting for a direction to be chosen here. It is not the eleven-language grid; that
+still belongs to whichever idea wins. Read it before choosing, because it will have settled the demo
+contract's shape by then.

@@ -6,9 +6,10 @@
 //! than binaries - so "the sidecar binary" for a test is the JVM launcher and the classpath is an
 //! argument - and everything awkward about that lives here rather than in each test.
 //!
-//! [`engine_less_sidecar`] runs `parallel-consumer-proxy`'s production `Main`. It hosts no Parallel
-//! Consumer engine: it binds, announces its port, admits one connection under the transport's
-//! rules, and answers every session `UNIMPLEMENTED` (astubbs/parallel-consumer#384). A test that
+//! [`engine_less_sidecar`] runs `parallel-consumer-proxy`'s `NoEngineMain`, shipped in that
+//! module's **test** jar beside `TestModeMain`. It hosts no Parallel Consumer engine: it binds,
+//! announces its port, admits one connection under the transport's rules, and answers every
+//! session `UNIMPLEMENTED` (astubbs/parallel-consumer#384). A test that
 //! spawns it exercises the whole client-side path up to and including the handshake, and stops
 //! exactly where the engine would begin.
 //!
@@ -20,8 +21,9 @@
 
 use std::path::{Path, PathBuf};
 
-/// The sidecar entry point - the production one, in the proxy module's main artefact.
-pub const MAIN_CLASS: &str = "bz.stub.parallelconsumer.proxy.Main";
+/// The no-engine sidecar entry point, in the proxy module's TEST jar: the production lifecycle with
+/// the engine supplier swapped, so a session is answered UNIMPLEMENTED and this test has a subject.
+pub const MAIN_CLASS: &str = "bz.stub.parallelconsumer.proxy.NoEngineMain";
 
 /// The engine-backed harness entry point, in the proxy module's **test** jar.
 pub const TEST_MODE_MAIN_CLASS: &str = "bz.stub.parallelconsumer.proxy.testmode.TestModeMain";

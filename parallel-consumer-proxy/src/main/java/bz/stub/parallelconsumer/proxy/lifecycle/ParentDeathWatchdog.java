@@ -43,10 +43,8 @@ import java.util.function.BooleanSupplier;
  *
  * <h2>What it does not do</h2>
  *
- * It reports death. It does not decide what happens next - today that is
- * {@code bz.stub.parallelconsumer.proxy.Main}, which closes the listener; once there is an engine it is the
- * shutdown drain's. Separating the signal from the response is what lets either be tested without killing a
- * process.
+ * It reports death. It does not decide what happens next - that is {@link DrainCoordinator}'s job, and
+ * separating the signal from the response is what lets either be tested without killing a process.
  *
  * @author Antony Stubbs
  */

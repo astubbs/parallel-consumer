@@ -16,6 +16,11 @@ import bz.stub.parallelconsumer.proxy.protocol.v1.ProxyMessage;
 import bz.stub.parallelconsumer.proxy.protocol.v1.ProxyServiceGrpc;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
+import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
+import io.grpc.netty.shaded.io.netty.channel.epoll.Epoll;
+import io.grpc.netty.shaded.io.netty.channel.epoll.EpollDomainSocketChannel;
+import io.grpc.netty.shaded.io.netty.channel.epoll.EpollEventLoopGroup;
+import io.grpc.netty.shaded.io.netty.channel.unix.DomainSocketAddress;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 import lombok.extern.slf4j.Slf4j;
@@ -92,6 +97,12 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
     private static final String LOOPBACK_HOST = "127.0.0.1";
 
     private final int port;
+
+    /** Set instead of {@link #port} when this client dials a Unix domain socket. */
+    private final java.nio.file.Path socketPath;
+
+    /** Ours only in domain-socket mode; the default channel owns its own event loop otherwise. */
+    private EpollEventLoopGroup domainSocketEventLoop;
     private final ClientOptions options;
 
     private final Object transmitLock = new Object();
@@ -149,6 +160,7 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
 
     private GrpcParallelConsumerClient(Builder builder) {
         this.port = builder.port;
+        this.socketPath = builder.socketPath;
         this.options = builder.options;
     }
 
@@ -171,7 +183,9 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
     public CompletionStage<NegotiatedSession> connect() {
         synchronized (this) {
             if (channel == null) {
-                channel = ManagedChannelBuilder.forAddress(LOOPBACK_HOST, port).usePlaintext().build();
+                channel = socketPath == null
+                        ? ManagedChannelBuilder.forAddress(LOOPBACK_HOST, port).usePlaintext().build()
+                        : domainSocketChannel();
                 requests = ProxyServiceGrpc.newStub(channel).session(new SessionObserver());
                 // connect-time configuration is the first message on the stream, and the only configuration
                 // channel there is (R39/KTD5)
@@ -179,6 +193,34 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
             }
         }
         return configured.thenApply(WireMapping::toNegotiatedSession);
+    }
+
+    /**
+     * A channel over a Unix domain socket rather than loopback TCP.
+     *
+     * <h2>Why the authority is overridden</h2>
+     *
+     * A domain socket has no host, so gRPC would synthesise an authority from the path - and the proxy's
+     * allowlist interceptor (R29) holds every client that declares one to the loopback host forms. The
+     * override declares what is true, that this is a local connection, rather than weakening the
+     * interceptor to accept a path. The browser threat that interceptor exists for cannot reach a
+     * filesystem socket at all, so nothing is being traded away here.
+     */
+    private io.grpc.ManagedChannel domainSocketChannel() {
+        if (!Epoll.isAvailable()) {
+            throw new IllegalStateException("this platform has no epoll domain-socket transport, so the "
+                    + "client cannot dial a Unix domain socket here - grpc-netty-shaded bundles the Linux "
+                    + "epoll natives and no kqueue transport, so this is expected on macOS",
+                    Epoll.unavailabilityCause());
+        }
+        domainSocketEventLoop = new EpollEventLoopGroup();
+        return NettyChannelBuilder
+                .forAddress(new DomainSocketAddress(socketPath.toFile()))
+                .eventLoopGroup(domainSocketEventLoop)
+                .channelType(EpollDomainSocketChannel.class)
+                .overrideAuthority(LOOPBACK_HOST)
+                .usePlaintext()
+                .build();
     }
 
     @Override
@@ -399,6 +441,14 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
                 Thread.currentThread().interrupt();
             }
         }
+        // Only the domain-socket path supplies its own event loop, and only its supplier may shut it down -
+        // gRPC's default channel owns its group and reuses it, so this must stay conditional. Its threads are
+        // non-daemon, so skipping this leaves the JVM alive after the application is finished with it.
+        var currentEventLoop = domainSocketEventLoop;
+        if (currentEventLoop != null) {
+            currentEventLoop.shutdownGracefully();
+            domainSocketEventLoop = null;
+        }
         endSession(null);
     }
 
@@ -529,11 +579,21 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
 
     public static class Builder {
         private int port;
+        private java.nio.file.Path socketPath;
         private ClientOptions options;
 
-        /** The sidecar's loopback port - the value it reported when it bound. Required. */
+        /** The sidecar's loopback port - the value it reported when it bound. Required unless a socket. */
         public Builder port(int port) {
             this.port = port;
+            return this;
+        }
+
+        /**
+         * Dial the sidecar's Unix domain socket instead of a loopback port - the path it reported when it
+         * bound. Linux only, including inside a container on any host.
+         */
+        public Builder socketPath(java.nio.file.Path socketPath) {
+            this.socketPath = socketPath;
             return this;
         }
 
@@ -547,8 +607,12 @@ public class GrpcParallelConsumerClient implements ParallelConsumerClient {
             if (options == null) {
                 throw new IllegalStateException("options are required");
             }
-            if (port <= 0) {
-                throw new IllegalStateException("a positive sidecar port is required");
+            if (socketPath == null && port <= 0) {
+                throw new IllegalStateException("a positive sidecar port, or a socket path, is required");
+            }
+            if (socketPath != null && port > 0) {
+                throw new IllegalStateException("give a port or a socket path, not both - they are two "
+                        + "different transports and one of them would be silently ignored");
             }
             return new GrpcParallelConsumerClient(this);
         }

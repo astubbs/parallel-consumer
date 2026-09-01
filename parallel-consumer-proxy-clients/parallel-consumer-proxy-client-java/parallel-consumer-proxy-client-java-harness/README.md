@@ -13,7 +13,7 @@
 JVM side that depends on the engine. It has no main sources and publishes nothing.
 
 It exists because a test-scope dependency is not transitive on the classpath but *is* an edge in the
-Maven reactor. While `java-grpc` test-depended on `parallel-consumer-proxy`, `-pl <anything wrapping
+Maven reactor. While `pc-java-grpc` test-depended on `parallel-consumer-proxy`, `-pl <anything wrapping
 it> -am` built the engine, and `bin/build.sh` opens with `clean` - so the routine build of a wrapper
 deleted the sidecar jar every other language's conformance test spawns. Confining that edge to a
 leaf nothing depends on is this module's whole job.
@@ -26,12 +26,12 @@ Two things live here, and they are the same thing from two sides:
   three dependencies and drifting from them.
 - **Its test tree runs the gRPC transport's harness-backed conformance suite** - the shared spike
   suite from the api module's test-jar, driven against a real gRPC server over mock Kafka clients.
-  Its evidence is recorded against `java-grpc`, where a reader looking for that transport's evidence
+  Its evidence is recorded against `pc-java-grpc`, where a reader looking for that transport's evidence
   will look.
 
 ## What it can do today
 
-Nothing an application would call. What it *proves* is `java-grpc`'s: dispatch, the user function,
+Nothing an application would call. What it *proves* is `pc-java-grpc`'s: dispatch, the user function,
 per-record outcomes, the produce payload, FIFO hand-out through one executor, the asynchronous
 processor answering off-thread, the session-end stage, and the records-out-for-processing leak
 check. Everything un-negotiated in the fan-out is un-negotiated here too - leases, heartbeats,

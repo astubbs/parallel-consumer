@@ -70,3 +70,7 @@ pressure to be under.
 Related: [`parked-chaos-suite-against-client-libraries.md`](parked-chaos-suite-against-client-libraries.md)
 covers running the *chaos* suite against the clients, and its results-channel discussion is the
 mechanism this note depends on.
+
+**Now binding on live work (2026-08-20):** the fairness charter here governs
+[`branch-classic-comparison-demo.md`](branch-classic-comparison-demo.md), which races each language's
+PC client against that language's own native client in front of users.

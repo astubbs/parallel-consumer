@@ -17,7 +17,8 @@ import org.junit.jupiter.api.{DisplayName, Test}
 /**
  * '''The Scala client's handshake, against the real sidecar rather than a stand-in.'''
  *
- * The sidecar spawned is `parallel-consumer-proxy`'s production entry point, launched as an ordinary
+ * The sidecar spawned is `parallel-consumer-proxy`'s `NoEngineMain` - the production lifecycle with
+ * the engine supplier swapped - launched as an ordinary
  * child process - so this exercises the whole lifecycle contract the specification describes and not
  * an in-process shortcut: launch directly, hold the stdin pipe, find the port line, connect to
  * loopback, put `Configure` on the wire, and turn what came back into a failed `Future`.
@@ -160,7 +161,7 @@ class SidecarHandshakeTest {
     None
   }
 
-  private val SidecarMain = "bz.stub.parallelconsumer.proxy.Main"
+  private val SidecarMain = "bz.stub.parallelconsumer.proxy.NoEngineMain"
 
   /** What the sidecar's refusal must name, so a client author does not debug their own code. */
   private val NoEngineDescription = "hosts no Parallel Consumer engine"

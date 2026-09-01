@@ -6,8 +6,8 @@ Both are JVM classpath invocations rather than binary paths, so both need the cl
 writes at ``target/sidecar-classpath.txt`` (see the ``python-e2e-harness`` profile in
 ``pom.xml``); ``make test`` produces it through the same wiring when pytest is run on its own.
 
-``engine_less_sidecar`` is the proxy module's **production** ``Main``. It hosts no Parallel
-Consumer engine - it binds, announces its port, admits one connection, and answers every session
+``engine_less_sidecar`` is the proxy module's ``NoEngineMain``, which lives in its **test**
+jar beside ``TestModeMain``. It hosts no Parallel Consumer engine - it binds, announces its port, admits one connection, and answers every session
 ``UNIMPLEMENTED`` (astubbs/parallel-consumer#384). What a test using it can prove is the whole
 client-side path up to and including the handshake, and nothing past it.
 
@@ -34,7 +34,7 @@ from parallel_consumer import SidecarCommand
 MODULE_ROOT = pathlib.Path(__file__).resolve().parent.parent
 CLASSPATH_FILE = MODULE_ROOT / "target" / "sidecar-classpath.txt"
 TEST_MODE_SIDECAR_MAIN = "bz.stub.parallelconsumer.proxy.testmode.TestModeMain"
-ENGINE_LESS_SIDECAR_MAIN = "bz.stub.parallelconsumer.proxy.Main"
+ENGINE_LESS_SIDECAR_MAIN = "bz.stub.parallelconsumer.proxy.NoEngineMain"
 
 NO_ENGINE_DESCRIPTION = "hosts no Parallel Consumer engine"
 """What the sidecar's refusal must name, so a client author does not debug their own code."""

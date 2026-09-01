@@ -17,7 +17,8 @@ import java.nio.file.attribute.PosixFilePermissions
 /**
  * **The Kotlin client's handshake, against the real sidecar rather than a stand-in.**
  *
- * The sidecar spawned is `parallel-consumer-proxy`'s production entry point, launched as an ordinary
+ * The sidecar spawned is `parallel-consumer-proxy`'s `NoEngineMain` - the production lifecycle with
+ * the engine supplier swapped - launched as an ordinary
  * child process - so this exercises the whole lifecycle contract the specification describes and not
  * an in-process shortcut: launch directly, hold the stdin pipe, find the port line, connect to
  * loopback, put `Configure` on the wire, and turn what came back into a Kotlin failure.
@@ -148,7 +149,7 @@ class SidecarHandshakeTest {
     }
 
     private companion object {
-        const val SIDECAR_MAIN = "bz.stub.parallelconsumer.proxy.Main"
+        const val SIDECAR_MAIN = "bz.stub.parallelconsumer.proxy.NoEngineMain"
 
         /** What the sidecar's refusal must name, so a client author does not debug their own code. */
         const val NO_ENGINE_DESCRIPTION = "hosts no Parallel Consumer engine"

@@ -1,0 +1,25 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+# Read this together with the Java demo's Dockerfile
+# (parallel-consumer-proxy-clients/parallel-consumer-proxy-client-java/demo/Dockerfile), which is
+# the only build in this repository whose context is the repository rather than one module.
+#
+# That departure is safe only because of this file. The rule it bends - stated in the C++ client's
+# Dockerfile - exists so a build never uploads other agents' target/ output, and concurrent
+# worktrees under .claude make that a real cost rather than a theoretical one. IF YOU ADD A BUILD
+# OUTPUT DIRECTORY TO THIS REPO, ADD IT HERE.
+#
+# The C++ and Swift client builds are unaffected: their context is their own module directory, and
+# a build reads the .dockerignore of ITS OWN context root - so this file governs only the demo
+# build. Neither of those modules carries one today, which is fine while their contexts stay small.
+
+**/target/
+**/build/
+.git/
+.claude/
+.idea/
+**/*.iml
+**/*.log
+**/node_modules/
+**/.venv/
+**/__pycache__/

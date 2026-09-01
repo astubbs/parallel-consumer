@@ -16,7 +16,7 @@ core's success and retry paths, so ordering and commit semantics are core's, unt
 
 **It is the one client that never speaks the proxy protocol**, and that is what makes it useful
 beyond convenience: it is the control arm for the shared API. A conformance scenario that passes for
-`java-grpc` and fails here is a claim about the API rather than about a stream. Its pom bans
+`pc-java-grpc` and fails here is a claim about the API rather than about a stream. Its pom bans
 protobuf, gRPC and the protocol module from the classpath in every scope, so transport detail
 leaking into the shared surface fails this module's build.
 
@@ -50,8 +50,8 @@ classpath of a test or an application you build here.
 ## Testing it
 
 ```bash
-./mvnw test -pl :parallel-consumer-proxy-client-java-direct -am
-./mvnw test -pl :parallel-consumer-proxy-conformance -am -Dpc.conformance.language=java-direct
+./mvnw test -pl :parallel-consumer-proxy-client-pc-java-direct -am
+./mvnw test -pl :parallel-consumer-proxy-conformance -am -Dpc.conformance.language=pc-java-direct
 ```
 
 The first is this module's own suite - `DirectSpikeConformanceTest`, the shared spike suite from the

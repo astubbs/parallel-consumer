@@ -21,6 +21,56 @@ Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutio
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. Mechanism known and owned (astubbs#262), quarantined - see below |
 | `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 3 seen (2026-08-18, 2026-08-19, 2026-08-25) | Not from the original scan - each found while babysitting a branch carrying **no main Java**. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third sighting carries the failing batch contents and they point at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
 
+### `ConformanceSuiteTest.conforms[5]` on the **core** binding - a record dispatched and never settled (2026-08-21, astubbs#328)
+
+Seen on astubbs#328's CI, on the `clients: kotlin` and `clients: rust` jobs. **Eight other language
+jobs ran the same suite in the same workflow and passed**, which is most of what makes this a flake
+rather than a breakage.
+
+- Scenario: `the-in-flight-ceiling-bounds-unresolved-records`, behaviour `hold-until-ceiling-full`,
+  `--expect-dispatches 6 --max-concurrency 2`.
+- Assertion: "every delivery was settled". Expected offsets `[0, 1, 2, 3, 4, 5]`, observed
+  `[0, 5, 2, 1, 4]` - **offset 3 (`ceiling-d`) was DISPATCHED and never SETTLED** before the run
+  ended. The runner exited 0.
+
+**The runner is `core`, not the language named in the job.** Every language job runs the whole
+conformance suite, and that suite includes the in-process core binding - so the failing arm involves
+no proxy, no client library and no sidecar, and which job reports it is only which one lost the
+race. Do not read "kotlin failed" as a Kotlin defect; the same sighting will appear under whichever
+language job happens to hit it next.
+
+**Not diagnosed, and the two candidates are not equivalent.** Either the CI runner is loaded enough
+that the last dispatch does not settle inside the scenario's window - ten language jobs run
+concurrently in that workflow - or core's in-flight accounting can genuinely leave a record
+unresolved at the ceiling boundary, which is the bug class this scenario exists to catch. **The
+second is the reason not to paper over it**: this scenario's whole job is to prove the in-flight
+ceiling bounds unresolved records, so a record left unresolved is exactly what it is watching for.
+
+The separating experiment is the usual one: run the scenario alone on an uncontended runner. Passing
+means contention; still failing means core, and the observation above is already the reproduction.
+
+**Do not "fix" it by extending the window or retrying.** A retry destroys the signal - the repo has
+already lost three flakes that way - and a longer window would turn a real accounting bug into a
+slower one.
+
+### `BlockedThreadAsserterTest.functionThatReturnsOnItsOwnScheduleIsRejected` - the helper's own self-test (2026-08-21, astubbs#242)
+
+Seen by a language agent during the demo fan-out, on a box at **load average 83 across 12 cores**
+(ten agents running concurrently). Filed here rather than in that agent's own note because this is
+`parallel-consumer-core`, not a client.
+
+**Diagnosed as contention, with a control rather than an assumption:** the class re-run alone passed
+**7/7**, and the agent's own module tests were green 20/20 in the same session.
+
+**It is a NEW signature on a helper that already has prior art, and the two should not be merged.**
+The existing entry for this area is about `assertUnblocksAfter` measuring 2 ms short - a timing
+margin, owned by astubbs#262. This is the helper failing to **reject** a function that returns on its
+own schedule, which is the guard's own self-test rather than its margin. Same class, different
+assertion; filing them together would hide one of them.
+
+One sighting under extreme synthetic load is not a rate, and load average 83 is not a condition CI
+reproduces. Worth knowing, not worth acting on alone.
+
 ### Four more seen under concurrent agent load, 2026-08-15 - unclassified
 
 <!-- post-merge: checked-begin -->
@@ -34,6 +84,15 @@ defect:
 - `ProxyProcessorLivenessTest.aSlowWorkerKeepsItsRecordWhileHeartbeatsContinueAndLosesItWhenTheyStop`
 - `JStreamParallelEoSStreamProcessorTest.testConsumeAndProduce` - added 2026-08-17, seen with ~60
   worktrees live on the box; passed in isolation and in the same session's full post-change run
+- `ParallelEoSStreamProcessorTest.processInKeyOrder(CommitMode)[3]` - added 2026-08-21, seen once while
+  building U10 in the proxy module (`-am` again). **A different assertion from the commit-frontier
+  symptom this file records for the same test further down**: this one failed on
+  `assertThat(polled).as("sanity check input data").hasSameSizeAs(locks)` - the check on the INPUT,
+  before the engine's behaviour is asserted at all - so do not merge the two symptoms without
+  evidence. Classified as contention by the AGENTS.md diagnostic rather than by assumption: it failed
+  inside the full parallel reactor build and then passed **3/3 uncontended** when run alone. The
+  branch that met it changed only `parallel-consumer-proxy/`, and core does not depend on that module,
+  so it could not have caused it.
 
 **Do not quarantine any of them on this evidence.** Contention on a box running many JVMs is exactly
 the condition rule 2 exists to rule out, and the first uncontended full run of

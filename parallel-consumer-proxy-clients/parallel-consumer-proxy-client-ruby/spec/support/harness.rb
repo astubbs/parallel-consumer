@@ -7,8 +7,8 @@
 # binaries - so "the sidecar binary" for a spec is the JVM launcher and the classpath is an
 # argument - and everything awkward about that lives here rather than in each spec.
 #
-# engine_less_sidecar runs parallel-consumer-proxy's production Main. It hosts no Parallel Consumer
-# engine: it binds, announces its port, admits one connection under the transport's rules, and
+# engine_less_sidecar runs parallel-consumer-proxy's NoEngineMain, which ships in that module's
+# TEST jar beside TestModeMain. It hosts no Parallel Consumer engine: it binds, announces its port, admits one connection under the transport's rules, and
 # answers every session UNIMPLEMENTED (astubbs/parallel-consumer#384). A spec that spawns it
 # exercises the whole client-side path up to and including the handshake and stops exactly where
 # the engine would begin.
@@ -17,7 +17,7 @@
 # client package. That one IS engine-backed, which is what makes the conformance scenarios below
 # runnable end to end.
 module Harness
-  MAIN_CLASS = "bz.stub.parallelconsumer.proxy.Main"
+  MAIN_CLASS = "bz.stub.parallelconsumer.proxy.NoEngineMain"
   TEST_MODE_MAIN_CLASS = "bz.stub.parallelconsumer.proxy.testmode.TestModeMain"
 
   # What the sidecar's refusal must name, so a client author does not debug their own code.

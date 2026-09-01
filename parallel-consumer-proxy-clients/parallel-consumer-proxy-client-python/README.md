@@ -116,9 +116,9 @@ The generated stubs under `src/parallel_consumer/_generated/` are **committed de
 user installing this package needs neither `protoc` nor the schema file. `make proto-check` is what
 stops the committed copy drifting from the contract.
 
-`make test` spawns two real sidecars: the production `Main`, which hosts no engine and refuses the
-session, and the test-mode sidecar (`TestModeMain --mock`) that the end-to-end test drives. The
-second lives in the proxy module's *test* jar, so both need a JVM classpath. Maven writes that
+`make test` spawns two real sidecars: `NoEngineMain`, which hosts no engine and refuses the
+session, and the test-mode sidecar (`TestModeMain --mock`) that the end-to-end test drives. Both
+live in the proxy module's *test* jar, so both need a JVM classpath. Maven writes that
 classpath under
 `target/`; running `make test` on its own drives the same Maven wiring to produce it. Under
 `./mvnw ... -Dpc.foreignClients` - the CI matrix row's command - Maven has already written it.

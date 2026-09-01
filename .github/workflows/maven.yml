@@ -155,6 +155,17 @@ jobs:
             name: "Performance Tests"
             cmd: "bin/performance-test.sh"
             timeout: 60
+          # The reference demo, through BOTH of its entry points. Separate from the integration
+          # suite because ReferenceDemoIT proves the demo's ARMS work while this proves the way a
+          # reader actually starts it - the Maven classpath step, the forked JVM the spawned
+          # sidecar depends on, the image build, the compose broker, and the exit code a scripted
+          # caller sees. Every failure this demo has had lived in that gap, and none of them was a
+          # logic error a unit test could have caught. It also covers the java-grpc-uds arm on a
+          # developer machine that cannot run it: the container is Linux whatever the host is.
+          - suite: demo
+            name: "Demo (both entry points)"
+            cmd: "bin/ci-demo-test.sh"
+            timeout: 30
           # Chaos Pain Suite - the per-PR ambient tripwire. It ran on the self-hosted `highcpu` box
           # until 2026-08-26, on the premise that it needed many real cores to provoke anything.
           # Measured head-to-head on the SAME commit (d8beb162f), that premise did not survive:

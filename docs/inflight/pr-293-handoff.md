@@ -80,3 +80,10 @@ to be discovered.
 
 astubbs/parallel-consumer#303 (`docs/module-readmes`) is stacked on this and retargets to master when
 this merges.
+
+## Stacked on this
+
+Besides astubbs#303, `feats/classic-vertx-demo` is now stacked here -
+[`branch-classic-comparison-demo.md`](branch-classic-comparison-demo.md). Its proxy-side half is
+blocked on U10, which is one of the four known-shallow items above; its rescue half is not blocked on
+anything.

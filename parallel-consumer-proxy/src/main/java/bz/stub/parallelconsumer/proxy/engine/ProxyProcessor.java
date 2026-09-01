@@ -633,6 +633,29 @@ public class ProxyProcessor extends ExternalEngine<byte[], byte[]> {
         return wm.getNumberRecordsOutForProcessing();
     }
 
+    /**
+     * How many records this proxy has handed to the client and not yet had a report for - <b>the drain's
+     * signal, and deliberately not {@link #getNumberRecordsOutForProcessing()}</b>.
+     * <p>
+     * Core's count answers "what does the engine believe is outstanding"; this one answers "what is sitting in
+     * a foreign process". KTD17 turns on the difference: core's drain guard consults neither this registry nor
+     * {@code WorkManager.hasWorkInFlight()}, and {@code ExternalEngine} forces a single worker thread that
+     * returns the moment it has dispatched - so a record inside a Python worker is invisible to the ordinary
+     * close path. The drain waits on this.
+     */
+    public int foreignRecordsInFlight() {
+        return inFlight.size();
+    }
+
+    /**
+     * How long the drain may wait for the client, as the client itself configured it in {@code Configure}.
+     * Exposed because core keeps {@code getOptions()} protected, and the lifecycle unit lives outside this
+     * package - reading one duration is a smaller seam than widening the whole options object.
+     */
+    public Duration drainTimeout() {
+        return options.getDrainTimeout();
+    }
+
     @Override
     protected boolean isAsyncFutureWork(List<?> resultsFromUserFunction) {
         // the smallest complete precedent is ReactorProcessor: recognise this engine's own sentinel type

@@ -8,8 +8,8 @@
  * `typescript-e2e-harness` profile in this module's pom.xml). Everything awkward about that lives
  * here rather than in each test.
  *
- * `engineLessSidecar` runs `parallel-consumer-proxy`'s production `Main`. It hosts no Parallel
- * Consumer engine: it binds, announces its port, admits one connection under the transport's
+ * `engineLessSidecar` runs `parallel-consumer-proxy`'s `NoEngineMain`, shipped in that module's
+ * TEST jar beside `TestModeMain`. It hosts no Parallel Consumer engine: it binds, announces its port, admits one connection under the transport's
  * rules, and answers every session `UNIMPLEMENTED` (astubbs/parallel-consumer#384). A test that
  * spawns it exercises the whole client-side path up to and including the handshake, and stops
  * exactly where the engine would begin.
@@ -30,7 +30,7 @@ import type { SidecarCommand } from "../src/index";
 
 const MODULE_ROOT = path.resolve(__dirname, "..", "..");
 const CLASSPATH_FILE = path.join(MODULE_ROOT, "target", "sidecar-classpath.txt");
-const MAIN_CLASS = "bz.stub.parallelconsumer.proxy.Main";
+const MAIN_CLASS = "bz.stub.parallelconsumer.proxy.NoEngineMain";
 const TEST_MODE_MAIN_CLASS = "bz.stub.parallelconsumer.proxy.testmode.TestModeMain";
 
 /** What the sidecar's refusal must name, so a client author does not debug their own code. */

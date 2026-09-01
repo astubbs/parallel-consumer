@@ -32,9 +32,12 @@ import (
 	"strings"
 )
 
-// MainClass is the sidecar entry point - the production one, in the proxy module's MAIN jar. It is
-// the same binary an application would spawn; nothing about this test path is a special build.
-const MainClass = "bz.stub.parallelconsumer.proxy.Main"
+// MainClass is the no-engine sidecar entry point, in the proxy module's TEST jar. It is the
+// production lifecycle - the same bind, admission rules and parent-death contract an application
+// gets - with the engine supplier swapped, so a session is answered UNIMPLEMENTED and the handshake
+// test has a subject. The production Main hosts the engine; spawning that here would leave nothing
+// to assert the refusal against.
+const MainClass = "bz.stub.parallelconsumer.proxy.NoEngineMain"
 
 // TestModeMainClass is the engine-backed harness entry point, in the proxy module's TEST jar so it
 // can never reach a client package.
