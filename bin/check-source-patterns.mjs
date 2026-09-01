@@ -42,9 +42,17 @@ const added = mergeBase
   ? sh('git', ['diff', '--name-only', '--diff-filter=A', mergeBase, 'HEAD']).split('\n').filter(Boolean)
   : null
 
-const read = f => { try { return readFileSync(f, 'utf8') } catch { return null } }
+// One read per file, not one per rule. Rules overlap - `^bin/.*\.sh$` and `\.(sh|bash)$` both match
+// every shell script in bin/ - so an uncached read is O(files x rules) for no gain.
+const contents = new Map()
+const read = f => {
+  if (!contents.has(f)) {
+    try { contents.set(f, readFileSync(f, 'utf8')) } catch { contents.set(f, null) }
+  }
+  return contents.get(f)
+}
 
-let violations = 0, inScope = 0, cannot = 0
+let violations = 0, inScope = 0, cannot = 0, baseUsed = null
 for (const rule of RULES) {
   let candidates
   if (rule.scope === 'added-files') {
@@ -53,6 +61,10 @@ for (const rule of RULES) {
       cannot++; continue
     }
     candidates = added
+    // NAME THE BASE. `origin/master` is whatever was last fetched, and a stale ref moves the merge
+    // base backwards - which makes files master added since look "new here" and flags them. Printing
+    // it is the difference between a confusing false positive and an obvious one.
+    baseUsed = mergeBase
   } else {
     candidates = tracked
   }
@@ -66,7 +78,8 @@ for (const rule of RULES) {
     if (text === null) continue
     if (rule.requires && !rule.requires.test(text)) continue
     if (rule.allowIf && rule.allowIf.test(text)) continue
-    if (rule.forbid.test(text)) hits.push(f)
+    // No `forbid` means the file's existence is the violation - see the Rule typedef.
+    if (!rule.forbid || rule.forbid.test(text)) hits.push(f)
   }
   if (hits.length === 0) continue
 
@@ -86,4 +99,5 @@ if (inScope === 0) {
   console.log('check-source-patterns: no files in scope for any rule')
   process.exit(3)
 }
-console.log(`check-source-patterns: ${RULES.length} rule(s) clean over ${inScope} file(s) in scope`)
+const against = baseUsed ? `, new-file rules against ${baseUsed.slice(0, 9)}` : ''
+console.log(`check-source-patterns: ${RULES.length} rule(s) clean over ${inScope} file(s) in scope${against}`)

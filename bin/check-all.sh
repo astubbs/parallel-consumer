@@ -138,7 +138,7 @@ failed_names=""; cannot_names=""
 # set is small enough that launching all of it and waiting once is fine; a job cap would need exactly
 # the bash 4 features that are unavailable on half the machines this runs on.
 run_capture() { # <script>|SKIP:<reason> <label> <outfile-prefix>
-    local script="$1" label="$2" pre="$3" start end rc out syntax
+    local script="$1" label="$2" pre="$3" start end rc out syntax checker runner
     case "$script" in
         SKIP:*)
             printf '%s\n%s\n%s\n' "SKIP" "0" "$label" > "$pre.meta"
@@ -270,7 +270,11 @@ sweep() { # <script>|<label> pairs, script first
 if [ "$MODE" = "all" ] || [ "$MODE" = "tests" ]; then
     echo "=== self-tests ==="
     set --
-    for t in bin/test-*.sh; do
+    # BOTH SUFFIXES, for the same reason the gates loop takes both - and this one is worse if missed.
+    # A gate the glob does not find is at least absent from the count; a SELF-TEST the glob does not
+    # find leaves its gate looking tested. bin/test-check-source-patterns.mjs was swept by nothing
+    # while bin/AGENTS.md and repo-hygiene.yml both said this glob covered it.
+    for t in bin/test-*.sh bin/test-*.mjs; do
         [ -f "$t" ] || continue
         set -- "$@" "$t" "$(basename "$t")"
     done

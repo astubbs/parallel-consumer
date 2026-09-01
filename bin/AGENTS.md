@@ -14,10 +14,11 @@ because churn is its own risk.
 **The reason is silent wrong answers, not taste.** In one session: a gate written with gawk's
 `ENDFILE` parsed cleanly under mawk - the default `awk` here - matched nothing, and printed its success
 line over a file containing the exact defect it was written to catch. `exp` turned out to be a reserved
-awk function name. And the structural evidence is stronger than either anecdote: **two entire gates
-exist only to police shell's traps** (`bin/lib/source-patterns.mjs` (rule `sigpipe-into-grep-q`),
-[`check-shell-hazards.sh`](check-shell-hazards.sh)), plus a shared helper for `grep -c` printing `0`
-and exiting `1`. When a fifth of the tooling guards the tooling, the language is the problem.
+awk function name. And the structural evidence is stronger than either anecdote: **a whole slice of
+this directory exists only to police shell's traps** - [`check-shell-hazards.sh`](check-shell-hazards.sh),
+the `sigpipe-into-grep-q` row in [`bin/lib/source-patterns.mjs`](lib/source-patterns.mjs) (its own gate
+until it was folded in), and a shared helper for `grep -c` printing `0` and exiting `1`. When that much
+of the tooling guards the tooling, the language is the problem.
 
 **Node, not Python**, and the repo already chose: `.github/scripts/` holds eight JS gate
 implementations, each with a `.test.js` sibling, against one Python file in the tree. Node is the
@@ -141,8 +142,10 @@ Two structural guards exist and are worth copying into any new checker's self-te
   PRs first. `shellcheck` does **not** catch this pattern (verified against the known-bad line,
   which it passed clean), which is why the guard is a bespoke grep rather than a linter. It
   matches every flag spelling - `-q`, `-qE`, `-Eq`, split flags (`grep -v -q`), `--quiet`,
-  `--silent` - and skips exactly two files, itself and its self-test, because both must carry
-  the anti-pattern as data. Anything else it skipped would be a violation in hiding.
+  `--silent` - and skips nothing by name. The gate it replaced had to exclude itself and its own
+  self-test, because both carried the anti-pattern as data; a rule in a `.mjs` table does not match
+  `\.(sh|bash)$` and so cannot flag itself. Its cases live in
+  [`bin/test-check-source-patterns.mjs`](test-check-source-patterns.mjs).
 - **Fixtures big enough to reach the failure.** The review gate's self-test has cases for a match
   buried mid-body and a match at the very end, and neither can trigger the bug - the first is small,
   the second has nothing following it. A case that reaches it is added in astubbs#210.

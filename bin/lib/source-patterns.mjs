@@ -5,14 +5,15 @@
 // WHY THIS FILE EXISTS
 //
 // bin/ accumulated a gate per rule, and most of them are the same program: walk some files, match a
-// regex, complain. check-shell-sigpipe.sh is one grep. check-branch-self-reference.sh is one grep with
-// an opt-out marker. Each one re-implements file walking, exclusion, an opt-out, an exit-code
+// regex, complain. check-shell-sigpipe.sh WAS one grep, and is now the `sigpipe-into-grep-q` row below.
+// check-branch-self-reference.sh is one grep with an opt-out marker. Each re-implements file walking,
+// exclusion, an opt-out, an exit-code
 // contract and a failure message, in a language where each of those is a paragraph - and each one is
 // a place for those five things to be subtly different from its neighbours.
 //
-// So: one runner, many rows. A new rule is a `{ id, why, files, forbid, allowIf, fix }` object. It
-// inherits the walking, the marker handling, the exit codes and the reporting, and it cannot drift
-// from its neighbours because there is only one implementation of all of that.
+// So: one runner, many rows. A new rule is a `{ id, why, files, forbid?, requires?, allowIf?, fix }`
+// object. It inherits the walking, the marker handling, the exit codes and the reporting, and it
+// cannot drift from its neighbours because there is only one implementation of all of that.
 //
 // CHECK WHAT WE ALREADY RUN BEFORE ADDING A ROW. This repo already has ShellCheck, SpotBugs with
 // fb-contrib/findsecbugs/findbugs-slf4j, Infer, forbiddenapis, ArchUnit and CodeQL. A rule that one of
@@ -35,7 +36,15 @@
 // and it survives long after the thing it guarded stopped mattering - which is how a linter becomes
 // noise people learn to skip.
 
-/** @typedef {{id: string, why: string, files: RegExp, forbid: RegExp, requires?: RegExp, allowIf?: RegExp, fix: string, scope?: 'added-files'}} Rule */
+/**
+ * A rule. `forbid` is OPTIONAL: omit it when the file's mere existence is the violation, which is
+ * what `new-shell-script` means. It was written as `forbid: /^/` at first - a regex that matches
+ * everything, used as a sentinel - and that is the kind of cleverness the next person adding a row
+ * has to decode before they can copy it.
+ *
+ * @typedef {{id: string, why: string, files: RegExp, forbid?: RegExp, requires?: RegExp,
+ *            allowIf?: RegExp, fix: string, scope?: 'added-files'}} Rule
+ */
 
 /** @type {Rule[]} */
 export const RULES = [
@@ -47,7 +56,6 @@ export const RULES = [
        + 'exist only to police shell traps. Existing scripts are grandfathered; this is about what is NEW.',
     scope: 'added-files',
     files: /^bin\/.*\.sh$/,
-    forbid: /^/,                        // the file existing at all is the violation
     allowIf: /shell-justified:\s*\S/,
     fix: 'Write it as .mjs, or state why shell is right: # shell-justified: <reason>',
   },
