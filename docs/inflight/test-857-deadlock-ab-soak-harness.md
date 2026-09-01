@@ -96,3 +96,37 @@ well as the control. They cannot be this deadlock - the probe result rules that 
 either the unexplained async line, a calibration overshoot, or something new. Unread at time of
 writing; `gh run view --log-failed` returns truncated noise for them, which is the failure mode
 `docs/solutions/workflow-issues/gh-run-view-log-truncation.md` already owns.
+
+## 2026-09-02: the runner's known defect is fixed, and it was worse than "needs fixing"
+
+The header carried `KNOWN DEFECT: the declines==0 window gate is right for the FIXED arm and WRONG
+for the CONTROL arm`. It is now implemented per arm, which is what that line asked for - but the gate
+had never been implemented at all, in either arm. It was a comment above a `printf`.
+
+**Why the uniform version would have inverted the result.** A blocking revoke never reaches the
+decline; it deadlocks. So on the control arm `declines == 0` is what a SUCCESSFUL reproduction looks
+like, and scoring both arms by declines discards every real control observation while keeping the
+empty ones. The arm that proves the defect exists would have been the arm scored as "no data".
+
+Now: `FIXED` needs `declines > 0`; `CONTROL` needs a failure or a timeout; either arm reports
+`DID-NOT-RUN` when the failsafe report says no test executed, so a build that ran nothing can never
+be counted as a clean run.
+
+**Three other things were wrong with the runner, none of them recorded anywhere.**
+
+- **It could only work on one machine.** Both trees and the JDK were hardcoded absolute paths, one of
+  them pointing at a worktree on `experiment/857-deadlock-control-arm-do-not-merge` - a branch whose
+  name says it is temporary. Anywhere else it measured nothing and said so only through an empty
+  tally. Both trees are now required arguments, validated for an `mvnw`, and `JAVA_HOME` must be set.
+- **It counted with `$(grep -c ... || echo 0)`**, which captures `0\n0` on no match, because `grep -c`
+  prints `0` AND exits 1. The declines and timeout columns - the two the experiment reads - would have
+  been corrupted in exactly the no-match case. `bin/lib/chaos-experiment-common.sh` has carried
+  `pc_count_matches` and a note about this trap the whole time; this script did not use it.
+- **It re-implemented `pc_failsafe_stats` inline** rather than sourcing the shared helper, so it also
+  missed `pc_classify_failsafe_stats` and had no notion of a run that executed no test.
+
+**Other instances of the count defect: one candidate, checked and dismissed.**
+`bin/test-check-quarantine-registry.sh` matches the pattern and is a **red control** - it reproduces
+the broken form deliberately so two tests can prove the real implementation differs. It was "fixed"
+during this sweep and its own tests went red, which is the control working. It now carries a comment
+saying so, because the function name alone does not.
