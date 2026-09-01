@@ -90,6 +90,17 @@ const methodSecondsFrom = files => {
 const rateFrom = text =>
   Number([...text.matchAll(new RegExp(`test=${SUBJECT}\\s.*?recordsPerSecond=(-?\\d+)`, 'g'))].pop()?.[1] ?? 0)
 
+// EVERY EXIT WRITES A REPORT. Defined here, above the first early return, because that is the whole
+// bug it exists to prevent: the first attempt at "always write a report" only covered the empty-runs
+// path, while the exit that actually fires in practice - the bootstrapping 404 below - returned
+// earlier and wrote nothing. Two exits, one reporting, and the silent one was the common case. If you
+// add an exit, it writes a report or it is the same bug again.
+const writeReport = body => {
+  mkdirSync('target', { recursive: true })
+  writeFileSync(REPORT, body + '\n')
+  console.log(body.replace(/[|*#]/g, '').replace(/\n{2,}/g, '\n'))
+}
+
 // ---- this run -----------------------------------------------------------------------------------
 const summaryFile = 'target/performance-throughput.txt'
 if (!existsSync(summaryFile) || !readFileSync(summaryFile, 'utf8').trim()) {
@@ -106,10 +117,24 @@ if (!(observedRate > 0)) {
   // A missing rate is a finding, not a quiet pass: the test did not run, or the emitter is no longer
   // reached, and both look identical to a clean lane otherwise.
   console.error(`check-throughput-regression: no usable rate for ${SUBJECT} in ${summaryFile}.`)
+  writeReport(`### 🟠 Throughput — no rate to report
+
+The performance lane ran but produced no usable \`recordsPerSecond\` for \`${SUBJECT}\`. Either the test did not run, or \`ThroughputReport\` is no longer reached.
+
+**Not a pass** — both of those look identical to a clean lane otherwise, which is exactly why this is reported rather than skipped.`)
   process.exit(CANNOT)
 }
 if (!(observedControl > 0)) {
   console.error('check-throughput-regression: no control class ran, so machine speed cannot be cancelled.')
+  writeReport(`### 🟠 Throughput — no control ran
+
+| | |
+|---|---|
+| **This run** | ${observedRate} rec/s |
+
+None of the control classes (\`${CONTROLS.join(', ')}\`) produced a time, so machine speed cannot be cancelled and no comparison is possible. The raw number above is recorded but comparable to nothing.
+
+**Not a pass.**`)
   process.exit(CANNOT)
 }
 
@@ -128,13 +153,36 @@ try {
   // workflow therefore always failed its own check, blaming the wrong thing.
   const err = `${e?.stderr ?? ''}${e?.stdout ?? ''}${e?.message ?? ''}`
   if (/404|could not find any workflows|not found/i.test(err)) {
-    console.log('check-throughput-regression: perf-baseline.yml is not on the default branch yet, so there')
-    console.log('  are no master runs to compare against. This is the bootstrapping state - it resolves')
-    console.log('  once this workflow lands on master and runs once. Not a fault.')
+    writeReport(`### ⚪ Throughput — no reference yet (bootstrapping)
+
+| | |
+|---|---|
+| **This run** | ${observedRate} rec/s |
+| Subject time | ${observedSubject.toFixed(1)}s |
+| Control time | ${observedControl.toFixed(1)}s |
+
+\`perf-baseline.yml\` is not on the default branch yet, so there are no master runs to compare against. **This is the bootstrapping state, not a fault** — it resolves once this workflow lands on master and runs once.
+
+The numbers above are this run's, recorded here rather than left in a job log.`)
     process.exit(NOTHING_IN_SCOPE)
   }
+  const firstLine = err.trim().split('\n')[0]
   console.error('check-throughput-regression: could not list master baseline runs.')
-  console.error(`  ${err.trim().split('\n')[0]}`)
+  console.error(`  ${firstLine}`)
+  writeReport(`### 🟠 Throughput — the check could not run
+
+| | |
+|---|---|
+| **This run** | ${observedRate} rec/s |
+| Subject time | ${observedSubject.toFixed(1)}s |
+
+Could not list master baseline runs, so no comparison was made:
+
+\`\`\`
+${firstLine}
+\`\`\`
+
+**This is not a pass.** A check that could not look must say so rather than stay silent.`)
   process.exit(CANNOT)
 }
 // A REPORT IS WRITTEN EVEN WITH NO REFERENCE. The first version wrote one only when it could compute a
@@ -142,12 +190,6 @@ try {
 // this lands - the check exited quietly and the PR comment never appeared at all. The PR that adds
 // throughput reporting displayed no throughput report. A report saying "here are this run's numbers,
 // there is nothing to compare them against yet" is the useful thing to post, not silence.
-const writeReport = body => {
-  mkdirSync('target', { recursive: true })
-  writeFileSync(REPORT, body + '\n')
-  console.log(body.replace(/[|*#]/g, '').replace(/\n{2,}/g, '\n'))
-}
-
 if (runs.length === 0) {
   writeReport(`### ⚪ Throughput — no reference yet
 
