@@ -1884,6 +1884,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 // toString() on user keys and values, which is what logWithoutEscaping exists to contain. Last,
                 // because logWithoutEscaping swallows whatever the lambda throws - moving this above the lines
                 // that report the failure would let a hostile toString() suppress the report itself.
+                //
+                // SLF4J's own parameter substitution is a SECOND, independent layer, not the same one said twice:
+                // logback's LoggingEvent.getFormattedMessage() formats through MessageFormatter.arrayFormat, whose
+                // safeObjectAppend catches Throwable from each argument's toString() and substitutes
+                // "[FAILED toString()]". So a hostile key or value degrades one interpolation rather than the line.
+                // It is deliberately NOT relied on: it only covers the {} arguments, and only once formatting is
+                // reached - a level-enabled check or an appender that renders the object by another route is
+                // outside it. logWithoutEscaping is the layer that holds regardless.
                 log.debug("Full context of the batch that failed in the user function: {}", context);
             });
             throw e; // trow again to make the future failed
