@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer;
  */
 
 import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
 import bz.stub.parallelconsumer.internal.utils.LogCapture;
 import bz.stub.parallelconsumer.integrationTests.AmbientProbeExtension;
 import bz.stub.parallelconsumer.integrationTests.NoAmbientProbe;
@@ -27,6 +28,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
@@ -75,24 +77,19 @@ class AmbientProbeExtensionTest {
         var context = contextFor(TimedFixture.class, "timedMethod");
         seedStart(context);
 
-        var logger = (Logger) LoggerFactory.getLogger(AmbientProbeExtension.class);
-        var appender = new ListAppender<ILoggingEvent>();
-        appender.start();
-        logger.addAppender(appender);
-        try {
+        List<String> lines;
+        try (var logs = LogCapture.of(AmbientProbeExtension.class)) {
             // end of the test METHOD: the clock stops here, but nothing is said yet - @AfterEach and
             // every AfterEachCallback still have to run, and either can fail the test
             extension.afterTestExecution(context);
             assertWithMessage("headroom must not be reported before teardown has had its say")
-                    .that(headroomLines(appender)).isEmpty();
+                    .that(headroomLines(logs)).isEmpty();
 
             // ...and teardown fails it
             extension.testFailed(context, new AssertionError("@AfterEach blew up"));
-        } finally {
-            logger.detachAppender(appender);
+            lines = headroomLines(logs);
         }
 
-        List<String> lines = headroomLines(appender);
         assertThat(lines).hasSize(1);
         assertThat(lines.get(0)).contains("outcome=FAILED");
         assertThat(lines.get(0)).contains("deadlineMs=" + TimeUnit.SECONDS.toMillis(30));
@@ -105,18 +102,13 @@ class AmbientProbeExtensionTest {
         var context = contextFor(TimedFixture.class, "timedMethod");
         seedStart(context);
 
-        var logger = (Logger) LoggerFactory.getLogger(AmbientProbeExtension.class);
-        var appender = new ListAppender<ILoggingEvent>();
-        appender.start();
-        logger.addAppender(appender);
-        try {
+        List<String> lines;
+        try (var logs = LogCapture.of(AmbientProbeExtension.class)) {
             extension.afterTestExecution(context);
             extension.testSuccessful(context);
-        } finally {
-            logger.detachAppender(appender);
+            lines = headroomLines(logs);
         }
 
-        List<String> lines = headroomLines(appender);
         assertThat(lines).hasSize(1);
         assertThat(lines.get(0)).contains("outcome=PASSED");
     }
@@ -133,11 +125,8 @@ class AmbientProbeExtensionTest {
         var measuredButUntimed = contextFor(PlainFixture.class, "plainMethod");
         seedStart(measuredButUntimed);
 
-        var logger = (Logger) LoggerFactory.getLogger(AmbientProbeExtension.class);
-        var appender = new ListAppender<ILoggingEvent>();
-        appender.start();
-        logger.addAppender(appender);
-        try {
+        List<String> lines;
+        try (var logs = LogCapture.of(AmbientProbeExtension.class)) {
             extension.afterTestExecution(timedButUnmeasured);
             extension.testSuccessful(timedButUnmeasured);
             extension.testFailed(timedButUnmeasured, new AssertionError("boom"));
@@ -145,11 +134,10 @@ class AmbientProbeExtensionTest {
             extension.afterTestExecution(measuredButUntimed);
             extension.testSuccessful(measuredButUntimed);
             extension.testFailed(measuredButUntimed, new AssertionError("boom"));
-        } finally {
-            logger.detachAppender(appender);
+            lines = headroomLines(logs);
         }
 
-        assertThat(headroomLines(appender)).isEmpty();
+        assertThat(lines).isEmpty();
     }
 
     /** Stands in for a broker IT's {@code beforeEach}, which cannot run here - see the class javadoc. */
@@ -158,8 +146,13 @@ class AmbientProbeExtensionTest {
                 .put(AmbientProbeExtension.STARTED_KEY, Instant.now().minusMillis(50));
     }
 
-    private static List<String> headroomLines(ListAppender<ILoggingEvent> appender) {
-        return appender.list.stream()
+    /**
+     * Reads through {@link LogCapture} rather than a raw {@code ListAppender}, so these tests share the helper the
+     * rest of the class uses. The marker filter is also what discharges {@code LogCapture}'s second obligation - the
+     * logger is JVM-shared and this module runs thread-parallel, so a reader must scope what it reads.
+     */
+    private static List<String> headroomLines(LogCapture logs) {
+        return logs.events().stream()
                 .map(ILoggingEvent::getFormattedMessage)
                 .filter(message -> message.contains(AmbientProbeExtension.HEADROOM_MARKER))
                 .collect(Collectors.toList());
