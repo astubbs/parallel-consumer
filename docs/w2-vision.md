@@ -1,7 +1,12 @@
-# The Hasten vision: the laws, the beats, and how the notes string together
+# The W2 vision: the laws, the beats, and how the notes string together
+
+**W2** is the project-level working codename - *"Why Wait?"* - deliberately used here so the product
+name stays adjustable; [`inflight/core-admission-scheduling-model.md`](inflight/core-admission-scheduling-model.md)
+owns the naming glossary, including why W2-the-codename is not the W2 the handoff used for the
+control plane (now *Voice*).
 
 **Live document, not a record.** It lived under `docs/plans/` as the dated vision map until
-2026-09-01 - `git log --follow -M30% -- docs/vision.md` walks through the move, and the threshold
+2026-09-01 - `git log --follow -M30% -- docs/w2-vision.md` walks through the move, and the threshold
 is needed because the promotion rewrote enough that git's default 50% similarity does not pair the
 two - and was misfiled there: a `docs/plans/` document says what was known on one day and may
 not be rewritten ([`citations.md`](citations.md)), whereas this binds a note set that keeps moving.

@@ -187,7 +187,7 @@ outlives this note moves to its owner first.
 
 - **Migrate first.** If `STRATEGY.md` takes the thesis section, the four-decision model and the
   embedded-not-cluster positioning have reached their durable owner and stop being open work here.
-  Half of that has already happened: [`docs/vision.md`](../vision.md) now **states** the four
+  Half of that has already happened: [`docs/w2-vision.md`](../w2-vision.md) now **states** the four
   decisions and the ten architectural laws they sit under, so what is open here is `STRATEGY.md`'s
   adoption of the thesis, not the model's homelessness.
   The integration filter - *what unnecessary coupling does this remove?* - is a standing test rather

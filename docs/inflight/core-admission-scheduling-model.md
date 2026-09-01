@@ -22,7 +22,8 @@ markers of semantic opacity ([`core-prescience-and-spice.md`](core-prescience-an
 **Kwisatz Haderach** - a playful alias for complete semantic Prescience, easter-egg only.
 **Naming, partially resolved:** the supplement confirms **Voice** as the authoritative control
 plane - the thing the earlier handoff called **W2** - while the owner's separate use of W2 as a
-project-level codename stands on its own. Public API names must work for people who have never
+project-level codename stands on its own - it expands to *"Why Wait?"*, the tagline, and it is the
+name [`../w2-vision.md`](../w2-vision.md) runs under. Public API names must work for people who have never
 read Dune; these stay internal/demo vocabulary.
 
 ## The hinge
