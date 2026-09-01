@@ -112,7 +112,7 @@ if [ -n "$branch_only_note" ]; then
     emit "\`$2\` documents under \`docs/\` across every ref exist only on branches that have not merged,"
     emit "so nothing below names them and no working-tree grep can reach them. To search all of it:"
     emit ""
-    emit "    node bin/prior-art.mjs <mechanism> [<mechanism>...]"
+    emit "    node bin/inflight.mjs prior-art <mechanism> [<mechanism>...]"
     emit ""
     emit "Run it before concluding \"no prior art\" - that conclusion is otherwise a false negative"
     emit "wearing the authority of a completed check."

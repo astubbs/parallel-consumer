@@ -195,7 +195,7 @@ and the traps that voided earlier experiments.
 
 | Check | Command |
 |---|---|
-| Plans, solutions and in-flight notes, **on every branch** | `node bin/prior-art.mjs <mechanism> [<mechanism>...]` |
+| Plans, solutions and in-flight notes, **on every branch** | `node bin/inflight.mjs prior-art <mechanism> [<mechanism>...]` |
 | Open PRs (collision check) | `gh pr list -R astubbs/parallel-consumer`, then `gh pr diff <n> -R astubbs/parallel-consumer --name-only` |
 | **Merged** PRs, by file | `gh pr list -R astubbs/parallel-consumer --state merged --limit 100 --json number,title,files --jq '.[] \| select(.files[]?.path \| test("<ClassName>")) \| "\(.number) \(.title)"'` |
 | Issues, `--state all` | `gh issue list -R astubbs/parallel-consumer --state all --limit 300` - fork issues *and* `upstream-mirror` ones; read the upstream original, not the mirror's summary |
@@ -204,8 +204,8 @@ and the traps that voided earlier experiments.
 - **`grep` and `find` read the working tree, and most of this repo's docs are not in it.** Roughly
   two thirds of everything under `docs/` exists only on branches that have not merged, so a
   working-tree search answers a narrower question than the table asks and returns a *false negative
-  carrying the authority of a completed check*. `bin/prior-art.mjs` searches every ref and flags each
-  hit that is missing from `origin/master`; its header explains the rest. Worked incident:
+  carrying the authority of a completed check*. `bin/inflight.mjs prior-art` searches every ref and flags
+  each hit that is missing from `origin/master`; `bin/lib/prior-art.mjs`'s header explains the rest. Worked incident:
   [`docs/solutions/workflow-issues/prior-art-lives-on-branches-2026-09-01.md`](docs/solutions/workflow-issues/prior-art-lives-on-branches-2026-09-01.md).
 - **The titles are already in your context**, injected at session start by
   `.claude/hooks/inject-recorded-knowledge.sh` - so "I did not know it existed" is not available as

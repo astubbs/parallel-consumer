@@ -105,11 +105,15 @@ search the right branch at the wrong time. Both read as "nothing found".
 
 ## The fix
 
-- **`node bin/prior-art.mjs <mechanism> [<mechanism>...]`** runs the checks across every ref in one
+- **`node bin/inflight.mjs prior-art <mechanism> [<mechanism>...]`** runs the checks across every ref in one
   command, groups hits by path rather than by ref, and flags each path missing from
   `origin/master`. It reports the size of the corpus it searched, so "nothing, across 443 refs" is a
   result rather than a blank line - the failure named in
   [`a-check-that-reports-success-without-having-run.md`](a-check-that-reports-success-without-having-run.md).
+
+  *Address repaired: this shipped as `bin/prior-art.mjs`, a script of its own. Its logic is now
+  `bin/lib/prior-art.mjs` and its front end is `bin/inflight.mjs prior-art`. Nothing the paragraph
+  above claims has changed - only where the code lives.*
   It also warns when run from the main checkout, when the last fetch is over an hour old, and when
   HEAD is behind the baseline. Cost: ~0.5s.
 - **The session-start index now states the gap in the same breath as the list** - the branch-only
@@ -139,5 +143,5 @@ search the right branch at the wrong time. Both read as "nothing found".
 - [`read-the-commits-you-inherit-2026-08-10.md`](read-the-commits-you-inherit-2026-08-10.md) - the
   staleness half of this incident, from the write side.
 - [`compound-tooling-breaks-in-worktrees-and-forks-2026-08-07.md`](compound-tooling-breaks-in-worktrees-and-forks-2026-08-07.md) -
-  the `gh` false-negative class, which `bin/prior-art.mjs` avoids by naming the repo on every call.
+  the `gh` false-negative class, which `bin/lib/prior-art.mjs` avoids by naming the repo on every call.
 - `docs/agent-harness.md` - which layers fire on their own, and which are merely available.

@@ -1,0 +1,392 @@
+// Copyright (C) 2026 Antony Stubbs and contributors
+//
+// THE PRIOR-ART SEARCH, as a library. `bin/inflight.mjs prior-art` is its only front end.
+//
+// Runs the AGENTS.md "Before you investigate anything" checks over EVERY REF, not the working tree.
+//
+// WHY THIS EXISTS. Those checks were written as working-tree greps - `ls docs/plans/`,
+// `grep -rl <mechanism> docs/solutions/`, `ls docs/inflight/`. In this repo most of the knowledge
+// base lives on unmerged branches: measured 2026-09-01, 580 of the 901 documents under `docs/`
+// across every ref exist ONLY on branches that have not merged. So a session on master cannot see
+// two thirds of its own prior art, runs all six checks, gets "nothing", and reasons from a false
+// negative - which is worse than not looking, because it carries the authority of a completed check.
+//
+// Worked incident: docs/solutions/workflow-issues/prior-art-lives-on-branches-2026-09-01.md.
+//
+// WHAT "NOTHING" MEANS HERE. Every section prints the size of the corpus it searched, and the caller
+// returns 2 if it could not search at all. A search whose empty output is indistinguishable from a
+// search that never ran is the failure in
+// docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md. "No hits across
+// 443 refs" is a result; a blank line is not.
+//
+// NOT A GATE. "No prior art found" is a successful run, nothing in CI depends on it, and neither
+// this file nor its front door takes a `check-` prefix - bin/AGENTS.md grants that prefix to the
+// review agent by pattern, and a grant is not something to acquire by accident.
+//
+// WHY IT IS A LIBRARY AND NOT A SCRIPT. It was `bin/prior-art.mjs`, a second front door beside the
+// gates. One front door is the point of bin/inflight.mjs: an agent that has to know which of N
+// scripts to reach for is an agent that reaches for `git grep` instead.
+//
+// IT RETURNS A RESULT, NOT AN EXIT CODE, AND NOT TEXT. The first cut of this split returned 0 or 2
+// and printed as it went - a shell script in Node's clothing. Three things follow from returning the
+// findings instead, and the third is the reason:
+//
+//   - The process boundary exists in exactly one place, bin/inflight.mjs, which is the only file
+//     that may call process.exit. A library that exits has decided something that is not its to
+//     decide.
+//   - The self-test asserts on structure rather than scraping stdout. A test that greps its own
+//     output cannot tell a missing hit from a changed heading.
+//   - EVERY FEATURE QUEUED BEHIND THIS ONE NEEDS THE FINDINGS, NOT THE TEXT. Comparing a note's
+//     state across branch tips, grouping hits by ref cluster rather than by path, searching headings
+//     only - each is a different view over the same `hits`, and none of them is reachable from a
+//     formatted page. Format is a consumer of the result, not the result.
+//
+// `format()` renders one for a terminal; `onSection` streams sections as they complete, because a
+// 438-ref search that prints nothing until it finishes reads as a hang.
+
+import { execFileSync } from 'node:child_process'
+import { statSync } from 'node:fs'
+
+const REPO = 'astubbs/parallel-consumer'
+
+export const summary = 'search plans, solutions, notes, commits and GitHub across EVERY ref'
+
+export const usage = `Usage: bin/inflight.mjs prior-art [--by-ref] <term> [<term>...]
+
+Terms are case-insensitive extended regexes, OR-ed together. Grep the MECHANISM, never the symptom
+- the class, the lock, the option, the exception, the log line. A failing test's name is the weakest
+search term available.
+
+  bin/inflight.mjs prior-art isTransactionCommittingInProgress acquireCommitLock
+  bin/inflight.mjs prior-art RetryQueue writeLock
+
+--by-ref groups the hits by the SET OF REFS carrying them instead of listing one line per path. Use
+it when a term returns dozens of paths: identical ref-sets mean one branch, and the per-path view
+cannot say that. A cluster whose refs are all gone is a dead branch, not prior art.`
+
+/** Run a command; return {ok, out, status}. Never throws - callers decide what a failure means. */
+function exec(cmd, args) {
+    try {
+        return { ok: true, out: execFileSync(cmd, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }), status: 0 }
+    } catch (e) {
+        return { ok: false, out: e.stdout ?? '', status: e.status ?? -1 }
+    }
+}
+
+const lines = (s) => s.split('\n').filter((l) => l.length > 0)
+
+/**
+ * @typedef {{path: string, refs: string[], onBaseline: boolean}} Hit
+ * @typedef {{n: string, heading: string, pathspec: string, hits: Hit[]}} Section
+ * @typedef {{id: string, lines: string[]}} Warning
+ *
+ * @typedef {object} PriorArtResult
+ * @property {boolean} ok        false only when the search could not run at all
+ * @property {string} [reason]   why not, when ok is false
+ * @property {string} pattern
+ * @property {string} baseline
+ * @property {number} refsSearched  printed everywhere, so "nothing" is a size and not a blank line
+ * @property {Warning[]} warnings
+ * @property {Section[]} sections
+ * @property {{term: string, entries: string[]}[]} commits
+ * @property {{ran: boolean, skipped?: string, lists: {heading: string, note?: string, entries: string[], failed: boolean}[]}} github
+ *
+ * @param {string[]} terms case-insensitive extended regexes, OR-ed together
+ * @param {{onSection?: (s: Section, r: PriorArtResult) => void, github?: boolean}} [opts]
+ *   `github: false` keeps the search entirely local - for a caller that only wants the tree, and for
+ *   the self-test, which must not depend on a rate limit shared with every parallel session here.
+ * @returns {PriorArtResult}
+ */
+export function priorArt(terms, opts = {}) {
+    /** @type {PriorArtResult} */
+    const result = {
+        ok: false, pattern: terms.join('|'), baseline: '', refsSearched: 0,
+        warnings: [], sections: [], commits: [], github: { ran: false, lists: [] },
+    }
+    const cannot = (reason) => ({ ...result, ok: false, reason })
+
+    if (terms.length === 0) return cannot('no search terms given')
+
+    // Anything the caller passes is already a regex, so a term containing `|` or parens composes.
+    const pattern = result.pattern
+
+    // Local branches plus origin's, minus the symbolic HEAD which duplicates whatever it points at.
+    // Deliberately NOT `--all`: that pulls in tags and refs/stash, which add noise without adding docs.
+    const refsResult = exec('git', ['for-each-ref', '--format=%(refname:short)', 'refs/heads', 'refs/remotes/origin'])
+    if (!refsResult.ok) return cannot('cannot list refs - is this a git repository?')
+    const refs = lines(refsResult.out).filter((r) => !r.endsWith('/HEAD'))
+    if (refs.length === 0) return cannot('no branch refs found - nothing to search')
+
+    // The ref every hit is compared against, so "not on the mainline" is a statement about a real ref
+    // rather than about whatever happens to be checked out.
+    const baseline = exec('git', ['rev-parse', '--verify', '--quiet', 'origin/master']).ok ? 'origin/master' : 'master'
+
+    result.baseline = baseline
+    result.refsSearched = refs.length
+
+    // ------------------------------------------------------------------------------------------------
+    // Freshness, collected before any result. A complete search of a stale corpus is still a false
+    // negative, and it reads exactly like a complete search of a current one.
+    //
+    // Both warnings are real incidents. On 2026-09-01 a session investigated
+    // astubbs/parallel-consumer#44 from the main checkout at the HEAD it opened with; master advanced
+    // 151 commits underneath it - including a solutions write-up on the very path under investigation
+    // - and every working-tree read answered for that snapshot without saying so.
+    // ------------------------------------------------------------------------------------------------
+    const warn = (id, ...lines) => result.warnings.push({ id, lines })
+
+    const gitDir = exec('git', ['rev-parse', '--git-dir']).out.trim()
+    const commonDir = exec('git', ['rev-parse', '--git-common-dir']).out.trim()
+    if (gitDir === commonDir) {
+        warn('main-checkout',
+            'this is the MAIN CHECKOUT, which AGENTS.md says never to work in - several',
+            'sessions share it, so its HEAD can move between two of your own commands.',
+            'Cut a worktree: git worktree add .claude/worktrees/<name> -b <branch> origin/master')
+    }
+
+    // A shallow clone does not error, it just has less history - and `git log --all -S` below then
+    // answers over a truncated corpus with no indication that it did.
+    if (exec('git', ['rev-parse', '--is-shallow-repository']).out.trim() === 'true') {
+        warn('shallow',
+            'SHALLOW clone - the commit search below covers only the fetched depth.',
+            'Run: git fetch --unshallow')
+    }
+
+    try {
+        const ageSeconds = (Date.now() - statSync(`${commonDir}/FETCH_HEAD`).mtimeMs) / 1000
+        if (ageSeconds > 3600) {
+            warn('stale-fetch',
+                `last fetch was ${Math.floor(ageSeconds / 3600)}h ago, so '${baseline}' and the ${refs.length} refs`,
+                "below are that stale. Run 'git fetch origin' and re-run.")
+        }
+    } catch {
+        warn('never-fetched', "no FETCH_HEAD - this clone may never have fetched. Run 'git fetch origin'.")
+    }
+
+    const behind = Number(exec('git', ['rev-list', '--count', `HEAD..${baseline}`]).out.trim() || '0')
+    if (behind > 0) {
+        warn('head-behind',
+            `your HEAD is ${behind} commit(s) behind ${baseline}. The search below is against the`,
+            'refs, not your working tree, so it is unaffected - but anything you read out of',
+            `the working tree is ${behind} commits old. AGENTS.md: 'Read the commits you inherit'.`)
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // Documents, across every ref. A hit records EVERY ref carrying it, not just the first: which
+    // refs carry a path is the finding, not decoration. `onBaseline` is the flag that matters - a
+    // path absent from the baseline is prior art the working tree cannot show you.
+    // ------------------------------------------------------------------------------------------------
+    // SECTION 4 EXCLUDES THE FIRST THREE EXPLICITLY. It was `docs/*.md`, which reads as "markdown
+    // directly under docs/" and is not what git does: `*` in a pathspec crosses `/` under wildmatch,
+    // so every plan, solution and note matched section 4 as well as its own, and the section headed
+    // "Everything else" was in fact "everything, again". Found by running --by-ref against this very
+    // file's history, where one note surfaced as two paths in a single cluster.
+    const SECTIONS = [
+        ['1', 'Prior investigations - docs/plans/', ['docs/plans/']],
+        ['2', 'Solved problems - docs/solutions/', ['docs/solutions/']],
+        ['3', 'In-flight state - docs/inflight/', ['docs/inflight/']],
+        ['4', 'Everything else under docs/', [
+            'docs/', ':(exclude)docs/plans/', ':(exclude)docs/solutions/', ':(exclude)docs/inflight/']],
+    ]
+    for (const [n, heading, pathspec] of SECTIONS) {
+        // git grep exits 1 for "no match" and >1 for a real error; only the latter is a problem.
+        const res = exec('git', ['grep', '-l', '-i', '-E', pattern, ...refs, '--', ...pathspec])
+        if (!res.ok && res.status > 1) {
+            return cannot(`git grep failed (status ${res.status}) on ${pathspec.join(' ')} - results are NOT trustworthy`)
+        }
+        // ref:path -> path -> carrying refs. A path can contain ':' only pathologically; split on the first.
+        const byPath = new Map()
+        for (const hit of lines(res.out)) {
+            const i = hit.indexOf(':')
+            if (i < 0) continue
+            const path = hit.slice(i + 1)
+            if (!byPath.has(path)) byPath.set(path, [])
+            byPath.get(path).push(hit.slice(0, i))
+        }
+        const section = {
+            n, heading, pathspec,
+            hits: [...byPath.keys()].sort().map((path) => ({
+                path, refs: byPath.get(path), onBaseline: byPath.get(path).includes(baseline),
+            })),
+        }
+        result.sections.push(section)
+        opts.onSection?.(section, result)
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // Code history. A mechanism that was added and later removed leaves no trace in any tree - only in
+    // commits - so a tree search cannot find the experiment that already tried what you are proposing.
+    // ------------------------------------------------------------------------------------------------
+    for (const term of terms) {
+        const res = exec('git', ['log', '--all', '--format=%h %ad %s', '--date=short', `-S${term}`])
+        const entries = lines(res.out).slice(0, 15)
+        if (entries.length > 0) result.commits.push({ term, entries })
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // GitHub. Optional - a missing or unauthenticated gh must not look like "no prior art", which is
+    // why `ran` is a field rather than an empty list.
+    //
+    // Every call names the repo. `gh` resolves a bare command against `upstream` in this fork, and a
+    // merged-PR search that silently answers for confluentinc reads exactly like "no prior art" - see
+    // docs/solutions/workflow-issues/compound-tooling-breaks-in-worktrees-and-forks-2026-08-07.md.
+    // ------------------------------------------------------------------------------------------------
+    result.ok = true
+    if (opts.github === false) {
+        result.github.skipped = 'not requested'
+        return result
+    }
+    if (!exec('gh', ['--version']).ok) {
+        result.github.skipped = 'gh not installed'
+        return result
+    }
+    if (!exec('gh', ['auth', 'status']).ok) {
+        result.github.skipped = 'gh is not authenticated'
+        return result
+    }
+    result.github.ran = true
+
+    const jqSelect = (shape) =>
+        `.[] | select((.title + " " + (.body // "")) | test("${pattern.replace(/"/g, '\\"')}"; "i")) | ${shape}`
+
+    const ghList = (heading, note, args) => {
+        const res = exec('gh', args)
+        result.github.lists.push({ heading, note, entries: lines(res.out), failed: !res.ok })
+    }
+
+    ghList('6. Open PRs whose title or body matches (collision check)', undefined,
+        ['pr', 'list', '-R', REPO, '--state', 'open', '--limit', '200', '--json', 'number,title,body',
+            '--jq', jqSelect('"  #\\(.number) \\(.title)"')])
+
+    ghList('7. MERGED PRs whose title or body matches',
+        '(the PR that already solved something in your file is, by definition, merged)',
+        ['pr', 'list', '-R', REPO, '--state', 'merged', '--limit', '200', '--json', 'number,title,body',
+            '--jq', jqSelect('"  #\\(.number) \\(.title)"')])
+
+    ghList('8. Issues, --state all (fork issues and upstream-mirror ones)',
+        "(read the upstream original, not the mirror's summary)",
+        ['issue', 'list', '-R', REPO, '--state', 'all', '--limit', '400', '--json', 'number,title,body,state',
+            '--jq', jqSelect('"  #\\(.number) [\\(.state)] \\(.title)"')])
+
+    return result
+}
+
+// ================================================================================================
+// VIEWS OVER THE RESULT. Everything below reads `PriorArtResult` and returns a string; none of it
+// runs git, and none of it decides an exit code. That separation is the point of returning findings:
+// `refClusters` below is a genuinely different answer to the same search, and it is twenty lines
+// precisely because the search handed back the data rather than a page of text.
+// ================================================================================================
+
+const cont = (lines) => lines.join('\n           ')
+
+/** The header every view shares - what was searched, and how much of it. */
+export function formatHeader(r) {
+    const out = [`prior-art: searching ${r.refsSearched} refs for /${r.pattern}/i  (baseline: ${r.baseline})\n`]
+    for (const w of r.warnings) {
+        out.push(`  ${w.id === 'head-behind' ? 'NOTE' : 'WARNING'}: ${cont(w.lines)}`)
+    }
+    if (r.warnings.length) out.push('')
+    return out.join('\n')
+}
+
+/** One section, per path. The default view, and the one streamed as sections complete. */
+export function formatSection(section, r) {
+    const out = [`=== ${section.n}. ${section.heading} ===`]
+    if (section.hits.length === 0) {
+        out.push(`  nothing, across ${r.refsSearched} refs\n`)
+        return out.join('\n')
+    }
+    for (const h of section.hits) {
+        out.push(`  ${h.path}`)
+        out.push(h.onBaseline
+            ? `      on ${r.baseline}`
+            : `      NOT ON ${r.baseline} - e.g. ${h.refs[0]} (${h.refs.length} refs)`)
+    }
+    out.push('')
+    return out.join('\n')
+}
+
+/**
+ * Group every hit by the SET OF REFS carrying it.
+ *
+ * WHY THIS EXISTS, and it is the first thing the result object bought. Dogfooding the per-path view
+ * on a term that survived only on one abandoned branch printed sixty-five lines, one per note, each
+ * saying "NOT ON origin/master" - and a reader had to compare sixty-five ref names by eye to reach
+ * the actual finding, which was "this is one dead branch". Identical ref-sets are one event in the
+ * repository's history; listing their members separately hides that behind their own volume.
+ *
+ * @returns {{refs: string[], paths: string[], onBaseline: boolean}[]} largest cluster first
+ */
+export function refClusters(r) {
+    const byKey = new Map()
+    // Deduplicated across sections: a cluster is a statement about the repository, not about how
+    // this tool happens to have partitioned its search, and counting one note twice overstates the
+    // finding. The overlapping-pathspec bug that made this bite is fixed above; the guard stays,
+    // because a future section is free to overlap deliberately.
+    const seen = new Set()
+    for (const section of r.sections) {
+        for (const h of section.hits) {
+            if (seen.has(h.path)) continue
+            seen.add(h.path)
+            const refs = [...h.refs].sort()
+            const key = refs.join(' ')
+            if (!byKey.has(key)) byKey.set(key, { refs, paths: [], onBaseline: h.onBaseline })
+            byKey.get(key).paths.push(h.path)
+        }
+    }
+    return [...byKey.values()].sort((a, b) => b.paths.length - a.paths.length)
+}
+
+export function formatByRef(r) {
+    const clusters = refClusters(r)
+    if (clusters.length === 0) return `=== hits grouped by ref-set ===\n  nothing, across ${r.refsSearched} refs\n`
+    const paths = clusters.reduce((n, c) => n + c.paths.length, 0)
+    const out = [`=== hits grouped by ref-set - ${clusters.length} cluster(s) over ${paths} path(s) ===\n`]
+    for (const c of clusters) {
+        const where = c.onBaseline
+            ? `on ${r.baseline}`
+            : `NOT ON ${r.baseline} - ${c.refs.length} ref(s): ${c.refs.slice(0, 3).join(', ')}${c.refs.length > 3 ? ', ...' : ''}`
+        out.push(`  ${c.paths.length} path(s), ${where}`)
+        for (const p of c.paths) out.push(`      ${p}`)
+        out.push('')
+    }
+    return out.join('\n')
+}
+
+/** Commits and GitHub - identical in both views, because neither is per-path. */
+export function formatTail(r) {
+    const out = ['=== 5. Commits that added or removed the term (git log --all -S) ===']
+    if (r.commits.length === 0) out.push('  nothing')
+    for (const c of r.commits) {
+        out.push(`  -- ${c.term}`)
+        for (const e of c.entries) out.push(`  ${e}`)
+    }
+    out.push('')
+
+    if (!r.github.ran) {
+        out.push(`=== 6-8. GitHub checks SKIPPED - ${r.github.skipped} ===`)
+        out.push('  These are NOT "nothing found". Run the three gh checks in AGENTS.md by hand.')
+        out.push('')
+        return out.join('\n')
+    }
+    for (const l of r.github.lists) {
+        out.push(`=== ${l.heading} ===`)
+        if (l.note) out.push(`    ${l.note}`)
+        if (l.failed) out.push('  (query failed - treat as UNKNOWN, not as nothing)')
+        else if (l.entries.length === 0) out.push('  nothing')
+        else out.push(...l.entries)
+        out.push('')
+    }
+    return out.join('\n')
+}
+
+/**
+ * The whole run as one page. `byRef` picks the view; everything else is shared. Kept separate from
+ * priorArt() so a caller that wants only the findings never pays to render them.
+ */
+export function format(r, { byRef = false } = {}) {
+    if (!r.ok) return `prior-art: ${r.reason}`
+    const middle = byRef ? [formatByRef(r)] : r.sections.map((s) => formatSection(s, r))
+    return [formatHeader(r), ...middle, formatTail(r)].join('\n')
+}
