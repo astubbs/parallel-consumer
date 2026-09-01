@@ -112,9 +112,12 @@ class ProducerManagerTest {
             @Override
             protected AbstractParallelEoSStreamProcessor<String, String> pc() {
                 if (parallelEoSStreamProcessor == null) {
-                    AbstractParallelEoSStreamProcessor<String, String> raw = super.pc();
-                    parallelEoSStreamProcessor = spy(raw);
-
+                    // Exactly one processor is constructed against this module, and that is now enforced rather
+                    // than merely intended: astubbs#322 binds a module's memoised collaborators to one owner, so a
+                    // second ParallelEoSStreamProcessor here fails with "BrokerPollSystem is already bound to a
+                    // different ParallelConsumer". This block used to call super.pc() and spy() the result first,
+                    // and both were dead - the spy was overwritten by the next statement without ever being read -
+                    // so the only thing they contributed was that second processor.
                     parallelEoSStreamProcessor = new ParallelEoSStreamProcessor<>(options(), this) {
                         @Override
                         protected boolean isTimeToCommitNow() {
