@@ -1,12 +1,12 @@
-# Run the chaos suite on a long loop under load, as the closest thing to a production deployment
+# Run the chaos suite on a long loop under load
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: blind-spot -->
 
-The suite runs once per PR and finishes in minutes. Nobody runs this library for hours under
-sustained churn, because nobody here has a production deployment to run it in - and the defects this
-project keeps finding are the ones that need time and load to appear. A long soak is the nearest
-available substitute, and it is cheap: the machine is idle overnight either way.
+The suite runs once per PR and finishes in minutes. The defects this project keeps finding are the
+ones that need time and load to appear - so the suite is weakest against exactly the shape of defect
+the work keeps turning up. A long soak supplies both, and it is cheap: the machine is idle overnight
+either way.
 
 **It has already paid for itself once.** The A/B harness (`soak-deadlock-probe.sh`, which moved to
 the overnight-harness branch - astubbs/parallel-consumer#405 - because it is the same kind of
