@@ -72,82 +72,22 @@ revoke. Cells, caveats and the two instrumentation faults caught along the way a
 `docs/solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md` and
 the probe's own Calibration status javadoc.
 
-0. **AT MERGE, DELETE SIX SCRIPTS THIS BRANCH RE-ADDS UNDER THEIR OLD NAMES - git will NOT flag
-   it.** astubbs/parallel-consumer#381 renames every experiment runner to an `exp-` prefix and lands
-   first. This branch still carries the originals, so the merge sees six *new paths* rather than six
-   conflicts, and master quietly ends up holding both copies of each - which then diverge, because
-   only one of them is the one anybody edits.
+**DONE 2026-09-01 - master is merged and all three predicted traps fired exactly as written.** The
+merge commit records each resolution; in short:
 
-   | this branch adds | astubbs/parallel-consumer#381 already put on master |
-   |---|---|
-   | `bin/exp-audit-stall-detector-silence.sh` | `bin/exp-audit-stall-detector-silence.sh` |
-   | `bin/exp-confirm-async-drain.sh` | `bin/exp-confirm-async-drain.sh` |
-   | `bin/exp-hunt-async-stall-answer.sh` | `bin/exp-hunt-async-stall-answer.sh` |
-   | `bin/exp-measure-large-instances-failure-rate.sh` | `bin/exp-measure-large-instances-failure-rate.sh` |
-   | `bin/exp-sweep-large-instances-scale.sh` | `bin/exp-sweep-large-instances-scale.sh` |
-   | `bin/exp-batch-857.sh` | `bin/exp-batch-857.sh` (also shortened) |
-   <!-- file-refs: N/A - the exp- paths deliberately do not exist on this branch; they arrive with
-        astubbs/parallel-consumer#381, and naming them is the whole point of the table -->
+- **The six scripts duplicated with ZERO conflicts reported**, as predicted. The originals are
+  deleted. Diffing first was not ceremony: the pairs differ by 33-93 lines and the `exp-` copies are
+  the improved lineage, and two of the six had no twin at all because
+  astubbs/parallel-consumer#381 had RETIRED them - re-adding those would have resurrected
+  instruments master deliberately buried.
+- **`getAssignmentSize` broke the build**, which is the good case. Fixed as prescribed rather than by
+  reverting: the public getter is gone and the failure-path dump drops the field, with the reasoning
+  left at the site.
+- **`getConsumerClass` did not come back.** Master's side won, which is what the note demanded.
 
-   **Keep the `exp-` copies and delete this branch's six.** The prefixed ones are the ones the
-   `docs/testing.md` choosing table, `bin/AGENTS.md`'s lifecycle rule and
-   `.github/workflows/experiments.yml` all name; the un-prefixed ones are referenced by nothing once
-   that lands. Diff them before deleting rather than assuming they are identical - this branch may
-   carry a fix that never made it across.
-   <!-- file-refs: N/A - names the workflow and docs that arrive with astubbs/parallel-consumer#381,
-        which is exactly why they are not on this branch yet -->
-
-   `bin/performance-test.sh` is *modified* on both sides, so that one WILL conflict and is the easy
-   case: take both edits.
-
-0b. **Then ask which of the six still deserve to exist at all, because this PR answers some of their
-   questions.** `bin/AGENTS.md` ("A script that answered its question is finished") is the rule: an
-   experiment whose question is settled has its method written up in `docs/solutions/` and its script
-   deleted. That judgement is cheapest exactly here, at the merge that answers them - nobody comes
-   back for it later, which is why `bin/` has only ever grown.
-
-   Worth re-asking one at a time: `exp-audit-stall-detector-silence` (its question is task 1 below
-   and is REOPENED, so it stays), `exp-hunt-async-stall-answer` and `exp-confirm-async-drain` (the
-   same question at two confidence levels - if the drain result is settled, one write-up replaces
-   both), `exp-batch-857` (a snapshot of what was outstanding on one day, and the shortest shelf life
-   of the six). The two `large-instances` measurements are rate instruments rather than one-shot
-   questions and survive on their own terms.
-
-   This branch's own additions get the same test, not a free pass: `bin/soak-deadlock-probe.sh`
-   drives the deterministic probe and is a regression instrument worth keeping, while
-   `bin/torture-overnight.sh` and its self-test were built for a soak that has already reported.
-
-0c. **AT MERGE, resolve a deliberate divergence: the dependency DELETED `getAssignmentSize`, and
-   this branch still calls it.** The simplify pass on astubbs/parallel-consumer#393 removed
-   `assignmentSizeCache`, `ConsumerManager.getAssignmentSize()` and the `consumer.assignment()` call
-   in `updateCache()`, on the grounds that the base commit had deleted `pausedForThrottling` for
-   being exactly that shape and that the poll hot path should read Kafka once per pass. Correct on
-   that branch, where nothing called it.
-
-   **It is not zero-caller here.** This branch adds a public
-   `AbstractParallelEoSStreamProcessor.getAssignmentSize()` delegating to the deleted method, and
-   `MultiInstanceRebalanceTest` calls it as `assignedPartitions={}` in a failure-time state dump. So
-   the merge has a decision to make, and it will surface as a compile error rather than silently -
-   which is the good case.
-
-   **The resolution is not "revert the deletion".** The caller is a diagnostic on a failure path,
-   invoked once per dump, so the per-poll cost argument that justified the deletion does not apply
-   to it: have the dump read `consumer.assignment().size()` at the point of use, or drop the field.
-   Nothing on master calls either method, so no shipped API is at stake.
-
-   **Second deletion in the same merge, and this one must NOT come back as it was.**
-   astubbs/parallel-consumer#393 also removed `ConsumerManager.getConsumerClass()`, which this
-   branch still defines. It could never have worked: `consumer` is a `ThreadConfinedConsumer` and
-   `Object.getClass()` is final, so it returned the *wrapper's* class and never
-   `KafkaConsumer`/`MockConsumer`/`LegacyKafkaConsumer`/`AsyncKafkaConsumer`. Its purpose was
-   reflective auto-commit detection, which string-matches exactly those names and then reflects into
-   fields only a real driver has - so wiring it up would have made the auto-commit-disabled check
-   fail **silently**, which is worse than not having it. If this branch wants the capability, it has
-   to unwrap the delegate rather than reinstate the method; taking this side of the conflict without
-   reading it reintroduces a check that cannot fire.
-
-<!-- post-merge: checked - describes a merge-time task on named PRs, so it reads as a record of what
-     the merge had to resolve once both have landed -->
+Of the thirteen conflicts, ten resolved to master after verifying it was the superset or successor
+each time, one (`AmbientProbeExtension`) was a genuine both-sides merge, and `ChaosChurnStormIT` took
+master's corrected calibration text over this branch's retracted claim.
 
 1. **Settle whether the stall detector MISSES real failures - REOPENED 2026-08-31.** It was closed
    on 2026-08-28 after eight replays on the pre-astubbs#344 tree, where the silence had been seen:
