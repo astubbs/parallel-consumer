@@ -51,9 +51,12 @@ boundaries:
     stops polling while draining holds its assignment without consuming, starving its own group.
   - Every rebalance callback runs on the poll thread inside poll(), so anything slow on the revoke
     path is charged against max.poll.interval.ms, and overrunning it evicts the member from the group.
-  - In transactional commit mode the revoke path waits for an in-flight transaction to finish, and
-    that wait is currently unbounded. A long transaction can therefore breach max.poll.interval.ms.
-    Tracked as astubbs/parallel-consumer#44 (confluentinc/parallel-consumer#803).
+  - In transactional commit mode the revoke path declines the same way, on a second lock. If a
+    transaction commit is already running it skips the commit rather than waiting for the producer
+    transaction lock. It used to wait there with no deadline and could breach max.poll.interval.ms,
+    which was astubbs/parallel-consumer#44 (confluentinc/parallel-consumer#803). Both commit modes
+    now decline rather than block, and both trade the same thing for it - uncommitted offsets are
+    redelivered to the new owner.
   - Eager and cooperative differ in what Kafka retains across a rebalance - notably consumer-side
     pause state, which is discarded for eager and kept for retained partitions under cooperative.
     State mirrored on top of Kafka's has to model both.
