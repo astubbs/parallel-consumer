@@ -57,6 +57,37 @@ quarantined_audit() {
         --exclude-dir=.git -A 4 "$QUARANTINE_ANNOTATION_ERE" . 2>/dev/null
 }
 
+# The annotated file whose basename is <Class>, or nothing when no annotated class has that name.
+#
+# IT IS A FUNCTION BECAUSE THE INLINE VERSION SILENTLY KILLED ITS CALLER. Every copy was
+# `f=$(quarantined_files | while read -r qf; do [ ... ] && { echo "$qf"; break; }; done)`, and under
+# `set -euo pipefail` that has two independent faults:
+#
+#   - THE NO-MATCH CASE ABORTS THE SCRIPT. A `while` carries out the status of the last command its
+#     body ran, so a final `[ ... ]` that found no match makes the loop exit 1, `pipefail` promotes
+#     it to the pipeline, the assignment takes it, and `set -e` kills the script THERE - before the
+#     caller's own message about the missing class can print. In bin/check-quarantine-registry.sh
+#     that destroyed the `DRIFT:` line for a registry entry whose class has no annotation, which is
+#     precisely the drift the gate exists to name: exit 1 was right, the explanation was gone.
+#     Control arm, same fixture, one term changed: `set -euo pipefail` printed nothing and exited 1;
+#     `set -uo pipefail` printed the full DRIFT line and exited 1.
+#   - THE `break` IS AN EARLY-EXITING PIPE READER, the EPIPE-into-`pipefail` hazard
+#     bin/check-shell-sigpipe.sh polices for `grep -q`. It needs more than one pipe buffer of
+#     pending input to bite, so it hides until the annotated-file list grows.
+#
+# So: no pipeline (a herestring), and an `if` rather than a `&&` list, because an `if` whose
+# condition is false is defined to exit 0 while a `&&` list is defined to carry the failure out.
+quarantined_file_for_class() { # <ClassName>
+    local qf
+    while IFS= read -r qf; do
+        if [ -n "$qf" ] && [ "$(basename "$qf" .java)" = "$1" ]; then
+            printf '%s\n' "$qf"
+            return 0
+        fi
+    done <<<"$(quarantined_files)"
+    return 0
+}
+
 # Registry entries, one per line: `Class.method` (or `Class` for class-level quarantines).
 registry_entries() {
     grep -E '^- \[ \] `' "$REGISTRY" 2>/dev/null | sed -E 's/^- \[ \] `([^`]+)`.*/\1/' || true
