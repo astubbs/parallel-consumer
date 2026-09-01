@@ -76,6 +76,7 @@ Relabel `bug` to `feature`: no defect is demonstrated here, and what is left is 
 
 `ProducerManager` is contended. astubbs#262 and the `fix/transactional-produce-callback-abort` branch
 both carry the produce-callback change that astubbs#261 already landed on master, so both need
+<!-- post-merge: checked -->
 reconciling against master before anything else touches the file; astubbs#257 does not go near
 `commitOffsets`. None of them changes the commit retry loop, so a taxonomy change conflicts textually
 at worst - but it must not land before astubbs#262, whose own notes record two further produce-path
