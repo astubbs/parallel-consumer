@@ -4,13 +4,17 @@
 <!-- inflight-impact: coordination -->
 
 
-A signpost, not a handover. **What is on `master` is the fork/build machinery only** - the
-`parallel-consumer-streams` module shell, its patch/regenerate discipline and the upstream-suite
-oracle, landed as the base of a reconstructed stack. It patches Kafka's processor context and record
-collector for thread safety and stops there: no PC execution seam, no dispatcher, no records through
-PC, and the module is **not published**. Everything else - the seam, the semantics, the measurements,
-the plan documents and the workstream's own in-flight notes - is still off `master`, so an agent
-listing this directory sees only sideways references to it and no way in.
+A signpost, not a handover. **What is on `master` is the machinery and the minimal execution seam** -
+the `parallel-consumer-streams` module, its patch/regenerate discipline, the upstream-suite oracle,
+and (second rung) `PcTaskDispatcher`, wake-on-work and the `StreamTask`/`StreamThread` hunks that
+reach them. Records do go through PC, **with the seam switched on**, which it is not by default.
+
+**What is still off `master`** is most of what makes that seam usable: refusing unsupported topology
+shapes (so today an unsupported one is dispatched rather than refused - the reason the seam defaults
+off), task lifecycle and rebalance, stream time and punctuation, the benchmarks and the seam-on
+upstream evidence lane, the example module, and the plan documents and in-flight notes of the
+workstream. The module is **not published** either way. So an agent listing this directory still
+sees sideways references to most of the work and no way in.
 
 **What it is.** Give a Kafka Streams topology PC's per-key concurrency by replacing Streams' record
 selection with PC's `WorkManager` and running the processor chain on PC's worker pool, applied as a
@@ -27,8 +31,8 @@ Reading the PR head as the state of the work is the mistake this note exists to 
 (`docs/plans/2026-08-31-001-process-god-branch-decomposition-plan.md`, Wagon B) reconstructs it as a
 fresh stack cut from `master`, taking content from the forest by copy: the forest stays as the
 evidence record, and the PRs document what the design *is* rather than how it was discovered. The
-machinery described above is the first rung; the seam is the second. The forest branches are not
-retired by any of this and are still where the unlanded work lives.
+machinery described above is the first rung; the seam is the second, and both have landed. The forest
+branches are not retired by any of this and are still where the unlanded work lives.
 <!-- file-refs: N/A - the decomposition plan arrives on master with its own PR, not with the first rung -->
 
 

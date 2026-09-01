@@ -35,21 +35,30 @@ class ShadowedClassLoadingTest {
             AbstractProcessorContext.class,
             ProcessorContextImpl.class,
             RecordCollectorImpl.class,
+            // Moved up from JAR_RESIDENT by the execution seam. The rung below this one (astubbs#379) put
+            // them in the jar-resident set precisely so that this assertion would have to flip, visibly, on
+            // the day the generated set grew - which is today. StreamTask is the seam; StreamThread is the
+            // poll wait wake-on-work splits.
+            StreamTask.class,
+            StreamThread.class,
     };
 
     /**
      * Classes we deliberately do <em>not</em> generate. They must still load from the jar - that is what makes
      * this "shadowing" rather than "a fork": the two sets have to coexist in one runtime package.
      * <p>
-     * {@link StreamTask} is the interesting one, and it is here rather than above on purpose. It is the class
-     * the execution seam will patch next, and it is the immediate neighbour of all three generated classes -
-     * it constructs the context and drives the collector. Asserting that it still comes from the jar is
-     * therefore the sharpest available check that the generated set is exactly what the pom declares, and it
-     * is what will have to change, visibly, when the seam arrives.
+     * Chosen for adjacency, not convenience: {@code PartitionGroup} is the buffer the seam bypasses,
+     * {@code RecordQueue} is reached into by the seam's own record preparation, and {@code TaskManager}
+     * constructs {@code StreamTask} on the StreamThread. If generation were ever to sprawl past the declared
+     * set, these are the first three it would reach.
+     * <p>
+     * Named as strings rather than imported because two of the sharpest neighbours are package-private, and
+     * a check that can only name public classes cannot pick its own subjects.
      */
-    private static final Class<?>[] JAR_RESIDENT = {
-            StreamTask.class,
-            StreamThread.class,
+    private static final String[] JAR_RESIDENT_NAMES = {
+            "org.apache.kafka.streams.processor.internals.PartitionGroup",
+            "org.apache.kafka.streams.processor.internals.RecordQueue",
+            "org.apache.kafka.streams.processor.internals.TaskManager",
     };
 
     @Test
@@ -71,7 +80,7 @@ class ShadowedClassLoadingTest {
 
     @Test
     void unGeneratedSiblingsStillComeFromTheJar() {
-        for (Class<?> resident : JAR_RESIDENT) {
+        for (Class<?> resident : jarResidentClasses()) {
             URL location = codeSourceOf(resident);
             log.info("{} loaded from {}", resident.getSimpleName(), location);
 
@@ -92,7 +101,7 @@ class ShadowedClassLoadingTest {
     @Test
     void generatedAndJarClassesShareOneRuntimePackage() {
         for (Class<?> generated : GENERATED) {
-            for (Class<?> resident : JAR_RESIDENT) {
+            for (Class<?> resident : jarResidentClasses()) {
                 assertThat(generated.getPackage().getName())
                         .as("%s must sit in the same package as the jar-resident classes it reaches into", generated.getName())
                         .isEqualTo(resident.getPackage().getName());
@@ -104,6 +113,26 @@ class ShadowedClassLoadingTest {
                         .isSameAs(resident.getClassLoader());
             }
         }
+    }
+
+    /**
+     * Loads {@link #JAR_RESIDENT_NAMES} through the same classloader that loaded this test, which is the one
+     * whose classpath ordering the whole module depends on. A name that does not resolve fails here rather
+     * than silently shrinking the check to whatever still exists after a Kafka upgrade.
+     */
+    private static Class<?>[] jarResidentClasses() {
+        Class<?>[] resolved = new Class<?>[JAR_RESIDENT_NAMES.length];
+        for (int i = 0; i < JAR_RESIDENT_NAMES.length; i++) {
+            try {
+                resolved[i] = Class.forName(JAR_RESIDENT_NAMES[i], false,
+                        ShadowedClassLoadingTest.class.getClassLoader());
+            } catch (ClassNotFoundException e) {
+                throw new AssertionError(JAR_RESIDENT_NAMES[i] + " is named as a jar-resident neighbour but "
+                        + "does not exist - Kafka has moved or renamed it, and this check is now guarding "
+                        + "nothing. Pick another adjacent class rather than deleting the entry.", e);
+            }
+        }
+        return resolved;
     }
 
     private static URL codeSourceOf(Class<?> type) {

@@ -1,21 +1,54 @@
-# `parallel-consumer-streams` - patching Kafka Streams without vendoring or forking it
+# `parallel-consumer-streams` - a Kafka Streams topology on Parallel Consumer's worker pool
 
-> ## ALPHA. EXPERIMENTAL. NOT PUBLISHED.
+> ## ALPHA. EXPERIMENTAL. NOT PUBLISHED. SEAM OFF BY DEFAULT.
 > This module is in the reactor so the machinery below can be built and reviewed. It is **not**
 > published to Maven Central, deliberately - see
 > [The classpath hazard this module does not solve](#the-classpath-hazard-this-module-does-not-solve).
 > Tracking issue: [astubbs#255](https://github.com/astubbs/parallel-consumer/issues/255).
 
-**What is here today is the build machinery and its oracle, and nothing else.** Apache Kafka Streams'
-`processor.internals` package is package-private, explicitly not an API, and has no seam at the point
-Parallel Consumer needs one. This module establishes a repeatable way to change those internals - one
-that keeps no Apache source in this repository, states the size of the change as a reviewable number,
-and fails at build time rather than at runtime when the change stops applying.
+Apache Kafka Streams parallelises across *partitions*. Inside one partition,
+`PartitionGroup.nextRecord()` hands records over strictly one at a time, so one slow record delays
+everything queued behind it whatever key it carries. That serialisation has no semantic justification
+when the records are on different keys, and removing it is what this module is for: `StreamTask`'s
+record selection is replaced by Parallel Consumer's `WorkManager` and a worker pool, so records on
+distinct keys of one partition run concurrently through the *unmodified* processor chain. A topology's
+own code does not change.
 
-**What is not here: the Parallel Consumer execution seam.** No record goes through Parallel Consumer
-in this module today. `StreamTask` is not patched, there is no dispatcher, and there is no switch. That
-work arrives in the PR stacked on this one, and it is what
-[astubbs#271](https://github.com/astubbs/parallel-consumer/pull/271) was cut from.
+`processor.internals` is package-private, explicitly not an API, and offers no seam where this needs
+one - so the module also carries a repeatable way to change those internals that keeps no Apache
+source in this repository, states the size of the change as a reviewable number, and fails at build
+time rather than at runtime when the change stops applying.
+
+## Turning it on, and why it is off
+
+```
+-Dpc.streams.dispatch.enabled=true
+```
+
+**The seam is OFF by default. This is an opt-in preview, and the reason is a missing refusal rather
+than caution.** Joins, windows, suppression, exactly-once and stream-time punctuation are unsupported
+on the PC path *and are not yet refused* - a topology using one of them is dispatched anyway and gets
+wrong behaviour, with nothing in the log to say so. Until that refusal envelope exists, the only
+honest default is one that cannot silently mis-run a topology nobody checked.
+
+Two further switches, both process-wide for the reason given in
+[`PcDispatchSwitch`](src/main/java/bz/stub/parallelconsumer/streams/PcDispatchSwitch.java) (there is
+no seam through `KafkaStreams` to inject a collaborator):
+
+| Property | Default | What it does |
+|---|---|---|
+| `pc.streams.dispatch.enabled` | `false` | the seam itself |
+| `pc.streams.dispatch.poolSize` | `4` | worker threads per task, and PC's `maxConcurrency` |
+| `pc.streams.wakeOnWork.enabled` | `true` | the split poll wait; unreachable while the seam is off |
+
+A value that is neither `true` nor `false` throws rather than being read as the default - a typo in
+the property that selects an arm would otherwise produce a run that looks like the arm you asked for
+and is not.
+
+**Being process-wide is a real limitation, not a simplification.** Two `KafkaStreams` instances in one
+JVM cannot be configured differently. What that would take, and the unfinished implementation of it,
+is recorded in
+[`docs/inflight/streams-dispatch-switch-is-jvm-wide-not-per-instance.md`](../docs/inflight/streams-dispatch-switch-is-jvm-wide-not-per-instance.md).
 
 ---
 
@@ -48,6 +81,8 @@ through a second, smaller patch, for the reason given below.
 | `AbstractProcessorContext` | the current record context and current processor node move from two `protected` fields to thread-confined ones | stock Streams holds one of these per task and gets away with it because exactly one thread is ever inside the task |
 | `ProcessorContextImpl` | reads and writes them through the accessors instead of the inherited fields | it is a subclass doing `getfield`/`putfield` on those fields, so leaving it alone defeats the confinement *with no compile error to say so* |
 | `RecordCollectorImpl` | two `HashMap`s become `ConcurrentHashMap`s | written from the producer's I/O thread for every in-flight send; the compiler would never have demanded this class, so it is named rather than discovered |
+| `StreamTask` | record selection and the commit gates ask the dispatcher instead of the partition group; the processor chain runs on a worker | **the seam itself**, and the only class here that references Parallel Consumer - which is what let the machinery rung land the three above without it |
+| `StreamThread` | the poll wait is split: a short poll, then a wait on our own condition that a worker completion ends | it owns the only blocking wait in the run loop, and nothing else can split it - see [wake-on-work](#wake-on-work-why-the-poll-wait-is-split) |
 
 That is the whole patch. The set is **named in the pom, not discovered**
 (`patched.classes`), and the stop-threshold is stated there: if it has to grow much past a dozen, the
@@ -69,14 +104,19 @@ itself, beautifully. So each claim here has a control.
 
 [`ShadowedClassLoadingTest`](src/test/java/bz/stub/parallelconsumer/streams/ShadowedClassLoadingTest.java)
 asserts it directly rather than inferring it from behaviour: each generated class loads from a code
-source under `/classes/` and not a `.jar`; `StreamTask` and `StreamThread`, which are deliberately
-*not* generated, still load from the jar - which is what makes this shadowing rather than a fork; and
-every generated class shares both a package name and a **classloader** with them, because different
-classloaders split the package and break package-private access while the names still match.
+source under `/classes/` and not a `.jar`; `PartitionGroup`, `RecordQueue` and `TaskManager`, which
+are deliberately *not* generated, still load from the jar - which is what makes this shadowing rather
+than a fork; and every generated class shares both a package name and a **classloader** with them,
+because different classloaders split the package and break package-private access while the names
+still match.
 
-`StreamTask` is the sharp one. It is the immediate neighbour of all three patched classes and the
-class the seam will patch next, so "it still comes from the jar" is the tightest available statement
-that the generated set is exactly what the pom declares.
+The jar-resident three are chosen for adjacency, not convenience: `PartitionGroup` is the buffer the
+seam bypasses, `RecordQueue` is reached into by the seam's own record preparation, and `TaskManager`
+constructs `StreamTask`. If generation ever sprawled past the declared set, those are the first three
+it would reach.
+
+`StreamTask` and `StreamThread` used to be that list, on the machinery rung, precisely so the
+assertion would have to flip *visibly* on the day the generated set grew. It flipped here.
 
 ### An empty patch is a no-op, and that is checked by the tooling
 
@@ -89,22 +129,58 @@ between the technique and the change.
 ### Apache Kafka's own test suite, run against the patched classes
 
 Kafka publishes its **compiled** tests to Maven Central. This module takes them as a `test`-classifier
-dependency and points a dedicated surefire execution at them, so Kafka's own
-`StreamTaskTest`, `RecordCollectorTest` and `ProcessorContextImplTest` exercise **our**
-`AbstractProcessorContext`, **our** `ProcessorContextImpl` and **our** `RecordCollectorImpl`. Nothing
-is excluded, rewritten, recompiled or relaxed. It runs in the module's normal `test` phase, on every
-build, with no profile and no flag.
+dependency and points a dedicated surefire execution at them, so Kafka's own `StreamTaskTest`,
+`StreamThreadTest`, `RecordCollectorTest` and `ProcessorContextImplTest` exercise **our** copies of
+the five patched classes. Nothing is excluded, rewritten, recompiled or relaxed. It runs in the
+module's normal `test` phase, on every build, with no profile and no flag.
 
 That is the behaviour-preservation claim, and it is the strongest one available: **anything the patch
 broke that Kafka tested, fails here.**
 
-> **Re-derive the counts; never copy them.** They move with the patch, with `kafka.version`, and they
-> will move again when the seam arrives. Run the module's whole `test` phase and read the per-class
-> numbers out of `target/surefire-reports-kafka-upstream/`.
+**The claim is about the patch, and it only means anything with the seam OFF**, so that execution
+pins `pc.streams.dispatch.enabled=false` rather than inheriting whatever the default happens to be.
+The pin is not redundant with the default being off today - deleting it would make the oracle
+silently follow the default the day it moves.
+
+Some of `StreamThreadTest` is skipped, by Kafka's own `assumeTrue`/`assumeFalse` on its
+`stateUpdaterEnabled` x `processingThreadsEnabled` parameter matrix. Those assumptions are evaluated
+on the first line of each method, from the test's own parameters, before any patched code runs -
+so nothing in this patch can influence them. That is a mechanism, not a measurement, which is why it
+is stated here without a number.
+
+> **Re-derive the counts; never copy them.** They move with the patch, with `kafka.version`, and with
+> the seam. Run the module's whole `test` phase and read the per-class numbers out of
+> `target/surefire-reports-kafka-upstream/`.
 >
 > **Do not scope the run with `-Dtest=`.** It silently overrides that execution's `<includes>`, so
 > Kafka's suite does not run at all - and the build still goes green, with the number you were
 > checking never computed. It has cost several people a whole run.
+
+### Wake-on-work: why the poll wait is split
+
+`StreamThread` polls the consumer and runs the topology on **one** thread, so blocking in
+`Consumer#poll()` for the full `poll.ms` costs stock Kafka Streams nothing - there is by definition no
+processing it could be doing instead. Hand records to a worker pool and that inverts: records complete
+*during* the poll wait, and neither their completions nor the records they unblock can move until poll
+returns. Worse, the inner work loop breaks back out to poll whenever a pass dispatched nothing - which
+under an asynchronous dispatcher also means "the pool is full" or "every available key is already in
+flight", states that resolve on a worker completion and never on a broker fetch. The loop therefore
+chooses to block at precisely the moments a completion is imminent.
+
+So the patched `StreamThread` polls briefly to collect whatever the broker already has, then waits on
+[`PcWorkSignal`](src/main/java/bz/stub/parallelconsumer/streams/PcWorkSignal.java) for the rest of its
+budget, and a worker completion ends that wait immediately. It is deliberately **not**
+`KafkaConsumer#wakeup()`: that word already means *shutdown* to Kafka Streams, and a wake delivered
+while the thread is not polling arms the *next* poll instead, so a stray completion could swallow a
+shutdown - a failure that shows up once in a thousand shutdowns and never reproduces on demand.
+
+**Wake-on-work was measured as roughly two thirds of the backlog benefit**, by ablating it rather than
+by arguing from mechanism - which had predicted the opposite, that a saturated topic would leave the
+split wait idle. That measurement, its refuted prediction and its arms are owned by
+[`docs/solutions/best-practices/ablate-your-own-change-not-only-the-baseline.md`](../docs/solutions/best-practices/ablate-your-own-change-not-only-the-baseline.md);
+**this rung does not re-derive it and no figure is repeated here**, because the benchmark that
+produces one is a separate unit and a number copied out of its write-up drifts silently from it. What
+this rung ships is the mechanism and the tests that show it is load-bearing.
 
 ---
 
