@@ -340,6 +340,7 @@ An overnight rotation of five chaos scenarios on an idle M2 desktop (`bin/tortur
 across four times as many cycles.** Whatever this is, it is specific to W1 and it is not ambient
 load - which is the control arm this file has never had, and it arrived for free. The run's
 `SUMMARY.md` carries the per-scenario tallies; `grep 'END ' tally.tsv` reproduces them.
+<!-- file-refs: N/A - the harness moved to branch test/overnight-torture-harness-v2; named here as the instrument that produced these runs, not as a file in this tree -->
 
 The four are not one signature. They are three:
 
@@ -385,6 +386,7 @@ cycle, records `diag=ACTIVE|NOT-ENGAGED` so an ignored flag cannot pass for an e
 prints a drain verdict computed from the samples **after** the violation. It is deliberately not a
 binary: `CLIMBED`, `CREEPING`, `FLAT`, `RECEDED` and several "cannot judge" answers are distinct,
 because collapsing any pair reintroduces a specific wrong reading. The script header owns the set.
+<!-- file-refs: N/A - the harness moved to branch test/overnight-torture-harness-v2; named here as the instrument that produced these runs, not as a file in this tree -->
 
 **And it repeated this file's own instrument defect, in mirror image.** The classifier above once
 called every drained run `FLAT`; the first version of this `drain=` verdict compared the first
@@ -394,3 +396,4 @@ opposite direction, and the dangerous one: it reports the interesting result as 
 Caught by `bin/test-torture-overnight.sh`, whose `wedge` case fails against the old logic and passes
 against the new. The lesson this file already records - a wrong verdict on a right number reads as a
 finding - held for the second time in four days.
+<!-- file-refs: N/A - the harness moved to branch test/overnight-torture-harness-v2; named here as the instrument that produced these runs, not as a file in this tree -->

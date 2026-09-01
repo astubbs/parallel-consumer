@@ -52,6 +52,7 @@ something the run emits at a level that reaches the file you are grepping: harne
 `bz.stub.parallelconsumer.integrationTests` sit at `info`, which is why `ManagedPCInstance` logs the
 commit mode itself and `bin/torture-overnight.sh` reads the mode from there.
 [`docs/logging.md`](logging.md) owns the profiles and the levels.
+<!-- file-refs: N/A - the harness moved to branch test/overnight-torture-harness-v2; it is named here as the instrument these runs used, not as a file in this tree -->
 
 ## Designing a liveness check
 

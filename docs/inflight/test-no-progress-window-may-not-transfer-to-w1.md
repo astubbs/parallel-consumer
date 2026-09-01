@@ -20,6 +20,7 @@ for it either:
 | `bug-857-family.md`'s fourteenth sighting (from astubbs/parallel-consumer#347) | `NO_PROGRESS, fleet stuck at 97896/100000` - 30s against a 30s bound | **`1521825993857670757`** |
 | Torture soak 2026-08-29, cycle 51 (`bin/torture-overnight.sh`) | `fleet consumed count stuck at 97386/100000 for 30s (bound 30s)` | **`87978223167568`** |
 | Torture soak 2026-08-29, cycle 166 | `fleet consumed count stuck at 97297/100000 for 30s (bound 30s)` | **`106062481479157`** |
+<!-- file-refs: N/A - the harness moved to branch test/overnight-torture-harness-v2; named here as the instrument that produced these runs, not as a file in this tree -->
 
 **The soak gives this line its first RATE, and its first control arm.** `NO_PROGRESS` killed
 roughly one `ChaosChurnStormIT` cycle in twenty, on an otherwise idle desktop, while the other four
@@ -80,6 +81,7 @@ A repeat soak now answers this without anyone reading a log: `bin/torture-overni
 recovery diagnostic on every cycle and prints a drain verdict per cycle.
 [`test-857-churn-storm-async-stalls.md`](test-857-churn-storm-async-stalls.md) **owns that
 mechanism** - what it records, and the instrument defect its first version repeated.
+<!-- file-refs: N/A - the harness moved to branch test/overnight-torture-harness-v2; it is named here as the instrument these runs used, not as a file in this tree -->
 
 ## Related
 

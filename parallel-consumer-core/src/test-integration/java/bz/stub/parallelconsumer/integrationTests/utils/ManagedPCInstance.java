@@ -207,8 +207,11 @@ public class ManagedPCInstance implements Runnable {
             // to warn by the test log config, so it never appears and the mode a run actually used
             // is unobservable after the fact. `bz.stub.parallelconsumer.integrationTests` is at
             // info, so this one is always in the log and in the siloed harness stream. Scripts read
-            // it to report the mode a soak OBSERVED instead of the mode it believed it requested;
-            // bin/torture-overnight.sh's header owns why that distinction is load-bearing here.
+            // it to report the mode a soak OBSERVED instead of the mode it believed it requested.
+            // That distinction is load-bearing: a long soak selects modes by rotation, and a run that
+            // silently never reached the mode you were hunting looks identical to one that reached it
+            // and found nothing. A 214-cycle overnight run turned out to be 129 SYNC, 85 ASYNC and
+            // zero transactional - which is only discoverable from a line like this one.
             log.info("Running consumer instance {} with commitMode={} ordering={}",
                     instanceId, config.commitMode, config.order);
 
