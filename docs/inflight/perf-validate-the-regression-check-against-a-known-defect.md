@@ -78,10 +78,13 @@ So `FAIL_BELOW` is 0.70, derived rather than guessed, and the defect this note i
 note could not justify. `bin/test-check-throughput-regression.sh` pins those real observations as
 cases, so the thresholds cannot drift away from the evidence they came from without a red test.
 
-**Independently, astubbs/parallel-consumer#29 ran the control arm** and reached the same mechanism from
-the other direction: 43,552 rec/s failing at `b42ab61d7`, 76,950 passing at `92c5d5b70`, one main-code
-term changed, neighbour classes within 1-3%, and the lane composition confound moved the wrong way and
-it still improved.
+**astubbs/parallel-consumer#29 ran the control arm on the fix**, after merging the branch carrying it
+(`5ed885612`). Calling that an independent rediscovery, as an earlier draft here did, was wrong and
+inflates the evidence: it is one team measuring one change, not two arriving at the same mechanism
+separately. What it IS: 43,552 rec/s failing at `b42ab61d7`, 76,950 passing at `92c5d5b70`, a single
+main-code term changed, neighbour classes within 1-3%, and the lane-composition confound moved the
+wrong way and it still improved. That is a controlled measurement of the fix's effect, which is worth
+more than a rediscovery would have been anyway.
 
 ### What is still worth running, and what it is now for
 
@@ -95,5 +98,7 @@ Two caveats belong with the numbers, and both survive into whatever this becomes
 - **Eight of the twelve observations are the same branch and the same defect**, so the regressed group
   is one phenomenon sampled eight times rather than eight independent regressions. The gap is real; its
   width is less established than twelve points suggests.
-- **A regression that slows everything equally is still invisible**, because within-run normalisation
-  cannot separate that from a slow runner. No run of this experiment will say otherwise.
+- **A regression that slows everything equally is invisible to THIS CHECK** - within-run normalisation
+  cannot separate it from a slow runner. It is not invisible to the available data: 90 days of runs are
+  queryable and nothing reads them across runs yet. See
+  `perf-a-queryable-history-instead-of-a-single-committed-baseline.md`.

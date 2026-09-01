@@ -32,9 +32,16 @@
 #
 # WHAT IT DOES AND DOES NOT CATCH - READ THIS BEFORE TRUSTING A GREEN
 #
-# It catches a regression that hits the throughput test HARDER than its neighbours. It is blind to one
-# that slows everything equally, because that is indistinguishable from a slow runner using only
-# within-run data. A blind spot stated is worth more than a bound that pretends not to have one.
+# It catches a regression that hits the throughput test HARDER than its neighbours. A regression that
+# slows everything equally is invisible TO THIS CHECK, because within-run data alone cannot separate it
+# from a slow runner.
+#
+# THAT IS A LIMIT OF THIS CHECK, NOT OF THE AVAILABLE DATA, and an earlier version of this comment
+# wrongly implied the latter. Every performance run inside GitHub's log-retention window is queryable
+# (bin/perf-backfill.sh), so a uniform slowdown IS detectable by comparing absolute rates ACROSS runs -
+# the history exists, nothing here reads it yet. Doing so is tracked in
+# docs/inflight/perf-a-queryable-history-instead-of-a-single-committed-baseline.md, and it is also what
+# would let the baseline rise when the product gets FASTER, which a hand-updated file does not.
 #
 # THE THRESHOLDS ARE MEASURED, NOT GUESSED - AND HERE IS THE MEASUREMENT
 #
@@ -55,6 +62,12 @@
 #
 # WARN_BELOW at 0.85 deliberately fires on the slowest healthy run seen (0.778). A warning means look
 # at this, not this is broken, and the run in question was genuinely the slowest of the healthy set.
+#
+# 0.70 IS NOT TIMID, IT IS MEASURED. The healthy band's floor, 0.778, is a DOCS-ONLY branch - four
+# markdown files, no main code - so identical code lost 22% after normalisation on that run. Anything
+# tighter than about 0.72 therefore fails documentation PRs, and a gate that does that is switched off
+# within a week. Tightening needs comparison against a DISTRIBUTION of master runs rather than a single
+# baseline; see docs/inflight/perf-a-queryable-history-instead-of-a-single-committed-baseline.md.
 #
 # TWELVE OBSERVATIONS FROM ONE RETENTION WINDOW IS NOT A LAW. Eight of the twelve are the same branch
 # and the same defect, so the regressed group is really one phenomenon sampled eight times, not eight
