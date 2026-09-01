@@ -19,7 +19,7 @@ Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutio
 | Test | Rate | Why it is worth attention |
 |---|---|---|
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. Mechanism known and owned (astubbs#262), quarantined - see below |
-| `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 3 seen (2026-08-18, 2026-08-19, 2026-08-25) | Not from the original scan - each found while babysitting a branch carrying **no main Java**. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third sighting carries the failing batch contents and they point at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
+| `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 4 seen (2026-08-18, 2026-08-19, 2026-08-25, 2026-09-01) | Not from the original scan - each found while babysitting a branch. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third and fourth sightings independently carry the **same three-way key collision** in the failing batch contents, which points at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
 
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
 door, and for the same reason: two of that family turned out to be real product bugs, and the third
@@ -82,6 +82,46 @@ under KEY ordering, and predict a deterministic failure; then five distinct keys
 always passes. If both hold, this is
 the test's own input and neither the runner nor the batcher. If the collision case passes, the draw
 is a red herring and contention-versus-product stands as before.
+
+<!-- post-merge: checked-begin -->
+#### The 2026-09-01 sighting: the collision reproduces, in a second module, unprompted
+
+`ReactorBatchTest`, KEY ordering (`simpleBatchTest(ProcessingOrder)[3]` - `@EnumSource` orders the
+enum `UNORDERED, PARTITION, KEY`, so index 3 is KEY, the same parameter as 2026-08-25). Seen on the
+Unit Tests lane of astubbs/parallel-consumer#393, the thread-confinement extraction. Same
+`Expected size: 3 but was: 4`.
+
+**This is the first sighting whose branch carried main Java, so the master-state argument above is
+restated here rather than reused.** It still holds, for two reasons specific to
+astubbs/parallel-consumer#393. Relative to the head the failure was first seen on, the commit under
+test changed only comments and one core test fixture, and that fixture is loaded by two core
+ownership tests `ReactorBatchTest` never touches. That PR's one behavioural change to a poll path
+moves an existing `updateCache()` call from after `pollingBroker.set(true)` to before it - a
+reordering, not an addition, so the poll does no more work than master's does. Neither could reach a
+batch boundary in another module.
+
+**What makes the sighting worth recording is the payload, because it is the 2026-08-25 one again.**
+The five records carried keys `34, 62, 34, 34, 77` by offset - a **three-way collision on key 34** -
+and arrived as `{o0, o1}`, `{o4}`, `{o2}`, `{o3}`. 2026-08-25 saw keys `29, 36, 36, 36, 71`, a
+three-way collision on key 36, arriving as `{o0, o4}`, `{o1}`, `{o2}`, `{o3}`. Two independent
+draws, different modules, different collided key, **same shape**: one key drawn three times, two
+drawn once, and four batches where the expectation is `ceil(5 / 2) = 3`.
+
+That is what the expectation-versus-input reading predicts, and it is no longer resting on a single
+observation. Under KEY ordering the three colliding records share a shard and must be processed in
+order, so they cannot batch with each other however fast the runner is; only the two singletons are
+free to pair with anything. A three-way collision therefore forces at least four batches on
+arithmetic, while `expectedNumOfBatches` - grep `BatchTestMethods` for it - is computed from the
+record count alone and stays at three.
+
+**It still is not a diagnosis, and the experiment named above is still the thing that settles it**
+(pin `defaultKeys` through the Lombok setter on `KafkaTestUtils`, force the collision, predict a
+deterministic failure; then five distinct keys, predict it always passes). What has changed is the
+prior: the collision is now the leading reading rather than one of three equals, and a control arm
+that failed to reproduce under a forced collision would be a genuinely surprising result. Recorded
+while the CI log carrying the payload still existed - those logs expire, and the payload is the
+whole value of the sighting.
+<!-- post-merge: checked-end -->
 
 ### `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` - a helper defect, not a test defect
 
