@@ -20,6 +20,25 @@ been tied to the counter, and the mirror's primary mechanism (the lost-partition
 The fix - deriving the gate by conservation - lands independently of this attribution; if reports
 persist after it ships, this mechanism is ruled out for them, which is also information.
 
+**Withdrawn for astubbs#183 specifically, 2026-09-01 - that report has a better-matching mechanism
+that is already fixed, and it is not in this family at all.** The paragraph above nominates the
+counter drift for astubbs#183 (confluentinc#875) "as well". A stronger candidate exists:
+**confluentinc#909**, whose fix landed here on 2026-08-19 as astubbs#31 (`5e8ea66ae`). Its own
+upstream reporter describes astubbs#183's symptoms at offset level - one offset never received while
+its neighbours complete, the committed offset pinned at exactly that offset, lag climbing on the
+partition, and a pod restart seeking back to it and processing it normally. astubbs#183 reads as the
+same account without the offsets filled in, and the defective `addWorkContainer` is byte-identical in
+the 0.5.3.1 both were reported against. The reasoning, and the two candidates it retracts
+(astubbs#344 and this family), are in
+[astubbs#183's thread](https://github.com/astubbs/parallel-consumer/issues/183#issuecomment-5489212857).
+
+**Do not read astubbs#183 as a confluentinc#857 sighting.** The only thing that ever linked them is
+one hedged third-party comment on the upstream issue - *"That's potentially the same issue as
+reported here: #857"* <!-- issue-refs: exempt - verbatim quotation of the upstream comment; altering the number would misquote it --> - and the mirror inherited it as structure. confluentinc#909 explains both
+halves of that report, including the eventual full stop: a pinned commit base eventually trips
+offset-encoding back-pressure for the partition. It is awaiting one thing only, which no code change
+can supply - whether the reporter's consumer was rebalancing, and under load, in the window.
+
 **Landed:** astubbs#100 (a mid-rebalance commit threw `RebalanceInProgressException`, which nothing caught,
 permanently killing the broker-poll thread) and astubbs#80 (a draining consumer never called
 `consumer.poll()` - ~10kHz busy-spin plus a rebalance-unresponsive member zombie-holding its
