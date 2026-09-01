@@ -55,6 +55,21 @@ code fixed or the rule narrowed, not a suppression. Read the granularity limits 
 costing any of them - one of them is not expressible in ArchUnit at all.
 
 <!-- post-merge: checked-begin -->
+- **Pin `ThreadConfinedConsumer`'s Lombok `@Delegate` excludes interface to its overrides**, so a
+  method the wrapper means to guard cannot silently become an unguarded passthrough. The wrapper
+  guards by *overriding* each `Consumer` method it cares about and listing that method on an
+  excludes interface, so `@Delegate` does not generate a competing passthrough. The two lists have
+  to agree, and nothing checks that they do: drop a signature from the excludes interface and the
+  generated delegate wins, reaching the consumer without the ownership check, with no compile error
+  and no test failure. A new Kafka `Consumer` method arriving in a client upgrade is the same hole
+  from the other direction - it is delegated by default, and defaults are how a guard acquires a
+  gap nobody chose.
+
+  Same shape as the two invariant rules already shipped, so it is the per-invariant exception below
+  rather than the post-v6 programme - but only once the guard is actually wired, since a rule
+  pinning an unenforced seam pins nothing. Suggested by the simplify pass on
+  astubbs/parallel-consumer#393, which is where the wrapper arrives; the claim call and the existing
+  `ArchitectureTest` live on astubbs/parallel-consumer#29.
 - **Dependency direction** between `internal`, `state`, `offsets` and the public API package - state
   should not reach back into the controller.
 - **No raw `Thread` / executor construction outside the places that own lifecycle**, so the

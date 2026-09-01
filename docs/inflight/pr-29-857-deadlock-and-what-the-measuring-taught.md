@@ -80,12 +80,12 @@ the probe's own Calibration status javadoc.
 
    | this branch adds | astubbs/parallel-consumer#381 already put on master |
    |---|---|
-   | `bin/audit-stall-detector-silence.sh` | `bin/exp-audit-stall-detector-silence.sh` |
-   | `bin/confirm-async-drain.sh` | `bin/exp-confirm-async-drain.sh` |
-   | `bin/hunt-async-stall-answer.sh` | `bin/exp-hunt-async-stall-answer.sh` |
-   | `bin/measure-large-instances-failure-rate.sh` | `bin/exp-measure-large-instances-failure-rate.sh` |
-   | `bin/sweep-large-instances-scale.sh` | `bin/exp-sweep-large-instances-scale.sh` |
-   | `bin/batch-857-experiments.sh` | `bin/exp-batch-857.sh` (also shortened) |
+   | `bin/exp-audit-stall-detector-silence.sh` | `bin/exp-audit-stall-detector-silence.sh` |
+   | `bin/exp-confirm-async-drain.sh` | `bin/exp-confirm-async-drain.sh` |
+   | `bin/exp-hunt-async-stall-answer.sh` | `bin/exp-hunt-async-stall-answer.sh` |
+   | `bin/exp-measure-large-instances-failure-rate.sh` | `bin/exp-measure-large-instances-failure-rate.sh` |
+   | `bin/exp-sweep-large-instances-scale.sh` | `bin/exp-sweep-large-instances-scale.sh` |
+   | `bin/exp-batch-857.sh` | `bin/exp-batch-857.sh` (also shortened) |
    <!-- file-refs: N/A - the exp- paths deliberately do not exist on this branch; they arrive with
         astubbs/parallel-consumer#381, and naming them is the whole point of the table -->
 
@@ -158,7 +158,7 @@ the probe's own Calibration status javadoc.
    **The overnight torture run then produced the case that closure said did not exist:** cycle 16
    failed on a bare awaitility timeout with no detector firing at all. So the detector over-fires on
    slow runs AND can stay silent on a real failure, which is the combination that matters, because
-   the suite goes green on its silence. `bin/audit-stall-detector-silence.sh` classifies a failing
+   the suite goes green on its silence. `bin/exp-audit-stall-detector-silence.sh` classifies a failing
    run by what actually caught it; re-run it against the torture corpus rather than the astubbs#344
    arms, since the corpus is where the counter-example lives.
 

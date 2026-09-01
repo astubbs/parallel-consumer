@@ -820,15 +820,20 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
                 long totalWorkTracked = sm.getNumberOfWorkQueuedInShardsAwaitingSelection();
                 boolean hasIncompletes = wm.hasIncompleteOffsets();
 
+                // assignedPartitions is deliberately absent: the accessor behind it mirrored state
+                // Kafka already owns, and astubbs/parallel-consumer#393 deleted the mirror rather
+                // than keep the poll path asking Kafka a third time per pass. This dump is a
+                // failure-path diagnostic, so it is not worth reintroducing a cached field for -
+                // and reading the live assignment here would need a consumer handle the dump does
+                // not have.
                 log.error("  Instance {}: closed/failed={}, failureCause={}, started={}, " +
-                                "assignedPartitions={}, queuedInShards={}, outForProcessing={}, " +
+                                "queuedInShards={}, outForProcessing={}, " +
                                 "incompleteOffsets={}, hasIncompletes={}, " +
                                 "pausedPartitions={}, consumedKeys={}",
                         instance.getInstanceId(),
                         pc.isClosedOrFailed(),
                         pc.getFailureCause() != null ? pc.getFailureCause().getMessage() : "none",
                         instance.isStarted(),
-                        pc.getAssignmentSize(),
                         totalWorkTracked,
                         wm.getNumberRecordsOutForProcessing(),
                         wm.getNumberOfIncompleteOffsets(),

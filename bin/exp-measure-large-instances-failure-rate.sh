@@ -19,30 +19,29 @@
 #      partition or shard, not at timing.
 #
 # Pure CPU. Run it and read the tally.
+#
+# `-e` is deliberately omitted - a failing iteration is the data. bin/lib/chaos-experiment-common.sh
+# owns that reasoning, along with the maven invocation and the outcome classifier every runner here
+# shares, including the discipline that a run which executed no test is NOT a data point: zero tests
+# looks identical to a pass in a rate.
 set -u
+# shellcheck source=bin/lib/chaos-experiment-common.sh
+source "${BASH_SOURCE[0]%/*}/lib/chaos-experiment-common.sh"
+
 D="$(git rev-parse --show-toplevel)"
 OUT=/tmp/large-instances; mkdir -p "$OUT"
 for i in $(seq 1 "${1:-10}"); do
     log="$OUT/run-$i.log"
-    JAVA_HOME="${JAVA_HOME:-/Users/astubbs/.sdkman/candidates/java/17.0.18-tem}" \
-      "$D/mvnw" -f "$D/pom.xml" -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
-        -Dincluded.groups=performance -Dexcluded.groups= \
-        -Dit.test='MultiInstanceRebalanceTest#largeNumberOfInstances' \
-        -Dpc.log.dir="$OUT/pc-logs-$i" \
-        -Dfailsafe.failIfNoSpecifiedTests=false -Dcopyright.skip=true -Djacoco.skip=true \
-        > "$log" 2>&1
-    stats=$(grep -ohE 'tests="[0-9]+" errors="[0-9]+" skipped="[0-9]+" failures="[0-9]+"' \
-              "$D/parallel-consumer-core/target/failsafe-reports"/TEST-*MultiInstanceRebalance*.xml \
-              2>/dev/null | tail -1)
-    # A run that did not execute the test is NOT a data point - the same discipline every other
-    # experiment here needed. Zero tests looks identical to a pass in a rate.
-    if ! printf '%s' "$stats" | grep -q 'tests="[1-9]'; then
-        printf '%s\trun=%s\tDID-NOT-RUN\t%s\n' "$(date -u +%FT%TZ)" "$i" "${stats:-no-report}" >> "$OUT/tally.tsv"
+    pc_run_performance "$D" 'MultiInstanceRebalanceTest#largeNumberOfInstances' "$log" \
+        -Dpc.log.dir="$OUT/pc-logs-$i"
+    stats=$(pc_failsafe_stats "$D" MultiInstanceRebalance)
+    r=$(pc_classify_failsafe_stats "$stats")
+    if [ "$r" = DID-NOT-RUN ]; then
+        printf '%s\trun=%s\tDID-NOT-RUN\t%s\n' "$(pc_now)" "$i" "${stats:-no-report}" >> "$OUT/tally.tsv"
         continue
     fi
     progress=$(grep -ohE 'No progress beyond [0-9]+ records after [0-9]+ rounds' "$log" | tail -1)
     keys=$(grep -ohE 'missing keys: \[[^]]{0,70}' "$log" | tail -1)
-    if printf '%s' "$stats" | grep -qE 'errors="[1-9]|failures="[1-9]'; then r=FAILED; else r=passed; fi
-    printf '%s\trun=%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$i" "$r" "${progress:-no-progress-line}" \
+    printf '%s\trun=%s\t%s\t%s\t%s\n' "$(pc_now)" "$i" "$r" "${progress:-no-progress-line}" \
         "${keys:-no-keys-line}" >> "$OUT/tally.tsv"
 done

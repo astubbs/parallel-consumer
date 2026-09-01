@@ -62,57 +62,72 @@
              -Dlogback.configurationFile=logback-integration-test.xml
          docs/logging.md owns the why. -->
 
-    <property name="pc.log.dir" value="${pc.log.dir:-target/pc-logs}"/>
+    <!-- The local name deliberately differs from the system property it reads. Written as
+         <property name="pc.log.dir" value="${pc.log.dir:-target/pc-logs}"/> the definition refers to
+         itself, and logback resolves the self-reference to the default instead of to -Dpc.log.dir -
+         so the override silently did nothing and every run wrote to target/pc-logs whatever was
+         passed. Proved by putting -Dpc.log.dir on the fork command line and watching the files land
+         in the default directory anyway. Keep the two names different. -->
+    <property name="siloDir" value="${pc.log.dir:-target/pc-logs}"/>
+
+    <!-- Two layouts, named once. Seven appenders used to carry a copy each, which is how a silo
+         quietly ends up formatted differently from its siblings and stops being greppable with the
+         same expression. The level/detector streams differ from the whole-run ones in two ways on
+         purpose: a wider logger field, because a stack trace is worth attributing precisely, and
+         %ex, because an error line without its exception is not an error report. -->
+    <property name="SILO_PATTERN" value="%d{HH:mm:ss.SSS} %X{pcId} [%thread] %logger{24} - %msg%n"/>
+    <property name="SILO_PATTERN_WITH_STACK"
+              value="%d{HH:mm:ss.SSS} %X{pcId} [%thread] %logger{36} - %msg%n%ex"/>
 
     <!-- EVERY error, and EVERY warning, for the whole run - never rolled, never truncated.
          A ring buffer is the right answer to volume and the wrong answer to a warning from two
          days ago, which is the line you want when something fails on day three. -->
     <appender name="ERRORS" class="ch.qos.logback.core.FileAppender">
-        <file>${pc.log.dir}/errors.log</file>
+        <file>${siloDir}/errors.log</file>
         <append>true</append>
         <filter class="ch.qos.logback.classic.filter.LevelFilter">
             <level>ERROR</level><onMatch>ACCEPT</onMatch><onMismatch>DENY</onMismatch>
         </filter>
-        <encoder><pattern>%d{HH:mm:ss.SSS} %X{pcId} [%thread] %logger{36} - %msg%n%ex</pattern></encoder>
+        <encoder><pattern>${SILO_PATTERN_WITH_STACK}</pattern></encoder>
     </appender>
 
     <appender name="WARNINGS" class="ch.qos.logback.core.FileAppender">
-        <file>${pc.log.dir}/warnings.log</file>
+        <file>${siloDir}/warnings.log</file>
         <append>true</append>
         <filter class="ch.qos.logback.classic.filter.LevelFilter">
             <level>WARN</level><onMatch>ACCEPT</onMatch><onMismatch>DENY</onMismatch>
         </filter>
-        <encoder><pattern>%d{HH:mm:ss.SSS} %X{pcId} [%thread] %logger{36} - %msg%n%ex</pattern></encoder>
+        <encoder><pattern>${SILO_PATTERN_WITH_STACK}</pattern></encoder>
     </appender>
 
     <appender name="PROBES" class="ch.qos.logback.core.FileAppender">
-        <file>${pc.log.dir}/probes.log</file>
+        <file>${siloDir}/probes.log</file>
         <append>true</append>
-        <encoder><pattern>%d{HH:mm:ss.SSS} %X{pcId} [%thread] %logger{24} - %msg%n</pattern></encoder>
+        <encoder><pattern>${SILO_PATTERN}</pattern></encoder>
     </appender>
 
     <appender name="HARNESS" class="ch.qos.logback.core.FileAppender">
-        <file>${pc.log.dir}/harness.log</file>
+        <file>${siloDir}/harness.log</file>
         <append>true</append>
-        <encoder><pattern>%d{HH:mm:ss.SSS} %X{pcId} [%thread] %logger{24} - %msg%n</pattern></encoder>
+        <encoder><pattern>${SILO_PATTERN}</pattern></encoder>
     </appender>
 
     <appender name="PC_COMMIT" class="ch.qos.logback.core.FileAppender">
-        <file>${pc.log.dir}/pc-commit-offsets.log</file>
+        <file>${siloDir}/pc-commit-offsets.log</file>
         <append>true</append>
-        <encoder><pattern>%d{HH:mm:ss.SSS} %X{pcId} [%thread] %logger{24} - %msg%n</pattern></encoder>
+        <encoder><pattern>${SILO_PATTERN}</pattern></encoder>
     </appender>
 
     <appender name="PC_LIFECYCLE" class="ch.qos.logback.core.FileAppender">
-        <file>${pc.log.dir}/pc-poll-rebalance-lifecycle.log</file>
+        <file>${siloDir}/pc-poll-rebalance-lifecycle.log</file>
         <append>true</append>
-        <encoder><pattern>%d{HH:mm:ss.SSS} %X{pcId} [%thread] %logger{24} - %msg%n</pattern></encoder>
+        <encoder><pattern>${SILO_PATTERN}</pattern></encoder>
     </appender>
 
     <appender name="PC_STATE" class="ch.qos.logback.core.FileAppender">
-        <file>${pc.log.dir}/pc-shard-work-state.log</file>
+        <file>${siloDir}/pc-shard-work-state.log</file>
         <append>true</append>
-        <encoder><pattern>%d{HH:mm:ss.SSS} %X{pcId} [%thread] %logger{24} - %msg%n</pattern></encoder>
+        <encoder><pattern>${SILO_PATTERN}</pattern></encoder>
     </appender>
 
     <!-- Routing. No level attributes on purpose: these inherit, so pc.log.level still governs. -->

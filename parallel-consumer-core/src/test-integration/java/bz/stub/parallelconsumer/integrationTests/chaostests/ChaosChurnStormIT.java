@@ -34,6 +34,13 @@ import java.util.concurrent.atomic.AtomicLong;
  * <b>Calibration status</b>: this scenario MUST go red (zombie/dwell or drain-bound probe) on the pre-fix
  * drain-defect composition (the real bug) ({@code experiment/stall-uber-nofix}) and green here - see plan Unit 5.
  * <p>
+ * <b>Recovery diagnostic - already answered, do not re-derive</b>: under
+ * {@code -Dchaos.diagnoseStallRecovery=true} (see {@link ChaosScenarioBase#DIAGNOSE_STALL_RECOVERY})
+ * this scenario's asynchronous no-progress line was watched to a verdict on 2026-08-28 - the backlog
+ * DRAINED on all six firings collected, which is what demoted that line to a timing proxy rather
+ * than a distinct defect. A run that drains reproduces a known result; a run that stays FLAT is the
+ * finding worth reporting.
+ * <p>
  * Seed protocol: {@code -Dchaos.seed=<long>} replays a schedule; unset = random seed, always logged.
  * Excluded from default suites via {@code @Tag("chaos")}; run with {@code -Dincluded.groups=chaos}.
  * <p>
@@ -76,19 +83,19 @@ class ChaosChurnStormIT extends ChaosScenarioBase {
     private static final Duration HEAVY_SLEEP = Duration.ofSeconds(45);
 
     /**
-     * This scenario's own prior art for {@link ChaosScenarioBase#DIAGNOSE_STALL_RECOVERY} - or rather,
-     * the lack of it: unlike {@code AbstractRevokeUnderWorkScenario}, the diagnostic has never engaged
-     * here before this override existed (the flag was silently ignored - see
-     * {@code docs/inflight/test-857-churn-storm-async-stalls.md}, "Why this line was never settled").
-     * So a "backlog drains" result here is a NEW finding, not a re-derivation of one already
-     * established - the opposite framing from the revoke-under-work family.
+     * This scenario's own prior art for {@link ChaosScenarioBase#DIAGNOSE_STALL_RECOVERY}, which was a
+     * long time arriving: unlike {@code AbstractRevokeUnderWorkScenario}, the flag was silently ignored
+     * here until this override existed, so the asynchronous no-progress line went unsettled for weeks.
+     * It has since been answered - this class's "Calibration status" javadoc carries the verdict and
+     * its date. A drain is therefore a re-derivation; a flat backlog is the finding.
      */
     @Override
     protected void logDiagnosticContext() {
-        log.warn("=== BEFORE INTERPRETING THIS RUN: this scenario's diagnostic mode has never engaged " +
-                "before (docs/inflight/test-857-churn-storm-async-stalls.md) - there is no prior " +
-                "'it recovers' result to re-derive here. Report whether the backlog drains or stays " +
-                "flat as a NEW finding. ===");
+        log.warn("=== BEFORE INTERPRETING THIS RUN, read this class's 'Calibration status' javadoc. " +
+                "The recovery diagnostic has engaged on this scenario before and the backlog DRAINED " +
+                "on every one of six firings, which is what demoted the asynchronous stall to a " +
+                "timing proxy. If your result is 'it drains', you have reproduced a known result - " +
+                "the finding worth reporting is a run that stays FLAT. ===");
     }
 
     @Test

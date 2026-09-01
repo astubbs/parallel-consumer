@@ -7,6 +7,7 @@ package bz.stub.parallelconsumer.integrationTests;
 
 import bz.stub.parallelconsumer.internal.utils.ProgressBarUtils;
 import bz.stub.parallelconsumer.internal.utils.StringUtils;
+import bz.stub.parallelconsumer.internal.utils.ThroughputReport;
 import bz.stub.parallelconsumer.internal.utils.TrimListRepresentation;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
@@ -18,12 +19,11 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.assertj.core.api.Assertions;
 import org.assertj.core.api.SoftAssertions;
 import org.awaitility.core.ConditionTimeoutException;
+import org.awaitility.core.TerminalFailureException;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
-import bz.stub.parallelconsumer.internal.utils.ThroughputReport;
-
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -133,13 +133,19 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
                         all.assertAll();
                     });
         } catch (ConditionTimeoutException e) {
-            ThroughputReport.report("MultiInstanceHighVolumeTest", consumedKeys.size(), expectedMessageCount,
-                    waitStarted, StringUtils.msg("commitMode={} order={} maxPoll={} outcome=FAILED",
-                            commitMode, order, maxPoll));
+            reportThroughput(expectedMessageCount, waitStarted, "FAILED");
             fail(failureMessage + "\n" + e.getMessage());
+        } catch (TerminalFailureException e) {
+            // The failFast arm above exits through THIS, not ConditionTimeoutException - Awaitility's
+            // two failure exits are unrelated siblings under RuntimeException. Catching only the
+            // timeout meant the one failure mode with a named cause ("PC died") was the one that
+            // reported no throughput at all, so bin/performance-test.sh printed NONE FOUND for a run
+            // that had just measured a processor death - the exact case the on-failure figure exists
+            // for. Rethrown unchanged: this reports, it does not soften the failure.
+            reportThroughput(expectedMessageCount, waitStarted, "FAILED");
+            throw e;
         }
-        ThroughputReport.report("MultiInstanceHighVolumeTest", consumedKeys.size(), expectedMessageCount,
-                waitStarted, StringUtils.msg("commitMode={} order={} maxPoll={}", commitMode, order, maxPoll));
+        reportThroughput(expectedMessageCount, waitStarted, "PASSED");
 
         assertThat(processedCount.get())
                 .as("messages processed and produced by parallel-consumer should be equal")
@@ -149,6 +155,20 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
         assertThat(expectedMessageCount).isEqualTo(processedCount.get());
 
         bars.forEach(ProgressBar::close);
+    }
+
+    /**
+     * One reporter for both exits of the wait, so the two lines cannot drift apart in what they
+     * carry. They already had: the failing line named {@code outcome=FAILED} and the passing line
+     * carried no {@code outcome} field at all, so a collector could only tell a green run from a
+     * schema change by the absence of a key - which is exactly the reading a
+     * {@code key=value} line exists to remove. Both now say which they are, matching the
+     * {@code PC-DEADLINE-HEADROOM} line the ambient probe emits.
+     */
+    private void reportThroughput(int expectedMessageCount, Instant waitStarted, String outcome) {
+        ThroughputReport.report("MultiInstanceHighVolumeTest", consumedKeys.size(), expectedMessageCount,
+                waitStarted, StringUtils.msg("commitMode={} order={} maxPoll={} outcome={}",
+                        commitMode, order, maxPoll, outcome));
     }
 
     private ParallelEoSStreamProcessor<String, String> buildPc(String inputTopicName, int maxPoll, ProcessingOrder order, CommitMode commitMode) {

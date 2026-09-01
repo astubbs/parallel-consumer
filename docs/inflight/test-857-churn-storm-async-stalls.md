@@ -258,7 +258,7 @@ on it.
 ## The detector-silence worry does NOT reproduce, 2026-08-28
 
 Replayed the seed eight times and classified every FAILING run by what caught it
-(`bin/audit-stall-detector-silence.sh`). Five runs failed. **All five had `NO_PROGRESS` fire.** Not
+(`bin/exp-audit-stall-detector-silence.sh`). Five runs failed. **All five had `NO_PROGRESS` fire.** Not
 one failure occurred with the liveness detectors silent.
 
 So the "a third of failures went red with the detector quiet" observation, from the astubbs#344 arms,

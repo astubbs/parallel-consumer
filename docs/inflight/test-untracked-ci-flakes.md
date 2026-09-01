@@ -19,11 +19,46 @@ Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutio
 | Test | Rate | Why it is worth attention |
 |---|---|---|
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. Mechanism known and owned (astubbs#262), quarantined - see below |
-| `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 3 seen (2026-08-18, 2026-08-19, 2026-08-25) | Not from the original scan - each found while babysitting a branch carrying **no main Java**. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third sighting carries the failing batch contents and they point at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
+| `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 4 seen (2026-08-18, 2026-08-19, 2026-08-25, 2026-09-01) | Not from the original scan - each found while babysitting a branch. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third and fourth sightings independently carry the **same three-way key collision** in the failing batch contents, which points at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
+
+| `ParallelEoSStreamProcessorTest.processInKeyOrder` | 2 seen locally (2026-09-01), 1 in 3 isolated runs | **Two DIFFERENT failures under one test name, and the documented fix is already in the tree.** See below - this one is not a fresh flake, it is a solved one still firing |
 
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
 door, and for the same reason: two of that family turned out to be real product bugs, and the third
 was neither tight nor a stall but a test that could not force its own trigger.
+
+### `processInKeyOrder` - a solved flake that still fires, and a second failure hiding under the same name
+
+<!-- post-merge: checked-begin - names the branch the sighting came from, in the past tense, which
+     stays true once that work has landed -->
+Seen 2026-09-01 while running the core unit suite on the branch that became
+astubbs/parallel-consumer#381, which carried no main Java - so nothing in that work can be the cause.
+Recorded rather than diagnosed, because a sighting has to be written down before the branch that saw
+it merges: the evidence expires with the logs.
+<!-- post-merge: checked-end -->
+
+**Two distinct failures, and conflating them would waste the next person's time:**
+
+- **Parameter `[1]`, `ConditionTimeoutException` after ~41s**, on the assertion labelled
+  *"Which offsets are committed and in the expected order"*. This is, symptom for symptom, the flake
+  written up in
+  [`../solutions/test-flakiness/assert-the-commit-frontier-not-the-tick-path.md`](../solutions/test-flakiness/assert-the-commit-frontier-not-the-tick-path.md).
+  Reproduced 1 run in 3 in isolation, so it is cheap to work on.
+- **Parameter `[3]`, an `AssertionError` on the test's own input-data sanity check** - "actual size
+  is 0 while expected size is 9", the latch list empty. Seen ONCE, in a full 533-test suite run, and
+  NOT reproduced in two subsequent full-class runs or three method runs. Different parameter,
+  different phase, different message. Nothing yet says the two share a cause.
+
+**The part worth acting on: that solution doc records its fix as `e8c9bb12` on astubbs#264 and
+"UNMERGED as of 2026-08-13". astubbs#264 merged that same day, and the frontier assertion it
+introduced IS in the tree** - `KafkaTestUtils` carries the frontier helper. Yet the failing
+assertion still reports the OLD label, which `KafkaTestUtils` still offers as a default description
+from two call sites. So the fix landed and this path did not adopt it.
+
+That makes this a **stale-resolution** case rather than a new flake, and it is the more useful
+reading: a solution doc that says "fixed" is why nobody re-opened this. Whoever picks it up should
+start by checking which call sites still take the ordered-list assertion, and update that doc's
+`status`, which is wrong in a way that suppresses attention.
 
 ### `simpleBatchTest` - three modules, one shared helper, and a lead nobody has tested
 
@@ -82,6 +117,46 @@ under KEY ordering, and predict a deterministic failure; then five distinct keys
 always passes. If both hold, this is
 the test's own input and neither the runner nor the batcher. If the collision case passes, the draw
 is a red herring and contention-versus-product stands as before.
+
+<!-- post-merge: checked-begin -->
+#### The 2026-09-01 sighting: the collision reproduces, in a second module, unprompted
+
+`ReactorBatchTest`, KEY ordering (`simpleBatchTest(ProcessingOrder)[3]` - `@EnumSource` orders the
+enum `UNORDERED, PARTITION, KEY`, so index 3 is KEY, the same parameter as 2026-08-25). Seen on the
+Unit Tests lane of astubbs/parallel-consumer#393, the thread-confinement extraction. Same
+`Expected size: 3 but was: 4`.
+
+**This is the first sighting whose branch carried main Java, so the master-state argument above is
+restated here rather than reused.** It still holds, for two reasons specific to
+astubbs/parallel-consumer#393. Relative to the head the failure was first seen on, the commit under
+test changed only comments and one core test fixture, and that fixture is loaded by two core
+ownership tests `ReactorBatchTest` never touches. That PR's one behavioural change to a poll path
+moves an existing `updateCache()` call from after `pollingBroker.set(true)` to before it - a
+reordering, not an addition, so the poll does no more work than master's does. Neither could reach a
+batch boundary in another module.
+
+**What makes the sighting worth recording is the payload, because it is the 2026-08-25 one again.**
+The five records carried keys `34, 62, 34, 34, 77` by offset - a **three-way collision on key 34** -
+and arrived as `{o0, o1}`, `{o4}`, `{o2}`, `{o3}`. 2026-08-25 saw keys `29, 36, 36, 36, 71`, a
+three-way collision on key 36, arriving as `{o0, o4}`, `{o1}`, `{o2}`, `{o3}`. Two independent
+draws, different modules, different collided key, **same shape**: one key drawn three times, two
+drawn once, and four batches where the expectation is `ceil(5 / 2) = 3`.
+
+That is what the expectation-versus-input reading predicts, and it is no longer resting on a single
+observation. Under KEY ordering the three colliding records share a shard and must be processed in
+order, so they cannot batch with each other however fast the runner is; only the two singletons are
+free to pair with anything. A three-way collision therefore forces at least four batches on
+arithmetic, while `expectedNumOfBatches` - grep `BatchTestMethods` for it - is computed from the
+record count alone and stays at three.
+
+**It still is not a diagnosis, and the experiment named above is still the thing that settles it**
+(pin `defaultKeys` through the Lombok setter on `KafkaTestUtils`, force the collision, predict a
+deterministic failure; then five distinct keys, predict it always passes). What has changed is the
+prior: the collision is now the leading reading rather than one of three equals, and a control arm
+that failed to reproduce under a forced collision would be a genuinely surprising result. Recorded
+while the CI log carrying the payload still existed - those logs expire, and the payload is the
+whole value of the sighting.
+<!-- post-merge: checked-end -->
 
 ### `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` - a helper defect, not a test defect
 

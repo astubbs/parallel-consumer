@@ -26,6 +26,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
+import java.util.regex.Pattern;
 
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
@@ -88,21 +89,31 @@ public class ConsumerManager<K, V> {
     private int correctPollWakeups = 0;
     private int noWakeups = 0;
 
+    private boolean commitRequested;
+
     /**
      * Prime the metadata cache so that groupMetadata() returns a valid value before the poll
      * thread starts. Must be called after construction, before any thread claims ownership.
      * <p>
-     * Silently handles errors (e.g., missing group.id) — validation happens later in
-     * the PC constructor's checkGroupIdConfigured().
+     * Absorbs whatever priming throws, and logs the exception itself rather than only its message,
+     * because nothing downstream re-reports it.
+     * <p>
+     * <b>A missing {@code group.id} is not what this catch is for</b>, though the shape invites that
+     * reading. The processor's constructor runs {@code validateConfiguration()} - and through it
+     * {@code checkGroupIdConfigured()} - before it asks the module for the broker poller, and the
+     * poller is what first constructs this manager and calls this method. On that path the
+     * missing-config error has already been thrown, naming the config, before priming is reached.
+     * The catch stays broad because the manager is built lazily, so nothing guarantees that ordering
+     * for a future caller, and because a genuine broker-side priming failure has no such backstop at
+     * all.
      */
     void init() {
         try {
             updateCache();
         } catch (Exception e) {
-            log.trace("Could not prime cache during init (will be validated later): {}", e.getMessage());
+            log.trace("Could not prime cache during init (will be validated later)", e);
         }
     }
-    private boolean commitRequested;
 
     ConsumerRecords<K, V> poll(Duration requestedLongPollTimeout) {
         Duration timeoutToUse = requestedLongPollTimeout;
@@ -128,7 +139,7 @@ public class ConsumerManager<K, V> {
             // property the exit refresh relies on (see the comment there).
             updateCache();
             pollingBroker.set(true);
-            log.trace("Poll starting with timeout: {}, assignment size: {}", timeoutToUse, assignmentSizeCache);
+            log.debug("Poll starting with timeout: {}", timeoutToUse);
             Instant pollStarted = Instant.now();
             long tryCount = 0;
             boolean polledSuccessfully = false;
@@ -177,25 +188,16 @@ public class ConsumerManager<K, V> {
         // Update the cache after pollingBroker is cleared, so wakeup() from another thread
         // won't call consumer.wakeup() while we're calling consumer.groupMetadata()/paused().
         // This fixes ConcurrentModificationException when close() races against poll().
-        // Always update (not just when records > 0) so assignment cache stays current after rebalances.
+        // Always update (not just when records > 0) so the caches stay current after a rebalance,
+        // which happens inside poll().
         // See https://github.com/confluentinc/parallel-consumer/issues/857
         updateCache();
         return records != null ? records : new ConsumerRecords<>(UniMaps.of());
     }
 
-    private volatile int assignmentSizeCache = 0;
-
     protected void updateCache() {
         metaCache = consumer.groupMetadata();
         pausedPartitionSizeCache = consumer.paused().size();
-        assignmentSizeCache = consumer.assignment().size();
-    }
-
-    /**
-     * Cached assignment size, safe to read from any thread. Updated during poll.
-     */
-    public int getAssignmentSize() {
-        return assignmentSizeCache;
     }
 
     /**
@@ -459,20 +461,30 @@ public class ConsumerManager<K, V> {
         return pausedPartitionSizeCache;
     }
 
+    /**
+     * <b>These two have no caller yet, and that is deliberate - do not delete them as dead code.</b>
+     * {@code AbstractParallelEoSStreamProcessor.subscribe(...)} still subscribes through the
+     * <em>raw</em> consumer it holds from {@code options.getConsumer()}, so subscription is one of
+     * the paths that does not yet reach the thread-confinement guard. That is the same
+     * guard-installed-but-not-guarding state ownership itself is in on this branch: nothing calls
+     * {@code claimConsumerOwnership()}, so ownership never leaves
+     * {@link ConsumerOwnership.Phase#UNCLAIMED} and no call is refused at runtime.
+     * <p>
+     * They are the seam astubbs#29 wires, where the processor is changed to hold this manager rather
+     * than the raw consumer and the ArchUnit rule that pins the invariant lands with it. Kept here
+     * rather than re-added there because an unreachable-looking method carrying no note is exactly
+     * what a later reader removes as an oversight - which is the removal this paragraph exists to
+     * stop.
+     */
     void subscribe(Collection<String> topics, ConsumerRebalanceListener listener) {
         consumer.subscribe(topics, listener);
     }
 
-    void subscribe(java.util.regex.Pattern pattern, ConsumerRebalanceListener listener) {
-        consumer.subscribe(pattern, listener);
-    }
-
     /**
-     * Returns the raw consumer class type for reflection-based checks (e.g., auto-commit detection).
-     * Does not access the consumer's Kafka methods, just the class object.
+     * @see #subscribe(Collection, ConsumerRebalanceListener) for why this has no caller yet
      */
-    Class<?> getConsumerClass() {
-        return consumer.getClass();
+    void subscribe(Pattern pattern, ConsumerRebalanceListener listener) {
+        consumer.subscribe(pattern, listener);
     }
 
     public void resume(final Set<TopicPartition> pausedTopics) {

@@ -60,11 +60,11 @@ class ThreadConfinedConsumer<K, V> implements Consumer<K, V> {
     void claimOwnership() {
         Thread current = Thread.currentThread();
         ConsumerOwnership previous = ownership.getAndSet(ConsumerOwnership.ownedBy(current));
-        Thread previousOwner = previous.isOwnedBySomeoneOtherThan(current) ? previous.owner() : null;
-        if (previousOwner != null && previousOwner != current) {
+        if (previous.isOwnedBySomeoneOtherThan(current)) {
             // claimOwnership is the poll thread's start-of-life claim; a live previous owner here
             // means two poll loops share one consumer, which the guard exists to catch. Log loudly
             // rather than throw: throwing here would kill the new loop, not the misuse.
+            Thread previousOwner = previous.owner();
             log.warn("Consumer ownership claimed by thread '{}' but was still held by thread '{}' (alive:{}) - " +
                             "two components polling one consumer? See confluentinc#857.",
                     current.getName(), previousOwner.getName(), previousOwner.isAlive());
@@ -85,8 +85,11 @@ class ThreadConfinedConsumer<K, V> implements Consumer<K, V> {
         if (witness.isOwnedBy(current) && ownership.compareAndSet(witness, ConsumerOwnership.RELEASED)) {
             log.debug("Consumer ownership released by thread: {}", current.getName());
         } else {
+            // Report the witness the branch above actually tested, not a fresh read: re-reading
+            // reports a state this call never saw, and when the CAS is what failed it contradicts
+            // the message by naming an owner that had already moved on.
             log.warn("Thread '{}' tried to release consumer ownership it does not hold (owner: {})",
-                    current.getName(), ownership.get());
+                    current.getName(), witness);
         }
     }
 
@@ -119,8 +122,6 @@ class ThreadConfinedConsumer<K, V> implements Consumer<K, V> {
             // lost a race against another claimer; re-read and decide again
         }
     }
-
-
 
     private void checkThread(String methodName) {
         Thread current = Thread.currentThread();
@@ -289,8 +290,8 @@ class ThreadConfinedConsumer<K, V> implements Consumer<K, V> {
         ConsumerGroupMetadata groupMetadata();
         void subscribe(Collection<String> topics, ConsumerRebalanceListener callback);
         void subscribe(Collection<String> topics);
-        void subscribe(java.util.regex.Pattern pattern, ConsumerRebalanceListener callback);
-        void subscribe(java.util.regex.Pattern pattern);
+        void subscribe(Pattern pattern, ConsumerRebalanceListener callback);
+        void subscribe(Pattern pattern);
         void close();
         void close(Duration timeout);
     }

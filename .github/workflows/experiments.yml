@@ -1,0 +1,170 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# Experiment runners - ON-DEMAND measurement, never gating, never on push.
+#
+# These answer EMPIRICAL questions about the chaos and performance suites rather than asserting
+# anything: how often does this fail, does the rate move with scale, does this stall drain or wedge,
+# does that detector miss real failures. bin/AGENTS.md ("A script that answered its question is
+# finished") owns their lifecycle; docs/testing.md ("Experiment runners") owns WHICH question each
+# one answers, and is the table to read before dispatching one.
+#
+# WHY NOT ON EVERY PUSH, which is the obvious question:
+#
+#   1. A rate measured once is not a rate. Every one of these runs the same test N times and reports
+#      the proportion that failed. One run per push yields a single pass/fail - a Bernoulli sample,
+#      not a rate - and nothing in this repo aggregates across pushes, so the number the experiment
+#      exists to produce would never be computed. The unit of work is the BATCH, not the commit.
+#   2. The batch costs about what its arithmetic says. The Performance Tests lane takes minutes for
+#      ONE run; the default here is eight to ten. That is a runner-hour per push, on every push, for
+#      a number nobody asked for on that commit.
+#   3. Gating on it would be wrong even if it were free. A rate is a measurement, and a measurement
+#      turned into a pass/fail needs a threshold nobody has the spread to choose yet - the trap
+#      docs/solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md
+#      is about.
+#
+# So: dispatch when you have the question. The one experiment with a standing open question is also
+# offered on a schedule below, because a rate that nothing ever samples stays unmeasured - which is
+# how the largeNumberOfInstances failure rate went from a 2026-01 upstream report to "nobody has
+# measured it since".
+#
+# SECURITY (public repo + self-hosted runner): workflow_dispatch and schedule only - both are
+# write-access-gated or repo-owned by construction, so no untrusted fork code reaches the
+# self-hosted machine. Inputs pass through env (data), never ${{ }} inside run blocks (code).
+# See docs/self-hosted-runner.md.
+#
+# NOT EVERY RUNNER IN bin/ IS OFFERED HERE, and the omission is the interesting part. The
+# cross-tree runner exp-batch-857 reads sibling worktrees
+# (.claude/worktrees/pr29, .claude/worktrees/pre-344) that exist only on a machine where somebody cut
+# them. `actions/checkout` creates one workspace and no siblings, so dispatching either one here
+# measured nothing while reporting success: a green job and an artifact with no data in it, which is
+# the worst of the three possible outcomes because it is indistinguishable from a clean result. Both
+# It now refuses to start without its trees (pc_require_tree, exit 2) and is not offered as a
+# choice. Provisioning arbitrary historical worktrees on a runner is the alternative, and it is
+# not one - those trees are specific branches at specific commits, chosen by hand for a comparison.
+# Run them locally; docs/testing.md's runner table says which are which.
+#
+# KNOWN LIMITATION, stated rather than hidden: each runner writes to a fixed /tmp directory and
+# appends to a tally there. Two dispatches of the SAME experiment at once would interleave rows on a
+# self-hosted box whose /tmp persists. Dispatch is human-triggered and these runs are long, so this
+# has not bitten; if it does, the fix is a run-scoped output directory in the scripts, not here.
+
+name: experiments
+
+on:
+  workflow_dispatch:
+    inputs:
+      experiment:
+        description: 'Which question to ask (see docs/testing.md, "Experiment runners")'
+        required: true
+        type: choice
+        options:
+          - exp-measure-large-instances-failure-rate
+          - exp-sweep-large-instances-scale
+          - exp-audit-stall-detector-silence
+      iterations:
+        description: 'Iterations - empty for the script default, otherwise a positive integer'
+        required: false
+        default: ''
+  schedule:
+    # Weekly, Sundays 04:00 UTC. ONLY the largeNumberOfInstances rate: its question is open and
+    # recorded (docs/inflight/test-largenumberofinstances-residual-failures-unmeasured.md), and a
+    # rate with no sampler never gets answered. Nothing else is scheduled - an experiment whose
+    # question is settled should be deleted, not run forever.
+    - cron: '0 4 * * 0'
+
+permissions:
+  contents: read
+
+# No `concurrency:` group, deliberately - same reasoning as chaos-pain.yml: a group holds one running
+# plus at most one pending and DISCARDS the rest, so it deduplicates where a mutex needs to queue,
+# and measurements must never be silently dropped. How many jobs the box runs at once is the box's
+# decision. See docs/ci.md, "The box decides its own concurrency".
+
+jobs:
+  experiment:
+    name: "Experiment (on-demand)"
+    runs-on: [self-hosted, highcpu]
+    timeout-minutes: 240
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: ''
+
+      - name: Show environment
+        run: |
+          java -version
+          echo "cpus: $(nproc)"
+          docker --version
+
+      - name: Run the experiment
+        env:
+          # Data, never code. A scheduled run has no inputs, so it falls back to the one experiment
+          # the schedule exists for.
+          EXPERIMENT: ${{ inputs.experiment || 'exp-measure-large-instances-failure-rate' }}
+          ITERATIONS: ${{ inputs.iterations }}
+        run: |
+          set -euo pipefail
+          case "$EXPERIMENT" in
+              exp-measure-large-instances-failure-rate|exp-sweep-large-instances-scale| \
+              exp-audit-stall-detector-silence) ;;
+              *) echo "Unknown experiment: $EXPERIMENT" >&2; exit 2 ;;
+          esac
+          # VALIDATE THE COUNT HERE - the script will not do it for you. The runners set `set -u` and
+          # deliberately not `-e` (a failing iteration is their data), so `for i in $(seq 1 ten)`
+          # does not abort: seq writes to stderr, the substitution is empty, the loop body never
+          # executes and the script exits 0. The job then goes green and uploads an empty output
+          # directory, having run no test at all - the same false-clean shape as the missing-worktree
+          # case above. This comment used to assert the opposite ("anything else fails the script's
+          # own seq"), which is why the check was never written.
+          if [ -n "$ITERATIONS" ]; then
+              case "$ITERATIONS" in
+                  ''|*[!0-9]*) echo "iterations must be a positive integer, got: $ITERATIONS" >&2; exit 2 ;;
+                  0*) echo "iterations must be a positive integer, got: $ITERATIONS" >&2; exit 2 ;;
+              esac
+          fi
+          echo "=== $EXPERIMENT ${ITERATIONS:-(script default)} ==="
+          # Unquoted expansion is intentional: ITERATIONS is either empty (so the script takes its
+          # own default) or the positive integer just validated above.
+          bin/"$EXPERIMENT".sh ${ITERATIONS}
+
+      - name: Collect the tally
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p experiment-output
+          # Each runner writes to its own fixed /tmp directory; copy whatever is there into the
+          # workspace so it can be uploaded. `|| true` on the copy: an experiment that died before
+          # writing anything must still upload the maven logs it did produce.
+          # These paths are hardcoded in the scripts themselves - grep `OUT=` and `T=` in bin/ if
+          # one moves. Two of them were guessed wrong when this workflow was written and would have
+          # uploaded nothing while reporting success, so the step ends by SAYING whether it found
+          # anything rather than leaving an empty artifact to be read as an empty result.
+          # Only the four dispatchable runners' directories - the two cross-tree ones cannot run
+          # here at all (see this workflow's header), and a path in this list for a script that can
+          # never write it is the stale entry the note below is about.
+          found=0
+          for d in /tmp/large-instances /tmp/scale-sweep /tmp/detector-audit /tmp/async-answer; do
+              if [ -d "$d" ]; then cp -R "$d" experiment-output/ && found=$((found + 1)); fi
+          done
+          find experiment-output -name 'tally.tsv' -exec sh -c 'echo "--- $1 ---"; cat "$1"' _ {} \; || true
+          if [ "$found" -eq 0 ]; then
+              echo "::warning::No experiment output directory was found. Either the run died before"
+              echo "::warning::writing anything, or a script's output path changed and this list is stale."
+          fi
+
+      - name: Upload experiment output
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: experiment-${{ github.run_id }}
+          path: |
+            experiment-output/
+            **/target/*-reports/*.xml
+          if-no-files-found: warn
+          retention-days: 30

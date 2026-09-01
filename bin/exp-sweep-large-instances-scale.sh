@@ -19,29 +19,28 @@
 #
 # Weaker than the bare-consumer control arm that note asks for, and does not replace it. It costs a
 # flag instead of a harness.
+#
+# `-e` is deliberately omitted - a failing iteration is the data. bin/lib/chaos-experiment-common.sh
+# owns that reasoning, along with the maven invocation and the outcome classifier every runner here
+# shares.
 set -u
+# shellcheck source=bin/lib/chaos-experiment-common.sh
+source "${BASH_SOURCE[0]%/*}/lib/chaos-experiment-common.sh"
+
 D="$(git rev-parse --show-toplevel)"
 OUT=/tmp/scale-sweep; mkdir -p "$OUT"
 REPS="${1:-3}"
 for scale in 1 2 4; do
   for i in $(seq 1 "$REPS"); do
     log="$OUT/s$scale-run-$i.log"
-    JAVA_HOME="${JAVA_HOME:-/Users/astubbs/.sdkman/candidates/java/17.0.18-tem}" \
-      "$D/mvnw" -f "$D/pom.xml" -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
-        -Dincluded.groups=performance -Dexcluded.groups= -Dperf.scale="$scale" \
-        -Dit.test='MultiInstanceRebalanceTest#largeNumberOfInstances' \
-        -Dpc.log.dir="$OUT/pc-logs-s$scale-$i" \
-        -Dfailsafe.failIfNoSpecifiedTests=false -Dcopyright.skip=true -Djacoco.skip=true \
-        > "$log" 2>&1
-    stats=$(grep -ohE 'tests="[0-9]+" errors="[0-9]+" skipped="[0-9]+" failures="[0-9]+"' \
-              "$D/parallel-consumer-core/target/failsafe-reports"/TEST-*MultiInstanceRebalance*.xml \
-              2>/dev/null | tail -1)
-    if ! printf '%s' "$stats" | grep -q 'tests="[1-9]'; then
-        printf '%s\tscale=%s\trun=%s\tDID-NOT-RUN\n' "$(date -u +%FT%TZ)" "$scale" "$i" >> "$OUT/tally.tsv"
+    pc_run_performance "$D" 'MultiInstanceRebalanceTest#largeNumberOfInstances' "$log" \
+        -Dperf.scale="$scale" -Dpc.log.dir="$OUT/pc-logs-s$scale-$i"
+    r=$(pc_failsafe_outcome "$D" MultiInstanceRebalance)
+    if [ "$r" = DID-NOT-RUN ]; then
+        printf '%s\tscale=%s\trun=%s\tDID-NOT-RUN\n' "$(pc_now)" "$scale" "$i" >> "$OUT/tally.tsv"
         continue
     fi
-    if printf '%s' "$stats" | grep -qE 'errors="[1-9]|failures="[1-9]'; then r=FAILED; else r=passed; fi
-    printf '%s\tscale=%s\trun=%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$scale" "$i" "$r" \
+    printf '%s\tscale=%s\trun=%s\t%s\t%s\n' "$(pc_now)" "$scale" "$i" "$r" \
         "$(grep -ohE 'No progress beyond [0-9]+ records after [0-9]+ rounds' "$log" | tail -1)" >> "$OUT/tally.tsv"
   done
 done
