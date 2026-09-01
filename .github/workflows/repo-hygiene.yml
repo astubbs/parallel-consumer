@@ -13,7 +13,8 @@
 # that no workflow named. The failure is silent by construction: nothing goes red to tell you a
 # check is not running.
 #
-# `bin/check-all.sh --with-tests` globs `bin/check-*.sh` and `bin/test-*.sh`, so the set cannot drift
+# `bin/check-all.sh --with-tests` globs `bin/check-*.{sh,mjs}` and `bin/test-*.{sh,mjs}`, so the set
+# cannot drift
 # from what exists. It does not stop at the first failure - every check runs, and the summary names
 # each one that failed with the tail of its output - so a single lane loses no attribution against
 # the previous per-job layout. It runs the gates concurrently and finishes in about a minute, which
