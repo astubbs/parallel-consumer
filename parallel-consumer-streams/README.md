@@ -25,28 +25,37 @@ time rather than at runtime when the change stops applying.
 -Dpc.streams.dispatch.enabled=true
 ```
 
-**The seam is OFF by default. This is an opt-in preview** - but the reason has changed, and the
-change is worth reading rather than skipping.
+**The seam is OFF by default. This is an opt-in preview** - and the reason has now changed twice.
+Each time, the measurement that closed one reason named the next, which is worth reading rather than
+skipping.
 
-The original reason was a missing refusal: joins, windows, suppression and exactly-once were
+**Reason one, closed: a missing refusal.** Joins, windows, suppression and exactly-once were
 unsupported *and not refused*, so a topology using one was dispatched anyway and got wrong behaviour
-with nothing in the log to say so. That gap is closed - see
-[What is refused, and how you find out](#what-is-refused-and-how-you-find-out). The commitment made
-at the time was to restore on-by-default the day refusal landed.
+with nothing in the log to say so. See
+[What is refused, and how you find out](#what-is-refused-and-how-you-find-out).
 
-**It is not being restored, and the replacement reason was found by measuring rather than by
-worrying.** Run Apache Kafka's own suite against the patched classes with the seam *on* and
-`StreamThreadTest` reaches `StreamTask.revive()` through Kafka's ordinary task-corruption recovery: a
-`TaskCorruptedException` closes the task dirty and revives the same instance, whose PC dispatcher is
-final and was closed on the way down. `revive()` throws the loud-failure `IllegalStateException` that
-exists to stop that becoming a silent stall, nothing catches it, and it leaves the run loop uncaught
-on the StreamThread. `TaskCorruptedException` is not exotic - it is what Kafka raises when a
-consumer's offset falls outside the topic's retained range.
+**Reason two, closed: revival.** Run Apache Kafka's own suite against the patched classes with the
+seam *on* and `StreamThreadTest` reached `StreamTask.revive()` through Kafka's ordinary
+task-corruption recovery - a `TaskCorruptedException` closes the task dirty and revives the same
+instance, whose PC dispatcher had been closed on the way down. The loud-failure
+`IllegalStateException` that stopped that becoming a silent stall was caught by nothing and left the
+run loop uncaught on the StreamThread. A revived task now **rebuilds its dispatcher** over the
+partitions it holds at that moment, and the seam-on measurement, taken before and after with nothing
+else changed, shows those three cases green, no exception leaving any StreamThread, and no case that
+passed before regressing - plus five `StreamTaskTest` close and checkpoint cases going green with
+them, because the same work taught `validateClean` to see records that are still running.
 
-So: a refused surface is safe to have switched on; a thrown lifecycle event mid-recovery is not. The
-default now waits on task lifecycle and rebalance - the work that gives the dispatcher a life beyond
-the task instance it was built with - and whoever moves it should re-run that seam-on measurement
-first rather than trusting this paragraph.
+**Reason three, open, and it is why the default still does not move.** A
+`TaskCorruptedException` or `TaskMigratedException` raised *inside a processor* is caught by the
+worker, delivered one or more pump cycles later, and wrapped in a `StreamsException` - so Kafka's
+`TaskManager` never sees the type it dispatches recovery on, and an application stock Streams would
+have recovered shuts down instead. `StreamThreadTest.shouldReinitializeRevivedTasksInAnyState` fails
+for exactly that, identically before and after the lifecycle work. It cannot be refused, because it
+is a property of the exception rather than of the topology shape; it belongs to the error-surfacing
+work.
+
+Whoever moves the default should re-run the seam-on measurement rather than trusting this section -
+three times now it has named the next reason.
 
 Two further switches, both process-wide for the reason given in
 [`PcDispatchSwitch`](src/main/java/bz/stub/parallelconsumer/streams/PcDispatchSwitch.java) (there is
@@ -223,6 +232,42 @@ split wait idle. That measurement, its refuted prediction and its arms are owned
 produces one is a separate unit and a number copied out of its write-up drifts silently from it. What
 this rung ships is the mechanism and the tests that show it is load-bearing.
 
+### Task lifecycle: what happens when a task changes hands
+
+Kafka Streams moves a task around a great deal - it suspends it, recycles it into a standby, gains and
+loses its partitions in a cooperative rebalance, closes it dirty and revives the same object. The
+dispatcher was originally built to live exactly as long as one `StreamTask` constructor call, which
+held only while none of that happened.
+
+| Event | What the dispatcher does now |
+|---|---|
+| Partitions change (`updateInputPartitions`) | revoke, then assign, in Parallel Consumer's own order - the revoke is what bumps the epoch that lets a late outcome for a partition somebody else now owns be recognised and dropped |
+| Suspend | drain, bounded; a worker still inside the chain would be forwarding into a record collector about to close |
+| Recycle to standby (`prepareRecycle`) | close, through the same call the close path makes - this route previously bypassed it and leaked the registry entry, the worker pool, the wake-signal registration and PC's partition state |
+| Close | drain, revoke, and mark everything published as covered, because a closed dispatcher owns nothing and will never commit again |
+| Revive after a dirty close | **build a new dispatcher** over the partitions the task holds now; the closed one has no route back to a running worker pool |
+
+Two rules hold the rest together. **In-flight work on a revoked partition is abandoned, not awaited** -
+the epoch fence makes its outcome unusable, and that is the at-least-once trade Parallel Consumer's
+core already makes rather than a policy invented here. And **a question may never mutate**: the
+"is there work outstanding" query is reachable from Kafka's state-updater thread, so it reads counters
+and touches neither the `WorkManager` nor the completion mailbox, while everything that does touch
+them stays owner-thread-only and says so at runtime. That rule and how it was arrived at are owned by
+[`docs/solutions/architecture-patterns/a-query-must-never-mutate-derive-thread-safety-from-callers.md`](../docs/solutions/architecture-patterns/a-query-must-never-mutate-derive-thread-safety-from-callers.md).
+
+The distinction that makes a clean close honest is that "is a commit worth attempting" and "is it safe
+to walk away" are **the same question on the stock path** - processing is synchronous, so a record is
+either finished or not started. Asynchronous dispatch creates a third state, and `validateClean()` is
+the caller that has to see it: without that, `closeClean()` over records still inside the processor
+chain succeeded silently where Kafka's contract is to throw `TaskMigratedException` and close dirty.
+
+The end-to-end arm is `RebalanceUnderPcDispatchTest`: two `KafkaStreams` instances in one application
+id over a multi-partition topic, the second joining mid-run, both dispatching through Parallel
+Consumer. It asserts no loss, duplicates bounded by **capacity rather than by a fraction of
+throughput**, that the handover actually happened (with a reader `assign`ed and `seek`ed past the
+position captured when the second instance started, so it cannot be satisfied by the first
+instance's earlier output), and that ownership moved rather than being shared.
+
 ---
 
 ## What is refused, and how you find out
@@ -305,6 +350,15 @@ under PC dispatch stream time never advances, so the punctuator simply never fir
 warning, no output. It is the one item of the original unsupported list this envelope does not cover,
 because it is a call on the processor context rather than a topology shape or a store type. Wall-clock
 punctuation does fire.
+
+**A typed control-flow exception raised inside a processor.** `TaskCorruptedException` and
+`TaskMigratedException` are how a topology tells Kafka's `TaskManager` to recover a task rather than
+fail. On the PC path a worker's exception is surfaced one or more pump cycles later and wrapped in a
+`StreamsException`, so the type never reaches the machinery that dispatches on it, and an application
+stock Streams would have recovered shuts down instead. It escapes the envelope for a structural
+reason: it is a property of the exception, not of the topology's shape, so there is nothing to refuse
+at build time or at task construction. This is what the default is currently waiting on - see
+[Turning it on, and why it is off](#turning-it-on-and-why-it-is-off).
 
 ---
 
