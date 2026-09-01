@@ -20,6 +20,7 @@ Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutio
 |---|---|---|
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. Mechanism known and owned (astubbs#262), quarantined - see below |
 | `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 3 seen (2026-08-18, 2026-08-19, 2026-08-25) | Not from the original scan - each found while babysitting a branch carrying **no main Java**. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third sighting carries the failing batch contents and they point at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
+| `ParallelEoSStreamProcessorTest.processInKeyOrder` | 1 of 8 local full-suite runs on unmodified `master` (2026-09-01) | Not from the original scan - found while re-cutting astubbs#203, which is why the control arm exists. Source-level lead below, so classify from it rather than re-measuring |
 
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
 door, and for the same reason: two of that family turned out to be real product bugs, and the third
@@ -82,6 +83,32 @@ under KEY ordering, and predict a deterministic failure; then five distinct keys
 always passes. If both hold, this is
 the test's own input and neither the runner nor the batcher. If the collision case passes, the draw
 is a red herring and contention-versus-product stands as before.
+
+### `processInKeyOrder` - one control-loop cycle standing in for "all nine records polled"
+
+```
+ParallelEoSStreamProcessorTest.processInKeyOrder:1147 [sanity check input data]
+  Actual and expected should have same size but actual size is: 0 while expected size is: 9
+```
+
+**Master state, measured rather than argued.** Found on astubbs#203's re-cut branch (2 of 5 full
+`-pl :parallel-consumer-core` runs), so the control arm was run before touching anything: a detached
+worktree at the same `origin/master` commit, no changes, same box - **1 of 8 runs failed on the
+identical line with the identical message**. Same assertion, same failure mode, nothing of
+astubbs#203 present. Re-running the test class alone was green 5 of 5, so it needs the concurrent
+suite's load to fire.
+
+**The lead is in the test, not the product**, and it is the shape `docs/solutions/` already names -
+awaiting a proxy that leads the value under assertion. Grep `processInKeyOrder` for
+`awaitForOneLoopCycle`: the assertion immediately after it counts the records the `consumerSpy.poll`
+doAnswer has accumulated, but one control-loop iteration is not a promise that the poll delivering
+all nine has happened - the first iteration can turn before the broker poller has returned anything,
+and `polled` is then empty rather than short. That reading predicts exactly the observed all-or-
+nothing size (0, never 3 or 7), and it predicts the load dependence.
+
+**Classify before touching it**, per the rule above. The cheap experiment: replace the
+`awaitForOneLoopCycle()` with an await on `polled` reaching nine and predict it goes deterministic;
+if it still fails, the poll genuinely is not happening and that is a product question.
 
 ### `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` - a helper defect, not a test defect
 
