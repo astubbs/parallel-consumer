@@ -215,8 +215,11 @@
                          expand per fork - Maven passes unknown properties through untouched.
 
                          FAILSAFE IS DELIBERATELY NOT GIVEN THIS. It declares no forkCount, so it runs at
-                         the default of 1, and the bin/ experiment runners read a flat
-                         <their -Dpc.log.dir>/probes.log path that a fork subdirectory would break. -->
+                         the default of 1, and the bin/ experiment runners record a flat
+                         <their -Dpc.log.dir>/probes.log path for a reader to open, which a fork
+                         subdirectory would break. (They CLASSIFY from the run log, not from the silo -
+                         the violation and the trajectory land in different silos, and only the run log
+                         has both. Their headers say so.) -->
                     <argLine>@{argLine} ${lincheck.jvm.args} -Dpc.log.dir=${pc.log.dir}/fork-${surefire.forkNumber}</argLine>
                 </configuration>
             </plugin>

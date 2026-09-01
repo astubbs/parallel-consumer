@@ -19,8 +19,15 @@
 # fired; the aggregate reading is still recorded beside it, because a run where another detector
 # fired first is worth seeing.
 #
-# Reads the siloed streams that docs/logging.md owns rather than the raw run log - probes.log is the
-# detectors, so "did it fire" is a small file instead of a grep of tens of thousands of lines.
+# CLASSIFIES FROM THE RUN LOG, AND WRITES THE SILOS FOR THE HUMAN. -Dpc.log.dir gives each run its
+# own silo directory (docs/logging.md), but the two things this script has to read live in DIFFERENT
+# silos: the "VIOLATION: NO_PROGRESS" announcement is ProgressProbe, so it goes to probes.log, and
+# the "[diagnose] ... consumed=n/m ... done=" trajectory is ChaosScenarioBase, so it goes to
+# harness.log. The run log is the one place both appear together, and it has them because the silos
+# are routed as COPIES with additivity left alone. So the classifier reads $log; the silo directory
+# is there for whoever opens the run afterwards and wants "did it fire" as a small file rather than
+# a grep of tens of thousands of lines. An earlier version of this header claimed the classifier
+# read probes.log, which it never did.
 #
 # `-e` is deliberately omitted - a failing iteration is the data. bin/lib/chaos-experiment-common.sh
 # owns that reasoning, along with the maven invocation and the parsing every runner here shares.

@@ -34,7 +34,13 @@
 # omission; this row is what stops the next one from corrupting the headline instead of showing up.
 # The counts are still printed beside every verdict, so any of them can be re-checked by hand.
 #
-# Reads the siloed probes.log (docs/logging.md) so "which detector fired" is a small file.
+# CLASSIFIES FROM THE RUN LOG; THE probes.log PATH IN EACH TALLY ROW IS FOR THE READER.
+# -Dpc.log.dir gives every iteration its own silo directory (docs/logging.md) and the row records
+# where it is, so "which detector fired" is a small file to open by hand. pc_detector_verdict itself
+# is given $log, because the silos are routed as COPIES with additivity left alone - the run log
+# carries every "VIOLATION:" line the classifier needs, and it also carries the ChaosScenarioBase
+# "[diagnose]" lines, which land in harness.log rather than probes.log. An earlier version of this
+# header said the classifier read the silo; it never did.
 #
 # `-e` is deliberately omitted - a failing iteration is the data. bin/lib/chaos-experiment-common.sh
 # owns that reasoning, along with the maven invocation and the classifiers every runner here shares.
