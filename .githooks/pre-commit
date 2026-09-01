@@ -62,14 +62,18 @@ set -euo pipefail
 # installs, so a contributor without it was hard-blocked from committing ANYTHING, with
 # "check-docs-data.sh failed (exit 2)" as the only explanation - the precise outcome the paragraph
 # above exists to prevent. The remaining three gates exit 0 or 1 only, so they need no soft code:
-# check-source-patterns.mjs and check-action-versions.sh exit 1 on a finding, and
+# check-action-versions.sh exits 1 on a finding. check-source-patterns.mjs exits 1 on a finding AND
+# 2 for "cannot run" - it fails closed when it cannot establish a merge base (shallow clone, narrow
+# fetch), and that must SOFT-skip here rather than block: blocking a commit because history is
+# incomplete teaches people to bypass the hook, which this header warns about one paragraph up.
+# and
 # check-quarantine-registry.sh exits its own drift flag.
 GATES=(
     "check-copyright-headers.sh:2"
     "check-issue-refs.sh:2"
     "check-file-refs.sh:2"
     "check-docs-data.sh:2"
-    "check-source-patterns.mjs:"
+    "check-source-patterns.mjs:2"
     "check-quarantine-registry.sh:"
     "check-action-versions.sh:"
 )

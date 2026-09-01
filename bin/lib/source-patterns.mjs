@@ -86,6 +86,11 @@ export const RULES = [
     //
     // `[^|]\|` keeps `||` out: a logical-or is not a pipeline.
     forbid: /^(?![ \t]*#)[^\n]*[^|]\|[ \t]*grep(?:[ \t]+-[a-zA-Z-]+)*[ \t]+(?:-[a-zA-Z]*q|--quiet|--silent)/m,
+    // TWO KNOWN LIMITS, both inherited from the line-oriented gate this replaced rather than
+    // introduced here - checked against it rather than assumed. A pipeline split over a line
+    // continuation (`printf x | \` then `grep -q` on the next line) is not caught, and a heredoc body
+    // line containing `| grep -q` as literal data is a false positive, since only #-comment lines are
+    // excluded. Stated so nobody reads the rule as tighter than it is.
     fix: 'Use a herestring: grep -q PATTERN <<<"$data". No pipeline, so no SIGPIPE for pipefail to promote.',
   },
 ]
