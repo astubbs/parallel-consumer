@@ -206,16 +206,46 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
         return binaryArrayString;
     }
 
+    /**
+     * Decodes under the strict {@link InvalidOffsetMetadataHandlingPolicy#FAIL} policy, for a caller with no
+     * configured consumer to take a policy from.
+     *
+     * @see #getDecodedIncompletes(long, InvalidOffsetMetadataHandlingPolicy, TopicPartition)
+     */
     public HighestOffsetAndIncompletes getDecodedIncompletes(long baseOffset) {
         return getDecodedIncompletes(baseOffset,  ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.FAIL);
     }
 
+    /**
+     * Decodes without a partition to name in diagnostics - the payload is all the caller has.
+     *
+     * @see #getDecodedIncompletes(long, InvalidOffsetMetadataHandlingPolicy, TopicPartition)
+     */
     public HighestOffsetAndIncompletes getDecodedIncompletes(long baseOffset, InvalidOffsetMetadataHandlingPolicy errorPolicy) {
         return getDecodedIncompletes(baseOffset, errorPolicy, null);
     }
 
     /**
-     * @param tp the partition this payload was committed against, for diagnosis - may be null when unknown
+     * Turns this pair's payload into the highest offset seen and the incomplete offsets below it, applying the user's
+     * policy to every way that can fail.
+     * <p>
+     * Three outcomes, and the point of this method is that they are <em>one</em> user-visible event - "this build
+     * cannot read the committed metadata" - rather than three unrelated failures:
+     * <ol>
+     *     <li>the encoding is Kafka Streams', which this build never decodes;</li>
+     *     <li>the encoding has a magic byte but no decoder here (the {@code ByteArray} pair);</li>
+     *     <li>a decoder exists, but the bytes are not something any encoder here could have produced - see
+     *     {@link CorruptOffsetMetadataException}, which is the case that used to return a fabricated offset map
+     *     instead of failing.</li>
+     * </ol>
+     * A fourth outcome - a payload that decodes cleanly into a wrong-but-plausible map - is <b>not</b> covered, and
+     * cannot be: nothing in such a payload proves it wrong.
+     *
+     * @param baseOffset  the committed offset the payload is relative to, and what {@code IGNORE} falls back to
+     * @param errorPolicy what to do when this build cannot read the payload
+     * @param tp          the partition this payload was committed against, for diagnosis - may be {@code null} when
+     *                    the caller does not know it
+     * @return the highest offset seen, and the incomplete offsets below it
      */
     @SneakyThrows
     public HighestOffsetAndIncompletes getDecodedIncompletes(long baseOffset,
@@ -238,6 +268,10 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
                         msg("no decoder for encoding: {}", encoding.description()),
                         () -> new UnsupportedOffsetEncodingException(encoding, describeSource(tp, baseOffset)),
                         tp);
+            // Every remaining constant has a decoder, so it belongs to decodeBody below rather than to the policy.
+            // The assumption is not left implicit: decodeBody's own default throws PCInternalRuntimeException, so an
+            // encoding added without a decoder AND without an arm here fails loudly instead of being decoded as
+            // something else.
             default:
                 break;
         }
