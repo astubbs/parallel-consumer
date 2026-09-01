@@ -25,8 +25,8 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  * (topic-partition, record count, offset range) and cap the number of partitions named individually, so the
  * line has a fixed upper bound however large the batch is. The unabridged dump belongs at {@code DEBUG}.
  * <p>
- * Two call sites use it; the same defect is live on several more, which
- * {@code docs/inflight/bug-unbounded-log-lines.md} lists with their anchors - including the ones deliberately
+ * The same defect is live on log lines this class has not been applied to yet;
+ * {@code docs/inflight/bug-unbounded-log-lines.md} lists them with their anchors - including the ones deliberately
  * dismissed, where the collection <em>is</em> the diagnostic and summarising it would destroy the line.
  *
  * @author Antony Stubbs
