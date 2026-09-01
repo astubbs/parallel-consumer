@@ -31,6 +31,9 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
+import java.time.Instant;
+import bz.stub.parallelconsumer.internal.utils.StringUtils;
+import bz.stub.parallelconsumer.internal.utils.ThroughputReport;
 
 import static bz.stub.parallelconsumer.internal.utils.GeneralTestUtils.time;
 import static bz.stub.parallelconsumer.internal.utils.Range.range;
@@ -232,6 +235,9 @@ class LargeVolumeInMemoryTests extends ParallelEoSStreamProcessorTestBase {
 //            log.debug(x.toString());
         });
 
+        // In-memory: no broker in the path, so this rate is the cleanest machine-speed reference in
+        // the lane - it moves with the runner and with PC's own overhead, and with nothing else.
+        Instant waitStarted = Instant.now();
         waitAtMost(defaultTimeout.multipliedBy(15)).untilAsserted(() -> {
             // assertj's size checker uses an iterator so must be synchronised.
             // .size() wouldn't need it but this output is nicer
@@ -245,6 +251,12 @@ class LargeVolumeInMemoryTests extends ParallelEoSStreamProcessorTestBase {
                     .as("Expected number of produced messages")
                     .hasSize(quantityOfMessagesToProduce);
         });
+        int processed;
+        synchronized (successfulWork) {
+            processed = successfulWork.size();
+        }
+        ThroughputReport.report("LargeVolumeInMemoryTests", processed, quantityOfMessagesToProduce,
+                waitStarted, StringUtils.msg("keys={} outcome=PASSED", numberOfKeys));
         bar.close();
 
         log.info("Closing async client");
