@@ -72,7 +72,52 @@ revoke. Cells, caveats and the two instrumentation faults caught along the way a
 `docs/solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md` and
 the probe's own Calibration status javadoc.
 
-0. **AT MERGE, resolve a deliberate divergence: the dependency DELETED `getAssignmentSize`, and
+0. **AT MERGE, DELETE SIX SCRIPTS THIS BRANCH RE-ADDS UNDER THEIR OLD NAMES - git will NOT flag
+   it.** astubbs/parallel-consumer#381 renames every experiment runner to an `exp-` prefix and lands
+   first. This branch still carries the originals, so the merge sees six *new paths* rather than six
+   conflicts, and master quietly ends up holding both copies of each - which then diverge, because
+   only one of them is the one anybody edits.
+
+   | this branch adds | astubbs/parallel-consumer#381 already put on master |
+   |---|---|
+   | `bin/audit-stall-detector-silence.sh` | `bin/exp-audit-stall-detector-silence.sh` |
+   | `bin/confirm-async-drain.sh` | `bin/exp-confirm-async-drain.sh` |
+   | `bin/hunt-async-stall-answer.sh` | `bin/exp-hunt-async-stall-answer.sh` |
+   | `bin/measure-large-instances-failure-rate.sh` | `bin/exp-measure-large-instances-failure-rate.sh` |
+   | `bin/sweep-large-instances-scale.sh` | `bin/exp-sweep-large-instances-scale.sh` |
+   | `bin/batch-857-experiments.sh` | `bin/exp-batch-857.sh` (also shortened) |
+   <!-- file-refs: N/A - the exp- paths deliberately do not exist on this branch; they arrive with
+        astubbs/parallel-consumer#381, and naming them is the whole point of the table -->
+
+   **Keep the `exp-` copies and delete this branch's six.** The prefixed ones are the ones the
+   `docs/testing.md` choosing table, `bin/AGENTS.md`'s lifecycle rule and
+   `.github/workflows/experiments.yml` all name; the un-prefixed ones are referenced by nothing once
+   that lands. Diff them before deleting rather than assuming they are identical - this branch may
+   carry a fix that never made it across.
+   <!-- file-refs: N/A - names the workflow and docs that arrive with astubbs/parallel-consumer#381,
+        which is exactly why they are not on this branch yet -->
+
+   `bin/performance-test.sh` is *modified* on both sides, so that one WILL conflict and is the easy
+   case: take both edits.
+
+0b. **Then ask which of the six still deserve to exist at all, because this PR answers some of their
+   questions.** `bin/AGENTS.md` ("A script that answered its question is finished") is the rule: an
+   experiment whose question is settled has its method written up in `docs/solutions/` and its script
+   deleted. That judgement is cheapest exactly here, at the merge that answers them - nobody comes
+   back for it later, which is why `bin/` has only ever grown.
+
+   Worth re-asking one at a time: `exp-audit-stall-detector-silence` (its question is task 1 below
+   and is REOPENED, so it stays), `exp-hunt-async-stall-answer` and `exp-confirm-async-drain` (the
+   same question at two confidence levels - if the drain result is settled, one write-up replaces
+   both), `exp-batch-857` (a snapshot of what was outstanding on one day, and the shortest shelf life
+   of the six). The two `large-instances` measurements are rate instruments rather than one-shot
+   questions and survive on their own terms.
+
+   This branch's own additions get the same test, not a free pass: `bin/soak-deadlock-probe.sh`
+   drives the deterministic probe and is a regression instrument worth keeping, while
+   `bin/torture-overnight.sh` and its self-test were built for a soak that has already reported.
+
+0c. **AT MERGE, resolve a deliberate divergence: the dependency DELETED `getAssignmentSize`, and
    this branch still calls it.** The simplify pass on astubbs/parallel-consumer#393 removed
    `assignmentSizeCache`, `ConsumerManager.getAssignmentSize()` and the `consumer.assignment()` call
    in `updateCache()`, on the grounds that the base commit had deleted `pausedForThrottling` for
