@@ -7,7 +7,7 @@
 this defect rather than warning. What is left below is a confirmation, not the experiment that
 settles it - see the last section.**
 
-**A detector that has never fired is not a working detector.** `bin/check-throughput-regression.sh`
+**A detector that has never fired is not a working detector.** `bin/check-throughput-regression.mjs`
 was reasoned into existence from a regression that was diagnosed by hand; nothing has yet confirmed it
 would have caught that regression, or that it stays quiet on a clean tree. Both halves need showing,
 and there is an unusually good subject available: a defect whose presence is a one-line edit.
@@ -68,14 +68,14 @@ otherwise. That limitation is in the script's header and belongs in whatever con
 ## Update, same day: history answered it before the experiment could
 
 The threshold no longer needs this experiment to be chosen, because the spread was already recorded -
-in CI logs nobody had mined. `bin/perf-backfill.sh` recovered every performance run inside GitHub's
+in CI logs nobody had mined. `bin/perf-backfill.mjs` recovered every performance run inside GitHub's
 log-retention window and computed the normalised ratio for each. Twelve carried a rate and they
 separate with a gap and no observation inside it: every regressed run scored between 0.407 and 0.605,
 every healthy one 0.778 or above.
 
 So `FAIL_BELOW` is 0.70, derived rather than guessed, and the defect this note is about scores 0.578 -
 **it fails the lane** rather than warning, which is what was wanted and what the earlier draft of this
-note could not justify. `bin/test-check-throughput-regression.sh` pins those real observations as
+note could not justify. `bin/test-check-throughput-regression.mjs` pins those real observations as
 cases, so the thresholds cannot drift away from the evidence they came from without a red test.
 
 **astubbs/parallel-consumer#29 ran the control arm on the fix**, after merging the branch carrying it

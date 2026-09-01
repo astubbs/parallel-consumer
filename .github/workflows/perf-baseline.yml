@@ -80,7 +80,7 @@ jobs:
 
       - name: Throughput regression check
         if: always()
-        run: bin/check-throughput-regression.sh
+        run: node bin/check-throughput-regression.mjs
 
       # `if: always()` and `if-no-files-found: warn` together: a lane that FAILED still produced
       # numbers worth keeping - ThroughputReport emits on failure as well as success, which is the

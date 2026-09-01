@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Copyright (C) 2026 Antony Stubbs and contributors
 //
-// SPIKE: the Node counterpart of bin/perf-backfill.sh, written to answer whether these data-shaping
+// SPIKE: the Node counterpart of bin/perf-backfill.mjs, written to answer whether these data-shaping
 // scripts belong in shell at all. Read the comparison in
 // docs/inflight/ci-node-query-client.md before extending either one - two implementations of the same
 // thing is the worst possible resting state, so this is a decision aid with a deadline, not a fork.
@@ -103,5 +103,46 @@ function collect(maxRuns) {
   console.log(`History: ${HISTORY}`)
 }
 
+function suggestBaseline() {
+  // MASTER RUNS ONLY. The shell version's first real invocation proposed 43,552 rec/s - the REGRESSED
+  // figure from an unmerged branch that dominated the sample - which would have LOWERED the baseline
+  // and disarmed the check. A warning is not a guard, so this filters to trees that actually shipped.
+  const rows = readFileSync(HISTORY, 'utf8').split('\n')
+    .filter(l => l && !l.startsWith('#')).map(l => l.split('\t'))
+    .filter(r => r[2] === 'master' && r[6] !== 'none')
+  if (rows.length === 0) {
+    console.error('No MASTER run carries a rate. A baseline may only come from a tree that shipped;')
+    console.error('PR-branch runs are excluded so an unmerged regression cannot become the new normal.')
+    process.exit(3)
+  }
+  // THE MEDIAN RUN, not the fastest - baselining on an outlier makes every ordinary run afterwards
+  // read as a regression, which is how a performance gate earns its reputation and gets switched off.
+  const byRun = new Map()
+  for (const r of rows) if (!byRun.has(r[0])) byRun.set(r[0], Number(r[6]))
+  const runs = [...byRun.entries()].sort((a, b) => a[1] - b[1])
+  const [runId, rate] = runs[Math.floor((runs.length - 1) / 2)]
+
+  const current = Number(readFileSync('docs/perf-baseline.tsv', 'utf8').split('\n')
+    .find(l => l.startsWith('rate\t'))?.split('\t')[2] ?? 0)
+  if (current && rate < current) {
+    console.error(`REFUSING TO RECOMMEND: ${rate} is BELOW the current baseline of ${current}.`)
+    console.error('  Raising a baseline is routine. Lowering one claims the product got slower and that')
+    console.error('  this is acceptable, which is never a scripted decision. Edit it by hand and say why.')
+    process.exit(1)
+  }
+
+  // ONE RUN'S NUMBERS, never a blend: a rate from one run normalised by class times from another is
+  // not a comparison.
+  console.log(`\n# Every row below is from run ${runId} - do not mix runs.`)
+  console.log(`rate\t${SUBJECT}\t${rate}\trecords-per-second`)
+  for (const r of rows.filter(r => r[0] === runId && r[4] !== SUBJECT)) {
+    console.log(`class-seconds\t${r[4]}\t${r[5]}\tseconds`)
+  }
+  console.log('\nPaste into docs/perf-baseline.tsv ONLY if the product genuinely got faster.')
+  console.log('A regression that has become the new normal produces exactly the same output.')
+}
+
 const args = process.argv.slice(2)
-collect(Number(args[0] ?? 40))
+const suggest = args[0] === '--suggest-baseline'
+collect(Number((suggest ? args[1] : args[0]) ?? 40))
+if (suggest) suggestBaseline()

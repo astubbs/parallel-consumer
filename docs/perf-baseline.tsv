@@ -1,6 +1,6 @@
 # Copyright (C) 2026 Antony Stubbs and contributors
 #
-# Baseline for bin/check-throughput-regression.sh. Tab-separated: kind, name, value, unit.
+# Baseline for bin/check-throughput-regression.mjs. Tab-separated: kind, name, value, unit.
 #
 # A COMMITTED RATCHET, UPDATED BY A HUMAN. Nothing in CI writes here - there is no data branch and no
 # contents: write grant, so this file is the whole baseline.
@@ -14,7 +14,7 @@
 # update it to make a red lane green without saying that is what you are doing.
 #
 # The three class-seconds rows are the machine-speed reference, not measurements of anything in their
-# own right. All three performance classes are listed: bin/perf-backfill.sh's first version summed
+# own right. All three performance classes are listed: bin/perf-backfill.mjs's first version summed
 # whatever classes happened to run and its denominator swung from 130s to 1335s across branches, which
 # conflated "the subject slowed" with "the lane changed".
 rate	MultiInstanceHighVolumeTest	77960	records-per-second

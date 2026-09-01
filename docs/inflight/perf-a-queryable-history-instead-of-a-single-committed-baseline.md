@@ -3,7 +3,7 @@
 <!-- inflight-type: feature -->
 <!-- inflight-impact: blind-spot -->
 
-`bin/check-throughput-regression.sh` compares against `docs/perf-baseline.tsv`: **one run's numbers,
+`bin/check-throughput-regression.mjs` compares against `docs/perf-baseline.tsv`: **one run's numbers,
 updated by hand.** That is enough to gate on, and it has three consequences that a queryable history
 removes rather than mitigates.
 
@@ -30,7 +30,7 @@ removes rather than mitigates.
   everything equally reads as a slow runner. Cross-run absolute rates would catch it - and those exist.
 
 **The data is not missing. Nothing reads it.** Every performance run inside GitHub's log-retention
-window carries per-class failsafe times, and recent ones carry rates; `bin/perf-backfill.sh` already
+window carries per-class failsafe times, and recent ones carry rates; `bin/perf-backfill.mjs` already
 recovers them read-only via the run-logs archive.
 
 ## The idea: each run carries the whole history forward
@@ -50,7 +50,7 @@ run and one that cannot.
 never publish one, or the series becomes whatever the last PR to touch it said.
 
 **The cache is a cache, and must be rebuildable.** If it is lost, corrupted, or its schema changes,
-`bin/perf-backfill.sh` reconstructs it from logs within the retention window. Anything that cannot be
+`bin/perf-backfill.mjs` reconstructs it from logs within the retention window. Anything that cannot be
 rebuilt that way does not belong in it - which is the rule that keeps this from quietly becoming the
 durable store the operator declined.
 

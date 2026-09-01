@@ -151,7 +151,7 @@ jobs:
       # case's data on the run rather than depending on that flag staying correct.
       - name: Throughput regression check
         if: always() && matrix.suite == 'performance'
-        run: bin/check-throughput-regression.sh
+        run: node bin/check-throughput-regression.mjs
 
       # PERFORMANCE ONLY, and the retention is deliberately not the chaos lane's 14 days above.
       # Those reports diagnose ONE failure and are read within days. These are the accumulation
