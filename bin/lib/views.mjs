@@ -33,6 +33,7 @@ export function formatFind(hits, query, index) {
 }
 
 export function formatDrift(d) {
+    if (d.ok === false) return `prior-art: ${d.reason}`
     if (!d.found) return `no in-flight note at that path on any ref.\nTry: bin/inflight.mjs note find <fuzzy>`
 
     const cluster = (c, label) => {
@@ -64,9 +65,10 @@ export function formatDrift(d) {
         out.push(`  ${d.baseline} has moved since.\n`)
         for (const c of d.divergent) {
             const a = c.added
-            out.push(cluster(c, !a ? 'differs'
-                : a.newFile ? 'added on this branch, after it diverged'
-                    : `+${a.added} -${a.removed} since its merge-base`))
+            out.push(cluster(c, !a ? 'differs (no merge-base version to compare against)'
+                : a.diffFailed ? 'size UNKNOWN - the diff command failed, which is not "no change"'
+                    : a.newFile ? 'added on this branch, after it diverged'
+                        : `+${a.added} -${a.removed} since its merge-base`))
         }
     }
 

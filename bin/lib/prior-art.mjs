@@ -8,7 +8,7 @@
 // `grep -rl <mechanism> docs/solutions/`, `ls docs/inflight/`. In this repo most of the knowledge
 // base lives on unmerged branches: measured 2026-09-01, 580 of the 901 documents under `docs/`
 // across every ref exist ONLY on branches that have not merged. So a session on master cannot see
-// two thirds of its own prior art, runs all six checks, gets "nothing", and reasons from a false
+// two thirds of its own prior art, runs every check, gets "nothing", and reasons from a false
 // negative - which is worse than not looking, because it carries the authority of a completed check.
 //
 // Worked incident: docs/solutions/workflow-issues/prior-art-lives-on-branches-2026-09-01.md.
@@ -101,10 +101,13 @@ export function priorArt(terms, opts = {}) {
 
     // Local branches plus origin's, minus the symbolic HEAD which duplicates whatever it points at.
     // Deliberately NOT `--all`: that pulls in tags and refs/stash, which add noise without adding docs.
-    const refs = refTips().map((r) => r.ref)
-    if (refs.length === 0) return cannot('no branch refs found - is this a git repository?')
+    const tips = refTips()
+    if (!tips.ok) return cannot('cannot list refs - is this a git repository?')
+    const refs = tips.tips.map((r) => r.ref)
+    if (refs.length === 0) return cannot('no branch refs found - nothing to search')
 
     const baseline = baselineRef()
+    if (!baseline) return cannot('neither origin/master nor master resolves - no baseline to compare against')
 
     result.baseline = baseline
     result.refsSearched = refs.length
@@ -158,6 +161,14 @@ export function priorArt(terms, opts = {}) {
     // ------------------------------------------------------------------------------------------------
     for (const term of terms) {
         const res = exec('git', ['log', '--all', '--format=%h %ad %s', '--date=short', `-S${term}`])
+        // A FAILED pickaxe is not an EMPTY pickaxe. This loop used to read only `res.out`, so a git
+        // that died - a pathological repack, an OOM kill, a term git could not handle - produced no
+        // entries and rendered as "nothing", byte-identical to a real zero-hit search. That is the
+        // exact failure this file's header forbids, one section below where it forbids it.
+        if (!res.ok) {
+            result.commits.push({ term, entries: [], failed: true })
+            continue
+        }
         const entries = lines(res.out).slice(0, 15)
         if (entries.length > 0) result.commits.push({ term, entries })
     }
@@ -291,16 +302,17 @@ export function formatByRef(r) {
 /** Commits and GitHub - identical in both views, because neither is per-path. */
 export function formatTail(r) {
     const out = ['=== 5. Commits that added or removed the term (git log --all -S) ===']
-    if (r.commits.length === 0) out.push('  nothing')
+    if (r.commits.length === 0) out.push(`  nothing, across every ref`)
     for (const c of r.commits) {
         out.push(`  -- ${c.term}`)
+        if (c.failed) out.push('  (query failed - treat as UNKNOWN, not as nothing)')
         for (const e of c.entries) out.push(`  ${e}`)
     }
     out.push('')
 
     if (!r.github.ran) {
         out.push(`=== 6-8. GitHub checks SKIPPED - ${r.github.skipped} ===`)
-        out.push('  These are NOT "nothing found". Run the three gh checks in AGENTS.md by hand.')
+        out.push('  These are NOT "nothing found". Run the gh checks in AGENTS.md by hand.')
         out.push('')
         return out.join('\n')
     }

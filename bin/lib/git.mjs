@@ -51,10 +51,17 @@ export const lines = (s) => s.split('\n').filter((l) => l.length > 0)
  */
 export function refTips() {
     const res = exec('git', ['for-each-ref', '--format=%(objectname) %(refname:short)', 'refs/heads', 'refs/remotes/origin'])
-    if (!res.ok) return []
-    return lines(res.out)
-        .map((l) => ({ sha: l.slice(0, l.indexOf(' ')), ref: l.slice(l.indexOf(' ') + 1) }))
-        .filter((r) => !r.ref.endsWith('/HEAD'))
+    // `{ok}` RATHER THAN AN EMPTY ARRAY. This returned `[]` on failure, so "this is not a git
+    // repository" and "this repository has no branches" were the same answer - and three commands
+    // rendered it as a clean empty result and exited 0, printing "nothing, across 0 refs" over a
+    // search that never ran. Reproduced outside a git repo before it was fixed.
+    if (!res.ok) return { ok: false, tips: [] }
+    return {
+        ok: true,
+        tips: lines(res.out)
+            .map((l) => ({ sha: l.slice(0, l.indexOf(' ')), ref: l.slice(l.indexOf(' ') + 1) }))
+            .filter((r) => !r.ref.endsWith('/HEAD')),
+    }
 }
 
 /**
@@ -62,7 +69,15 @@ export function refTips() {
  * rather than about whatever happens to be checked out.
  */
 export function baseline() {
-    return exec('git', ['rev-parse', '--verify', '--quiet', 'origin/master']).ok ? 'origin/master' : 'master'
+    for (const ref of ['origin/master', 'master']) {
+        if (exec('git', ['rev-parse', '--verify', '--quiet', ref]).ok) return ref
+    }
+    // BOTH CANDIDATES FAILED, so there is no baseline to compare against. The fallback used to be the
+    // bare string 'master' with no check, which resolves to nothing in a shallow or single-ref clone -
+    // and every consumer then read an empty tree as "the baseline carries nothing", reporting every
+    // note on every branch as stranded and every version as divergent, with no warning anywhere.
+    // Returning null forces the caller to say so instead of answering confidently and wrongly.
+    return null
 }
 
 /**
@@ -82,10 +97,27 @@ export function blobsForPath(refs, path) {
     // today and silently wrong the first time anything filters or reorders. Verified against git's
     // actual output: a hit prints `<sha> <rest>`, a miss prints `<spec> missing` and drops the rest -
     // so a miss is detected on the second field, never by trying to parse the ref back out.
-    const query = refs.map((r) => `${r}:${path} ${r}`).join('\n')
+    // A PATH CONTAINING WHITESPACE CANNOT CARRY A `%(rest)` TOKEN. git splits the input line at its
+    // FIRST space to find the object spec, so `<ref>:<path with space> <ref>` asks about a truncated
+    // path and answers `missing` for every ref - a note invisible to every command, with no error.
+    // git emits exactly one output line per input line, in order, so positional pairing is exact;
+    // the length is asserted below rather than assumed, which is the whole reason it is safe.
+    const selfDescribing = !/\s/.test(path)
+    const query = refs.map((r) => (selfDescribing ? `${r}:${path} ${r}` : `${r}:${path}`)).join('\n')
     const res = exec('git', ['cat-file', '--batch-check=%(objectname) %(rest)'], { input: `${query}\n` })
+    const outLines = lines(res.out)
     const out = new Map()
-    for (const line of lines(res.out)) {
+
+    if (!selfDescribing) {
+        if (outLines.length !== refs.length) return out // a short answer is not a set of misses
+        outLines.forEach((line, i) => {
+            const [sha, second] = [line.slice(0, line.indexOf(' ')), line.slice(line.indexOf(' ') + 1)]
+            if (line.indexOf(' ') > 0 && second !== 'missing') out.set(refs[i], sha)
+        })
+        return out
+    }
+
+    for (const line of outLines) {
         const cut = line.indexOf(' ')
         if (cut < 0) continue
         const first = line.slice(0, cut)
@@ -111,7 +143,9 @@ export function treeEntries(ref, pathspec) {
 export function blobDiffStat(a, b) {
     if (a === b) return { added: 0, removed: 0, identical: true }
     const res = exec('git', ['diff', '--numstat', a, b])
-    if (!res.ok) return { added: null, removed: null, identical: false }
+    // Distinguishable from the newFile sentinel: without `diffFailed`, the view saw a truthy object
+    // with no `newFile` and rendered `+null -null since its merge-base`.
+    if (!res.ok) return { added: null, removed: null, identical: false, diffFailed: true }
     const first = lines(res.out)[0]
     if (!first) return { added: 0, removed: 0, identical: true }
     const [added, removed] = first.split('\t')
@@ -132,9 +166,21 @@ export function freshnessWarnings(base, refCount) {
     const warnings = []
     const warn = (id, ...text) => warnings.push({ id, lines: text })
 
+    if (!base) {
+        warn('no-baseline', 'neither origin/master nor master resolves in this checkout, so there is',
+            'NO baseline to compare against. Every answer below is unreliable - a shallow or',
+            'single-ref clone is the usual cause. Run: git fetch origin master')
+        return warnings
+    }
+
     const gitDir = exec('git', ['rev-parse', '--git-dir']).out.trim()
     const commonDir = exec('git', ['rev-parse', '--git-common-dir']).out.trim()
-    if (gitDir === commonDir) {
+    if (!gitDir || !commonDir) {
+        // Both empty compare EQUAL, which used to print a confident "this is the MAIN CHECKOUT".
+        // A git that cannot answer `rev-parse` is not a diagnosis, it is a missing answer.
+        warn('git-unreadable', 'git could not answer `rev-parse --git-dir`; freshness below is UNKNOWN,',
+            'not clean. Everything this run reports may be answering for the wrong tree.')
+    } else if (gitDir === commonDir) {
         warn('main-checkout',
             'this is the MAIN CHECKOUT, which AGENTS.md says never to work in - several',
             'sessions share it, so its HEAD can move between two of your own commands.',

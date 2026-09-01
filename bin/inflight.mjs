@@ -34,6 +34,8 @@
 // EXIT CODES: 0 ran (whatever it found), 2 cannot run - including a usage error. Self-test:
 // bin/test-inflight.mjs.
 
+import { pathToFileURL } from 'node:url'
+
 import { baseline, freshnessWarnings, refTips } from './lib/git.mjs'
 import { corpusIndex, drift, findNotes, prsByBranch, stranded } from './lib/notes.mjs'
 import { formatDrift, formatFind, formatStranded, formatWarnings } from './lib/views.mjs'
@@ -112,6 +114,7 @@ working tree can show you under a third of them.
                     const query = args[0]
                     if (!query) return { ok: false, reason: 'note find: give a fuzzy name to match' }
                     const index = corpusIndex()
+                    if (!index.ok) return { ok: false, reason: `note find: ${index.reason}` }
                     emit(formatWarnings(freshnessWarnings(index.baseline, index.refs.length)))
                     emit(formatFind(findNotes(index, query), query, index))
                     return { ok: true }
@@ -140,8 +143,17 @@ carries that the baseline does not, else the branch name. Nothing is summarised 
                     const path = args.find((a) => a !== '--all')
                     if (!path) return { ok: false, reason: 'note drift: give a note path (see: note find)' }
                     // No corpus index: this is a question about one path, so it asks git that.
-                    emit(formatWarnings(freshnessWarnings(baseline(), refTips().length)))
-                    emit(formatDrift(drift(path, { prs: prsByBranch(), all })))
+                    const tips = refTips()
+                    emit(formatWarnings(freshnessWarnings(baseline(), tips.tips.length)))
+                    const prs = prsByBranch()
+                    if (!prs.ok) {
+                        // gh being unavailable is not "these branches have no PR", and the drift
+                        // output cannot say which it meant unless this line says it first.
+                        emit(`  WARNING: ${prs.reason} - PR titles below are UNKNOWN, not absent.\n`)
+                    }
+                    const d = drift(path, { prs: prs.map, all })
+                    if (d.ok === false) return { ok: false, reason: `note drift: ${d.reason}` }
+                    emit(formatDrift(d))
                     return { ok: true }
                 },
             },
@@ -165,6 +177,7 @@ What survives is clustered by ref-set, because one workstream's notes share thei
 them separately buries the finding under its own volume.`,
         run: (args, emit) => {
             const index = corpusIndex()
+            if (!index.ok) return { ok: false, reason: `stranded: ${index.reason}` }
             emit(formatWarnings(freshnessWarnings(index.baseline, index.refs.length)))
             emit(formatStranded(stranded(index), index))
             return { ok: true }
@@ -178,6 +191,15 @@ const flatten = (cmds, prefix = '') => cmds.flatMap((c) => (c.sub
     : [{ ...c, path: `${prefix}${c.name}` }]))
 
 const ALL = flatten(COMMANDS)
+
+/**
+ * Every command path, `note drift` included.
+ *
+ * Exported so the self-test walks the registry instead of scraping this file with a regex. The
+ * regex it replaced matched one indent level, so it saw the three top-level names and neither
+ * subcommand - and two checks named "every registered command" quietly covered three fifths of them.
+ */
+export const COMMAND_PATHS = ALL.map((c) => c.path)
 
 function help() {
     const width = Math.max(...ALL.map((c) => c.path.length))
@@ -224,6 +246,11 @@ function dispatch(argv, emit) {
     return child.run(rest.slice(1), emit)
 }
 
-const { ok, reason } = dispatch(process.argv.slice(2), (s) => console.log(s))
-if (reason) (ok ? console.log : console.error)(reason)
-process.exit(ok ? 0 : 2)
+// Guarded so this file can be imported for its registry without running a command. It remains the
+// only file here permitted to exit the process; being importable is what lets the self-test assert
+// on the registry rather than on a regex over the source.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+    const { ok, reason } = dispatch(process.argv.slice(2), (s) => console.log(s))
+    if (reason) (ok ? console.log : console.error)(reason)
+    process.exit(ok ? 0 : 2)
+}

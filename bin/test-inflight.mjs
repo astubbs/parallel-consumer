@@ -37,6 +37,7 @@
 import { spawnSync } from 'node:child_process'
 import { cpSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { mkdtempSync as mkTmp } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -49,14 +50,15 @@ const report = (ok, label) => {
 }
 
 /** Run a front door (real or mutant) as a subprocess - the CLI contract is a process-level fact. */
-function invoke(binDir, args) {
-    const r = spawnSync(process.execPath, [join(binDir, 'inflight.mjs'), ...args], { encoding: 'utf8' })
+function invoke(binDir, args, opts = {}) {
+    const r = spawnSync(process.execPath, [join(binDir, 'inflight.mjs'), ...args], { encoding: 'utf8', ...opts })
     return { code: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}` }
 }
 
 const lib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'prior-art.mjs')).href)
 const notes = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'notes.mjs')).href)
 const gitlib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'git.mjs')).href)
+const front = (binDir) => import(pathToFileURL(join(binDir, 'inflight.mjs')).href)
 
 /**
  * Source with comments removed, so a check about CODE is not answered by prose. The first cut of
@@ -73,11 +75,43 @@ function patch(file, from, to) {
     if (!before.includes(from)) throw new Error(`mutation anchor not found in ${file}: ${from.slice(0, 60)}...`)
     writeFileSync(file, before.replace(from, to))
 }
-const registeredNames = (binDir) =>
-    [...readFileSync(join(binDir, 'inflight.mjs'), 'utf8').matchAll(/^\s{8}name: '([a-z-]+)',$/gm)].map((m) => m[1])
+/**
+ * Every command path the front door registers, including subcommands.
+ *
+ * Read from the registry itself. This was a regex over the source anchored to one indent level, so
+ * it returned the three top-level names and neither subcommand - and the two checks that iterate it
+ * are named "every registered command".
+ */
+const registeredNames = async (binDir) => (await front(binDir)).COMMAND_PATHS
 
 /** A term that exists in docs/inflight/ on many refs - so overlap, if present, is visible. */
 const TERM_IN_DOCS = 'inflight-impact'
+
+/**
+ * A note with both divergent and behind-only versions, CHOSEN FROM THE CORPUS rather than named.
+ *
+ * The drift checks hardcoded `docs/inflight/bug-857-family.md`. docs/inflight/AGENTS.md's contract is
+ * that a note is `git rm`d when its work lands, so that path is guaranteed to disappear - and on the
+ * day it does, these checks go red in the REAL tree for a reason unrelated to any code change, which
+ * the suite reports identically to a regression. Picking the note by the property the check needs
+ * makes it hermetic against the repository's own lifecycle.
+ *
+ * @returns {Promise<{path: string, drift: object} | null>} null when no note qualifies - the caller
+ *   must treat that as "cannot test", never as a pass.
+ */
+async function aDriftedNote(binDir) {
+    const n = await notes(binDir)
+    const index = n.corpusIndex()
+    const candidates = [...index.byPath.entries()]
+        .filter(([path, versions]) => index.basePaths.has(path) && versions.size > 2)
+        .map(([path]) => path)
+        .sort()
+    for (const path of candidates) {
+        const d = n.drift(path, { prs: new Map() })
+        if (d.found && d.divergent.length > 0 && d.behind.versions > 0) return { path, drift: d }
+    }
+    return null
+}
 
 /**
  * A check is an async predicate over a bin directory, so the same code runs against the real tree
@@ -161,8 +195,8 @@ const CHECKS = [
         id: 'help-lists-every-registered-command',
         why: 'a tool reachable only by knowing its filename is the state the front door exists to end',
         run: async (binDir) => {
-            const names = registeredNames(binDir)
-            if (names.length === 0) return false
+            const names = await registeredNames(binDir)
+            if (names.length < 2) return false // a registry with no subcommands is not this one
             const help = invoke(binDir, ['help']).out
             return names.every((n) => help.includes(n))
         },
@@ -175,9 +209,10 @@ const CHECKS = [
     {
         id: 'usage-names-the-front-door-not-the-library',
         why: 'a help screen naming a path that no longer runs is citation rot inside the tool',
-        run: async (binDir) => registeredNames(binDir).every((n) => {
-            const usage = invoke(binDir, ['help', n]).out
-            return usage.includes(`bin/inflight.mjs ${n}`) && !/bin\/(?!inflight)[a-z-]+\.mjs/.test(usage)
+        run: async (binDir) => (await registeredNames(binDir)).every((n) => {
+            const usage = invoke(binDir, ['help', ...n.split(' ')])
+            if (usage.code !== 0) return false
+            return usage.out.includes(`bin/inflight.mjs ${n}`) && !/bin\/(?!inflight)[a-z-]+\.mjs/.test(usage.out)
         }),
         // Anchored on the usage line, not on the bare path: the first occurrence of that path in
         // the library is in its header comment, so a looser anchor mutates prose and leaves the help
@@ -236,7 +271,9 @@ const CHECKS = [
         why: 'pairing cat-file output to input by position is correct until anything reorders it',
         run: async (binDir) => {
             const g = await gitlib(binDir)
-            const refs = g.refTips().map((r) => r.ref)
+            const tips = g.refTips()
+            if (!tips.ok) return false
+            const refs = tips.tips.map((r) => r.ref)
             const m = g.blobsForPath(refs, 'docs/inflight/AGENTS.md')
             const known = new Set(refs)
             if (m.size === 0 || ![...m.keys()].every((k) => known.has(k))) return false
@@ -245,8 +282,8 @@ const CHECKS = [
             return m.get(base) === direct
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'git.mjs'),
-            'const query = refs.map((r) => `${r}:${path} ${r}`).join',
-            'const query = refs.map((r) => `${r}:${path}`).join'),
+            'refs.map((r) => (selfDescribing ? `${r}:${path} ${r}` : `${r}:${path}`))',
+            'refs.map((r) => `${r}:${path}`)'),
     },
     {
         id: 'stranded-excludes-what-the-baseline-once-had',
@@ -259,7 +296,7 @@ const CHECKS = [
             return [...index.baseEverPaths].every((p) => !reported.has(p))
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
-            '        if (index.baseEverPaths.has(path)) continue', '        // mutant: filter removed'),
+            '        if (index.baseEverPaths.has(path)) {', '        if (false) {'),
     },
     {
         id: 'stranded-is-clustered-not-listed',
@@ -278,26 +315,34 @@ const CHECKS = [
         why: 'a branch that has not merged recently is not drift, and it is most of the volume',
         run: async (binDir) => {
             const n = await notes(binDir)
-            const path = 'docs/inflight/bug-857-family.md'
-            const d = n.drift(path, { prs: new Map() })
-            if (!d.found || d.divergent.length === 0 || d.behind.versions === 0) return false
-            const history = n.baselineHistoryBlobs(d.baseline, path)
-            return d.divergent.every((c) => !history.has(c.blob))
+            const found = await aDriftedNote(binDir)
+            if (!found) return false // no note qualifies: cannot test, which is not a pass
+            const history = n.baselineHistoryBlobs(found.drift.baseline, found.path)
+            return found.drift.divergent.every((c) => !history.has(c.blob))
         },
+        // Mutating the `behind` push emptied `behind` too, so the check failed on its own guard
+        // rather than on the assertion its `why` names - a control that never exercised the line it
+        // exists for. This keeps the bookkeeping intact and corrupts only the SPLIT, so a historical
+        // blob lands in `divergent` and the final `.every(...)` is what goes red.
         mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
-            '        if (history.has(blob)) behind.push({ blob, refs })',
-            '        if (globalThis.__never) behind.push({ blob, refs })'),
+            '        if (history.has(blob)) behind.push({ blob, refs })\n        else divergent.push(entry)',
+            '        if (history.has(blob)) { behind.push({ blob, refs }); divergent.push(entry) }\n'
+            + '        else divergent.push(entry)'),
     },
     {
         id: 'drift-clusters-by-blob-not-by-ref',
         why: 'diffing once per ref instead of once per version is 274 diffs where 37 will do',
         run: async (binDir) => {
-            const n = await notes(binDir)
-            const d = n.drift('docs/inflight/bug-857-family.md', { prs: new Map() })
-            if (!d.found) return false
+            const found = await aDriftedNote(binDir)
+            if (!found) return false
+            const d = found.drift
             const all = [...d.divergent, ...(d.baselineCluster ? [d.baselineCluster] : [])]
             const blobs = all.map((c) => c.blob)
-            return blobs.length > 0 && blobs.length < d.refsCarrying && new Set(blobs).size === blobs.length
+            if (!(blobs.length > 0 && blobs.length < d.refsCarrying && new Set(blobs).size === blobs.length)) return false
+            // `added` is measured against each branch's merge-base and rendered as the headline
+            // number; a swap or a missing computation would otherwise turn nothing red.
+            return d.divergent.every((c) => c.added !== null
+                && (c.added.newFile === true || (Number.isInteger(c.added.added) && Number.isInteger(c.added.removed))))
         },
         // The first mutant here truncated each cluster's ref list, which changed nothing the check
         // asserts - a control that cannot fail. This one emits a cluster twice, which is exactly the
@@ -318,6 +363,52 @@ const CHECKS = [
         mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
             '        const topic = [...ALL].sort((a, b) => b.path.length - a.path.length)',
             '        const topic = [...ALL].sort((a, b) => a.path.length - b.path.length)'),
+    },
+    {
+        id: 'a-total-git-failure-cannot-report-nothing',
+        why: 'reporting "searched every branch tip, found nothing" over a search that never ran is this repo\'s worst failure class',
+        // THE REGRESSION TEST FOR A SHIPPED P0. Outside a git repository, `stranded`, `note find` and
+        // `note drift` printed a clean empty result and exited 0 - `note find` said "no note matching
+        // /q/ on any of 0 refs. Nothing is a result here: this searched every branch tip", which is a
+        // false claim about work never done. `refTips()` returned `[]` for both "no refs" and "git
+        // failed", and only prior-art guarded it. Found by a reviewer running it, not by this suite.
+        run: async (binDir) => {
+            const outside = mkdtempSync(join(tmpdir(), 'inflight-notarepo-'))
+            const commands = [['stranded'], ['note', 'find', 'quarantine'],
+                ['note', 'drift', 'docs/inflight/x.md'], ['prior-art', 'anything']]
+            return commands.every((args) => invoke(binDir, args, { cwd: outside }).code === 2)
+        },
+        // Targets the GUARD, not refTips: restoring the old `[]`-on-failure alone still tripped the
+        // separate empty-refs guard, so the mutant stayed green while proving nothing.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
+            "    if (!ok) return { ok: false, reason: 'cannot list refs - is this a git repository?' }\n"
+            + "    if (refs.length === 0) return { ok: false, reason: 'no branch refs found - nothing to search' }\n"
+            + "    if (!base) return { ok: false, reason: 'neither origin/master nor master resolves"
+            + " - no baseline to compare against' }",
+            '    // mutant: every corpus guard removed'),
+    },
+    {
+        id: 'every-command-runs-end-to-end',
+        why: 'the library was tested and the CLI was not, so argv parsing, --all, emit and the whole views layer shipped unexercised',
+        run: async (binDir) => {
+            const found = await aDriftedNote(binDir)
+            if (!found) return false
+            const runs = [
+                [['stranded'], 'NEVER reached'],
+                [['note', 'find', 'inflight'], 'matching'],
+                [['note', 'drift', found.path], found.path],
+                [['note', 'drift', '--all', found.path], found.path],
+                [['prior-art', 'a-term-that-cannot-match-anything-xyzzy'], 'nothing'],
+            ]
+            return runs.every(([args, needle]) => {
+                const r = invoke(binDir, args)
+                return r.code === 0 && r.out.includes(needle)
+            })
+        },
+        // Breaks the views layer, which no check reached before: every one of these commands renders
+        // through it, and none of them asserted on a rendered line.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'views.mjs'),
+            'const plural = (n, w) =>', 'const plural = (n, w) => "" && ('),
     },
 ]
 

@@ -104,7 +104,7 @@ a file in it is touched, rather than waiting to be opened.
 |---|---|---|
 | **`AGENTS.md`** (this file) | Rules that bind every agent, and the map above | Work items of any kind; anything only one topic needs |
 | **`STRATEGY.md`** (repo root) | What the product is and why: target problem, the client-side guiding choice, who it is for, success metrics, tracks under investment | A roadmap or feature list. It is a *claims* document nothing tests - work that falsifies a claim must update it; the branches that will are named in `docs/inflight/pr-strategy-doc-merge-triggers.md` |
-| **`docs/inflight/`** | *Transient* cross-branch state, **one file per item**, named `<area>-<slug>.md` - the prefix names an AREA, never a status. Rules, the prefix table and the tag vocabulary in [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md), which owns them | A backlog. A committed index file, which every PR would edit. **Not a place knowledge goes to die**: when your PR resolves a note, migrate what outlives it to its durable owner first - deleting the file is one of four outcomes, and that doc names them |
+| **`docs/inflight/`** | *Transient* cross-branch state, **one file per item**, named `<area>-<slug>.md` - the prefix names an AREA, never a status. Rules, the prefix table and the tag vocabulary in [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md), which owns them | A backlog. A committed index file, which every PR would edit. **Not a place knowledge goes to die**: when your PR resolves a note, migrate what outlives it to its durable owner first - deleting the file is only one of the outcomes, and that doc names them |
 | **`docs/refactoring.md`** | Refactors **too small to deserve their own note** - a line or two each, grouped by file, no owner or tags - plus **breaking changes queued for the next major** (release-gated section) and the **triage of `TODO`/`FIXME`/`XXX` markers** | Anything carrying a decision, evidence or tracking - that is a `docs/inflight/` note; promote the line and delete it in the same commit |
 | **`docs/todo-index.md`** | Generated inventory of every marker in the tree (`bin/todo-index.sh`, `--check` fails when stale) | Priorities - deliberately unsorted; triage goes in `refactoring.md` |
 | **`docs/quarantined-tests.md`** | CI-enforced registry of quarantined tests and, when one exists, their owning fix PR (unowned entries are legal, flagged advisory) | Tests that merely flake - quarantine requires evidence: a diagnosis, or a recorded sighting ledger proving it is master-state |
@@ -213,7 +213,7 @@ and the traps that voided earlier experiments.
   you; it narrows the search, it does not complete it.
 - **Grep the mechanism, not the symptom.** The failing test's name is the weakest search term
   available. Search the class, the lock, the option, the exception, the log line.
-- **A test's own javadoc is prior art, and the six commands above will not find it.** The chaos
+- **A test's own javadoc is prior art, and the commands above will not find it.** The chaos
   scenarios carry a `Calibration status` block naming the shapes already tried, the seeds, and what
   each run established - including experiments that were run and are worth not repeating. Running
   `ChaosRevokeUnderWorkIT`'s recovery diagnostic in August 2026 re-derived a result its own javadoc

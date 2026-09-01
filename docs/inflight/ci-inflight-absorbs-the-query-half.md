@@ -51,6 +51,49 @@ Counting the bash this sits against: 23,666 lines under `bin/` and `.claude/hook
 in `bin/*.mjs` and 2,515 in `.github/scripts/` (self-tests included). Node is the default for new
 scripts by operator ruling; this is what the existing surface looks like.
 
+## The register family, and the edges nobody can query
+
+**The generated registers should be `inflight` subcommands, not separate scripts.** Same shape in
+each: generate, commit, check staleness - three generators, three staleness stories, and
+`docs/todo-index.md` is the repo's own cautionary case of a committed generated file rotting until a
+reviewer caught it.
+
+| Register | Generator | Edges it already holds |
+|---|---|---|
+| `docs/inflight/issue-index.md` | `bin/issue-index.sh` | **none** - nodes only, which is [`ci-issue-index-has-no-edges.md`](ci-issue-index-has-no-edges.md)'s whole complaint |
+| `docs/todo-index.md` | `bin/todo-index.sh` (`--check` fails when stale) | marker to file |
+| `docs/quarantined-tests.md` | `bin/quarantine-lane-report.sh`, `bin/lib/quarantine-common.sh` | note to PR, via `Owner: PR astubbs#NN`, already reconciled against GitHub by `check-quarantine-owners.sh` |
+| `src/docs/development/upstream-map.yaml` | hand-maintained | fork to upstream PR - and nothing checks the fork side |
+
+**So edges already exist in four formats, and none of them can be queried together.**
+
+### The tool that already builds the link graph, then throws it away
+
+`.github/scripts/file-ref-gate.js` has `citationsIn`, `treeFrom`, `resolves` and `danglingRefs`: it
+walks every citing file in the tree on every PR, resolves each citation to a path - and reports only
+the **dangling** ones. The doc-to-doc and doc-to-file edge set is computed on every PR and discarded.
+Reusing that resolver is a better starting point than any cache, because it cannot go stale.
+
+### Not an embedded graph database
+
+- **The recorded constraint forbids it.** [`ci-node-query-client.md`](ci-node-query-client.md): "No
+  daemon, no socket, no lockfile. Plain `.js` run by `node`, no bundler and no npm dependencies... the
+  property that rules out a compiled binary rules out a package with an install step just as firmly."
+- **It is the architecture the survey already rejected.** Beads generation 2 moved state out of the
+  working tree into a side ref, and
+  [the comparison](../plans/2026-09-01-001-investigate-beads-comparison.md) §1's verdict was that it
+  fails *silently* rather than as a merge conflict - a branch's notes and its code disagreeing with
+  nothing going red.
+- **The edges split in two, and only one half needs storing.** In-tree edges - note to doc, doc to
+  file, note to issue number, registry to PR - are derivable from the tree and travel with the branch,
+  so they should not be cached at all; that is the argument that removed the corpus cache from
+  `bin/lib/notes.mjs`. GitHub edges - which PR closes which issue, issue to issue, a comment saying
+  the fix is elsewhere - are not derivable locally and share a rate limit with every parallel session.
+  **Those are the only ones a throwaway cache is for**, and `ci-issue-index-has-no-edges.md` already
+  states its discipline: cache *structure*, never *status*.
+- **Ask for a third hop before paying for a database.** Note to issue to PR is two hops, which is a
+  join. The graph is a `Map` built at runtime from a live tree scan joined to a cached GitHub slice.
+
 ## Two git traps to encode, wherever this work lands
 
 <!-- post-merge: checked -->

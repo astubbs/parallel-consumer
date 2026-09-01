@@ -82,8 +82,13 @@ function cacheWrite(name, value) {
  * }}
  */
 export function corpusIndex() {
-    const refs = refTips()
+    const { ok, tips: refs } = refTips()
     const base = baseline()
+    // A failed ref enumeration is not an empty repository, and a missing baseline is not an empty
+    // baseline. Both used to render as a confident "nothing found" and exit 0.
+    if (!ok) return { ok: false, reason: 'cannot list refs - is this a git repository?' }
+    if (refs.length === 0) return { ok: false, reason: 'no branch refs found - nothing to search' }
+    if (!base) return { ok: false, reason: 'neither origin/master nor master resolves - no baseline to compare against' }
     const entries = refs.map(({ ref }) => [ref, treeEntries(ref, NOTES_DIR).map((e) => [e.blob, e.path])])
 
     const byPath = new Map()
@@ -126,6 +131,7 @@ export function corpusIndex() {
     ).map((l) => l.split('\t')[1]).filter(Boolean))
 
     return {
+        ok: true,
         baseline: base, refs, byPath, byRef, basePaths, baseBlobs, baseEverPaths,
         blobPaths: new Map([...blobPaths].map(([b, s]) => [b, [...s]])),
     }
@@ -134,17 +140,25 @@ export function corpusIndex() {
 /** headRefName -> {number, title, state}. One gh call for every ref, never one per branch. */
 export function prsByBranch({ cache = true } = {}) {
     const cached = cache ? cacheRead('prs.json', PR_CACHE_TTL_MS) : null
-    if (cached) return new Map(cached)
+    if (cached) return { ok: true, cached: true, map: new Map(cached) }
     // Naming the repo is not optional: `gh` resolves a bare command against `upstream` in this fork,
     // and an answer for confluentinc reads exactly like "this branch has no PR".
     const res = exec('gh', ['pr', 'list', '-R', REPO, '--state', 'all', '--limit', '500',
         '--json', 'headRefName,number,title,state'])
-    if (!res.ok) return new Map() // unavailable is not "no PR"; callers show it as unknown
+    // UNAVAILABLE IS NOT "NO PR", and saying so needs a shape that can carry the difference. This
+    // returned a bare Map, so an unauthenticated or rate-limited `gh` was indistinguishable from a
+    // branch that genuinely has no PR - and the caller silently fell through to guessing a theme
+    // from a note title. prior-art already reports its own gh skip loudly; this now can too.
+    if (!res.ok) return { ok: false, reason: 'gh unavailable or unauthenticated', map: new Map() }
     let rows = []
-    try { rows = JSON.parse(res.out) } catch { return new Map() }
+    try {
+        rows = JSON.parse(res.out)
+    } catch {
+        return { ok: false, reason: 'gh returned output that is not JSON', map: new Map() }
+    }
     const pairs = rows.map((r) => [r.headRefName, { number: r.number, title: r.title, state: r.state }])
     if (cache) cacheWrite('prs.json', pairs)
-    return new Map(pairs)
+    return { ok: true, cached: false, map: new Map(pairs) }
 }
 
 /**
@@ -181,7 +195,11 @@ export function blobTitle(blob) {
  * over `<commit>:<path>`. No per-ref `merge-base`, which would be one fork per ref.
  */
 export function baselineHistoryBlobs(base, path) {
-    const commits = lines(exec('git', ['rev-list', base, '--', path]).out)
+    // `--full-history` because plain rev-list PRUNES a merge parent's contribution when the merge is
+    // TREESAME to the other parent, so a blob the baseline briefly held on a merged-away side is
+    // absent - and the doc above claims "EVER held". The pruning errs safe (such a version is called
+    // divergent rather than behind) but the claim was false, and completeness is the point here.
+    const commits = lines(exec('git', ['rev-list', '--full-history', base, '--', path]).out)
     if (commits.length === 0) return new Set()
     const res = exec('git', ['cat-file', '--batch-check=%(objectname)'],
         { input: `${commits.map((c) => `${c}:${path}`).join('\n')}\n` })
@@ -279,9 +297,12 @@ export function findNotes(index, query) {
  */
 export function drift(path, { prs = new Map(), maxBranchesPerCluster = 6, all = false } = {}) {
     const base = baseline()
-    const refs = refTips().map((r) => r.ref)
+    const { ok, tips } = refTips()
+    if (!ok) return { path, ok: false, reason: 'cannot list refs - is this a git repository?' }
+    if (!base) return { path, ok: false, reason: 'neither origin/master nor master resolves - no baseline' }
+    const refs = tips.map((r) => r.ref)
     const blobs = blobsForPath(refs, path)
-    if (blobs.size === 0) return { path, found: false }
+    if (blobs.size === 0) return { path, ok: true, found: false }
 
     const versions = new Map()
     for (const [ref, blob] of blobs) {
@@ -316,7 +337,7 @@ export function drift(path, { prs = new Map(), maxBranchesPerCluster = 6, all = 
     }
 
     return {
-        path, found: true, baseline: base, onBaseline: baseBlob !== null,
+        path, ok: true, found: true, baseline: base, onBaseline: baseBlob !== null,
         refsCarrying: blobs.size,
         refsTotal: refs.length,
         baselineCluster: baseBlob ? build([baseBlob, versions.get(baseBlob)]) : null,
@@ -343,8 +364,8 @@ export function drift(path, { prs = new Map(), maxBranchesPerCluster = 6, all = 
  *      this path                        - it landed and was `git rm`d when its work closed.
  *                                         Removed 40 more.
  *
- * CLUSTERED BY REF-SET, not listed per path. 364 survive the filters here, and the top of that list
- * is a dozen notes from one language-proxy workstream sitting on the same ~50 refs. An identical
+ * CLUSTERED BY REF-SET, not listed per path. Hundreds survive the filters, and the head of that
+ * list is one workstream's notes sharing one set of refs. An identical
  * ref-set is one event in the repository's history; printing its members separately buries the
  * finding under its own volume, which is the lesson `prior-art --by-ref` already paid for.
  *
@@ -354,11 +375,24 @@ export function stranded(index) {
     const survivors = []
     for (const [path, versions] of index.byPath) {
         if (index.basePaths.has(path)) continue
-        if (index.baseEverPaths.has(path)) continue
 
         const landed = [...versions.keys()].some((blob) =>
             index.baseBlobs.has(blob) && (index.blobPaths.get(blob) ?? []).some((p) => index.basePaths.has(p)))
         if (landed) continue
+
+        // THE PATH FILTER IS NOT ENOUGH ON ITS OWN, because a filename gets reused. This was
+        // `if (baseEverPaths.has(path)) continue`, so once master had closed and `git rm`d a note,
+        // a DIFFERENT note later created at the same path on a branch was silently dropped - the
+        // tool that exists to surface work that will be lost, losing it. Reproduced: master lands
+        // and removes `ci-flaky.md`; a branch independently creates an unrelated `ci-flaky.md`;
+        // stranded returned nothing. The short `<category>-<slug>` names make collisions ordinary.
+        //
+        // So the path must have been on the baseline AND the branch must be carrying content the
+        // baseline actually held there. New content at a recycled name is still stranded.
+        if (index.baseEverPaths.has(path)) {
+            const heldHere = baselineHistoryBlobs(index.baseline, path)
+            if ([...versions.keys()].some((blob) => heldHere.has(blob))) continue
+        }
 
         const refs = new Set()
         for (const rs of versions.values()) for (const r of rs) refs.add(r)
