@@ -7,6 +7,10 @@ State as of 2026-08-13. Nine branches, one open PR. Read this before touching an
 
 ## Branches
 
+<!-- post-merge: checked-begin -->
+<!-- Every branch and PR below is named outright rather than called "this branch", so the table
+     still resolves after this merges. astubbs/parallel-consumer#271 remains open, and this record
+     is dated - it says what was true on 2026-08-13, which is what makes it worth keeping. -->
 Tips are short SHAs. "ahead" means local commits not on origin.
 
 | Branch | Tip | Remote | What it is |
@@ -29,6 +33,8 @@ Every branch carries `8a0762a4` (the cross-thread fix) and everything before it.
 
 - **astubbs#271** (`feats/ks-on-pc-spike`) - all checks green. **BLOCKED by 10 unresolved review threads**, not by CI. Four are uncovered by in-flight work; *"a worker's failure can be committed past"* is the one to answer first. Others map to U13 (STREAM_TIME punctuation), U14 (backpressure), U10 (`revive()`).
 - **astubbs#274 / astubbs#275** - the review-gate fix, split in two. astubbs#274 is workflow-only and **its `claude-review` cannot pass by construction** (the action refuses to review a PR editing its own workflow). A human must merge it knowingly; that unblocks astubbs#275.
+
+<!-- post-merge: checked-end -->
 
 ## Traps that have cost real time
 

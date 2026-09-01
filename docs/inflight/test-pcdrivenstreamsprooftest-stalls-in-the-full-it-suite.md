@@ -26,6 +26,7 @@ trigger* (the awaited event may never happen) which is a different thing again f
 *stall*. **Which of the three this is has not been established**, and guessing is exactly what that
 vocabulary was written to stop.
 
+<!-- post-merge: checked - the PR is named outright and the sighting stays attributed to it after this merges -->
 Note it passed in CI on PR astubbs/parallel-consumer#271 - the `Integration Tests` job runs this class and
 went green - so whatever the interaction is, it is load- or ordering-dependent rather than deterministic.
 

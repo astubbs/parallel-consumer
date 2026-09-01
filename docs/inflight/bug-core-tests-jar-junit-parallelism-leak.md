@@ -2,7 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: config-lie -->
-<!-- inflight-state: closed - fixed on master by astubbs/parallel-consumer#265, which removed the packaged properties file; kept because this branch's own reasoning cites it -->
+<!-- inflight-state: closed - fixed on master by astubbs/parallel-consumer#265, which removed the packaged properties file; kept because the Kafka Streams spike's own reasoning cites it -->
 
 The file this note is about no longer exists - astubbs/parallel-consumer#265 removed it, and
 `git show 15f1ebe23^:parallel-consumer-core/src/test/resources/junit-platform.properties` is how to read
