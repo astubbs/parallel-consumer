@@ -349,3 +349,32 @@ cross-branch reader back into the adopt-or-build decision that
 [`process-adopt-external-harness.md`](../inflight/process-adopt-external-harness.md) owns - with the
 default now on adopt, because it ships. Rebuilding it is still allowed; it just has to be argued for
 in that note rather than assumed because the capability sounded novel.
+
+### Could we contribute the missing half to them? Asked and already answered - no
+
+Checked against their tracker on 2026-09-01, because proposing a contribution without checking
+whether the project wants it is how effort gets spent on a rejected patch. **Both candidate
+contributions have already been declined as out of scope**, closed `NOT_PLANNED` by the maintainer:
+
+- **GitHub Issues/Projects sync** (Backlog.md's [#231](https://github.com/MrLesk/Backlog.md/issues/231)) - *"a major integration and source-of-truth design
+  problem, outside the current project scope. Closing as deferred; future work should start with a
+  narrowly scoped one-way sync/action design if the owner wants it."*
+- **A comprehensive lifecycle hook system** (Backlog.md's [#456](https://github.com/MrLesk/Backlog.md/issues/456)) - *"broad extensibility surface, not work
+  planned for the current project scope."* Reviewed as implementation-ready and closed anyway,
+  pending a maintainer decision on the event list and hook model.
+- Beads integration (Backlog.md's [#588](https://github.com/MrLesk/Backlog.md/issues/588)) was closed as too open-ended, wanting one named workflow and a
+  concrete public surface.
+
+Two consequences, and the second matters more than the first:
+
+- **The door left open is narrow and needs their owner's decision first**, not a PR: a one-way,
+  narrowly scoped sync. A design question, opened as an issue, is the only sensible first move - and
+  it is not ours to open while we do not use the tool.
+- **Backlog.md is not going to grow the injection layer.** So adopting it would replace the note
+  store and the cross-branch reader and *nothing else* - we would keep our hooks, our gates and our
+  GitHub surface regardless. That is the same conclusion the Beads analysis reached in §3, one layer
+  down, and it should be read into the adopt-or-build decision rather than rediscovered.
+
+**And the ordering point that governs the whole question**: contributing to a tool is downstream of
+adopting it. Upstreaming first would mean maintaining a feature in someone else's codebase, for a
+system this repo does not run, whose design the maintainer has said is unresolved on their side too.
