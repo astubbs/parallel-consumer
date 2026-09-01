@@ -5,7 +5,8 @@
 
 # Pulls per-class timings and throughput rates out of historical CI logs into a local history file.
 #
-# Usage: bin/perf-backfill.sh [max-runs]        (default 40)
+# Usage: bin/perf-backfill.sh [max-runs]                  collect into the history file (default 40)
+#        bin/perf-backfill.sh --suggest-baseline [n]      print a docs/perf-baseline.tsv block to paste
 # Output: $PC_PERF_HISTORY, default ~/.parallel-consumer/perf-history.tsv
 #
 # WHY THIS EXISTS: THE SERIES CANNOT BE BUILT FORWARD FROM HERE
@@ -46,8 +47,28 @@
 set -uo pipefail
 
 REPO=astubbs/parallel-consumer
+
+# --suggest-baseline answers "the product got FASTER, now what". A hand-updated baseline only ever
+# ratchets when somebody remembers, so it silently loses sensitivity: the check keeps comparing against
+# a floor the code left behind, and a later regression is measured from too low a bar with nothing
+# going red to say so.
+#
+# IT PICKS THE MEDIAN RUN, NOT THE BEST ONE. Baselining on the fastest run seen would set the bar at an
+# outlier and every ordinary run afterwards would read as a regression - the classic way a performance
+# gate earns its reputation and gets switched off. The median of recent healthy runs is what "normal"
+# means.
+#
+# IT PRINTS ONE RUN'S NUMBERS, NEVER A BLEND. docs/perf-baseline.tsv requires every row to come from a
+# single run, because a rate from one run normalised by class times from another is not a comparison.
+# So this selects the median RUN and emits that run verbatim, rather than averaging fields separately.
+#
+# IT PRINTS; IT DOES NOT WRITE. Re-baselining is a judgement - "the product got faster" and "the
+# regression is now the baseline" produce identical numbers, and only a human knows which happened.
+SUGGEST=false
+if [ "${1:-}" = "--suggest-baseline" ]; then SUGGEST=true; shift; fi
 MAX_RUNS="${1:-40}"
 HISTORY="${PC_PERF_HISTORY:-$HOME/.parallel-consumer/perf-history.tsv}"
+ROOT_BASELINE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/docs/perf-baseline.tsv"
 SUBJECT=MultiInstanceHighVolumeTest
 # A FIXED neighbour set, not "every other class that ran". The first version summed all of them and the
 # sum swung from 130s to 1335s across branches - not because any machine was 10x slower, but because
@@ -116,3 +137,55 @@ done < "$work/runs.tsv"
 
 printf '\n%d added, %d already present, %d with no usable performance log\n' "$added" "$skipped" "$nodata"
 printf 'History: %s\n' "$HISTORY"
+
+if [ "$SUGGEST" = true ]; then
+    echo
+    echo "=== suggested baseline, from the MEDIAN of the healthy runs collected ==="
+    # MASTER RUNS ONLY. The first version took the median over every collected run, and its first real
+    # use proposed 43,552 rec/s - the REGRESSED figure from an unmerged branch that dominated the
+    # sample. It would have lowered the baseline from 77,960 and disarmed the check: exactly the failure
+    # the closing advice warns about, arriving on the first invocation. A warning is not a guard.
+    #
+    # A baseline may only come from a tree that shipped, so PR branches are excluded and the branch
+    # column is the filter. Until .github/workflows/perf-baseline.yml has run on master nothing is
+    # eligible, and saying so is the right answer rather than falling back to PR data.
+    median_id=$(awk -F'\t' '!/^#/ && $8 != "none" && $3 == "master" { print $8"\t"$1 }' "$HISTORY" \
+                | sort -g | awk '{ a[NR] = $0 } END { if (NR) print a[int((NR + 1) / 2)] }' | cut -f2)
+    if [ -z "$median_id" ]; then
+        echo "No MASTER run in $HISTORY carries a rate." >&2
+        echo "  A baseline may only come from a tree that shipped. PR-branch runs are excluded" >&2
+        echo "  deliberately: an unmerged regression dominating the sample would otherwise be" >&2
+        echo "  proposed as the new normal, lowering the bar and disarming the check." >&2
+        exit 3
+    fi
+    echo "Median run: $median_id"
+    rm -rf "$work/sug"; mkdir -p "$work/sug"
+    if ! gh api "repos/$REPO/actions/runs/$median_id/logs" > "$work/sug.zip" 2>/dev/null; then
+        echo "Its logs have expired - pick another run by hand from $HISTORY." >&2
+        exit 2
+    fi
+    unzip -qq -o "$work/sug.zip" -d "$work/sug" 2>/dev/null
+    slog=$(find "$work/sug" -iname '*Performance Tests*.txt' -size +1k 2>/dev/null | head -1)
+    rate=$(grep -ohE "PC-THROUGHPUT test=$SUBJECT .*recordsPerSecond=[0-9-]+" "$slog" \
+           | sed 's/.*recordsPerSecond=//; s/ .*//' | tail -1)
+    echo
+    echo "# Every row below is from run $median_id - do not mix runs."
+    printf 'rate\t%s\t%s\trecords-per-second\n' "$SUBJECT" "$rate"
+    for n in $NEIGHBOURS; do
+        secs=$(grep -ohE "Time elapsed: [0-9.]+ s[^-]*-- in [A-Za-z0-9_.]*$n" "$slog" \
+               | sed 's/Time elapsed: //; s/ s.*//' | head -1)
+        [ -n "$secs" ] && printf 'class-seconds\t%s\t%s\tseconds\n' "$n" "$secs"
+    done
+    echo
+    current=$(awk -F'\t' '$1 == "rate" { print $3; exit }' "$ROOT_BASELINE" 2>/dev/null)
+    if [ -n "${current:-}" ] && [ -n "${rate:-}" ] \
+       && [ "$(awk -v a="$rate" -v b="$current" 'BEGIN { print (a < b) }')" = "1" ]; then
+        echo "REFUSING TO RECOMMEND: $rate is BELOW the current baseline of $current."
+        echo "  Raising a baseline is routine. Lowering one is a claim that the product got slower and"
+        echo "  that this is now acceptable, which is never a scripted decision. If it is genuinely"
+        echo "  right, edit docs/perf-baseline.tsv by hand and say in the commit what got slower."
+        exit 1
+    fi
+    echo "Paste into docs/perf-baseline.tsv ONLY if the product genuinely got faster."
+    echo "A regression that has become the new normal produces exactly the same output."
+fi
