@@ -109,8 +109,10 @@ document. This section is the detail behind it.
     Was `check-shell-sigpipe.sh` until it became a row in `bin/lib/source-patterns.mjs`.
   - **`check-shell-hazards.sh`** fails coreutils flags that mean different things on GNU and BSD -
     `stat -f` exits 1 on GNU while printing filesystem prose to stdout, `sed -i` takes its suffix
-    attached on one and as the next argument on the other. Same class as the above, and it should
-    eventually absorb it (`bin/lib/source-patterns.mjs`).
+    attached on one and as the next argument on the other. Same class as the above, and the migration
+    runs the other way: it is the candidate to be folded INTO `bin/lib/source-patterns.mjs`, whose
+    rule table is already the same design in a language without shell's traps
+    (`docs/inflight/ci-what-else-folds-into-the-rule-table.md`).
   - **`test-rename-packages.sh`** self-tests the package-rename tool - run by hand once per branch,
     exactly the shape that rots unnoticed between the day it is written and the day a whole rename
     depends on it.

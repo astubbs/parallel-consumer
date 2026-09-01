@@ -40,6 +40,17 @@ for (const r of RULES) {
     r.allowIf.test('#!/usr/bin/env bash\n# shell-justified: wraps one docker command\n'), true)
   check('new-shell: an EMPTY justification does not count',
     r.allowIf.test('# shell-justified:\n'), false)
+  // .bash is shell too. Matching only .sh let bin/tool.bash bypass the policy silently - the same
+  // hole in a different extension, and the sigpipe rule already treated .bash as shell.
+  check('new-shell: matches a .bash path in bin/', r.files.test('bin/tool.bash'), true)
+  // The marker must be a COMMENT. Accepting it anywhere in the file exempted a script whose only
+  // occurrence was echoed output, usage text, or heredoc data - i.e. no justification at all.
+  check('new-shell: an echoed marker does NOT exempt',
+    r.allowIf.test("#!/usr/bin/env bash\necho 'shell-justified: not really'\n"), false)
+  check('new-shell: a marker in usage text does NOT exempt',
+    r.allowIf.test('#!/usr/bin/env bash\nusage="shell-justified: nope"\n'), false)
+  check('new-shell: an indented comment marker DOES exempt',
+    r.allowIf.test('#!/usr/bin/env bash\n  # shell-justified: wraps one docker call\n'), true)
   check('new-shell: an unjustified script is not allowed',
     r.allowIf.test('#!/usr/bin/env bash\necho hi\n'), false)
 }

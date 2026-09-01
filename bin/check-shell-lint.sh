@@ -22,7 +22,7 @@
 #
 # Both errors it found on arrival were real:
 #   - bin/check-quarantine-registry.sh read `"$method[[:space:]]"` as an array expansion (SC1087).
-#   - bin/check-shell-sigpipe.sh opened a PROSE comment with the word `shellcheck`, so ShellCheck
+#   - the sigpipe check (bin/lib/source-patterns.mjs) opened a PROSE comment with the word `shellcheck`, so ShellCheck
 #     parsed it as a directive, errored SC1072/SC1073, and stopped analysing the rest of that file.
 #     A sentence about the linter had silently switched the linter off - in the script whose entire
 #     job is guarding against silent failure.

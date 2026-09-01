@@ -20,7 +20,7 @@ the `sigpipe-into-grep-q` row in [`bin/lib/source-patterns.mjs`](lib/source-patt
 until it was folded in), and a shared helper for `grep -c` printing `0` and exiting `1`. When that much
 of the tooling guards the tooling, the language is the problem.
 
-**Node, not Python**, and the repo already chose: `.github/scripts/` holds eight JS gate
+**Node, not Python**, and the repo already chose: `.github/scripts/` holds four JS gate
 implementations, each with a `.test.js` sibling, against one Python file in the tree. Node is the
 established second language *and* already carries the testing convention `bin/` lacks.
 
@@ -37,7 +37,10 @@ language where each of those is a paragraph. [`bin/lib/source-patterns.mjs`](lib
 holds the table and `check-source-patterns.mjs` is the one runner they share. A check that has to
 *think* - parse XML, call an API, compare numbers - is a real program and still gets its own file.
 
-**Node scripts are compile-checked and self-tested in CI** (`pr-checklist.yml`). `node --check` is a
+**Node scripts are compile-checked by `pr-checklist.yml` and self-tested by `repo-hygiene.yml`**,
+which runs `bin/check-all.sh --with-tests` and so discovers `bin/test-*.mjs` by glob. They are two
+different workflows on purpose - naming only the first sends anyone repairing the test wiring to a
+job that never runs the tests. `node --check` is a
 compile, not static analysis; JavaScript is the one language CodeQL's default setup here does not
 scan, which is tracked separately.
 

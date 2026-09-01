@@ -25,7 +25,9 @@ which is where this repo's merges actually conflict.
 Two traps the self-test has to cover, because both make the gate useless while looking healthy:
 
 - **The gate's own fixtures must carry markers as data**, so it has to skip itself and its self-test
-  by name - the same exemption shape `bin/lib/source-patterns.mjs` (rule `sigpipe-into-grep-q`) already uses. Anything else it
+  by name. **No existing gate offers that shape to copy** - `sigpipe-into-grep-q` in
+  `bin/lib/source-patterns.mjs` avoids its own fixtures only because its `files` regex excludes
+  `.mjs`, which is an accident of where the rule lives rather than a mechanism. Anything else it
   skips is a violation in hiding.
 - **A marker at the start of a line is the signal; the same characters mid-line are not.** Diffs
   quoted in `docs/solutions/` and in commit bodies contain them legitimately.

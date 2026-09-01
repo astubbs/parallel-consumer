@@ -106,7 +106,7 @@ pc_failsafe_stats() { # tree-root report-name-fragment
 
 # Exactly one of DID-NOT-RUN, FAILED, passed. Herestrings rather than `printf | grep -q`: the pipe
 # form takes EPIPE from the early-exiting reader and, under `set -o pipefail`, turns a MATCH into a
-# failure - see bin/AGENTS.md and bin/check-shell-sigpipe.sh. None of today's callers set pipefail;
+# failure - see bin/AGENTS.md and bin/lib/source-patterns.mjs. None of today's callers set pipefail;
 # writing it the safe way here means adding it later cannot silently invert a verdict.
 pc_classify_failsafe_stats() { # stats-string
     grep -q 'tests="[1-9]' <<< "$1" || { echo DID-NOT-RUN; return; }
@@ -182,7 +182,7 @@ pc_signal_fired() { # signal-name run-log
 # mechanism must gate on pc_signal_fired as well, or it will accept a run that answers a different
 # question and write the answer up as though it were about its own.
 #
-# No pipe, deliberately - `grep | head` is the shape bin/check-shell-sigpipe.sh bans under pipefail,
+# No pipe, deliberately - `grep | head` is the shape `sigpipe-into-grep-q` bans under pipefail,
 # and a shared helper must stay safe for a caller that adds it.
 pc_first_violation() { # run-log
     local all

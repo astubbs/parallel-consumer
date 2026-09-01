@@ -5,13 +5,17 @@
 # The shell corpus the bespoke shell gates scan: `bin/*.sh` plus `.claude/hooks/*.sh`.
 #
 # WHY BOTH DIRECTORIES. The hooks are shell that runs on every agent session with no interactive user
-# to notice breakage - exactly the population these guards exist for - and check-shell-sigpipe.sh was
+# to notice breakage - exactly the population these guards exist for - and the sigpipe check was
 # blind to them until review found a live instance there: the session index piped into `grep -q`
 # under pipefail, harmless only because its input was well under the 64KiB pipe buffer that triggers
 # the inversion. A gate that scans half the corpus is a gate that reports clean about the half it
 # looked at.
 #
-# WHY THIS IS A LIB. check-shell-sigpipe.sh and check-shell-hazards.sh had this resolution
+# ONE CONSUMER LEFT, as of 2026-09-01: check-shell-hazards.sh. The sigpipe rule moved out to
+# bin/lib/source-patterns.mjs, which walks `git ls-files` instead - so it no longer inherits this
+# corpus's one-level scope limit, and this lib's remaining reach is the hazards gate alone.
+#
+# WHY THIS IS A LIB. the sigpipe check and check-shell-hazards.sh had this resolution
 # character-for-character duplicated, and it had ALREADY DRIFTED: sigpipe changed directory only when
 # given no argument, while hazards did it unconditionally, so an explicit RELATIVE scan directory
 # resolved against different roots in the two gates. Nothing would have caught that - both self-tests

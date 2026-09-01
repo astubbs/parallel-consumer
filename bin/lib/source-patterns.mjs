@@ -55,8 +55,15 @@ export const RULES = [
        + 'nothing, and printed success over the defect it was written to catch - and two entire gates '
        + 'exist only to police shell traps. Existing scripts are grandfathered; this is about what is NEW.',
     scope: 'added-files',
-    files: /^bin\/.*\.sh$/,
-    allowIf: /shell-justified:\s*\S/,
+    // `.bash` TOO. The sigpipe rule below already treats .bash as shell; matching only .sh here let
+    // `bin/tool.bash` bypass the Node-default policy silently, which is the same hole in a different
+    // extension. Caught in review, not by the gate - the gate cannot see a rule it was never given.
+    files: /^bin\/.*\.(sh|bash)$/,
+    // ANCHORED TO A COMMENT. `shell-justified:` matched anywhere in the file, so `echo
+    // 'shell-justified: x'`, usage text, or heredoc/test data exempted a script that carries no
+    // justification at all. Reason QUALITY stays a review judgment - no regex can check that - but the
+    // documented comment form is mechanically checkable, so it is checked.
+    allowIf: /^[ \t]*#[ \t]*shell-justified:[ \t]*\S/m,
     fix: 'Write it as .mjs, or state why shell is right: # shell-justified: <reason>',
   },
   {

@@ -25,9 +25,13 @@ a directive, which aborted analysis of an entire file, and `SC1087` ambiguous ar
 their knock-on. Now 0.
 
 **The warning count went UP after fixing them, from 10 to 14, and that is the directive bug's real
-size.** ShellCheck had been aborting on `bin/lib/source-patterns.mjs` (rule `sigpipe-into-grep-q`) before reaching its body, so
+size.** ShellCheck had been aborting on `bin/check-shell-sigpipe.sh` before reaching its body, so
 that file's four findings were never reported. A count taken before the fix understated the corpus,
 and nothing said so - which is the same shape as the rest of this PR.
+<!-- file-refs: N/A - bin/check-shell-sigpipe.sh was retired when its rule became a row in
+     bin/lib/source-patterns.mjs; this is a dated measurement of what ShellCheck did to that file, and
+     docs/citations.md forbids rewriting a dated record to match today's tree. Read it with
+     `git show 65977478c^:bin/check-shell-sigpipe.sh`. -->
 
 Not gated:
 
