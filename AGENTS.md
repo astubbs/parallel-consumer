@@ -189,23 +189,28 @@ accidental is *which* repo answered. The same ambiguity bites a bare `#NNN` in p
 
 ## Before you investigate anything
 
-Do all six checks **before** forming a hypothesis, and say in your write-up what each returned -
-including "nothing". Prior art tells you the method that settled the last question of this shape,
+Do every check in this table **before** forming a hypothesis, and say in your write-up what each
+returned - including "nothing", and including the size of the corpus that "nothing" covered. Prior art tells you the method that settled the last question of this shape,
 and the traps that voided earlier experiments.
 
 | Check | Command |
 |---|---|
-| Prior investigations | `ls docs/plans/`, then grep them |
-| Solved problems | `grep -rl <mechanism> docs/solutions/` |
-| In-flight state | `ls docs/inflight/`, `grep -rl <mechanism> docs/inflight/` |
+| Plans, solutions and in-flight notes, **on every branch** | `node bin/prior-art.mjs <mechanism> [<mechanism>...]` |
 | Open PRs (collision check) | `gh pr list -R astubbs/parallel-consumer`, then `gh pr diff <n> -R astubbs/parallel-consumer --name-only` |
 | **Merged** PRs, by file | `gh pr list -R astubbs/parallel-consumer --state merged --limit 100 --json number,title,files --jq '.[] \| select(.files[]?.path \| test("<ClassName>")) \| "\(.number) \(.title)"'` |
 | Issues, `--state all` | `gh issue list -R astubbs/parallel-consumer --state all --limit 300` - fork issues *and* `upstream-mirror` ones; read the upstream original, not the mirror's summary |
 | **The javadoc of the thing you are about to run or change** | `grep -rn "Calibration status" --include=*.java .` - chaos scenarios record their prior experiments, seeds and verdicts in the class javadoc, nowhere else |
 
+- **`grep` and `find` read the working tree, and most of this repo's docs are not in it.** Roughly
+  two thirds of everything under `docs/` exists only on branches that have not merged, so a
+  working-tree search answers a narrower question than the table asks and returns a *false negative
+  carrying the authority of a completed check*. `bin/prior-art.mjs` searches every ref and flags each
+  hit that is missing from `origin/master`; its header explains the rest. Worked incident:
+  [`docs/solutions/workflow-issues/prior-art-lives-on-branches-2026-09-01.md`](docs/solutions/workflow-issues/prior-art-lives-on-branches-2026-09-01.md).
 - **The titles are already in your context**, injected at session start by
   `.claude/hooks/inject-recorded-knowledge.sh` - so "I did not know it existed" is not available as
-  an excuse, and the check costs one grep against a list you have been handed.
+  an excuse. **That index is branch-scoped too**, and says so along with the count it cannot show
+  you; it narrows the search, it does not complete it.
 - **Grep the mechanism, not the symptom.** The failing test's name is the weakest search term
   available. Search the class, the lock, the option, the exception, the log line.
 - **A test's own javadoc is prior art, and the six commands above will not find it.** The chaos
