@@ -113,6 +113,15 @@ refactors below, which are non-breaking and can land at any point in any line.
   confluentinc#271 package restructure so users were not migrated twice - **re-read that against the
   open gate above**: 0.6.0.0 is the release carrying the `bz.stub` rename, so doing the rehome in it
   is one migration rather than two, and deferring it past 0.6.0.0 is what now costs a second one.
+- **`KafkaTestUtils` is the next thing standing between downstream users and the test-jar.**
+  astubbs#159 moved `LongPollingMockConsumer` into the main artefact, but that was a prerequisite,
+  not a fix: eight poms still declare `<classifier>tests</classifier>` because their test sources
+  still reach for `KafkaTestUtils`, `AbstractParallelEoSStreamProcessorTestBase` and
+  `LongPollingMockConsumerSubject`. The Truth subject is the one that cannot simply move - it
+  extends `com.google.common.truth.Subject`, so publishing it would promote `com.google.truth` from
+  `test` to `compile` for every downstream user, which is the cost astubbs#159 was careful not to
+  incur. `KafkaTestUtils` has no such constraint and is the largest remaining reason the classifier
+  exists, so it is where anyone actually closing confluentinc#162 / confluentinc#861 should start.
 - **Evaluate for breakage at the bump:** adopt `@ParametersAreNonnullByDefault`
   (`origin/improvements/nonnull-default` @684c02a0) and add a JPMS `module-info`
   (`origin/improvements/module-info` @d74f5e8b) - both tighten the published
