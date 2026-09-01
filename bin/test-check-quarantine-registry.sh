@@ -143,6 +143,32 @@ assert "the PREVIOUS implementation does leak the .git copy" YES \
 assert "the PREVIOUS implementation already excluded target" NO \
     "$(contains "$old" "target/generated-sources/Generated.java")"
 
+echo "--- quarantined_occurrences: a file with no match must count 0, on ONE line ---"
+
+# The bug this covers is invisible to a string comparison that happens to fail anyway, so assert the
+# exact bytes and then assert that a numeric test survives them - which is how the callers use it.
+no_match_file=$(mktemp)
+printf 'class NothingQuarantinedHere {}\n' > "$no_match_file"
+
+assert "no match counts exactly 0" "0" "$(quarantined_occurrences "$no_match_file")"
+
+numeric_ok=NO
+if [ "$(quarantined_occurrences "$no_match_file")" -eq 0 ] 2>/dev/null; then numeric_ok=YES; fi
+assert "the result survives a numeric test" YES "$numeric_ok"
+
+# Negative control, in this file's established style: the shipped-before implementation must fail
+# both, or the fixture has stopped reaching the defect and the two assertions above are vacuous.
+previous_occurrences() { grep -cE "$QUARANTINE_ANNOTATION_ERE" "$1" 2>/dev/null || echo 0; }
+
+assert "the PREVIOUS implementation returns two lines" "$(printf '0\n0')" \
+    "$(previous_occurrences "$no_match_file")"
+
+old_numeric_ok=NO
+if [ "$(previous_occurrences "$no_match_file")" -eq 0 ] 2>/dev/null; then old_numeric_ok=YES; fi
+assert "the PREVIOUS implementation breaks a numeric test" NO "$old_numeric_ok"
+
+rm -f "$no_match_file"
+
 echo
 echo "--- check-quarantine-registry.sh: drift is EXPLAINED, not merely refused ---"
 

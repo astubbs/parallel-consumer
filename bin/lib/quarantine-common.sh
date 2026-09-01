@@ -31,8 +31,20 @@ quarantined_files() {
 }
 
 # Count of annotation usages in one file.
+#
+# NOT `|| echo 0`: grep -c PRINTS 0 and EXITS 1 when nothing matches, so the fallback appends a
+# SECOND line and the caller captures "0\n0". check-quarantine-registry.sh then dies on
+# `[ "$entries" -ne "$count" ]` with "integer expression expected", and check-quarantine-owners.sh
+# silently compares a two-line string against "1" and never matches. Assign on failure instead.
+#
+# Unreachable from today's callers, which only pass files quarantined_files() already matched - so
+# this is a latent defect being closed, not an outage. bin/check-inflight-tags.sh carries the same
+# idiom and the same warning; that it was written there and reintroduced elsewhere is the argument
+# for fixing every instance rather than the one that bites.
 quarantined_occurrences() {
-    grep -cE "$QUARANTINE_ANNOTATION_ERE" "$1" 2>/dev/null || echo 0
+    local n
+    n=$(grep -cE "$QUARANTINE_ANNOTATION_ERE" "$1" 2>/dev/null) || n=0
+    printf '%s' "${n:-0}"
 }
 
 # The human-readable audit listing: every annotation usage with the following lines that carry its
