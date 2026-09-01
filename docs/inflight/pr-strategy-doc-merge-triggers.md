@@ -24,10 +24,14 @@ guarantee, the strongest claim in the comparison is the one that has to move, an
 `Exactly-once` row moves with it. Read the branch's own inflight note mapping reported transactional
 issues against what it proved.
 
-Same family, same section: **`fix/transactional-produce-callback-abort`** and
-**`fix/produce-lock-double-release`**. A transactional guarantee that needed a fix to hold is still a
-guarantee that holds - but the doc should not claim it more strongly than the fixed code supports.
-See [`bug-producing-lock-double-release.md`](bug-producing-lock-double-release.md).
+<!-- post-merge: checked-begin -->
+Same family, same section: **`fix/transactional-produce-callback-abort`**, still open, and the
+produce-lock double release, which landed as astubbs#257. A transactional guarantee that needed a fix
+to hold is still a guarantee that holds - but the doc should not claim it more strongly than the fixed
+code supports. astubbs#257's answer is recorded in §11 of
+[`../plans/2026-08-03-001-investigate-transactional-commit-flake.md`](../plans/2026-08-03-001-investigate-transactional-commit-flake.md),
+so the trigger it represents has fired and only the callback-abort branch is still pending here.
+<!-- post-merge: checked-end -->
 
 ## Change who the product is for
 

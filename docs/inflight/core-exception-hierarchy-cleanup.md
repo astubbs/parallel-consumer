@@ -17,9 +17,12 @@ guards astubbs#267 added were written as `catch (Throwable)`. Asked what could a
 `addToMailbox` throw, nobody could answer from the code - the catch names nothing, so the reachable
 route has to be rediscovered by reading three call levels down. It turned out to be
 `WorkContainer#onPostAddToMailBox` releasing the produce lock, where `ProducerManager`'s
-`ensureProduceStarted` throws `PCInternalRuntimeException` if the hold count is below one - the same
-invariant [`bug-producing-lock-double-release.md`](bug-producing-lock-double-release.md) has an open
-question about.
+`ensureProduceStarted` throws `PCInternalRuntimeException` if the hold count is below one - which was
+also a live double-release bug, since fixed and closed by astubbs#257.
+
+**That fix does not retire the argument, it sharpens it.** The route was only ever findable by reading
+down to `ensureProduceStarted`; had the guard named `ProduceLockNotHeldException`, the bug would have
+been legible at the call site instead of taking a separate investigation to surface.
 <!-- post-merge: checked-end -->
 
 **Had PC thrown, and caught, its own specific types, that would have been legible at the call site**:
