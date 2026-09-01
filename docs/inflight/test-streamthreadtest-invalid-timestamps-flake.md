@@ -51,6 +51,13 @@ produced a clean control twice and a red one once, in the same session. That is 
 an unchanged tree, which is the strongest shape this ledger collects, and it is why the lane is built
 to name this case from here rather than abort on it.
 
+**And on both cascaded rungs' first CI run after the classifier warm landed** - the Unit lane of
+astubbs/parallel-consumer#388 and of astubbs/parallel-consumer#389, same parameterisation `[3]`, same
+assertion, in runs where every other lane was green. Those two runs are worth reading for a second
+reason: neither hit the Maven Central classifier timeout, so the suite actually ran, which is what the
+`prepare-deps` warm was cascaded down the spine to make possible. The flake is now the only thing
+reddening that lane.
+
 ## Why this matters more than one flaky test
 
 **Every agent working on this module is told that "Kafka's own suites, zero failures with the seam
