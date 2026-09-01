@@ -1,38 +1,131 @@
 # `bin/` - how these scripts relate to CI and to the reviewer
 
-Repo scripts. Two conventions live here because nothing else enforces them.
+Repo scripts. This doc owns the conventions for writing a script in `bin/`; the root AGENTS.md
+routes here and keeps only what binds every session. Two conventions live here because nothing else
+enforces them.
 
-## Adding a verification script? Consider granting it to the reviewer
+## Write it in Node unless you can say why not
 
-`.github/workflows/claude-code-review.yml` gives the PR reviewer an **enumerated allowlist** of
-commands (`--allowedTools`). It is not a glob, and there is no automated check that it stays in step
-with this directory - so a new script is invisible to the reviewer until someone adds it by hand.
+**New scripts in `bin/` are Node (`.mjs`). Shell needs a stated reason.** Operator ruling,
+2026-09-01. [`bin/check-source-patterns.mjs`](check-source-patterns.mjs) enforces it against anything
+NEW since the merge base; existing scripts are grandfathered and are **not** a migration backlog,
+because churn is its own risk.
 
-That gap is not theoretical. `bin/test-check-review-posted.sh` went ungranted while its sibling
-`bin/test-check-copyright-headers.sh` was granted, so when PR astubbs#210 changed the review gate, the
-reviewer could not run the gate's own self-test and had to reason about the fix statically instead -
-on a PR whose whole subject was that gate misreporting.
+**The reason is silent wrong answers, not taste.** In one session: a gate written with gawk's
+`ENDFILE` parsed cleanly under mawk - the default `awk` here - matched nothing, and printed its success
+line over a file containing the exact defect it was written to catch. `exp` turned out to be a reserved
+awk function name. And the structural evidence is stronger than either anecdote: **a whole slice of
+this directory exists only to police shell's traps** - [`check-shell-hazards.sh`](check-shell-hazards.sh),
+the `sigpipe-into-grep-q` row in [`bin/lib/source-patterns.mjs`](lib/source-patterns.mjs) (its own gate
+until it was folded in), and a shared helper for `grep -c` printing `0` and exiting `1`. When that much
+of the tooling guards the tooling, the language is the problem.
 
-**Grant a script when it is read-only and lets the reviewer check a claim rather than infer it** -
-`check-*.sh`, `test-check-*.sh`, the `ci-*-test.sh` wrappers. A reviewer that can re-run what a PR
-asserts catches a false claim; one that cannot is guessing.
+**Node, not Python**, and the repo already chose: `.github/scripts/` holds four JS gate
+implementations, each with a `.test.js` sibling, against one Python file in the tree. Node is the
+established second language *and* already carries the testing convention `bin/` lacks.
 
-**Do not grant** anything that writes, publishes, or reaches the network beyond `gh` reads. The
-allowlist is deliberately enumerated rather than `Bash(*)`: that job has no fork guard beyond
-`sender.type != Bot`, and it reads attacker-influencable text (the diff, the PR body, comments), so
-an enumerable list is the safety margin against injection-into-execution. Widening it to `bin/*`
-would hand that margin away for the convenience of not editing one line.
+**Shell is still right sometimes, and the escape hatch is a sentence rather than a flag** - put
+`shell-justified: <reason>` in a comment. A written reason is one somebody can disagree with later.
+Reasons that qualify: a handful of lines wrapping a single command; something that must run before
+Node is available; a git hook where a runtime's startup is a real fraction of the latency budget.
+**"It is what the neighbouring scripts are" does not qualify** - that is how a default outlives its
+reason.
 
-**Grant BOTH spellings.** These are prefix matches, not globs: `Bash(bin/foo.sh:*)` does **not**
-match `./bin/foo.sh`. Every entry is listed twice for that reason, and a half-added grant is worse
-than none - the reviewer's invocation fails in a way that reads like the script is broken.
+**A new rule is a row, not a script.** Most gates here are the same program - walk files, match a
+regex, complain - each re-implementing walking, exclusions, an opt-out and an exit-code contract, in a
+language where each of those is a paragraph. [`bin/lib/source-patterns.mjs`](lib/source-patterns.mjs)
+holds the table and `check-source-patterns.mjs` is the one runner they share. A check that has to
+*think* - parse XML, call an API, compare numbers - is a real program and still gets its own file.
 
-**Editing that workflow costs you the review on that PR.** The action's workflow-validation guard
-skips itself (exiting 0) whenever `claude-code-review.yml` differs from the default branch, so
-`claude-review` will go red on the PR making the change - correctly, since no review ran. Ask for one
-in a comment (`@claude review this`), which runs from an unmodified workflow file. Note the gate
-checks whether a comment cites *its own* run id, so a manually requested review does not turn that
-particular red check green; it stays red until merge.
+**Node scripts are compile-checked by `pr-checklist.yml` and self-tested by `repo-hygiene.yml`**,
+which runs `bin/check-all.sh --with-tests` and so discovers `bin/test-*.mjs` by glob. They are two
+different workflows on purpose - naming only the first sends anyone repairing the test wiring to a
+job that never runs the tests. `node --check` is a
+compile, not static analysis; JavaScript is the one language CodeQL's default setup here does not
+scan, which is tracked separately.
+
+## Naming a script here can grant it to the PR reviewer
+
+`bin/check-*.sh` and `bin/test-check-*.sh` are granted to the review agent **by pattern**, so a
+script matching either prefix becomes runnable by the reviewer the moment it is on the default
+branch. Nobody approves it; the name is the grant.
+
+**A `.mjs` gate needs its own grant, and the pattern does not cover it.** The allowlist entries are
+`Bash(bin/check-*.sh:*)` - a Node gate is invoked as `node bin/check-x.mjs`, which matches nothing, so
+the reviewer silently cannot run it. `Bash(node bin/check-*.mjs:*)` and `Bash(node bin/test-*.mjs:*)`
+are granted alongside the shell ones for that reason. Adding a language to `bin/` without adding its
+grant leaves the reviewer quietly running fewer checks than the directory contains.
+
+**So do not give that prefix to a script that writes, publishes, deploys, or reaches the network
+beyond `gh` reads.** The two prefixes were chosen to keep `deploy.sh`, `chaos-test.sh`,
+`soak-test.sh` and friends outside the grant, and a misnamed script defeats that silently.
+
+Everything else about the allowlist - the two boundaries it sits between, what still needs a manual
+grant, and why a grant must land before the pull request that needs it - is in
+[`docs/ci.md`](../docs/ci.md) -> "Editing the reviewer".
+
+## Run them all with `bin/check-all.sh`, not from memory
+
+**Before you push: `bin/check-all.sh`.** By default it globs `bin/check-*.sh` **and `bin/check-*.mjs`**, dispatching each by extension, and runs them concurrently - seconds, not minutes, because a sweep slow enough to skip protects nothing. `--with-tests` adds `bin/test-*.sh` and `bin/test-*.mjs`, the self-tests, which answer a different question ("do the gates still work") and are CI's job. Either way it globs, so a gate
+added tomorrow is swept with no edit anywhere - nobody has to remember to register it, and nobody
+has to remember it exists.
+
+That property is the whole design, and it is why the discovery loop must stay a glob. The script
+exists because astubbs#356 pushed a branch that failed `check-branch-self-reference.sh` in CI after
+a local sweep of seven gates chosen by hand. The gate was not new, subtle, or broken; it was not on
+somebody's list.
+
+- **A skip is never a pass.** Exit 2 (cannot run) and exit 3 (nothing in scope) get their own
+  columns and are excluded from the pass count, because a gate that measured nothing must not read
+  like one that measured and found nothing.
+- **Five scripts are not tree gates** - four report the state of a *pull request* and one needs a
+  maven-log argument - so they are skipped by default and run under `--pr`. Since a hand-maintained
+  list is exactly what this script abolishes, every name in it is **asserted to exist**: rename one
+  and the runner exits 2 rather than quietly sweeping one gate fewer than it claims.
+
+## A script that answered its question is finished - `exp-` says so up front
+
+`bin/` grows and never shrinks. The prefixes carry most of the grouping already - `check-`, `test-`,
+`ci-`, `build-` account for the large majority of what is here - and the residue is the problem: the
+one-off drivers that answered one empirical question and then stayed forever, because nothing ever
+says a script is done.
+
+**An experiment driver takes the `exp-` prefix.** The test is what the script is *for*, not what it
+runs: if its header states a question with a stopping condition - "does the failure rate move with
+scale?", "does this stall always drain?" - it is an instrument, and the prefix says so to everyone
+who lists this directory later. A script that measures something you would re-measure after any
+change is a tool and keeps an ordinary name.
+
+The prefix is deliberately not a subdirectory. Script paths here are cited from `pom.xml`, workflow
+YAML, javadoc and docs, nothing checks those citations, and `AGENTS.md` already records a move that
+left six stale pointers behind. A prefix buys the same legibility for none of that risk.
+
+**When the question is answered, the method moves to [`docs/solutions/`](../docs/solutions/) and the
+script goes.** The durable value of an experiment is how it was settled and what it found - the
+control arm, the trap that voided the first attempt, the number. That is a write-up, and this repo
+already keeps them. An executable nobody will run again is not a record; it is a file everyone has
+to scroll past and no reader can tell from a live tool.
+
+Two things this rule is NOT. It does not license deleting a driver whose question is still open -
+"answered" means answered, and a note in `docs/inflight/` usually says which. And it does not apply
+to a tool that happens to have been written for one investigation: if you would run it again after
+changing the code it exercises, it is a tool, whatever it was written for.
+
+**Nothing enforces any of this** - no gate can tell an answered question from an open one - so it is
+a judgement made at merge, by whoever knows what the experiment found.
+
+**And the half that keeps it findable: an `exp-` script needs a row in
+[`docs/testing.md`](../docs/testing.md) -> "Experiment runners" BEFORE it merges** - the question it
+answers, and whether that question is still open. Without it the script is discoverable only by
+`ls bin/`, which is how six runners arrived referenced by no doc, no workflow and no other script,
+while a seventh would have been written rather than found. That table is also where a question is
+marked answered, so the same row that finds a live instrument is what retires a dead one.
+
+**A row is owed only where no mechanism sweeps the file.** `check-*` and `test-*` are globbed by
+`bin/check-all.sh`, so they are found by construction and naming them anywhere else is a copy that
+can go stale. The scripts that need an index are exactly the ones nothing globs: the experiment
+runners, and the handful of build helpers beside them. That is the test to apply before adding a
+name to any list - **does something already find this?**
 
 ## Scripts that guard other scripts
 
@@ -46,14 +139,16 @@ Two structural guards exist and are worth copying into any new checker's self-te
 - **No `printf | grep -q` or `| awk` under `set -o pipefail`.** The early-exiting reader closes the
   pipe, the writer takes `EPIPE`, and `pipefail` promotes 141 to the pipeline's status - so *matching*
   becomes a failure. It needs more than one pipe buffer (64 KiB) of trailing input to bite, which is
-  why it survives small fixtures. Use a herestring. **`bin/check-shell-sigpipe.sh` enforces this
+  why it survives small fixtures. Use a herestring. **`bin/lib/source-patterns.mjs` (rule `sigpipe-into-grep-q`) enforces this
   across every script in this directory** and runs in CI, so a new violation fails the build rather
   than waiting to be noticed - `bin/check-review-posted.sh` shipped with one and misreported four
   PRs first. `shellcheck` does **not** catch this pattern (verified against the known-bad line,
   which it passed clean), which is why the guard is a bespoke grep rather than a linter. It
   matches every flag spelling - `-q`, `-qE`, `-Eq`, split flags (`grep -v -q`), `--quiet`,
-  `--silent` - and skips exactly two files, itself and its self-test, because both must carry
-  the anti-pattern as data. Anything else it skipped would be a violation in hiding.
+  `--silent` - and skips nothing by name. The gate it replaced had to exclude itself and its own
+  self-test, because both carried the anti-pattern as data; a rule in a `.mjs` table does not match
+  `\.(sh|bash)$` and so cannot flag itself. Its cases live in
+  [`bin/test-check-source-patterns.mjs`](test-check-source-patterns.mjs).
 - **Fixtures big enough to reach the failure.** The review gate's self-test has cases for a match
   buried mid-body and a match at the very end, and neither can trigger the bug - the first is small,
   the second has nothing following it. A case that reaches it is added in astubbs#210.
@@ -74,6 +169,22 @@ caught it in review, and the same mistake had been seen before.
 
 The github-actions ecosystem was re-enabled in `.github/dependabot.yml` at the same time; it had
 been off since 2022, when the repo genuinely had no workflows.
+
+**Temporary CVE exclusions expire.** `bin/check-cve-exclusions.sh` parses the root pom's
+`excludeVulnerabilityIds` and fails once an entry marked `TEMPORARY-SINCE: YYYY-MM-DD` is more than
+90 days old - also on an undated, unparseable or future-dated marker, and on an id with no rationale
+comment above it. It runs in Repo Hygiene rather than in the audit job that reads the same list,
+because that job is skipped for fork PRs and dies early on a token expiry, which is exactly when an
+unwatched list rots. It exits **3**, leaving 1 and 2 to keep the meanings
+`bin/check-ossindex-audit.sh` gives them. Same class as the rule above - **Dependabot cannot catch
+it**: the ids it was written for are in no advisory database, so no alert exists to fire, and a
+blanket `ignore` had silenced the patch bump that would have retired them.
+
+**Scope every `ignore` in `.github/dependabot.yml` to the update you actually fear.** A bare
+`dependency-name` with no `update-types` silences the dependency completely, including the patch
+release you are waiting for - and the failure is invisible, because nothing reports a PR that was
+never opened. Blanket is right only for a genuine freeze (`net.bytebuddy`, held until wiremock 3.x).
+Anything you expect to move again gets `update-types`.
 
 **SHA pins are exempt**, and are not drift. The `astubbs/*` forks are pinned to a commit on a
 *branch* on purpose - a moving branch ref would be the unsafe choice - so each use site tracks a

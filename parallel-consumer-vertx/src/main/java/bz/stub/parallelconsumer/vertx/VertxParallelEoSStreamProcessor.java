@@ -5,10 +5,13 @@ package bz.stub.parallelconsumer.vertx;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.PCRetriableException;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.PollContext;
 import bz.stub.parallelconsumer.PollContextInternal;
 import bz.stub.parallelconsumer.internal.ExternalEngine;
+import bz.stub.parallelconsumer.internal.MdcPropagation;
+import bz.stub.parallelconsumer.internal.PCInternalRuntimeException;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
@@ -39,8 +42,26 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static bz.stub.parallelconsumer.internal.UserFunctions.carefullyRun;
+import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.describeWithRootCause;
+import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.logWithoutEscaping;
 
 
+/**
+ * <b>HTTP status codes are the caller's concern, not this library's.</b> A Vert.x {@code WebClient}
+ * future completes successfully for any response that arrives, whatever its status, and fails only
+ * when the request does not complete at all - connection refused, timeout, TLS failure. This engine
+ * treats that future's outcome as the work's outcome, so a delivered <b>4xx or 5xx marks the record
+ * processed and its offset is committed</b>, while a transport failure marks it failed and the
+ * record is retried.
+ * <p>
+ * That is deliberate, and it matches how parallel-consumer treats the rest of the user's domain: it
+ * hands you the tools and takes no position on what counts as a business failure. To make a status
+ * code retryable, say so in your own function - attach a Vert.x
+ * {@code ResponsePredicate} to the request, or inspect the response and throw.
+ * <p>
+ * Both halves of this boundary are pinned by {@code VertxTest.serverErrorStatusStillCommits} and
+ * {@code VertxTest.transportFailureIsDistinctFromANonSuccessStatus}, so it cannot change silently.
+ */
 @Slf4j
 public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
         implements VertxParallelStreamProcessor<K, V> {
@@ -151,10 +172,16 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
 
             Future<HttpResponse<Buffer>> send = call.send(); // dispatches the work to vertx
 
+            // the user's callback runs on the vert.x event loop, which is a second thread boundary - carry the
+            // diagnostic context of this (worker) thread over it
+            var eventLoopContext = getMdcPropagation().capture();
+
             // hook in the users' call back for when the web request gets a response
-            send.onComplete(ar ->
-                    onWebRequestComplete.accept(ar)
-            );
+            send.onComplete(ar -> {
+                try (var mdcScope = getMdcPropagation().enter(eventLoopContext)) {
+                    onWebRequestComplete.accept(ar);
+                }
+            });
 
             return send;
         }, onSend);
@@ -185,25 +212,91 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
     }
 
     private void addVertxHooks(final PollContextInternal<K, V> context, final Future<?> send) {
+        // called on the worker thread, where the caller's context is established - these handlers however run on the
+        // vert.x event loop, so the context has to be carried explicitly
+        final MdcPropagation mdc = getMdcPropagation();
+        final Map<String, String> eventLoopContext = mdc.capture();
+
         context.streamWorkContainers().forEach(wc -> {
             // attach internal handler
             wc.setWorkType(VERTX_TYPE);
 
             send.onSuccess(h -> {
-                log.debug("Vert.x Vertical success");
-                wc.onUserFunctionSuccess();
-                addToMailbox(context, wc);
+                try (var mdcScope = mdc.enter(eventLoopContext)) {
+                    log.debug("Vert.x Vertical success");
+                    wc.onUserFunctionSuccess();
+                    addToMailbox(context, wc);
+                }
             });
             send.onFailure(h -> {
-                log.error("Vert.x Vertical fail: {}", h.getMessage());
-                wc.onUserFunctionFailure(h);
-                addToMailbox(context, wc);
+                // master's MDC scope, this branch's guards: the handlers run on the vert.x event loop, so
+                // the caller's diagnostic context has to be carried explicitly, and everything below has to
+                // happen inside it or the failure is logged without the context that identifies it.
+                try (var mdcScope = mdc.enter(eventLoopContext)) {
+                    // Record the failure BEFORE rendering it. Logging a throwable hands it to the logging binding,
+                    // which walks the cause chain itself to build a stack trace - unbounded, and running the
+                    // throwable author's overrides. If that throws, everything after it is skipped, and what would be
+                    // skipped here is the work container's own completion: the record would stay marked in flight
+                    // forever, stalling ordering and draining. The failure is the thing that must be recorded; the
+                    // log line is the thing that can be lost.
+                    // Each step guarded separately, because vert.x will NOT contain a throw for us: FutureImpl's
+                    // listener array iterates its listeners with no per-listener try/catch, so anything escaping this
+                    // handler skips every remaining listener - including the sibling containers' own handlers, which
+                    // strands their records in flight forever. Core, Reactor and Mutiny all guard this; this was the
+                    // last engine that did not.
+                    try {
+                        wc.onUserFunctionFailure(h);
+                    } catch (Throwable bookkeepingThrew) {
+                        // Logged, not fatal, and bounded: what threw is USER code - the retryDelayProvider, reached via
+                        // updateFailureHistory - and onUserFunctionFailure records the verdict in a finally, so the
+                        // container leaves its in-flight state even on this path. What is lost is retry METADATA for
+                        // this one record (attempt count, retryDueAt), not the record: it is still mailboxed on the
+                        // next lines. Making it fatal would let a user callback stop the consumer, which is the whole
+                        // defect class this handler exists to close.
+                        log.error("Failed to record the send failure against {} - the record is still returned to the " +
+                                "mailbox below. Cause: {}", wc, describeWithRootCause(bookkeepingThrew));
+                    }
+                    try {
+                        addToMailbox(context, wc);
+                    } catch (PCInternalRuntimeException pcInvariantBroke) {
+                        // The EXPECTED shape - one of PC's own invariants. It was reachable here as
+                        // ProduceLockNotHeldException from the produce-lock release inside addToMailbox until
+                        // astubbs#257 made cleanUpContext the single release point. Terminal, per
+                        // the operator ruling: if the record cannot be posted, PC can no longer account for it, and
+                        // continuing risks a silent skip. Escalation only records the reason and moves the state,
+                        // because throwing would skip vert.x's remaining listeners and strand the sibling containers,
+                        // and blocking would hold the event loop.
+                        failFatallyOnUnmailboxableRecord(wc, pcInvariantBroke);
+                    } catch (Throwable nothingElseIsExpected) {
+                        // Backstop for a route nobody has enumerated. Broad on purpose, for the same reason the arm
+                        // above must not rethrow.
+                        failFatallyOnUnmailboxableRecord(wc, nothingElseIsExpected);
+                    }
+
+                    // the throwable rather than its message: this is the only record of why a send failed, and
+                    // getMessage() alone drops the type, the cause chain and the stack - and reads "fail: null"
+                    // for anything thrown without a message. Guarded, because h is the user's throwable and the
+                    // logging binding walks its cause chain unbounded.
+                    logWithoutEscaping(h, () -> {
+                        // DEBUG for a retriable failure, ERROR otherwise: PCRetriableException is the user's documented
+                        // way of saying "this one is expected, hand it back to me later", so it is a normal step in a
+                        // working retry loop rather than a fault. Logged at ERROR it would report healthy operation as
+                        // broken, and at the rate a retry loop runs it would bury the failures that are.
+                        if (PCRetriableException.isPresentIn(h)) {
+                            log.debug("Vert.x Vertical fail", h);
+                        } else {
+                            log.error("Vert.x Vertical fail", h);
+                        }
+                    });
+                }
             });
 
             // add plugin callback hook
             send.onComplete(ar -> {
-                log.trace("Running plugin hook");
-                this.onVertxCompleteHook.ifPresent(Runnable::run);
+                try (var mdcScope = mdc.enter(eventLoopContext)) {
+                    log.trace("Running plugin hook");
+                    this.onVertxCompleteHook.ifPresent(Runnable::run);
+                }
             });
         });
     }

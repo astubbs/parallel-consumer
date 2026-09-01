@@ -15,11 +15,10 @@ import org.junit.jupiter.api.Timeout;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
-
-import static org.awaitility.Awaitility.await;
 
 /**
  * Chaos Pain Suite - W1 "churn storm" (Phase 1 skateboard; origin design:
@@ -35,6 +34,13 @@ import static org.awaitility.Awaitility.await;
  * <b>Calibration status</b>: this scenario MUST go red (zombie/dwell or drain-bound probe) on the pre-fix
  * drain-defect composition (the real bug) ({@code experiment/stall-uber-nofix}) and green here - see plan Unit 5.
  * <p>
+ * <b>Recovery diagnostic - already answered, do not re-derive</b>: under
+ * {@code -Dchaos.diagnoseStallRecovery=true} (see {@link ChaosScenarioBase#DIAGNOSE_STALL_RECOVERY})
+ * this scenario's asynchronous no-progress line was watched to a verdict on 2026-08-28 - the backlog
+ * DRAINED on all six firings collected, which is what demoted that line to a timing proxy rather
+ * than a distinct defect. A run that drains reproduces a known result; a run that stays FLAT is the
+ * finding worth reporting.
+ * <p>
  * Seed protocol: {@code -Dchaos.seed=<long>} replays a schedule; unset = random seed, always logged.
  * Excluded from default suites via {@code @Tag("chaos")}; run with {@code -Dincluded.groups=chaos}.
  * <p>
@@ -45,8 +51,8 @@ import static org.awaitility.Awaitility.await;
  * at a commit BEFORE the fix (expect RED - the probe violation names the mechanism) and again at the
  * fix commit (expect GREEN). The RED->GREEN flip is the evidence that the fix addresses the mechanism
  * the probe watches. Add {@code -Dchaos.seed=<seed>} to replay a specific schedule; on-demand CI runs
- * via {@code .github/workflows/chaos-pain.yml} (workflow_dispatch: seed, reps). See AGENTS.md
- * "Chaos Pain Suite".
+ * via {@code .github/workflows/chaos-pain.yml} (workflow_dispatch: seed, reps). See
+ * {@code docs/testing.md}, "Chaos Pain Suite".
  */
 @Tag("chaos")
 @Timeout(600)
@@ -76,11 +82,28 @@ class ChaosChurnStormIT extends ChaosScenarioBase {
      * sits comfortably under LAG_STAGNATION_BOUND (150s). */
     private static final Duration HEAVY_SLEEP = Duration.ofSeconds(45);
 
+    /**
+     * This scenario's own prior art for {@link ChaosScenarioBase#DIAGNOSE_STALL_RECOVERY}, which was a
+     * long time arriving: unlike {@code AbstractRevokeUnderWorkScenario}, the flag was silently ignored
+     * here until this override existed, so the asynchronous no-progress line went unsettled for weeks.
+     * It has since been answered - this class's "Calibration status" javadoc carries the verdict and
+     * its date. A drain is therefore a re-derivation; a flat backlog is the finding.
+     */
+    @Override
+    protected void logDiagnosticContext() {
+        log.warn("=== BEFORE INTERPRETING THIS RUN, read this class's 'Calibration status' javadoc. " +
+                "The recovery diagnostic has engaged on this scenario before and the backlog DRAINED " +
+                "on every one of six firings, which is what demoted the asynchronous stall to a " +
+                "timing proxy. If your result is 'it drains', you have reproduced a known result - " +
+                "the finding worth reporting is a run that stays FLAT. ===");
+    }
+
     @Test
     void churnStormMeetsSlosAndBalancesLedger() throws Exception {
-        long seed = resolveSeed();
-        String replayCmd = replayCommand(seed);
-        log.info("=== CHAOS W1 churn storm: seed={} (replay: {}) ===", seed, replayCmd);
+        // The @Timeout clock starts here, so effectiveDiagnosticQuietCap's time-remaining sum must too.
+        Instant methodStart = Instant.now();
+        ChaosSeed seed = resolveSeed();
+        log.info("=== CHAOS W1 churn storm: seed={} (replay: {}) ===", seed.getValue(), seed.replayCommand());
 
         String topic = getClass().getSimpleName() + "-w1-" + RandomUtils.nextInt();
         ensureTopic(topic, PARTITIONS); // explicit partition count (base numPartitions is package-private)
@@ -96,12 +119,13 @@ class ChaosChurnStormIT extends ChaosScenarioBase {
         FleetBootstrap fleet = bootstrapFleet(topic, pcConfig, EXPECTED_MESSAGES, PRE_PRODUCE_FRACTION,
                 INITIAL_FLEET, HEAVY_EVERY, HEAVY_SLEEP);
         AtomicLong totalConsumed = fleet.getTotalConsumed();
+        AtomicLong totalStarted = fleet.getTotalStarted();
         Queue<String> allConsumed = fleet.getAllConsumed();
         Set<String> expectedKeys = fleet.getExpectedKeys();
         ProgressProbe probe = fleet.getProbe();
 
         ChaosConductor conductor = conductorFor(fleet, pcConfig, HEAVY_EVERY, HEAVY_SLEEP, MAX_FLEET)
-                .seed(seed)
+                .seed(seed.getValue())
                 .minTick(Duration.ofMillis(500))
                 .maxTick(Duration.ofMillis(1500))
                 .joinAfterDrainBias(0.9)
@@ -110,17 +134,22 @@ class ChaosChurnStormIT extends ChaosScenarioBase {
         startRun(probe, conductor);
 
         try {
-            // the run: everything produced must be consumed by SOMEONE within the cap, chaos or not
-            await().alias("all messages consumed under churn")
-                    .atMost(RUN_CAP)
-                    .pollInterval(Duration.ofSeconds(2))
-                    .failFast("probe violation during run", probe::hasViolations)
-                    .until(() -> totalConsumed.get() >= EXPECTED_MESSAGES
-                            && allConsumedCovers(expectedKeys, allConsumed));
+            // the run: everything produced must be consumed by SOMEONE within the cap, chaos or not -
+            // or, under -Dchaos.diagnoseStallRecovery=true, watched PAST any violation instead of
+            // aborting on it, to see whether the backlog drains or consumption stays flat (see
+            // ChaosScenarioBase#diagnosableWait).
+            diagnosableWait("all messages consumed under churn", methodStart, RUN_CAP,
+                    "probe violation during run", probe)
+                    .until(() -> {
+                        boolean done = totalConsumed.get() >= EXPECTED_MESSAGES
+                                && allConsumedCovers(expectedKeys, allConsumed);
+                        logDiagnosticProgress("run", EXPECTED_MESSAGES, totalStarted, totalConsumed, probe, done);
+                        return done;
+                    });
         } finally {
             settleRun(conductor, probe, fleet.getProducerThread(), fleet.getPcExecutor(), totalConsumed);
         }
 
-        assertScenarioSlos(probe, conductor, replayCmd, expectedKeys, allConsumed);
+        assertScenarioSlos(probe, conductor, seed.replayCommand(), expectedKeys, allConsumed);
     }
 }

@@ -7,6 +7,7 @@ package bz.stub.parallelconsumer.integrationTests;
 
 import bz.stub.parallelconsumer.internal.utils.ProgressBarUtils;
 import bz.stub.parallelconsumer.internal.utils.StringUtils;
+import bz.stub.parallelconsumer.internal.utils.ThroughputReport;
 import bz.stub.parallelconsumer.internal.utils.TrimListRepresentation;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
@@ -18,9 +19,12 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.assertj.core.api.Assertions;
 import org.assertj.core.api.SoftAssertions;
 import org.awaitility.core.ConditionTimeoutException;
+import org.awaitility.core.TerminalFailureException;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -50,6 +54,38 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
     ProcessingOrder order = ProcessingOrder.KEY;
 
 
+    static final int GATING_VOLUME = 3_000_000;
+
+    /**
+     * The volume this test runs at. Unlike the other recovered sites, the {@code //10_000_000} that
+     * sat above this line <em>was</em> live - at {@code 04cd4d81} (2020-12-14) - and was commented
+     * out at {@code ad3636a5} (2021-07-02) when the value was reduced. Git holds that history, so
+     * the comment was residue and stays deleted.
+     * <p>
+     * What was not residue is the reason for the reduction. The wait below was hard-coded at 60
+     * seconds, so the higher volume could not be met regardless of whether the run was healthy -
+     * the volume was lowered to fit a deadline rather than because 10M was wrong. With the deadline
+     * scaling, the original volume is reachable again:
+     *
+     * <pre>bin/performance-test.sh -Dmultiinstance.messages=10000000</pre>
+     *
+     * Through the script, not a bare {@code ./mvnw verify -Pci}: this class is {@code @Tag("performance")} and
+     * the default {@code excluded.groups} is {@code performance,chaos,quarantined}, so a plain run deselects the
+     * very test the property configures - and exits BUILD SUCCESS having run nothing. Exclusion also beats
+     * inclusion, so {@code -Dincluded.groups=performance} alone is not enough either; the script passes both
+     * that and {@code -Dexcluded.groups=}, which is why the CI lane works.
+     */
+    private static int volume() {
+        return Integer.getInteger("multiinstance.messages", GATING_VOLUME);
+    }
+
+    /** The deadline this test has always had at its own volume. */
+    private static final Duration GATING_CEILING = ofSeconds(60);
+
+    private static Duration ceilingFor(int messages) {
+        return completionCeiling(messages, GATING_VOLUME, GATING_CEILING);
+    }
+
     // todo multi commit mode, multi partition count, multi instance count? 2,3,10,100? more instances than partitions, more partitions than instances
     @SneakyThrows
     @Test
@@ -57,8 +93,7 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
         numPartitions = 12;
         String inputTopicName = setupTopic(this.getClass().getSimpleName() + "-input");
 
-//        int expectedMessageCount = 10_000_000;
-        int expectedMessageCount = 30_000_00;
+        int expectedMessageCount = volume();
         log.info("Producing {} messages before starting test", expectedMessageCount);
 
         List<String> expectedKeys = getKcu().produceMessages(inputTopicName, expectedMessageCount);
@@ -82,8 +117,9 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
         var failureMessage = StringUtils.msg("All keys sent to input-topic should be processed and produced, within time " +
                         "(expected: {} commit: {} order: {} max poll: {})",
                 expectedMessageCount, commitMode, order, maxPoll);
+        Instant waitStarted = Instant.now();
         try {
-            waitAtMost(ofSeconds(60))
+            waitAtMost(ceilingFor(expectedMessageCount))
                     // dynamic reason support still waiting https://github.com/awaitility/awaitility/pull/193#issuecomment-873116199
                     // .failFast( () -> pcThree.getFailureCause(), () -> pcThree.isClosedOrFailed()) // requires https://github.com/awaitility/awaitility/issues/178#issuecomment-734769761
                     .failFast("PC died - check logs", () -> pcThree.isClosedOrFailed()) // requires https://github.com/awaitility/awaitility/issues/178#issuecomment-734769761
@@ -97,8 +133,19 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
                         all.assertAll();
                     });
         } catch (ConditionTimeoutException e) {
+            reportThroughput(expectedMessageCount, waitStarted, "FAILED");
             fail(failureMessage + "\n" + e.getMessage());
+        } catch (TerminalFailureException e) {
+            // The failFast arm above exits through THIS, not ConditionTimeoutException - Awaitility's
+            // two failure exits are unrelated siblings under RuntimeException. Catching only the
+            // timeout meant the one failure mode with a named cause ("PC died") was the one that
+            // reported no throughput at all, so bin/performance-test.sh printed NONE FOUND for a run
+            // that had just measured a processor death - the exact case the on-failure figure exists
+            // for. Rethrown unchanged: this reports, it does not soften the failure.
+            reportThroughput(expectedMessageCount, waitStarted, "FAILED");
+            throw e;
         }
+        reportThroughput(expectedMessageCount, waitStarted, "PASSED");
 
         assertThat(processedCount.get())
                 .as("messages processed and produced by parallel-consumer should be equal")
@@ -108,6 +155,20 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
         assertThat(expectedMessageCount).isEqualTo(processedCount.get());
 
         bars.forEach(ProgressBar::close);
+    }
+
+    /**
+     * One reporter for both exits of the wait, so the two lines cannot drift apart in what they
+     * carry. They already had: the failing line named {@code outcome=FAILED} and the passing line
+     * carried no {@code outcome} field at all, so a collector could only tell a green run from a
+     * schema change by the absence of a key - which is exactly the reading a
+     * {@code key=value} line exists to remove. Both now say which they are, matching the
+     * {@code PC-DEADLINE-HEADROOM} line the ambient probe emits.
+     */
+    private void reportThroughput(int expectedMessageCount, Instant waitStarted, String outcome) {
+        ThroughputReport.report("MultiInstanceHighVolumeTest", consumedKeys.size(), expectedMessageCount,
+                waitStarted, StringUtils.msg("commitMode={} order={} maxPoll={} outcome={}",
+                        commitMode, order, maxPoll, outcome));
     }
 
     private ParallelEoSStreamProcessor<String, String> buildPc(String inputTopicName, int maxPoll, ProcessingOrder order, CommitMode commitMode) {

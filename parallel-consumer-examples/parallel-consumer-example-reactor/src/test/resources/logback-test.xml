@@ -17,8 +17,6 @@
         <appender-ref ref="STDOUT"/>
     </root>
 
-
-
     <!-- containers -->
     <logger name="bz.stub.parallelconsumer.integrationTests.DbTest" level="debug"/>
     <logger name="bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest" level="debug"/>

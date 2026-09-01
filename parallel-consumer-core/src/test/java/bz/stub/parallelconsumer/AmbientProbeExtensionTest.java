@@ -10,12 +10,15 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import bz.stub.parallelconsumer.integrationTests.AmbientProbeExtension;
 import bz.stub.parallelconsumer.integrationTests.NoAmbientProbe;
+import bz.stub.parallelconsumer.integrationTests.chaostests.ChaosSeed;
 import bz.stub.parallelconsumer.integrationTests.chaostests.ProgressProbe;
 import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.ExtensionContext;
 import org.junitpioneer.jupiter.ClearSystemProperty;
+import org.junit.jupiter.api.parallel.ResourceLock;
 import org.junitpioneer.jupiter.SetSystemProperty;
 import org.slf4j.LoggerFactory;
 
@@ -25,10 +28,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
@@ -50,6 +55,125 @@ import static org.mockito.Mockito.when;
  * ({@code getRequiredTestInstance()} throwing) and by the ITs themselves.
  */
 class AmbientProbeExtensionTest {
+
+    /**
+     * Every {@link AmbientProbeExtension#buildAutopsy} call mutates the same static once-per-JVM
+     * environment-dump guard, whether or not the test cares about the dump - the first caller wins it
+     * and every later one gets the "already dumped" line. This module runs JUnit thread-parallel
+     * outside {@code -Pci}, so any two of them that are not serialised can red each other. Hold this
+     * lock on every test that calls {@code buildAutopsy}, not just the two asserting on the dump.
+     */
+    private static final String ENVIRONMENT_DUMP_LOCK = "ambient-probe-environment-dump";
+
+    // --- deadline headroom: measured at the end of the method, LABELLED after teardown ---
+
+    /**
+     * A test whose method passes and whose {@code @AfterEach} then fails is one FAILING test to
+     * failsafe. The headroom line used to be emitted from {@code afterTestExecution}, which runs
+     * before that teardown, so it read {@code outcome=PASSED} inside a failing run - a wrong value in
+     * a {@code key=value} line, which is worse for a collector than a missing one.
+     */
+    @Test
+    void headroomOutcomeComesFromTheWatcherPhaseNotTheEndOfTheTestMethod() {
+        var extension = new AmbientProbeExtension();
+        var context = contextFor(TimedFixture.class, "timedMethod");
+        seedStart(context);
+
+        var logger = (Logger) LoggerFactory.getLogger(AmbientProbeExtension.class);
+        var appender = new ListAppender<ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            // end of the test METHOD: the clock stops here, but nothing is said yet - @AfterEach and
+            // every AfterEachCallback still have to run, and either can fail the test
+            extension.afterTestExecution(context);
+            assertWithMessage("headroom must not be reported before teardown has had its say")
+                    .that(headroomLines(appender)).isEmpty();
+
+            // ...and teardown fails it
+            extension.testFailed(context, new AssertionError("@AfterEach blew up"));
+        } finally {
+            logger.detachAppender(appender);
+        }
+
+        List<String> lines = headroomLines(appender);
+        assertThat(lines).hasSize(1);
+        assertThat(lines.get(0)).contains("outcome=FAILED");
+        assertThat(lines.get(0)).contains("deadlineMs=" + TimeUnit.SECONDS.toMillis(30));
+    }
+
+    /** The other exit: a clean pass still reports, because a green run is what establishes normal. */
+    @Test
+    void headroomIsReportedOnAPassingTestToo() {
+        var extension = new AmbientProbeExtension();
+        var context = contextFor(TimedFixture.class, "timedMethod");
+        seedStart(context);
+
+        var logger = (Logger) LoggerFactory.getLogger(AmbientProbeExtension.class);
+        var appender = new ListAppender<ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            extension.afterTestExecution(context);
+            extension.testSuccessful(context);
+        } finally {
+            logger.detachAppender(appender);
+        }
+
+        List<String> lines = headroomLines(appender);
+        assertThat(lines).hasSize(1);
+        assertThat(lines.get(0)).contains("outcome=PASSED");
+    }
+
+    /**
+     * No {@code @Timeout} means no denominator, so there is no headroom to express - and the watcher
+     * phase must stay silent rather than inventing one. Same silence for a test whose method never
+     * ran: nothing was captured, so nothing is emitted.
+     */
+    @Test
+    void headroomIsSilentWithoutADeadlineAndWithoutAMeasurement() {
+        var extension = new AmbientProbeExtension();
+        var timedButUnmeasured = contextFor(TimedFixture.class, "timedMethod"); // no start instant
+        var measuredButUntimed = contextFor(PlainFixture.class, "plainMethod");
+        seedStart(measuredButUntimed);
+
+        var logger = (Logger) LoggerFactory.getLogger(AmbientProbeExtension.class);
+        var appender = new ListAppender<ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            extension.afterTestExecution(timedButUnmeasured);
+            extension.testSuccessful(timedButUnmeasured);
+            extension.testFailed(timedButUnmeasured, new AssertionError("boom"));
+
+            extension.afterTestExecution(measuredButUntimed);
+            extension.testSuccessful(measuredButUntimed);
+            extension.testFailed(measuredButUntimed, new AssertionError("boom"));
+        } finally {
+            logger.detachAppender(appender);
+        }
+
+        assertThat(headroomLines(appender)).isEmpty();
+    }
+
+    /** Stands in for a broker IT's {@code beforeEach}, which cannot run here - see the class javadoc. */
+    private static void seedStart(ExtensionContext context) {
+        context.getStore(ExtensionContext.Namespace.create(AmbientProbeExtensionTest.class))
+                .put(AmbientProbeExtension.STARTED_KEY, Instant.now().minusMillis(50));
+    }
+
+    private static List<String> headroomLines(ListAppender<ILoggingEvent> appender) {
+        return appender.list.stream()
+                .map(ILoggingEvent::getFormattedMessage)
+                .filter(message -> message.contains(AmbientProbeExtension.HEADROOM_MARKER))
+                .collect(Collectors.toList());
+    }
+
+    static class TimedFixture {
+        @Timeout(value = 30, unit = TimeUnit.SECONDS)
+        void timedMethod() {
+        }
+    }
 
     // --- fixtures for the isDisabled() matrix ---
 
@@ -111,9 +235,104 @@ class AmbientProbeExtensionTest {
         assertThat(AmbientProbeExtension.isDisabled(contextFor(MethodOptOutFixture.class, "optedOutMethod"))).isTrue();
     }
 
+    // --- environment dump (what JavaEnvTest used to do by hand) ---
+
+    /** Asserts on the guard itself, so it resets it first - see {@link #ENVIRONMENT_DUMP_LOCK}. */
+    @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
+    void autopsyCarriesTheEnvironmentDumpOncePerRun() {
+        AmbientProbeExtension.resetEnvironmentDumpForTest();
+        var probe = observerProbe();
+        var context = contextFor(PlainFixture.class, "plainMethod");
+
+        String first = AmbientProbeExtension.buildAutopsy(context, probe, new AssertionError("first failure"));
+        String second = AmbientProbeExtension.buildAutopsy(context, probe, new AssertionError("second failure"));
+
+        // the first autopsy of a run carries the dump
+        assertThat(first).contains("environment (once per JVM):");
+        assertThat(first).contains("java.version=");
+        // a second failing test does not repeat a few hundred lines
+        assertThat(second).contains("environment: dumped in this JVM's first autopsy");
+        assertThat(second).doesNotContain("environment (once per JVM):");
+    }
+
+    @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
+    @SetSystemProperty(key = "ambient.probe.test.multiline", value = "alpha\nbeta")
+    void environmentDumpEscapesNewlinesSoOneLinePerProperty() {
+        AmbientProbeExtension.resetEnvironmentDumpForTest();
+
+        String autopsy = AmbientProbeExtension.buildAutopsy(
+                contextFor(PlainFixture.class, "plainMethod"), observerProbe(), new AssertionError("x"));
+
+        assertThat(autopsy).contains("ambient.probe.test.multiline=alpha\\nbeta");
+    }
+
+    /**
+     * The autopsy goes straight to CI logs, so a property whose name reads like a credential is masked - while the
+     * key itself still prints, because knowing it was set is the diagnostic.
+     */
+    @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
+    @SetSystemProperty(key = "ambient.probe.test.password", value = "hunter2")
+    @SetSystemProperty(key = "ambient.probe.test.plain", value = "not-a-secret")
+    void environmentDumpMasksValuesOfCredentialLookingKeys() {
+        AmbientProbeExtension.resetEnvironmentDumpForTest();
+
+        String autopsy = AmbientProbeExtension.buildAutopsy(
+                contextFor(PlainFixture.class, "plainMethod"), observerProbe(), new AssertionError("x"));
+
+        assertThat(autopsy).contains("ambient.probe.test.password=***");
+        assertThat(autopsy).doesNotContain("hunter2");
+        // an ordinary knob is untouched - the masking is by key name, not a blanket filter
+        assertThat(autopsy).contains("ambient.probe.test.plain=not-a-secret");
+    }
+
+    /**
+     * The likelier leak: people name a property for what it configures, so the credential rides in the VALUE
+     * under a key that announces nothing. Matching key names alone would print these verbatim.
+     */
+    @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
+    @SetSystemProperty(key = "ambient.probe.test.db.url", value = "jdbc:postgresql://h/db?user=svc&password=hunter2")
+    @SetSystemProperty(key = "ambient.probe.test.hook", value = "https://user:tok3n@hooks.example.com/x")
+    @SetSystemProperty(key = "ambient.probe.test.gpg.passphrase", value = "correct-horse")
+    void environmentDumpMasksCredentialsCarriedInsideValues() {
+        AmbientProbeExtension.resetEnvironmentDumpForTest();
+
+        String autopsy = AmbientProbeExtension.buildAutopsy(
+                contextFor(PlainFixture.class, "plainMethod"), observerProbe(), new AssertionError("x"));
+
+        // embedded key=value credential, and URL userinfo - neither key contains a secret marker
+        assertThat(autopsy).doesNotContain("hunter2");
+        assertThat(autopsy).doesNotContain("tok3n");
+        // gpg.passphrase is a real Maven release flag, and "passphrase" is not "password"
+        assertThat(autopsy).doesNotContain("correct-horse");
+        // the keys still print - knowing the property was set is the diagnostic
+        assertThat(autopsy).contains("ambient.probe.test.db.url=");
+        assertThat(autopsy).contains("ambient.probe.test.hook=");
+    }
+
+    /**
+     * The masking must not eat the dump it protects. {@code java.library.path} is why {@code pat} was rejected
+     * as a key marker - it would have masked every path property on the JVM.
+     */
+    @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
+    void environmentDumpDoesNotOverMaskOrdinaryProperties() {
+        AmbientProbeExtension.resetEnvironmentDumpForTest();
+
+        String autopsy = AmbientProbeExtension.buildAutopsy(
+                contextFor(PlainFixture.class, "plainMethod"), observerProbe(), new AssertionError("x"));
+
+        assertThat(autopsy).contains("java.version=" + System.getProperty("java.version"));
+        assertThat(autopsy).contains("java.library.path=" + System.getProperty("java.library.path"));
+    }
+
     // --- autopsy rendering ---
 
     @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
     void autopsyReportsProbeCleanWhenNothingObserved() {
         var probe = observerProbe();
 
@@ -127,6 +346,7 @@ class AmbientProbeExtensionTest {
     }
 
     @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
     void autopsyListsViolationsWithCount() {
         var probe = observerProbe();
         probe.getViolations().add("ZOMBIE_MEMBER/REBALANCE_BLOCKED: synthetic dwell violation");
@@ -142,6 +362,7 @@ class AmbientProbeExtensionTest {
     }
 
     @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
     void autopsyShowsFrozenPartitionDetailWhenNoViolationCrossedBounds() {
         var probe = observerProbe();
         var tp = new TopicPartition("in-topic", 12);
@@ -158,6 +379,52 @@ class AmbientProbeExtensionTest {
         assertThat(autopsy).doesNotContain("probe clean");
     }
 
+    /**
+     * A non-gating observation did not cause the failure being autopsied, but a reader diagnosing one
+     * needs to know a watermark sat pinned while it happened - and since 2026-08-25 the autopsy and the
+     * chaos job summary are the ONLY places a Class 2 finding can appear at all. If this section stops
+     * rendering, the finding does not go red anywhere; it simply becomes invisible.
+     */
+    @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
+    void autopsyListsNonGatingObservationsSeparatelyFromViolations() {
+        var probe = observerProbe();
+        probe.getObservations().add("CLASS2_STALL/LAG_STAGNATION: partition in-topic-21 lag=2974 "
+                + "with committed offset stagnant at 91 for 153s (bound 150s).");
+
+        String autopsy = AmbientProbeExtension.buildAutopsy(
+                contextFor(PlainFixture.class, "plainMethod"), probe, null);
+
+        assertThat(autopsy).contains("observations, non-gating (1):");
+        assertThat(autopsy).contains("CLASS2_STALL/LAG_STAGNATION: partition in-topic-21");
+        assertWithMessage("an observation must never be counted as a violation - that conflation is the "
+                + "regression this section exists to make visible")
+                .that(autopsy).contains("violations (0):");
+        assertWithMessage("an observation is something observed, so the clean-probe shortcut must not fire")
+                .that(autopsy).doesNotContain("probe clean");
+    }
+
+    /**
+     * Whenever the autopsy renders its sections at all, "no observations" is STATED rather than left
+     * to be inferred from an absent heading. The probe here is non-clean (a frozen partition), because
+     * a wholly clean probe takes the "probe clean" shortcut and renders no sections - that shortcut is
+     * asserted separately, and this test exists to prove the zero case inside the normal path.
+     */
+    @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
+    void autopsyStatesWhenThereWereNoObservations() {
+        var probe = observerProbe();
+        var tp = new TopicPartition("in-topic", 3);
+        probe.getPartitionLagSnapshots().put(tp,
+                new ProgressProbe.PartitionLagSnapshot(tp, 100, 2200, 2100, Instant.now().minusSeconds(120)));
+
+        String autopsy = AmbientProbeExtension.buildAutopsy(
+                contextFor(PlainFixture.class, "plainMethod"), probe, null);
+
+        assertThat(autopsy).contains("observations, non-gating (0):");
+        assertThat(autopsy).contains("  (none)");
+    }
+
     @Test
     void frozenPartitionLinesFilterOutHealthyPartitions() {
         var probe = observerProbe();
@@ -171,6 +438,83 @@ class AmbientProbeExtensionTest {
                 new ProgressProbe.PartitionLagSnapshot(freshlyCommitted, 100, 400, 300, Instant.now()));
 
         assertThat(AmbientProbeExtension.frozenPartitionLines(probe)).isEmpty();
+    }
+
+    // --- chaos seed replay handle ---
+
+    /**
+     * The seed is the only handle that replays a chaos failure, and the run-start console line carrying
+     * it is precisely what a truncated CI log eats - so it has to be in the autopsy, which travels as
+     * {@code system-out} inside the uploaded failsafe XML. Resolved here the way a scenario resolves it,
+     * so this covers the real {@code -Dchaos.seed} path and not a hand-built value.
+     */
+    @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
+    @SetSystemProperty(key = ChaosSeed.SEED_PROPERTY, value = "4734674029169027864")
+    void autopsyCarriesTheChaosSeedAndItsReplayCommand() {
+        ChaosSeed seed = ChaosSeed.resolve();
+        assertThat(seed.getValue()).isEqualTo(4734674029169027864L);
+
+        var context = contextFor(PlainFixture.class, "plainMethod");
+        doReturn(Optional.of(new SeededFixture(seed))).when(context).getTestInstance();
+        // the capture point: the live test instance is only guaranteed to be there this early
+        new AmbientProbeExtension().afterTestExecution(context);
+
+        String autopsy = AmbientProbeExtension.buildAutopsy(context, observerProbe(), new AssertionError("stalled"));
+
+        assertThat(autopsy).contains("chaos seed: 4734674029169027864");
+        assertThat(autopsy).contains("chaos replay: ./mvnw -Pci -pl parallel-consumer-core -am verify"
+                + " -DskipUTs=true -Dincluded.groups=chaos -Dexcluded.groups="
+                + " -Dchaos.seed=4734674029169027864");
+    }
+
+    /** Every other broker IT is unseeded - it must not grow two lines of empty chaos boilerplate. */
+    @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
+    void autopsyOmitsTheSeedLinesForTestsThatHaveNone() {
+        var context = contextFor(PlainFixture.class, "plainMethod");
+        doReturn(Optional.of(new PlainFixture())).when(context).getTestInstance();
+        new AmbientProbeExtension().afterTestExecution(context);
+
+        String autopsy = AmbientProbeExtension.buildAutopsy(context, observerProbe(), new AssertionError("stalled"));
+
+        assertThat(autopsy).doesNotContain("chaos seed:");
+        assertThat(autopsy).doesNotContain("chaos replay:");
+    }
+
+    /** A scenario that failed before resolving a seed holds null - the capture must not publish it. */
+    @Test
+    @ResourceLock(ENVIRONMENT_DUMP_LOCK)
+    void autopsyOmitsTheSeedLinesWhenTheScenarioNeverResolvedOne() {
+        var context = contextFor(PlainFixture.class, "plainMethod");
+        doReturn(Optional.of(new SeededFixture(null))).when(context).getTestInstance();
+        new AmbientProbeExtension().afterTestExecution(context);
+
+        String autopsy = AmbientProbeExtension.buildAutopsy(context, observerProbe(), new AssertionError("stalled"));
+
+        assertThat(autopsy).doesNotContain("chaos seed:");
+    }
+
+    /** Unset means a fresh schedule every run - a resolve() that returned a constant would be silent. */
+    @Test
+    @ClearSystemProperty(key = ChaosSeed.SEED_PROPERTY)
+    void chaosSeedIsRandomisedWhenTheReplayPropertyIsUnset() {
+        assertThat(ChaosSeed.resolve().getValue()).isNotEqualTo(ChaosSeed.resolve().getValue());
+    }
+
+    /** Stands in for {@code ChaosScenarioBase}, which cannot be loaded here - it extends
+     * {@code BrokerIntegrationTest}, whose static initialiser starts a Kafka Testcontainer. */
+    static class SeededFixture implements ChaosSeed.Holder {
+        private final ChaosSeed seed;
+
+        SeededFixture(ChaosSeed seed) {
+            this.seed = seed;
+        }
+
+        @Override
+        public ChaosSeed getChaosSeed() {
+            return seed;
+        }
     }
 
     // --- beforeEach fallback paths + callback no-ops ---
@@ -286,6 +630,10 @@ class AmbientProbeExtensionTest {
         });
         when(context.getTestMethod()).thenReturn(method);
         when(context.getDisplayName()).thenReturn("mockedTest()");
+        // one real store per context: the extension hands state from its callbacks to buildAutopsy
+        // through it, so a null (unstubbed) store would only ever exercise half the path
+        var store = new StubStore();
+        doReturn(store).when(context).getStore(any(ExtensionContext.Namespace.class));
         return context;
     }
 

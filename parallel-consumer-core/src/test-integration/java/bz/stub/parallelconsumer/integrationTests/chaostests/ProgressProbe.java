@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.integrationTests.chaostests;
  */
 
 import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
+import bz.stub.parallelconsumer.integrationTests.utils.ManagedPCInstance;
 import lombok.Getter;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
@@ -36,6 +37,12 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  * <ul>
  *   <li><b>Progress watermark</b>: while work remains, fleet-wide consumed count must advance within
  *   {@link #NO_PROGRESS_WINDOW} (generalises the confluentinc#857 investigation's "no progress for 11s" check).</li>
+ *   <li><b>Instance progress</b> ({@code INSTANCE_STALL/NO_WORK_COMPLETED}): the same shape one
+ *   granularity finer - for each LIVE fleet member that holds work (queued in shards or out for
+ *   processing, read from PC's own {@code WorkManager}), a work result must be returned within
+ *   {@link #INSTANCE_STALL_BOUND}. Wired per-run via {@link #withInstanceProgress}; inactive (like
+ *   the watermark) in ambient mode. See the bound's javadoc for why this is instance-level rather
+ *   than shard-level, and why it cannot fire on a merely-busy instance.</li>
  *   <li><b>Zombie-member / rebalance dwell</b>: the group must not dwell in
  *   {@code PREPARING_REBALANCE}/{@code COMPLETING_REBALANCE} beyond {@link #REBALANCE_DWELL_BOUND}.
  *   Keyed on protocol-unresponsiveness, NOT on "member holds partitions with zero consumption" - a
@@ -52,7 +59,8 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  * Two construction paths (one per {@link Mode}) share the same samplers:
  * <ul>
  *   <li><b>Chaos mode</b> ({@link #ProgressProbe(KafkaClientUtils, String, String, LongSupplier, long)}):
- *   all probes active, single topic, violations GATE the run (the chaos suite asserts them empty).</li>
+ *   all probes active, single topic, violations GATE the run (the chaos suite asserts them empty)
+ *   while observations are reported only - see {@link #getObservations()}.</li>
  *   <li><b>Ambient observer mode</b> ({@link #ambientObserver(KafkaClientUtils, Supplier)}): flight
  *   recorder for every broker IT. Watches ALL topics the group has committed offsets for; the
  *   progress-watermark probe is inactive (no consumed-count supplier exists); violations and peaks are
@@ -88,12 +96,80 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
      * reduced to 45s; 2x45=90s vs this 150s bound). A second legit-freeze class was measured during W4
      * calibration: EAGER reassignment restarts in-flight heavies on every storm membership change,
      * pinning commit low-watermarks for storm+dwell+slack - scenarios must keep that arithmetic under
-     * this bound (see ChaosRevokeUnderWorkIT). RED calibration of this probe is still open: W4 is
-     * artifact-free but has not yet reproduced a true unbounded Class 2 stall on master (the confluentinc#857
-     * root-cause stall is probabilistic); the probe ships GREEN-calibrated with peaks measured. */
+     * this bound (see ChaosRevokeUnderWorkIT).
+     * <p>
+     * <b>Crossing this bound is an {@link #getObservations() observation}, not a violation - it does
+     * not fail the run.</b> RED calibration was never achieved and is now closed rather than open:
+     * three diagnostic replays, two of them of the seeds the sightings ledger itself nominated as its
+     * best evidence, all crossed this bound and then drained completely. What the bound measures is
+     * how long a watermark stays pinned, which is a speed question; the liveness question it was
+     * standing in for belongs to {@link #INSTANCE_STALL_BOUND} - <b>but only at instance
+     * granularity.</b> Demoting this detector therefore REDUCED per-shard liveness coverage rather
+     * than relocating it: see {@link #INSTANCE_STALL_BOUND}'s own granularity note, and
+     * {@code docs/inflight/test-per-shard-liveness-has-no-gate.md} for what is uncovered and the
+     * correlated gate that would close it. The peak is still always measured - a timing regression
+     * must stay visible, it just must not turn a correctness suite red. */
     public static final Duration LAG_STAGNATION_BOUND = Duration.ofSeconds(150);
+    /**
+     * Appended to every Class 2 observation so the interpretation arrives WITH the finding, not in a
+     * document the reader must first decide to open. The gap it closes cost a measured day: three of
+     * four 2026-08-19 arms failed this check while progressing normally, because the natural reading
+     * of the bare message - "the library has stalled" - is wrong. That reading is now also what the
+     * demotion to an observation prevents structurally, but the text stays: a green run's log is
+     * read by someone who has no failure to prompt them to look it up.
+     */
+    static final String CLASS2_INTERPRETATION =
+            "NOTE: this bound is a TIMING measurement, not a correctness verdict, and since 2026-08-25 "
+                    + "it is an OBSERVATION that does not fail the run. A partition's committed offset "
+                    + "cannot advance past one incomplete record, so a slow or repeatedly-redelivered "
+                    + "record pins the watermark while the shard behind it completes work normally - a "
+                    + "busy fleet and a wedged one are indistinguishable to it. Three replays now say "
+                    + "so: seed 4734674029169027864 trips it 53 times on the eager arm and drains; "
+                    + "seed 6825864417772979246 (the sightings ledger's own master-control seed) trips "
+                    + "it twice and drains to inFlight=0; seed 4044221734199516240 trips it 46 times on "
+                    + "the drain arm and drains. The gating liveness claim is INSTANCE_STALL, which "
+                    + "watches completions and so cannot fire on slow-but-progressing - but it is "
+                    + "per-INSTANCE, so a single wedged shard on an instance whose other shards keep "
+                    + "completing is covered by NOTHING that gates. If you are here because a "
+                    + "watermark froze while the fleet stayed busy, that gap is the case to rule out "
+                    + "by hand. See docs/solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md "
+                    + "and docs/inflight/test-per-shard-liveness-has-no-gate.md";
     /** Ignore trivial tails - the Class 2 signature is real backlog going nowhere. */
     public static final long LAG_STAGNATION_MIN_LAG = 50;
+    /**
+     * INSTANCE-progress probe: no live instance may hold work while returning no work result for
+     * longer than this. The liveness claim it makes is the one the Class 2 lag bound only
+     * approximates: {@code CLASS2_STALL} watches a partition's COMMITTED offset, which one incomplete
+     * record legitimately pins while the shard behind it completes work continuously - so a busy
+     * fleet and a wedged fleet look identical to it (measured 2026-08-19, seed 4734674029169027864:
+     * four arms all drained fully, three of four still tripped the 150s bound). This probe instead
+     * watches COMPLETIONS: any returned work result re-arms it, so it structurally cannot fire on an
+     * instance that is slow-but-progressing - only on one that is holding work and finishing nothing.
+     * <p>
+     * <b>Granularity is per INSTANCE, not per shard, and that is a reachability constraint, not the
+     * ideal.</b> The owner's formulation is per shard ("no shard should go {@code INSTANCE_STALL_BOUND}
+     * without returning a work result"), but "which shards hold queued work" lives in
+     * {@code ShardManager}'s private {@code processingShards} map with no public accessor, and this
+     * suite does not add main-code accessors for a probe. Per instance is still the confluentinc#857
+     * wedge signature exactly: work results are counted where {@code WorkManager#onSuccessResult}
+     * runs - PC's CONTROL thread - so a deadlocked control loop freezes the count even while worker
+     * threads finish records and heartbeats keep flowing. What per-instance cannot see is one wedged
+     * shard on an instance whose other shards keep completing; that case remains
+     * {@code CLASS2_STALL}'s - which since 2026-08-25 reports it as an observation rather than
+     * failing on it, precisely because it cannot tell that case from a slow one. <b>So that case has
+     * no gating detector at all today.</b> That is a known, deliberate reduction in coverage, not an
+     * oversight, and it is tracked in {@code docs/inflight/test-per-shard-liveness-has-no-gate.md};
+     * do not read the demotion as evidence the case is covered elsewhere.
+     * <p>
+     * Bound arithmetic (why 150s cannot fire legitimately): a completion arrives at the end of every
+     * user-function execution, so the longest legitimate GAP is one heaviest record - W1's 45s dwell,
+     * 3.3x under the bound. The other legitimate quiet stretch is an eager storm, where completions
+     * of revoked in-flight work are dropped as stale (no listener fire): storm (60s) plus one
+     * eviction horizon (30s) is 90s, still 60s under. Sharing {@link #LAG_STAGNATION_BOUND}'s 150s
+     * figure is deliberate - it keeps the two detectors' verdicts comparable on the same run: a run
+     * where Class 2 fires and this stays silent is measured slow-but-progressing, not wedged.
+     */
+    public static final Duration INSTANCE_STALL_BOUND = Duration.ofSeconds(150);
     private static final Duration SAMPLE_INTERVAL = Duration.ofSeconds(1);
     /** A probe that cannot sample is a probe silently passing - after this many consecutive sampling
      * failures the degradation itself becomes a violation (false-GREEN guard), instead of the run
@@ -106,7 +182,8 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
      * mode signal itself.
      */
     public enum Mode {
-        /** All probes active, single topic, violations GATE the run (the chaos suite asserts them empty). */
+        /** All probes active, single topic, violations GATE the run (the chaos suite asserts them
+         * empty); {@link #getObservations() observations} are reported and never gate. */
         CHAOS("chaos-progress-probe", "chaos-probe"),
         /** Flight recorder for every broker IT: admin-read samplers only, all topics, violations NEVER gate. */
         AMBIENT_OBSERVER("ambient-probe-sampler", "ambient-probe");
@@ -130,6 +207,95 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
     /** Chaos mode's fleet consumed-count; null in {@link Mode#AMBIENT_OBSERVER} (progress watermark inactive). */
     private final LongSupplier totalConsumed;
     private final long expectedTotal;
+    /**
+     * What the instance-progress probe samples from one fleet member. An interface rather than
+     * {@code ManagedPCInstance} directly so the detector's decision logic is broker-free testable
+     * against fake views ({@code InstanceStallProbeIT}) - the same pure-replay pattern as
+     * {@link #ledger} and {@code KeyOrderLedger#check}.
+     */
+    public interface InstanceProgressView {
+        int instanceId();
+
+        /**
+         * Started, not mid-stop/restart, and its PC is up and not failed. The chaos harness stops and
+         * restarts members constantly; a stopped or restarting instance holds torn-down state and must
+         * never be reported as stalled.
+         */
+        boolean isLive();
+
+        /** Work queued in this instance's shards awaiting selection ({@code WorkManager}'s own count). */
+        long queuedInShards();
+
+        /** Records this instance currently has out for processing ({@code WorkManager}'s own count). */
+        long outForProcessing();
+
+        /** Monotone count of work results returned - see {@code ManagedPCInstance#workResultsReturned}. */
+        long workResultsReturned();
+
+        /**
+         * Identity that changes when the instance brings up a NEW PC (a restart). A fresh incarnation
+         * gets a fresh full bound-window rather than inheriting the old PC's silence.
+         */
+        Object incarnationMarker();
+
+        /** The live adapter over a real fleet member, reading PC's own {@code WorkManager} state. */
+        static InstanceProgressView of(ManagedPCInstance pc) {
+            return new InstanceProgressView() {
+                @Override
+                public int instanceId() {
+                    return pc.getInstanceId();
+                }
+
+                @Override
+                public boolean isLive() {
+                    var parallelConsumer = pc.getParallelConsumer();
+                    return pc.isStarted() && !pc.isClosePending()
+                            && parallelConsumer != null && !parallelConsumer.isClosedOrFailed();
+                }
+
+                @Override
+                public long queuedInShards() {
+                    var parallelConsumer = pc.getParallelConsumer();
+                    // the count can be transiently negative by its own javadoc (counter races) - floor it
+                    return parallelConsumer == null ? 0
+                            : Math.max(0, parallelConsumer.getWm().getNumberOfWorkQueuedInShardsAwaitingSelection());
+                }
+
+                @Override
+                public long outForProcessing() {
+                    var parallelConsumer = pc.getParallelConsumer();
+                    return parallelConsumer == null ? 0
+                            : Math.max(0, parallelConsumer.getWm().getNumberRecordsOutForProcessing());
+                }
+
+                @Override
+                public long workResultsReturned() {
+                    return pc.getWorkResultsReturnedCount();
+                }
+
+                @Override
+                public Object incarnationMarker() {
+                    return pc.getParallelConsumer();
+                }
+            };
+        }
+    }
+
+    /** Instance-progress bookkeeping: the completion count last seen, which PC it was seen on, and
+     * since when it has not advanced. */
+    @Value
+    private static class InstanceProgressMark {
+        long workResultsReturned;
+        Object incarnation;
+        Instant since;
+    }
+
+    /** Fleet supplier for the instance-progress probe; null (ambient mode, or not wired) = inactive. */
+    private volatile Supplier<List<InstanceProgressView>> instanceProgressSupplier;
+    private final Map<Integer, InstanceProgressMark> instanceProgressMarks = new ConcurrentHashMap<>();
+    @Getter
+    private volatile long peakInstanceStallMs = 0;
+
     /** per-partition committed-offset watermarks for the Class 2 (lag stagnation) probe */
     private final Map<TopicPartition, Long> lastCommitted = new ConcurrentHashMap<>();
     private final Map<TopicPartition, Instant> lastCommittedMove = new ConcurrentHashMap<>();
@@ -139,6 +305,19 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
 
     @Getter
     private final List<String> violations = Collections.synchronizedList(new ArrayList<>());
+    /**
+     * Findings that are MEASURED and REPORTED but never gate - {@link #getViolations()}'s
+     * non-failing sibling. A detector belongs here when what it measures is a timing property
+     * rather than a correctness one, so that crossing its bound is a statement about speed and
+     * cannot by itself mean the system is wrong.
+     * <p>
+     * Only {@code CLASS2_STALL/LAG_STAGNATION} is here today, demoted on 2026-08-25 after two
+     * diagnostic replays of the sightings ledger's own nominated seeds fired it and then drained
+     * completely - see {@link #CLASS2_INTERPRETATION} for the evidence and
+     * {@code docs/inflight/bug-857-family.md} for the ledger those replays settle.
+     */
+    @Getter
+    private final List<String> observations = Collections.synchronizedList(new ArrayList<>());
     private final Map<Integer, Instant> outstandingDrains = new ConcurrentHashMap<>();
     private final AtomicBoolean running = new AtomicBoolean(false);
     private Thread samplerThread;
@@ -176,6 +355,17 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
         return this;
     }
 
+    /**
+     * Arms the instance-progress probe ({@code INSTANCE_STALL/NO_WORK_COMPLETED} - see
+     * {@link #INSTANCE_STALL_BOUND}) with a live view of the fleet. A supplier because the fleet
+     * GROWS during a run (JOIN_NEW); {@code ChaosScenarioBase#startRun} wires it from the conductor
+     * for every chaos scenario. Never wired in ambient mode, which has no fleet to watch.
+     */
+    public ProgressProbe withInstanceProgress(Supplier<List<InstanceProgressView>> fleetSupplier) {
+        this.instanceProgressSupplier = fleetSupplier;
+        return this;
+    }
+
     /** Chaos-mode construction: all probes active, single topic - the W1/W4 gating path. */
     public ProgressProbe(KafkaClientUtils kcu, String groupId, String topic, LongSupplier totalConsumed, long expectedTotal) {
         this(kcu, () -> groupId,
@@ -202,6 +392,22 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
         this.totalConsumed = totalConsumed;
         this.expectedTotal = expectedTotal;
         this.mode = mode;
+    }
+
+    /**
+     * A chaos-mode probe for a test that drives a sampler seam directly, with no broker.
+     * <p>
+     * The {@code null} {@link KafkaClientUtils} is legal because no sampler thread is started, so
+     * nothing ever reaches a cluster - and that invariant lives here, next to the field it depends on,
+     * rather than being re-explained at each call site. Three tests had grown their own copy of this
+     * constructor call plus their own wording of the same reason, which is the drift
+     * {@code AGENTS.md}'s "reuse test utilities - search before you add" rule exists to stop.
+     *
+     * @param groupId only appears in violation text; no group is joined
+     * @param topic   only appears in violation text; no topic is read
+     */
+    static ProgressProbe forSeamTest(String groupId, String topic) {
+        return new ProgressProbe(null, groupId, topic, () -> 0L, 0);
     }
 
     /** Observer mode never gates - violations are autopsy material only (ambient flight recorder). */
@@ -234,11 +440,11 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
         }
         if (isObserverMode()) {
             // quiet flight recorder: the extension owns end-of-test reporting (autopsy / DEBUG one-liner)
-            log.debug("[{}] peaks: maxRebalanceDwell={}ms maxDrainDuration={}ms maxLagStagnation={}ms",
-                    mode.logTag, peakRebalanceDwellMs, peakDrainDurationMs, peakLagStagnationMs);
+            log.debug("[{}] peaks: maxRebalanceDwell={}ms maxDrainDuration={}ms maxLagStagnation={}ms maxInstanceStall={}ms",
+                    mode.logTag, peakRebalanceDwellMs, peakDrainDurationMs, peakLagStagnationMs, peakInstanceStallMs);
         } else {
-            log.info("[{}] peaks: maxRebalanceDwell={}ms maxDrainDuration={}ms maxLagStagnation={}ms",
-                    mode.logTag, peakRebalanceDwellMs, peakDrainDurationMs, peakLagStagnationMs);
+            log.info("[{}] peaks: maxRebalanceDwell={}ms maxDrainDuration={}ms maxLagStagnation={}ms maxInstanceStall={}ms",
+                    mode.logTag, peakRebalanceDwellMs, peakDrainDurationMs, peakLagStagnationMs, peakInstanceStallMs);
         }
         return getViolations();
     }
@@ -272,6 +478,7 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
                 Thread.sleep(SAMPLE_INTERVAL.toMillis());
                 if (!isObserverMode()) {
                     sampleProgress();
+                    sampleInstanceProgress(Instant.now());
                 }
                 sampleRebalanceDwell();
                 sampleDrains();
@@ -313,6 +520,55 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
         }
     }
 
+    /**
+     * INSTANCE-progress detector - see {@link #INSTANCE_STALL_BOUND} for the property it asserts and
+     * the granularity reasoning. Per live instance: if it holds work (queued in shards, or records out
+     * for processing) and its returned-work-result count has not advanced within the bound, that is a
+     * violation. The clock re-arms on ANY of: a result returned, the instance going idle (nothing
+     * held), a restart (new PC incarnation), or the instance leaving the live set - so only a
+     * continuous hold-work-return-nothing stretch can accumulate.
+     * <p>
+     * Package-private and taking {@code now} explicitly so {@code InstanceStallProbeIT} can drive it
+     * deterministically, broker-free, in both directions - the sampler thread calls it with
+     * {@code Instant.now()}.
+     */
+    void sampleInstanceProgress(Instant now) {
+        var supplier = instanceProgressSupplier;
+        if (supplier == null) return; // not wired (ambient mode, or a scenario predating the probe)
+        for (InstanceProgressView view : supplier.get()) {
+            int id = view.instanceId();
+            if (!view.isLive()) {
+                // stopped or mid-restart: torn-down state must never read as a stall
+                instanceProgressMarks.remove(id);
+                continue;
+            }
+            long returned = view.workResultsReturned();
+            Object incarnation = view.incarnationMarker();
+            InstanceProgressMark mark = instanceProgressMarks.get(id);
+            boolean advanced = mark == null
+                    || mark.getWorkResultsReturned() != returned
+                    || mark.getIncarnation() != incarnation;
+            long queued = view.queuedInShards();
+            long outForProcessing = view.outForProcessing();
+            boolean holdsWork = queued > 0 || outForProcessing > 0;
+            if (advanced || !holdsWork) {
+                instanceProgressMarks.put(id, new InstanceProgressMark(returned, incarnation, now));
+                continue;
+            }
+            long stalledMs = Duration.between(mark.getSince(), now).toMillis();
+            if (stalledMs > peakInstanceStallMs) peakInstanceStallMs = stalledMs;
+            if (stalledMs > INSTANCE_STALL_BOUND.toMillis()) {
+                violate("INSTANCE_STALL/NO_WORK_COMPLETED: instance " + id + " holds work (queued="
+                        + queued + ", outForProcessing=" + outForProcessing
+                        + ") but has returned no work result for " + (stalledMs / 1000) + "s (bound "
+                        + INSTANCE_STALL_BOUND.getSeconds() + "s) at " + returned
+                        + " results returned - completions are counted on PC's control thread, so this "
+                        + "instance's control loop is holding work and finishing nothing");
+                instanceProgressMarks.put(id, new InstanceProgressMark(returned, incarnation, now)); // re-arm
+            }
+        }
+    }
+
     private void sampleRebalanceDwell() throws Exception {
         var adminOpt = kcu.adminIfOpen();
         if (!adminOpt.isPresent()) return; // outside the open()..close() window - skip this sample
@@ -331,14 +587,42 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
             rebalanceDwellStart = Instant.now();
             return;
         }
-        Duration dwell = Duration.between(rebalanceDwellStart, Instant.now());
-        if (dwell.toMillis() > peakRebalanceDwellMs) peakRebalanceDwellMs = dwell.toMillis();
-        if (rebalanceDwellViolationEnabled && dwell.compareTo(REBALANCE_DWELL_BOUND) > 0) {
-            violate("ZOMBIE_MEMBER/REBALANCE_BLOCKED: group '" + groupId + "' dwelling in " + state
-                    + " for " + dwell.getSeconds() + "s (bound " + REBALANCE_DWELL_BOUND.getSeconds()
-                    + "s) - a member is not answering the rebalance (protocol-unresponsive)");
+        if (recordRebalanceDwell(Duration.between(rebalanceDwellStart, Instant.now()), groupId, state)) {
             rebalanceDwellStart = Instant.now(); // re-arm
         }
+    }
+
+    /**
+     * Classify one rebalance-dwell sample: always update the peak, and violate only when this
+     * scenario has the Class 1 detector armed.
+     * <p>
+     * <b>Measuring the peak is unconditional on the toggle, and that is the invariant.</b> A scenario
+     * whose own disturbances legitimately cross this bound suppresses the VIOLATION; it must never
+     * lose the MEASUREMENT, or disabling the detector would quietly delete the evidence that would
+     * later re-calibrate it. Extracted as a broker-free seam so that invariant is asserted rather than
+     * assumed - {@code docs/inflight/test-chaos-phase2.md} records it as having had no fast coverage,
+     * on the grounds that the samplers were private.
+     *
+     * <b>Safe to call from a thread other than the sampler, and that is not an accident.</b> It
+     * touches only safely-published state - the volatile peak, the volatile enable flag, and the
+     * synchronized violations list - and never the sampler-confined clock fields (`rebalanceDwellStart`
+     * and friends), which is why the caller re-arms rather than this method. That is what makes
+     * {@code RebalanceDwellToggleIT} driving it from the test thread legitimate rather than racy.
+     * Keep it that way: reaching for a plain field here would silently make those tests a data race.
+     *
+     * @return whether a violation fired, i.e. whether the caller should re-arm the dwell clock
+     */
+    boolean recordRebalanceDwell(Duration dwell, String groupId, ConsumerGroupState state) {
+        if (dwell.toMillis() > peakRebalanceDwellMs) {
+            peakRebalanceDwellMs = dwell.toMillis();
+        }
+        if (!rebalanceDwellViolationEnabled || dwell.compareTo(REBALANCE_DWELL_BOUND) <= 0) {
+            return false;
+        }
+        violate("ZOMBIE_MEMBER/REBALANCE_BLOCKED: group '" + groupId + "' dwelling in " + state
+                + " for " + dwell.getSeconds() + "s (bound " + REBALANCE_DWELL_BOUND.getSeconds()
+                + "s) - a member is not answering the rebalance (protocol-unresponsive)");
+        return true;
     }
 
     /**
@@ -379,17 +663,44 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
             partitionLagSnapshots.put(tp, new PartitionLagSnapshot(tp, committed, end, lag, since));
             if (moved) continue;
             long stagnantMs = Duration.between(since, now).toMillis();
-            if (lag >= LAG_STAGNATION_MIN_LAG && stagnantMs > peakLagStagnationMs) {
-                peakLagStagnationMs = stagnantMs;
-            }
-            if (lag >= LAG_STAGNATION_MIN_LAG && stagnantMs > LAG_STAGNATION_BOUND.toMillis()) {
-                violate("CLASS2_STALL/LAG_STAGNATION: partition " + tp + " lag=" + lag
-                        + " with committed offset stagnant at " + committed + " for " + (stagnantMs / 1000)
-                        + "s (bound " + LAG_STAGNATION_BOUND.getSeconds() + "s) - protocol-invisible stall: "
-                        + "group STABLE + heartbeats flowing, yet this partition's backlog is going nowhere");
+            if (recordLagStagnation(tp, committed, lag, stagnantMs)) {
                 lastCommittedMove.put(tp, now); // re-arm
             }
         }
+    }
+
+    /**
+     * Classify one partition's stagnation sample: always update the peak, and record an
+     * {@link #getObservations() observation} when the bound is crossed. Extracted from the admin
+     * round-trip above so the classification has a broker-free seam - the samplers are otherwise
+     * only reachable through a live cluster, which is why this rule had no fast coverage while it
+     * was gating (recorded as open work in {@code docs/inflight/test-chaos-phase2.md}).
+     * <p>
+     * <b>Measuring the peak is unconditional on the bound, deliberately.</b> Suppressing the finding
+     * must never lose the measurement - that is the same invariant the per-scenario dwell toggle
+     * holds, and it is the whole reason a demoted detector still earns its keep.
+     *
+     * <b>Safe to call off the sampler thread</b>, for the same reason and under the same constraint as
+     * {@link #recordRebalanceDwell}: only the volatile peak and the synchronized observations list are
+     * touched here, never the sampler-confined `lastCommittedMove` bookkeeping the caller owns.
+     *
+     * @return whether the bound was crossed, i.e. whether the caller should re-arm this partition
+     */
+    boolean recordLagStagnation(TopicPartition tp, long committed, long lag, long stagnantMs) {
+        if (lag < LAG_STAGNATION_MIN_LAG) {
+            return false;
+        }
+        if (stagnantMs > peakLagStagnationMs) {
+            peakLagStagnationMs = stagnantMs;
+        }
+        if (stagnantMs <= LAG_STAGNATION_BOUND.toMillis()) {
+            return false;
+        }
+        observe("CLASS2_STALL/LAG_STAGNATION: partition " + tp + " lag=" + lag
+                + " with committed offset stagnant at " + committed + " for " + (stagnantMs / 1000)
+                + "s (bound " + LAG_STAGNATION_BOUND.getSeconds() + "s). "
+                + CLASS2_INTERPRETATION);
+        return true;
     }
 
     /**
@@ -421,14 +732,41 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
         }
     }
 
+    /**
+     * Record a finding that is reported but never fails the run - the non-gating counterpart of
+     * {@link #violate(String)}. Logged at WARN so it is visible in a green run's output, which is
+     * where a timing regression has to be noticed: nothing turns red to point at it.
+     */
+    private void observe(String message) {
+        record(observations, message, /* gating */ false);
+    }
+
     private void violate(String message) {
-        violations.add(message);
+        record(violations, message, /* gating */ true);
+    }
+
+    /**
+     * The one place a finding is stored and announced, shared by {@link #violate} and
+     * {@link #observe} so the mode rule below cannot drift between them.
+     * <p>
+     * <b>Silent-on-green contract.</b> In observer mode a finding can occur during a PASSING test, so
+     * the failure-time autopsy is the reporting surface and the live log stays at DEBUG. Outside it
+     * the finding is announced as it happens: gating findings at ERROR because they will fail the
+     * run, non-gating ones at WARN because nothing else will ever point at them.
+     * <p>
+     * <b>The non-gating text is load-bearing beyond this file.</b> {@code bin/chaos-test.sh} counts
+     * observations per scenario by matching {@code OBSERVATION (does not fail the run)} literally, so
+     * changing that string silently reports zero observations in the CI job summary. Its
+     * {@code OBSERVATION_MARKER} is the other half of the pair - change both or neither.
+     */
+    private void record(List<String> sink, String message, boolean gating) {
+        sink.add(message);
         if (isObserverMode()) {
-            // silent-on-green contract: an ambient violation can occur during a PASSING test, so the
-            // failure-time autopsy is the reporting surface - DEBUG matches the green-path precedent
-            log.debug("[{}] violation recorded: {}", mode.logTag, message);
-        } else {
+            log.debug("[{}] {} recorded: {}", mode.logTag, gating ? "violation" : "observation", message);
+        } else if (gating) {
             log.error("[{}] VIOLATION: {}", mode.logTag, message);
+        } else {
+            log.warn("[{}] OBSERVATION (does not fail the run): {}", mode.logTag, message);
         }
     }
 

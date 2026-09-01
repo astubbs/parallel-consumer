@@ -12,16 +12,80 @@
 # an annotation-only prefix is what keeps releases from being blocked by the tooling's own sources).
 QUARANTINE_ANNOTATION_ERE='^[[:space:]]*(@[[:alnum:]_.]+(\([^)]*\))?[[:space:]]*)*@(bz\.stub\.parallelconsumer\.)?Quarantined\('
 
-REGISTRY="${REGISTRY:-docs/QUARANTINED_TESTS.md}"
+REGISTRY="${REGISTRY:-docs/quarantined-tests.md}"
 
 # All java files containing real annotation usage (repo-relative paths).
+#
+# WORKTREE ROOTS ARE EXCLUDED, BOTH OF THEM. `.claude/worktrees/<name>` and `/.worktrees/` each hold
+# a full checkout of some OTHER branch - .gitignore names both, calling the second "the other root in
+# use". Without the exclusions the scan is green inside a worktree and red on a clean master in the
+# primary checkout, reporting drift from ~60 sibling branches: annotations that are not on this
+# branch at all, judged against a registry that is. It stayed hidden because the repo's own rule is
+# never to work in the primary checkout, so nobody ran it there; the pre-commit hook added in this PR
+# does. Excluding only one root was the same bug with a smaller blast radius - review caught it, and
+# bin/test-check-quarantine-registry.sh now has a fixture for each. .git is excluded for the same
+# shape of reason, cheaply.
 quarantined_files() {
-    grep -rlE --include='*.java' --exclude-dir=target "$QUARANTINE_ANNOTATION_ERE" . 2>/dev/null || true
+    grep -rlE --include='*.java' --exclude-dir=target --exclude-dir=.claude --exclude-dir=.worktrees \
+        --exclude-dir=.git "$QUARANTINE_ANNOTATION_ERE" . 2>/dev/null || true
 }
 
 # Count of annotation usages in one file.
+#
+# NOT `|| echo 0`: grep -c PRINTS 0 and EXITS 1 when nothing matches, so the fallback appends a
+# SECOND line and the caller captures "0\n0". check-quarantine-registry.sh then dies on
+# `[ "$entries" -ne "$count" ]` with "integer expression expected", and check-quarantine-owners.sh
+# silently compares a two-line string against "1" and never matches. Assign on failure instead.
+#
+# Unreachable from today's callers, which only pass files quarantined_files() already matched - so
+# this is a latent defect being closed, not an outage. bin/check-inflight-tags.sh carries the same
+# idiom and the same warning; that it was written there and reintroduced elsewhere is the argument
+# for fixing every instance rather than the one that bites.
 quarantined_occurrences() {
-    grep -cE "$QUARANTINE_ANNOTATION_ERE" "$1" 2>/dev/null || echo 0
+    local n
+    n=$(grep -cE "$QUARANTINE_ANNOTATION_ERE" "$1" 2>/dev/null) || n=0
+    printf '%s' "${n:-0}"
+}
+
+# The human-readable audit listing: every annotation usage with the following lines that carry its
+# `fixedBy`/reason. Lives here rather than in the caller because it needs the SAME exclusions as
+# quarantined_files() above - bin/quarantined-test.sh had its own copy of this grep without them,
+# so the worktree-pollution bug fixed there still reproduced in the audit output, listing
+# annotations from ~60 sibling branches. One pattern and one exclusion set, one place.
+quarantined_audit() {
+    grep -rnE --include='*.java' --exclude-dir=target --exclude-dir=.claude --exclude-dir=.worktrees \
+        --exclude-dir=.git -A 4 "$QUARANTINE_ANNOTATION_ERE" . 2>/dev/null
+}
+
+# The annotated file whose basename is <Class>, or nothing when no annotated class has that name.
+#
+# IT IS A FUNCTION BECAUSE THE INLINE VERSION SILENTLY KILLED ITS CALLER. Every copy was
+# `f=$(quarantined_files | while read -r qf; do [ ... ] && { echo "$qf"; break; }; done)`, and under
+# `set -euo pipefail` that has two independent faults:
+#
+#   - THE NO-MATCH CASE ABORTS THE SCRIPT. A `while` carries out the status of the last command its
+#     body ran, so a final `[ ... ]` that found no match makes the loop exit 1, `pipefail` promotes
+#     it to the pipeline, the assignment takes it, and `set -e` kills the script THERE - before the
+#     caller's own message about the missing class can print. In bin/check-quarantine-registry.sh
+#     that destroyed the `DRIFT:` line for a registry entry whose class has no annotation, which is
+#     precisely the drift the gate exists to name: exit 1 was right, the explanation was gone.
+#     Control arm, same fixture, one term changed: `set -euo pipefail` printed nothing and exited 1;
+#     `set -uo pipefail` printed the full DRIFT line and exited 1.
+#   - THE `break` IS AN EARLY-EXITING PIPE READER, the EPIPE-into-`pipefail` hazard
+#     `sigpipe-into-grep-q` polices for `grep -q`. It needs more than one pipe buffer of
+#     pending input to bite, so it hides until the annotated-file list grows.
+#
+# So: no pipeline (a herestring), and an `if` rather than a `&&` list, because an `if` whose
+# condition is false is defined to exit 0 while a `&&` list is defined to carry the failure out.
+quarantined_file_for_class() { # <ClassName>
+    local qf
+    while IFS= read -r qf; do
+        if [ -n "$qf" ] && [ "$(basename "$qf" .java)" = "$1" ]; then
+            printf '%s\n' "$qf"
+            return 0
+        fi
+    done <<<"$(quarantined_files)"
+    return 0
 }
 
 # Registry entries, one per line: `Class.method` (or `Class` for class-level quarantines).

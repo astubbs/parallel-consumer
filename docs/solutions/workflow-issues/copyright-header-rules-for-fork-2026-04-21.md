@@ -1,7 +1,7 @@
 ---
 title: Copyright header management rules for Apache 2.0 fork
 date: 2026-04-21
-updated: 2026-08-05
+updated: 2026-08-07
 category: workflow-issues
 module: build-system
 problem_type: workflow_issue
@@ -28,12 +28,13 @@ tags:
 >
 > - The mycila license plugin is **gone** - removed outright, along with `license.skip` and `license.mode`. It was skipped by default from PR astubbs#90 onward and never invoked after that, so it was deleted rather than left as an escape hatch for a case that can no longer arise. `-Dlicense.skip` is not a property this build defines any more: passing it is inert, and any command below that still carries it should have it dropped rather than copied forward.
 > - Header conformance is enforced by `bin/check-copyright-headers.sh` (provenance-aware, keyed on the pinned fork-point commit) and runs in CI via the `Copyright Headers` workflow. Run it locally before pushing header-related changes; `bin/test-check-copyright-headers.sh` self-tests the scanner itself.
+> - The scanner is also bound into Maven's **`validate`** phase (`pom.xml`, `<copyright.skip>`), so a missing header fails *every* job that runs Maven at all, not just the `Copyright Headers` check - one omitted `Modifications Copyright` line turned five CI checks red at once. The live escape hatch is `-Dcopyright.skip=true`; there is no `-Dlicense.skip` any more.
 > - New fork-original files use `Copyright (C) <year> Antony Stubbs and contributors` - never the Confluent header.
 > - Upstream-derived files **modified** since the fork point keep the Confluent header and add `Modifications Copyright (C) <year> Antony Stubbs and contributors` beneath it (Apache 2.0 4(b)/4(c) dual-notice convention).
 > - Renames/moves/extractions of upstream files are registered in the provenance lists inside `bin/check-copyright-headers.sh`.
 > - Still valid from this doc: never bump years incidentally or standalone (years are deliberately not policed by the scanner), the `NOTICE` file is the legal attribution record, and header-only changes without substantive code changes remain prohibited.
 >
-> The authoritative rules live in `AGENTS.md`, "Copyright rules for this fork". The incident narrative below is kept as the historical record.
+> The authoritative rules live in [`docs/copyright.md`](../../copyright.md). The incident narrative below is kept as the historical record.
 
 ## Context
 
@@ -141,8 +142,8 @@ The commit only added a null-epoch guard. The range `2020-2022` was correct. The
 
 ## Related
 
-- `AGENTS.md`, "Copyright rules for this fork" under Code Style - the codified rules (authoritative source)
+- [`docs/copyright.md`](../../copyright.md) - the codified rules (authoritative source)
 - `bin/check-copyright-headers.sh` + `bin/test-check-copyright-headers.sh` - the enforcement and its self-tests (PR astubbs#90)
 - `.github/workflows/copyright.yml` - CI enforcement
 - `NOTICE` file at repo root - legal attribution structure
-- `pom.xml` - mycila license plugin config, dormant behind `<license.skip>true</license.skip>`
+- `pom.xml` - binds the scanner to the `validate` phase behind `<copyright.skip>`; the mycila license plugin it used to configure was removed in PR astubbs#124

@@ -12,6 +12,7 @@ import bz.stub.parallelconsumer.ParallelConsumer;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.PollContextInternal;
+import bz.stub.parallelconsumer.Quarantined;
 import bz.stub.parallelconsumer.state.ModelUtils;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -264,6 +265,17 @@ class ProducerManagerTest {
 
     @SneakyThrows
     @Test
+    @Quarantined(
+            reason = "Timing-precision failure in the shared BlockedThreadAsserter#assertUnblocksAfter helper, "
+                    + "not in this test's own assertions. The unblocker is scheduled BEFORE the elapsed clock "
+                    + "starts, so the measured window begins later than the delay it is compared against and is "
+                    + "systematically SHORT by however long arming the scheduler takes. `isAtLeast(unblocksAfter)` "
+                    + "then fails by a millisecond or two whenever the machine is busy enough to widen that gap. "
+                    + "Seen as `getElapsed() expected to be at least PT20S but was PT19.998S` - 2ms short on a 20s "
+                    + "bound - on a PR whose diff contained no Java at all.",
+            tracking = "docs/inflight/test-untracked-ci-flakes.md",
+            fixedBy = "astubbs#262",
+            flapping = true)
     void producedRecordsCantBeInTransactionWithoutItsOffsetDirect() {
         // custom settings
         setup(ParallelConsumerOptions.<String, String>builder()
@@ -287,8 +299,9 @@ class ProducerManagerTest {
                 // Acquire against the REAL context and hand the lock to it, exactly as
                 // ParallelEoSStreamProcessor#pollAndProduce does. This is load-bearing, not tidying: the
                 // lock must not be released until the work has reached the controller's inbound queue -
-                // see WorkContainer#onPostAddToMailBox, which states the invariant and is the sanctioned
-                // release point. Releasing it here, inside the user function, opens a window in which the
+                // see AbstractParallelEoSStreamProcessor#cleanUpContext, which states the invariant and is the
+                // single sanctioned release point (astubbs#257 made it the only one; the release that used to run
+                // per-record from addToMailbox is gone). Releasing it here, inside the user function, opens a window in which the
                 // controller can take the commit lock, drain a mailbox that does not yet contain this
                 // work, and commit an offset one behind - which is what made this test flaky (~1 in 6).
                 try {
@@ -309,11 +322,11 @@ class ProducerManagerTest {
 
                 // Guard against this test regressing to hand-managing the lock. The lock must still be
                 // owned by the context when the user function returns - that ownership is what defers
-                // release to WorkContainer#onPostAddToMailBox. Reintroduce a manual unlock here and this
+                // release to cleanUpContext. Reintroduce a manual unlock here and this
                 // fails deterministically, instead of coming back as a ~1-in-6 flake that also takes the
                 // whole PIT mutation lane down with it.
                 Truth.assertWithMessage("produce lock must still be owned by the context when the user "
-                                + "function returns, so release is deferred to onPostAddToMailBox")
+                                + "function returns, so release is deferred to cleanUpContext")
                         .that(context.getProducingLock().isPresent())
                         .isTrue();
 
@@ -375,7 +388,7 @@ class ProducerManagerTest {
             }, () -> {
                 log.debug("Unblocking offset processing offset1Mutex...");
                 offset1Mutex.countDown();
-            }, ofSeconds(20)); // was 10s; too tight under PIT
+            });
 
             //
             await().atMost(ofSeconds(20))

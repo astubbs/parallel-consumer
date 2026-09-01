@@ -6,8 +6,11 @@ package bz.stub.parallelconsumer.vertx;
  */
 
 import com.github.tomakehurst.wiremock.WireMockServer;
+import com.github.tomakehurst.wiremock.client.WireMock;
 import bz.stub.parallelconsumer.internal.utils.WireMockUtils;
 import bz.stub.parallelconsumer.PollContext;
+import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.FakeRuntimeException;
 import bz.stub.parallelconsumer.vertx.VertxParallelEoSStreamProcessor.RequestInfo;
 import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
@@ -24,7 +27,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.parallel.Isolated;
@@ -33,6 +35,7 @@ import pl.tlinkowski.unij.api.UniMaps;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -42,6 +45,7 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static pl.tlinkowski.unij.api.UniLists.of;
+import static com.google.common.truth.Truth.assertWithMessage;
 
 @Isolated
 @Slf4j
@@ -108,6 +112,59 @@ class VertxTest extends VertxBaseUnitTest {
         assertThat(res)
                 .extracting(x -> x.cause().getMessage().toLowerCase())
                 .allSatisfy(msg -> assertThat(msg).contains("connection refused"));
+    }
+
+    /**
+     * A send failure whose bookkeeping throws still redelivers the record.
+     *
+     * <p><b>Read the limitation before trusting this test.</b> It pins the observable contract and it does
+     * <em>not</em> discriminate the guard in {@code addVertxHooks}: it passes with the guard, without it, and with
+     * both it and {@code WorkContainer.onUserFunctionFailure}'s {@code finally} reverted. Measured, all three ways.
+     * So it is a regression guard on the behaviour, not evidence that either fix is load-bearing here.
+     *
+     * <p>That matters because a review round rated the unguarded vert.x handler P1, reasoning that
+     * {@code FutureImpl}'s listener array iterates with no per-listener try/catch, so an escape strands the record
+     * in flight forever. The reasoning may well be right about vert.x's dispatch; the <em>consequence</em> does not
+     * reproduce - the record comes back regardless, so something downstream recovers it. Nobody has established
+     * what, and until someone does, the severity is unproven rather than confirmed.
+     *
+     * <p>The guard was kept anyway: it costs nothing, it matches what core, Reactor and Mutiny do, and an engine
+     * that silently differs from its siblings is how the next round finds this file again. But it is
+     * defence-in-depth, not a demonstrated fix.
+     *
+     * <p>Driven through {@code vertxFuture} with an already-failed future - deterministic, no socket, and the
+     * entry point that actually reaches {@code addVertxHooks}. An earlier version used
+     * {@code vertxHttpReqInfoStream}, which takes a different path and did not exercise the handler at all. The
+     * throwing {@code retryDelayProvider} is real user code, reached via {@code updateFailureHistory}, and the
+     * probe below asserts it genuinely fired - without that, the test could pass by never triggering anything.
+     */
+    @SneakyThrows
+    @Test
+    void aSendFailureWhoseBookkeepingThrowsStillRedeliversTheRecord() {
+        var attempts = new AtomicInteger();
+        var providerCalls = new AtomicInteger();
+        setupParallelConsumerInstance(ParallelConsumerOptions.<String, String>builder()
+                .consumer(consumerSpy)
+                .producer(producerSpy)
+                .retryDelayProvider(ignored -> {
+                    providerCalls.incrementAndGet();
+                    throw new FakeRuntimeException("your retry delay provider is broken");
+                })
+                .build());
+        primeFirstRecord();
+
+        vertxAsync.vertxFuture(rec -> {
+            attempts.incrementAndGet();
+            return Future.failedFuture(new FakeRuntimeException("the send failed"));
+        });
+
+        await().atMost(ofSeconds(30))
+                .untilAsserted(() -> assertWithMessage("the record is redelivered despite the failure handler's "
+                        + "bookkeeping throwing").that(attempts.get()).isAtLeast(2));
+
+        assertWithMessage("the scenario actually happened - the user's provider was invoked and threw. Without "
+                + "this, the test above could pass while exercising nothing")
+                .that(providerCalls.get()).isAtLeast(1);
     }
 
     // todo how is this different from #failingHttpCall ?
@@ -196,16 +253,83 @@ class VertxTest extends VertxBaseUnitTest {
         assertThat(res).extracting(x -> x.result().bodyAsString()).contains(WireMockUtils.stubResponse);
     }
 
+    /**
+     * Characterizes what a non-2xx status does, which nothing asserted before. The stub
+     * {@code VertxTest.handleHttpResponseCodes} was named for this and was deleted in
+     * {@code cadf4c95} - correctly, its body was {@code assertThat(true).isFalse()} behind
+     * {@code @Disabled} and it had never run green. The gap it named was real: audit §1.3 records
+     * that non-2xx handling is untested and that the nearest test asserts 200 on the happy path
+     * only.
+     * <p>
+     * A Vert.x {@code WebClient} future completes successfully for <em>any</em> HTTP response and
+     * fails only on transport errors, and
+     * {@code VertxParallelEoSStreamProcessor}'s {@code send.onSuccess} calls
+     * {@code onUserFunctionSuccess}. So a 500 is a delivered response, not a processing failure,
+     * and the offset commits.
+     * <p>
+     * That is a contract, not a bug: parallel-consumer takes no position on status codes, the same
+     * way it takes no position on how a value was serialised. A user who wants a 5xx retried says
+     * so - with a response predicate, or by throwing from their own function. This test exists so
+     * that contract fails loudly if it ever changes silently.
+     */
+    @SneakyThrows
+    @Test
+    void serverErrorStatusStillCommits() {
+        stubServer.stubFor(WireMock.get(WireMock.urlPathEqualTo("/server-error"))
+                .willReturn(WireMock.aResponse().withStatus(500).withBody("boom")));
+
+        var latch = new CountDownLatch(1);
+        vertxAsync.addVertxOnCompleteHook(latch::countDown);
+
+        var futureStream = vertxAsync.vertxHttpRequestStream((webClient, rec) -> {
+            RequestInfo reqInfo = getGoodHost();
+            return webClient.get(reqInfo.getPort(), reqInfo.getHost(), "/server-error");
+        });
+
+        awaitLatch(latch);
+
+        var res = getResults(futureStream);
+        assertThat(res).hasSize(1).doesNotContainNull();
+        // the future succeeded - the response was delivered, so nothing failed as far as vertx is concerned
+        assertThat(res).extracting(AsyncResult::cause).containsOnlyNulls();
+        assertThat(res).extracting(x -> x.result().statusCode()).containsOnly(500);
+
+        // and the work is treated as done: the offset commits
+        awaitForCommitExact(1);
+    }
+
+    /**
+     * The other side of the boundary in {@link #serverErrorStatusStillCommits}, and the reason that
+     * contract is defensible: a transport failure - nothing delivered - does fail the future. The
+     * distinction is what a user needs in order to decide where to put their own error handling.
+     */
+    @SneakyThrows
+    @Test
+    void transportFailureIsDistinctFromANonSuccessStatus() {
+        var latch = new CountDownLatch(1);
+        vertxAsync.addVertxOnCompleteHook(latch::countDown);
+
+        var futureStream = vertxAsync.vertxHttpRequestStream((webClient, rec) -> {
+            RequestInfo unreachable = getBadRequest();
+            return webClient.get(unreachable.getPort(), unreachable.getHost(), unreachable.getContextPath());
+        });
+
+        awaitLatch(latch);
+
+        var res = getResults(futureStream);
+        assertThat(res).hasSize(1).doesNotContainNull();
+        assertThat(res).extracting(AsyncResult::cause).doesNotContainNull();
+
+        // the half that makes this a contrast rather than a second success case: nothing commits, so
+        // the record is retried. Asserting only that the future failed would leave the boundary
+        // half-stated - and the boundary is the whole point of the pair.
+        assertCommits(of());
+    }
+
     private List<AsyncResult<HttpResponse<Buffer>>> getResults(
             Stream<JStreamVertxParallelEoSStreamProcessor.VertxCPResult<String, String>> futureStream) {
         var collect = futureStream.map(JStreamVertxParallelEoSStreamProcessor.VertxCPResult::getAsr).collect(Collectors.toList());
         return blockingGetResults(collect);
-    }
-
-    @Test
-    @Disabled
-    void handleHttpResponseCodes() {
-        assertThat(true).isFalse();
     }
 
     @SneakyThrows
@@ -234,6 +358,9 @@ class VertxTest extends VertxBaseUnitTest {
         vertxAsync.addVertxOnCompleteHook(latch::countDown);
 
         var latchTwo = new CountDownLatch(1);
+        // signals that a user function is genuinely running and parked on latchTwo - the state we want to
+        // release from
+        var innerFunctionStarted = new CountDownLatch(1);
 
         Checkpoint cp = tc.checkpoint(3);
 
@@ -243,6 +370,7 @@ class VertxTest extends VertxBaseUnitTest {
 
             try {
                 log.info("Waiting");
+                innerFunctionStarted.countDown();
                 latchTwo.await();
             } catch (InterruptedException e) {
                 e.printStackTrace();
@@ -254,8 +382,8 @@ class VertxTest extends VertxBaseUnitTest {
             event.complete();
         }));
 
-        log.info("Pausing");
-        Thread.sleep(1000L);
+        // wait for work to actually be in flight, instead of sleeping and hoping it is
+        awaitLatch(innerFunctionStarted);
         latchTwo.countDown();
         log.info("Counted down");
 
