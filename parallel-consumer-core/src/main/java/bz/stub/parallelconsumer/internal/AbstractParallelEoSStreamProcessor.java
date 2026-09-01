@@ -1313,10 +1313,19 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
         // make sure all work that's been completed are arranged ready for commit
         Duration timeToBlockFor = shouldTryCommitNow ? Duration.ZERO : getTimeToBlockFor();
-        log.trace("Control loop: blocking on mailbox for {}, shouldCommit={}, queuedInShards={}, outForProcessing={}",
-                timeToBlockFor, shouldTryCommitNow,
-                wm.getNumberOfWorkQueuedInShardsAwaitingSelection(),
-                wm.getNumberRecordsOutForProcessing());
+        // Suppliers, not values: getNumberOfWorkQueuedInShardsAwaitingSelection() sums a counter across EVERY
+        // processing shard, and this is the control loop - the hottest path there is. SLF4J defers formatting
+        // but NOT argument evaluation, so passing it directly runs that scan on every pass at every log level,
+        // including the levels production runs at. Under KEY ordering the shard map is keyed per record key, so
+        // the scan grows with in-flight key cardinality exactly when the loop is spinning fastest.
+        // atTrace() returns the NOP builder when trace is off, and NOP's addArgument(Supplier) never calls get()
+        // - which is what makes this free rather than merely cheap. bin/check-hot-log-args.sh enforces the rule.
+        log.atTrace()
+                .addArgument(timeToBlockFor)
+                .addArgument(shouldTryCommitNow)
+                .addArgument(() -> wm.getNumberOfWorkQueuedInShardsAwaitingSelection())
+                .addArgument(() -> wm.getNumberRecordsOutForProcessing())
+                .log("Control loop: blocking on mailbox for {}, shouldCommit={}, queuedInShards={}, outForProcessing={}");
         processWorkCompleteMailBox(timeToBlockFor);
 
         //

@@ -425,9 +425,14 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
             + "'PC reported exception states: []' - no crash and no recorded cause. It also degraded its "
             + "neighbour: running 21 instances for 111s immediately before MultiInstanceHighVolumeTest in "
             + "the same reused JVM dropped that test from 73,722 to 39,684 records/second, which read as a "
-            + "product regression and is not one. Re-enabling this is real work with an open question - "
-            + "nobody has ever measured its failure RATE - and it is being done deliberately on "
-            + "handoff/enable-large-number-of-instances rather than as a surprise inside an unrelated PR.")
+            + "product regression and is not one. THE FAILURE RATE HAS SINCE BEEN MEASURED, on "
+            + "handoff/enable-large-number-of-instances: one failure in ten consecutive runs on an idle "
+            + "Linux box, and the failure is a STALL rather than an overload - the ambient probe caught "
+            + "ZOMBIE_MEMBER/REBALANCE_BLOCKED, a coordinator dwelling in PreparingRebalance because a "
+            + "member stopped answering. That branch was merged here on 2026-09-01 for its control-loop "
+            + "fix, and THIS annotation was deliberately held back out of that merge: one failure in ten "
+            + "is not a rate a required check can carry. Re-enabling stays that branch's work - see "
+            + "docs/inflight/test-largenumberofinstances-residual-failures-unmeasured.md.")
     @Tag("performance")
     @Test
     void largeNumberOfInstances() {

@@ -133,3 +133,76 @@ coordinator problem from a PC problem.
 Runtime, for whoever plans the next one: roughly 70 seconds a run at 0.25 and under two minutes at
 0.5. Cheap enough to run in bulk, which is the argument for hunting on the constrained containers the
 soak-harness note proposes rather than on a fast desktop that passes everything.
+
+## 2026-09-01, on Linux: it fails here, and the failure is a stall rather than an overload
+
+The desktop that never failed was one machine. On a Linux box - 32 physical cores, but
+`/etc/environment` pins `JAVA_TOOL_OPTIONS=-XX:MaxRAM=48g -XX:MaxRAMPercentage=20
+-XX:ActiveProcessorCount=8`, so every JVM sees eight - `largeNumberOfInstances` at the default scale
+failed **once in ten consecutive runs**, plus a preceding pilot run that passed. The box was
+otherwise idle: no other build, no other container.
+
+**This is the first failure of this test reproduced anywhere but CI**, which is what the previous
+entries were missing: nineteen green on an M2 Mac Pro could not separate the hypotheses because
+nothing ever went wrong on it.
+
+**It is a stall, not the overload the August sweep measured.** The detector's own verdict:
+
+> `No progress beyond 432799 records after 11 rounds. [FLAT for 12s - it stopped rather than ran out
+> of time | elapsed=62s | ...]`
+
+`FLAT` is the discriminator the tracker was built to report - the count stopped moving rather than
+moving too slowly. The confounded 2026-08-28 sweep failed the other way, with `TimeoutException`
+at scales the machine could not finish, and that difference is why this run is evidence and that one
+was not.
+
+### What the ambient probe caught, and why it moves the claim
+
+The autopsy block fired on the failing run and named a cause:
+
+> `ZOMBIE_MEMBER/REBALANCE_BLOCKED: group ... dwelling in PreparingRebalance for 15s (bound 15s) - a
+> member is not answering the rebalance (protocol-unresponsive)`
+
+with `rebalanceDwell=15441ms`, `lagStagnation=33032ms`, and a long list of frozen partitions each
+carrying comparable lag. The group is stuck in `PreparingRebalance` **waiting on a member**, and the
+commit path is full of `RebalanceInProgressException` for as long as that lasts.
+
+**That cuts against the claim this note is named for.** "The remaining ~10% is the Kafka consumer
+group protocol under extreme membership churn" describes a coordinator that cannot converge. What
+the probe describes is a coordinator doing its job and blocking on a member that went silent - which
+is a member-side story, and the members are PC instances.
+
+**It does not settle it, and the reason is specific.** The capacity profile's churn kills instances
+continuously, and an instance killed mid-`JoinGroup` is by construction a member that stops
+answering. So the observation is consistent with both a benign race in the harness's stop path and a
+PC defect that wedges a live member. The question is now much sharper than it was - **is the
+unresponsive member one the harness stopped, or one still running?** - and that is a question about
+identity, not about rates.
+
+### Three instrumentation gaps stand between that question and its answer
+
+Found while trying to answer it from the artefacts this run already produced:
+
+- **`ProgressTracker.withDiagnostic(...)` has never been called.** The hook exists, its javadoc names
+  `pc::describeProgress` as the intended argument, and `grep -rn withDiagnostic --include=*.java` finds
+  only the declaration and its own documentation. So the verdict line ends with *"no consumer
+  diagnostic supplied"* on every stall this test has ever produced - including this one. Wiring it is
+  the cheapest thing on this list and it is what separates "not trying" from "trying and not
+  finishing".
+- **`dumpInstanceState` deliberately cannot report the assignment.** Its own comment says
+  `assignedPartitions` was dropped when astubbs/parallel-consumer#393 deleted the mirrored accessor,
+  and that reading the live assignment would need a consumer handle the dump does not have. That
+  accessor is exactly what would name the silent member.
+- **Two of the per-run log silos are empty on every passing run** - `probes.log` and
+  `pc-poll-rebalance-lifecycle.log` - because the probe reports peaks at DEBUG on a clean pass and
+  only writes the autopsy on failure. The other silos do carry content on passes. The consequence is
+  that a failing run has **no passing run to be read against**: whether a 15s dwell is anomalous or
+  routine under this churn is not answerable from what the runs record. Inverted, and unexplained:
+  `pc-shard-work-state.log` is populated on passes and **empty on the failing run**.
+
+### Reproducing
+
+`bin/exp-measure-large-instances-failure-rate.sh` with `JAVA_HOME` set to a real JDK 17 - its
+`pc_experiment_java_home` looks for an SDKMAN candidate that does not exist outside the machine it
+was written on, and says so rather than failing, so an unset `JAVA_HOME` runs under whatever the
+wrapper finds. Roughly ninety seconds a run at the default scale.
