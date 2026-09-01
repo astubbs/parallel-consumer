@@ -167,10 +167,13 @@ it - and a human should re-apply it before freezing:
   everywhere else, [`docs/issue-references.md`](issue-references.md) applies.
 - **The section IS the GitHub Release body** (see *Cutting a release* above), so write it in the
   AsciiDoc `bin/release-notes.py` converts: headings, `*`/`**` bullets, `. ` ordered lists,
-  `link:`/URL macros, `*bold*`, `` `mono` ``, `NOTE::`, `+` continuations, `//` comments. Source
-  blocks, tables, anchors, block attributes, includes and xrefs are **rejected** - the renderer fails
-  rather than ship mangled markup, and `bin/test-release-notes.sh` runs it over every section of the
-  file on each PR, via `bin/check-all.sh --with-tests` in `repo-hygiene.yml`.
+  `link:`/URL macros, `*bold*`, `` `mono` ``, `NOTE::`, `+` continuations, `//` comments. Everything
+  else it recognises as markup is **rejected** - the renderer fails rather than ship mangled markup,
+  and names the construct and the line when it does, which is why the rejection list is **not
+  copied here**: `bin/release-notes.py`'s own `UNSUPPORTED` table owns it, and a second copy would
+  go stale the first time the table grows. `bin/test-release-notes.sh` runs the renderer over every
+  section of this file on each PR, via `bin/check-all.sh --with-tests` in `repo-hygiene.yml`, so a
+  section reaching for something unsupported fails in CI rather than on the release page.
 
 ## The `PR Checklist` changelog gate is a different, narrower check
 

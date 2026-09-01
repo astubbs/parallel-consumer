@@ -15,9 +15,11 @@ Conversion policy - a bounded, checked subset, NOT a general AsciiDoc engine:
     lists, link macros, bold, admonitions, list continuations, comments). Everything else
     passes through unchanged, which is safe for the constructs Markdown and AsciiDoc share
     (paragraphs, `monospace`, _italics_).
-  - Anything outside that subset that WOULD render as mangled markup (block delimiters,
-    block attributes, anchors, tables, includes, conditionals, xrefs) is an ERROR, not a
-    silent pass. Fix the changelog or teach this script - do not ship broken markup.
+  - Anything outside that subset that WOULD render as mangled markup is an ERROR, not a
+    silent pass. Fix the changelog or teach this script - do not ship broken markup. The
+    `UNSUPPORTED` table below is the list; it is not restated here or in docs/releasing.md,
+    because a second copy of it goes stale the first time the table grows, and the error
+    names the offending construct and line anyway.
   - No asciidoctor/pandoc dependency: the release job must not be able to fail because a
     gem or a Python package would not install.
 
