@@ -25,8 +25,10 @@ deploys via the `maven-central` profile, tags `v<version>` and cuts a GitHub rel
 
 ## Bugs found while triaging the upstream mirrors (2026-08-05)
 
+<!-- post-merge: checked-begin -->
 They were found by reading code to diagnose something else. The load-factor one has since become
 astubbs#201 and is no longer tracked here; what is left has no issue of its own.
+<!-- post-merge: checked-end -->
 
 1. **MDC context is not propagated into the worker pool.** PC sets its own `pcId` and `offset` keys
    but never captures the caller's context map at submit time (no `copyOfContextMap` anywhere), so a

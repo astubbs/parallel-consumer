@@ -67,10 +67,12 @@ one place a stale-read finding deserves a look rather than a shrug.
   the broker-poll thread, with no happens-before edge between them. The consequence is not corruption,
   it is **commit latency**: the poller can miss the flag and fail to shorten its long poll when a commit
   has been requested. Worth connecting to the commit-timeout flakes this project already tracks.
+<!-- post-merge: checked-begin -->
 - `internal/AbstractParallelEoSStreamProcessor.java:980` - `lastWorkRequestWasFulfilled`, same shape.
   **Fixed since: astubbs#201 made the field `volatile`, and a re-run reports it no longer.** Left in
   place rather than deleted, because this list is the point-in-time record of what astubbs#294
   surfaced - the count above still reads 30 for that reason.
+<!-- post-merge: checked-end -->
 
 `JLM_JSR166_UTILCONCURRENT_MONITORENTER` (4)
 
