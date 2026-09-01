@@ -17,7 +17,22 @@ baseline for comparison is 15/20 runs fully clean, zero stall-class failures.
 | `KafkaSanityTests`, `TransactionMarkersTest` | singles | residual, uncategorised |
 | `PartitionStateCommittedOffsetIT.committedOffsetRemoved[3] none` | 1 sighting (2026-08-05) | `RebalanceInProgressException` out of the test's own setup |
 | `PartitionStateCommittedOffsetIT.committedOffsetRemoved[2] earliest` | 1 sighting (2026-08-25, astubbs#353, [job 97859037375](https://github.com/astubbs/parallel-consumer/actions/runs/32865269364/job/97859037375)) | `checkHowManyRecordsWithKeyPresent` expected 2 got 1 - the `[1] latest` assertion signature (solved 2026-08-05 as a nudge race) appearing on the `earliest` parameter; `probe clean` autopsy (test-side, not consumer-group progress), on a branch with no Java <!-- post-merge: checked --> |
+| `PartitionStateCommittedOffsetIT.committedOffsetRemoved[1] latest` | 1 sighting (2026-09-01, astubbs#207, [job 99717308477](https://github.com/astubbs/parallel-consumer/actions/runs/33462670308/job/99717308477)) | `checkHowManyRecordsWithKeyPresent` expected 2 got 1, `probe clean`. **The parameter the 2026-08-05 nudge-race fix targeted, with that fix in the tree** - so this is a recurrence, not a new member. Green 7/7 locally on the same commit when the class ran scoped; CI runs `forkCount=4` <!-- post-merge: checked --> |
 | `TransactionTimeoutsTest.commitTimeout[2]` | 1 sighting (2026-08-06, astubbs#204) | incompletes `[8]` where the parameter pins `[8, 12]` |
+
+**The `[1] latest` recurrence is the one worth a second look**, because it is not a new member of the family -
+it is the exact parameter and assertion signature that
+[`latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md`](../solutions/test-flakiness/latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md)
+recorded as SOLVED, reappearing with that fix present. Either the fix is partial, or a second mechanism produces the
+same observable. The 2026-08-25 sighting on `[2] earliest` already hinted at that - the solved doc says "ONLY the
+[1]=latest parameter ever fails", and `earliest` failing contradicted it.
+
+<!-- post-merge: checked-begin -->
+What the astubbs#207 sighting adds: it was **green 7/7 locally on the same commit** with the class run scoped, and red
+on CI at `forkCount=4` with a clean probe. So the discriminator is contention, not the branch - astubbs#207 changes
+offset *decoding*, and this test removes the committed offset entirely, so there is no metadata for its paths to reach.
+Not diagnosed further; recorded so the next sighting has two data points on the same parameter rather than one.
+<!-- post-merge: checked-end -->
 
 **A third member has now left the family, and it left by being reclassified rather than fixed-as-tight.**
 `TransactionTimeoutsTest.commitTimeout[1]` failed once on CI (2026-08-07,

@@ -11,6 +11,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
+import org.apache.kafka.common.TopicPartition;
+
 import java.nio.ByteBuffer;
 import java.util.stream.Stream;
 
@@ -44,6 +46,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class CorruptOffsetMetadataTest {
 
     static final long BASE_OFFSET = 100L;
+
+    /**
+     * A real partition rather than {@code null}. The decode entry point accepts null when a caller does not know it,
+     * but passing null here would test the one path that cannot verify the fix below: under {@code FAIL} the
+     * exception message is the operator's only clue which assigned partition holds the bad metadata, because it
+     * surfaces inside Kafka's generic rebalance-callback wrapper.
+     */
+    static final TopicPartition TP = new TopicPartition("myTopic", 3);
 
     /**
      * The committed offset is the NEXT offset to be polled, so treating the metadata as absent means the highest offset
@@ -95,7 +105,7 @@ class CorruptOffsetMetadataTest {
     @MethodSource("corruptPayloads")
     void ignorePolicyDiscardsACorruptPayloadAndResumesFromTheCommittedOffset(String name, byte[] input) {
         var result = EncodedOffsetPair.decodeToIncompletes(input, BASE_OFFSET,
-                InvalidOffsetMetadataHandlingPolicy.IGNORE, null);
+                InvalidOffsetMetadataHandlingPolicy.IGNORE, TP);
 
         assertThat(result.getHighestSeenOffset())
                 .as("corrupt metadata must be treated as absent, not decoded into an offset map")
@@ -109,9 +119,13 @@ class CorruptOffsetMetadataTest {
     @MethodSource("corruptPayloads")
     void failPolicyRejectsACorruptPayloadRatherThanDecodingIt(String name, byte[] input) {
         assertThatThrownBy(() -> EncodedOffsetPair.decodeToIncompletes(input, BASE_OFFSET,
-                InvalidOffsetMetadataHandlingPolicy.FAIL, null))
+                InvalidOffsetMetadataHandlingPolicy.FAIL, TP))
                 .as("FAIL must not silently accept a payload this build could not have written")
-                .isInstanceOf(CorruptOffsetMetadataException.class);
+                .isInstanceOf(CorruptOffsetMetadataException.class)
+                // The decoders build these through the one-argument constructor, which records "source unknown".
+                // Passing that instance through would strand the operator with no partition to look at.
+                .hasMessageContaining(TP.toString())
+                .hasMessageContaining(String.valueOf(BASE_OFFSET));
     }
 
     /**

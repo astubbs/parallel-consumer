@@ -129,6 +129,18 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
                                                            long baseOffset,
                                                            InvalidOffsetMetadataHandlingPolicy errorPolicy,
                                                            TopicPartition tp) {
+        if (input.length == 0) {
+            // Not reachable from production today: decodeCompressedOffsets branches on an empty payload before
+            // calling here, because "no metadata committed" is a legitimate state rather than a corrupt one. That
+            // makes this an invariant the caller happens to keep - and an invariant nothing enforces is one a future
+            // caller breaks, here into an unhandled BufferUnderflowException off wrap.get(), which is exactly the
+            // escape-the-policy shape this method exists to remove.
+            return handleUnreadableMetadata(baseOffset,
+                    errorPolicy,
+                    msg("the payload is empty - not even a magic byte"),
+                    () -> new CorruptOffsetMetadataException("the payload is empty", describeSource(tp, baseOffset)),
+                    tp);
+        }
         ByteBuffer wrap = ByteBuffer.wrap(input).asReadOnlyBuffer();
         byte magic = wrap.get();
         Optional<OffsetEncoding> encoding = OffsetEncoding.maybeDecode(magic);
