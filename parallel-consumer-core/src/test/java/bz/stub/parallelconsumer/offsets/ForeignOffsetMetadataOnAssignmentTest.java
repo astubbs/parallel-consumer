@@ -19,6 +19,7 @@ import pl.tlinkowski.unij.api.UniMaps;
 import java.util.Base64;
 import java.util.function.UnaryOperator;
 
+import static bz.stub.parallelconsumer.offsets.OffsetCodecTestUtils.magicByteOfAnEncodingThatDoesNotExistYet;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -79,9 +80,14 @@ class ForeignOffsetMetadataOnAssignmentTest {
     /**
      * Base64 of a payload whose leading magic byte matches no {@link OffsetEncoding} - neither one of PC's own codecs
      * nor either of the Kafka Streams magic numbers PC recognises.
+     * <p>
+     * The byte is derived from the enum, not written here. Hard coding one made this test's subject depend on a
+     * coincidence: the day an encoding claims that byte, this stops exercising the unknown-magic path and goes on
+     * passing, which is the one outcome a forward-compatibility test must not have.
      */
     private static String foreignMetadata() {
-        return Base64.getEncoder().encodeToString(new byte[]{(byte) 42, 0, 0, 0});
+        return Base64.getEncoder().encodeToString(
+                new byte[]{magicByteOfAnEncodingThatDoesNotExistYet(), 0, 0, 0});
     }
 
     /**
