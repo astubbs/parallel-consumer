@@ -57,6 +57,16 @@ hook_lib="${BASH_SOURCE[0]%/*}/lib/hook-common.sh"
 invocations="$(hook_git_invocations "$payload")"
 case $'\n'"$invocations"$'\n' in *$'\n'push$'\n'*|*$'\n'push$'\t'*) ;; *) exit 0 ;; esac
 
+# THE REPOSITORY COMES FROM THE COMMAND'S OWN DIRECTORY, not this hook process's. A subagent (or a
+# push run with an explicit path) acts on a repository the hook's own cwd says nothing about, and
+# pairing the command's branch with the SESSION's repo quoted another tree's inflight note (Codex
+# review, astubbs/parallel-consumer#382). The payload cwd is the strongest source this fail-open
+# reminder can afford; a `git -C <path> push` to a THIRD repository remains the documented edge in
+# docs/inflight/ci-pr-lookup-is-copied-into-three-hooks.md.
+cmd_cwd="$(hook_payload_cwd "$payload")"
+if [ -n "$cmd_cwd" ] && [ -d "$cmd_cwd" ]; then
+    cd "$cmd_cwd" 2>/dev/null || true
+fi
 root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$root" ] || exit 0
 cd "$root" 2>/dev/null || exit 0

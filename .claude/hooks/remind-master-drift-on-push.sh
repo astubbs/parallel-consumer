@@ -60,11 +60,24 @@ hook_lib="${BASH_SOURCE[0]%/*}/lib/hook-common.sh"
 invocations="$(hook_git_invocations "$payload")"
 case $'\n'"$invocations"$'\n' in *$'\n'push$'\n'*|*$'\n'push$'\t'*) ;; *) exit 0 ;; esac
 
+# THE REPOSITORY COMES FROM THE COMMAND'S OWN DIRECTORY, not this hook process's - same reasoning
+# and same edge as remind-inflight-on-push.sh, which owns the comment.
+cmd_cwd="$(hook_payload_cwd "$payload")"
+if [ -n "$cmd_cwd" ] && [ -d "$cmd_cwd" ]; then
+    cd "$cmd_cwd" 2>/dev/null || true
+fi
 root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$root" ] || exit 0
 cd "$root" 2>/dev/null || exit 0
 
+# TWO SIDES OF ONE REFSPEC: `git push origin src:dst` publishes the LOCAL branch `src` under the
+# REMOTE name `dst`. The dst is the right LABEL (it is what a PR has as its head branch, and what
+# the stamp is keyed by); the src is the CONTENT being pushed, so it is what the drift measurement
+# must read - measuring a same-named local `dst` reported another branch's drift, or went silent
+# when no such local branch existed (Codex review, astubbs/parallel-consumer#382). With no colon
+# the sides agree; an empty src (bare push, HEAD:x, an unexpanded $var) falls back to HEAD below.
 branch="$(hook_push_head_ref "$invocations")"
+push_src="$(hook_push_head_ref "$invocations" src)"
 head_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 [ -n "$branch" ] || branch="$head_branch"
 [ -n "$branch" ] && [ "$branch" != "HEAD" ] || exit 0
@@ -79,8 +92,8 @@ head_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 # measure stays silent rather than guessing.
 measure_ref="HEAD"
 worktree_diff=1
-if [ "$branch" != "$head_branch" ]; then
-    measure_ref="$(git rev-parse --verify --quiet "refs/heads/$branch" 2>/dev/null || true)"
+if [ -n "$push_src" ] && [ "$push_src" != "$head_branch" ]; then
+    measure_ref="$(git rev-parse --verify --quiet "refs/heads/$push_src" 2>/dev/null || true)"
     [ -n "$measure_ref" ] || exit 0
     worktree_diff=0
 fi

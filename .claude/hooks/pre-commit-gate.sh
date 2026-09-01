@@ -189,10 +189,17 @@ def commit_bypass_counts(line):
             repo_dir = ""
             while j < len(tokens) and tokens[j] in GIT_VALUE_FLAGS:
                 # `-C <path>` is the only one of these that relocates the command. Recorded on the
-                # way past rather than re-derived, and the LAST one wins because git applies them
-                # cumulatively in order.
+                # way past rather than re-derived - and repeated -C values COMPOSE, each relative
+                # path applied from the directory the previous one established, so `git -C sub -C ..
+                # commit` runs in the ORIGINAL repository. Keeping only the last token resolved
+                # `..` against the payload cwd instead, and a parent with no gate then passed the
+                # commit unchecked (Codex review, astubbs/parallel-consumer#382).
                 if tokens[j] == "-C" and j + 1 < len(tokens):
-                    repo_dir = tokens[j + 1]
+                    nxt = tokens[j + 1]
+                    if os.path.isabs(nxt) or not repo_dir:
+                        repo_dir = nxt
+                    else:
+                        repo_dir = os.path.join(repo_dir, nxt)
                 j += 2               # git global flags that consume a value
             if j < len(tokens) and tokens[j] == "commit":
                 end = j
@@ -239,8 +246,15 @@ def leading_cd(line):
         if at_cmd and t == "cd":
             cd_count += 1
         at_cmd = False
-    if cd_count == 1 and len(toks) > 1 and toks[0] == "cd" and not toks[1].startswith("-"):
-        return toks[1]
+    # ...AND ONLY WHEN THE JOIN PRESERVES THE CWD. `cd /x & git commit` backgrounds the cd into a
+    # subshell and `cd /x | cmd` pipes it into one - the commit stays in the payload cwd either
+    # way, so trusting the prefix would run an unrelated green gate over a red tree (Codex review,
+    # astubbs/parallel-consumer#382). Only `&&`, `;` and a newline hand the changed directory to
+    # the next command in the same shell; operator runs can carry trailing newlines/semicolons.
+    if cd_count == 1 and len(toks) > 2 and toks[0] == "cd" and not toks[1].startswith("-"):
+        joiner = toks[2].strip("\n;")
+        if joiner in ("", "&&"):
+            return toks[1]
     return ""
 
 

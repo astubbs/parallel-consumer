@@ -87,7 +87,7 @@ except Exception:
 FORCE = {"--force", "-f", "--force-with-lease", "--force-if-includes"}
 # Push options that consume a SEPARATE value token. Dropping only the flag would leave its value
 # where the repository or the refspec should be.
-PUSH_VALUE_FLAGS = {"-o", "--push-option", "--receive-pack", "--exec", "--repo"}
+PUSH_VALUE_FLAGS = {"-o", "--push-option", "--receive-pack", "--exec", "--repo", "--recurse-submodules"}
 OPERATORS = set("();<>|&\n")  # must name the same characters as the lexer punctuation above
 
 
@@ -160,8 +160,15 @@ for t in toks:
     if at_cmd and t == "cd":
         cd_count += 1
     at_cmd = False
-if cd_count == 1 and len(toks) > 1 and toks[0] == "cd" and not toks[1].startswith("-"):
-    cd_prefix = toks[1]
+# ...AND ONLY WHEN THE JOIN PRESERVES THE CWD. `cd /x & git commit` backgrounds the cd into a
+# subshell and `cd /x | cmd` pipes it into one - the commit stays in the payload cwd either way,
+# so trusting the prefix would gate an unrelated tree (Codex review, astubbs/parallel-consumer#382).
+# Only `&&`, `;` and a newline hand the changed directory to the next command in the same shell;
+# operator runs may carry trailing newlines/semicolons, so strip those before comparing.
+if cd_count == 1 and len(toks) > 2 and toks[0] == "cd" and not toks[1].startswith("-"):
+    joiner = toks[2].strip("\n;")
+    if joiner in ("", "&&"):
+        cd_prefix = toks[1]
 
 
 def resolve_against(path, base):
@@ -197,6 +204,12 @@ for i, t in enumerate(toks):
     # stops at an operator so the next command cannot donate a subcommand.
     GIT_VALUE_FLAGS = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path")
     sub = None
+    # RESET PER INVOCATION: a -C recorded while scanning an earlier command in a compound payload
+    # must not survive into the invocation that carries the verdict - `git -C /a status && git
+    # commit --amend` runs the amend in the payload cwd, not /a (Codex review,
+    # astubbs/parallel-consumer#382). And REPEATED -C values COMPOSE, each relative one applied
+    # from the previous, so only the chain - never just the last token - names the directory.
+    git_c = ""
     j = 0
     while j < len(rest):
         x = rest[j]
@@ -204,7 +217,11 @@ for i, t in enumerate(toks):
             break
         if x in GIT_VALUE_FLAGS:
             if x == "-C" and j + 1 < len(rest):
-                git_c = rest[j + 1]
+                nxt = rest[j + 1]
+                if os.path.isabs(nxt) or not git_c:
+                    git_c = nxt
+                else:
+                    git_c = os.path.join(git_c, nxt)
             j += 2
             continue
         if x.startswith("-"):

@@ -494,6 +494,23 @@ assert "...and runs the resolved tree's own gate" resolved_relative "$got"
 wt_out=$(wt_fire "$session_green" "$commit_green" 'git -C redsub commit -m x')
 assert "a relative git -C resolves against the payload cwd" 2 "${wt_out%%|*}"
 
+# 3e. REPEATED -C values COMPOSE: `git -C sub -C .. commit` runs in the ORIGINAL repository, so the
+# red gate must fire. Keeping only the last token resolved `..` against the payload cwd - the
+# parent, which has no gate - and the commit passed unchecked (Codex review on
+# astubbs/parallel-consumer#382).
+mkdir -p "$commit_red/sub"
+wt_out=$(wt_fire "$session_green" "$commit_red" 'git -C sub -C .. commit -m x')
+assert "repeated -C paths compose instead of last-wins" 2 "${wt_out%%|*}"
+case "$wt_out" in *"GATE OF commit-red"*) got=composed_the_chain ;; *) got="escaped to the parent: ${wt_out#*|}" ;; esac
+assert "...and the composed chain lands back in the red tree" composed_the_chain "$got"
+
+# 3f. `cd /x & git commit` backgrounds the cd - the commit stays in the payload cwd, so trusting
+# the prefix would run the green tree's gate over the red tree the commit actually lands in.
+wt_out=$(wt_fire "$session_green" "$commit_red" "cd $commit_green & git commit -m x")
+assert "a backgrounded cd does not relocate the gate" 2 "${wt_out%%|*}"
+case "$wt_out" in *"GATE OF commit-red"*) got=gated_the_real_tree ;; *) got="trusted the subshell cd: ${wt_out#*|}" ;; esac
+assert "...and the red tree's own gate is the one that ran" gated_the_real_tree "$got"
+
 # 4. A COMMIT FROM A SUBDIRECTORY has to climb: the gate lives at the checkout root, and stopping at
 # the literal directory would find no gate and fail open - a silent skip, not a visible error.
 wt_out=$(wt_fire "$session_green" "$commit_red/nested/deeper" 'git commit -m "from a subdir"')
@@ -1889,7 +1906,27 @@ case "$drift_side_report" in *MASTER-SUBJECT-ONE*) got=measured_sidework ;; *) g
 assert "a refspec-named branch is measured by its own local ref" measured_sidework "$got"
 case "$drift_side_report" in *"BOTH sides"*) got="leaked the worktree's overlap" ;; *) got=no_false_overlap ;; esac
 assert "and the session worktree's overlap is not attributed to it" no_false_overlap "$got"
-rm -rf "$drift_refspec_tmp" "$drift_side_tmp"
+
+# `git push origin src:dst` PUBLISHES src - dst is only the remote label. Measuring dst read a
+# same-named local branch that was not being pushed, or went silent when none existed (Codex
+# review, astubbs/parallel-consumer#382). sidework:renamed must measure sidework's own drift.
+drift_srcdst_tmp="$(mktemp -d)"
+out="$(printf '{"tool_name":"Bash","tool_input":{"command":"git push origin sidework:renamed"}}' |
+    env TMPDIR="$drift_srcdst_tmp" MASTER_DRIFT_REF=basefix MASTER_DRIFT_FETCH_FLOOR_SECONDS=0 bash "$DRIFT_HOOK" 2>/dev/null)"
+drift_srcdst_report="$(drift_ctx "$out")"
+case "$drift_srcdst_report" in *MASTER-SUBJECT-ONE*) got=measured_the_src ;; *) got="no report" ;; esac
+assert "a src:dst push is measured on its SOURCE branch" measured_the_src "$got"
+
+# THE REPOSITORY COMES FROM THE PAYLOAD CWD: a hook process running somewhere else entirely (a
+# subagent) must still measure the repository the command runs in. Pre-fix, rev-parse in the
+# hook's own directory found no repo and the reminder silently vanished.
+drift_cwd_tmp="$(mktemp -d)"
+out="$( (cd "$drift_cwd_tmp" && printf '{"tool_name":"Bash","cwd":"%s","tool_input":{"command":"git push"}}' "$drift_repo" |
+    env TMPDIR="$drift_cwd_tmp" MASTER_DRIFT_REF=basefix MASTER_DRIFT_FETCH_FLOOR_SECONDS=0 bash "$DRIFT_HOOK" 2>/dev/null) )"
+drift_cwd_report="$(drift_ctx "$out")"
+case "$drift_cwd_report" in *MASTER-SUBJECT-*) got=found_the_repo ;; *) got="stayed silent" ;; esac
+assert "the drift repo is derived from the payload cwd, not the hook's" found_the_repo "$got"
+rm -rf "$drift_refspec_tmp" "$drift_side_tmp" "$drift_srcdst_tmp" "$drift_cwd_tmp"
 
 # UNCOMMITTED WORK COUNTS AS THIS BRANCH'S, which the hook states as a deliberate choice: a file you
 # are editing right now is the one you most want to hear about. `untouched.txt` is in neither side's
@@ -2182,6 +2219,29 @@ assert "a relative cd resolves against the payload cwd" selftest/other-worktree 
 hb_out="$(hb_fire 'git commit --amend --no-edit' -)"
 case "$hb_out" in *"this hook process's directory"*) got=labelled_last_resort ;; *) got=unlabelled ;; esac
 assert "with no cwd at all, the hook-directory fallback is labelled" labelled_last_resort "$got"
+
+# THE CODEX ROUND (astubbs/parallel-consumer#382), pinned - four more ways to steer the guard.
+
+# A -C recorded while scanning an EARLIER invocation must not survive into the one that carries
+# the verdict: `git -C <dir> status && git commit --amend` runs the amend in the payload cwd.
+# Pre-fix this either answered about <dir> or, when <dir> was not a repository, went completely
+# SILENT - a bypass of the refusal itself.
+hb_bleed="$(mktemp -d)"
+hb_out="$(hb_fire "git -C $hb_bleed status && git commit --amend --no-edit" "$hb_other")"
+[ -n "$hb_out" ] && got=DENY || got=ALLOW
+assert "a -C on an EARLIER command does not bleed into the amend" DENY "$got"
+assert "...and the amend is answered from the payload cwd" selftest/other-worktree "$(hb_head)"
+rm -rf "$hb_bleed"
+
+# --recurse-submodules takes a separate value; the python copy of the parser must skip it too
+# (change one, change the other - and the first round changed only the bash one).
+hb_fire 'git push --force --recurse-submodules on-demand origin feats/subm' >/dev/null
+assert "the python parser skips --recurse-submodules and its value" feats/subm "$(hb_head)"
+
+# `cd /x & git commit` BACKGROUNDS the cd into a subshell - the amend stays where the payload says,
+# so the prefix must not be trusted across a cwd-losing operator.
+hb_fire "cd $hb_other & git commit --amend --no-edit" >/dev/null
+assert "a backgrounded cd does not relocate the amend" "$hb_cwd_branch" "$(hb_head)"
 
 # AN UNEXPANDED $VAR is source text, not a branch - fall back with the label, never assert the
 # literal.

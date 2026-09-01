@@ -148,7 +148,15 @@ hook_git_subcommands() { # <payload-json>
 # `hook_git_invocations` to ask whether the payload is a push at all; reading that list rather than
 # re-deriving it keeps the whole hook to ONE python3 spawn - the same economy `hook_git_runs_any`
 # exists for, one function down.
-hook_push_head_ref() { # <invocations - the output of hook_git_invocations>
+#
+# THE OPTIONAL SECOND ARGUMENT PICKS A SIDE. `git push origin src:dst` publishes the LOCAL branch
+# `src` under the REMOTE name `dst`: `dst` is what a pull request has as its head branch (the
+# default answer, and the label a reminder should print), but `src` is the content actually being
+# pushed - so a hook that MEASURES the branch (the drift reminder) must ask for `src`, or it
+# measures a same-named local branch that is not what git is publishing (Codex review,
+# astubbs/parallel-consumer#382). With no colon the two sides are the same name.
+hook_push_head_ref() { # <invocations - the output of hook_git_invocations> [dst|src]
+    local side="${2:-dst}"
     local line args t spec dst count skip
     while IFS= read -r line; do
         case "$line" in push|push$'\t'*) ;; *) continue ;; esac
@@ -180,7 +188,7 @@ EOF
         [ -n "$spec" ] || continue
         [ "$spec" = "tag" ] && continue
         case "$spec" in
-            *:*) dst="${spec#*:}" ;;
+            *:*) if [ "$side" = src ]; then dst="${spec%%:*}"; else dst="${spec#*:}"; fi ;;
             *)   dst="$spec" ;;
         esac
         dst="${dst#+}"
@@ -198,6 +206,20 @@ EOF
 $1
 EOF
     return 0
+}
+
+# The tool call's own working directory from the payload, or nothing. A hook process does not run
+# where its guarded command runs - a subagent, or a `git -C /other/clone push`, acts on a repository
+# the hook's own directory says nothing about - so a push hook that derives its repository from
+# `$PWD` pairs the command's branch with the SESSION's repo (Codex review,
+# astubbs/parallel-consumer#382). Fail-open like everything here: no python3, no cwd field, or
+# unparseable JSON all print nothing and the caller stays with its own directory.
+hook_payload_cwd() { # <payload-json>
+    printf '%s' "$1" | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("cwd") or "")
+except Exception:
+    pass' 2>/dev/null || true
 }
 
 # True when the payload runs ANY of the named git subcommands. One tokeniser spawn for the whole
