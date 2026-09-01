@@ -29,9 +29,11 @@ import static com.google.common.truth.Truth.assertThat;
  * builder regardless of level - the fix would silently stop working and nothing else in the build would notice:
  * the source still reads correctly, and the cost is a throughput number nobody is gating on.
  * <p>
- * The complementary half is {@code bin/check-hot-log-args.sh}, which catches the other direction - somebody
- * writing the eager form again. A source check cannot see SLF4J's runtime behaviour, and this test cannot see the
- * source; neither one alone closes the gap.
+ * <b>Nothing catches the other direction</b> - somebody writing the eager form again. A bespoke source gate for
+ * that existed briefly and was removed: PMD's {@code GuardLogStatement} is the standard rule for exactly this
+ * pattern and is not in this build, and a private scanner keyed on a hand-maintained list of accessor names goes
+ * stale silently. So this test guards the mechanism the fix rests on; the pattern itself rests on review, and on
+ * the throughput gate noticing the consequence.
  * <p>
  * Background: the eager form reached the control loop on astubbs/parallel-consumer#29 and is the leading candidate
  * for that branch's unexplained throughput shortfall - see

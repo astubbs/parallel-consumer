@@ -48,18 +48,21 @@ history.
 The call is now a supplier: `log.atTrace().addArgument(() -> ...).log(...)`. `Logger#atTrace()`
 returns the NOP builder when trace is disabled, and the NOP builder never invokes the supplier.
 
-Two mechanisms guard it, because neither can see what the other sees:
+One mechanism guards it, and the gap left by the other is stated rather than papered over:
 
-- `bin/check-hot-log-args.sh` - a source gate. It sees the guard; ArchUnit cannot, because a guard is
-  control flow and ArchUnit reads the call graph, so an ArchUnit rule would flag the correctly-guarded
-  sites identically. Its header carries that reasoning and the denylist of scanning accessors.
 - `HotPathLogArgumentsAreDeferredTest` - asserts the SLF4J behaviour the fix rests on, at a pinned
   level, with the eager form as its control arm. A source check cannot see runtime behaviour, so an
-  SLF4J upgrade that evaluated suppliers eagerly would break the fix silently.
+  SLF4J upgrade that evaluated suppliers eagerly would break the fix while leaving the source reading
+  correctly.
+- **Nothing automatically catches somebody writing the eager form again.** A bespoke source gate for
+  that was written and then removed: PMD's `GuardLogStatement` is the standard rule for this exact
+  pattern, and a private scanner discriminating on a hand-maintained list of five accessor names goes
+  stale the first time someone adds a scanning accessor without thinking of it - passing while covering
+  less, which is the failure it existed to prevent. Adopting PMD is the open option; its known
+  noisiness is the honest reason nobody has.
 
-The gate's own self-test, `bin/test-check-hot-log-args.sh`, exists because the check's first draft
-used gawk's `ENDFILE` on a box whose `awk` is mawk: it parsed, ran nothing, and printed its success
-line over a file containing this exact defect.
+The consequence is still caught downstream: a regression of this shape shows up in the throughput gate,
+which measures the effect rather than the pattern.
 
 ## Where the fix is, and where the defect still is
 
