@@ -106,10 +106,11 @@ Two caveats belong with the numbers, and both survive into whatever this becomes
 
 ## RUN, 2026-09-01: the check fires - and the run exposed a weaker claim than expected
 
-<!-- post-merge: checked - both PRs are named by number and referred to in the past tense, so this
-     paragraph reads identically once either of them has merged or been closed -->
+<!-- post-merge: checked-begin - both PRs are named by number and in the past tense, so this reads
+     identically once either has merged or been closed -->
 Red/black executed in CI as astubbs/parallel-consumer#402 (defect injected, verbatim) against
 astubbs/parallel-consumer#401 (same tree, no defect). Both arms ran the real lane on hosted runners.
+<!-- post-merge: checked-end -->
 
 | Arm | rate | records | machine index | ratio | verdict |
 |---|---|---|---|---|---|
@@ -147,10 +148,11 @@ breaching the ceiling - roughly a 20-30% cut. That is a better next experiment t
 
 ### More evidence that 0.70 cannot tighten
 
-<!-- post-merge: checked - names the PR that produced a measurement, in the past tense; the sentence
-     is about where a number came from and stays true after any merge -->
+<!-- post-merge: checked-begin - names the PR a measurement came from, in the past tense; stays true
+     after any merge -->
 The black arm scored 0.861 on a tree differing from the baseline run only by documentation and
 scripts. Together with the docs-only 0.778 already recorded, and an earlier run of the same branch at
 1.000 (astubbs/parallel-consumer#401), that is a spread of 0.778 to 1.000 on effectively identical
-code, from three separate runs. The floor is noise, not sensitivity, and a bound above about 0.72 would fail
+code, from three separate runs.
+<!-- post-merge: checked-end --> The floor is noise, not sensitivity, and a bound above about 0.72 would fail
 documentation changes.
