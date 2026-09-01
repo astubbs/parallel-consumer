@@ -78,8 +78,9 @@ Relabel `bug` to `feature`: no defect is demonstrated here, and what is left is 
      ordering constraint now cites the notes that outlive the PR rather than the PR's own state -->
 `ProducerManager` is contended, and the contention resolved rather than persisting: astubbs#261 landed
 the produce-callback change on master, and astubbs#262 and the `fix/transactional-produce-callback-abort`
-branch both reconciled onto it. astubbs#257 does not go near `commitOffsets`. None of them changes the
-commit retry loop, so a taxonomy change conflicts textually at worst. What still binds is the ORDER:
+branch both reconciled onto it. astubbs#257 has since merged too, and does not go near
+`commitOffsets`. None of them changes the commit retry loop, so a taxonomy change conflicts textually
+at worst. What still binds is the ORDER:
 astubbs#262's `bug-eos-swallowed-produce-failures.md` records two further produce-path mishandlings
 that belong in the same design, so a taxonomy change written without them designs half the problem.
 <!-- post-merge: checked-end -->

@@ -42,7 +42,22 @@ rc=0
   "$@" 2>&1 | tee "$LOG" || rc=${PIPESTATUS[0]}
 
 mkdir -p "$(dirname "$SUMMARY")"
-grep -o 'PC-THROUGHPUT .*' "$LOG" > "$SUMMARY" || true
+# WHAT MACHINE PRODUCED THESE NUMBERS. One comment line, ahead of the data, because a rate without
+# the box it came from cannot be compared with anything later - hosted runners are not identical, and
+# the same code has been observed at a 1.54x spread across them.
+#
+# It is METADATA, not an input to any verdict. bin/check-throughput-regression.mjs cancels machine
+# speed by comparing against the other classes in the SAME run, which is strictly better than bucketing
+# by hardware: it needs no model list, and it keeps working on a runner nobody has seen before. This
+# line exists so somebody can later CHECK that normalisation is doing its job - if the normalised ratio
+# turns out to correlate with the CPU model, the normalisation is failing and this is how you find out.
+{
+  printf '# machine cpu=%s cores=%s memkb=%s\n' \
+    "$(sed -n 's/^model name[[:space:]]*: //p' /proc/cpuinfo 2>/dev/null | head -1 | tr ' ' '_')" \
+    "$(nproc 2>/dev/null || echo unknown)" \
+    "$(sed -n 's/^MemTotal:[[:space:]]*\([0-9]*\).*/\1/p' /proc/meminfo 2>/dev/null || echo unknown)"
+} > "$SUMMARY" || true
+grep -o 'PC-THROUGHPUT .*' "$LOG" >> "$SUMMARY" || true
 
 # WHICH tests are represented, not just how many lines came back.
 #
