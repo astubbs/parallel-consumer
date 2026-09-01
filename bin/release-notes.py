@@ -25,14 +25,21 @@ Relative `link:docs/FOO[...]` targets are rewritten to absolute URLs at the rele
 because a relative link in a release body resolves against github.com and 404s.
 
 Usage:
-  bin/release-notes.py <version> [--changelog PATH] [--repo-url URL] [--ref REF]
+  bin/release-notes.py <version> [--changelog PATH] [--repo-url URL] [--ref REF] [--strict]
 
 Exit codes:
   0  notes written to stdout
-  1  usage / IO error
-  2  no section for that version, or the section is empty  (the bug this script fixes:
-     never let this be silent, and never substitute auto-generated notes for it)
+  1  usage / IO error  (argparse's own exit code is overridden to 1, so 2 keeps one meaning)
+  2  no section for that version, or the section produces no notes  (the bug this script
+     fixes: never let this be silent, and never substitute auto-generated notes for it)
   3  the section uses AsciiDoc this script does not convert
+  4  --strict, and the heading is not frozen yet (still carries a suffix such as
+     `(unreleased)`); without --strict that is a warning
+
+Nothing here may exit 0 with an empty body. "The section exists" is not the same test as
+"the section renders to something": a section holding only `//` comments passes the first
+and fails the second, and an empty release body is the precise failure this script exists
+to prevent - so the emptiness check runs on the CONVERTED output, not on the raw lines.
 
 Tested by bin/test-release-notes.sh (CI runs it before the release job uses this script).
 """
@@ -47,6 +54,7 @@ DEFAULT_REPO_URL = "https://github.com/astubbs/parallel-consumer"
 EXIT_USAGE = 1
 EXIT_NO_SECTION = 2
 EXIT_UNSUPPORTED = 3
+EXIT_NOT_FROZEN = 4
 
 # A level-2 heading: the version sections. Historic sections are `== v0.5.2.2`, newer ones
 # `== 0.6.0.0`, and an unreleased one may carry a suffix such as `== 0.6.0.0 (unreleased)`.
@@ -67,7 +75,15 @@ UNSUPPORTED = [
     (re.compile(r"xref:|<<[^<>]+>>"), "internal cross-reference"),
     (re.compile(r"footnote:"), "footnote"),
     (re.compile(r"^\s*toc::"), "toc macro"),
+    (re.compile(r"^\s*'''\s*$"), "thematic break"),
+    (re.compile(r"^\s*<<<\s*$"), "page break"),
 ]
+
+# Not an AsciiDoc construct - a typo. An odd number of backticks leaves one monospace span
+# open, so convert_inline masks the rest of the line as code and every emphasis marker after
+# the stray backtick silently stops being converted. Same contract as the table above: a line
+# that would ship mangled markup is an error, not a pass.
+UNBALANCED_MONOSPACE = "odd number of ` - one monospace span is left open"
 
 ADMONITIONS = ("NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION")
 
@@ -105,6 +121,7 @@ def find_section(lines, version):
     """Return (heading_suffix, body_lines) for `version`, or raise NoSection.
 
     The section runs from its own `== <version>` heading to the next level-2 heading.
+    Emptiness is NOT judged here - see `render`.
     """
     wanted = normalise_version(version)
     body, suffix, grabbing = [], "", False
@@ -120,16 +137,28 @@ def find_section(lines, version):
             body.append(line)
     if not grabbing:
         raise NoSection("no `== %s` section in the changelog" % version)
-    if not any(line.strip() for line in body):
-        raise NoSection("the `== %s` section is empty" % version)
     return suffix, body
 
 
+def first_problem(line):
+    """The one reason this line cannot be converted, or None."""
+    for pattern, why in UNSUPPORTED:
+        if pattern.search(line):
+            return why
+    if line.count("`") % 2:
+        return UNBALANCED_MONOSPACE
+    return None
+
+
 def check_supported(body):
-    problems = [(i, line.rstrip("\n"), why)
-                for i, line in enumerate(body, start=1)
-                for pattern, why in UNSUPPORTED
-                if pattern.search(line)]
+    # First match wins, deliberately: the patterns are allowed to overlap (`|===` is both a
+    # table fence and a table cell), and an operator reading the failure wants one reason per
+    # offending line, not one per pattern that happened to fire.
+    problems = []
+    for i, line in enumerate(body, start=1):
+        why = first_problem(line)
+        if why:
+            problems.append((i, line.rstrip("\n"), why))
     if problems:
         raise Unsupported(problems)
 
@@ -162,8 +191,10 @@ def convert_prose(text, repo_url, ref):
 
 
 def convert_inline(text, repo_url, ref):
+    """The inline entry point: mask the monospace spans, then `convert_prose` the rest."""
     # Backticks delimit monospace in both languages; never rewrite what is inside one
-    # (`bz.stub.parallelconsumer.*` must not be read as an emphasis marker).
+    # (`bz.stub.parallelconsumer.*` must not be read as an emphasis marker). check_supported
+    # has already rejected a line with an odd number of them, so the spans pair up here.
     parts = text.split("`")
     for i in range(0, len(parts), 2):
         parts[i] = convert_prose(parts[i], repo_url, ref)
@@ -201,9 +232,9 @@ def convert_line(line, repo_url, ref):
 
 
 def to_markdown(body, repo_url, ref):
-    out = [converted for converted in
-           (convert_line(line, repo_url, ref) for line in body)
-           if converted is not None]
+    converted = (convert_line(line, repo_url, ref) for line in body)
+    out = [line for line in converted if line is not None]
+    # Trim leading/trailing blanks only - `.strip()` would eat a nested bullet's indent.
     while out and not out[0].strip():
         out.pop(0)
     while out and not out[-1].strip():
@@ -212,12 +243,14 @@ def to_markdown(body, repo_url, ref):
 
 
 def render(text, version, repo_url, ref):
+    """Return (markdown, heading_suffix). Never returns an empty body - see the module docstring."""
     suffix, body = find_section(text.splitlines(), version)
-    if suffix:
-        print("warning: the `== %s` heading still carries %r - the released section should "
-              "name the version alone." % (version, suffix), file=sys.stderr)
     check_supported(body)
-    return to_markdown(body, repo_url, ref)
+    markdown = to_markdown(body, repo_url, ref)
+    if not markdown.strip():
+        raise NoSection("the `== %s` section produces no notes - it is empty, or holds only "
+                        "`//` comments and `+` continuations" % version)
+    return markdown, suffix
 
 
 def default_changelog():
@@ -225,8 +258,21 @@ def default_changelog():
                         "CHANGELOG.adoc")
 
 
+class ArgumentParser(argparse.ArgumentParser):
+    """argparse exits 2 on a bad argument, which is this script's "no section" code.
+
+    Two failures sharing an exit code is one failure the release operator will misdiagnose,
+    so a usage error is reported as EXIT_USAGE like every other operator mistake here.
+    """
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        print("error: %s" % message, file=sys.stderr)
+        sys.exit(EXIT_USAGE)
+
+
 def main(argv):
-    parser = argparse.ArgumentParser(
+    parser = ArgumentParser(
         description="Render a CHANGELOG.adoc section as Markdown release notes.")
     parser.add_argument("version", help="release version, e.g. 0.6.0.0")
     parser.add_argument("--changelog", default=None, help="path to CHANGELOG.adoc")
@@ -234,6 +280,9 @@ def main(argv):
                         help="repository URL used to absolutise relative links")
     parser.add_argument("--ref", default=None,
                         help="git ref relative links resolve against (default: v<version>)")
+    parser.add_argument("--strict", action="store_true",
+                        help="fail if the heading is not frozen (still carries a suffix such "
+                             "as `(unreleased)`); a real release passes this, a rehearsal does not")
     args = parser.parse_args(argv)
 
     path = args.changelog or default_changelog()
@@ -246,10 +295,10 @@ def main(argv):
         return EXIT_USAGE
 
     try:
-        sys.stdout.write(render(text, args.version, args.repo_url, ref))
+        notes, suffix = render(text, args.version, args.repo_url, ref)
     except NoSection as err:
         print("error: %s (%s). A release must not ship with an empty or auto-generated "
-              "body - add the section, then re-run the release." % (err, path),
+              "body - add or fill in the section, then re-run the release." % (err, path),
               file=sys.stderr)
         return EXIT_NO_SECTION
     except Unsupported as err:
@@ -259,6 +308,21 @@ def main(argv):
         for lineno, line, why in err.problems:
             print("  line %d of the section (%s): %s" % (lineno, why, line), file=sys.stderr)
         return EXIT_UNSUPPORTED
+
+    if suffix:
+        # The suffix never reaches the body - the heading is not rendered - so this is about the
+        # changelog that gets tagged, not the release page. A rehearsal must not be blocked by it;
+        # a real release must not tag a section still labelled unreleased, and a warning in a
+        # 30-minute job log is not a check.
+        problem = ("the `== %s` heading still carries %r - the released section must name the "
+                   "version alone" % (args.version, suffix))
+        if args.strict:
+            print("error: %s. Drop the suffix in %s, commit it to master, then re-run the "
+                  "release." % (problem, os.path.basename(path)), file=sys.stderr)
+            return EXIT_NOT_FROZEN
+        print("warning: %s." % problem, file=sys.stderr)
+
+    sys.stdout.write(notes)
     return 0
 
 

@@ -15,12 +15,16 @@
 #            string `== 0.6.0.0` and matched nothing
 #        4.  a version prefix does NOT match a longer version (0.6.0.1 vs 0.6.0.10)
 #        5.  a missing section is exit 2, not empty output
-#        6.  a present-but-empty section is exit 2
+#        6.  a present-but-empty section is exit 2 - INCLUDING one that is non-empty but
+#            renders to nothing (only `//` comments, only a `+`), which is the same empty
+#            release body astubbs#197 was about, reached by a different route
 #        7.  AsciiDoc outside the convertible subset is exit 3, not mangled markup
 #        8.  headings, bullets, ordered lists, admonitions, continuations and comments
 #        9.  bold: AsciiDoc `*one*` and `**two**` both become Markdown `**two**`
 #       10.  `*` inside a `monospace` span is not read as an emphasis marker
 #       11.  link macros: absolute URLs, and relative targets absolutised at the ref
+#       12.  a usage error is exit 1, not argparse's default 2 - which would be
+#            indistinguishable from "no section for that version"
 #
 #   B. The REAL CHANGELOG.adoc: every version section in the file must render with exit 0.
 #      Case 7 is worth its keep only if something keeps checking the actual file against
@@ -101,6 +105,12 @@ assert "a heading suffix still matches (astubbs#197 regression)" \
     "Body." "$(render "$SUFFIXED" 0.6.0.0)"
 assert "...and warns about the suffix" \
     "1" "$(python3 "$RENDERER" 0.6.0.0 --changelog "$SUFFIXED" 2>&1 >/dev/null | grep -c "unreleased")"
+# A rehearsal tolerates the suffix; a real release must not tag a section still labelled
+# unreleased, so --strict promotes the warning to a refusal with its own exit code.
+assert "--strict makes an unfrozen heading fatal" \
+    4 "$(render_status "$SUFFIXED" 0.6.0.0 --strict)"
+assert "...and prints no notes when it does" \
+    "" "$(render "$SUFFIXED" 0.6.0.0 --strict)"
 
 PREFIXES=$(changelog '== 0.6.0.10
 
@@ -125,8 +135,35 @@ Body.')
 assert "an empty section fails loudly" \
     2 "$(render_status "$EMPTY_SECTION" 0.6.0.0)"
 
+# "The section has lines in it" and "the section renders to something" are DIFFERENT tests, and
+# only the second one is the promise. A section holding nothing but dropped constructs passes the
+# first and produces a one-byte body - the empty release page of astubbs#197, reached from the
+# other side. Emptiness is therefore judged on the converted output.
+RENDERS_TO_NOTHING=$(changelog '== 0.6.0.0
+
+// a comment, which is dropped
+
++
+
+== 0.5.3.3
+
+Body.')
+assert "a section that renders to nothing fails loudly" \
+    2 "$(render_status "$RENDERS_TO_NOTHING" 0.6.0.0)"
+# Counted in BYTES, not compared to "": `$(...)` strips the trailing newline, so the bug this
+# case is about - a one-byte "\n" body, published as a blank release page - compares equal to
+# empty and the assertion passes over it.
+assert "...and prints nothing to stdout rather than an empty body" \
+    0 "$(render "$RENDERS_TO_NOTHING" 0.6.0.0 | wc -c | tr -d ' ')"
+
+# argparse's own exit code is 2, which is this script's "no section for that version". Sharing it
+# would send a release operator looking for a missing changelog section over a mistyped flag.
+assert "a usage error is exit 1, not the no-section code" \
+    1 "$(render_status "$THREE_SECTIONS" --not-a-flag)"
+
 for construct in '[source,java]' '----' '|===' '[[anchor]]' 'include::other.adoc[]' \
-                 'ifdef::x[]' ':attribute: value' 'see <<other-section>>'; do
+                 'ifdef::x[]' ':attribute: value' 'see <<other-section>>' \
+                 "'''" '<<<' 'an unclosed `monospace span'; do
     UNSUPPORTED=$(changelog "== 0.6.0.0
 
 $construct")
