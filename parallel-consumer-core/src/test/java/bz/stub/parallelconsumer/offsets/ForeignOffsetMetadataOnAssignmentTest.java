@@ -63,9 +63,14 @@ class ForeignOffsetMetadataOnAssignmentTest {
     /**
      * Base64 of a payload whose leading magic byte matches no {@link OffsetEncoding} - neither one of PC's own codecs
      * nor either of the Kafka Streams magic numbers PC recognises.
+     * <p>
+     * The byte is derived from the enum, not hard coded: a hard-coded one is silently claimed the day an encoding is
+     * added for it, at which point this stops testing the unknown-magic path and starts testing that encoding, while
+     * staying green.
      */
     private static String foreignMetadata() {
-        return Base64.getEncoder().encodeToString(new byte[]{(byte) 42, 0, 0, 0});
+        return Base64.getEncoder().encodeToString(
+                new byte[]{OffsetCodecTestUtils.magicByteOfAnEncodingThatDoesNotExistYet(), 0, 0, 0});
     }
 
     /**

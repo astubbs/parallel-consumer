@@ -9,8 +9,10 @@ import bz.stub.parallelconsumer.state.PartitionState;
 import lombok.experimental.UtilityClass;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.Arrays;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.stream.Collectors;
 
 import static bz.stub.parallelconsumer.internal.utils.Range.range;
 
@@ -64,6 +66,26 @@ public class OffsetCodecTestUtils {
         });
 
         return incompleteOffsets;
+    }
+
+    /**
+     * A magic byte that no {@link OffsetEncoding} in this build claims - i.e. what the metadata of a commit written by
+     * a FUTURE version of Parallel Consumer looks like to this one.
+     * <p>
+     * Derived from the enum rather than hard coded, so that adding an encoding cannot silently turn a
+     * forward-compatibility test into a test of that new encoding - a green that stopped asserting what it says it
+     * does.
+     */
+    static byte magicByteOfAnEncodingThatDoesNotExistYet() {
+        Set<Byte> claimed = Arrays.stream(OffsetEncoding.values())
+                .map(OffsetEncoding::getMagicByte)
+                .collect(Collectors.toSet());
+        for (int candidate = Byte.MIN_VALUE; candidate <= Byte.MAX_VALUE; candidate++) {
+            if (!claimed.contains((byte) candidate)) {
+                return (byte) candidate;
+            }
+        }
+        throw new IllegalStateException("Every possible magic byte is claimed by an encoding - the wire format is full");
     }
 
 }
