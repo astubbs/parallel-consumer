@@ -63,13 +63,16 @@ conservation test live here.
 
 **5. The fleet, without a cluster.** Coordination rides Kafka; frontier agreements make drains,
 deployments and topology evolution boring; partitions, records and topics virtualize; scheduled
-intent generalises what an obligation is; and the boundary with specialist substrates stays
-explicit.
+intent generalises what an obligation is; the boundary with specialist substrates stays
+explicit; and participants who never run Kafka enter the resource graph through the telemetry they
+already emit and a credit-vending surface, which is where the "beyond Kafka" product decision was
+taken.
 [`core-fleet-capacity-coordination.md`](../inflight/core-fleet-capacity-coordination.md) ·
 [`core-frontier-handover.md`](../inflight/core-frontier-handover.md) ·
 [`core-partition-virtualization.md`](../inflight/core-partition-virtualization.md) ·
 [`core-scheduled-intent.md`](../inflight/core-scheduled-intent.md) ·
-[`core-nile-boundary.md`](../inflight/core-nile-boundary.md)
+[`core-nile-boundary.md`](../inflight/core-nile-boundary.md) ·
+[`core-non-kafka-participants.md`](../inflight/core-non-kafka-participants.md)
 
 **6. Many faces, one engine.** Facades, ecosystem adapters, runtime services and compatibility
 APIs are the adoption surface; internal machinery becomes product through the polyglot

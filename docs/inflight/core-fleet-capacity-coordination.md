@@ -21,8 +21,14 @@ marks the boundaries - because fiction is where scope creep hides best.
    company's standard HTTP and database libraries. So they were there." The largest category
    change in either weekend: the runtime as a general capacity-governance participant, not a Kafka
    consumer. The story's own demo scene dramatises the risk ("so it's a service mesh? an APM?
-   FinOps?") - crossing this line puts the project in four adjacent markets at once. A product
-   decision, explicitly not taken by recording it here.
+   FinOps?") - crossing this line puts the project in four adjacent markets at once. **That product
+   decision has since been TAKEN** (owner, session of 2026-09-01): the line is crossed deliberately,
+   the service-mesh framing is not treated as a risk, and the reasoning is that coverage of the
+   non-Kafka half is a precondition for the global-optimisation claim rather than an expansion of it
+   - an envelope learned from a partial view is simply wrong. The mechanisms this claim never named
+   - credit vending to external callers, ingesting existing monitoring, transparent interception,
+   protocol compatibility - are owned by
+   [`core-non-kafka-participants.md`](core-non-kafka-participants.md).
 3. **QoS policy classes.** `emergency/911` as *a promise, not a cluster*: guaranteed capacity
    through a dependency graph when the class has work, borrowable by everyone when it does not.
    [`core-slo-objective-api.md`](core-slo-objective-api.md)'s importance-aware allocation promoted
