@@ -207,7 +207,12 @@ def convert_line(line, repo_url, ref):
     if RE_COMMENT.match(line):
         return None
     if line.strip() == "+":
-        return ""  # list continuation: a blank line keeps the block with its item
+        # List continuation. A blank line does NOT attach the following block to the item the
+        # way AsciiDoc's `+` does - CommonMark ends the list at an unindented paragraph - so the
+        # continued block renders as a paragraph trailing the list. Deliberately not "fixed" by
+        # indenting to the item's depth: that needs the converter to carry list state, and the
+        # only two `+` uses in CHANGELOG.adoc read correctly either way (checked).
+        return ""
 
     m = RE_HEADING.match(line)
     if m:
