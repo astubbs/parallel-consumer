@@ -39,16 +39,22 @@ public enum PcUnsupportedConstruct {
 
     KSTREAM_KSTREAM_JOIN(
             "KStream-KStream join",
-            "join emission is gated on stream time, which never advances on the PC path, and "
-                    + "KStreamKStreamJoin.sharedTimeTracker is mutated from both join sides without synchronisation"),
+            "join emission is gated on stream time, which on the PC path is a low-water mark over concurrently "
+                    + "dispatched work rather than stock's selection-order value - so which records fall inside a "
+                    + "join window moves with dispatch order - and KStreamKStreamJoin.sharedTimeTracker is mutated "
+                    + "from both join sides without synchronisation"),
 
     KSTREAM_KTABLE_JOIN(
             "KStream-KTable join",
-            "the table side is read at the record's stream time, which never advances on the PC path"),
+            "the table side is read at the record's stream time, which on the PC path is a low-water mark over "
+                    + "concurrently dispatched work - so which version of the table a record sees moves with "
+                    + "dispatch order"),
 
     KSTREAM_GLOBALKTABLE_JOIN(
             "KStream-GlobalKTable join",
-            "the global table is read at the record's stream time, which never advances on the PC path"),
+            "the global table is read at the record's stream time, which on the PC path is a low-water mark over "
+                    + "concurrently dispatched work - so which version of the table a record sees moves with "
+                    + "dispatch order"),
 
     KTABLE_KTABLE_JOIN(
             "KTable-KTable join",
@@ -61,19 +67,20 @@ public enum PcUnsupportedConstruct {
 
     WINDOWED_AGGREGATION(
             "windowed aggregation (windowedBy)",
-            "windowCloseTime is derived from observedStreamTime, which never advances on the PC path, so which "
-                    + "records count as late changes with dispatch order - and observedStreamTime is a non-volatile "
-                    + "long updated read-modify-write from every worker"),
+            "windowCloseTime is derived from observedStreamTime, a non-volatile long updated read-modify-write "
+                    + "from every worker - so under concurrent dispatch which records count as late is decided "
+                    + "from a value that is being corrupted"),
 
     WINDOWED_COGROUPED_AGGREGATION(
             "windowed cogrouped aggregation (windowedBy)",
-            "same as windowed aggregation - window close is stream-time driven and stream time does not advance "
-                    + "on the PC path"),
+            "same as windowed aggregation - window close is stream-time driven, and on the PC path the value it "
+                    + "is driven by is corrupted by concurrent read-modify-write"),
 
     SUPPRESSION(
             "suppression (suppress)",
-            "\"only the final result per window\" is a statement about stream time, which never advances on the "
-                    + "PC path, so suppressed updates would never be emitted"),
+            "\"only the final result per window\" is a statement about stream time, which on the PC path is a "
+                    + "low-water mark over concurrently dispatched work - so which update is final moves with "
+                    + "dispatch order"),
 
     WINDOW_STORE(
             "a WindowStore",
@@ -88,7 +95,8 @@ public enum PcUnsupportedConstruct {
 
     SUPPRESSION_BUFFER(
             "a suppression buffer",
-            "the buffer emits on stream time, which never advances on the PC path"),
+            "the buffer emits on stream time, which on the PC path is a low-water mark over concurrently "
+                    + "dispatched work - so when it emits moves with dispatch order"),
 
     VERSIONED_KEY_VALUE_STORE(
             "a versioned key-value store",

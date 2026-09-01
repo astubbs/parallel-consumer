@@ -51,19 +51,34 @@ package bz.stub.parallelconsumer.streams;
  * <b>nothing regresses</b>. Each half was sabotaged separately with the prediction stated first, and each
  * time exactly those two cases went red and nothing else moved - so neither half is carrying the other.
  * <p>
- * <b>Why the default nevertheless stays where it is.</b> Its third parameter combination stays red under
- * Kafka's private processing-threads config, where {@code DefaultTaskExecutor} calls {@code task.process}
- * from its own thread - out of scope since the seam landed, and named as such in {@link PcTaskDispatcher}'s
- * threading contract. <b>Stream-time punctuation is a separate outstanding item</b>, recorded in
- * {@code docs/inflight/}, and belongs to a different piece of work. Most of all, the flip is a decision
- * about the <em>reconciled</em> module: sibling rungs of astubbs#255 are in flight against this same base
- * and every one of them moves the seam-on numbers, so a flip argued from any one of them is arguing from a
- * state that will not exist when it merges. That reservation, and what to do at consolidation, are in
- * {@code docs/inflight/streams-dispatch-default-flip-is-reserved-until-the-rungs-reconcile.md}.
+ * <b>The fourth named item is stream-time punctuation, and closing it did not add a reason either.</b> It
+ * was never one of the three triggers above - it was recorded in {@code docs/inflight/} as a separate
+ * outstanding item, explicitly already priced in when the refusal reason closed - and it is now closed on
+ * its own terms (astubbs#255, U13). Punctuation fires on this path: stream time is a low-water mark over
+ * work in flight, and both punctuation types warn at registration about how they diverge, including the
+ * concurrency hazard that can corrupt a state store rather than merely retime output. Two divergences are
+ * pinned as <em>known</em> rather than fixed - the mark can overtake stock where PC's KEY-shard order
+ * differs from stock's timestamp order, and after a restart against a group this module committed the mark
+ * is not restored at all, so punctuators re-fire over covered event time. The item therefore moves from
+ * "unimplemented and silent" to "implemented, loud, and with two measured gaps", and that pricing stands.
  * <p>
- * Whoever flips this next should re-run the seam-on measurement rather than trusting these paragraphs, and
- * should expect the pattern to repeat: three times now, the measurement has named the next reason - so
- * "no reason left" is something to show, not to assume.
+ * <b>So the chain, end to end, is: refusal (astubbs/parallel-consumer#389), revival
+ * (astubbs/parallel-consumer#394), exception surfacing (astubbs/parallel-consumer#395), each closed with a
+ * seam-on measurement and a control arm, plus punctuation (astubbs/parallel-consumer#396) closed beside
+ * them.</b> Each rung left the default where it found it, and each was right to: a default moved on one
+ * rung's evidence while a sibling holds an unclosed reason is a default nobody measured.
+ * <p>
+ * <b>What remains, and why it is not a fourth trigger.</b>
+ * {@code shouldReinitializeRevivedTasksInAnyState}'s third parameter combination stays red under Kafka's
+ * private processing-threads config, where {@code DefaultTaskExecutor} calls {@code task.process} from its
+ * own thread - out of scope since the seam landed, and named as such in {@link PcTaskDispatcher}'s
+ * threading contract.
+ * <p>
+ * Whoever flips this should re-run the seam-on measurement on the <em>reconciled</em> module rather than
+ * trusting these paragraphs, and should expect the pattern to repeat: three times now, the measurement has
+ * named the next reason - so "no reason left" is something to show, not to assume. The reservation and the
+ * procedure are in
+ * {@code docs/inflight/streams-dispatch-default-flip-is-reserved-until-the-rungs-reconcile.md}.
  * <p>
  * <b>This reverses an inherited decision, and the argument it reverses was a different one.</b> The seam
  * defaulted <em>on</em> in the feasibility study (astubbs#271) on the grounds that depending on a separate,
@@ -75,7 +90,7 @@ package bz.stub.parallelconsumer.streams;
  * requirement at each site. What the artifact-is-the-opt-in argument does not cover is a user who opts in
  * to <em>per-key concurrency</em> and gets <em>silently altered semantics</em> on a topology shape nobody
  * refused. That objection is now answered by the refusal envelope above, the revival one by the lifecycle
- * unit, and the exception-type route by this rung. Do not restore on-by-default merely because these
+ * unit, and the exception-type route by the error-surfacing unit. Do not restore on-by-default merely because these
  * paragraphs look like timidity - and do not restore it merely because they no longer name a defect either.
  * Restore it against a fresh seam-on measurement taken on the reconciled module, and say so with the
  * numbers.

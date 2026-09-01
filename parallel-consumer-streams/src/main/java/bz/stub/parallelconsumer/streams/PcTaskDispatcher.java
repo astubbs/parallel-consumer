@@ -24,15 +24,19 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -75,7 +79,9 @@ import java.util.concurrent.locks.LockSupport;
  *       StreamThread reaches them through {@code prepareCommit}, {@code validateClean} and
  *       {@code commitNeeded()}; the state-updater thread reaches them through {@code maybeCheckpoint} on a
  *       RESTORING task. They are therefore written as genuine queries - counters and atomics only, touching
- *       neither {@code WorkManager} nor the mailbox.</li>
+ *       neither {@code WorkManager} nor the mailbox. {@link #getStreamTimeLowWaterMark()} joined them with
+ *       astubbs#255's U13, for the same reason from a third caller: {@code TaskExecutor.punctuate()} may run
+ *       on a task-executor thread.</li>
  *   <li>{@link #collectCommitData()}, {@link #onCommitSuccess} and {@link #updatePartitions} - <b>owner
  *       thread only</b>, still enforced by {@link #assertOwnerThread}. All reach {@code WorkManager}, and
  *       Streams only reaches them through {@code StreamTask.prepareCommit},
@@ -161,11 +167,57 @@ public class PcTaskDispatcher implements Closeable {
      */
     public interface WorkPreparer {
         /**
-         * @return the chain execution to run on a worker, or null if the record was dropped during
-         *         preparation (a bad timestamp, say) and there is nothing to run - it still counts as
-         *         consumed.
+         * @return the prepared record, or null if it was dropped during preparation (a bad timestamp, say)
+         *         and there is nothing to run - it still counts as consumed. That clause is the contract,
+         *         not a detail: {@link #dispatchAvailable}'s return value is flow control, and a dropped
+         *         record that stopped counting would make {@code process()} report no progress and park the
+         *         only dispatching thread for a poll budget.
          */
-        Runnable prepare(ConsumerRecord<byte[], byte[]> record);
+        PreparedRecord prepare(ConsumerRecord<byte[], byte[]> record);
+    }
+
+    /**
+     * One record, ready to run, and the Kafka Streams <b>stream timestamp</b> that came out of the
+     * {@code TimestampExtractor} while preparing it (astubbs#255, U13).
+     * <p>
+     * The timestamp travels with the work rather than being read off the {@link ConsumerRecord}, because
+     * those are two different numbers: {@code ConsumerRecord.timestamp()} is the broker's, and Kafka Streams
+     * runs every record through the configured {@code TimestampExtractor}, which a payload-time topology
+     * points at a field inside the value. Taking the broker's would be silently wrong on exactly the
+     * topologies that care most about stream time.
+     */
+    public static final class PreparedRecord {
+
+        private final Runnable chainExecution;
+
+        private final long streamTimestamp;
+
+        /**
+         * @param chainExecution what to run on a worker; a preparer with nothing to run returns
+         *                       {@code null} from {@link WorkPreparer#prepare} instead of wrapping a null
+         *                       here
+         * @throws NullPointerException if {@code chainExecution} is null - and it is worth failing here
+         *                              rather than at {@code run()}. This is the module's public extension
+         *                              seam: a null slipping through is an NPE on a worker, which
+         *                              {@link #runOnWorker} classifies as a <em>processing</em> failure, and
+         *                              with retries disabled that blocks the record's KEY shard for the life
+         *                              of the task while reporting a topology error to the user. Recorded as
+         *                              an open hole by astubbs#255's U13 review before it was closed here.
+         */
+        public PreparedRecord(final Runnable chainExecution, final long streamTimestamp) {
+            this.chainExecution = Objects.requireNonNull(chainExecution,
+                    "a PreparedRecord must carry work to run; return null from WorkPreparer.prepare to "
+                            + "signal a record dropped during preparation");
+            this.streamTimestamp = streamTimestamp;
+        }
+
+        Runnable chainExecution() {
+            return chainExecution;
+        }
+
+        long streamTimestamp() {
+            return streamTimestamp;
+        }
     }
 
     /**
@@ -329,6 +381,138 @@ public class PcTaskDispatcher implements Closeable {
      * thread asks; only the owner thread ever writes it.
      */
     private volatile long successesCommitted;
+
+    /**
+     * The stream timestamp of every record handed to the pool and not yet drained (astubbs#255, U13). The
+     * state Kafka Streams' {@code streamTime} is derived from on the PC path.
+     *
+     * <p><b>Owner thread only</b>, exactly like {@link #successesDrained}, and the call sites are worth
+     * naming because they are not all on one surface. Entries go in from {@link #dispatchAvailable}; they
+     * come out from {@link #drainCompletions}, which is reached from <em>four</em> places - that same
+     * {@code dispatchAvailable}, {@link #collectCommitData()}, {@link #close()}, and
+     * {@link #pumpUntilQuiescent}. The first and last sit on the unguarded StreamThread surface, the middle
+     * two on the guarded owner-thread commit surface. By default those are the same thread, which is what
+     * makes a plain {@link IdentityHashMap} sufficient; workers never touch it at all.
+     *
+     * <p><b>The exception the class javadoc names applies here, and this field raises its stakes.</b> With
+     * Streams' private {@code __processing.threads.enabled__} config on, {@code DefaultTaskExecutor} drives
+     * {@code task.process} - and therefore {@code dispatchAvailable} - off the owner thread. Where that
+     * already made a plain {@code long} go stale, it now makes a resizable hash table race. Accepted rather
+     * than overlooked: the config is private, off by default, and unreachable from this module's supported
+     * surface. It is recorded here so the next reader inherits the cost rather than rediscovering it.
+     *
+     * <p>Identity-keyed because {@link WorkContainer} is compared by topic-partition and offset, and two
+     * containers for the same offset across an assignment epoch would collide on a value map.
+     *
+     * <p><b>It is not bounded at {@link #poolSize}, so do not "optimise" it into a fixed-size array.</b> A
+     * worker decrements {@link #inFlight} after queueing its outcome but before the StreamThread's drain
+     * removes the entry, so a pump can be authorised to dispatch against a slot whose predecessor's hold is
+     * still registered - roughly {@code 2 * poolSize} entries at worst, between drains. Harmless for the
+     * mark, because a lingering entry is a real timestamp held slightly longer, which errs low.
+     *
+     * <p><b>The hold is registered before the record is released and cleared after its effects are
+     * visible</b>, so there is no instant at which a dispatched record is neither in flight here nor folded
+     * back into PC. The entry goes in before {@code workerPool.execute}, and comes out in the drain - which
+     * runs after the worker's chain returned, because a worker enqueues its outcome only once the chain is
+     * done. Reverse either and the mark occasionally runs ahead of live work: silent, intermittent, and
+     * visible only as spuriously late records under load.
+     *
+     * <p><b>Those two boundaries now serve a second reader, so do not move them for stream time's
+     * convenience.</b> Because the entry goes in before the pool submission and comes out at the drain, on
+     * the owner thread only, {@code size()} is the <em>exact</em> in-flight count - the quantity
+     * {@link #dispatchAvailable}'s capacity read wants and {@link #inFlight} cannot give it, since a worker
+     * decrements that counter concurrently (see the residual note in {@link #runOnWorker}). Nothing consumes
+     * it that way yet. A later simplification that folded these two calls into the surrounding code would
+     * take the exact count with it without noticing.
+     */
+    private final Map<WorkContainer<byte[], byte[]>, Long> inFlightStreamTimestamps = new IdentityHashMap<>();
+
+    /**
+     * The highest stream timestamp ever handed to the pool. Dispatching thread only.
+     * <p>
+     * Read only when {@link #inFlightStreamTimestamps} is empty, and at that instant it is exactly what stock
+     * Kafka Streams would hold: stock's stream time is the max over records <em>selected</em>, this is the max
+     * over records <em>dispatched</em>, and with nothing in flight those are the same set.
+     */
+    private long maxDispatchedStreamTimestamp = ConsumerRecord.NO_TIMESTAMP;
+
+    /**
+     * Kafka Streams' stream time for this task, on the PC path: the <b>low-water mark over work in
+     * flight</b>, or the highest timestamp dispatched when nothing is in flight, clamped monotone
+     * (astubbs#255, U13).
+     *
+     * <p><b>What it guarantees, and the guarantee is weaker than it first looks.</b> At the moment
+     * {@link #publishStreamTime()} computes it, no record <em>then</em> in flight is below it. It is
+     * <b>not</b> an order boundary: the monotone clamp means a record dispatched <em>later</em> can carry a
+     * lower timestamp and be in flight below the mark, and {@link #dispatchesBehindStreamTime} counts exactly
+     * those. So this is a conservative summary of progress, not Flink's guarantee that no earlier element
+     * follows a watermark. Do not restate it as one - a reader who believes it is an order boundary will
+     * conclude a windowed operator is safe behind it, which is precisely the condition under which a
+     * versioned store silently drops puts.
+     *
+     * <p>It also says nothing about records PC is holding but has not handed out, and nothing about records
+     * not yet fetched - the same silence stock keeps, since stock can sit at the timestamp of the record it
+     * just selected while older records wait in another partition's queue.
+     *
+     * <p><b>It CAN sit above what stock would hold, and an earlier version of this javadoc claimed
+     * otherwise.</b> Within a batch it is a low-water mark, so it lags. But between batches the pool empties
+     * and it rises to {@link #maxDispatchedStreamTimestamp} - and PC dispatches per KEY shard, not in stock's
+     * timestamp order, so wherever those orders differ the mark overtakes stock. It needs no concurrency and
+     * no second partition: three records on one partition with three distinct keys give a mark of
+     * {@code [0, 2, 2]} where stock reports {@code [0, 1, 2]}, which is measured by
+     * {@code theMarkOvertakesStockWhereDispatchOrderDiffers}. {@link #dispatchesBehindStreamTime} counts
+     * exactly the records this strands - a counter that could not have a non-zero value if the old claim
+     * were true.
+     *
+     * <p>What survives is narrower and still worth having: <b>the mark never passes a record that is
+     * currently in flight</b>, so a punctuation cannot close a window over work still inside the chain. It
+     * says nothing about records PC has accepted and not yet handed out. A user computing lateness as
+     * {@code currentStreamTimeMs() - record.timestamp()} can therefore see a negative-grace result here that
+     * stock would never produce.
+     *
+     * <p>Volatile because {@code TaskExecutor.punctuate()} may run on a task-executor thread rather than the
+     * StreamThread, so this belongs on the query surface with {@link #getInFlightCount()}. Written only by
+     * the dispatching thread, in {@link #publishStreamTime()}.
+     *
+     * <p><b>Released at the drain, and that is the opposite of {@link #successesPublished} deliberately.</b>
+     * That counter is incremented at publication into the mailbox, because for "is a commit outstanding" the
+     * unsafe answer is a false <em>no</em> and a worker finishing must make the answer true immediately. Here
+     * the unsafe value is a mark that is too <em>high</em>, so holding a finished record's timestamp for the
+     * extra moment until the drain errs low, which is the safe direction. Two fields in one class released at
+     * different points, for opposite-facing safety arguments; do not align them.
+     */
+    private volatile long streamTimeLowWaterMark = ConsumerRecord.NO_TIMESTAMP;
+
+    /**
+     * How many records were dispatched carrying a stream timestamp already below {@link #streamTimeLowWaterMark}
+     * (astubbs#255, U13) - records the seam handed out after stream time had passed them, which a windowed
+     * operator would treat as late.
+     *
+     * <p>This is a measurement, not a defect count. PC dispatches per KEY shard in offset order while stock
+     * selects across a task's partitions in timestamp order, so the seam genuinely produces more lateness
+     * than stock, and this is the number that says how much. It is what a future decision to reinstate any
+     * windowed operator turns on.
+     */
+    private volatile long dispatchesBehindStreamTime;
+
+    /**
+     * Once either close path has begun, the mark stops moving (astubbs#255, U13).
+     *
+     * <p><b>This closes a hole U13 recorded against itself and left open.</b> {@link #close()} calls
+     * {@code awaitTermination}, then {@code shutdownNow()} when that expires - which interrupts the chains
+     * still running, each of which throws into {@link #recordFailure} - and the very next statement is
+     * {@link #drainCompletions()}. Without this flag that drain releases the killed records' holds and
+     * republishes, advancing the mark over work that never completed: precisely the one direction
+     * {@link #dropStreamTimeHoldsWithoutPublishing()} is named for preventing, arriving by a different
+     * route. It was bounded only by the accident that a closed dispatcher has no reader.
+     *
+     * <p>Checked in {@link #publishStreamTime()} rather than at the two call sites, because the drain is
+     * reached from four places and a per-call-site guard is the shape that gets one of them wrong.
+     *
+     * <p>Volatile because {@link #abortClose()} is reached from a foreign thread by
+     * {@link #abortAllActive()} while the StreamThread may still be inside a pump.
+     */
+    private volatile boolean streamTimeFrozen;
 
     /**
      * How many records the last {@link #dispatchAvailable} consumed - dispatched to the pool, dropped, or
@@ -534,6 +718,7 @@ public class PcTaskDispatcher implements Closeable {
         // Terminates: every iteration either consumes at least one record from a finite backlog or exits.
         int consumed = 0;
         pumpStoppedForCapacity = false;
+        int dispatchedToPool = 0;
         while (true) {
             int capacity = poolSize - inFlight.get();
             if (capacity < 1) {
@@ -549,9 +734,9 @@ public class PcTaskDispatcher implements Closeable {
                 // `consumed` it must always agree with, rather than on each of the three branches below,
                 // because three call sites is how they would silently stop agreeing.
                 handedOutStillIncomplete.merge(work.getTopicPartition(), 1, Integer::sum);
-                Runnable chainExecution;
+                PreparedRecord prepared;
                 try {
-                    chainExecution = preparer.prepare(work.getCr());
+                    prepared = preparer.prepare(work.getCr());
                 } catch (RuntimeException e) {
                     // Preparation failed on the StreamThread - deserialisation, most likely. Treat it exactly
                     // as a processing failure so the record does not vanish from PC's accounting.
@@ -560,19 +745,42 @@ public class PcTaskDispatcher implements Closeable {
                     continue;
                 }
 
-                if (chainExecution == null) {
+                if (prepared == null) {
                     // Dropped during preparation - consumed, nothing to run. Still a success as far as PC is
                     // concerned, and so still commit-outstanding, hence publishSuccess and not a bare add.
+                    // Contributes no stream timestamp: a record dropped for a bad timestamp has none to give,
+                    // and stock does not advance stream time over one either.
                     work.onUserFunctionSuccess();
                     publishSuccess(work);
                     syncCompleted++;
                     continue;
                 }
 
+                // The hold goes on before the record is released to the pool - see inFlightStreamTimestamps.
+                holdStreamTime(work, prepared.streamTimestamp());
                 inFlight.incrementAndGet();
                 recordsDispatched.incrementAndGet();
                 PcDispatchCounters.onDispatchedToPool();
-                workerPool.execute(() -> runOnWorker(work, chainExecution));
+                final Runnable chainExecution = prepared.chainExecution();
+                try {
+                    workerPool.execute(() -> runOnWorker(work, chainExecution));
+                    dispatchedToPool++;
+                } catch (RejectedExecutionException rejected) {
+                    // The pool went down between the `closed` check at the top of this method and here -
+                    // which abortAllActive() does BY DESIGN, from a foreign thread. Every increment above
+                    // has to be compensated, and the stream-time hold is the one that used to be missed:
+                    // an uncompensated hold pins the mark at this record's timestamp forever, turning a
+                    // wrong counter into a stopped punctuation clock. Recorded as an open hole by U13 and
+                    // closed here (astubbs#255).
+                    //
+                    // Ordered like the drain does it - release the hold, then hand the outcome to PC -
+                    // rather than the reverse, so no window exists in which the record is neither held nor
+                    // accounted for.
+                    releaseStreamTimeHold(work);
+                    inFlight.decrementAndGet();
+                    recordFailure(work, rejected);
+                    syncCompleted++;
+                }
             }
             if (syncCompleted == 0) {
                 break;
@@ -581,7 +789,121 @@ public class PcTaskDispatcher implements Closeable {
             drainCompletions();
         }
         lastDispatchCount = consumed;
+        // Only when this pump actually put something in the pool. Both drains above publish at their own
+        // tail, so with nothing dispatched the state has not moved since the last publish and recomputing
+        // would walk the map for an answer it already has - on the pump where the map is at its FULLEST,
+        // since a pool-full pump is exactly the one that dispatches nothing.
+        if (dispatchedToPool > 0) {
+            publishStreamTime();
+        }
         return consumed;
+    }
+
+    /**
+     * Restore stream time from a committed partition time, on task initialisation (astubbs#255, U13).
+     * <p>
+     * This is the PC-path counterpart of {@code PartitionGroup.setPartitionTime}, which raises stock's
+     * {@code streamTime} to a seed decoded out of the commit metadata. Without it, routing
+     * {@code StreamTask.streamTime()} through this dispatcher makes stream time restart at
+     * {@link ConsumerRecord#NO_TIMESTAMP} on a path where nothing else restores it - which Kafka's own
+     * {@code shouldReadCommittedStreamTime*} cases catch.
+     * <p>
+     * A seed can only ever raise the mark. It flows through {@link #maxDispatchedStreamTimestamp} rather
+     * than straight to the published value, so a subsequent empty pool reports the seed rather than falling
+     * back below it - the two arms have to agree or the mark would sag the moment the first record
+     * completed.
+     * <p>
+     * <b>What this does not solve, and it is measured rather than reasoned:</b> a group whose commits this
+     * module wrote carries PC's frontier payload, not Streams' {@code TopicPartitionMetadata}, so there is
+     * nothing to decode and nothing to seed from. {@code StreamTimePunctuatorRefireOnRestartTest} pins that
+     * - stock punctuates at the restored mark after a restart, the PC path punctuates below run 1's base -
+     * and the general case still needs KTD-S7's opaque rider.
+     * <p>
+     * <b>Owner thread only, and unguarded on purpose.</b> Kafka reaches this through
+     * {@code StreamTask.initializeTaskTimeAndProcessorMetadata} from {@code completeRestoration}, which in
+     * 3.9.2 only {@code TaskManager} calls - not {@code DefaultStateUpdater}, not {@code TaskExecutor} - so
+     * the owner thread is the only caller today. No {@code assertOwnerThread}, because restoration is exactly
+     * the territory where turning a thread comment into a check threw on a legitimate call once already (see
+     * the class javadoc's thread model), and that walk has not been redone for every Kafka version this
+     * module may meet. The sentence is the contract; add the guard when someone has earned it.
+     */
+    public void seedStreamTime(final long committedPartitionTime) {
+        maxDispatchedStreamTimestamp = Math.max(maxDispatchedStreamTimestamp, committedPartitionTime);
+        publishStreamTime();
+    }
+
+    /**
+     * Register a dispatched record's stream timestamp, and count it if the mark has already passed it.
+     * Dispatching thread only.
+     */
+    private void holdStreamTime(final WorkContainer<byte[], byte[]> work, final long streamTimestamp) {
+        inFlightStreamTimestamps.put(work, streamTimestamp);
+        maxDispatchedStreamTimestamp = Math.max(maxDispatchedStreamTimestamp, streamTimestamp);
+        if (streamTimeLowWaterMark != ConsumerRecord.NO_TIMESTAMP && streamTimestamp < streamTimeLowWaterMark) {
+            dispatchesBehindStreamTime++;
+        }
+    }
+
+    /**
+     * Drop one record's hold. Owner thread only.
+     *
+     * @return true if a hold was actually registered for this container, so the caller knows whether the
+     *         mark's inputs changed
+     */
+    private boolean releaseStreamTimeHold(final WorkContainer<byte[], byte[]> work) {
+        return inFlightStreamTimestamps.remove(work) != null;
+    }
+
+    /**
+     * Recompute {@link #streamTimeLowWaterMark} and publish it. Owner thread only. Called from the tail of
+     * {@link #dispatchAvailable}, the tail of {@link #drainCompletions}, and {@link #seedStreamTime} -
+     * and never <b>directly</b> from a close path. Both close paths raise {@link #streamTimeFrozen} first,
+     * so the drain {@link #close()} runs cannot advance the mark over chains a forced {@code shutdownNow()}
+     * has just interrupted. An earlier version of this sentence said "from neither close path", which reads
+     * as "the mark never moves during close" and was not enforced by anything.
+     * <p>
+     * <b>Publish after the last mutation, never before it.</b> U10 lost Kafka's own
+     * {@code shouldClearCommitStatusesInCloseDirty} to exactly that ordering mistake, on the flag this field
+     * replaces the pattern of.
+     * <p>
+     * <b>And never mid-batch, which is subtler.</b> Publishing after each individual hold would let the
+     * monotone clamp fix the mark on a partial batch: hold 100, publish 100, then hold 50 - and the clamp
+     * refuses to come back down to the true minimum. The batch has to be fully registered before the minimum
+     * over it means anything. The cost is that a worker started earlier in the batch can read a mark that
+     * does not yet include its own record; that reads LOW, which is the safe direction, and it is why
+     * {@code ProcessorContext.currentStreamTimeMs()} inside {@code process()} is a lower bound rather than a
+     * value a processor can pin its own record against.
+     * <p>
+     * The emptiness test and the max are <b>one observation</b> over state only this thread writes. Splitting
+     * them - asking "is it empty?" and then taking the max - would be a high-water read with a race in front
+     * of it. That shape has a write-up of its own, on a branch this one does not carry:
+     * {@code git show daa43d212:docs/solutions/architecture-patterns/a-high-water-mark-cannot-express-out-of-order-completion.md}.
+     */
+    private void publishStreamTime() {
+        if (streamTimeFrozen) {
+            return;
+        }
+
+        final long candidate;
+        if (inFlightStreamTimestamps.isEmpty()) {
+            candidate = maxDispatchedStreamTimestamp;
+        } else {
+            long lowest = Long.MAX_VALUE;
+            for (final long held : inFlightStreamTimestamps.values()) {
+                if (held < lowest) {
+                    lowest = held;
+                }
+            }
+            candidate = lowest;
+        }
+
+        // Monotone, unconditionally. The candidate is not: finish the oldest record and it jumps, then
+        // dispatch an older one and it drops. Kafka's own streamTime only ever rises, and PunctuationQueue
+        // reschedules off the timestamp it fired at, so a mark that went backwards would re-fire punctuators
+        // over windows that had already closed.
+        if (candidate > streamTimeLowWaterMark) {
+            streamTimeLowWaterMark = candidate;
+        }
     }
 
     private void runOnWorker(final WorkContainer<byte[], byte[]> work, final Runnable chainExecution) {
@@ -616,13 +938,15 @@ public class PcTaskDispatcher implements Closeable {
             // and the next wait takes a poll budget before trying again with a correct count. One poll
             // budget, no hang, no lost record.
             //
-            // Closing it properly means splitting this counter in two - a pool-capacity count the worker owns
-            // and decrements BEFORE enqueuing, and an outstanding count the StreamThread owns and decrements
-            // as it drains - so that neither question is ever answered from the other's window. Note that
-            // simply hoisting this decrement above completed.add does NOT work: it moves the identical window
-            // onto PcWorkSignal's gate instead, where a zero inFlight with an undrained outcome is the state
-            // hasActiveWork() exists to catch. Deliberately not done here: it re-keys every reader of
-            // getInFlightCount(), and the defect costs one poll budget and cannot hang.
+            // Closing it properly means answering "how many are in the pool" without reading a counter a
+            // worker is concurrently writing. Note that simply hoisting this decrement above completed.add
+            // does NOT work: it moves the identical window onto PcWorkSignal's gate instead, where a zero
+            // inFlight with an undrained outcome is the state hasActiveWork() exists to catch. What would
+            // work is already here - astubbs#255 U13's inFlightStreamTimestamps map is populated BEFORE
+            // workerPool.execute and emptied in the drain, on the owner thread only, so its size() is the
+            // exact in-flight count with no window and no atomics. Deliberately not wired up here: it re-keys
+            // every reader of getInFlightCount(), and that is a separate decision. The defect costs one poll
+            // budget and cannot hang.
             workSignal.signalWorkAvailable();
         }
     }
@@ -720,11 +1044,16 @@ public class PcTaskDispatcher implements Closeable {
      */
     private void drainCompletions() {
         WorkContainer<byte[], byte[]> work;
+        boolean releasedAnyHold = false;
         while ((work = completed.poll()) != null) {
             // Read the outcome before handing the container over - handleFutureResult ends the flight and
             // hands the container to shard and partition state, and nothing promises it stays readable.
             final boolean succeeded = work.isUserFunctionSucceeded();
             final TopicPartition partition = work.getTopicPartition();
+            // Release the stream-time hold here, whatever the outcome. A FAILED record must release too: with
+            // retries disabled its KEY shard stays blocked for the life of the task, so a hold that survived
+            // failure would pin stream time forever and punctuation would never fire again.
+            releasedAnyHold |= releaseStreamTimeHold(work);
             workManager.handleFutureResult(work);
             if (succeeded) {
                 successesDrained++;
@@ -736,6 +1065,11 @@ public class PcTaskDispatcher implements Closeable {
                 handedOutStillIncomplete.computeIfPresent(partition,
                         (ignored, held) -> held <= 1 ? null : held - 1);
             }
+        }
+        // Only when a hold actually came off. The common call is the one at the top of every pump with an
+        // empty mailbox, and recomputing there answers a question whose inputs have not changed.
+        if (releasedAnyHold) {
+            publishStreamTime();
         }
     }
 
@@ -1171,6 +1505,31 @@ public class PcTaskDispatcher implements Closeable {
     }
 
     /**
+     * Kafka Streams' stream time for this task on the PC path, or {@link ConsumerRecord#NO_TIMESTAMP} before
+     * any record has been dispatched - which is the same {@code -1} that {@code PartitionGroup} starts at, so
+     * {@code StreamTask.maybePunctuateStreamTime()}'s existing UNKNOWN guard keeps working unchanged
+     * (astubbs#255, U13).
+     * <p>
+     * <b>Callable from any thread</b>, on the query surface: it reads one volatile and touches neither
+     * {@link WorkManager} nor the mailbox. It has to be - {@code TaskExecutor.punctuate()} may run on a
+     * task-executor thread rather than the StreamThread.
+     *
+     * @see #streamTimeLowWaterMark for what the value means and what it does not promise
+     */
+    public long getStreamTimeLowWaterMark() {
+        return streamTimeLowWaterMark;
+    }
+
+    /**
+     * How many records this dispatcher handed out carrying a stream timestamp already below the published
+     * mark - the extra lateness the seam creates over stock's timestamp-ordered selection (astubbs#255, U13).
+     * A measurement for the divergence write-up, not a defect count.
+     */
+    public long getDispatchesBehindStreamTime() {
+        return dispatchesBehindStreamTime;
+    }
+
+    /**
      * Whether a worker outcome is sitting in the mailbox waiting for the StreamThread to feed it back to PC.
      * <p>
      * This is half of {@link PcWorkSignal}'s wake predicate, and it is level-triggered on purpose - the
@@ -1317,13 +1676,39 @@ public class PcTaskDispatcher implements Closeable {
             return;
         }
         closed = true;
+        // Before shutdownNow(), so nothing this abort kills can move the mark on its way out.
+        streamTimeFrozen = true;
         ACTIVE.remove(this);
         // Deregistered on BOTH close paths: a closed dispatcher that still answered PcWorkSignal's gate would
         // keep its StreamThread on the split-wait branch for work that can never complete.
         workSignal.deregister(this);
         workerPool.shutdownNow();
+        // NOT dropStreamTimeHoldsWithoutPublishing() here, and that is a correction rather than an omission.
+        // abortAllActive() reaches this from a FOREIGN thread while the StreamThread is still looping through
+        // dispatchAvailable -> drainCompletions -> publishStreamTime, which iterates the map. Clearing it
+        // from here would be a plain-collection mutation racing a traversal - and setting `closed` first does
+        // not close the window, because dispatchAvailable drains BEFORE it checks closed. An aborted
+        // dispatcher is already out of ACTIVE and unreachable, so its map dies with it. The freeze above is
+        // a volatile boolean, which is why it CAN be set from here and the map clear cannot.
         log.info("PC dispatch ABORTED over {} - simulating a crash, nothing drained, nothing reported",
                 inputPartitions);
+    }
+
+    /**
+     * Drop the stream-time holds of a cleanly closed dispatcher, <b>without</b> republishing (astubbs#255,
+     * U13). Named for the omission because the omission is the point.
+     * <p>
+     * Republishing here would recompute over an empty map and advance the mark to
+     * {@link #maxDispatchedStreamTimestamp} - over records that never completed, which is the one direction
+     * that is unsafe. {@link #streamTimeFrozen} already makes that impossible; this method predates the flag
+     * and is kept because the two do different jobs. The flag stops the mark moving; this stops the
+     * dispatcher holding {@link WorkContainer} references past the close.
+     * <p>
+     * <b>{@link #close()} only, never {@link #abortClose()}</b> - see the comment there. This is a plain map,
+     * and the abort path runs on a foreign thread.
+     */
+    private void dropStreamTimeHoldsWithoutPublishing() {
+        inFlightStreamTimestamps.clear();
     }
 
     @Override
@@ -1332,6 +1717,12 @@ public class PcTaskDispatcher implements Closeable {
             return;
         }
         closed = true;
+        // Raised BEFORE awaitTermination, not after. When that wait expires this method calls
+        // shutdownNow(), which interrupts the chains still running; each throws into recordFailure, and the
+        // drain below would otherwise release their holds and publish a mark over work the shutdown killed.
+        // A clean close whose pool DID drain loses nothing by this: the drain's last publish already
+        // happened on the pump before close, and after close nothing punctuates off this dispatcher again.
+        streamTimeFrozen = true;
         ACTIVE.remove(this);
         workSignal.deregister(this);
         workerPool.shutdown();
@@ -1356,6 +1747,9 @@ public class PcTaskDispatcher implements Closeable {
         // left behind outlives the task it belonged to. getBufferedRecordCount() short-circuits on `closed`
         // as well, so this is belt and braces on a map that a revived task must not inherit.
         handedOutStillIncomplete.clear();
+        // After the drain above, and only about references: the freeze at the top is what makes the mark
+        // safe, so this cannot advance anything even if a hold is still registered.
+        dropStreamTimeHoldsWithoutPublishing();
         log.info("PC dispatch closed over {}", inputPartitions);
     }
 }
