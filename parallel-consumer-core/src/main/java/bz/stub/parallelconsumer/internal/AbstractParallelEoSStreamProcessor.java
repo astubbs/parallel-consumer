@@ -1133,6 +1133,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Called from {@code poll*} (i.e. on the user's own thread) before any PC thread exists, because that is the only
      * moment at which the user's context is reachable - none of PC's threads inherit it, the SLF4J MDC is not
      * inheritable.
+     * <p>
+     * <b>The INFO line below fires once per instance, and structurally so.</b> Its only caller is
+     * {@link #supervisorLoop(Function, Consumer)}, which throws {@link IllegalStateException} when {@code poll*} is
+     * called more than once - so there is no arrangement of the public API that puts this on a per-poll or per-record
+     * path. Keep it that way: the same line reached per batch would be an INFO log on the hot path.
      *
      * @see MdcPropagation
      */
