@@ -69,12 +69,19 @@ const sh = (c, a, o = {}) => execFileSync(c, a, { encoding: 'utf8', maxBuffer: 2
  */
 const methodSecondsFrom = files => {
   const byClass = new Map()
+  const caseNames = new Set()
   for (const f of files) {
     for (const m of readFileSync(f, 'utf8')
-      .matchAll(/<testcase[^>]*\bclassname="(?:.*\.)?(\w+)"[^>]*\btime="([\d.]+)"/g)) {
-      byClass.set(m[1], (byClass.get(m[1]) ?? 0) + Number(m[2]))
+      .matchAll(/<testcase[^>]*\bname="([^"]*)"[^>]*\bclassname="(?:.*\.)?(\w+)"[^>]*\btime="([\d.]+)"/g)) {
+      byClass.set(m[2], (byClass.get(m[2]) ?? 0) + Number(m[3]))
+      caseNames.add(`${m[2]}#${m[1]}`)
     }
   }
+  // THE CASE SET, not just the totals. Summing every <testcase> means a run that GAINED a case has a
+  // larger denominator for a reason that is not performance - a parameterised control picking up one
+  // more @EnumSource value makes the ratio look healthier and can mask a real subject regression.
+  // Comparing the identities refuses that silently-wrong comparison instead of averaging it in.
+  byClass.set('__cases__', [...caseNames].sort().join('|'))
   return byClass
 }
 
@@ -157,6 +164,8 @@ Recorded here so the numbers are visible now rather than only in a job log.`)
 const work = mkdtempSync(join(tmpdir(), 'thr-'))
 const reference = []
 const incomplete = []
+const mismatched = []
+const observedCases = observedClasses.get('__cases__')
 try {
   for (const [id, sha] of runs) {
     const dir = join(work, id); mkdirSync(dir, { recursive: true })
@@ -173,6 +182,11 @@ try {
     // subset of the reports. A partial control set gives an incomparable denominator and can move the
     // median enough to invent a pass or a regression, so every expected control must be present.
     const missing = CONTROLS.filter(c => !classes.has(c))
+    const caseSet = classes.get('__cases__')
+    if (observedCases && caseSet && caseSet !== observedCases) {
+      mismatched.push(sha.slice(0, 9))
+      continue
+    }
     if (subject > 0 && control > 0 && missing.length === 0) {
       reference.push({ id, sha: sha.slice(0, 9), rate, subject, control })
     } else if (missing.length) {
@@ -182,7 +196,19 @@ try {
 } finally { rmSync(work, { recursive: true, force: true }) }
 
 if (reference.length === 0) {
-  console.log('check-throughput-regression: master baseline runs exist but carry no usable artifact yet.')
+  const why = mismatched.length
+    ? `every candidate ran a different set of test cases than this run (${mismatched.join(', ')}) - the test matrix changed, so the runs are not comparable`
+    : 'master baseline runs exist but carry no usable artifact yet'
+  writeReport(`### ⚪ Throughput — no comparable reference
+
+| | |
+|---|---|
+| **This run** | ${observedRate} rec/s |
+| Subject time | ${observedSubject.toFixed(1)}s |
+
+${why}.
+
+Refusing to compare against a run whose workload differs, rather than averaging the difference in and calling the result a verdict.`)
   process.exit(NOTHING_IN_SCOPE)
 }
 

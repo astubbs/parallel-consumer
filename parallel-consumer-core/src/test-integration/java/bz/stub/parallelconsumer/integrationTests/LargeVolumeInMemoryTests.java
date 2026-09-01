@@ -34,6 +34,7 @@ import java.util.concurrent.CountDownLatch;
 import java.time.Instant;
 import bz.stub.parallelconsumer.internal.utils.StringUtils;
 import bz.stub.parallelconsumer.internal.utils.ThroughputReport;
+import org.awaitility.core.ConditionTimeoutException;
 
 import static bz.stub.parallelconsumer.internal.utils.GeneralTestUtils.time;
 import static bz.stub.parallelconsumer.internal.utils.Range.range;
@@ -210,6 +211,13 @@ class LargeVolumeInMemoryTests extends ParallelEoSStreamProcessorTestBase {
     /**
      * Runs a round of consumption and returns the time taken
      */
+    /** Size read under the list's own monitor - assertj's iterator-based checks need it, so this does too. */
+    private static int countProcessed(java.util.List<?> successfulWork) {
+        synchronized (successfulWork) {
+            return successfulWork.size();
+        }
+    }
+
     private void testTiming(int numberOfKeys, int quantityOfMessagesToProduce) {
         log.info("Running test for {} keys and {} messages", numberOfKeys, quantityOfMessagesToProduce);
 
@@ -238,6 +246,7 @@ class LargeVolumeInMemoryTests extends ParallelEoSStreamProcessorTestBase {
         // In-memory: no broker in the path, so this rate is the cleanest machine-speed reference in
         // the lane - it moves with the runner and with PC's own overhead, and with nothing else.
         Instant waitStarted = Instant.now();
+        try {
         waitAtMost(defaultTimeout.multipliedBy(15)).untilAsserted(() -> {
             // assertj's size checker uses an iterator so must be synchronised.
             // .size() wouldn't need it but this output is nicer
@@ -251,12 +260,19 @@ class LargeVolumeInMemoryTests extends ParallelEoSStreamProcessorTestBase {
                     .as("Expected number of produced messages")
                     .hasSize(quantityOfMessagesToProduce);
         });
-        int processed;
-        synchronized (successfulWork) {
-            processed = successfulWork.size();
+        } catch (ConditionTimeoutException e) {
+            // REPORT ON THE FAILING EXIT TOO, and rethrow unchanged. A timed-out run produced no rate at
+            // all, which is the run whose number a collector most wants - and because earlier
+            // parameterised cases have already emitted this class's label, bin/performance-test.sh's
+            // "NOT MEASURED" check cannot notice the missing failing case either. Silence twice over.
+            ThroughputReport.report("LargeVolumeInMemoryTests", countProcessed(successfulWork),
+                    quantityOfMessagesToProduce, waitStarted,
+                    StringUtils.msg("keys={} outcome=FAILED", numberOfKeys));
+            throw e;
         }
-        ThroughputReport.report("LargeVolumeInMemoryTests", processed, quantityOfMessagesToProduce,
-                waitStarted, StringUtils.msg("keys={} outcome=PASSED", numberOfKeys));
+        ThroughputReport.report("LargeVolumeInMemoryTests", countProcessed(successfulWork),
+                quantityOfMessagesToProduce, waitStarted,
+                StringUtils.msg("keys={} outcome=PASSED", numberOfKeys));
         bar.close();
 
         log.info("Closing async client");
