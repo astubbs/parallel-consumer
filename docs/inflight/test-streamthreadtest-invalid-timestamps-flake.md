@@ -36,6 +36,13 @@ it costs every branch in the chain a red build and a re-run, and where the tempt
 green is strongest.
 <!-- post-merge: checked-end -->
 
+**Sighted twice more on the example rung's CI** (astubbs/parallel-consumer#391): across four
+attempts of its Unit lane, the sequence was flake, Maven Central timeout, green, flake - two
+failures in the three attempts that actually ran the suite, at the full run count the oracle
+produces on this stack. Consistent with the forest's originally measured rate rather than below it.
+The example agent deliberately stopped re-running to chase green, which is the habit this note
+exists to prevent.
+
 ## Why this matters more than one flaky test
 
 **Every agent working on this module is told that "Kafka's own suites, zero failures with the seam
