@@ -78,8 +78,13 @@ jobs:
       - name: Performance lane
         run: bin/performance-test.sh
 
+      # On master the check is informational: this lane IS the reference the PR lane compares against,
+      # so failing it here would mean master gating itself on its own median.
       - name: Throughput regression check
         if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: node bin/check-throughput-regression.mjs
 
       # `if: always()` and `if-no-files-found: warn` together: a lane that FAILED still produced

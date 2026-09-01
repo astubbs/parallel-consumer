@@ -1,133 +1,183 @@
 #!/usr/bin/env node
-//
 // Copyright (C) 2026 Antony Stubbs and contributors
 //
-
-// PORTED FROM bin/check-throughput-regression.sh, which cb8d18d65 deleted - read it with
-// `git show cb8d18d65^:bin/check-throughput-regression.sh`, the repair docs/citations.md prescribes
-// for a path that is gone. The BUSINESS behaviour is identical - same inputs,
-// same arithmetic, same thresholds, same exit codes - and bin/test-check-throughput-regression.mjs
-// pins that with the same six cases and the same four ratios the shell version produced. Mixing a
-// rewrite into a port is how a language change gets blamed for a behaviour change, so the known
-// improvements (per-method comparison, a measured noise floor) are tracked separately and are not here.
+// Compares this run's throughput against RECENT MASTER RUNS, read from their artifacts, and writes a
+// report the workflow posts to the PR.
 //
-// It is NOT a transliteration, though. Two things the shell version did because shell made them easy
-// are done properly now, and one of them was a latent bug:
+// THERE IS NO COMMITTED BASELINE, DELIBERATELY. There was: docs/perf-baseline.tsv, one run's numbers
+// updated by hand. Three things were wrong with it and all three are structural rather than fixable.
+// It rots - a number nobody re-measures is trusted for as long as nobody looks. It cannot answer "how
+// much does this vary", which is the only question that makes a threshold meaningful. And comparing
+// against a figure from months ago is worse than re-measuring, because the machine, the runner image
+// and the test have all moved since. If you want to know how a release compares, run the test on that
+// release; do not trust a number somebody wrote down.
 //
-//   * Reports are found with fs.globSync, not by shelling out to `find` through `sh -c`. A subprocess
-//     to list files is a shell habit, not a requirement.
-//   * Class times are read into a Map keyed by the class NAME parsed out of the XML, instead of
-//     matching a baseline name against a file PATH with a substring test. The substring version would
-//     have matched the wrong report for any class whose name is a prefix of another's - it happens not
-//     to bite today, which is exactly the kind of thing that starts biting when somebody adds a class.
+// So the reference is the last N `perf baseline (master)` runs, whose artifacts carry both the rate
+// and the per-class times. No table to maintain, and the data is as fresh as the last push to master.
+//
+// THE MEDIAN, NOT THE LAST RUN, AND THIS IS THE WHOLE POINT. Measured 2026-09-01 on an idle machine:
+// the same commit, eight full-lane runs, MultiInstanceHighVolumeTest spanning 25.9s to 33.8s - about
+// 30% - while the control classes stayed within 5%. Against an instrument that noisy, comparing
+// against any SINGLE previous run is a coin flip, and a threshold drawn around one point is drawn
+// around noise. A median over several runs is the cheapest thing that is not.
+//
+// It also explains the thresholds. A 20% regression cannot be separated from that spread by any
+// bound, so pretending otherwise would produce a gate that fires on quiet Tuesdays and gets switched
+// off within a week. Operator ruling, 2026-09-01: fail at a 50% loss, flag at 30%. The fail line sits
+// OUTSIDE the measured noise; the flag line sits at its edge and says so rather than claiming to be a
+// verdict.
+//
+// MACHINE SPEED IS STILL CANCELLED USING THE NEIGHBOURS, and its weakness is now measured rather than
+// assumed: in the noise-floor runs the controls moved 5% while the subject moved 30%, so flat
+// controls do NOT bound subject variance. The normalisation removes machine-to-machine drift, which
+// is real; it does not remove this test's own variance, which is larger. That is why the bounds are
+// coarse and why the report says what the allowable range is rather than only whether it passed.
+//
+// EXIT CODES follow bin/check-all.sh: 0 pass, 1 violation, 2 cannot run, 3 nothing in scope.
 
-import { readFileSync, existsSync, globSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { readFileSync, writeFileSync, existsSync, globSync, mkdtempSync, rmSync, readdirSync, mkdirSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { verdictFor, FAIL_BELOW, WARN_BELOW } from './lib/throughput-verdict.mjs'
 
-// ANCHORED TO THE REPO ROOT, like the shell version's `cd "$ROOT"`. The first port dropped that and
-// kept the relative paths, so run from anywhere but the root it found no baseline and no summary and
-// exited 3 - "nothing in scope" - which reads as a clean tree rather than as a gate that could not
-// look. A gate whose answer depends on the caller's working directory is worse than no gate.
+// Anchored like the shell original's `cd "$ROOT"`. Without it the relative paths below resolve
+// against the caller's directory, and the gate reports "nothing in scope" - a clean tree - when what
+// actually happened is that it could not look.
 process.chdir(resolve(dirname(fileURLToPath(import.meta.url)), '..'))
 
-const BASELINE = 'docs/perf-baseline.tsv'
-const SUMMARY = 'target/performance-throughput.txt'
-const FAIL_BELOW = 0.70
-const WARN_BELOW = 0.85
-const STALE_ABOVE = 1.15
+const REPO = process.env.PC_REPO ?? 'astubbs/parallel-consumer'
+const SUBJECT = 'MultiInstanceHighVolumeTest'
+const CONTROLS = ['VeryLargeMessageVolumeTest', 'LargeVolumeInMemoryTests', 'LoadTest']
+const REFERENCE_RUNS = Number(process.env.PC_REFERENCE_RUNS ?? 10)
+const REPORT = 'target/throughput-report.md'
 
-/** exit codes, per bin/check-all.sh's contract */
 const VIOLATION = 1, CANNOT = 2, NOTHING_IN_SCOPE = 3
+const sh = (c, a, o = {}) => execFileSync(c, a, { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, ...o })
 
-const die = (code, ...lines) => { console.error(lines.join('\n')); process.exit(code) }
+/**
+ * Per-METHOD seconds from a failsafe XML set, summed per class.
+ *
+ * Not the <testsuite> aggregate, and that is the conservation argument rather than a nicety: a class
+ * time is `work + setup`, and container startup and @BeforeAll do not scale with the work done, so
+ * they are the non-conserved term. Leaving them in breaks the invariant the comparison rests on.
+ */
+const methodSecondsFrom = files => {
+  const byClass = new Map()
+  for (const f of files) {
+    for (const m of readFileSync(f, 'utf8')
+      .matchAll(/<testcase[^>]*\bclassname="(?:.*\.)?(\w+)"[^>]*\btime="([\d.]+)"/g)) {
+      byClass.set(m[1], (byClass.get(m[1]) ?? 0) + Number(m[2]))
+    }
+  }
+  return byClass
+}
 
-if (!existsSync(BASELINE)) die(CANNOT, `check-throughput-regression: ${BASELINE} is missing - cannot compare.`)
-if (!existsSync(SUMMARY) || !readFileSync(SUMMARY, 'utf8').trim()) {
-  console.log(`check-throughput-regression: no ${SUMMARY} - the performance lane has not run here.`)
+const rateFrom = text =>
+  Number([...text.matchAll(new RegExp(`test=${SUBJECT}\\s.*?recordsPerSecond=(-?\\d+)`, 'g'))].pop()?.[1] ?? 0)
+
+// ---- this run -----------------------------------------------------------------------------------
+const summaryFile = 'target/performance-throughput.txt'
+if (!existsSync(summaryFile) || !readFileSync(summaryFile, 'utf8').trim()) {
+  console.log(`check-throughput-regression: no ${summaryFile} - the performance lane has not run here.`)
+  process.exit(NOTHING_IN_SCOPE)
+}
+const observedRate = rateFrom(readFileSync(summaryFile, 'utf8'))
+const observedClasses = methodSecondsFrom(globSync('**/target/failsafe-reports/TEST-*.xml'))
+const observedControl = CONTROLS.filter(c => observedClasses.has(c))
+  .reduce((a, c) => a + observedClasses.get(c), 0)
+
+if (!(observedRate > 0)) {
+  // A missing rate is a finding, not a quiet pass: the test did not run, or the emitter is no longer
+  // reached, and both look identical to a clean lane otherwise.
+  console.error(`check-throughput-regression: no usable rate for ${SUBJECT} in ${summaryFile}.`)
+  process.exit(CANNOT)
+}
+if (!(observedControl > 0)) {
+  console.error('check-throughput-regression: no control class ran, so machine speed cannot be cancelled.')
+  process.exit(CANNOT)
+}
+
+// ---- the reference: recent master runs, from their artifacts -------------------------------------
+let runs = []
+try {
+  runs = sh('gh', ['run', 'list', '-R', REPO, '--workflow', 'perf-baseline.yml',
+    '--branch', 'master', '--limit', String(REFERENCE_RUNS),
+    '--json', 'databaseId,headSha', '--jq', '.[] | [.databaseId, .headSha] | @tsv'])
+    .split('\n').filter(Boolean).map(l => l.split('\t'))
+} catch {
+  console.error('check-throughput-regression: could not list master baseline runs (gh unavailable or unauthenticated).')
+  process.exit(CANNOT)
+}
+if (runs.length === 0) {
+  // Correct on a repository where the master lane has not run yet. Bootstrapping, not a fault - and
+  // saying so beats inventing a reference.
+  console.log('check-throughput-regression: no `perf baseline (master)` runs yet - nothing to compare against.')
+  console.log('  The reference builds itself once that workflow has run on master.')
   process.exit(NOTHING_IN_SCOPE)
 }
 
-/** The baseline as meaning rather than as columns: one subject rate, and the control classes. */
-const baseline = readFileSync(BASELINE, 'utf8').split('\n')
-  .filter(l => l && !l.startsWith('#'))
-  .map(l => l.split('\t'))
-  .reduce((acc, [kind, name, value]) => {
-    if (kind === 'rate') acc.subject = { name, rate: Number(value) }
-    if (kind === 'class-seconds') acc.controls.set(name, Number(value))
-    return acc
-  }, { subject: null, controls: new Map() })
+const work = mkdtempSync(join(tmpdir(), 'thr-'))
+const reference = []
+try {
+  for (const [id, sha] of runs) {
+    const dir = join(work, id); mkdirSync(dir, { recursive: true })
+    try { sh('gh', ['run', 'download', id, '-R', REPO, '-D', dir]) } catch { continue }
+    const files = readdirSync(dir, { recursive: true }).map(f => join(dir, String(f)))
+    const summary = files.find(f => f.endsWith('performance-throughput.txt'))
+    const xml = files.filter(f => /TEST-.*\.xml$/.test(f))
+    if (!summary || xml.length === 0) continue
+    const rate = rateFrom(readFileSync(summary, 'utf8'))
+    const classes = methodSecondsFrom(xml)
+    const control = CONTROLS.filter(c => classes.has(c)).reduce((a, c) => a + classes.get(c), 0)
+    const subject = classes.get(SUBJECT) ?? 0
+    if (subject > 0 && control > 0) reference.push({ id, sha: sha.slice(0, 9), rate, subject, control })
+  }
+} finally { rmSync(work, { recursive: true, force: true }) }
 
-if (!baseline.subject) {
-  die(CANNOT, `check-throughput-regression: ${BASELINE} has no 'rate' row - nothing to compare against.`)
+if (reference.length === 0) {
+  console.log('check-throughput-regression: master baseline runs exist but carry no usable artifact yet.')
+  process.exit(NOTHING_IN_SCOPE)
 }
 
-// The subject name comes from a data file and is interpolated into a pattern, so it is escaped.
-// Java class names cannot contain regex metacharacters today; the escape costs nothing and means the
-// gate cannot be broken by editing a .tsv.
-const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-const observedRate = Number(
-  [...readFileSync(SUMMARY, 'utf8').matchAll(
-    new RegExp(`test=${escapeRe(baseline.subject.name)}\\s.*?recordsPerSecond=(-?\\d+)`, 'g'))].pop()?.[1] ?? 0)
+const observedSubject = observedClasses.get(SUBJECT) ?? 0
+const v = verdictFor({ subject: observedSubject, control: observedControl }, reference)
+const { observedShare, referenceShare, ratio, icon, word } = v
+const pct = n => `${(n * 100).toFixed(0)}%`
+const verdict = { icon, word, exit: v.failed ? VIOLATION : 0 }
 
-if (!(observedRate > 0)) {
-  // A missing or -1 rate is a real finding, not a quiet pass: either the test did not run or
-  // ThroughputReport stopped being reached, and both look identical to a clean lane otherwise.
-  die(CANNOT,
-    `check-throughput-regression: no usable recordsPerSecond for ${baseline.subject.name} in ${SUMMARY}.`,
-    '  Either it did not run, or ThroughputReport is no longer reached. Not treating this as a pass.')
-}
+const shares = reference.map(r => (r.subject / r.control))
+const spread = `${Math.min(...shares).toFixed(3)} – ${Math.max(...shares).toFixed(3)}`
 
-/** Every failsafe report, keyed by the class name the XML itself declares. */
-const observedSeconds = new Map(
-  globSync('**/target/failsafe-reports/TEST-*.xml')
-    .map(f => readFileSync(f, 'utf8').match(/<testsuite[^>]*\bname="(?:.*\.)?(\w+)"[^>]*\btime="([\d.]+)"/))
-    .filter(Boolean)
-    .map(([, name, time]) => [name, Number(time)]))
+const report = `### ${icon} Throughput — ${word}
 
-const ran = [...baseline.controls.keys()].filter(n => observedSeconds.has(n))
-const skipped = [...baseline.controls.keys()].filter(n => !observedSeconds.has(n))
+| | |
+|---|---|
+| **Subject share, this run** | ${observedShare.toFixed(3)} |
+| **Reference share (median)** | ${referenceShare.toFixed(3)} |
+| **Ratio** | **${ratio.toFixed(3)}** |
+| Subject time | ${observedSubject.toFixed(1)}s |
+| Control time | ${observedControl.toFixed(1)}s |
+| Reported rate | ${observedRate} rec/s |
 
-if (ran.length === 0) {
-  // Without a neighbour there is no machine-speed proxy, and a raw comparison against an instrument
-  // with this much spread is worse than none.
-  die(CANNOT,
-    'check-throughput-regression: no baseline neighbour class ran, so machine speed cannot be',
-    '  cancelled. Refusing to compare raw numbers across machines - see this script header.')
-}
+**Allowable range** 🟢 ≥ ${WARN_BELOW.toFixed(2)} · 🟡 ${FAIL_BELOW.toFixed(2)}–${WARN_BELOW.toFixed(2)} (about a ${pct(1 - WARN_BELOW)} loss) · 🔴 < ${FAIL_BELOW.toFixed(2)} (about a ${pct(1 - FAIL_BELOW)} loss)
 
-const sum = (acc, n) => acc + n
-const observedControl = ran.map(n => observedSeconds.get(n)).reduce(sum, 0)
-const baselineControl = ran.map(n => baseline.controls.get(n)).reduce(sum, 0)
+<details><summary>How this is derived, and what it cannot tell you</summary>
 
-const machineIndex = baselineControl / observedControl
-const expected = Math.round(baseline.subject.rate * machineIndex)
-const ratio = expected > 0 ? observedRate / expected : 0
+**By conservation, not by correction.** Every test in this lane processes a fixed number of records, so within one run the ratio of one test's time to another's is invariant under machine speed — a runner twice as slow doubles both terms and leaves the ratio alone. There is no machine-index correction to be wrong, because nothing needed correcting. \`share = subjectSeconds / controlSeconds\`, both from this same run.
 
-console.log(`check-throughput-regression: ${baseline.subject.name}`)
-console.log(`  observed        ${observedRate} records/second`)
-console.log(`  baseline        ${baseline.subject.rate} records/second`)
-console.log(`  machine index   ${machineIndex.toFixed(4)}  (from ${ran.length} neighbour class(es): ${observedControl.toFixed(2)}s observed vs ${baselineControl.toFixed(2)}s baseline)`)
-console.log(`  expected here   ${expected} records/second`)
-console.log(`  RATIO           ${ratio.toFixed(3)}  (1.0 = exactly what the machine speed predicts)`)
-if (skipped.length) console.log(`  skipped (did not run): ${skipped.join(' ')}`)
+**Per-method times, not class times.** A class time is \`work + setup\`, and container startup and \`@BeforeAll\` do not scale with work — they are the non-conserved term, and leaving them in breaks the invariant.
 
-if (ratio < FAIL_BELOW) {
-  console.log(`\nFAILED: ratio ${ratio.toFixed(3)} is below ${FAIL_BELOW}.`)
-  console.log('Every regressed run ever measured here scored between 0.407 and 0.605; every healthy one')
-  console.log('scored 0.778 or above. This is in the first band. Do not re-baseline to clear it without')
-  console.log('establishing which of the two it is - node bin/perf-backfill.mjs shows you the history.')
-  process.exit(VIOLATION)
-}
+**Reference is the median of ${reference.length} recent \`perf baseline (master)\` run(s)**, read from their artifacts. There is no committed baseline to go stale, and a share is dimensionless, so an old entry stays comparable to a new one without re-baselining. Shares observed: ${spread}.
 
-if (ratio < WARN_BELOW) {
-  console.log(`\nWARNING: ratio ${ratio.toFixed(3)} is below ${WARN_BELOW}. Slower than the neighbours explain, but`)
-  console.log('inside the band where nobody has measured the normalised spread yet, so this does not fail')
-  console.log('the lane. The slowest healthy run measured here scored 0.778. Re-run before dismissing it.')
-} else if (ratio > STALE_ABOVE) {
-  console.log(`\nBASELINE MAY BE STALE: ratio ${ratio.toFixed(3)} - this tree beat the baseline by more than 15%`)
-  console.log('after normalising. One run does not establish that. If master keeps landing here, the')
-  console.log('baseline is a floor the code has left behind:  node bin/perf-backfill.mjs --suggest-baseline')
-} else {
-  console.log('\nOK: within what machine speed accounts for.')
-}
+**What this still cannot do.** It removes machine-to-machine variance. It does **not** remove this test's own run-to-run variance, measured at about 30% on a single unchanged commit while its controls stayed within 5%. That is a property of the test, not of the comparison, and no arithmetic here can touch it — which is why the reference is a median and the bounds are deliberately coarse. 🟡 means look at this; only 🔴 is outside the measured spread.
+
+Runs used: ${reference.map(r => r.sha).join(', ')}
+</details>`
+
+mkdirSync('target', { recursive: true })
+writeFileSync(REPORT, report + '\n')
+console.log(report.replace(/[|*#]/g, '').replace(/\n{2,}/g, '\n'))
+console.log(`\nreport written to ${REPORT}`)
+process.exit(verdict.exit)

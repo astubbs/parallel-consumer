@@ -23,6 +23,10 @@ permissions:
   contents: read
   pull-requests: write
   checks: write
+  # The throughput check reads recent `perf baseline (master)` runs and downloads their artifacts to
+  # build its reference, which is a different workflow's runs - that needs actions: read. Without it
+  # the check cannot list them and correctly reports "cannot run" rather than inventing a baseline.
+  actions: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
@@ -149,9 +153,44 @@ jobs:
       # Runs BEFORE the upload so a regression cannot cost us the evidence of it: `if: always()` on
       # the upload below means the artifact lands either way, but ordering it after keeps the failing
       # case's data on the run rather than depending on that flag staying correct.
+      # `continue-on-error` so the REPORT still posts when the check fails - a red verdict is the one
+      # somebody most needs to read, and a step that dies before writing its report hides exactly that.
+      # The job is still failed by the "Fail on throughput regression" step below.
       - name: Throughput regression check
+        id: throughput
         if: always() && matrix.suite == 'performance'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: node bin/check-throughput-regression.mjs
+
+      # Posted as a comment rather than left in the job log, because a number nobody retrieves is a
+      # number nobody has. The duplication checks already comment here; this follows them.
+      - name: Post the throughput report
+        if: always() && matrix.suite == 'performance' && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs')
+            const path = 'target/throughput-report.md'
+            if (!fs.existsSync(path)) return
+            const body = fs.readFileSync(path, 'utf8')
+            const marker = '<!-- pc-throughput-report -->'
+            const { owner, repo } = context.repo
+            const issue_number = context.issue.number
+            // Update in place rather than appending on every push: a PR with fifteen throughput
+            // comments is a PR where nobody reads the throughput comment.
+            const existing = (await github.rest.issues.listComments({ owner, repo, issue_number }))
+              .data.find(c => c.body.includes(marker))
+            const payload = `${marker}\n${body}`
+            if (existing) await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: payload })
+            else await github.rest.issues.createComment({ owner, repo, issue_number, body: payload })
+
+      - name: Fail on throughput regression
+        if: always() && matrix.suite == 'performance' && steps.throughput.outcome == 'failure'
+        run: |
+          echo "The throughput check reported a regression - see the report comment on this PR." >&2
+          exit 1
 
       # PERFORMANCE ONLY, and the retention is deliberately not the chaos lane's 14 days above.
       # Those reports diagnose ONE failure and are read within days. These are the accumulation

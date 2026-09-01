@@ -3,7 +3,10 @@
 <!-- inflight-type: feature -->
 <!-- inflight-impact: blind-spot -->
 
-`bin/check-throughput-regression.mjs` compares against `docs/perf-baseline.tsv`: **one run's numbers,
+**Largely IMPLEMENTED 2026-09-01 - see "What landed" at the foot. The committed baseline is gone; what
+remains open is the accumulating artifact.**
+
+`bin/check-throughput-regression.mjs` used to compare against a committed `perf-baseline.tsv`: **one run's numbers,
 updated by hand.** That is enough to gate on, and it has three consequences that a queryable history
 removes rather than mitigates.
 
@@ -78,3 +81,38 @@ service. Extract it only once it has worked here.
   a run that measured nothing must be visibly absent, never silently averaged in as a zero.
 - **Do not gate on the aggregate before it is trusted.** The current fixed-baseline check should stay
   the gate until a history-based one has been shown to agree with it.
+
+
+## What landed, 2026-09-01
+
+The committed baseline is deleted. The check now reads the last N `perf baseline (master)` runs from
+their artifacts and takes the **median**, so there is no table to maintain and nothing to go stale.
+Three of the four problems above are gone with it: no rot, no hand-updating, and a reference as fresh
+as the last push to master.
+
+**And the comparison is now derived by conservation rather than by correction**, which removed the
+defect review found in the old form. It compared a rate against a machine index built from control
+class times - mixing dimensions, and applying a correction that had been MEASURED not to hold (controls
+moved 5% while the subject moved 30%). The conserved quantity is the share, `subjectSeconds /
+controlSeconds`, both from the same run: every test does a fixed amount of work, so a runner twice as
+slow doubles both terms and the ratio is unchanged. Nothing has to be corrected because nothing was
+uncorrected. Per-method times, because a class time is `work + setup` and setup is the non-conserved
+term.
+
+**This is also what makes the accumulating artifact viable long-term**, which was not obvious when this
+note was written. A stored SHARE is dimensionless and machine-independent, so an entry from one
+runner generation stays comparable to one from the next with no fingerprint and no re-baselining - and
+it compresses to almost nothing. A store of absolute rates would have needed all of that and still
+rotted.
+
+### Still open
+
+The artifact that carries the whole history forward - each run downloading the previous aggregate,
+appending, and re-uploading - is not built. Today the check downloads the last N runs individually,
+which is bounded by log retention and by N. The design above stands; what changed is that it should
+store conserved shares rather than raw numbers.
+
+### Not open any more
+
+Raising the baseline when the product gets faster. There is no baseline to raise: a median over recent
+master runs moves on its own as master moves.

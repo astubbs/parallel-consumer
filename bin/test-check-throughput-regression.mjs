@@ -1,79 +1,80 @@
 #!/usr/bin/env node
 // Copyright (C) 2026 Antony Stubbs and contributors
 //
-// Self-test for bin/check-throughput-regression.mjs, using REAL numbers from real CI runs.
+// Self-test for bin/lib/throughput-verdict.mjs. Every number below is measured, not invented, and the
+// file is the evidence the bounds came from - a bound justified only in a commit message is one nobody
+// can re-derive, and one nobody can re-derive is one nobody defends when it fires inconveniently.
 //
-// The cases are not invented. Each is an observation recovered by bin/perf-backfill.mjs from a run
-// inside GitHub's log-retention window, so this file is simultaneously the check's test and the
-// evidence its thresholds came from - a threshold justified only in a commit message is one nobody
-// can re-derive.
-//
-// IT IS ALSO THE PORT'S PROOF. The shell version passed exactly these six cases with these exit
-// codes; the Node version must too. A port that changes behaviour while claiming to change only
-// language is the failure this pins down.
-//
-// Per-class seconds for the regressed cases are apportioned from the recorded neighbour TOTAL in the
-// baseline's proportions. The check sums matched classes, so the total is what it reads and the split
-// is presentational - said here rather than left for somebody to find the numbers are not verbatim.
+// THE NOISE CASES MATTER MOST. The subject was measured spanning 25.9s to 33.8s on a SINGLE unchanged
+// commit while its control classes held within 5%. Any bound that fires inside that spread produces a
+// red on a quiet day, and the first person to hit one switches the gate off - taking the collection
+// with it. So this asserts what the gate must NOT do at least as hard as what it must.
 
-import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, copyFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { verdictFor, FAIL_BELOW, WARN_BELOW, median } from './lib/throughput-verdict.mjs'
 
-const CHECK = join(process.cwd(), 'bin', 'check-throughput-regression.mjs')
-const BASE = join(process.cwd(), 'docs', 'perf-baseline.tsv')
 let failures = 0
-
-function runCase(desc, expected, rate, very, large, load) {
-  const dir = mkdtempSync(join(tmpdir(), 'thr-'))
-  try {
-    mkdirSync(join(dir, 'bin'), { recursive: true })
-    mkdirSync(join(dir, 'docs'), { recursive: true })
-    mkdirSync(join(dir, 'target'), { recursive: true })
-    const reports = join(dir, 'parallel-consumer-core', 'target', 'failsafe-reports')
-    mkdirSync(reports, { recursive: true })
-    copyFileSync(CHECK, join(dir, 'bin', 'check-throughput-regression.mjs'))
-    copyFileSync(BASE, join(dir, 'docs', 'perf-baseline.tsv'))
-
-    // An EMPTY rate means the summary EXISTS but carries no usable figure - a broken lane. That is a
-    // different case from no summary at all, which is a clean tree, and the two must not collapse.
-    writeFileSync(join(dir, 'target', 'performance-throughput.txt'),
-      rate === null
-        ? '# machine cpu=synthetic cores=2 memkb=1\n'
-        : `PC-THROUGHPUT test=MultiInstanceHighVolumeTest processed=3000000 expected=3000000 elapsedMs=1 recordsPerSecond=${rate} outcome=X\n`)
-
-    for (const [name, secs] of [['VeryLargeMessageVolumeTest', very],
-                                ['LargeVolumeInMemoryTests', large],
-                                ['LoadTest', load]]) {
-      if (secs === null) continue
-      writeFileSync(join(reports, `TEST-x.${name}.xml`),
-        `<?xml version="1.0"?>\n<testsuite name="x.${name}" time="${secs}" tests="1"/>\n`)
-    }
-
-    let rc = 0, out = ''
-    try { out = execFileSync('node', ['bin/check-throughput-regression.mjs'], { cwd: dir, encoding: 'utf8' }) }
-    catch (e) { rc = e.status ?? 1; out = `${e.stdout ?? ''}${e.stderr ?? ''}` }
-
-    const ratio = out.match(/RATIO\s+([\d.]+)/)?.[1] ?? ''
-    if (rc === expected) console.log(`ok    ${desc.padEnd(52)} exit ${rc}  ${ratio && 'ratio=' + ratio}`)
-    else { console.error(`FAIL  ${desc.padEnd(52)} expected ${expected}, got ${rc}\n${out}`); failures++ }
-  } finally { rmSync(dir, { recursive: true, force: true }) }
+const check = (desc, actual, expected) => {
+  if (actual === expected) console.log(`ok    ${desc}`)
+  else { console.error(`FAIL  ${desc} - expected ${expected}, got ${actual}`); failures++ }
 }
 
-// MUST FAIL - run 33478449495 on astubbs/parallel-consumer#29: 43,552 rec/s, 134.65s of neighbours.
-runCase('regressed: astubbs#29 at 43,552 (the real one)', 1, 43552, 53.47, 40.18, 40.99)
-// MUST FAIL - the worst observed. If the coarse end stops failing, the check is broken.
-runCase('regressed: worst observed, 29,372', 1, 29372, 55.81, 41.95, 42.79)
-// MUST PASS - the same branch after the one-line fix, run 33487673494: 76,950 against 131.88s.
-runCase('healthy: astubbs#29 after the fix, 76,950', 0, 76950, 52.37, 39.36, 40.15)
-// MUST PASS - slowest healthy run seen, 57,215. Warns, must not fail: a warning is "look at this".
-runCase('healthy but slow: 57,215 (warns, must not fail)', 0, 57215, 54.78, 41.17, 41.99)
-// MUST NOT PASS - summary present, no usable rate. Exit 2, never 0.
-runCase('summary exists but carries no rate', 2, null, 51.69, 38.85, 39.63)
-// MUST NOT PASS - no neighbour, so machine speed cannot be cancelled.
-runCase('no neighbour class ran', 2, 77960, null, null, null)
+// Reference: real runs from the noise-floor characterisation on origin/master, per-method subject
+// seconds against the summed control classes.
+const REF = [
+  { subject: 25.915, control: 79.451 },
+  { subject: 27.936, control: 80.684 },
+  { subject: 29.898, control: 77.597 },
+]
 
-if (failures === 0) { console.log('\nAll check-throughput-regression self-tests passed'); process.exit(0) }
-console.error(`\n${failures} check-throughput-regression self-test(s) failed`)
+check('median picks the middle of an odd set', median([3, 1, 2]), 2)
+check('median does not mutate its input', (() => { const a = [3, 1, 2]; median(a); return a[0] })(), 3)
+
+// --- the machine must cancel, which is the whole claim -------------------------------------------
+{
+  // Same tree on a runner twice as slow: every time doubles. Conservation says the verdict is
+  // identical. If this ever fails, the comparison has stopped being machine-independent and the
+  // thresholds mean nothing.
+  const normal = verdictFor({ subject: 27.936, control: 80.684 }, REF)
+  const slow = verdictFor({ subject: 55.872, control: 161.368 }, REF)
+  check('a machine twice as slow gives the SAME ratio', slow.ratio.toFixed(6), normal.ratio.toFixed(6))
+  check('and the same verdict', slow.icon, normal.icon)
+}
+
+// --- noise must not fire -------------------------------------------------------------------------
+check('noise: low end of the measured spread is green',
+  verdictFor({ subject: 25.915, control: 79.451 }, REF).icon, '🟢')
+check('noise: high end of the measured spread is green',
+  verdictFor({ subject: 33.783, control: 80.206 }, REF).icon, '🟢')
+
+// --- the A/B I once called a confirmed regression ------------------------------------------------
+{
+  // Both arms are green under conservation, which is the third independent line of evidence that the
+  // "20% regression" was the instrument rather than the code. Pinned so the claim cannot quietly
+  // come back.
+  check('the A/B before-arm is green', verdictFor({ subject: 23.347, control: 80.95 }, REF).icon, '🟢')
+  check('the A/B after-arm is green', verdictFor({ subject: 28.603, control: 80.89 }, REF).icon, '🟢')
+}
+
+// --- real regressions must be caught --------------------------------------------------------------
+{
+  // A subject taking 1.8x as long - the scale of the astubbs/parallel-consumer#29 shortfall - flags but
+  // does not fail, because the operator set the fail line at a 50% loss and this is about 44%. Pinned
+  // as an assertion so the consequence is visible to anyone changing the bound.
+  const v = verdictFor({ subject: 50.0, control: 80.0 }, REF)
+  check('a 1.8x subject is FLAGGED', v.icon, '🟡')
+  check('a 1.8x subject does not FAIL at a 50% bound', v.failed, false)
+  // Three times as long is unambiguous.
+  check('a 3x subject FAILS', verdictFor({ subject: 84.0, control: 80.0 }, REF).failed, true)
+}
+
+// --- the not-a-pass paths -------------------------------------------------------------------------
+check('no reference yet is its own state', verdictFor({ subject: 27, control: 80 }, []).kind, 'no-reference')
+check('a missing subject is not a pass', verdictFor({ subject: 0, control: 80 }, REF).kind, 'no-subject')
+check('a missing control is not a pass', verdictFor({ subject: 27, control: 0 }, REF).kind, 'no-control')
+
+check('fail bound is a 50% loss', FAIL_BELOW, 0.50)
+check('flag bound is a 30% loss', WARN_BELOW, 0.70)
+
+if (failures === 0) { console.log('\nAll throughput-verdict self-tests passed'); process.exit(0) }
+console.error(`\n${failures} throughput-verdict self-test(s) failed`)
 process.exit(1)
