@@ -44,6 +44,13 @@ produces on this stack. Consistent with the forest's originally measured rate ra
 The example agent deliberately stopped re-running to chase green, which is the habit this note
 exists to prevent.
 
+**Sighted once more on the reconciliation branch**, seam off: one failure in three runs of the whole
+upstream execution on one machine, at parameterisation `[3]` and the same assertion line. The other
+two runs were the seam-on evidence lane's control arm, which was clean both times - so the same tree
+produced a clean control twice and a red one once, in the same session. That is a pass/fail pair on
+an unchanged tree, which is the strongest shape this ledger collects, and it is why the lane is built
+to name this case from here rather than abort on it.
+
 ## Why this matters more than one flaky test
 
 **Every agent working on this module is told that "Kafka's own suites, zero failures with the seam
