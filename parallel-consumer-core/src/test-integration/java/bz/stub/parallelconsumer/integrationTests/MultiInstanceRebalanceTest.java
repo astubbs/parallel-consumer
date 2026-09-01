@@ -415,19 +415,6 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
      *
      * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/857">#857</a>
      */
-    @Disabled("RE-DISABLED 2026-09-01, and unlike the annotation this replaces, with a reason. "
-            + "This test was @Disabled on master carrying no explanation - its javadoc says only that it "
-            + "'takes some time', so it was switched off for COST and has never been shown to fail. This "
-            + "branch removed that @Disabled and tagged it @Tag(\"performance\"), which put it in a lane "
-            + "that GATES (Performance Tests is a required check - the class javadoc's claim that the "
-            + "performance lane 'never gates a merge' is false). It then failed on its first exposure: a "
-            + "progress timeout at 111.2s, 500,000 records, PERIODIC_CONSUMER_ASYNCHRONOUS/UNORDERED, with "
-            + "'PC reported exception states: []' - no crash and no recorded cause. It also degraded its "
-            + "neighbour: running 21 instances for 111s immediately before MultiInstanceHighVolumeTest in "
-            + "the same reused JVM dropped that test from 73,722 to 39,684 records/second, which read as a "
-            + "product regression and is not one. Re-enabling this is real work with an open question - "
-            + "nobody has ever measured its failure RATE - and it is being done deliberately on "
-            + "handoff/enable-large-number-of-instances rather than as a surprise inside an unrelated PR.")
     @Tag("performance")
     @Test
     void largeNumberOfInstances() {
