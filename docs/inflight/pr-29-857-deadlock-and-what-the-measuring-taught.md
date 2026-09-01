@@ -68,6 +68,15 @@ it.
 
 ## MERGE IS PAUSED - operator decision, 2026-09-01
 
+> **UPDATE, same day: the question this hold was placed on has been ANSWERED, and the hold is still
+> the operator's to lift.** `Performance Tests` passed at `92c5d5b70` with `MultiInstanceHighVolumeTest`
+> at 76,950 rec/s against 43,552 in the failing run, the only main-code difference being the
+> control-loop fix, the neighbours within 1-3%, and the capacity profiles re-enabled ahead of it
+> rather than skipped. The table and the caveats are in
+> `docs/inflight/perf-control-loop-log-argument-evaluated-eagerly.md`. It is one run per side against
+> a 1.54x instrument spread - strong, not conclusive. Nothing here lifts the hold; the rest of this
+> section is kept as written so the reasoning that produced it stays readable.
+
 **Do not merge this PR, and do not treat a green CI as clearing the hold.** It is paused until the
 `Performance Tests` failure is understood, because that failure is currently unexplained rather than
 merely inconvenient.

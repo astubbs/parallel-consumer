@@ -21,7 +21,7 @@ The eager form was introduced by astubbs/parallel-consumer#29 and was never on m
 Both neighbouring log statements that use the same accessor - one in the same method, one in
 `WorkManager` - are correctly guarded, which is what marks this as a slip rather than a habit.
 
-## What is OPEN: whether this accounts for the throughput shortfall
+## Was OPEN, now ANSWERED: whether this accounts for the throughput shortfall
 
 <!-- post-merge: checked - a historical record of what that PR's runs showed; still readable after it merges -->
 `MultiInstanceHighVolumeTest.multiInstance` was down ~39% on astubbs/parallel-consumer#29's CI runs
@@ -102,3 +102,31 @@ what would settle it, and one lucky run is the likeliest way to stop looking too
 The defect was introduced by `1479f73ff wip(#857): provisional fixes for silent stall under <!-- issue-refs: exempt - quoted commit subject; qualifying it would misquote the commit -->
 rebalance`.
 <!-- post-merge: checked-end -->
+
+## 2026-09-01: MEASURED. One controlled run, and the outcome flipped
+
+The hypothesis above was tested by the next `Performance Tests` run after the fix merged, and this is
+the like-for-like comparison the whole investigation lacked - not because anyone constructed it, but
+because merging the fix made the lane run it.
+
+| | failing run `b42ab61d7` | passing run `92c5d5b70` |
+|---|---|---|
+| `VeryLargeMessageVolumeTest` | 53.86 s | 53.28 s |
+| `LargeVolumeInMemoryTests` | 39.45 s | 38.28 s |
+| `LoadTest` | 41.34 s | 40.32 s |
+| `MultiInstanceRebalanceTest` | 0.020 s, all skipped | 170.9 s, 3 tests, all passed |
+| **`MultiInstanceHighVolumeTest`** | **FAILED, 43,552 rec/s, 2,638,050 of 3,000,000** | **PASSED, 76,950 rec/s, all 3,000,000 in 38,986 ms** |
+
+**Why this is a control arm and not just a good run.** The only main-code difference between those two
+heads is this fix - verify with `git diff b42ab61d7 92c5d5b70 -- '*/src/main/java/*'`, which returns
+that one file. The three neighbouring classes land within 1-3% of the failing run, so the machine was
+not materially faster. And lane composition moved the *wrong* way: the capacity profiles were skipped
+in the failing run and ran for 170.9 s of churn ahead of the throughput test here, in the same reused
+JVM - the carryover previously measured at about 5,000 rec/s. The confound was re-added, and the
+number still rose about 77%.
+
+**What it does not establish.** One run per side. The instrument's spread on identical code is 1.54x,
+so a single pair cannot be a verdict - though it is worth noting the passing band observed to date is
+71,387 to 109,898 rec/s and the failing band 39,684 to 44,992, and this result sits in the first.
+What would still strengthen it is repetition, which now costs nothing but time: the lane runs this
+test on every push to the PR.

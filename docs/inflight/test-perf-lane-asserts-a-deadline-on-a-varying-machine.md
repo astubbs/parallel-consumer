@@ -52,11 +52,15 @@ A like-for-like pair on ONE machine in one session is worth more than two CI run
   | `LargeVolumeInMemoryTests` | 37.99 s | 39.45 s | +4% |
   | **`MultiInstanceHighVolumeTest`** | **71,387 rec/s** | **43,552 rec/s** | **-39%** |
 
-- **A candidate mechanism exists as of 2026-09-01, and is not yet measured against the shortfall.**
-  The control loop evaluated a shard-wide sum as an unguarded `log.trace` argument every pass;
-  `docs/inflight/perf-control-loop-log-argument-evaluated-eagerly.md` owns it. It fits the
-  selectivity above - the failing test is the lane's only `KEY`-ordered member - and fitting is not
-  measuring.
+- **The mechanism was found AND measured on 2026-09-01: the shortfall was a defect, not variance.**
+  The control loop evaluated a shard-wide sum as an unguarded `log.trace` argument on every pass.
+  With that fixed and nothing else in main code changed, `MultiInstanceHighVolumeTest` went from
+  FAILING at 43,552 rec/s to PASSING at 76,950 rec/s while the three neighbouring classes stayed
+  within 1-3% - so not a faster machine - and while the capacity profiles were re-enabled ahead of
+  it, which moves the confound against the result.
+  `docs/inflight/perf-control-loop-log-argument-evaluated-eagerly.md` carries the table and the
+  caveats. **This does not retire this note**: a wall-clock deadline on a machine that varies 1.5x is
+  still unsound, and it happened to be right this time.
 <!-- post-merge: checked-end -->
 - **It does not reproduce locally.** The full lane passes here at 72,498. A development machine has
   headroom a hosted runner does not, so no local experiment can verify a fix for this.

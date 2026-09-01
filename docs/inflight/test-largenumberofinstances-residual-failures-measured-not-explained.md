@@ -237,3 +237,15 @@ baseline series to consult. It costs merge-blocking on an unlucky run. A red run
 read the `AMBIENT PROBE AUTOPSY` block, not a verdict on PC - and if the rate does not improve, the
 honest reading is that the log-argument defect was not this test's problem, which is itself a result
 worth having.
+
+### First result on the fixed tree, 2026-09-01: it passed
+
+All three capacity profiles ran in the gating lane at `92c5d5b70` and passed - `MultiInstanceRebalanceTest`
+3 tests, 170.9 s, no failures, no `AMBIENT PROBE AUTOPSY` block and no `No progress beyond` line.
+
+**One pass is not a rate**, and this note exists because a rate is what the question needs. The Linux
+measurement that produced one failure in ten was on the unfixed tree, so the honest position is that
+this test's failure rate on the current tree is **unknown, with one green observation**. The cheapest
+way to get a real number is `bin/exp-measure-large-instances-failure-rate.sh` on the fixed tree - the
+same harness, so the two rates would be comparable, which is what makes it worth doing rather than
+waiting for CI to accumulate runs.
