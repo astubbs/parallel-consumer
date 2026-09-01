@@ -258,9 +258,10 @@ them, do not copy them back.
     `onPartitionsAssigned(Collection<TopicPartition> partitions)` and
     `onPartitionsLost(Collection<TopicPartition> partitions)`) and `ConsumerManager`'s
     `noWakeups`, `erroneousWakups`, `correctPollWakeups` counters.
-  - `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` (3) - primitive written in one thread may not
-    be visible to another: `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled`,
-    `ConsumerManager.commitRequested`, `RetryQueue.closed`.
+  - `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` (2) - primitive written in one thread may not
+    be visible to another: `ConsumerManager.commitRequested`, `RetryQueue.closed`.
+    Was 3: `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled` is now
+    `volatile` (astubbs#201), and SpotBugs no longer reports it.
 - Fix = `AtomicInteger`/`AtomicLong` for the counters and `volatile` for the flags -
   **or** let the thread-model rework above absorb them, since several sit in exactly
   the poll/control-thread coordination it reshapes. Fixing piecemeal now may conflict.
@@ -482,6 +483,10 @@ but not this.*
   threading system.
 
 ### ParallelConsumerOptions.java (573 lines)
+- `validate()` does not check `initialLoadFactor <= maximumLoadFactor`, so an inverted
+  pair is silently pinned by `DynamicLoadFactor` rather than rejected - and since
+  astubbs#201 it also reads as a deliberately fixed factor, which is exactly what a
+  typo is not. Fail fast in `validate()` instead.
 - Accreting deprecated fields (`public void setCommitInterval`,
   `private final Duration defaultMessageRetryDelay`, `isUsingTransactionalProducer`) and the
   `ignoreReflectiveAccessExceptionsForAutoCommitDisabledCheck` temporary

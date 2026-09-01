@@ -45,9 +45,10 @@ Do not re-derive these; they are measured and recorded.
   `config/infer-known-findings.txt`, keyed on bug type plus `Class.method`. Fix one and **delete its
   line there**, or the lane fails telling you to. (There is no `RACERD_MAX_FINDINGS`; the bare count
   ceiling was replaced precisely because fixing one race and introducing another left it unchanged.)
-- **The non-volatile offenders** `lastWorkRequestWasFulfilled`, `ConsumerManager.commitRequested`,
-  `RetryQueue.closed`, and `AbstractParallelEoSStreamProcessor.lastCommitTime` -
-  `docs/refactoring.md`.
+- **The non-volatile offenders** `ConsumerManager.commitRequested`, `RetryQueue.closed`, and
+  `AbstractParallelEoSStreamProcessor.lastCommitTime` - `docs/refactoring.md`.
+  `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled` was a fourth until astubbs#201
+  made it `volatile`.
 - **The torn-read family** - check-then-act and two-read divergence, which are a *different* class
   from unguarded access and are not what `@GuardedBy` addresses.
 

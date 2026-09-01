@@ -31,6 +31,9 @@ Blockers, collisions, and decisions someone is waiting on. Not a PR list - `gh` 
   level override); astubbs#201 (`fix/155-load-factor-noise`) has the same logic inline in
   `LoadFactorCeilingReportingTest` because neither was on `master` when the other was written.
   **Whichever merges second must delete its copy and use the shared one** - do not leave two ways to
-  capture a log line.
+  capture a log line. The shared helper has more consumers than those two: `AmbientProbeExtensionTest`
+  and `SubmitWorkToPoolShutdownRaceTest` already carry the same inline
+  `(Logger) LoggerFactory.getLogger(...)` + `ListAppender` block on master, so converting them is the
+  rest of the same job.
 - **astubbs#8 (`features/retry-dlq`, 2022) is an abandoned draft**, kept only because it is the sole
   DLQ code that exists. Close or finish it; it is not in flight.
