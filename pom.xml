@@ -1330,7 +1330,27 @@
                                         <exclude>com.github.javafaker</exclude>
                                     </excludes>
                                 </bannedDependencies>
-                                <reactorModuleConvergence />
+                                <!-- The <message> is the actionable half. This rule's default text is
+                                     "Module parents have been found which could not be found in the reactor",
+                                     which is what a contributor gets from `mvn -pl <module>` and says nothing
+                                     about the fix - and the same subset build is how people arrive at the
+                                     "cannot find symbol: class ManagedTruth" report in
+                                     astubbs#180      https://github.com/astubbs/parallel-consumer/issues/180
+                                     confluentinc#861 https://github.com/confluentinc/parallel-consumer/issues/861
+                                     The message body is deliberately left-aligned: Maven echoes the element's
+                                     text verbatim, one [ERROR] line per newline, so any indentation here is
+                                     reprinted in the contributor's terminal. Do not re-indent it to match the
+                                     surrounding POM. Keep it in sync with docs/building.md. -->
+                                <reactorModuleConvergence>
+                                    <message>
+This build was invoked on a SUBSET of the reactor (e.g. `-pl &lt;module&gt;`), so the parent POM is not in it.
+  Build the whole reactor:      ./mvnw test-compile          (from the repo root)
+  ...or pull in dependencies:   ./mvnw -pl &lt;module&gt; -am test-compile
+A subset build also skips `generate-test-sources`, which is where the Google Truth assertion subjects
+(bz.stub.parallelconsumer.ManagedTruth and friends) are generated - so it is also how you end up with
+"cannot find symbol: class ManagedTruth". See docs/building.md.
+                                    </message>
+                                </reactorModuleConvergence>
                                 <!-- Register item 5. wiremock-jre8 pinning ASM 9.4 made Lincheck's
                                      transformer die per-class WHILE REPORTING SUCCESS - a false PASS
                                      on every calibration verdict, caught only by a deliberately

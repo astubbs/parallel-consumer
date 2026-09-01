@@ -72,6 +72,7 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 
 | Document | Read it when |
 |---|---|
+| [`docs/building.md`](docs/building.md) | A build failed in a way that reads like a broken repository: the fresh-clone recipe, why the Truth assertion classes are generated rather than committed, and which invocations skip the generator |
 | [`docs/testing.md`](docs/testing.md) | Writing or debugging tests: suite split, **why a run prints nothing and the flag that fixes it**, the ambient probe autopsy, the quarantine lane, the chaos suite, shared test utilities |
 | [`docs/ci.md`](docs/ci.md) | CI is red, or you are changing a workflow: what each workflow does, the self-hosted lanes, how to fetch a failed job's log |
 | [`docs/investigating.md`](docs/investigating.md) | Past the prior-art checks and into diagnosis: control arms, instrumentation traps, reporting rates |
@@ -297,6 +298,14 @@ counts. This is a community-maintained fork of the no-longer-maintained
 - **Maven via wrapper** (`./mvnw`) - do not use system Maven
 
 ## How to Build
+
+**The first command in a fresh clone is a whole-reactor `./mvnw clean install -DskipTests`. Never
+start with `./mvnw compile`, and never narrow to `-pl <module>` without `-am`.** Both skip the
+`generate-test-sources` phase that writes `ManagedTruth` and its `*Subject` family into `target/`,
+and both then fail as a missing artifact or `cannot find symbol: class ManagedTruth` - which reads
+as a broken repository rather than a wrong command. Nothing catches this for you: the enforcer only
+covers the `-pl` half, and an IDE reaches neither. [`docs/building.md`](docs/building.md) **owns
+this topic** - the error text, the invocation table, the IDE case - and wins where the two disagree.
 
 ```bash
 bin/build.sh                 # quick local build (compile + unit tests)
