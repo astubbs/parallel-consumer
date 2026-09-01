@@ -8,11 +8,11 @@ import lombok.experimental.UtilityClass;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
 
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
@@ -40,35 +40,56 @@ public class RecordBatchSummary {
     public static final int MAX_PARTITIONS_LISTED = 5;
 
     /**
+     * Hoisted rather than rebuilt per call: {@link Comparator#comparing} plus {@link Comparator#thenComparingInt}
+     * allocates two composed comparators, and this is reached from a log line on a failure path.
+     */
+    private static final Comparator<Map.Entry<TopicPartition, List<Long>>> BY_TOPIC_THEN_PARTITION = Comparator
+            .comparing((Map.Entry<TopicPartition, List<Long>> entry) -> entry.getKey().topic())
+            .thenComparingInt(entry -> entry.getKey().partition());
+
+    /**
      * @param topicPartition the partition the records were polled from
      * @param records        the records - only their offsets are read, never their keys or values
      * @return e.g. {@code my-topic-3: 500 records, offsets 1000-1499}
      */
     public static String summariseRecords(TopicPartition topicPartition, Collection<? extends ConsumerRecord<?, ?>> records) {
-        List<Long> offsets = new ArrayList<>(records.size());
+        // one primitive pass, rather than copying every offset into a boxed List just to min/max it - a 500-record
+        // batch was allocating ~500 Longs plus the list to produce two numbers, on a path that only ever logs
+        long lowest = Long.MAX_VALUE;
+        long highest = Long.MIN_VALUE;
         for (ConsumerRecord<?, ?> record : records) {
-            offsets.add(record.offset());
+            long offset = record.offset();
+            lowest = Math.min(lowest, offset);
+            highest = Math.max(highest, offset);
         }
-        return summariseOffsets(topicPartition, offsets);
+        return summarise(topicPartition, records.size(), lowest, highest);
     }
 
     /**
      * @return e.g. {@code my-topic-3: 500 records, offsets 1000-1499}, or {@code my-topic-3: 1 record, offset 1000}
      */
     public static String summariseOffsets(TopicPartition topicPartition, Collection<Long> offsets) {
-        if (offsets.isEmpty()) {
-            return msg("{}: 0 records", topicPartition);
-        }
         long lowest = Long.MAX_VALUE;
         long highest = Long.MIN_VALUE;
-        for (Long offset : offsets) {
+        for (long offset : offsets) {
             lowest = Math.min(lowest, offset);
             highest = Math.max(highest, offset);
+        }
+        return summarise(topicPartition, offsets.size(), lowest, highest);
+    }
+
+    /**
+     * The one rendering both single-partition entry points share, taking the count and range already reduced to
+     * primitives - so neither caller has to materialise the offsets it walked.
+     */
+    private static String summarise(TopicPartition topicPartition, int recordCount, long lowest, long highest) {
+        if (recordCount == 0) {
+            return msg("{}: 0 records", topicPartition);
         }
         String range = (lowest == highest)
                 ? msg("offset {}", lowest)
                 : msg("offsets {}-{}", lowest, highest);
-        return msg("{}: {}, {}", topicPartition, pluralise(offsets.size(), "record"), range);
+        return msg("{}: {}, {}", topicPartition, pluralise(recordCount, "record"), range);
     }
 
     /**
@@ -82,32 +103,29 @@ public class RecordBatchSummary {
         if (partitionCount == 0) {
             return pluralise(0, "record");
         }
-
-        long recordCount = offsetsByPartition.values().stream().mapToLong(Collection::size).sum();
-
-        List<Map.Entry<TopicPartition, List<Long>>> sorted = new ArrayList<>(offsetsByPartition.entrySet());
-        sorted.sort(Comparator
-                .comparing((Map.Entry<TopicPartition, List<Long>> entry) -> entry.getKey().topic())
-                .thenComparingInt(entry -> entry.getKey().partition()));
-
-        StringBuilder detail = new StringBuilder();
-        int listed = Math.min(partitionCount, MAX_PARTITIONS_LISTED);
-        for (int i = 0; i < listed; i++) {
-            if (i > 0) {
-                detail.append("; ");
-            }
-            Map.Entry<TopicPartition, List<Long>> entry = sorted.get(i);
-            detail.append(summariseOffsets(entry.getKey(), entry.getValue()));
-        }
-        int notListed = partitionCount - listed;
-        if (notListed > 0) {
-            detail.append(msg("; and {} more {}", notListed, noun(notListed, "partition")));
-        }
-
         if (partitionCount == 1) {
-            // the totals would just repeat the single entry
-            return detail.toString();
+            // the totals would just repeat the single entry - and this is the common shape (one user-function batch
+            // is usually one partition), so it returns before the count, the sort and the join below
+            Map.Entry<TopicPartition, List<Long>> only = offsetsByPartition.entrySet().iterator().next();
+            return summariseOffsets(only.getKey(), only.getValue());
         }
+
+        long recordCount = 0;
+        for (List<Long> offsets : offsetsByPartition.values()) {
+            recordCount += offsets.size();
+        }
+
+        String detail = offsetsByPartition.entrySet().stream()
+                .sorted(BY_TOPIC_THEN_PARTITION)
+                .limit(MAX_PARTITIONS_LISTED)
+                .map(entry -> summariseOffsets(entry.getKey(), entry.getValue()))
+                .collect(Collectors.joining("; "));
+
+        int notListed = partitionCount - Math.min(partitionCount, MAX_PARTITIONS_LISTED);
+        if (notListed > 0) {
+            detail += msg("; and {} more {}", notListed, noun(notListed, "partition"));
+        }
+
         return msg("{} across {}: {}",
                 pluralise(recordCount, "record"),
                 pluralise(partitionCount, "partition"),

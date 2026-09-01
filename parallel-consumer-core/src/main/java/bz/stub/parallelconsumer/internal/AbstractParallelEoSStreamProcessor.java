@@ -1865,14 +1865,25 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             }
 
             logWithoutEscaping(e, () -> {
-                // summary, not the whole context: the full render grows with the batch (astubbs#170)
-                String msg = msg("Exception caught in user function running stage, registering WC as failed, returning to" +
-                        " mailbox. Context: {}", context.summariseForLog(), e);
+                // Summary, not the whole context: the full render grows with the batch (astubbs#170). Built inside
+                // each arm rather than once above them, because summarising walks the whole batch and the retriable
+                // arm logs at DEBUG only - PCRetriableException is PC's designed retry signal, so a downstream
+                // outage drives this branch at full processing rate, and doing that work for a line nobody reads is
+                // the disabled-level allocation astubbs#201 found elsewhere.
+                String failureLine = "Exception caught in user function running stage, registering WC as failed," +
+                        " returning to mailbox. Context: {}";
                 if (PCRetriableException.isPresentIn(e)) {
-                    log.debug("Explicit " + PCRetriableException.class.getSimpleName() + " caught, logging at DEBUG only. " + msg, e);
+                    if (log.isDebugEnabled()) {
+                        log.debug("Explicit " + PCRetriableException.class.getSimpleName()
+                                + " caught, logging at DEBUG only. " + failureLine, context.summariseForLog(), e);
+                    }
                 } else {
-                    log.error(msg, e);
+                    log.error(failureLine, context.summariseForLog(), e);
                 }
+                // Inside the lambda, and LAST, both deliberately. Inside, because rendering the context calls
+                // toString() on user keys and values, which is what logWithoutEscaping exists to contain. Last,
+                // because logWithoutEscaping swallows whatever the lambda throws - moving this above the lines
+                // that report the failure would let a hostile toString() suppress the report itself.
                 log.debug("Full context of the batch that failed in the user function: {}", context);
             });
             throw e; // trow again to make the future failed
