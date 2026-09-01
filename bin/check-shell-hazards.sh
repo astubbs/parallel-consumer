@@ -10,7 +10,7 @@
 # which flags an implementation accepts, what it prints when it disagrees. A linter that does not
 # model coreutils cannot reach it, and every hazard below was found the hard way in this repo.
 # (NOTE: the `NOTE:` prefix is load-bearing - a comment whose first word is `shellcheck` is parsed as
-# a directive, the same trap check-shell-sigpipe.sh documents.)
+# a directive, the same trap the `sigpipe-into-grep-q` rule documents.)
 #
 # DELIBERATELY GENERIC, because this will grow. Hazards are DATA - a category, a regex, and the
 # sentence explaining the divergence - so adding one is a line in the table below rather than new
@@ -32,10 +32,12 @@
 # all of them at once. A finding on a joined command reports the line the command STARTS on, because
 # that is where a reader has to edit and the flag's own line means nothing without it.
 #
-# check-shell-sigpipe.sh BELONGS IN HERE, and has not moved yet. It is the same class by every test
-# that matters: a silent wrong answer, invisible to ShellCheck, found the hard way. It predates this
-# file, which is the only reason it is separate - and this file is named for the class rather than
-# for today's members precisely so it can absorb it.
+# THE SIGPIPE RULE HAS MOVED, AND OUTWARD RATHER THAN IN HERE. It was check-shell-sigpipe.sh, the
+# same class by every test that matters - a silent wrong answer, invisible to ShellCheck, found the
+# hard way - and this file was named for the class so it could absorb it. It went the other way
+# instead: it is now the `sigpipe-into-grep-q` row in bin/lib/source-patterns.mjs, whose table is the
+# same design in a language without shell's traps. THIS FILE IS NOW THE CANDIDATE TO FOLD INTO THAT
+# TABLE, not the destination - see docs/inflight/ci-what-else-folds-into-the-rule-table.md.
 #
 # WHAT ABSORBING IT NEEDS, so the next person does not rediscover it: the table would need a
 # per-hazard PRECONDITION field, because piping into `grep -q` is only a defect when the file sets
@@ -156,7 +158,7 @@ for f in $(shell_corpus_files); do
         cat_name="${hz%%	*}"; rest="${hz#*	}"
         pat="${rest%%	*}"; why="${rest#*	}"
         # FED FROM THE STRIPPED RECORDS (a herestring, not a pipe - `printf | grep` under pipefail
-        # inverts its own answer, the rule bin/check-shell-sigpipe.sh enforces). `idx` is grep's
+        # inverts its own answer, the rule `sigpipe-into-grep-q` enforces). `idx` is grep's
         # RECORD index, which is the same index in $norm because norm_text is $norm line for line, so
         # the prefixed copy hands back the physical line the command starts on. `text` is the whole
         # joined command, which is what the marker and comment tests want, while the heredoc-range
