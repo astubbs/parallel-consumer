@@ -318,6 +318,17 @@ them, do not copy them back.
 - `maybe in those cases we should not create metadata at all`: possibly avoid creating offset
   metadata at all in some cases.
 
+### offsets/OffsetEncoding.java
+- `ByteArray` / `ByteArrayCompressed` are enum constants that claim two magic bytes but have **no
+  live encoder** (commented out in `OffsetSimultaneousEncoder` - `there doesn't seem to be an
+  advantage over` BitSet encoding)
+  and **no decoder** in `EncodedOffsetPair#getDecodedIncompletes`, where they fall to the `default`
+  branch. Nothing is unsafe: that branch raises `OffsetDecodingError`, which
+  `OffsetMapCodecManager#loadPartitionStateForAssignment` recovers from by dropping the offset map.
+  But the constants should either gain decoders or be deleted. Deleting them frees two magic bytes
+  and is a **wire-format** decision, so it belongs with the breaking-change queue rather than an
+  ad-hoc cleanup.
+
 ### offsets/OffsetDecodingError.java
 - `TODO should extend java.lang.Error`: should it extend `java.lang.Error`?
   (exception-hierarchy design)
