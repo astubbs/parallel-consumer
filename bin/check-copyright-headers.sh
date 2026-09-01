@@ -222,6 +222,7 @@ go.mod|slash
 *.pyi|hash
 *.rb|hash
 *.sh|hash
+*.tsv|hash
 *.bash|hash
 *.yml|hash
 *.yaml|hash

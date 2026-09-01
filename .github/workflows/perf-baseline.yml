@@ -78,6 +78,10 @@ jobs:
       - name: Performance lane
         run: bin/performance-test.sh
 
+      - name: Throughput regression check
+        if: always()
+        run: bin/check-throughput-regression.sh
+
       # `if: always()` and `if-no-files-found: warn` together: a lane that FAILED still produced
       # numbers worth keeping - ThroughputReport emits on failure as well as success, which is the
       # whole reason the summary is useful - and a lane that produced none must say so rather than

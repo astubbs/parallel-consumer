@@ -146,6 +146,13 @@ jobs:
           path: '**/target/*-reports/*.xml'
           retention-days: 14
 
+      # Runs BEFORE the upload so a regression cannot cost us the evidence of it: `if: always()` on
+      # the upload below means the artifact lands either way, but ordering it after keeps the failing
+      # case's data on the run rather than depending on that flag staying correct.
+      - name: Throughput regression check
+        if: always() && matrix.suite == 'performance'
+        run: bin/check-throughput-regression.sh
+
       # PERFORMANCE ONLY, and the retention is deliberately not the chaos lane's 14 days above.
       # Those reports diagnose ONE failure and are read within days. These are the accumulation
       # itself: docs/inflight/perf-throughput-regression-gate.md defers a throughput gate until

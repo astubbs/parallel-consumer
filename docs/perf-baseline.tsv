@@ -1,0 +1,31 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+# Baseline for bin/check-throughput-regression.sh. Tab-separated: kind, name, value, unit.
+#
+# A COMMITTED RATCHET, UPDATED BY A HUMAN. Nothing in CI writes here - there is no data branch and no
+# contents: write grant (operator decision, 2026-09-01), so this file is the whole baseline. That is a
+# real limitation and it is the reason the fail threshold below is coarse rather than tight.
+#
+# PROVENANCE, WHICH YOU MUST READ BEFORE TRUSTING A VERDICT FROM IT: these are from ONE observed CI
+# run, the passing run that the astubbs/parallel-consumer#29 throughput investigation used as its
+# comparison. One sample is not a distribution. The `rate` line is that run's PC-THROUGHPUT figure;
+# the `class-seconds` lines are the failsafe class times from the same run, and exist only to cancel
+# machine speed - they are not themselves measurements of anything.
+#
+# UPDATING IT: take the numbers from a `perf baseline (master)` run's artifact
+# (`gh run download <run-id> -n performance-throughput-master-<n>`), and say in the commit WHICH run,
+# so the next person can tell a re-baseline from a regression that got normalised away. Never update
+# it to make a red lane green without saying that is what you are doing.
+#
+# CORROBORATION, deliberately NOT folded in: astubbs/parallel-consumer#401's own performance lane
+# (run 33487654993) returned 77,960 records/second on master's tree, completing all 3,000,000. That is
+# a second, independent sample and it is higher than the figure below, which is reassuring. It is not
+# used as the baseline because its class times are not to hand, and a rate from one run normalised by
+# class times from another is not a comparison - it is two runs pretending to be one. Every row here
+# must come from a SINGLE run.
+#
+# LoadTest has no entry: it is in the performance lane but its class time was not recorded in the run
+# these came from. A sibling missing here is skipped, not assumed - see the script's header.
+rate	MultiInstanceHighVolumeTest	71387	records-per-second
+class-seconds	VeryLargeMessageVolumeTest	51.25	seconds
+class-seconds	LargeVolumeInMemoryTests	37.99	seconds
