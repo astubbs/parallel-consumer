@@ -75,10 +75,13 @@ assert() { # <description> <expected> <actual>
 # Writes $1 to a changelog file and echoes its path. mktemp, not $RANDOM: every call here is
 # inside a `$(...)`, and bash before 5.1 does not reseed $RANDOM in a subshell - so on the
 # macOS 3.2 lane every fixture would land on one path and silently overwrite the last, while
-# fixtures written early are still referenced by asserts near the end of the file.
+# fixtures written early are still referenced by asserts near the end of the file. A counter
+# has the same subshell problem, which is why this is mktemp and not one.
+# No `.adoc` suffix after the Xs: BSD/macOS mktemp passes the template to mkstemp(3), which
+# requires the six Xs to be the LAST characters, and the renderer never looks at the extension.
 changelog() { # <text>
     local path
-    path="$(mktemp "$tmp/changelog-XXXXXX.adoc")"
+    path="$(mktemp "$tmp/changelog-XXXXXX")"
     printf '%s\n' "$1" > "$path"
     echo "$path"
 }
@@ -270,6 +273,55 @@ assert "unconstrained intraword bold passes through as valid Markdown" \
     '- Reads un**bel**ievable and re**start** correctly.
 - Kafka **3.9.1** is the default.' \
     "$(render "$UNCONSTRAINED" 0.6.0.0)"
+
+# A link macro, a URL macro and an emphasis span may all CONTAIN a `monospace` span. Converting
+# each backtick-delimited piece separately puts the macro's `[` and `]` - and the emphasis span's
+# two `*` - in different pieces, so nothing matches and raw AsciiDoc ships to the release page
+# with the single asterisks rendering as italics. The converter masks code spans instead.
+SPANNING=$(changelog '== 0.6.0.0
+
+* See link:docs/releasing.md[the `--strict` flag doc] for detail.
+* An https://example.com/x[link with `mono` inside] label.
+* This is *bold with `mono` inside* text.
+* But `a link:docs/x.md[macro] inside code` stays literal.')
+assert "macros and emphasis spanning a monospace span still convert" \
+    '- See [the `--strict` flag doc](https://github.com/astubbs/parallel-consumer/blob/v0.6.0.0/docs/releasing.md) for detail.
+- An [link with `mono` inside](https://example.com/x) label.
+- This is **bold with `mono` inside** text.
+- But `a link:docs/x.md[macro] inside code` stays literal.' \
+    "$(render "$SPANNING" 0.6.0.0)"
+
+# A `//` line comment never reaches the body, so nothing in one may fail a release - a
+# commented-out draft entry holding a table row or a source block is a normal thing to write.
+# `////` is a comment BLOCK delimiter, whose contents WOULD reach the body, and stays rejected.
+COMMENTED_OUT=$(changelog '== 0.6.0.0
+
+// draft: [source,java] and |a cell| and a stray ` backtick and see <<somewhere>>
+
+Real body.')
+assert "a line comment may hold anything, because it is dropped" \
+    "Real body." "$(render "$COMMENTED_OUT" 0.6.0.0)"
+
+COMMENT_BLOCK=$(changelog '== 0.6.0.0
+
+////
+this block would otherwise reach the body
+////
+
+Real body.')
+assert "a comment BLOCK delimiter is still rejected" \
+    3 "$(render_status "$COMMENT_BLOCK" 0.6.0.0)"
+
+# CommonMark nests by the parent item content offset - three characters for `1. `, two for `- `.
+NESTED_ORDERED=$(changelog '== 0.6.0.0
+
+. First.
+.. Nested.
+. Second.')
+assert "a nested ordered item is indented to the parent marker width" \
+    '1. First.
+   1. Nested.
+1. Second.' "$(render "$NESTED_ORDERED" 0.6.0.0)"
 
 LINKS=$(changelog '== 0.6.0.0
 

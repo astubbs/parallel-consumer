@@ -87,6 +87,17 @@ UNSUPPORTED = [
 # that would ship mangled markup is an error, not a pass.
 UNBALANCED_MONOSPACE = "odd number of ` - one monospace span is left open"
 
+# convert_inline stands this character in for a monospace span while it converts the prose
+# around it, so one already in the source would be restored as the wrong span. Nothing legible
+# puts a NUL in a changelog; rejecting it is cheaper than defending against it.
+CODE_SPAN_MASK = "\x00"
+STRAY_MASK = "NUL byte (this renderer reserves it to stand in for `monospace` spans)"
+
+# `//` starts a LINE comment, which convert_line drops - so nothing in it can reach the body and
+# nothing in it should be able to fail the release. `////` is a comment BLOCK delimiter, whose
+# contents WOULD reach the body, so it stays in the table above as a delimited block.
+RE_COMMENT_BLOCK = re.compile(r"^\s*/{4,}\s*$")
+
 ADMONITIONS = ("NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION")
 
 RE_COMMENT = re.compile(r"^\s*//")
@@ -144,9 +155,13 @@ def find_section(lines, version):
 
 def first_problem(line):
     """The one reason this line cannot be converted, or None."""
+    if RE_COMMENT.match(line) and not RE_COMMENT_BLOCK.match(line):
+        return None  # dropped before it can mangle anything - see RE_COMMENT_BLOCK
     for pattern, why in UNSUPPORTED:
         if pattern.search(line):
             return why
+    if CODE_SPAN_MASK in line:
+        return STRAY_MASK
     if line.count("`") % 2:
         return UNBALANCED_MONOSPACE
     return None
@@ -193,14 +208,31 @@ def convert_prose(text, repo_url, ref):
 
 
 def convert_inline(text, repo_url, ref):
-    """The inline entry point: mask the monospace spans, then `convert_prose` the rest."""
-    # Backticks delimit monospace in both languages; never rewrite what is inside one
-    # (`bz.stub.parallelconsumer.*` must not be read as an emphasis marker). check_supported
-    # has already rejected a line with an odd number of them, so the spans pair up here.
+    """The inline entry point: hide the monospace spans, convert the prose, put them back.
+
+    MASK rather than split. Backticks delimit monospace in both languages and what is inside
+    one must never be rewritten (`bz.stub.parallelconsumer.*` is not an emphasis marker) - but
+    converting each backtick-delimited piece separately hides constructs that legitimately
+    CONTAIN a code span from the regexes that must match them:
+
+        link:docs/releasing.md[the `--strict` flag doc]
+        *bold with `mono` inside*
+
+    Split, the macro's `[` and `]` land in different pieces and it matches nothing, so raw
+    AsciiDoc ships to the release page; the bold's two `*` do the same, and Markdown then
+    renders the survivors as italics. Replacing each span with a one-character placeholder
+    keeps the line whole for the conversions while still hiding its contents - and a macro
+    written entirely INSIDE a code span stays hidden, which splitting also got right.
+
+    check_supported has rejected odd backtick counts and stray placeholder characters, so the
+    spans pair up and every placeholder here is one this function put in.
+    """
     parts = text.split("`")
-    for i in range(0, len(parts), 2):
-        parts[i] = convert_prose(parts[i], repo_url, ref)
-    return "`".join(parts)
+    spans = parts[1::2]
+    converted = convert_prose(CODE_SPAN_MASK.join(parts[0::2]), repo_url, ref)
+    for span in spans:
+        converted = converted.replace(CODE_SPAN_MASK, "`%s`" % span, 1)
+    return converted
 
 
 def convert_line(line, repo_url, ref):
@@ -211,9 +243,18 @@ def convert_line(line, repo_url, ref):
     if line.strip() == "+":
         # List continuation. A blank line does NOT attach the following block to the item the
         # way AsciiDoc's `+` does - CommonMark ends the list at an unindented paragraph - so the
-        # continued block renders as a paragraph trailing the list. Deliberately not "fixed" by
-        # indenting to the item's depth: that needs the converter to carry list state, and the
-        # only two `+` uses in CHANGELOG.adoc read correctly either way (checked).
+        # continued block renders as a paragraph trailing the list.
+        #
+        # Deliberately not "fixed" by indenting to the item's depth. That needs the converter to
+        # carry list state, and it would make the LIVE output worse: both `+` uses in
+        # CHANGELOG.adoc sit under the last item of a bullet list and read as a closing paragraph
+        # for the whole list, which is what a trailing paragraph gives and what an indented
+        # continuation under the final sub-bullet would not.
+        #
+        # THE CAVEAT, because it is invisible: after `+` an ORDERED list ends and the next `.`
+        # item restarts at 1. There is no ordered list anywhere in CHANGELOG.adoc today
+        # (`grep -cE '^\.+ ' CHANGELOG.adoc` -> 0). If one is ever written with a `+` in it,
+        # indent the continuation here rather than shipping renumbered items.
         return ""
 
     m = RE_HEADING.match(line)
@@ -232,7 +273,10 @@ def convert_line(line, repo_url, ref):
 
     m = RE_OLIST.match(line)
     if m:
-        return "%s1. %s" % ("  " * (len(m.group(1)) - 1),
+        # THREE spaces per level, not two: CommonMark nests by the parent's CONTENT offset, and
+        # `1. ` is three characters wide where `- ` is two. Indent a nested ordered item by two
+        # and GitHub flattens the whole list to one level.
+        return "%s1. %s" % ("   " * (len(m.group(1)) - 1),
                             convert_inline(m.group(2), repo_url, ref))
 
     return convert_inline(line, repo_url, ref)
@@ -337,4 +381,9 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    # The changelog is read as explicit UTF-8; write it back the same way rather than at the
+    # runner's locale. `LC_ALL=C` turns the em dashes in CHANGELOG.adoc into a UnicodeEncodeError
+    # traceback reported as exit 1 - "IO error" - which is a true statement and a useless one at
+    # minute thirty of a release.
+    sys.stdout.reconfigure(encoding="utf-8")
     sys.exit(main(sys.argv[1:]))
