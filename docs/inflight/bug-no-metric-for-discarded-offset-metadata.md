@@ -1,6 +1,6 @@
 # A discarded offset map is logged but not counted
 
-<!-- inflight-type: task -->
+<!-- inflight-type: bug -->
 <!-- inflight-impact: blind-spot -->
 <!-- post-merge: checked-begin -->
 
