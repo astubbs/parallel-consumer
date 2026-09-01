@@ -23,18 +23,28 @@
 // false positives, and a tool that returns 401 hits is a tool an agent stops reading - the same
 // failure that made `prior-art --by-ref` necessary.
 //
-// CACHED ON REF TIPS, NEVER ON TIME. A ref that has not moved cannot have changed its notes, so the
-// set of tip SHAs is an EXACT cache key rather than a heuristic one. docs/inflight/ci-node-query-client.md
-// records this as a decision to make; this is it made. The GitHub half is the exception and says so.
+// THERE IS NO DISK CACHE FOR GIT DATA, and removing the one that was here is why `note drift` is
+// fast. Git is already the cache: `ls-tree` and `cat-file` read packed objects, and the tip SHAs
+// that would key a cache are themselves a git read. The cache that existed cost a read/write layer,
+// a 2.5MB file per key, a staleness class, and it shipped one real bug - orphaned snapshots, 7.4MB
+// in a single session - to make a 1.3s command take 59ms.
+//
+// It was also hiding a design mistake. `drift` asks about ONE path, and it was building the WHOLE
+// corpus (one `ls-tree` per ref, 436 forks) to answer it, then caching the result to make that
+// affordable. Asking git the narrow question directly - `cat-file --batch-check` over `<ref>:<path>`
+// - is 60ms cold, which is the cached path's speed with none of its machinery.
+//
+// `corpusIndex` remains for the two questions that genuinely span every note (`find`, `stranded`)
+// and simply pays its 1.3s. The ONE cache left is `prsByBranch`, because that one crosses the
+// network and shares a rate limit with every parallel session here.
 //
 // No process.exit, no printing: bin/inflight.mjs owns the process boundary.
 
-import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { baseline, blobDiffStat, exec, lines, refTips, treeEntries } from './git.mjs'
+import { baseline, blobDiffStat, blobsForPath, exec, lines, refTips, treeEntries } from './git.mjs'
 
 export const NOTES_DIR = 'docs/inflight'
 const REPO = 'astubbs/parallel-consumer'
@@ -62,29 +72,28 @@ function cacheWrite(name, value) {
  * Every (blob, path) under docs/inflight/ on every ref, plus the derived indexes.
  *
  * @returns {{
- *   baseline: string, refs: {ref: string, sha: string}[], cached: boolean,
+ *   baseline: string, refs: {ref: string, sha: string}[],
  *   byPath: Map<string, Map<string, string[]>>,   // path -> blob -> refs carrying that version
+ *   byRef: Map<string, {blob: string, path: string}[]>, // ref -> what it carries; the inverse, built once
  *   blobPaths: Map<string, string[]>,             // blob -> every path it has ever lived at
  *   basePaths: Set<string>,                       // paths present on the baseline
  *   baseBlobs: Set<string>,                       // blobs present on the baseline, at any path
+ *   baseEverPaths: Set<string>,                   // every path the baseline's HISTORY has held - the stranded filter
  * }}
  */
-export function corpusIndex({ cache = true } = {}) {
+export function corpusIndex() {
     const refs = refTips()
     const base = baseline()
-    const key = createHash('sha1').update(refs.map((r) => `${r.ref}=${r.sha}`).sort().join('\n')).digest('hex')
-    const name = `corpus-${key}.json`
-
-    let entries = cache ? cacheRead(name) : null
-    const cached = entries !== null
-    if (!cached) {
-        entries = refs.map(({ ref }) => [ref, treeEntries(ref, NOTES_DIR).map((e) => [e.blob, e.path])])
-        if (cache) cacheWrite(name, entries)
-    }
+    const entries = refs.map(({ ref }) => [ref, treeEntries(ref, NOTES_DIR).map((e) => [e.blob, e.path])])
 
     const byPath = new Map()
     const blobPaths = new Map()
+    // INVERTED ONCE, because branchFacts needs "what does this ref carry" and scanning byPath for it
+    // is O(corpus) per branch - measured ~3ms a call over 26,539 rows, and `note drift` asks up to
+    // six times per cluster. Built here so every consumer shares the one pass.
+    const byRef = new Map()
     for (const [ref, pairs] of entries) {
+        byRef.set(ref, pairs.map(([blob, path]) => ({ blob, path })))
         for (const [blob, path] of pairs) {
             if (!byPath.has(path)) byPath.set(path, new Map())
             const versions = byPath.get(path)
@@ -96,9 +105,11 @@ export function corpusIndex({ cache = true } = {}) {
         }
     }
 
+    // FROM `entries`, NOT A SECOND ls-tree. The baseline is always one of the refs above, so forking
+    // again for it cost a live git process on every cache hit - 67ms where the cache promised none.
     const basePaths = new Set()
     const baseBlobs = new Set()
-    for (const e of treeEntries(base, NOTES_DIR)) {
+    for (const e of byRef.get(base) ?? []) {
         basePaths.add(e.path)
         baseBlobs.add(e.blob)
     }
@@ -115,7 +126,7 @@ export function corpusIndex({ cache = true } = {}) {
     ).map((l) => l.split('\t')[1]).filter(Boolean))
 
     return {
-        baseline: base, refs, cached, byPath, basePaths, baseBlobs, baseEverPaths,
+        baseline: base, refs, byPath, byRef, basePaths, baseBlobs, baseEverPaths,
         blobPaths: new Map([...blobPaths].map(([b, s]) => [b, [...s]])),
     }
 }
@@ -136,12 +147,21 @@ export function prsByBranch({ cache = true } = {}) {
     return new Map(pairs)
 }
 
-/** The first `# ` heading of a blob - a note's own title, read without checking anything out. */
+/**
+ * The first `# ` heading of a blob - a note's own title, read without checking anything out.
+ *
+ * Memoised for the process, which is always safe: a blob SHA names its content, so the answer cannot
+ * change. Without it the same title was re-forked once per branch that happened to carry the same
+ * note - `note drift` on a busy note spent 361ms of 527ms in `sys`, almost all of it forking.
+ */
+const titleCache = new Map()
 export function blobTitle(blob) {
+    if (titleCache.has(blob)) return titleCache.get(blob)
     const res = exec('git', ['cat-file', '-p', blob])
-    if (!res.ok) return null
-    for (const l of lines(res.out)) if (l.startsWith('# ')) return l.slice(2).trim()
-    return null
+    let title = null
+    if (res.ok) for (const l of lines(res.out)) if (l.startsWith('# ')) { title = l.slice(2).trim(); break }
+    titleCache.set(blob, title)
+    return title
 }
 
 /**
@@ -187,24 +207,35 @@ export function addedSinceMergeBase(base, ref, path, blob) {
     return blobDiffStat(at, blob)
 }
 
+/** The baseline's own note paths - one ls-tree, memoised, used only by the theme fallback. */
+const baselinePathsCache = new Map()
+function baselineNotePaths(base) {
+    if (!baselinePathsCache.has(base)) {
+        baselinePathsCache.set(base, new Set(treeEntries(base, NOTES_DIR).map((e) => e.path)))
+    }
+    return baselinePathsCache.get(base)
+}
+
 /**
  * What IS this branch, in facts only.
  *
- * The cascade is Antony's: the PR title, else the title of a note this branch carries and the
- * baseline does not, else the branch name. Every step is a lookup. A summarised "theme" was the
- * first design and was dropped deliberately - it is the one field that cannot be cached, cannot be
- * reproduced, and has to be verified by the reader, which defeats the point of a guided command.
+ * The cascade is the PR title, else the title of a note this branch carries and the baseline does
+ * not, else the branch name. Every step is a lookup. A summarised "theme" was the first design and
+ * was dropped deliberately - it is the one field that cannot be reproduced and has to be verified by
+ * the reader, which defeats the point of a guided command.
+ *
+ * THE SECOND STEP IS LAZY, and that is what lets `drift` avoid building the whole corpus. It costs
+ * one `ls-tree` for this ref, and only when the ref has no PR and is actually being displayed - at
+ * most `maxBranchesPerCluster` per cluster, rather than one per ref in the repository.
  */
-export function branchFacts(index, ref, prs) {
+export function branchFacts(ref, prs, base) {
     const pr = prs.get(ref)
     if (pr) return { ref, pr, theme: pr.title, themeFrom: 'pr-title' }
 
-    const own = []
-    for (const [path, versions] of index.byPath) {
-        if (index.basePaths.has(path)) continue
-        for (const [blob, refs] of versions) if (refs.includes(ref)) own.push({ path, blob })
-    }
-    own.sort((a, b) => a.path.localeCompare(b.path))
+    const onBase = baselineNotePaths(base)
+    const own = treeEntries(ref, NOTES_DIR)
+        .filter((e) => !onBase.has(e.path))
+        .sort((a, b) => a.path.localeCompare(b.path))
     for (const o of own) {
         const title = blobTitle(o.blob)
         if (title) return { ref, pr: null, theme: title, themeFrom: `note:${o.path}`, ownNotes: own.length }
@@ -233,22 +264,33 @@ export function findNotes(index, query) {
 /**
  * How one note differs across every branch tip - DIVERGENCE ONLY, by default.
  *
- * Clustered by blob, so the diff runs once per DISTINCT VERSION rather than once per ref: 37 diffs
- * instead of 274 for the fork's most-edited note.
+ * TAKES A PATH, NOT THE CORPUS. This is a question about ONE file, and answering it used to mean
+ * building an index of every note on every ref - 436 `ls-tree` forks - which then had to be cached
+ * to be usable. Asking git the narrow question instead is 60ms cold: one `cat-file --batch-check`
+ * over `<ref>:<path>` for the versions, one `rev-list` plus one `cat-file` for the history.
  *
- * Then split, which is the part that makes it readable. A cluster whose blob the baseline once held
- * is a branch that has simply not merged recently - it is behind, it gets further behind every time
- * anyone edits the note, and nobody needs to be told. What is reported is the content that exists on
- * a branch and has never existed on the baseline, because that is what is at risk of being lost.
+ * Clustered by blob, so the diff runs once per DISTINCT VERSION rather than once per ref: 37 rather
+ * than 274 for the fork's most-edited note.
  *
- * `all: true` returns the behind clusters too, for the rare case where you want the full picture.
+ * Then split. A cluster whose blob the baseline once held is a branch that has simply not merged
+ * recently - it is behind, it gets further behind every time anyone edits the note, and nobody needs
+ * to be told. What is reported is content that exists on a branch and has never existed on the
+ * baseline, because that is what is at risk of being lost.
  */
-export function drift(index, path, { prs = new Map(), maxBranchesPerCluster = 6, all = false } = {}) {
-    const versions = index.byPath.get(path)
-    if (!versions) return { path, found: false }
+export function drift(path, { prs = new Map(), maxBranchesPerCluster = 6, all = false } = {}) {
+    const base = baseline()
+    const refs = refTips().map((r) => r.ref)
+    const blobs = blobsForPath(refs, path)
+    if (blobs.size === 0) return { path, found: false }
 
-    const history = baselineHistoryBlobs(index.baseline, path)
-    const baseBlob = [...versions.entries()].find(([, refs]) => refs.includes(index.baseline))?.[0] ?? null
+    const versions = new Map()
+    for (const [ref, blob] of blobs) {
+        if (!versions.has(blob)) versions.set(blob, [])
+        versions.get(blob).push(ref)
+    }
+
+    const history = baselineHistoryBlobs(base, path)
+    const baseBlob = blobs.get(base) ?? null
 
     const build = ([blob, refs]) => {
         const sorted = [...refs].sort()
@@ -258,9 +300,9 @@ export function drift(index, path, { prs = new Map(), maxBranchesPerCluster = 6,
             isBaseline: blob === baseBlob,
             // Against the merge-base of the first carrying ref, so the number is what this branch
             // ADDED rather than how far the baseline has moved since.
-            added: blob === baseBlob ? null : addedSinceMergeBase(index.baseline, sorted[0], path, blob),
+            added: blob === baseBlob ? null : addedSinceMergeBase(base, sorted[0], path, blob),
             title: blobTitle(blob),
-            branches: sorted.slice(0, maxBranchesPerCluster).map((r) => branchFacts(index, r, prs)),
+            branches: sorted.slice(0, maxBranchesPerCluster).map((r) => branchFacts(r, prs, base)),
         }
     }
 
@@ -274,13 +316,11 @@ export function drift(index, path, { prs = new Map(), maxBranchesPerCluster = 6,
     }
 
     return {
-        path, found: true, baseline: index.baseline, onBaseline: index.basePaths.has(path),
-        refsCarrying: [...versions.values()].reduce((n, r) => n + r.length, 0),
-        refsTotal: index.refs.length,
+        path, found: true, baseline: base, onBaseline: baseBlob !== null,
+        refsCarrying: blobs.size,
+        refsTotal: refs.length,
         baselineCluster: baseBlob ? build([baseBlob, versions.get(baseBlob)]) : null,
-        divergent: divergent
-            .map(build)
-            .sort((a, b) => b.refs.length - a.refs.length),
+        divergent: divergent.map(build).sort((a, b) => b.refs.length - a.refs.length),
         behind: {
             versions: behind.length,
             refs: behind.reduce((n, b) => n + b.refs.length, 0),
@@ -332,14 +372,4 @@ export function stranded(index) {
         byKey.get(key).paths.push(s.path)
     }
     return [...byKey.values()].sort((a, b) => b.paths.length - a.paths.length || b.refCount - a.refCount)
-}
-
-/** Every rename the blob index can prove: one blob, more than one path. No heuristic involved. */
-export function renames(index) {
-    const out = []
-    for (const [blob, paths] of index.blobPaths) {
-        if (paths.length < 2) continue
-        out.push({ blob, paths: [...paths].sort(), onBaseline: paths.filter((p) => index.basePaths.has(p)) })
-    }
-    return out.sort((a, b) => b.paths.length - a.paths.length)
 }

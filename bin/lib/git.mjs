@@ -9,7 +9,12 @@
 // NOTHING HERE INTERPRETS GIT. Every function is a thin wrapper over plumbing - for-each-ref,
 // cat-file, ls-tree, rev-parse - and the only work done in JavaScript is grouping the output into a
 // Map. Where git offers an exact answer and a heuristic one, this takes the exact one: blob identity
-// over `--find-renames`, `merge-base --is-ancestor` over `branch --merged`.
+// over `--find-renames`, never `--follow`.
+//
+// A containment helper was written here and removed unused. The knowledge it carried is real and is
+// recorded in docs/inflight/ci-inflight-absorbs-the-query-half.md instead - `git branch -d` and
+// `git cherry` both answer a different question than they appear to - because a function nobody
+// calls is documentation with a maintenance cost, not a mechanism.
 //
 // IT NEVER CALLS process.exit AND NEVER PRINTS. bin/inflight.mjs owns the process boundary;
 // bin/test-inflight.mjs asserts that no library under bin/lib/ contains a process exit at all.
@@ -111,23 +116,6 @@ export function blobDiffStat(a, b) {
     if (!first) return { added: 0, removed: 0, identical: true }
     const [added, removed] = first.split('\t')
     return { added: Number(added), removed: Number(removed), identical: false }
-}
-
-/**
- * IS `branch` FULLY CONTAINED IN `target`?
- *
- * Use this, never `git branch -d`'s refusal and never `git cherry`. Both answer a different question
- * than the one they appear to:
- *
- *   - `git branch -d` measures containment against the CURRENT HEAD, not against the branch you
- *     merged into. On 2026-09-01 it refused three deletions as "not fully merged" while every commit
- *     was demonstrably present in the target - the checkout was simply on a stale master.
- *   - `git cherry` compares patch-ids, and a squash-merge changes the patch-id of everything it
- *     squashed. The same day it reported 11 of 12 commits absent from master when the content had
- *     landed weeks earlier through a squashed PR.
- */
-export function isContainedIn(branch, target) {
-    return exec('git', ['merge-base', '--is-ancestor', branch, target]).ok
 }
 
 /**

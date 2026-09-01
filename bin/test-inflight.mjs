@@ -15,6 +15,15 @@
 // not happen to print. Returning findings is what makes `sections-do-not-overlap` and
 // `ref-clusters-are-deduplicated` expressible at all - both are statements about data.
 //
+// THE FIVE CHECKS COVERING git.mjs AND notes.mjs WERE WRITTEN, REPORTED AS PASSING, AND WERE NOT IN
+// THE FILE. The edit that added them anchored on text that did not match and said nothing; the suite
+// then reported "All 22 self-test(s) passed" over a set that had never contained them, so three
+// commands shipped with zero coverage while their author believed otherwise. It is the exact failure
+// this file exists to prevent, committed inside it, and it surfaced only because a reviewer noticed
+// two module loaders that nothing called. Any edit adding a check here must VERIFY the check is in
+// the file afterwards - `grep -c "^        id: '"` is the cheap version - because an edit that
+// reports success is not evidence that it landed.
+//
 // TWO OF THESE ARE REGRESSION TESTS FOR BUGS THIS FILE FOUND:
 //   - sections-do-not-overlap: section 4's pathspec was `docs/*.md`, and `*` crosses `/` in git's
 //     wildmatch, so "everything else under docs/" silently re-listed every plan, solution and note.
@@ -221,6 +230,94 @@ const CHECKS = [
                 '            if (terms.length === 0) return { ok: false, reason: priorArtUsage }',
                 '            if (terms.length === 0) return { ok: false, reason: "nope" }')
         },
+    },
+    {
+        id: 'blobs-for-path-correlates-by-its-own-token',
+        why: 'pairing cat-file output to input by position is correct until anything reorders it',
+        run: async (binDir) => {
+            const g = await gitlib(binDir)
+            const refs = g.refTips().map((r) => r.ref)
+            const m = g.blobsForPath(refs, 'docs/inflight/AGENTS.md')
+            const known = new Set(refs)
+            if (m.size === 0 || ![...m.keys()].every((k) => known.has(k))) return false
+            const base = g.baseline()
+            const direct = g.exec('git', ['rev-parse', `${base}:docs/inflight/AGENTS.md`]).out.trim()
+            return m.get(base) === direct
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'git.mjs'),
+            'const query = refs.map((r) => `${r}:${path} ${r}`).join',
+            'const query = refs.map((r) => `${r}:${path}`).join'),
+    },
+    {
+        id: 'stranded-excludes-what-the-baseline-once-had',
+        why: 'a note the baseline git rm-d landed and closed; reporting it as stranded is a false positive',
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            const index = n.corpusIndex()
+            if (index.baseEverPaths.size === 0) return false
+            const reported = new Set(n.stranded(index).flatMap((c) => c.paths))
+            return [...index.baseEverPaths].every((p) => !reported.has(p))
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
+            '        if (index.baseEverPaths.has(path)) continue', '        // mutant: filter removed'),
+    },
+    {
+        id: 'stranded-is-clustered-not-listed',
+        why: '364 separate lines is a result an agent stops reading, which is the same as no result',
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            const clusters = n.stranded(n.corpusIndex())
+            const paths = clusters.reduce((t, c) => t + c.paths.length, 0)
+            return paths > 0 && clusters.length < paths
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
+            "        const key = s.refs.join(' ')", '        const key = s.path'),
+    },
+    {
+        id: 'drift-reports-divergence-not-distance',
+        why: 'a branch that has not merged recently is not drift, and it is most of the volume',
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            const path = 'docs/inflight/bug-857-family.md'
+            const d = n.drift(path, { prs: new Map() })
+            if (!d.found || d.divergent.length === 0 || d.behind.versions === 0) return false
+            const history = n.baselineHistoryBlobs(d.baseline, path)
+            return d.divergent.every((c) => !history.has(c.blob))
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
+            '        if (history.has(blob)) behind.push({ blob, refs })',
+            '        if (globalThis.__never) behind.push({ blob, refs })'),
+    },
+    {
+        id: 'drift-clusters-by-blob-not-by-ref',
+        why: 'diffing once per ref instead of once per version is 274 diffs where 37 will do',
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            const d = n.drift('docs/inflight/bug-857-family.md', { prs: new Map() })
+            if (!d.found) return false
+            const all = [...d.divergent, ...(d.baselineCluster ? [d.baselineCluster] : [])]
+            const blobs = all.map((c) => c.blob)
+            return blobs.length > 0 && blobs.length < d.refsCarrying && new Set(blobs).size === blobs.length
+        },
+        // The first mutant here truncated each cluster's ref list, which changed nothing the check
+        // asserts - a control that cannot fail. This one emits a cluster twice, which is exactly the
+        // per-ref shape clustering exists to avoid, and breaks the uniqueness the check requires.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
+            '        else divergent.push(entry)',
+            '        else { divergent.push(entry); divergent.push(entry) }'),
+    },
+    {
+        id: 'nested-commands-are-listed-and-reachable',
+        why: 'a subcommand missing from help is a tool nobody can find, which is the state this ends',
+        run: async (binDir) => {
+            const help = invoke(binDir, ['help']).out
+            if (!help.includes('note find') || !help.includes('note drift')) return false
+            const usage = invoke(binDir, ['help', 'note', 'drift'])
+            return usage.code === 0 && usage.out.includes('bin/inflight.mjs note drift')
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+            '        const topic = [...ALL].sort((a, b) => b.path.length - a.path.length)',
+            '        const topic = [...ALL].sort((a, b) => a.path.length - b.path.length)'),
     },
 ]
 

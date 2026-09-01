@@ -1,8 +1,13 @@
 // Copyright (C) 2026 Antony Stubbs and contributors
 //
-// VIEWS OVER THE NOTE CORPUS. Reads what bin/lib/notes.mjs returns and produces strings; runs no git
-// and decides no exit code. Kept apart from the queries so a caller that wants the findings - a hook
-// building a session index, a gate deciding whether to fail - never pays to render them.
+// VIEWS. Reads what the query libraries return and produces strings; runs no git and decides no exit
+// code. Kept apart from the queries so a caller that wants the findings - a hook building a session
+// index, a gate deciding whether to fail - never pays to render them.
+//
+// `formatWarnings` is here rather than beside either caller because bin/lib/git.mjs's
+// `freshnessWarnings` has two consumers and they rendered it identically, down to the eleven-space
+// continuation indent and the one id that prints NOTE instead of WARNING. That was the second copy
+// of a shared primitive appearing on the same branch that wrote the rule against it.
 
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`
 

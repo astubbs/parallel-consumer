@@ -44,8 +44,8 @@
 // `format()` renders one for a terminal; `onSection` streams sections as they complete, because a
 // 438-ref search that prints nothing until it finishes reads as a hang.
 
-import { execFileSync } from 'node:child_process'
-import { statSync } from 'node:fs'
+import { baseline as baselineRef, exec, freshnessWarnings, lines, refTips } from './git.mjs'
+import { formatWarnings } from './views.mjs'
 
 const REPO = 'astubbs/parallel-consumer'
 
@@ -63,17 +63,6 @@ search term available.
 --by-ref groups the hits by the SET OF REFS carrying them instead of listing one line per path. Use
 it when a term returns dozens of paths: identical ref-sets mean one branch, and the per-path view
 cannot say that. A cluster whose refs are all gone is a dead branch, not prior art.`
-
-/** Run a command; return {ok, out, status}. Never throws - callers decide what a failure means. */
-function exec(cmd, args) {
-    try {
-        return { ok: true, out: execFileSync(cmd, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }), status: 0 }
-    } catch (e) {
-        return { ok: false, out: e.stdout ?? '', status: e.status ?? -1 }
-    }
-}
-
-const lines = (s) => s.split('\n').filter((l) => l.length > 0)
 
 /**
  * @typedef {{path: string, refs: string[], onBaseline: boolean}} Hit
@@ -112,64 +101,14 @@ export function priorArt(terms, opts = {}) {
 
     // Local branches plus origin's, minus the symbolic HEAD which duplicates whatever it points at.
     // Deliberately NOT `--all`: that pulls in tags and refs/stash, which add noise without adding docs.
-    const refsResult = exec('git', ['for-each-ref', '--format=%(refname:short)', 'refs/heads', 'refs/remotes/origin'])
-    if (!refsResult.ok) return cannot('cannot list refs - is this a git repository?')
-    const refs = lines(refsResult.out).filter((r) => !r.endsWith('/HEAD'))
-    if (refs.length === 0) return cannot('no branch refs found - nothing to search')
+    const refs = refTips().map((r) => r.ref)
+    if (refs.length === 0) return cannot('no branch refs found - is this a git repository?')
 
-    // The ref every hit is compared against, so "not on the mainline" is a statement about a real ref
-    // rather than about whatever happens to be checked out.
-    const baseline = exec('git', ['rev-parse', '--verify', '--quiet', 'origin/master']).ok ? 'origin/master' : 'master'
+    const baseline = baselineRef()
 
     result.baseline = baseline
     result.refsSearched = refs.length
-
-    // ------------------------------------------------------------------------------------------------
-    // Freshness, collected before any result. A complete search of a stale corpus is still a false
-    // negative, and it reads exactly like a complete search of a current one.
-    //
-    // Both warnings are real incidents. On 2026-09-01 a session investigated
-    // astubbs/parallel-consumer#44 from the main checkout at the HEAD it opened with; master advanced
-    // 151 commits underneath it - including a solutions write-up on the very path under investigation
-    // - and every working-tree read answered for that snapshot without saying so.
-    // ------------------------------------------------------------------------------------------------
-    const warn = (id, ...lines) => result.warnings.push({ id, lines })
-
-    const gitDir = exec('git', ['rev-parse', '--git-dir']).out.trim()
-    const commonDir = exec('git', ['rev-parse', '--git-common-dir']).out.trim()
-    if (gitDir === commonDir) {
-        warn('main-checkout',
-            'this is the MAIN CHECKOUT, which AGENTS.md says never to work in - several',
-            'sessions share it, so its HEAD can move between two of your own commands.',
-            'Cut a worktree: git worktree add .claude/worktrees/<name> -b <branch> origin/master')
-    }
-
-    // A shallow clone does not error, it just has less history - and `git log --all -S` below then
-    // answers over a truncated corpus with no indication that it did.
-    if (exec('git', ['rev-parse', '--is-shallow-repository']).out.trim() === 'true') {
-        warn('shallow',
-            'SHALLOW clone - the commit search below covers only the fetched depth.',
-            'Run: git fetch --unshallow')
-    }
-
-    try {
-        const ageSeconds = (Date.now() - statSync(`${commonDir}/FETCH_HEAD`).mtimeMs) / 1000
-        if (ageSeconds > 3600) {
-            warn('stale-fetch',
-                `last fetch was ${Math.floor(ageSeconds / 3600)}h ago, so '${baseline}' and the ${refs.length} refs`,
-                "below are that stale. Run 'git fetch origin' and re-run.")
-        }
-    } catch {
-        warn('never-fetched', "no FETCH_HEAD - this clone may never have fetched. Run 'git fetch origin'.")
-    }
-
-    const behind = Number(exec('git', ['rev-list', '--count', `HEAD..${baseline}`]).out.trim() || '0')
-    if (behind > 0) {
-        warn('head-behind',
-            `your HEAD is ${behind} commit(s) behind ${baseline}. The search below is against the`,
-            'refs, not your working tree, so it is unaffected - but anything you read out of',
-            `the working tree is ${behind} commits old. AGENTS.md: 'Read the commits you inherit'.`)
-    }
+    result.warnings = freshnessWarnings(baseline, refs.length)
 
     // ------------------------------------------------------------------------------------------------
     // Documents, across every ref. A hit records EVERY ref carrying it, not just the first: which
@@ -278,16 +217,11 @@ export function priorArt(terms, opts = {}) {
 // precisely because the search handed back the data rather than a page of text.
 // ================================================================================================
 
-const cont = (lines) => lines.join('\n           ')
-
 /** The header every view shares - what was searched, and how much of it. */
 export function formatHeader(r) {
-    const out = [`prior-art: searching ${r.refsSearched} refs for /${r.pattern}/i  (baseline: ${r.baseline})\n`]
-    for (const w of r.warnings) {
-        out.push(`  ${w.id === 'head-behind' ? 'NOTE' : 'WARNING'}: ${cont(w.lines)}`)
-    }
-    if (r.warnings.length) out.push('')
-    return out.join('\n')
+    const head = `prior-art: searching ${r.refsSearched} refs for /${r.pattern}/i  (baseline: ${r.baseline})\n`
+    const warnings = formatWarnings(r.warnings)
+    return warnings ? `${head}\n${warnings}` : head
 }
 
 /** One section, per path. The default view, and the one streamed as sections complete. */

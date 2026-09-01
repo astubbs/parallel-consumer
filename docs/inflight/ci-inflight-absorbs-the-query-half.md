@@ -3,12 +3,15 @@
 <!-- inflight-type: task -->
 <!-- inflight-impact: ci -->
 
+<!-- post-merge: checked-begin -->
 **A hook or gate should decide POLICY. It should not know how to READ THE CORPUS.** Several do both
 today, in bash, each with its own copy of the reading. `bin/inflight.mjs` now owns the reading -
 [`ci-node-query-client.md`](ci-node-query-client.md) proposed it and the cross-branch half landed in
 astubbs/parallel-consumer#400 - so the migration is a subtraction from those scripts rather than
 new work.
+<!-- post-merge: checked-end -->
 
+<!-- post-merge: checked -->
 Surveyed 2026-09-01, on astubbs/parallel-consumer#400. Numbers are line counts, not estimates of
 what migrates: each script keeps its policy and loses only its reading.
 
@@ -19,8 +22,8 @@ what migrates: each script keeps its policy and loses only its reading.
 | `.claude/hooks/inject-branch-context.sh` | 654 | a branch's commits, handoff notes, PR body and comments - `branchFacts()` already answers most of it |
 | `.claude/hooks/inject-recorded-knowledge.sh` | 437 | ~250 of them parse three tag axes and group by impact order. It **already runs a cross-ref `git grep`** to count branch-only documents - the prior-art fan-out, reimplemented in bash |
 | `.claude/hooks/check-merge-outstanding-work.sh` | 364 | reads notes and `gh` to decide whether background work is live |
-| `bin/check-branch-self-reference.sh` | 360 | "does a note mention THIS branch or PR" |
-| `.claude/hooks/remind-inflight-on-push.sh` | 239 | "what does this PR's own note still say is open" - `note find` plus a read |
+| `bin/check-branch-self-reference.sh` | 360 | whether a note names the branch or PR it sits on |
+| `.claude/hooks/remind-inflight-on-push.sh` | 239 | what a PR's own note still says is open - `note find` plus a read |
 | `bin/check-inflight-tags.sh` | 169 | parses every note, then fails. Already shares `bin/lib/inflight-tags.sh` with the index - the split is right and is done in bash |
 | `bin/issue-index.sh` | 127 | GitHub to tree; the tunnel's first half, and it should share the tool's cache |
 
@@ -47,6 +50,24 @@ after the hook migrations have proved the libraries stable.
 Counting the bash this sits against: 23,666 lines under `bin/` and `.claude/hooks/`, against ~1,700
 in `bin/*.mjs` and 2,515 in `.github/scripts/` (self-tests included). Node is the default for new
 scripts by operator ruling; this is what the existing surface looks like.
+
+## Two git traps to encode, wherever this work lands
+
+<!-- post-merge: checked -->
+Both cost real time on astubbs/parallel-consumer#400, and both fail by answering a *different*
+question than the one they appear to answer - so neither looks like a failure.
+
+- **`git branch -d`'s "not fully merged" is measured against the CURRENT HEAD**, not against the
+  branch you merged into. It refused three deletions whose every commit was demonstrably present in
+  the target, because the checkout was on a stale master. The real question is
+  `git merge-base --is-ancestor <branch> <target>`.
+- **`git cherry` compares patch-ids, and a squash-merge changes them.** It reported 11 of 12 commits
+  absent from master when the content had landed weeks earlier through a squashed PR. To ask whether
+  work landed, check the *artifacts*, not the patch-ids.
+
+A helper for the first was written into `bin/lib/git.mjs` and removed unused before merge - a
+function nobody calls is documentation with a maintenance cost. The knowledge belongs here until
+something needs it.
 
 ## Delete when
 

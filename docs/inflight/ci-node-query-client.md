@@ -40,6 +40,7 @@ whichever lands first owns the edges, and the other becomes its consumer.
 
 ## What of this has now landed
 
+<!-- post-merge: checked -->
 **The cross-branch reader was built after all, in astubbs/parallel-consumer#400**, and the
 adopt-or-build argument this note said to have was had: Backlog.md ships the reader, but its schema
 carries status, milestones, dependencies and acceptance criteria - not a consequence ordering - so

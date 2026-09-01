@@ -34,9 +34,9 @@
 // EXIT CODES: 0 ran (whatever it found), 2 cannot run - including a usage error. Self-test:
 // bin/test-inflight.mjs.
 
-import { freshnessWarnings } from './lib/git.mjs'
+import { baseline, freshnessWarnings, refTips } from './lib/git.mjs'
 import { corpusIndex, drift, findNotes, prsByBranch, stranded } from './lib/notes.mjs'
-import { formatDrift, formatFind, formatStranded, formatWarnings } from './lib/notes-views.mjs'
+import { formatDrift, formatFind, formatStranded, formatWarnings } from './lib/views.mjs'
 import {
     format, formatHeader, formatSection, formatTail,
     priorArt, summary as priorArtSummary, usage as priorArtUsage,
@@ -139,9 +139,9 @@ carries that the baseline does not, else the branch name. Nothing is summarised 
                     const all = args.includes('--all')
                     const path = args.find((a) => a !== '--all')
                     if (!path) return { ok: false, reason: 'note drift: give a note path (see: note find)' }
-                    const index = corpusIndex()
-                    emit(formatWarnings(freshnessWarnings(index.baseline, index.refs.length)))
-                    emit(formatDrift(drift(index, path, { prs: prsByBranch(), all })))
+                    // No corpus index: this is a question about one path, so it asks git that.
+                    emit(formatWarnings(freshnessWarnings(baseline(), refTips().length)))
+                    emit(formatDrift(drift(path, { prs: prsByBranch(), all })))
                     return { ok: true }
                 },
             },
