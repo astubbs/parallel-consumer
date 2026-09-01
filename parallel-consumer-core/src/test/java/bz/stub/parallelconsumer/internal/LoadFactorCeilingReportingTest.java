@@ -165,8 +165,9 @@ class LoadFactorCeilingReportingTest {
 
     /**
      * An initial factor above the maximum cannot step either, but it is a misconfiguration rather than a request - so
-     * it must not be classified as a deliberately fixed factor and quietened. Nothing validates the pair yet
-     * ({@code docs/refactoring.md}), which is exactly why this has to hold.
+     * it must not be classified as a deliberately fixed factor and quietened.
+     * {@link ParallelConsumerOptions#validate()} rejects such a pair before it can be configured; this constructor is
+     * internal and takes the bounds directly, so the classification has to hold on its own regardless.
      */
     @Test
     void invertedBoundsAreNotTreatedAsAFixedFactor() {

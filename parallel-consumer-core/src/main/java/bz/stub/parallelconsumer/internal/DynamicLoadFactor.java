@@ -83,8 +83,11 @@ public class DynamicLoadFactor {
      * <p>
      * Deliberately {@code ==} and not {@code >=}. An inverted pair - an initial factor <em>above</em> the maximum -
      * also cannot step, but it is a typo rather than a request, and classifying it as fixed would silence the only
-     * report that would ever have told the user about it. Nothing validates the pair today;
-     * {@code docs/refactoring.md} tracks failing fast in {@code ParallelConsumerOptions#validate()} instead.
+     * report that would ever have told the user about it.
+     * {@link bz.stub.parallelconsumer.ParallelConsumerOptions#validate()} now rejects an inverted pair outright, so
+     * a configured one no longer reaches here - but this constructor is internal and takes the two bounds directly,
+     * so the classification still has to hold on its own rather than widen to {@code >=} on the strength of a check
+     * upstream of it.
      */
     @Getter
     private final boolean staticFactor;

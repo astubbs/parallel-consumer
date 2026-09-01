@@ -91,6 +91,15 @@ refactors below, which are non-breaking and can land at any point in any line.
   [`docs/inflight/core-exception-hierarchy-cleanup.md`](inflight/core-exception-hierarchy-cleanup.md)
   owns the rest of the naming work - `InternalException` and the two spellings of the PC prefix are
   untouched, so a later pass will be a second break unless it is done in this same release.
+- **DONE, landing with astubbs/parallel-consumer#201: an inverted `initialLoadFactor` /
+  `maximumLoadFactor` pair is rejected instead of accepted.**
+  `ParallelConsumerOptions#validate()` now throws `IllegalArgumentException` naming both options and
+  both values. A break only for a configuration that never did what it said - today an initial factor
+  above the maximum is accepted and pinned at the initial value, surfacing at best as an inverted
+  `100/10` in the rate-limited saturation warning, so an application carrying the typo starts and
+  runs; after this it fails at construction. Small blast radius, but "started yesterday, will not
+  start today" is what a `=== Breaking` bullet exists for. Recorded here rather than only in the
+  commit, because this section is what the release notes are assembled from.
 - **Remove the deprecated `commitInterval` options** - `public void setTimeBetweenCommits` /
   `public Duration getTimeBetweenCommits` in `internal/AbstractParallelEoSStreamProcessor.java`.
 - **Remove the accreting deprecated `ParallelConsumerOptions` fields**
@@ -482,11 +491,7 @@ but not this.*
   `is this method redundant`: method may be redundant now that modules don't use the internal
   threading system.
 
-### ParallelConsumerOptions.java (573 lines)
-- `validate()` does not check `initialLoadFactor <= maximumLoadFactor`, so an inverted
-  pair is silently pinned by `DynamicLoadFactor` rather than rejected - and since
-  astubbs#201 it also reads as a deliberately fixed factor, which is exactly what a
-  typo is not. Fail fast in `validate()` instead.
+### ParallelConsumerOptions.java (627 lines)
 - Accreting deprecated fields (`public void setCommitInterval`,
   `private final Duration defaultMessageRetryDelay`, `isUsingTransactionalProducer`) and the
   `ignoreReflectiveAccessExceptionsForAutoCommitDisabledCheck` temporary

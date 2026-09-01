@@ -475,6 +475,7 @@ public class ParallelConsumerOptions<K, V> {
         Objects.requireNonNull(consumer, "A consumer must be supplied");
 
         transactionsValidation();
+        loadFactorValidation();
     }
 
     private void transactionsValidation() {
@@ -501,6 +502,29 @@ public class ParallelConsumerOptions<K, V> {
                         Fields.commitMode,
                         commitMode));
             }
+        }
+    }
+
+    /**
+     * The load factor bounds have only one meaningful ordering: {@link #initialLoadFactor} is where the dynamic load
+     * factor starts, and {@link #maximumLoadFactor} is the ceiling it is allowed to step up to. An inverted pair can
+     * never step, so it is a typo rather than a request. Unchecked it is accepted and pinned at the initial value,
+     * surfacing at best as an inverted {@code 100/10} inside the rate-limited saturation warning - which only fires
+     * under load, and reads as a capacity signal rather than as the misconfiguration it is.
+     * <p>
+     * Checked whether or not {@link #messageBufferSize} is set. A buffer size makes the pair <em>unused</em>, not
+     * sensible, and accepting a nonsensical value is how it survives to the configuration change that starts reading
+     * it again.
+     */
+    private void loadFactorValidation() {
+        if (initialLoadFactor > maximumLoadFactor) {
+            throw new IllegalArgumentException(msg("Cannot set {} ({}) above {} ({}) - the initial load factor is "
+                            + "where the dynamic load factor starts and the maximum is the ceiling it may step up "
+                            + "to, so an inverted pair can never step",
+                    Fields.initialLoadFactor,
+                    initialLoadFactor,
+                    Fields.maximumLoadFactor,
+                    maximumLoadFactor));
         }
     }
 
