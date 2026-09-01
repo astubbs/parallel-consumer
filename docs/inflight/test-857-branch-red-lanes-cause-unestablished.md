@@ -23,8 +23,23 @@ an ENTRY refresh (before `pollingBroker` is set, preserving the CME fix);
 <!-- post-merge: checked-begin - every reference below names its PR in full and is written
      in the past tense as a record of runs that happened, so it reads the same once these
      branches have landed and stopped existing -->
-- **ANSWERED 2026-09-01: the `Performance Tests` failure was never a product defect. It was the lane
-  measuring itself.** The chain, with the numbers that establish each step:
+- **WITHDRAWN, later the same day: "the `Performance Tests` failure was never a product defect."**
+  It WAS one. The cause is an eager `log.trace` argument in the control loop - an O(shards) sum
+  evaluated on every pass at every level - introduced by this branch and now fixed;
+  `../solutions/performance-issues/slf4j-defers-formatting-not-argument-evaluation-2026-09-01.md`
+  owns the mechanism. Establishing it took a one-term control: with the profiles `@Disabled` and
+  costing 0.020 s the test still failed at 43,552, so lane composition is ruled out by measurement,
+  and the neighbouring classes sat within 1-3% of the baseline run, so runner speed is too.
+  Removing the one line moved it to 76,950 and it has passed twice since.
+
+  **This bullet is kept rather than deleted because the numbers below are real and were misread, and
+  the misreading is the lesson.** Every row is a genuine observation; the error was concluding
+  "therefore the lane, not the product" from a set of conditions that never isolated the tree. Note
+  also that this bullet contradicted a later one in this same file - which said the lane "has now run
+  with the fix in place and it still fails" - for long enough that both were on master's doorstep
+  together. Two notes in one file drifting apart is the same failure as two files drifting apart.
+
+  The chain as it was argued, with the numbers that were thought to establish each step:
 
   | condition | rec/s | outcome |
   |---|---|---|
@@ -36,9 +51,11 @@ an ENTRY refresh (before `pollingBroker` is set, preserving the CME fix);
 
   This branch tagged `MultiInstanceRebalanceTest`'s capacity profiles `@Tag("performance")`, which put
   them in the same lane - and the same reused JVM - as the throughput test. Disabling only the
-  heaviest moved the number by ~5,000 and no more, which is what showed the mechanism was the lane
-  rather than any one test. **The local full lane passes at 72,498, so the effect is CI-only**:
-  a development machine has headroom a hosted runner does not.
+  heaviest moved the number by about 5,000 and no more. That was read as "the mechanism is the lane
+  rather than any one test"; it should have been read as "composition is worth about 5,000 and
+  something else is worth 30,000". **The CI-only observation was right and its explanation was
+  wrong** - a development box does have headroom a hosted runner lacks, but what that headroom was
+  absorbing was the shard scan, not the lane.
 
   **The reported rate is not a rate once the deadline is struck.** `MultiInstanceHighVolumeTest`
   asserts 3,000,000 records within a 60-second `GATING_CEILING`; the failing runs report
@@ -51,8 +68,10 @@ an ENTRY refresh (before `pollingBroker` is set, preserving the CME fix);
   library exists to catch. A fork-isolation workaround was tried and reverted for the same reason: it
   buys headroom under the wall instead of removing the wall's load-bearing role.
 
-  The profiles are held out of the gating lane with `@Disabled` (the tags are load-bearing for
-  `capacityScale()`'s guard, so untagging would break the class). Re-enabling them, and deciding where
+  **All three profiles were re-enabled on 2026-09-01** (operator decision) and the lane gates on them;
+  `largeNumberOfInstances` has failed once since, with a rebalance stall that the control-loop fix does
+  NOT address - `test-largenumberofinstances-residual-failures-measured-not-explained.md` owns it.
+  What follows described the state while they were held out, and the question of where
   a test whose own documentation says a single run is not a verdict can live given the lane is a
   **required check**, is `handoff/enable-large-number-of-instances`.
 
@@ -89,7 +108,12 @@ an ENTRY refresh (before `pollingBroker` is set, preserving the CME fix);
   from a suspect tree is a control arm for whatever stayed behind, and it is worth checking for one
   before designing a bisect.
 
-- **Cheapest next ablation, not yet run: the INFO-level logging raise.** Both branches of the revoke
+- **THIS ONE POINTED AT THE RIGHT AREA, and was never run.** The defect turned out to be logging -
+  though argument *evaluation* at TRACE rather than INFO *volume*, so the shape was right and the
+  detail was not. Recorded because a prediction that was nearly right and went unrun is worth more
+  than a correct one nobody wrote down. Original text follows.
+
+  **Cheapest next ablation, not yet run: the INFO-level logging raise.** Both branches of the revoke
   fork were lifted to INFO by the astubbs/parallel-consumer#29 work (`grep "Acquired commitLock on
   revoke"`), and per-loop INFO logging in a three-million-record run is the right shape to cost this
   much throughput. Also on the same suspect list: the coherence check in `describeProgress()` and the

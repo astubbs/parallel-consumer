@@ -38,7 +38,7 @@ import static com.google.common.truth.Truth.assertThat;
  * Background: the eager form reached the control loop on astubbs/parallel-consumer#29, and a controlled
  * measurement established it as the cause of that branch's throughput shortfall - roughly 43,500 records/second
  * failing, 77,000 passing, one main-code term changed, corroborated by a two-arm local run. See
- * {@code docs/inflight/perf-control-loop-log-argument-evaluated-eagerly.md}.
+ * {@code docs/solutions/performance-issues/slf4j-defers-formatting-not-argument-evaluation-2026-09-01.md}.
  */
 class HotPathLogArgumentsAreDeferredTest {
 

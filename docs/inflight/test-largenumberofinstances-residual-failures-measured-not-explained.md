@@ -219,7 +219,7 @@ out, and the reasoning is worth keeping because it is not the obvious one.
 
 **The ten-run measurement predates the control-loop fix.** One failure in ten was measured on a tree
 that still evaluated a shard-wide sum as an unguarded `log.trace` argument on every control-loop pass
-(`docs/inflight/perf-control-loop-log-argument-evaluated-eagerly.md`). So that rate describes the
+(`docs/solutions/performance-issues/slf4j-defers-formatting-not-argument-evaluation-2026-09-01.md`). So that rate describes the
 unfixed tree, and quoting it as this test's failure rate going forward would be quoting a number for
 code that no longer exists.
 

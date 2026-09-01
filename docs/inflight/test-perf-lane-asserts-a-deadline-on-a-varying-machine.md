@@ -58,7 +58,7 @@ A like-for-like pair on ONE machine in one session is worth more than two CI run
   FAILING at 43,552 rec/s to PASSING at 76,950 rec/s while the three neighbouring classes stayed
   within 1-3% - so not a faster machine - and while the capacity profiles were re-enabled ahead of
   it, which moves the confound against the result.
-  `docs/inflight/perf-control-loop-log-argument-evaluated-eagerly.md` carries the table and the
+  `docs/solutions/performance-issues/slf4j-defers-formatting-not-argument-evaluation-2026-09-01.md` carries the table and the
   caveats. **This does not retire this note**: a wall-clock deadline on a machine that varies 1.5x is
   still unsound, and it happened to be right this time.
 <!-- post-merge: checked-end -->
@@ -124,3 +124,30 @@ rather than left as a second copy. Retrieve the original with
 - **Believing a single-run CI comparison.** 109,898 and 71,387 rec/s are the same code.
 - **Mining CI history for this test's failure rate.** It was `@Disabled` on master and never ran, so
   there is no history to mine - the search returns nothing and the nothing reads as a result.
+
+## 2026-09-01: a second measure landed beside the deadline, and did NOT replace it
+
+astubbs/parallel-consumer#401 added a throughput check that compares the subject against control
+classes **inside the same run** - `subjectSeconds / controlSeconds` against a median reference share -
+so it is dimensionless and does not care how fast the machine is. That is the right shape for the
+problem this note describes.
+
+**It does not close this note, for two reasons, and the second is the one that matters.**
+
+- **It is ADVISORY, not blocking.** `maven.yml` runs it, and the verdict does not fail the lane. The
+  only thing that still blocks a merge on the performance lane is `GATING_CEILING` - a 60-second wall
+  clock on a machine whose spread on identical code is 1.54x. Every argument above stands untouched.
+- **Its own calibration data argues against normalising on one box.** Eight full-lane runs on a single
+  unchanged commit put the raw subject at 13.4% robust spread and the normalised share at 16.6% -
+  dividing by a control compounds the control's variance instead of cancelling anything, because on
+  one idle machine there is no machine-to-machine variance left to cancel. The lib says so in its own
+  header and ships advisory for exactly that reason.
+
+So the state is: **collection improved, gating unchanged.** A test that fails a slow run and a stalled
+run identically is still the thing standing between this lane and a signal, and the fix this note
+argues for - gate on PROGRESS, not on "all N records within T" - has not been done.
+
+**What would actually retire this note**, now that the numbers exist: change
+`MultiInstanceHighVolumeTest` to assert progress with a generous outer bound, and let the advisory
+share carry the "is it slower than it was" question it is already measuring. That splits the two
+questions the deadline currently conflates, which is the whole argument above.

@@ -98,19 +98,51 @@ have shipped as a gate that passes everything - the false-green class documented
 defect must be run against a tree that still has it**, and that applies to a table row as much as to
 a script.
 
-## What the fix was worth
+## What the fix was worth, and how it was established
 
-Measured two ways, on unrelated hardware, changing only this one file:
+Two independent measurements, on unrelated hardware, with only this one file changed.
 
-- **On CI**: a required performance check went from failing at about 43,500 records/second to passing
-  at about 77,000, while three neighbouring test classes in the same run stayed within a few percent
-  - which is the control that rules out "the machine was faster".
-- **Locally**: five runs per arm with the eager form restored from the pre-fix commit. The arms did
-  not overlap, and the ratio matched CI's closely on a completely different machine.
+**On CI - a one-term comparison between two heads.** The neighbouring classes are the control: a
+uniformly slower machine slows everything proportionally, and these did not move together.
 
-**Reproduce, do not quote.** These figures describe two machines on one day; the method is what
-transfers. `git diff <pre-fix> <post-fix> -- '*/src/main/java/*'` returning exactly one file is what
-made the comparison a control arm rather than a coincidence.
+| | failing run | passing run |
+|---|---|---|
+| `VeryLargeMessageVolumeTest` | 53.86 s | 53.28 s |
+| `LargeVolumeInMemoryTests` | 39.45 s | 38.28 s |
+| `LoadTest` | 41.34 s | 40.32 s |
+| `MultiInstanceRebalanceTest` | 0.020 s, all skipped | 170.9 s, 3 tests, all passed |
+| **`MultiInstanceHighVolumeTest`** | **FAILED, 43,552 rec/s** | **PASSED, 76,950 rec/s** |
+
+Two confounds were ruled out rather than argued away. **Lane composition**: the capacity profiles
+cost 0.020 s with every test skipped in the failing run, and it still failed - and in the passing run
+they ran 170.9 s of churn ahead of the subject in the same reused JVM, so the confound was *re-added*
+and the number rose anyway. **Runner speed**: the three neighbours land within 1-3%.
+
+**Locally - the same swap, five runs per arm, JVM pinned to two processors.**
+
+| arm | records/second |
+|---|---|
+| supplier form (fixed) | 109,894 · 147,579 · 131,590 · 122,374 · 101,228 |
+| eager form (pre-fix) | 80,398 · 69,772 · 66,815 · 75,441 · 73,733 |
+
+No overlap, and the means differ by roughly the same factor CI showed. The order confound was tested,
+not assumed: the first pairs ran fixed-then-eager and the eager arm declined monotonically within
+itself, which is also what a thermally drifting machine looks like - so later pairs were interleaved
+with the *eager* arm first, and the fixed arm still won from the disadvantaged position. Method:
+`../best-practices/an-a-b-whose-arms-run-in-time-order-is-confounded-with-time.md`.
+
+**Reproduce, do not quote.** These figures describe two machines on one day; the method transfers and
+the numbers do not. `git diff <pre-fix> <post-fix> -- '*/src/main/java/*'` returning exactly one file
+is what made either comparison a control arm rather than a coincidence.
+
+## What this did NOT fix
+
+`largeNumberOfInstances` stalls at a rebalance - a member stops answering, the group dwells in
+`PreparingRebalance` - and that reproduces on the fixed tree with the same signature it had before.
+It was briefly suspected that a control thread doing this scan every pass was why a live member
+answered late; enabling the test put that under test and it lost. Two problems found in the same
+week, not one. `../../inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md`
+owns the survivor.
 
 ## How to find the next one
 

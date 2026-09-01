@@ -73,7 +73,7 @@ it.
 > at 76,950 rec/s against 43,552 in the failing run, the only main-code difference being the
 > control-loop fix, the neighbours within 1-3%, and the capacity profiles re-enabled ahead of it
 > rather than skipped. The table and the caveats are in
-> `docs/inflight/perf-control-loop-log-argument-evaluated-eagerly.md`. It is one run per side against
+> `docs/solutions/performance-issues/slf4j-defers-formatting-not-argument-evaluation-2026-09-01.md`. It is one run per side against
 > a 1.54x instrument spread - strong, not conclusive. Nothing here lifts the hold; the rest of this
 > section is kept as written so the reasoning that produced it stays readable.
 
@@ -94,7 +94,7 @@ detail). The control loop passed a shard-wide sum as a plain `log.trace` argumen
 formatting, not argument evaluation, so it ran every pass at every level, and it scales with in-flight
 key cardinality while the loop spins fastest under saturation. Both costs peak together, and the
 failing test is the only `KEY`-ordered member of the lane - which fits the selectivity that ruled
-runner speed out. `docs/inflight/perf-control-loop-log-argument-evaluated-eagerly.md` owns it.
+runner speed out. `docs/solutions/performance-issues/slf4j-defers-formatting-not-argument-evaluation-2026-09-01.md` owns it.
 
 **Fitting is still not measuring.** The instrument's spread across identical code is 1.54x, and none
 of it reproduces on a development machine, where this tree gave 73,722 rec/s alone and 72,498 in the
