@@ -2,14 +2,15 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: config-lie -->
+<!-- inflight-state: parked - the keep-or-delete call is the maintainer's, and astubbs/parallel-consumer#200 takes the sibling first -->
 
 **Half of this is already done, on a branch that reached it independently.**
 `bin/build-parallel-consumer-core-without-tests.sh` is DELETED by `e7b1dda88` on
 astubbs/parallel-consumer#200, which is open and unmerged. Do not redo that work; what is left here
 is its sibling.
 
-**`bin/build-without-tests.sh`** - seven lines, the whole-tree variant - survives, and breaks three
-of this project's stated build rules. Nothing runs it, nothing references it, and nothing goes red.
+**`bin/build-without-tests.sh`** - the whole-tree variant - survives, and breaks several of this
+project's stated build rules at once. Nothing runs it, nothing references it, and nothing goes red.
 
 ```
 export JAVA_HOME=$(/usr/libexec/java_home -v13)
@@ -89,5 +90,6 @@ sibling with it. Deleting this one on a different branch beforehand risks two br
 neighbouring lines of the same directory for the same reason, which is a conflict bought for
 nothing.
 
-Parked deliberately: the finding is cheap and certain, the decision is not urgent, and it was not
-the subject of the audit that turned it up.
+Parked deliberately - the tag above carries the same disposition, so the index agrees with this
+paragraph: the finding is cheap and certain, the decision is not urgent, and it was not the
+subject of the audit that turned it up.

@@ -32,6 +32,17 @@
 # self-hosted machine. Inputs pass through env (data), never ${{ }} inside run blocks (code).
 # See docs/self-hosted-runner.md.
 #
+# NOT EVERY RUNNER IN bin/ IS OFFERED HERE, and the omission is the interesting part. The two
+# cross-tree runners - exp-confirm-async-drain and exp-batch-857 - read sibling worktrees
+# (.claude/worktrees/pr29, .claude/worktrees/pre-344) that exist only on a machine where somebody cut
+# them. `actions/checkout` creates one workspace and no siblings, so dispatching either one here
+# measured nothing while reporting success: a green job and an artifact with no data in it, which is
+# the worst of the three possible outcomes because it is indistinguishable from a clean result. Both
+# scripts now refuse to start without their trees (pc_require_tree, exit 2), and neither is offered
+# as a choice. Provisioning arbitrary historical worktrees on a runner is the alternative, and it is
+# not one - those trees are specific branches at specific commits, chosen by hand for a comparison.
+# Run them locally; docs/testing.md's runner table says which are which.
+#
 # KNOWN LIMITATION, stated rather than hidden: each runner writes to a fixed /tmp directory and
 # appends to a tally there. Two dispatches of the SAME experiment at once would interleave rows on a
 # self-hosted box whose /tmp persists. Dispatch is human-triggered and these runs are long, so this
@@ -51,10 +62,8 @@ on:
           - exp-sweep-large-instances-scale
           - exp-audit-stall-detector-silence
           - exp-hunt-async-stall-answer
-          - exp-confirm-async-drain
-          - exp-batch-857
       iterations:
-        description: 'Iterations (empty = the script default; ignored by exp-batch-857)'
+        description: 'Iterations - empty for the script default, otherwise a positive integer'
         required: false
         default: ''
   schedule:
@@ -104,13 +113,25 @@ jobs:
           set -euo pipefail
           case "$EXPERIMENT" in
               exp-measure-large-instances-failure-rate|exp-sweep-large-instances-scale| \
-              exp-audit-stall-detector-silence|exp-hunt-async-stall-answer|exp-confirm-async-drain| \
-              exp-batch-857) ;;
+              exp-audit-stall-detector-silence|exp-hunt-async-stall-answer) ;;
               *) echo "Unknown experiment: $EXPERIMENT" >&2; exit 2 ;;
           esac
-          echo "=== $EXPERIMENT ==="
-          # Unquoted expansion is intentional and safe: ITERATIONS is either empty (so the script
-          # takes its own default) or a count. Anything else fails the script's own `seq`.
+          # VALIDATE THE COUNT HERE - the script will not do it for you. The runners set `set -u` and
+          # deliberately not `-e` (a failing iteration is their data), so `for i in $(seq 1 ten)`
+          # does not abort: seq writes to stderr, the substitution is empty, the loop body never
+          # executes and the script exits 0. The job then goes green and uploads an empty output
+          # directory, having run no test at all - the same false-clean shape as the missing-worktree
+          # case above. This comment used to assert the opposite ("anything else fails the script's
+          # own seq"), which is why the check was never written.
+          if [ -n "$ITERATIONS" ]; then
+              case "$ITERATIONS" in
+                  ''|*[!0-9]*) echo "iterations must be a positive integer, got: $ITERATIONS" >&2; exit 2 ;;
+                  0*) echo "iterations must be a positive integer, got: $ITERATIONS" >&2; exit 2 ;;
+              esac
+          fi
+          echo "=== $EXPERIMENT ${ITERATIONS:-(script default)} ==="
+          # Unquoted expansion is intentional: ITERATIONS is either empty (so the script takes its
+          # own default) or the positive integer just validated above.
           bin/"$EXPERIMENT".sh ${ITERATIONS}
 
       - name: Collect the tally
@@ -125,9 +146,11 @@ jobs:
           # one moves. Two of them were guessed wrong when this workflow was written and would have
           # uploaded nothing while reporting success, so the step ends by SAYING whether it found
           # anything rather than leaving an empty artifact to be read as an empty result.
+          # Only the four dispatchable runners' directories - the two cross-tree ones cannot run
+          # here at all (see this workflow's header), and a path in this list for a script that can
+          # never write it is the stale entry the note below is about.
           found=0
-          for d in /tmp/large-instances /tmp/scale-sweep /tmp/detector-audit /tmp/async-answer \
-                   /tmp/drain-confirm /tmp/batch857; do
+          for d in /tmp/large-instances /tmp/scale-sweep /tmp/detector-audit /tmp/async-answer; do
               if [ -d "$d" ]; then cp -R "$d" experiment-output/ && found=$((found + 1)); fi
           done
           find experiment-output -name 'tally.tsv' -exec sh -c 'echo "--- $1 ---"; cat "$1"' _ {} \; || true

@@ -32,6 +32,13 @@ source "${BASH_SOURCE[0]%/*}/lib/chaos-experiment-common.sh"
 
 W="$(pc_worktree_root)"
 D="$W/pr29"; PRE="$W/pre-344"
+# Up front and FATAL, before a single maven run. Every phase below runs against one of these sibling
+# trees, and this script had no check at all: on a checkout without them - CI, a fresh clone -
+# maven failed per iteration, pc_failsafe_outcome classified the absent report as DID-NOT-RUN, and
+# the batch finished green having measured nothing. That is the shape bin/AGENTS.md's degrade-loudly
+# rule exists for, and it is why the dispatch workflow no longer offers this runner.
+pc_require_tree "$D" pr29
+pc_require_tree "$PRE" pre-344
 T=/tmp/batch857/tally.tsv; mkdir -p /tmp/batch857
 say() { printf '%s\t%s\n' "$(pc_now)" "$*" >> "$T"; }
 
@@ -57,10 +64,15 @@ if [ -n "$FOUND" ]; then
         lg=/tmp/batch857/B-diag-$i.log
         pc_run_chaos "$D" "$FOUND" "$lg" -Dchaos.diagnoseStallRecovery=true
         fired=$(pc_first_violation "$lg")
-        say "B-diag\trun=$i\tseed=$FOUND\tfired=${fired:-none}\tfinal=$(grep -oE 'consumed=[0-9]+/[0-9]+' "$lg" | tail -1)"
-        if [ -n "$fired" ]; then
+        # `fired` is the probe's AGGREGATE violation count, so it says something fired, never which -
+        # the same distinction exp-hunt-async-stall-answer.sh's header sets out. Both are recorded;
+        # only the target signal stops the phase.
+        target=no
+        pc_signal_fired NO_PROGRESS "$lg" && target=yes
+        say "B-diag\trun=$i\tseed=$FOUND\tfired=${fired:-none}\tno_progress=$target\tfinal=$(grep -oE 'consumed=[0-9]+/[0-9]+' "$lg" | tail -1)"
+        if [ "$target" = yes ]; then
             pc_trajectory_after_violation "$lg" > /tmp/batch857/B-ANSWER.txt
-            say "B-diag\tFIRED - trajectory in /tmp/batch857/B-ANSWER.txt (climbing=DRAINED, flat=WEDGE)"
+            say "B-diag\tNO_PROGRESS FIRED - trajectory in /tmp/batch857/B-ANSWER.txt (read the LAST row: done=true is DRAINED, done=false is a WEDGE even if the count climbed)"
             break
         fi
     done
@@ -75,7 +87,7 @@ for i in 1 2 3 4 5 6; do
     o=$(pc_failsafe_outcome "$PRE" ChurnStorm)
     if [ "$o" = FAILED ]; then
         pc_detector_verdict "$lg"
-        say "C\trun=$i\tFAILED\tverdict=$PC_VERDICT\tno_progress=$PC_NO_PROGRESS\tother=$PC_OTHER_PROBE"
+        say "C\trun=$i\tFAILED\tverdict=$PC_VERDICT\tno_progress=$PC_NO_PROGRESS\tother=$PC_OTHER_PROBE\tunnamed=$PC_UNNAMED_PROBE"
     else
         say "C\trun=$i\t$o - not a data point"
     fi

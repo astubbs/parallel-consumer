@@ -44,6 +44,27 @@ rc=0
 mkdir -p "$(dirname "$SUMMARY")"
 grep -o 'PC-THROUGHPUT .*' "$LOG" > "$SUMMARY" || true
 
+# WHICH tests are represented, not just how many lines came back.
+#
+# The lane selects every @Tag("performance") class and only some of them call ThroughputReport, so a
+# nonempty summary carrying one figure reads as "the lane measured" when most of the lane in fact
+# contributed nothing - which leaves a regression in any of the others exactly as opaque as it was
+# before this summary existed. Naming the silent ones is the difference between a partial measurement
+# and one that looks complete.
+#
+# Both lists are DERIVED, never hand-maintained here. `ran` comes from the failsafe reports this run
+# just wrote (the invocation above is `clean verify`, so nothing stale survives) and `reported` from
+# the summary's own test= field. A hardcoded roster of the performance classes would be the copy that
+# goes stale the day somebody adds a fifth, and it would go stale silently - the same failure this
+# whole block exists to remove.
+# `|| true` on each: this block is diagnostic, and `set -e` must not let a summary that could not be
+# computed swallow the maven exit code re-raised at the end of the script.
+ran=$(find . -type f -path '*/target/failsafe-reports/TEST-*.xml' 2>/dev/null \
+        | sed -e 's#.*/TEST-##' -e 's#\.xml$##' -e 's#.*\.##' | sed '/^$/d' | sort -u) || ran=""
+reported=$(sed -n 's/.*[[:space:]]test=\([A-Za-z0-9_$]*\).*/\1/p' "$SUMMARY" 2>/dev/null \
+        | sed '/^$/d' | sort -u) || reported=""
+silent=$(comm -23 <(printf '%s' "$ran") <(printf '%s' "$reported")) || silent=""
+
 echo
 echo "=== PC-THROUGHPUT (records/second per performance test) ==="
 if [ -s "$SUMMARY" ]; then
@@ -57,6 +78,14 @@ else
   # emitter stopped being called, and both look identical to a green lane otherwise.
   echo "NONE FOUND - either no performance test ran, or ThroughputReport is no longer reached."
   echo "Check the failsafe summary above before assuming this lane measured anything."
+fi
+
+if [ -n "$silent" ]; then
+  echo
+  echo "NOT MEASURED - these ran in this lane and emitted no PC-THROUGHPUT line:"
+  printf '%s\n' "$silent" | sed 's/^/  /'
+  echo "A figure for one test is not a figure for the lane. Add a ThroughputReport.report call to"
+  echo "each of them, or accept that a regression there stays invisible to this summary."
 fi
 rm -f "$LOG"
 

@@ -345,14 +345,19 @@ asserts anything, and none of them gates.
 does it fail, and does that move when I change X" is one of these, and running a test once cannot
 answer it.
 
-| Ask this | Run | Its question is |
-|---|---|---|
-| How often does `largeNumberOfInstances` fail, and how? | `bin/exp-measure-large-instances-failure-rate.sh [n]` | **open** - unmeasured since the 2026-01 upstream report on confluentinc#857 |
-| Does that failure rate move with SCALE? | `bin/exp-sweep-large-instances-scale.sh` | **open** - rate rising with scale points at the group coordinator, flat points at PC |
-| Does the `NO_PROGRESS` detector MISS real failures? | `bin/exp-audit-stall-detector-silence.sh [n]` | **open, reopened 2026-08-31** - a detector that stays quiet on a real failure is worse than an absent one, because the suite goes green on its silence |
-| When the async stall fires, does the backlog DRAIN or stay FLAT? | `bin/exp-hunt-async-stall-answer.sh [n]` | **open** - draining means a timing proxy, flat means a real wedge reproducible on demand |
-| Does that stall drain EVERY time, or was that once? | `bin/exp-confirm-async-drain.sh` | **open** - the demotion rests on a single firing; a second confirms it |
-| All of the above, unattended, one tally | `bin/exp-batch-857.sh` | a batch of whatever was outstanding when it was written - read its header before trusting its scope |
+| Ask this | Run | Its question is | Where |
+|---|---|---|---|
+| How often does `largeNumberOfInstances` fail, and how? | `bin/exp-measure-large-instances-failure-rate.sh [n]` | **open** - unmeasured since the 2026-01 upstream report on confluentinc#857 | anywhere |
+| Does that failure rate move with SCALE? | `bin/exp-sweep-large-instances-scale.sh` | **open** - rate rising with scale points at the group coordinator, flat points at PC | anywhere |
+| Does the `NO_PROGRESS` detector MISS real failures? | `bin/exp-audit-stall-detector-silence.sh [n]` | **open, reopened 2026-08-31** - a detector that stays quiet on a real failure is worse than an absent one, because the suite goes green on its silence | anywhere |
+| When the async stall fires, does the backlog DRAIN or stay FLAT? | `bin/exp-hunt-async-stall-answer.sh [n]` | **open** - draining means a timing proxy, flat means a real wedge reproducible on demand | anywhere |
+| Does that stall drain EVERY time, or only in the firings collected so far? | `bin/exp-confirm-async-drain.sh` | **open, but narrower than it was** - `ChaosChurnStormIT`'s "Calibration status" javadoc records six firings that all drained, so a drain reproduces a known result and only a run that does NOT complete the backlog is new | local only |
+| All of the above, unattended, one tally | `bin/exp-batch-857.sh` | a batch of whatever was outstanding when it was written - read its header before trusting its scope | local only |
+
+**"Local only" is enforced, not advisory.** Those two compare this tree against sibling worktrees
+(`.claude/worktrees/pr29`, `.claude/worktrees/pre-344`) that exist only where somebody cut them, so
+they refuse to start without them (exit 2) rather than recording a missing-tree row and finishing
+green. They are deliberately absent from the dispatch workflow's choices for the same reason.
 
 The tracking note for that first row lives on the branch the runners came from and is not on master
 yet, so the row deliberately cites no path - a link into a file that only exists on another branch
@@ -369,9 +374,9 @@ that work lands, and add the link then.
 The distinction that matters is that a rate needs N runs. A single run gives a pass or a fail, which
 is not a rate, and no lane in this repo aggregates results across runs.
 
-**They can be dispatched instead of run locally.** `.github/workflows/experiments.yml` offers each
-one as a `workflow_dispatch` choice on the high-CPU runner, which is where the expensive ones belong
-- a ten-iteration batch is a runner-hour, not a desk-hour. The `largeNumberOfInstances` rate also
+**The single-tree ones can be dispatched instead of run locally.** `.github/workflows/experiments.yml`
+offers each of those as a `workflow_dispatch` choice on the high-CPU runner, which is where the
+expensive ones belong - a ten-iteration batch is a runner-hour, not a desk-hour. The `largeNumberOfInstances` rate also
 runs weekly on a schedule, alone, because its question is open and a rate nothing samples stays
 unmeasured. **Nothing here runs on push and nothing gates**; that workflow's header carries the
 reasoning, including why gating on a rate would need a threshold nobody has the spread to choose.

@@ -20,14 +20,19 @@
 #
 #   no-progress          - the detector fired. Working as intended.
 #   other-probe          - a different detector caught it. Not a miss; a different signature.
+#   UNNAMED-PROBE        - a detector fired and the classifier has no name for it. Not a miss
+#                          either, and the fix is to add the signal to PC_PROBE_OTHER_SIGNALS.
 #   LEDGER-ONLY-MISS-CASE - the end-of-run correctness ledger failed with NO detector firing. THE
 #                          MISS CASE: something went wrong and the liveness detectors said nothing.
 #
-# There is deliberately no `unclassified` verdict. This table used to list one and the classifier
-# has never emitted it, which is worse than a missing row: a reader who never sees it concludes the
-# corpus was clean rather than that the bucket does not exist. Every failing run lands in one of the
-# three above - and the counts are printed beside the verdict so it can be re-checked by hand, which
-# is the job the phantom bucket appeared to be doing.
+# UNNAMED-PROBE IS NOT THE PHANTOM `unclassified` ROW THIS TABLE USED TO CARRY. That one was listed
+# and never emitted, which is worse than a missing row - a reader who never sees a bucket concludes
+# the corpus was clean rather than that the bucket does not exist. This one is emitted, and it exists
+# because the classifier's signal list was incomplete: DRAIN_OVERDUE and PROBE_DEGRADED both fell
+# through to LEDGER-ONLY-MISS-CASE, so a run a detector DID catch was counted as a detector miss - in
+# the audit whose entire result is a count of detector misses. Completing the list fixes today's
+# omission; this row is what stops the next one from corrupting the headline instead of showing up.
+# The counts are still printed beside every verdict, so any of them can be re-checked by hand.
 #
 # Reads the siloed probes.log (docs/logging.md) so "which detector fired" is a small file.
 #
@@ -49,6 +54,7 @@ for i in $(seq 1 "${1:-8}"); do
         continue
     fi
     pc_detector_verdict "$log"
-    printf '%s\trun=%s\tFAILED\tverdict=%s\tno_progress=%s\tother_probe=%s\tprobes_log=%s\n' \
-        "$(pc_now)" "$i" "$PC_VERDICT" "$PC_NO_PROGRESS" "$PC_OTHER_PROBE" "$pcl/probes.log" >> "$OUT/tally.tsv"
+    printf '%s\trun=%s\tFAILED\tverdict=%s\tno_progress=%s\tother_probe=%s\tunnamed_probe=%s\tprobes_log=%s\n' \
+        "$(pc_now)" "$i" "$PC_VERDICT" "$PC_NO_PROGRESS" "$PC_OTHER_PROBE" "$PC_UNNAMED_PROBE" \
+        "$pcl/probes.log" >> "$OUT/tally.tsv"
 done

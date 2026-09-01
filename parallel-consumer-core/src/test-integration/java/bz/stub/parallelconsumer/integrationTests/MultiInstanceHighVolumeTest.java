@@ -19,6 +19,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.assertj.core.api.Assertions;
 import org.assertj.core.api.SoftAssertions;
 import org.awaitility.core.ConditionTimeoutException;
+import org.awaitility.core.TerminalFailureException;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -134,6 +135,15 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
         } catch (ConditionTimeoutException e) {
             reportThroughput(expectedMessageCount, waitStarted, "FAILED");
             fail(failureMessage + "\n" + e.getMessage());
+        } catch (TerminalFailureException e) {
+            // The failFast arm above exits through THIS, not ConditionTimeoutException - Awaitility's
+            // two failure exits are unrelated siblings under RuntimeException. Catching only the
+            // timeout meant the one failure mode with a named cause ("PC died") was the one that
+            // reported no throughput at all, so bin/performance-test.sh printed NONE FOUND for a run
+            // that had just measured a processor death - the exact case the on-failure figure exists
+            // for. Rethrown unchanged: this reports, it does not soften the failure.
+            reportThroughput(expectedMessageCount, waitStarted, "FAILED");
+            throw e;
         }
         reportThroughput(expectedMessageCount, waitStarted, "PASSED");
 

@@ -119,27 +119,68 @@ pc_failsafe_outcome() { # tree-root report-name-fragment
 
 # --- which detector caught it --------------------------------------------------------------------
 #
-# Sets PC_VERDICT to one of no-progress, other-probe or LEDGER-ONLY-MISS-CASE, plus PC_NO_PROGRESS
-# and PC_OTHER_PROBE. Three results rather than one string because the callers print the raw counts
-# beside the verdict - a verdict whose evidence is not in the tally cannot be re-checked from it.
-# bin/exp-audit-stall-detector-silence.sh's header owns what each verdict MEANS and why it is the
-# question worth asking.
+# Sets PC_VERDICT to one of no-progress, other-probe, UNNAMED-PROBE or LEDGER-ONLY-MISS-CASE, plus
+# PC_NO_PROGRESS, PC_OTHER_PROBE and PC_UNNAMED_PROBE. The counts are separate results rather than
+# one string because the callers print them beside the verdict - a verdict whose evidence is not in
+# the tally cannot be re-checked from it. bin/exp-audit-stall-detector-silence.sh's header owns what
+# each verdict MEANS and why it is the question worth asking.
+#
+# EVERY GATING SIGNAL HAS TO BE HERE, AND ANYTHING UNRECOGNISED HAS TO HAVE SOMEWHERE ELSE TO GO.
+# An omission is not an undercount, it is a wrong headline: a signal missing from the list used to
+# fall through to LEDGER-ONLY-MISS-CASE - the verdict that says every detector stayed silent - so a
+# run a detector DID catch was recorded as a detector miss, in the audit whose entire purpose is
+# counting detector misses. Two of the five were missing (DRAIN_OVERDUE, PROBE_DEGRADED) and a sixth
+# name was listed that ProgressProbe does not raise at all (LEDGER_KEY_ORDER), which says how the
+# list was written: from memory. Regenerate it instead -
+# `grep -n 'violate(' <ProgressProbe.java>` is the whole list, and nothing checks that these agree.
+# PC_UNNAMED_PROBE is the standing insurance against the next omission.
+PC_PROBE_NO_PROGRESS_SIGNAL='NO_PROGRESS'
+PC_PROBE_OTHER_SIGNALS='ZOMBIE_MEMBER|INSTANCE_STALL|DRAIN_OVERDUE|PROBE_DEGRADED'
+
+# Anchored on the announcement prefix, not on the bare signal name. ProgressProbe announces a gating
+# finding as one line - "[<tag>] VIOLATION: <SIGNAL>: <detail>" - so this counts violations rather
+# than mentions, and the three counts below are line counts over the same anchor, which is what makes
+# subtracting them sound. The bare-name match it replaces also hit the ambient observer's autopsy
+# bullets, which reprint the same names for a probe that was never gating this run.
+PC_PROBE_ANNOUNCEMENT='VIOLATION: '
+
 pc_detector_verdict() { # run-log
-    PC_NO_PROGRESS=$(pc_count_matches 'NO_PROGRESS' "$1")
-    PC_OTHER_PROBE=$(pc_count_matches 'ZOMBIE_MEMBER|INSTANCE_STALL|LEDGER_KEY_ORDER' "$1")
+    local announced
+    announced=$(pc_count_matches "$PC_PROBE_ANNOUNCEMENT" "$1")
+    PC_NO_PROGRESS=$(pc_count_matches "$PC_PROBE_ANNOUNCEMENT($PC_PROBE_NO_PROGRESS_SIGNAL)" "$1")
+    PC_OTHER_PROBE=$(pc_count_matches "$PC_PROBE_ANNOUNCEMENT($PC_PROBE_OTHER_SIGNALS)" "$1")
+    PC_UNNAMED_PROBE=$(( announced - PC_NO_PROGRESS - PC_OTHER_PROBE ))
+    [ "$PC_UNNAMED_PROBE" -lt 0 ] && PC_UNNAMED_PROBE=0
     if [ "$PC_NO_PROGRESS" -gt 0 ]; then
         PC_VERDICT=no-progress
     elif [ "$PC_OTHER_PROBE" -gt 0 ]; then
         PC_VERDICT=other-probe
+    elif [ "$PC_UNNAMED_PROBE" -gt 0 ]; then
+        # A detector fired and this file cannot say which. NOT a miss - say so loudly rather than
+        # letting it be counted as one, and go and add the signal above.
+        PC_VERDICT=UNNAMED-PROBE
     else
         PC_VERDICT=LEDGER-ONLY-MISS-CASE
     fi
+}
+
+# Did ONE named signal fire, as opposed to "something did"? The `violations=` reading on the
+# [diagnose] line is the probe's whole violation count, so a runner hunting a specific mechanism
+# cannot use it to tell its own signal from any other - see pc_first_violation.
+pc_signal_fired() { # signal-name run-log
+    grep -qE "$PC_PROBE_ANNOUNCEMENT$1" "$2" 2>/dev/null
 }
 
 # --- did the probe fire, and what happened next ----------------------------------------------------
 
 # The first `violations=<n>` reading with a non-zero count, or empty when the probe never fired. A
 # run that did not fire is not a data point: the recovery diagnostic only engages on a violation.
+#
+# IT SAYS "SOMETHING FIRED", NEVER WHICH. That reading is ProgressProbe's aggregate violation count
+# on the [diagnose] line, so ZOMBIE_MEMBER, INSTANCE_STALL, DRAIN_OVERDUE or PROBE_DEGRADED make it
+# non-empty exactly as the async NO_PROGRESS stall does. A runner whose question is about ONE
+# mechanism must gate on pc_signal_fired as well, or it will accept a run that answers a different
+# question and write the answer up as though it were about its own.
 #
 # No pipe, deliberately - `grep | head` is the shape bin/check-shell-sigpipe.sh bans under pipefail,
 # and a shared helper must stay safe for a caller that adds it.
@@ -149,25 +190,48 @@ pc_first_violation() { # run-log
     printf '%s' "${all%%$'\n'*}"
 }
 
-# Every consumption reading from the violation onward. Climbing means the backlog DRAINED (the
-# finding was bounded - a timing proxy); flat with inFlight stuck means a real WEDGE.
+# Every consumption reading from the violation onward, INCLUDING the denominator and the scenario's
+# own done flag - so a row is readable on its own and the last row settles the run. done=true means
+# the backlog DRAINED (the finding was bounded - a timing proxy); done=false at the end means it did
+# not, whether consumption climbed on the way there or stayed flat. "Climbing" alone does not
+# discriminate: a run that advances once and then stops short is a wedge that climbed.
 pc_trajectory_after_violation() { # run-log
     awk '/violations=[1-9]/{f=1} f' "$1" 2>/dev/null \
-        | grep -oE 'consumed=[0-9]+/[0-9]+ started=[0-9]+ inFlight=[0-9]+'
+        | grep -oE 'consumed=[0-9]+/[0-9]+ started=[0-9]+ inFlight=[0-9]+.*done=(true|false)'
 }
 
 # Sets PC_CONSUMED_FIRST and PC_CONSUMED_LAST - the ends of that trajectory, as bare integers, empty
-# when the run has no readings.
+# when the run has no readings - plus PC_CONSUMED_EXPECTED (the denominator the scenario was aiming
+# at) and PC_DIAGNOSTIC_DONE (the scenario's own completion predicate: consumed the backlog AND the
+# ledger covers every expected key).
 #
-# READ THE TWO NUMBERS SEPARATELY. An earlier version joined them with `paste -sd'->'`, where -d is a
+# THE DENOMINATOR AND THE FLAG ARE THE POINT, not decoration. "Last is greater than first" is
+# satisfied by a run that advanced once after the violation and then wedged short of the backlog -
+# which is a partial-progress wedge, the exact finding these runners exist to catch, and the reading
+# that would call it DRAINED is the reading that would report the bug as absent.
+#
+# READ THE NUMBERS SEPARATELY. An earlier version joined the ends with `paste -sd'->'`, where -d is a
 # character LIST and not a string, so it joined with '-'; the sed then looked for '->', matched
 # nothing, and the integer test failed silently into the else branch - labelling four runs that
 # plainly drained as FLAT. The data was right and every verdict was wrong.
 pc_consumed_bounds() { # run-log
-    local readings
-    readings=$(awk '/violations=[1-9]/{f=1} f' "$1" 2>/dev/null | grep -oE 'consumed=[0-9]+' | cut -d= -f2)
+    local after readings last
+    after=$(awk '/violations=[1-9]/{f=1} f' "$1" 2>/dev/null)
+    readings=$(grep -oE 'consumed=[0-9]+' <<< "$after" | cut -d= -f2)
     PC_CONSUMED_FIRST="${readings%%$'\n'*}"
     PC_CONSUMED_LAST="${readings##*$'\n'}"
+    # The LAST full [diagnose] reading, which carries both the denominator and the scenario's own
+    # done flag. Herestring rather than a pipe from awk, for the EPIPE reason recorded above
+    # pc_classify_failsafe_stats.
+    last=$(grep -oE 'consumed=[0-9]+/[0-9]+.*done=(true|false)' <<< "$after")
+    last="${last##*$'\n'}"
+    PC_CONSUMED_EXPECTED=""
+    PC_DIAGNOSTIC_DONE=""
+    if [ -n "$last" ]; then
+        PC_CONSUMED_EXPECTED="${last#consumed=*/}"
+        PC_CONSUMED_EXPECTED="${PC_CONSUMED_EXPECTED%% *}"
+        PC_DIAGNOSTIC_DONE="${last##*done=}"
+    fi
 }
 
 # --- running one experiment ------------------------------------------------------------------------
@@ -211,6 +275,24 @@ pc_main_checkout() {
 # The root every sibling worktree hangs off. AGENTS.md ("Worktree ownership") owns the layout.
 pc_worktree_root() {
     printf '%s/.claude/worktrees' "$(pc_main_checkout)"
+}
+
+# A cross-tree runner needs sibling worktrees that only exist on the machine somebody cut them on.
+# DEGRADE LOUDLY (bin/AGENTS.md): say which tree is missing and exit non-zero, rather than recording
+# a "missing tree" row and exiting 0.
+#
+# Exiting 0 is what made this worth a helper. These runners are unattended and their absence of
+# output looks exactly like a run that measured nothing interesting, so a dispatch onto a fresh
+# checkout - CI, a new clone, a colleague's machine - produced a green job, an artifact with no rows
+# in it, and no statement anywhere that the experiment had not run. Exit 2 is bin/'s "cannot run",
+# which is deliberately not the same column as a pass.
+pc_require_tree() { # tree-path label
+    [ -d "$1" ] && return 0
+    printf 'chaos-experiment: required worktree %s is missing (%s).\n' "$2" "$1" >&2
+    printf '  This is a CROSS-TREE experiment: it compares this checkout against sibling worktrees\n' >&2
+    printf '  that exist only where somebody cut them. It cannot run here, and a run that measured\n' >&2
+    printf '  nothing must not be reported as a run that found nothing.\n' >&2
+    exit 2
 }
 
 PC_JAVA_HOME="$(pc_experiment_java_home)"

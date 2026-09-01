@@ -111,7 +111,7 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
      */
     @Override
     public void afterTestExecution(ExtensionContext context) {
-        reportDeadlineHeadroom(context);
+        captureDeadlineHeadroom(context);
 
         captureChaosSeed(context);
         stopProbe(context);
@@ -166,6 +166,7 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
 
     @Override
     public void testFailed(ExtensionContext context, Throwable cause) {
+        reportDeadlineHeadroom(context, "FAILED");
         ProgressProbe probe = probeOf(context);
         if (probe == null) {
             return;
@@ -175,6 +176,7 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
 
     @Override
     public void testSuccessful(ExtensionContext context) {
+        reportDeadlineHeadroom(context, "PASSED");
         ProgressProbe probe = probeOf(context);
         if (probe == null) {
             return;
@@ -185,7 +187,10 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
                 probe.getViolations().size(), probe.getObservations().size());
     }
 
-    // testAborted / testDisabled: TestWatcher's no-op defaults are deliberate - the observer stays silent
+    // testAborted / testDisabled: TestWatcher's no-op defaults are deliberate - the observer stays
+    // silent, and that includes the headroom line. An aborted or disabled test is reported by
+    // failsafe as skipped, not as a duration, so "how much of its deadline did it use" has no
+    // answer worth putting in a collector.
 
     /**
      * Public for unit testing only ({@code AmbientProbeExtensionTest} must live outside this package:
@@ -204,8 +209,21 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
                 .orElse(false);
     }
 
-    /** Store key for the test's start instant; see {@link #reportDeadlineHeadroom}. */
-    private static final String STARTED_KEY = "ambient-probe-started-at";
+    /**
+     * Store key for the test's start instant; see {@link #reportDeadlineHeadroom}. Public for unit
+     * testing only - see {@link #isDisabled(ExtensionContext)} - so a test can seed the measurement
+     * without booting a broker; {@link #beforeEach} is the only writer in production.
+     */
+    public static final String STARTED_KEY = "ambient-probe-started-at";
+
+    /**
+     * The measurement handed from {@link #afterTestExecution} (where the clock must stop) to the
+     * {@link TestWatcher} phase (where the outcome is finally known) - see
+     * {@link #reportDeadlineHeadroom}. Both {@code null} for a test that never got a start instant
+     * or declares no {@code @Timeout}, which is how the reporter stays silent for those.
+     */
+    private static final String ELAPSED_KEY = "ambient-probe-elapsed-ms";
+    private static final String CEILING_KEY = "ambient-probe-deadline-ms";
 
     /** The token a collector greps for. Changing it breaks any harness reading these runs. */
     public static final String HEADROOM_MARKER = "PC-DEADLINE-HEADROOM";
@@ -233,8 +251,19 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
      *
      * <p>Silent when the test declares no {@code @Timeout}: with no ceiling there is no headroom to
      * express, and inventing a denominator would be worse than saying nothing.
+     *
+     * <p><b>Measured in one phase, labelled in another, and the split is load-bearing.</b> The clock
+     * has to stop in {@code afterTestExecution} - the test method's own window is what the deadline
+     * bounds, and teardown running afterwards would be counted as time the test spent. The OUTCOME is
+     * not known there: JUnit runs {@code @AfterEach} methods and {@code AfterEachCallback}s later, and
+     * a failure in either fails the test, so {@code getExecutionException()} at
+     * {@code afterTestExecution} time can say the method passed for a test failsafe will report as
+     * failed. That produced a line reading {@code outcome=PASSED} inside a failing run - a collector's
+     * worst input, since it is not missing, it is wrong. So the measurement is stored at the end of
+     * the method and emitted from the {@link TestWatcher} callbacks, which run after all teardown and
+     * are told which way the test actually went.
      */
-    private void reportDeadlineHeadroom(ExtensionContext context) {
+    private static void captureDeadlineHeadroom(ExtensionContext context) {
         Instant started = context.getStore(NAMESPACE).get(STARTED_KEY, Instant.class);
         if (started == null) {
             return;
@@ -255,12 +284,24 @@ public class AmbientProbeExtension implements BeforeEachCallback, AfterTestExecu
         if (!ceiling.isPresent()) {
             return;
         }
-        long elapsedMs = Duration.between(started, Instant.now()).toMillis();
-        long ceilingMs = ceiling.get().toMillis();
+        context.getStore(NAMESPACE).put(ELAPSED_KEY, Duration.between(started, Instant.now()).toMillis());
+        context.getStore(NAMESPACE).put(CEILING_KEY, ceiling.get().toMillis());
+    }
+
+    /**
+     * Emits the line {@link #captureDeadlineHeadroom} measured, now that the test's real outcome is
+     * settled. Silent when nothing was captured - no start instant, or no {@code @Timeout} - which is
+     * also the whole of the "test never ran its method" path.
+     */
+    private static void reportDeadlineHeadroom(ExtensionContext context, String outcome) {
+        Long elapsedMs = context.getStore(NAMESPACE).get(ELAPSED_KEY, Long.class);
+        Long ceilingMs = context.getStore(NAMESPACE).get(CEILING_KEY, Long.class);
+        if (elapsedMs == null || ceilingMs == null) {
+            return;
+        }
         long usedPercent = ceilingMs > 0 ? (elapsedMs * 100L) / ceilingMs : -1;
         log.warn("{} test={} elapsedMs={} deadlineMs={} deadlineUsedPercent={} outcome={}",
-                HEADROOM_MARKER, context.getDisplayName(), elapsedMs, ceilingMs, usedPercent,
-                context.getExecutionException().isPresent() ? "FAILED" : "PASSED");
+                HEADROOM_MARKER, context.getDisplayName(), elapsedMs, ceilingMs, usedPercent, outcome);
     }
 
     private static ProgressProbe probeOf(ExtensionContext context) {
