@@ -37,6 +37,37 @@ somebody's list.
   list is exactly what this script abolishes, every name in it is **asserted to exist**: rename one
   and the runner exits 2 rather than quietly sweeping one gate fewer than it claims.
 
+## A script that answered its question is finished - `exp-` says so up front
+
+`bin/` grows and never shrinks. The prefixes carry most of the grouping already - `check-`, `test-`,
+`ci-`, `build-` account for the large majority of what is here - and the residue is the problem: the
+one-off drivers that answered one empirical question and then stayed forever, because nothing ever
+says a script is done.
+
+**An experiment driver takes the `exp-` prefix.** The test is what the script is *for*, not what it
+runs: if its header states a question with a stopping condition - "does the failure rate move with
+scale?", "does this stall always drain?" - it is an instrument, and the prefix says so to everyone
+who lists this directory later. A script that measures something you would re-measure after any
+change is a tool and keeps an ordinary name.
+
+The prefix is deliberately not a subdirectory. Script paths here are cited from `pom.xml`, workflow
+YAML, javadoc and docs, nothing checks those citations, and `AGENTS.md` already records a move that
+left six stale pointers behind. A prefix buys the same legibility for none of that risk.
+
+**When the question is answered, the method moves to [`docs/solutions/`](../docs/solutions/) and the
+script goes.** The durable value of an experiment is how it was settled and what it found - the
+control arm, the trap that voided the first attempt, the number. That is a write-up, and this repo
+already keeps them. An executable nobody will run again is not a record; it is a file everyone has
+to scroll past and no reader can tell from a live tool.
+
+Two things this rule is NOT. It does not license deleting a driver whose question is still open -
+"answered" means answered, and a note in `docs/inflight/` usually says which. And it does not apply
+to a tool that happens to have been written for one investigation: if you would run it again after
+changing the code it exercises, it is a tool, whatever it was written for.
+
+**Nothing enforces any of this** - no gate can tell an answered question from an open one - so it is
+a judgement made at merge, by whoever knows what the experiment found.
+
 ## Scripts that guard other scripts
 
 `test-check-*.sh` files are self-tests for the corresponding `check-*.sh`, and CI runs them **before**
