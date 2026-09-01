@@ -162,9 +162,32 @@ contract itself is still right about what to do - flip the affected harness to a
 never revert a fix, never loosen a bound. What it did not anticipate is that a harness pointed at
 one seam also explores the others, so **a harness can stop finding its own bug without becoming
 quiet**, and the two that have been run against a fixed tree failed to invert for two different
-reasons.
+reasons. **`ShardManagerLincheckTest` has since inverted after all** - see the correction directly
+below - so the contract's record is one harness inverted late by a commit it never named, which is a
+different failure from the one this section was written about.
 
-**`ShardManagerLincheckTest`: the flip is red, and what it exposed is not the fixed bug.** With
+**`ShardManagerLincheckTest`: the flip WAS red, and astubbs#336 has since made it green (2026-09-01).**
+The arm is now flipped and asserts no violation - what follows is the history that produced it, kept
+because the second violation and the artefact question below both outlived the flip.
+
+astubbs#336 removed the counterexample by admitting to the population before the put and reading the
+outcome from the map rather than from the earlier read. Bisected, not assumed: the unchanged harness
+fires at astubbs#345, at confluentinc#905's hot-shard metric and at astubbs#373's claim
+compare-and-set, and misses at astubbs#336 - the sole commit touching core's main sources in that
+interval. Replicated with a **fresh worktree per commit**, which matters: the first pass reused one
+working copy, and a second worktree built at a different commit first reported 0 hits out of 10 at a
+commit that in fact fires 5 out of 5. A shared `target/` hands you a clean, wrong bisect and nothing
+in the output says so. **astubbs#336's own commit message claims the lane was green and "still
+finding the violation it is calibrated to find"**; run on that tree it is RED on this arm alone, and
+the message's own "adapted cherry-pick of `fa4d1cf251`" is the likely mechanism. Recorded, not
+explained away. **Three hand-written controls said otherwise and all three were wrong**, because each
+reverted one half of astubbs#336 onto today's tree and the defect was in neither half alone; the
+method that settles this class of question is in
+[`../solutions/best-practices/reverting-half-a-fix-is-not-a-control-2026-09-01.md`](../solutions/best-practices/reverting-half-a-fix-is-not-a-control-2026-09-01.md).
+The flip is green at the bound the counterexample was found at - 0 in 250,000 invocations, and 0 in
+2,500,000 at ten times it, on a 32-core box with Temurin 17.0.20+8 and Lincheck 3.7.
+
+The history, as it stood before that: with
 astubbs#345's torn `containsKey`/`get` pair gone, Lincheck still reports
 `= Invalid execution results =`, with no `NullPointerException` anywhere in it. Controlled both ways
 in one sitting - reverting only the main-code fix restores the NPE counterexample and a green
@@ -339,7 +362,8 @@ the Lincheck arm is a search running beside it.
 
 - `ShardManagerLincheckTest` is **unchanged by astubbs#335 landing**. Same counterexample as the
   section above records - `revokeSweep(0)` sequentially, then `addWork(0)` against `addWork(0)` -
-  so nothing in item 1's ranking moves on that evidence.
+  so nothing in item 1's ranking moves on that evidence. **(2026-09-01: astubbs#336, two commits
+  later, did remove it, and the arm is now flipped to assert-no-violation.)**
 - `PartitionStateLincheckTest` **has now been run against a tree carrying BOTH astubbs#337's and
   astubbs#344's fixes - the two the inversion contract named - and it does NOT invert.** It reports
   a violation on every run and its `assertThat(report).contains("commit()")` still passes, but on
@@ -371,8 +395,9 @@ the Lincheck arm is a search running beside it.
 
   Its javadoc has been corrected to say all of this, because until now it told readers the arm would
   invert when astubbs#344 landed. **The contract's per-PR trigger list is now fully spent, and it
-  went 1 for 4** - which is worth stating precisely, because the one that held did so for a reason
-  the contract did not name. astubbs#345 and astubbs#337/#344 left their harnesses finding
+  went 1 for 4 on the fixes it NAMED** - which is worth stating precisely, because the one that held
+  did so for a reason the contract did not name, and because `ShardManagerLincheckTest` did
+  eventually invert, on astubbs#336, which the contract never mentioned. astubbs#345 and astubbs#337/#344 left their harnesses finding
   something else entirely. `WorkManagerLincheckTest` did invert when astubbs#346 landed, but only
   because astubbs#345 had removed the OTHER violation reachable through the same operation first -
   had the two landed in the other order, that prediction would have failed too. What the
