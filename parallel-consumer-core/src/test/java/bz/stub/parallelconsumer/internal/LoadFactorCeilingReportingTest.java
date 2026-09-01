@@ -18,7 +18,6 @@ import org.junit.jupiter.api.parallel.Isolated;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
-import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 import static com.google.common.truth.Truth.assertThat;
@@ -58,12 +57,9 @@ class LoadFactorCeilingReportingTest {
 
     private static final String OLD_MESSAGE = "Max loading factor steps reached";
 
-    private ParallelConsumerOptions<String, String> options(
-            Consumer<ParallelConsumerOptions.ParallelConsumerOptionsBuilder<String, String>> customiser) {
-        var builder = ParallelConsumerOptions.<String, String>builder()
-                .consumer(new MockConsumer<String, String>(OffsetResetStrategy.LATEST));
-        customiser.accept(builder);
-        return builder.build();
+    private ParallelConsumerOptions.ParallelConsumerOptionsBuilder<String, String> optionsBuilder() {
+        return ParallelConsumerOptions.<String, String>builder()
+                .consumer(new MockConsumer<>(OffsetResetStrategy.LATEST));
     }
 
     /**
@@ -72,7 +68,7 @@ class LoadFactorCeilingReportingTest {
      */
     @Test
     void fixedMessageBufferSizeDoesNotWarnOnEveryPass() {
-        var options = options(builder -> builder.messageBufferSize(1000));
+        var options = optionsBuilder().messageBufferSize(1000).build();
         var module = new PCModule<>(options);
 
         var events = runPressureChecks(options, module);
@@ -105,9 +101,8 @@ class LoadFactorCeilingReportingTest {
      */
     @Test
     void dynamicFactorAtCeilingWarnsOnceNotEveryPass() {
-        var options = options(builder -> {
-            // defaults: a dynamic factor, 2..100
-        });
+        // left at its defaults: a dynamic factor, 2..100
+        var options = optionsBuilder().build();
         var atCeiling = new SteppedToCeilingLoadFactor();
         var module = new PCModule<String, String>(options) {
             @Override
@@ -183,14 +178,17 @@ class LoadFactorCeilingReportingTest {
         var appender = new ListAppender<ILoggingEvent>();
 
         try (var pc = new TestParallelEoSStreamProcessor<>(options, module)) {
-            pc.markLastWorkRequestFulfilled();
+            // Same package as AbstractParallelEoSStreamProcessor, so its protected/package-private members are
+            // reachable without a wrapper on the test double - the pressure check only acts once the last work
+            // request is marked fulfilled, which the real control loop does as it distributes work.
+            pc.setLastWorkRequestWasFulfilled(true);
 
             processorLogger.setLevel(Level.DEBUG);
             appender.start();
             processorLogger.addAppender(appender);
             try {
                 for (int pass = 0; pass < CONTROL_LOOP_PASSES; pass++) {
-                    pc.runPipelinePressureCheck();
+                    pc.checkPipelinePressure();
                 }
             } finally {
                 processorLogger.detachAppender(appender);
@@ -213,8 +211,14 @@ class LoadFactorCeilingReportingTest {
      * stepped to its cap.
      * <p>
      * Reaching that state for real costs one {@link DynamicLoadFactor} cool-down period per step - minutes of wall
-     * clock for the default 2..100 range - so the end state is asserted directly instead. Only the terminal condition
-     * is overridden; the reporting path under test is the real one.
+     * clock for the default 2..100 range - so the end state is asserted directly instead. Only the two terminal
+     * readings are overridden; the reporting path under test is the real one.
+     * <p>
+     * Both are needed, and {@code getCurrentFactor()} is not decoration: {@link DynamicLoadFactor#isMaxReached()}
+     * reads the private fields rather than the getters, so overriding the getter alone would not reach the branch -
+     * and overriding {@code isMaxReached()} alone would have the factor report itself as having "reached its maximum
+     * (2/100)". The message this test exists to make trustworthy would then be asserted against a state no running
+     * system can be in.
      */
     private static class SteppedToCeilingLoadFactor extends DynamicLoadFactor {
 
@@ -225,6 +229,11 @@ class LoadFactorCeilingReportingTest {
         @Override
         public boolean isMaxReached() {
             return true;
+        }
+
+        @Override
+        public int getCurrentFactor() {
+            return getMaxFactor();
         }
     }
 }

@@ -50,6 +50,7 @@ import static bz.stub.parallelconsumer.metrics.PCMetricsDef.USER_FUNCTION_EXECUT
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
+import static lombok.AccessLevel.PACKAGE;
 import static lombok.AccessLevel.PRIVATE;
 import static lombok.AccessLevel.PROTECTED;
 
@@ -315,12 +316,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * (e.g. we may want 10, but maybe there's a single partition and we're in partition mode - stepping up won't
      * help).
      * <p>
-     * {@code volatile} because the setter below widens the write beyond the control thread which owns the field: a
-     * test driving {@link #checkPipelinePressure()} sets it from whichever thread it runs on, and SpotBugs
-     * (AT_STALE_THREAD_WRITE_OF_PRIMITIVE) is right that a plain {@code boolean} gives that write no visibility
-     * guarantee. The field is touched once per control loop pass, so the barrier costs nothing measurable.
+     * {@code volatile} records the invariant: this is written by the control thread and read by whoever calls
+     * {@link #checkPipelinePressure()}, with no lock between them, so a plain {@code boolean} gives the write no
+     * visibility guarantee - which is what SpotBugs' {@code AT_STALE_THREAD_WRITE_OF_PRIMITIVE} was already saying
+     * about it on master, where it was one of the non-volatile offenders {@code docs/refactoring.md} tracks. The
+     * field is touched once per control loop pass, so the barrier costs nothing measurable.
      */
-    @Setter(PROTECTED) // visible for testing - lets a test put the pressure check into its guarded branch
+    // Package-private, not protected: the only caller is a same-package test putting the pressure check into its
+    // guarded branch, and PROTECTED would put a test-only seam on the extension surface of a public class.
+    @Setter(PACKAGE)
     private volatile boolean lastWorkRequestWasFulfilled = false;
 
     private io.micrometer.core.instrument.Timer userProcessingTimer;
@@ -1616,12 +1620,17 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     private void reportLoadFactorAtCeiling() {
         if (dynamicExtraLoadFactor.isStaticFactor()) {
-            log.debug("Executor pool queue is below its target ({} queued vs {}), and the loading factor is fixed at {} by configuration - " +
-                            "not stepping up, so the in-flight target stays at {} records.",
-                    getNumberOfUserFunctionsQueued(),
-                    getPoolLoadTarget(),
-                    dynamicExtraLoadFactor.getCurrentFactor(),
-                    getQueueTargetLoaded());
+            // Guarded, unlike the warn below: a fixed factor reaches this branch on EVERY pass for the life of the
+            // process, and four arguments bind SLF4J's varargs overload - an Object[] plus four boxed ints allocated
+            // per pass whether or not anyone is listening. The rate limiter is what stops the warn doing the same.
+            if (log.isDebugEnabled()) {
+                log.debug("Executor pool queue is below its target ({} queued vs {}), and the loading factor is fixed at {} by configuration - " +
+                                "not stepping up, so the in-flight target stays at {} records.",
+                        getNumberOfUserFunctionsQueued(),
+                        getPoolLoadTarget(),
+                        dynamicExtraLoadFactor.getCurrentFactor(),
+                        getQueueTargetLoaded());
+            }
         } else {
             loadFactorAtCeilingLimiter.performIfNotLimited(() ->
                     log.warn("Loading factor has reached its maximum ({}/{}) and the executor pool queue is still below its target " +
