@@ -46,8 +46,16 @@
 
          Nothing goes red either way: bin/check-test-log-config.sh scopes itself to the four library
          modules' src/test/resources/logback-test.xml and does not cover this file. -->
+    <!-- The same siloed streams the unit profile gets. Shared rather than copied: this profile had
+         NONE, and because nothing selects it that was invisible - the integration suite falls back
+         to logback-test.xml and got the silos by accident. Selecting this profile as the header
+         above instructs would have silently dropped every stream. -->
+    <include resource="logback-silos.xml"/>
+
     <root level="info">
         <appender-ref ref="STDOUT"/>
+        <appender-ref ref="ERRORS"/>
+        <appender-ref ref="WARNINGS"/>
     </root>
 
     <!-- PC state management — DEBUG to capture epoch, stale container, and rebalance events
