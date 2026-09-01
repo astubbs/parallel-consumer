@@ -64,7 +64,7 @@
             <scope>test</scope>
         </dependency>
         <!--
-            The engine and the fixture that drives it from mock Kafka clients: ProxyHarness (the
+            The engine and the fixture that drives it from mock Kafka clients: ConformanceHarness (the
             in-process engine lane, which binds a real gRPC server on an ephemeral loopback port)
             and the HarnessScenario names that are this suite's shared vocabulary.
 

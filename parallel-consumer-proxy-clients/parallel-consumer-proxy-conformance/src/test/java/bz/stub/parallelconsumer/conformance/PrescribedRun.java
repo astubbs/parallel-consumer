@@ -3,15 +3,17 @@ package bz.stub.parallelconsumer.conformance;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.proxy.harness.ProxyHarness;
+import bz.stub.parallelconsumer.proxy.harness.ConformanceHarness;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 /**
  * The runner contract carried out <b>in this JVM</b>: the five {@link RunnerBehaviour} tokens, the fixed
@@ -44,7 +46,15 @@ final class PrescribedRun implements ConformanceBinding.Run {
 
     private final List<DispatchObservation> observations = new ArrayList<>();
 
-    private final StringBuilder diagnostics = new StringBuilder();
+    /**
+     * Why the prescription could not be carried out, one line per reason - the transcript's stderr, which a
+     * failure message shows verbatim.
+     * <p>
+     * A list rather than the {@code StringBuilder} this was on {@code feats/proxy-requirements}: what the
+     * accumulator wanted all along was lines, the joining belongs to the one place that reads it, and the
+     * lock becomes the collection's own rather than a naked monitor on a mutable builder.
+     */
+    private final List<String> diagnostics = Collections.synchronizedList(new ArrayList<>());
 
     private final AtomicInteger observed = new AtomicInteger();
 
@@ -174,10 +184,8 @@ final class PrescribedRun implements ConformanceBinding.Run {
                 while (groupGeneration == generation) {
                     long remaining = deadline - System.nanoTime();
                     if (remaining <= 0) {
-                        synchronized (diagnostics) {
-                            diagnostics.append("the ceiling group of ").append(scenario.maxConcurrency())
-                                    .append(" never filled: ").append(heldInGroup).append(" held\n");
-                        }
+                        diagnostics.add("the ceiling group of " + scenario.maxConcurrency()
+                                + " never filled: " + heldInGroup + " held");
                         return false;
                     }
                     try {
@@ -280,28 +288,25 @@ final class PrescribedRun implements ConformanceBinding.Run {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
-        synchronized (diagnostics) {
-            diagnostics.append(whatWentWrong).append('\n');
-        }
+        diagnostics.add(whatWentWrong);
         return false;
     }
 
     @Override
     public RunnerTranscript transcript() {
         synchronized (observations) {
+            // The line format is DispatchObservation's own, not restated here: an in-process binding's
+            // stdout has to be the bytes a foreign runner would have printed, and two spellings of one
+            // contract is exactly what this suite exists to prevent.
             var stdout = observations.stream()
-                    .map(o -> (o.kind() == DispatchObservation.Kind.DISPATCH
-                            ? RunnerContract.DISPATCH_LINE_PREFIX
-                            : RunnerContract.SETTLED_LINE_PREFIX)
-                            + "key=" + o.key() + " offset=" + o.offset()
-                            + " attempt=" + o.attempt() + " reason=" + o.reason())
-                    .reduce("", (all, line) -> all + line + "\n");
+                    .map(DispatchObservation::toString)
+                    .collect(Collectors.joining("\n", "", "\n"));
             return new RunnerTranscript(bindingName,
                     "in-process " + bindingName + " binding: --scenario " + scenario.name()
                             + " --behaviour " + scenario.behaviour().token()
                             + " --expect-dispatches " + scenario.expectedDispatches()
                             + " --max-concurrency " + scenario.maxConcurrency(),
-                    exitCode, List.copyOf(observations), stdout, diagnostics.toString());
+                    exitCode, List.copyOf(observations), stdout, String.join("\n", diagnostics));
         }
     }
 
@@ -310,7 +315,7 @@ final class PrescribedRun implements ConformanceBinding.Run {
         windowClosed.countDown();
         // A held record is released back into an ordinary success, so the engine's own close drains rather
         // than waiting out a user function that is never going to return.
-        await(allCompleted, ProxyHarness.CONVERGENCE_BUDGET.toSeconds(),
+        await(allCompleted, ConformanceHarness.CONVERGENCE_BUDGET.toSeconds(),
                 "a held record was still executing when the run closed");
     }
 }

@@ -35,8 +35,15 @@
             This module owns its own protobuf pin because it owns its own schema. The protocol
             module's pin is read out of that pom by path from a workflow, so the two must not be
             collapsed into one shared property.
+
+            SEPARATE IS NOT THE SAME AS FREE TO LAG. It was 3.25.5 until the language-proxy stack
+            merged down, which brought the root pom's shared grpc pin - and grpc-protobuf 1.75.0
+            asks transitively for 3.25.8, so RequireUpperBoundDeps refused the lower number and the
+            module stopped building. Same number, same rule, same reason the protocol module moved
+            first; the property stays separate because the workflow that reads that one by path
+            still must not read this one.
         -->
-        <protobuf.version>3.25.5</protobuf.version>
+        <protobuf.version>3.25.8</protobuf.version>
         <proxy.protoc>${protobuf.version}</proxy.protoc>
 
         <!-- Experimental and never published: nothing downstream inherits this module's
@@ -82,6 +89,51 @@
                 <version>2.18.9</version>
                 <type>pom</type>
                 <scope>import</scope>
+            </dependency>
+
+            <!--
+                RequireUpperBoundDeps, and the number is this module's own highest requester rather
+                than a repo-wide choice. gRPC 1.75.0 asks for error_prone_annotations 2.30.0 through
+                grpc-stub, grpc-api and grpc-netty-shaded, while guava 33.6.0-jre - managed up from
+                grpc's own 33.3.1-android - asks for 2.47.0. The rule refuses the lower number
+                winning, so the pin is the higher one.
+
+                The sibling modules pin this too and NOT all to the same value: the proxy and the
+                Java client aggregator sit at 2.48.0, the protocol module at 2.47.0. That is
+                deliberate rather than drift - each is its own highest requester's number - so match
+                what THIS module resolves, do not copy a neighbour's.
+
+                Module-local for the same reason the Jackson import above is: nothing here is
+                published, so no consumer inherits it.
+            -->
+            <dependency>
+                <groupId>com.google.errorprone</groupId>
+                <artifactId>error_prone_annotations</artifactId>
+                <version>2.47.0</version>
+            </dependency>
+
+            <!--
+                The same rule again, and this pair is the one that says why this module needs its own
+                block at all. It depends on BOTH kafka-streams 3.9.2 and, through the proxy,
+                parallel-consumer-core - and core deliberately pins these two Kafka compression
+                codecs ABOVE what kafka-clients asks for, as compile-scope dependencies of its own.
+                So this module sees 1.5.6-4 and 1.1.10.5 down the kafka-streams path and 1.5.7-12 and
+                1.1.10.8 down the core path, and RequireUpperBoundDeps refuses the lower ones.
+
+                Matched to core's numbers rather than chosen: core is the module that decided to
+                out-pin Kafka here, and a codec resolved differently in two modules of one build is
+                the kind of split nobody notices until a broker rejects a batch. Retire this block
+                when kafka-streams ships a Kafka whose own codecs are at or past core's.
+            -->
+            <dependency>
+                <groupId>com.github.luben</groupId>
+                <artifactId>zstd-jni</artifactId>
+                <version>1.5.7-12</version>
+            </dependency>
+            <dependency>
+                <groupId>org.xerial.snappy</groupId>
+                <artifactId>snappy-java</artifactId>
+                <version>1.1.10.8</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

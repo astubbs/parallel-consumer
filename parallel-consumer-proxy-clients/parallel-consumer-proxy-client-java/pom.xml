@@ -40,6 +40,37 @@
         <module>parallel-consumer-proxy-client-java-demo</module>
     </modules>
 
+    <!--
+        THE gRPC GRAPH'S TWO PINS, DECLARED ONCE FOR THE TREE THAT NEEDS THEM. Only the modules that
+        put gRPC on a classpath resolve either artifact, so grpc and harness inherit these and api
+        and direct are unaffected - direct's bannedDependencies rule proves that, since a pin here
+        adds nothing to a graph that has no gRPC in it.
+
+        parallel-consumer-proxy's pom OWNS the reasoning for both and carries it in full. In one line
+        each: gRPC drags error_prone_annotations in at several versions and resolution settles on the
+        lowest, which the root pom's requireUpperBoundDeps refuses; and grpc-core brings gson 2.11.0
+        at runtime, the version OSS Index matches for CVE-2025-53864 - an advisory about a library
+        this repository does not depend on, pinned forward rather than excluded because an exclusion
+        would carry a retirement condition nobody could ever discharge.
+
+        The protocol module's error_prone pin is deliberately a version lower, since its highest
+        requester differs; equalising the three would break one of them.
+    -->
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>com.google.errorprone</groupId>
+                <artifactId>error_prone_annotations</artifactId>
+                <version>2.48.0</version>
+            </dependency>
+            <dependency>
+                <groupId>com.google.code.gson</groupId>
+                <artifactId>gson</artifactId>
+                <version>2.14.0</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
     <build>
         <plugins>
             <!--
@@ -76,8 +107,9 @@
                 dependency-free by design. So a dismissal goes in that module's own
                 spotbugs-exclude.xml, named class by class and pattern by pattern with the reason
                 written beside it. A module-wide or pattern-wide exclusion is the thing to refuse:
-                it silences the finding for code nobody has written yet. Only the api module needs
-                one today; every other module here is clean with no filter at all.
+                it silences the finding for code nobody has written yet. Two modules need one today
+                - api, for the zero-copy contract, and demo, whose output IS pre-rendered text; the
+                rest are clean with no filter at all.
             -->
             <plugin>
                 <groupId>com.github.spotbugs</groupId>

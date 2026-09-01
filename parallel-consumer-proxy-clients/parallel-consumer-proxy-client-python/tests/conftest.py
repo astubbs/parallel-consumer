@@ -1,12 +1,20 @@
 # Copyright (C) 2026 Antony Stubbs and contributors
 
-"""Fixtures for driving the real test-mode sidecar.
+"""Fixtures for driving a real sidecar - and there are TWO of them.
 
-The sidecar is the proxy module's ``TestModeMain``, which lives in that module's **test** jar -
-it must never reach a client package - so running it needs a JVM classpath rather than a binary
-path. Maven writes that classpath at ``target/sidecar-classpath.txt`` (see the
-``python-e2e-harness`` profile in ``pom.xml``); ``make test`` produces it through the same wiring
-when pytest is run on its own.
+Both are JVM classpath invocations rather than binary paths, so both need the classpath Maven
+writes at ``target/sidecar-classpath.txt`` (see the ``python-e2e-harness`` profile in
+``pom.xml``); ``make test`` produces it through the same wiring when pytest is run on its own.
+
+``engine_less_sidecar`` is the proxy module's ``NoEngineMain``, which lives in its **test**
+jar beside ``TestModeMain``. It hosts no Parallel Consumer engine - it binds, announces its port, admits one connection, and answers every session
+``UNIMPLEMENTED`` (astubbs/parallel-consumer#384). What a test using it can prove is the whole
+client-side path up to and including the handshake, and nothing past it.
+
+``sidecar_for`` is the proxy module's ``TestModeMain``, which lives in that module's **test**
+jar - it must never reach a client package. That one IS engine-backed: it seeds a mock consumer
+and runs the real engine, which is what lets ``test_one_record_end_to_end.py`` assert that a
+record is dispatched, processed once, and not redelivered.
 
 Everything below is test scaffolding. Nothing here is part of the library's surface, and the
 library itself knows only what every application knows: an absolute path to a binary, and
@@ -25,7 +33,11 @@ from parallel_consumer import SidecarCommand
 
 MODULE_ROOT = pathlib.Path(__file__).resolve().parent.parent
 CLASSPATH_FILE = MODULE_ROOT / "target" / "sidecar-classpath.txt"
-SIDECAR_MAIN = "bz.stub.parallelconsumer.proxy.testmode.TestModeMain"
+TEST_MODE_SIDECAR_MAIN = "bz.stub.parallelconsumer.proxy.testmode.TestModeMain"
+ENGINE_LESS_SIDECAR_MAIN = "bz.stub.parallelconsumer.proxy.NoEngineMain"
+
+NO_ENGINE_DESCRIPTION = "hosts no Parallel Consumer engine"
+"""What the sidecar's refusal must name, so a client author does not debug their own code."""
 
 _HOW_TO_BUILD_IT = (
     "run `make test` (which produces it), or "
@@ -50,7 +62,7 @@ def java() -> str:
 
 @pytest.fixture(scope="session")
 def sidecar_classpath() -> str:
-    """The test-mode sidecar's classpath, as Maven resolved it."""
+    """The sidecar's classpath, as Maven resolved it - both sidecars run off this one."""
     from_environment = os.environ.get("PC_PROXY_SIDECAR_CLASSPATH")
     if from_environment:
         return from_environment
@@ -64,7 +76,7 @@ def sidecar_classpath() -> str:
 
 @pytest.fixture
 def sidecar_for(java: str, sidecar_classpath: str):
-    """Builds the launch command for one named conformance scenario.
+    """Builds the launch command for one named conformance scenario, engine-backed.
 
     The scenario name is also the topic name - the harness seeds that scenario's records on a
     mock consumer and serves them from a topic of the same name.
@@ -73,7 +85,23 @@ def sidecar_for(java: str, sidecar_classpath: str):
     def build(scenario: str) -> SidecarCommand:
         return SidecarCommand(
             executable=pathlib.Path(java),
-            args=("-cp", sidecar_classpath, SIDECAR_MAIN, "--mock", "--scenario", scenario),
+            args=(
+                "-cp", sidecar_classpath, TEST_MODE_SIDECAR_MAIN, "--mock", "--scenario", scenario,
+            ),
         )
 
     return build
+
+
+@pytest.fixture
+def engine_less_sidecar(java: str, sidecar_classpath: str) -> SidecarCommand:
+    """The launch command for the real sidecar shell.
+
+    NO ARGUMENTS, and that is the sidecar's own rule rather than this fixture being terse: it
+    takes none and refuses to start when given one, because everything is configured connect-time
+    over the protocol.
+    """
+    return SidecarCommand(
+        executable=pathlib.Path(java),
+        args=("-cp", sidecar_classpath, ENGINE_LESS_SIDECAR_MAIN),
+    )

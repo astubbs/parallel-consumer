@@ -3,8 +3,11 @@
 # Copyright (C) 2026 Antony Stubbs and contributors
 #
 
-# Breaking-change gate for the frozen proxy protocol schema (the language-proxy plan's freeze
-# unit, astubbs#242 - the plan is docs/plans/2026-08-14-001-feat-language-proxy-plan.md).
+# Breaking-change gate for the frozen proxy protocol schema (the language-proxy plan's freeze unit,
+# astubbs#242). The plan travels with the work it plans, and is here:
+# docs/plans/2026-08-14-001-feat-language-proxy-plan.md.
+# What the freeze MEANS is owned by the banner at the top of the schema and by
+# parallel-consumer-proxy-protocol/docs/protocol-specification.md, both of which ship with this gate.
 #
 # After the freeze the wire may only GAIN, never change: `buf breaking` in the FILE category
 # forbids deleting, renumbering, retyping or renaming anything in proxy.proto. FILE rather than
@@ -66,7 +69,14 @@ if ! command -v buf >/dev/null 2>&1; then
     exit 2
 fi
 
-mapfile -t here < <(module_roots_in_worktree)
+# NO `mapfile`, and both array reads here used to be one. mapfile is a bash 4 builtin; macOS ships
+# bash 3.2, where the line dies with "mapfile: command not found" and this gate exits 127 - a gate
+# that has NOT run, reported as neither verdict, which is the exact class its own header argues
+# about. ShellCheck passes it clean, so the class now has a bin/check-shell-hazards.sh row rather
+# than only this comment. `while read` over a process substitution is portable to 3.2 and reads the
+# same.
+here=()
+while IFS= read -r module_root; do here+=("$module_root"); done < <(module_roots_in_worktree)
 if [[ ${#here[@]} -ne 1 ]]; then
     echo "check-proto-breaking: expected exactly one tracked ${PROTO_IN_MODULE}, found ${#here[@]}" \
         "(${here[*]:-none}); cannot tell which module to check, so this gate has NOT run." >&2
@@ -80,7 +90,8 @@ if [[ -z "$AGAINST" ]]; then
         echo "check-proto-breaking: $BASELINE_REF is not available (shallow clone?); cannot pick a baseline." >&2
         exit 2
     fi
-    mapfile -t frozen < <(module_roots_in_ref "$BASELINE_REF")
+    frozen=()
+    while IFS= read -r module_root; do frozen+=("$module_root"); done < <(module_roots_in_ref "$BASELINE_REF")
     if [[ ${#frozen[@]} -eq 0 ]]; then
         echo "check-proto-breaking: $BASELINE_REF carries no ${PROTO_IN_MODULE} at any path -" \
             "nothing frozen to compare against; passing. The gate arms when the freeze lands there."

@@ -11,10 +11,14 @@ import com.tngtech.archunit.junit.ArchTests;
 
 /**
  * Applies the shared {@link TestConventionRules} to this module's test classes - the rule logic lives once in
- * {@link TestConventionRules} (core test-jar, which this module already depends on for its mock clients); this
- * only points ArchUnit at this module's packages, which is what {@code EveryModuleWiresUpArchUnitTest} checks for.
+ * {@link TestConventionRules} (core test-jar); this only points ArchUnit at this module's packages.
+ * <p>
+ * The wrapper cannot be inherited from the test-jar instead, for the reason its siblings across the
+ * repository record: surefire's {@code dependenciesToScan} would pull the whole test-jar into every module.
+ * {@code EveryModuleWiresUpArchUnitTest} fails any module with a {@code src/test/java} that has no wrapper.
  */
-@AnalyzeClasses(packages = "bz.stub.parallelconsumer.conformance", importOptions = ImportOption.OnlyIncludeTests.class)
+@AnalyzeClasses(packages = "bz.stub.parallelconsumer.conformance",
+        importOptions = ImportOption.OnlyIncludeTests.class)
 class TestConventionsArchTest {
 
     @ArchTest

@@ -6,20 +6,52 @@ agent regardless of CI live in AGENTS.md; this is the reference behind them.
 
 ## Reading a failed job's log
 
-The `--log` flag on `gh run view` refuses while *any* job in the run is still going ("logs will be
-available when it is complete"), and `--log-failed` is often empty for a Maven job, because the
-failure text is ordinary stdout rather than an `::error::` annotation. Neither means the log is
-unavailable. Fetch the job directly - this works as soon as **that job** finishes, regardless of the
-rest of the run:
+**Every route here can hand you an incomplete log that looks complete, so the retrieval order is part
+of the diagnosis, not a detail.**
+[`docs/solutions/workflow-issues/gh-run-view-log-truncation.md`](solutions/workflow-issues/gh-run-view-log-truncation.md)
+**owns the routes and the incidents**; what follows is the part you need before your first command.
+
+**For a chaos or broker integration-test failure, go to the uploaded test-report artifact first.**
+The counts are XML attributes and the `AMBIENT PROBE AUTOPSY` is captured inside `system-out`, so
+neither depends on the console stream surviving:
 
 ```bash
-jid=$(gh run view <run-id> -R astubbs/parallel-consumer --json jobs --jq '.jobs[] | select(.name=="Integration Tests") | .databaseId')
-gh api "repos/astubbs/parallel-consumer/actions/jobs/$jid/logs" > /tmp/job.log
+gh run download <run-id> -R astubbs/parallel-consumer -n "highcpu-fast-feedback-reports-Chaos Pain Suite-<n>" -D /tmp/reports
+# then parse /tmp/reports/**/failsafe-reports/TEST-*.xml - `errors`/`failures` are attributes
 ```
 
-Then grep it: `Tests run:`, `<<< FAILURE`, and for broker integration tests the
+**For anything else, the run-logs archive**, which cannot truncate:
+
+```bash
+gh api repos/astubbs/parallel-consumer/actions/runs/<run-id>/logs > /tmp/logs.zip   # add /attempts/<n> for a re-run
+unzip -p /tmp/logs.zip '*<job name>*.txt' > /tmp/job.log
+```
+
+Two routes that read as authoritative and are not:
+
+- **`gh run view --job <id> --log` silently truncates.** It returned 990 lines of a ~5000-line chaos
+  job on astubbs#357, cutting inside a *passing* test and then appending the post-job steps - so the
+  file ends with cleanup and looks whole. Three separate sessions have filed a wrong diagnosis from
+  it. Convenience only.
+- **`gh api .../actions/jobs/<id>/logs` can exit 1 having written nothing**, with
+  `the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway`
+  on **stderr** - the one stream a `>` redirect does not capture, so you get an empty file and a job
+  that appears to have no log. With the flag it still dies mid-stream on a large log
+  (`read: operation timed out`), leaving a partial file with no marker.
+
+**Check completeness before you diagnose, whichever route you used**: the log must end with a real
+terminal marker - `Tests run:`, `BUILD SUCCESS`/`BUILD FAILURE`, or the post-job cleanup *of the step
+you care about*. **A grep for a failure signature returning zero on a truncated log is a false
+negative that reads exactly like a clean run**, and the more systematically you grep, the more
+confident the wrong answer becomes.
+
+Then grep: `Tests run:`, `<<< FAILURE`, and for broker integration tests the
 `AMBIENT PROBE AUTOPSY` block, which classifies contention-vs-bug before you start reading
 stack traces (see [`docs/testing.md`](testing.md)).
+
+`gh run view --log` also refuses while *any* job in the run is still going ("logs will be available
+when it is complete"), and `--log-failed` is often empty for a Maven job, because the failure text is
+ordinary stdout rather than an `::error::` annotation. Neither means the log is unavailable.
 
 ## Workflows
 
@@ -30,13 +62,16 @@ document. This section is the detail behind it.
 - **`maven.yml`** - build and test on every push/PR. PRs run two tiers in parallel: split suites on
   the pom's default Kafka version (`bin/ci-unit-test.sh`, `bin/ci-integration-test.sh`,
   `bin/performance-test.sh`) for fast feedback, and an experimental Kafka 4.x compatibility check
-  (`bin/ci-build.sh`). Also carries the seconds-fast Quarantine Audit job, SpotBugs, duplicate
-  detection, PR-scoped mutation testing (PIT), dependency vulnerability scanning, and the
-  `proto: breaking` freeze gate (`bin/check-proto-breaking.sh` - the frozen proxy wire schema may
-  only gain, never change; buf `FILE` category against origin/master). Push to
+  (`bin/ci-build.sh`). It also carries **`Chaos Pain Suite`**, the per-PR ambient tripwire,
+  which moved here from the self-hosted box on 2026-08-26 - see
+  ["Chaos does not need the self-hosted box"](#chaos-does-not-need-the-self-hosted-box). It is
+  **gating**, like the suite it replaced: a chaos RED is a real finding. Also carries the seconds-fast Quarantine Audit job, SpotBugs, duplicate
+  detection, PR-scoped mutation testing (PIT), and dependency vulnerability scanning. Push to
   master runs a single full `bin/ci-build.sh` on the default Kafka version to gate SNAPSHOT
   publishing. All jobs use explicit `cache/restore` with rotating keys from the `prepare-deps`
   job - never `setup-java cache: 'maven'`.
+  It also carries **`proto: breaking`**, the freeze gate over the proxy wire schema - see
+  ["`proto: breaking` runs three things, in an order that matters"](#proto-breaking-runs-three-things-in-an-order-that-matters).
 - **`publish.yml`** - publishes to Maven Central on every push to `master`. The pom version is the
   source of truth: `-SNAPSHOT` versions deploy as snapshots, non-snapshot versions deploy as full
   releases (and create a git tag + GitHub release). See [`docs/releasing.md`](releasing.md).
@@ -59,38 +94,82 @@ document. This section is the detail behind it.
   astubbs/parallel-consumer#N` lines from the PR body and blocks the child until every parent has
   merged. Produces the **required** check `Check PR Dependencies`, so a stacked PR cannot merge out
   of order.
-- **`repo-hygiene.yml`** - cheap repo-wide static checks needing no JDK, no broker and no build.
-  **One job per concern**, named `<area>: <check>` to match the master ruleset's context
-  convention - a job renamed here silently stops satisfying that ruleset, so treat the names as an
-  API. `sigpipe` runs `bin/check-shell-sigpipe.sh`, which fails any `bin/*.sh` piping into
-  `grep -q` under `pipefail` - that construct can report failure *because* it matched, once the
-  producer still has more than a pipe buffer left to write when `grep` exits, so it passes every
-  small fixture and surfaces only in production. shellcheck does not detect it, and the full
-  mechanism is in the script's own header and in
-  [`solutions/workflow-issues/a-check-that-reports-success-without-having-run.md`](solutions/workflow-issues/a-check-that-reports-success-without-having-run.md).
-  `rename` runs `bin/test-rename-packages.sh`, the self-test for the
-  package-rename tool (`bin/rename-packages.sh`) - a tool run by hand once per branch, which is
-  exactly the shape that rots unnoticed between the day it is written and the day the whole rename
-  depends on it. `actions` runs `bin/check-action-versions.sh`, keeping every
-  GitHub Action pinned to one version across all workflows.
-  `inflight-tags` runs `bin/check-inflight-tags.sh`, which validates every `docs/inflight/` note's
-  tags against the closed sets in `bin/lib/inflight-tags.sh`
-  ([`docs/inflight/AGENTS.md`](inflight/AGENTS.md) owns their meanings) - failing the commit that
-  mistyped a tag, rather than leaving it to whoever starts the next session to notice the index
-  could not place a note. `test-log-config` runs `bin/check-test-log-config.sh`, which pins the
-  four library modules' `logback-test.xml` to the `pc.log.level`-driven harness and fails any
-  logger committed at debug/trace - a failure class that is otherwise silent: the log floods,
-  nothing goes red, and the volume alone has timed tests out (measurements in the script header;
-  [`docs/testing.md`](testing.md), "Seeing test output", owns the how-to). Both are new alongside
-  `tooling: package rename` and, like it, cannot join the ruleset until the jobs exist on master.
-  Self-tests run first. **`shell: sigpipe`
-  and `workflows: action versions` are required status checks** - which is exactly why the job names
-  are an API. They exist because the failures they catch are invisible rather than loud, and they
-  gate precisely so those failures cannot be skimmed past. `tooling: package rename` is not in the
-  ruleset yet: a required context no run produces blocks every PR whose base predates it, so it can
-  only be added once the job is on master.
-  - `cve-exclusions` runs `bin/check-cve-exclusions.sh`, which **expires temporary CVE
-    exclusions**. Entries in the root pom's `excludeVulnerabilityIds` come in two kinds: *standing*
+- **`clients.yml`** - "Clients". One row per proxy-client language (astubbs#242): install that
+  language's toolchain, then build, test, run the shared conformance suite, run the language's own
+  static analysis, and **audit that language's dependencies for published vulnerabilities** via
+  `bin/client-audit.sh`. `fail-fast: false`, so one language's breakage cannot hide another's. The
+  workflow's own header owns the rest (the maturity gate, the caching rule, the toolchain pins).
+  - **Every row sets `PC_FOREIGN_CLIENTS_STRICT`**, which turns "toolchain not on PATH" from the
+    skip a developer's machine wants into the failure a provisioned runner needs.
+    `bin/foreign-client-step.sh` owns that contract; a row that stops setting it goes green having
+    built nothing.
+  - **The three Java client modules have no row here.** They are ordinary Maven modules in the
+    default reactor, so `maven.yml` already builds them and runs their tests. Kotlin and Scala do
+    have rows: both are JVM but neither is Java, and each has its own analyser to run.
+  - **C++ and Swift build in containers, on `ubuntu-latest`.** Each module carries a multi-stage
+    Dockerfile whose `FROM` line is that row's real pin, and `bin/build-client.sh` drives BuildKit
+    and exports the artifact stage. Neither language can be served from the host: gRPC and protobuf
+    reach C++ as system dev packages rather than as a versioned toolchain, and the ubuntu images
+    ship no Swift.
+  - **What the audit covers that nothing else does.** `dependency-audit.yml` above scans the Maven
+    tree; Go, Rust, npm, Ruby, Python and .NET dependencies were scanned by nothing at all, which is
+    how a stale gRPC pin carrying a published CVE shipped on the proxy branch. Dependabot does not
+    close it either, even with those ecosystems declared: it reads the **default branch**, and a pin
+    chosen at the start of a long-lived branch goes stale *during* the branch. This lane runs on the
+    branch, which is the only place that is visible.
+  - **Each language's own auditor**, because each reads its own lockfile and its own advisory
+    database - `govulncheck` even resolves whether the vulnerable *symbol* is reachable. npm and the
+    .NET SDK ship theirs; `govulncheck`, `bundler-audit` and `pip-audit` are pinned in the module's
+    own manifest exactly as its linters are; `cargo-audit` is the one with no manifest slot, so the
+    Rust row installs it pinned. **Swift and C++ have no auditor** - SwiftPM has no audit command and
+    the C++ module has no package manager - and both say so on every run rather than skipping
+    silently. A language with no recorded decision **fails**.
+  - **The exit code of an auditor is not a verdict, and that is why there is a script.** Measured:
+    `govulncheck -format json` and `dotnet list package --vulnerable` both print findings and **exit
+    0**; `npm audit` and `bundler-audit` use exit 1 for *found something* and for *could not find a
+    lockfile*. Each language is therefore classified structurally from its report, with the same
+    exit-code split as `bin/check-ossindex-audit.sh` - **1** the lane is broken and nothing was
+    learned, **2** the tree has a finding. `bin/test-client-audit.sh` runs first and is hermetic:
+    every auditor is replaced by a shim replaying recorded real output, so the two exit-0-with-
+    findings cases are *shown* to go red rather than assumed to.
+  - **Suppress a false positive in that ecosystem's own ignore mechanism** (`.cargo/audit.toml`,
+    `.bundler-audit.yml`, `pip-audit --ignore-vuln`), not in a registry here - a second list would
+    drift from the tool's, which is the defect the root pom's exclusion list already needs a guard
+    for.
+  - **The Go row's patch pin is load-bearing.** `govulncheck` reports advisories against the
+    toolchain's own stdlib, so a `toolchain:` behind on Go security releases reddens the row, naming
+    them. That is the freshness signal, and the fix is one line in the matrix.
+- **`repo-hygiene.yml`** - cheap repo-wide static checks needing no broker, no Docker and no build.
+  **ONE job, `repo: hygiene`, which DISCOVERS rather than enumerates**: it runs
+  `bin/check-all.sh --with-tests`, globbing `bin/check-*.sh` and `bin/test-*.sh`. It was one job per
+  concern until that shape cost more than it bought - a gate added to `bin/` ran NOWHERE until
+  somebody remembered to name it here, and nothing went red, because a check that is not running
+  looks exactly like a check that is passing. The job name is still an API: it is a required status
+  check, and renaming it silently stops satisfying the ruleset.
+
+  What the lane covers, and why each one is not obvious:
+
+  - **`check-shell-sigpipe.sh`** fails any script piping into `grep -q` under `pipefail`. That
+    construct can report failure *because* it matched, once the producer still has more than a pipe
+    buffer left to write when `grep` exits - so it passes every small fixture and surfaces only in
+    production. ShellCheck does not detect it. Full mechanism in the script header and in
+    [`solutions/workflow-issues/a-check-that-reports-success-without-having-run.md`](solutions/workflow-issues/a-check-that-reports-success-without-having-run.md).
+  - **`check-shell-hazards.sh`** fails coreutils flags that mean different things on GNU and BSD -
+    `stat -f` exits 1 on GNU while printing filesystem prose to stdout, `sed -i` takes its suffix
+    attached on one and as the next argument on the other. Same class as the above, and it should
+    eventually absorb it ([`inflight/ci-fold-sigpipe-into-shell-hazards.md`](inflight/ci-fold-sigpipe-into-shell-hazards.md)).
+  - **`test-rename-packages.sh`** self-tests the package-rename tool - run by hand once per branch,
+    exactly the shape that rots unnoticed between the day it is written and the day a whole rename
+    depends on it.
+  - **`check-action-versions.sh`** keeps every GitHub Action pinned to one version across workflows.
+  - **`check-inflight-tags.sh`** validates every `docs/inflight/` note's tags against the closed sets
+    in `bin/lib/inflight-tags.sh` ([`docs/inflight/AGENTS.md`](inflight/AGENTS.md) owns their
+    meanings), failing the commit that mistyped a tag rather than leaving the next session to notice
+    the index could not place a note.
+  - **`check-test-log-config.sh`** pins the four library modules' `logback-test.xml` to the
+    `pc.log.level`-driven harness and fails any logger committed at debug/trace - otherwise silent:
+    the log floods, nothing goes red, and the volume alone has timed tests out.
+  - **`check-cve-exclusions.sh`** **expires temporary CVE exclusions**. Entries in the root pom's `excludeVulnerabilityIds` come in two kinds: *standing*
     (retiring them needs someone else to act, on no timetable we control) and *temporary* (the
     upstream fix is merged, and the entry exists only because no release carries it yet). A
     temporary entry is marked `TEMPORARY-SINCE: YYYY-MM-DD` in the comment above it, and the check
@@ -107,10 +186,8 @@ document. This section is the detail behind it.
     clearable in one reviewable line: retire the entry if the fix shipped, or re-date / reclassify
     it having re-checked upstream. It lives here rather than in the audit job because that job is
     skipped for fork PRs and dies early on a token expiry, so the list would go unwatched exactly
-    when it matters most. **`deps: CVE exclusion expiry` is a new job name and is NOT yet a required
-    status check** - adding it to the master ruleset is a separate, deliberate act.
-  - `deferred-modules` runs `bin/check-deferred-modules.sh`, the **reverse** of the gate in
-    `clients.yml`. That workflow skips a language row while the module's maturity fragment carries
+    when it matters most.
+  - **`check-deferred-modules.sh`** is the **reverse** of the gate in `clients.yml`. That workflow skips a language row while the module's maturity fragment carries
     `deferred:`, which is right for a seeded skeleton and has no counterpart the other way: a wave
     that writes a real client and forgets to lift the deferral gets a row reporting green while
     building, testing and linting nothing, and `lifted_by:` is a note to a human. Source beyond the
@@ -120,20 +197,18 @@ document. This section is the detail behind it.
     Scope is whatever `clients.yml`'s matrix has a row for, read from the workflow, so a new row is
     covered the day it is added; the rest of the maturity corpus is out of scope because `deferred:`
     there also means "an aggregator or test module with no maturity claim to make", which skips
-    nothing. **`clients: deferred modules` is a new job name and is NOT yet a required status
-    check.**
-  - `client-scanners` runs `bin/check-client-scanners.sh`, which guards the other way a client row
-    can report green having checked nothing. `clients.yml` skips a row's static-analysis step when
+    nothing.
+  - **`check-client-scanners.sh`** guards the other way a client row can report green having
+    checked nothing. `clients.yml` skips a row's static-analysis step when
     its `scanner-cmd` is empty, which the Swift row needs - its module builds in a container that
     already lints on the way to the artifact stage, so a host step would be the same command
     written twice. Emptiness is therefore legal only for a language listed in the script's
     `DELEGATED` table, and the entry is a claim the check tests: the named file must exist and must
     still run the named analyser, so taking the lint out of that Dockerfile fails here rather than
     silently. It also asks that every row name its `scanner`, and that a `scanner-cmd` pointing at
-    a module script (`scripts/analyse.sh`) points at one that is there. **`clients: static analysis
-    coverage` is a new job name and is NOT yet a required status check.**
-  - `dependabot-coverage` runs `bin/check-dependabot-coverage.sh`, which asserts that
-    `.github/dependabot.yml` and the manifests actually in the tree agree, **in both directions**. An
+    a module script (`scripts/analyse.sh`) points at one that is there.
+  - **`check-dependabot-coverage.sh`** asserts that `.github/dependabot.yml` and the manifests
+    actually in the tree agree, **in both directions**. An
     ecosystem Dependabot was never told about produces no error, no warning and no PR, so it is
     indistinguishable from an ecosystem with nothing to update - which is how seven of this repo's
     nine ecosystems went unwatched for the whole of the language-proxy work, surfacing only when a
@@ -145,8 +220,53 @@ document. This section is the detail behind it.
     client-cpp` is genuinely uncoverable (no package manager) and is printed on every run, green ones
     included, so it stays a stated fact rather than an absence. **Exit 1** = the check could not run
     (no config, unparseable YAML); **exit 2** = a real coverage gap - the
-    `bin/check-ossindex-audit.sh` split, for the same reason. **`deps: Dependabot coverage` is a new
-    job name and is NOT yet a required status check.**
+    `bin/check-ossindex-audit.sh` split, for the same reason.
+
+  **A JDK is set up even though nothing here builds**: `bin/test-check-infer.sh` FAILS rather than
+  skips when no JDK resolves under `CI`, so without it the lane would pass only because the runner
+  image happens to ship one.
+
+  **Adding a required check is ordered, and getting it wrong blocks every open PR.** A required
+  context that no run produces leaves every PR pending until it merges master. So removals go first
+  (they can never block anything) and additions wait until the job exists on master - which is why
+  `shell: sigpipe` and `workflows: action versions` were dropped from the ruleset in the same change
+  that deleted those jobs. **Neither name exists any more, and neither is required.** `repo: hygiene`,
+  the single lane that replaced them (and the rest of `repo-hygiene.yml`'s old per-concern jobs), is
+  **also absent from the required list** as of the last live check -
+  `gh api repos/astubbs/parallel-consumer/rulesets/15055005` enumerates every required context by
+  name and `repo: hygiene` is not among them. Whether that is the pending "addition" this paragraph
+  describes, still waiting for its turn, or simply missed when the jobs were collapsed, is not
+  settled here - confirm against the live ruleset rather than assuming either.
+
+### `proto: breaking` runs three things, in an order that matters
+
+The job name says one thing and the job does three, because they share a `buf` install and a checkout
+and splitting them would buy a second job for one binary. In order:
+
+1. **`bin/check-proto-lint.sh`** - `buf lint` over the schema. First, because a schema that does not
+   lint is one whose breaking-change comparison is answering a question nobody asked yet. The rule set
+   and its two exceptions live in `parallel-consumer-proxy-protocol/buf.yaml`, not in the script.
+2. **`bin/test-check-proto-breaking.sh`** - the gate's own self-test, ahead of the gate, the same
+   ordering the docs-data and copyright scanners use. It mutates the real schema one way at a time
+   (delete, renumber, rename, add) and asserts the verdict, then restores it.
+3. **`bin/check-proto-breaking.sh`** - the gate. `buf breaking` in the **FILE** category against
+   `origin/master`.
+
+Three things about it are easy to get wrong:
+
+- **FILE, not WIRE, and the self-test is what pins that.** A renamed field is wire-compatible, so
+  `WIRE` would pass it - and nothing else in the repository would notice `buf.yaml` being weakened.
+  The rename case exists to fail if it ever is.
+- **A pass can mean "nothing to compare against".** Until the frozen schema is on `master` the gate
+  passes with a notice saying so, which is why the self-test asserts the *reason* and not only the
+  exit code. Once the schema lands, the baseline is `master` and therefore **moves** - so the gate
+  catches a break on the PR that introduces it and never again. That gap is open and recorded in
+  [`docs/inflight/ci-pin-the-proto-freeze-baseline.md`](inflight/ci-pin-the-proto-freeze-baseline.md).
+- **`fetch-depth: 0` is load-bearing.** The baseline is a git ref; a shallow clone makes the gate exit
+  2 (cannot run) rather than silently passing.
+
+`proto: breaking` is a **new job name and is NOT yet a required status check** - adding it to the
+master ruleset is a separate, deliberate act.
 
 ### `CodeQL` is a required check that no workflow file produces
 
@@ -174,6 +294,46 @@ file added alongside it does not become a second opinion. Trading down is the re
 hand-written matrix has to re-declare `actions` and `python`, which default setup covers for free,
 and then be maintained. astubbs#1 was exactly that proposal, opened in 2021 against
 `github/codeql-action@v1`; it was overtaken by default setup and closed by becoming this section.
+
+### Which checks are required, and why several deliberately are not
+
+**The required list is repository settings, not tree state**, so no PR can change it and nothing goes
+red when it drifts. Read it rather than trusting any list written down here:
+
+```bash
+gh api repos/astubbs/parallel-consumer/rulesets --jq '.[] | "\(.id) \(.name)"'
+gh api repos/astubbs/parallel-consumer/rulesets/<id> \
+  --jq '.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context'
+```
+
+**A required context that no run produces leaves every PR pending until it merges master**, so a new
+check is only promoted once the job that emits it is already on master. The same ordering governs a
+renamed job: the ruleset keeps the old name, which then blocks nothing visibly and passes never. That
+is how a bare `spotbugs` context outlived the job that became `static: spotbugs` and sat required with
+no producer until 2026-08-26. **A skip does not satisfy a required check either** - it waits - so a
+job that can legitimately have nothing in scope should report success rather than skip before anyone
+requires it.
+
+**These are deliberately NOT required, and each would break something if promoted:**
+
+| Check | Why not |
+|---|---|
+| `Mutation Tests (PIT, PR-scoped)` | **Requiring it would be vacuous.** The job is `continue-on-error: true`, so its check-run *conclusion* is success even when the step fails - the row reddens, and a required check reads the conclusion. The property worth gating is that the lane could not measure anything, which `bin/ci-mutation-test.sh` signals through its own exit codes rather than by finding survivors. Gating that means removing `continue-on-error` first, which is a code change, not a ruleset edit |
+| `Performance (optional)` | The self-hosted lane is dispatch-only, so this context is never produced on a PR. Requiring it would block every PR permanently |
+| `compat: kafka 4.x (experimental)` | Disabled with `if: false` |
+| `full build (master)` | Push-only; never produced on a PR |
+| `Analyze (actions)`, `Analyze (java-kotlin)`, `Analyze (python)` | The `CodeQL` aggregate above is already required and covers all three |
+
+This table is the durable half of a note that has been retired: the three ruleset edits it tracked -
+adding `Chaos Pain Suite` once it reached master, adding `static: infer`, and removing the orphaned
+`spotbugs` - were made on 2026-08-26. The reasoning survives it, because the failure it prevents is
+someone re-proposing one of the rows above and re-deriving why it does not work.
+
+**`Chaos Pain Suite` was promoted without waiting for a bake-in period**, deliberately and against
+the advice recorded at the time: it had been red for much of 2026-08-25 on a timing bound, and the
+detector responsible was demoted to non-gating only the day after. The owner's call was that a red
+chaos check is a real finding and will be fixed as one. Read a red there as a bug to investigate, not
+as the gate misbehaving.
 
 ### The three `claude*` workflows, and which is which
 
@@ -204,7 +364,86 @@ Their filenames do not distinguish them well - `claude-code-review.yml` is the o
   satisfies it, so answering a `@claude` question on a PR turns `claude-review` green. See "What
   the gate proves" below.
 - **`chaos-pain.yml`** - on-demand seeded chaos hunts (`workflow_dispatch`, inputs `seed`/`reps`).
-  See [`docs/testing.md`](testing.md).
+  See [`docs/testing.md`](testing.md). It declares no `concurrency` and queues on a runner like any
+  other job - see ["The box decides its own concurrency"](#the-box-decides-its-own-concurrency).
+
+### Chaos does not need the self-hosted box
+
+**Measured head-to-head on the same commit (`d8beb162f`, 2026-08-26): hosted `ubuntu-latest`
+13m59s, self-hosted `highcpu` 12m16s, both green.** The Chaos Pain Suite ran on the box on the
+premise that it needed many real cores to provoke anything; 14% of wall-clock does not buy a shared
+physical machine, and the sharing is what produced every scheduling problem the `highcpu` lane has
+had. A hosted runner gives each job **its own VM**, so co-residency cannot occur there at all.
+
+`bin/chaos-test.sh` needed no change to move, which is the tell that the premise was never
+load-bearing: it passes no `forkCount` and no `-Dparallel-tests`, so the suite was never configured
+to exploit the cores it was placed there for.
+
+It now runs as `Chaos Pain Suite` in `maven.yml`, and it is **gating** - a chaos RED is a
+real finding. Do not re-add it to the self-hosted lane: chaos would then run twice per PR, and the
+second copy is the one that has to be scheduled against a finite box. On-demand seeded hunts stay in
+`chaos-pain.yml`.
+
+**Caveat carried forward, deliberately:** the move was settled on one head-to-head run, and the
+hosted job's per-scenario test counts were not read (the job-log endpoint returned empty). Duration
+rules out a zero-scenario run - that is build-only, ~2 minutes - but the standing rule still applies:
+read the job's own `Chaos suite timing` summary and its zero-tests-selected warning before trusting a
+green.
+
+### The box decides its own concurrency
+
+**No workflow caps how many jobs run on the highcpu box. How many run at once is the box's own
+decision, made by how many runner processes it runs** - six today. Nothing in this repository asserts
+a limit, and nothing should: a workflow file cannot know the machine's capacity, and the moment it
+claims to, the claim rots silently the next time a runner is added or removed. The lever is on the
+box, and it needs no change here.
+
+**Nothing on the box is triggered by a pull request any more** - all three workflows that target
+`highcpu` are `workflow_dispatch` only - so the scheduling question is now much smaller than it was.
+What cancellation remains is the ordinary kind: a group keyed per-suite and per-ref supersedes an
+older run of the same suite on the same ref. It is keyed per-suite rather than workflow-wide to avoid
+a head-of-line stall, because one workflow-wide group makes a new run wait out the slowest-dying
+maven JVM of the old one before anything starts.
+
+#### Why a `concurrency` group is not a mutex
+
+Worth stating because the repository tried it and the failure was expensive. Between 2026-08-25 and
+2026-08-26 every job that could occupy the box - both per-PR suites, on-demand chaos, and the full
+mutation sweep - shared one repo-wide `highcpu-box-exclusive` group with `cancel-in-progress: false`,
+intended as a box mutex.
+
+**A concurrency group deduplicates; it does not queue.** GitHub keeps one run in progress and **at
+most one pending** per group, and DISCARDS anything that arrives behind that. With several branches
+active, each new push therefore evicted whichever run was already waiting. Measured over the 50
+minutes after it landed (2026-08-26, 01:03Z-01:53Z, 16 runs across 9 branches): **26 of 32 jobs never
+executed a single step** - chaos 12 of 16 evicted while pending, Performance 14 of 16 - while five of
+the six runners sat idle. A tripwire that runs on a quarter of pushes, chosen by whoever pushed last,
+is worth less than one that occasionally shares a box.
+
+The co-residency reds that motivated the mutex were `~154s lagStagnation` against a 150s bound - the
+bound meeting the load rather than a defect - and that detector was demoted to non-gating in the same
+pull request (`ProgressProbe.recordLagStagnation` now calls `observe` rather than recording a
+violation). The problem was fixed in the instrument, where it belonged; see
+[`a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`](solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md).
+
+**So: never reach for a `concurrency` group to protect a shared physical resource.** Express capacity
+where capacity lives - the number of runners serving the label.
+
+#### Reading a cancelled or absent chaos check
+
+**A CANCELLED check is rendered as a FAILING one.** `gh pr checks` prints `conclusion=cancelled` as
+`fail`, so a red `Performance (optional)` or `Chaos Pain Suite` may mean *it never ran* rather than
+that something regressed - check `conclusion` before believing it. A cancelled chaos check means
+**not measured**: neither a pass nor a failure.
+
+The chaos job writes a `Chaos measurement provenance` block into its job summary naming the commit it
+measured. If that commit is not the PR's head, the current code has not been through the suite -
+normally because a newer push superseded the run, in which case that push has a run of its own.
+Re-run on demand with `gh workflow run chaos-pain.yml -R astubbs/parallel-consumer`.
+
+Whether six concurrent chaos suites is in fact too many for the box is now an open question about
+runner count rather than about this workflow:
+[`docs/inflight/ci-highcpu-box-concurrency-is-runner-count.md`](inflight/ci-highcpu-box-concurrency-is-runner-count.md).
 - **`cancel-closed-pr-runs.yml`** - cancels a PR's in-flight runs when it closes, so a withdrawn PR
   stops occupying runners. Housekeeping only; gates nothing.
 - **`dependency-audit.yml`** - "Dependency Audit", job `deps: whole-tree CVE scan`. Named against
@@ -236,38 +475,6 @@ Their filenames do not distinguish them well - `claude-code-review.yml` is the o
     with `-Dossindex.fail=false` deliberately, so a findings-bearing run still reaches the guard
     instead of dying in the Maven step and taking the summary with it.
     `bin/test-check-ossindex-audit.sh` runs first.
-- **`clients.yml`** - "Clients", one job per non-Java client language. Builds, tests, runs the
-  conformance suite and the language's static analysis, and - since astubbs#242 - **audits that
-  language's dependencies for published vulnerabilities**, via `bin/client-audit.sh`. The workflow's
-  own header owns everything else about it (the maturity gate, the caching rule, the toolchain pins).
-  - **What the audit covers that nothing else does.** `dependency-audit.yml` above scans the Maven
-    tree; Go, Rust, npm, Ruby, Python and .NET dependencies were scanned by nothing at all, which is
-    how a stale gRPC pin carrying a published CVE shipped on the proxy branch. Dependabot does not
-    close it either, even with those ecosystems declared: it reads the **default branch**, and a pin
-    chosen at the start of a long-lived branch goes stale *during* the branch. This lane runs on the
-    branch, which is the only place that is visible.
-  - **Each language's own auditor**, because each reads its own lockfile and its own advisory
-    database - `govulncheck` even resolves whether the vulnerable *symbol* is reachable. npm and the
-    .NET SDK ship theirs; `govulncheck`, `bundler-audit` and `pip-audit` are pinned in the module's
-    own manifest exactly as its linters are; `cargo-audit` is the one with no manifest slot, so the
-    Rust row installs it pinned. **Swift and C++ have no auditor** - SwiftPM has no audit command and
-    the C++ module has no package manager - and both say so on every run rather than skipping
-    silently. A language with no recorded decision **fails**.
-  - **The exit code of an auditor is not a verdict, and that is why there is a script.** Measured:
-    `govulncheck -format json` and `dotnet list package --vulnerable` both print findings and **exit
-    0**; `npm audit` and `bundler-audit` use exit 1 for *found something* and for *could not find a
-    lockfile*. Each language is therefore classified structurally from its report, with the same
-    exit-code split as `bin/check-ossindex-audit.sh` - **1** the lane is broken and nothing was
-    learned, **2** the tree has a finding. `bin/test-client-audit.sh` runs first and is hermetic:
-    every auditor is replaced by a shim replaying recorded real output, so the two exit-0-with-
-    findings cases are *shown* to go red rather than assumed to.
-  - **Suppress a false positive in that ecosystem's own ignore mechanism** (`.cargo/audit.toml`,
-    `.bundler-audit.yml`, `pip-audit --ignore-vuln`), not in a registry here - a second list would
-    drift from the tool's, which is the defect the root pom's exclusion list already needs a guard
-    for.
-  - **The Go row's patch pin is load-bearing.** `govulncheck` reports advisories against the
-    toolchain's own stdlib, so a `toolchain:` behind on Go security releases reddens the row, naming
-    them. That is the freshness signal, and the fix is one line in the matrix.
 - **`release.yml`** - the dispatch-triggered release. See [`docs/releasing.md`](releasing.md).
 
 ## The automated review
@@ -713,19 +920,56 @@ never run on our own hardware.
 **`highcpu` is the only self-hosted label.** Declare labels in
 [`.github/actionlint.yaml`](../.github/actionlint.yaml) or actionlint flags them.
 
-- `pr-highcpu-fast-feedback.yml` ("highcpu") - on every in-repo PR plus dispatch. The lane that
-  earns the hardware; it carries the Chaos Pain Suite check.
-- `mutation-full-sweep.yml` - dispatch only: the whole-project PIT sweep
+- `pr-highcpu-fast-feedback.yml` **was deleted on 2026-08-26**, and is named here because a lane
+  that used to exist is exactly what someone greps for. Both suites it carried had hosted
+  equivalents: chaos moved to the hosted gate (see
+  ["Chaos does not need the self-hosted box"](#chaos-does-not-need-the-self-hosted-box)), and its
+  `Performance (optional)` check ran the *same* `bin/performance-test.sh` as `maven.yml`'s
+  **required** `Performance Tests` - a non-gating duplicate of a gating check. What remained was an
+  on-demand benchmark nobody dispatched, so it was not worth a file. Read it at
+  `git show 5ae0cbfe4:.github/workflows/pr-highcpu-fast-feedback.yml`.
+- `mutation-full-sweep.yml` - **nightly plus dispatch**: the whole-project PIT sweep
   (`bin/ci-mutation-test.sh -Dverbose=true -Dthreads=N`). The PR-scoped mutation job in `maven.yml`
   only covers classes changed against the base; this is its exhaustive counterpart.
 
-**There is no scheduled build, deliberately.** Every suite worth re-running is already a required
-check on each PR and runs again on every push to master, so a cron lane would only repeat covered
-work. **Do not add a lane for suites the gate already covers.** The repo's single cron lane,
-`dependency-audit.yml`, is not a counter-example: it runs no *suite*, and what it catches - a new
-advisory published against an unchanged dependency tree - is a function of elapsed time, which no
-PR-triggered check can ever see. That is the test to apply to any future scheduled lane: **does time
-alone change the answer?**
+### A green mutation tick usually means "measured nothing" - read the exit code
+
+`bin/ci-mutation-test.sh` answers in its exit code, and the script's own header owns the contract:
+**0** scored mutants, **2** could not run (a scope regex matching nothing in the tree, or PIT
+producing no statistics / zero mutants), **3** nothing in scope. Measured over the last 40
+`maven.yml` PR runs: 40 passes, zero mutants scored - the lane is correctly narrow, not broken. Only
+a **0** is evidence about test quality. `bin/test-ci-mutation-test.sh` guards the contract and runs
+in the lane ahead of it. The scope, the exclusions and the ranked widening list are in
+[`docs/inflight/ci-mutation-testing.md`](inflight/ci-mutation-testing.md); whether a skip should
+render grey rather than green is an open decision in
+[`docs/inflight/ci-mutation-lane-skip-reads-as-a-pass.md`](inflight/ci-mutation-lane-skip-reads-as-a-pass.md).
+
+**There is almost no scheduled build, deliberately.** Every suite worth re-running is already a
+required check on each PR and runs again on every push to master, so a cron lane would usually only
+repeat covered work. **Do not add a lane for suites the gate already covers.** The test to apply to
+any proposed scheduled lane is: **does time alone change the answer?**
+
+Two lanes are scheduled, and they clear that bar in different ways:
+
+- **`dependency-audit.yml`** passes the test outright. It runs no *suite*, and what it catches - a
+  new advisory published against an unchanged dependency tree - is purely a function of elapsed
+  time, which no PR-triggered check can ever see.
+- **`mutation-full-sweep.yml`** (nightly, 2026-08-26) **fails the test on paper and is a deliberate
+  exception.** A mutation score changes when the code changes, not when time passes, so the honest
+  trigger is per-merge - and per-merge is unusable at this repository's merge rate. Measured over the
+  last 60 master commits: up to 32 in a day, a **median gap of 0 minutes** (squash-merges arrive in
+  bursts), and **83% of gaps shorter than the sweep's own 31m27s job-elapsed runtime** (job elapsed
+  is the right clock here: it is how long a push has to arrive within to kill a running sweep; the
+  often-quoted 21m55s is only the PIT phase, and n=1). Per-push therefore either
+  piles dozens of concurrent sweeps onto one box, or - with a cancelling group - has four in five
+  killed before they finish, which is precisely the never-completes failure the lane was rebuilt to
+  escape. Since master moves every day, a nightly is in practice "after today's merges". The accepted
+  cost is that a regression is attributed to a **date** rather than a merge, so `git log` over that
+  day is the first step of triage.
+
+The exception is written here rather than left to contradict the rule silently. Note what makes it
+one: not that a schedule is convenient, but that the correct trigger was measured and found
+unusable. The workflow's `on:` block carries the same reasoning from its side.
 
 **Before pinning a job to a self-hosted label, confirm a runner serves it** -
 `gh api repos/astubbs/parallel-consumer/actions/runners` lists each runner's labels and online

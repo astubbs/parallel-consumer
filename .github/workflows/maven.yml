@@ -55,14 +55,15 @@ jobs:
             setup-java-Linux-x64-maven-
       - name: Download all dependencies
         run: ./mvnw --batch-mode -Pci dependency:go-offline -DincludeScope=test -U
-      # go-offline resolves declared dependencies and plugin JARs, but NOT the platform protoc /
-      # protoc-gen-grpc-java EXECUTABLES that protobuf-maven-plugin resolves for itself at generate
-      # time. Left cold, every downstream job fetches them from Central and inherits the Azure West
-      # US CDN route lottery in docs/solutions/build-errors/ ("Maven Central download timeouts") -
-      # a 240s hang, then a hard NullPointerException out of Aether rather than a retry. Measured on
+      # First of two plugin-resolves-for-itself misses, same class, different plugin. go-offline does
+      # not fetch the platform protoc / protoc-gen-grpc-java EXECUTABLES that protobuf-maven-plugin
+      # resolves at generate time, so left cold every downstream job fetches them from Central and
+      # inherits the Azure West US CDN route lottery in
+      # docs/solutions/build-errors/maven-central-timeout-azure-west-regions-2026-04-21.md - a 240s
+      # hang, then a hard NullPointerException out of Aether rather than a retry. Measured on
       # astubbs/parallel-consumer#293: in one run "Unit Tests" fetched protoc in 272ms while
-      # "Integration Tests" hung the full 240s on the identical URL, and it failed 2 of 6
-      # consecutive runs. The classifier is linux-x86_64 because this job declares ubuntu-latest.
+      # "Integration Tests" hung the full 240s on the identical URL, and it failed 2 of 6 consecutive
+      # runs. The classifier is linux-x86_64 because this job declares ubuntu-latest. (astubbs#242)
       - name: Warm plugin-resolved protoc binaries
         run: |
           set -euo pipefail
@@ -72,8 +73,8 @@ jobs:
               org.apache.maven.plugins:maven-help-plugin:3.5.2:evaluate 2>/dev/null | tail -1
           }
           # A renamed property makes help:evaluate print "null object or invalid expression", which
-          # dependency:get would happily turn into a warm of the wrong coordinate - warming nothing
-          # is indistinguishable from a cache hit until it fails four jobs downstream, so require a
+          # dependency:get would happily turn into a warm of the wrong coordinate - warming nothing is
+          # indistinguishable from a cache hit until it fails four jobs downstream, so require a
           # version-shaped answer rather than merely a non-empty one.
           require_version() {
             case "$2" in
@@ -95,33 +96,31 @@ jobs:
           # cache this job exists to populate actually got populated.
           test -s ~/.m2/repository/com/google/protobuf/protoc/"${protoc_version}"/protoc-"${protoc_version}"-linux-x86_64.exe
           test -s ~/.m2/repository/io/grpc/protoc-gen-grpc-java/"${grpc_version}"/protoc-gen-grpc-java-"${grpc_version}"-linux-x86_64.exe
-      # The same class of miss as protoc above, in a different plugin: scala-maven-plugin resolves
-      # the Scala COMPILER and the zinc compiler-bridge sources jar for itself at scala:compile time,
-      # so neither is a declared dependency and go-offline leaves both cold. Measured on
-      # astubbs/parallel-consumer#293, run 32008526667: "Unit Tests" spent 4m01s on
-      # scala-compiler-2.13.18.jar before Central gave up and it fell to the mirror, then was still
-      # fetching compiler-bridge_2.13-1.12.0-sources.jar 3m12s later when the lane's 15-minute cap
-      # killed it - the same CDN route lottery documented above, and it cost the whole job.
+      # go-offline resolves declared dependencies and plugin JARs, but NOT what a plugin resolves
+      # FOR ITSELF at execution time - and scala-maven-plugin fetches the Scala compiler and the
+      # zinc compiler-bridge sources jar that way, so neither is declared anywhere and both stay
+      # cold. Measured on astubbs/parallel-consumer#293 (run 32008526667): "Unit Tests" spent 4m01s
+      # on scala-compiler before Central gave up and it fell to the mirror, then was still fetching
+      # compiler-bridge sources 3m12s later when the lane's cap killed the job. Same CDN route
+      # lottery as docs/solutions/build-errors/maven-central-timeout-azure-west-regions-2026-04-21.md
+      # and it cost the whole job rather than one step.
       #
       # Warmed by COMPILING the module rather than by naming coordinates: the bridge version comes
       # from the plugin's own zinc dependency and no pom property carries it, so a `dependency:get`
-      # would need a literal that rots silently the next time the plugin is bumped - warming the
-      # wrong coordinate being indistinguishable from a cache hit is the defect the block above
-      # exists to prevent. -am keeps this to the scala module's own reactor chain.
+      # would need a literal that rots silently the next time the plugin is bumped - and warming
+      # the wrong coordinate is indistinguishable from a cache hit until it fails four jobs
+      # downstream. (astubbs#242)
+      #
+      # `test-compile`, NOT `compile`, and the difference is load-bearing rather than a wider net.
+      # The Scala module now depends on the gRPC transport, which reaches the protocol module, which
+      # TEST-depends on parallel-consumer-core's test-jar. Maven resolves an inter-module test-jar
+      # from the reactor only once the producing module has reached test-compile; stopped at
+      # `compile` it falls back to the repository, and on a runner with an empty ~/.m2 that is
+      # `Could not find artifact ...core:jar:tests` - which fails this job, and with it the cache
+      # save every other lane restores from. Nothing about this is local: a developer's ~/.m2 holds
+      # the artifact from any earlier build, so the failure only exists on a cold machine.
       - name: Warm scala-maven-plugin's compiler and zinc bridge
-        run: |
-          set -euo pipefail
-          # `package`, not `compile`: the scala module's -am chain includes
-          # parallel-consumer-proxy-protocol, which depends on parallel-consumer-core's TEST-JAR, and
-          # that artifact does not exist until core is packaged - a compile-only run resolves it
-          # against Central and 404s. The root pom's maven-release-plugin comment records the same
-          # trap for the same reason.
-          ./mvnw --batch-mode -ntp -Pci -pl :parallel-consumer-proxy-client-scala -am -DskipTests package
-          # Assert by glob, not by version, for the same reason the compile is version-free: the
-          # point is that the cache got populated, and a run that resolved nothing must go red here
-          # rather than four minutes into a downstream lane.
-          test -n "$(find ~/.m2/repository/org/scala-lang/scala-compiler -name 'scala-compiler-*.jar' -print -quit 2>/dev/null)"
-          test -n "$(find ~/.m2/repository/org/scala-sbt -name 'compiler-bridge_*-sources.jar' -print -quit 2>/dev/null)"
+        run: ./mvnw --batch-mode -Pci -pl :parallel-consumer-proxy-client-scala -am test-compile
       - name: Save Maven cache (rotating key)
         if: success()
         uses: actions/cache/save@v4
@@ -167,8 +166,31 @@ jobs:
             name: "Demo (both entry points)"
             cmd: "bin/ci-demo-test.sh"
             timeout: 30
+          # Chaos Pain Suite - the per-PR ambient tripwire. It ran on the self-hosted `highcpu` box
+          # until 2026-08-26, on the premise that it needed many real cores to provoke anything.
+          # Measured head-to-head on the SAME commit (d8beb162f), that premise did not survive:
+          # hosted 13m59s vs self-hosted 12m16s, both green. 14% of wall-clock is not worth a shared
+          # physical machine, and the sharing was the root of every scheduling problem the highcpu
+          # lane had - a hosted runner gives each job its own VM, so co-residency cannot happen.
+          #
+          # bin/chaos-test.sh needed no change to move here, which is the tell that the premise was
+          # never load-bearing: it passes no forkCount and no -Dparallel-tests, so the suite was
+          # never configured to exploit those cores.
+          #
+          # GATING, like the suite it replaces: a chaos RED is a real finding, so this entry is
+          # deliberately NOT `optional`. bin/chaos-test.sh excludes @Quarantined scenarios (the
+          # Quarantine Lane owns them) and flags a zero-tests-selected window loudly in the job
+          # summary rather than impersonating a green - read that before trusting a pass.
+          # On-demand seeded hunts (specific seed/reps) stay in chaos-pain.yml.
+          - suite: chaos
+            name: "Chaos Pain Suite"
+            cmd: "bin/chaos-test.sh"
+            timeout: 60
     name: "${{ matrix.name }}"
     runs-on: ubuntu-latest
+    # NO continue-on-error: every suite in this matrix gates. If you add an advisory trial lane, give
+    # the entry an `optional` key and set `continue-on-error: ${{ matrix.optional == 'true' }}` -
+    # actionlint rejects a matrix property no entry defines, so the expression cannot sit here unused.
     timeout-minutes: ${{ matrix.timeout }}
     steps:
       - uses: actions/checkout@v6
@@ -185,6 +207,22 @@ jobs:
             setup-java-Linux-x64-maven-
       - name: ${{ matrix.name }}
         run: ${{ matrix.cmd }}
+
+      # CHAOS ONLY. The self-hosted lane used to upload these as
+      # `highcpu-fast-feedback-reports-Chaos Pain Suite-*`; moving chaos here would otherwise have
+      # dropped them silently - a regression nothing goes red for. They are load-bearing for
+      # diagnosis rather than a nicety: a chaos failure is read out of the failsafe XML, and
+      # docs/solutions/workflow-issues/gh-run-view-log-truncation.md exists because the job LOG is
+      # unreliable for this suite - the artifact survives where the log stream does not. Cited from
+      # docs/inflight/bug-857-family.md; keep the name greppable if you rename it.
+      - name: Upload chaos test reports
+        if: always() && matrix.suite == 'chaos'
+        uses: actions/upload-artifact@v7
+        with:
+          name: chaos-suite-reports-${{ github.run_number }}
+          path: '**/target/*-reports/*.xml'
+          retention-days: 14
+
       - name: Upload coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v5
@@ -195,14 +233,24 @@ jobs:
 
   # Mutation testing (PIT). ci-mutation-test.sh scopes to the classes CHANGED vs the PR base
   # (GITHUB_BASE_REF), so it's fast enough for the 2-core hosted runner - the full internal.* sweep would
-  # time out here (which is why it used to be self-hosted-only). Advisory / non-gating.
+  # time out here (which is why it used to be self-hosted-only).
+  #
+  # ADVISORY ABOUT SCORES, NOT ABOUT ITSELF. `continue-on-error: true` stays - it keeps a mutation
+  # result from failing the workflow run, while the check ROW still renders red when the step fails
+  # (measured, see docs/inflight/ci-mutation-lane-skip-reads-as-a-pass.md). So red was always
+  # honest here and green never was: measured 2026-08-25 over the last 40 pull_request runs of this
+  # workflow, 40 green ticks and zero mutants scored, because every path out of the script exited 0.
+  # The step below reads bin/ci-mutation-test.sh's exit code instead and reacts to each state
+  # separately - survivors still fail nothing, but a lane that could not run, or ran and measured
+  # nothing, now goes red. The exit-code contract lives in that script's header;
+  # docs/inflight/ci-mutation-testing.md has the measurement.
   mutation:
     if: github.event_name == 'pull_request'
     needs: prepare-deps
     name: "Mutation Tests (PIT, PR-scoped)"
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    continue-on-error: true      # advisory - never gates merge
+    continue-on-error: true      # advisory - never gates merge; a failed STEP still reddens the row
     steps:
       - uses: actions/checkout@v6
         with:
@@ -218,8 +266,25 @@ jobs:
           key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
           restore-keys: |
             setup-java-Linux-x64-maven-
+      - name: Self-test the mutation verdict
+        # Ahead of the lane it protects, the same ordering repo-hygiene.yml and pr-checklist.yml use.
+        # Seconds, no maven: it feeds canned PIT logs through the verdict and asserts the exit codes.
+        run: bash bin/test-ci-mutation-test.sh
+
       - name: Mutation testing (changed classes only)
-        run: bin/ci-mutation-test.sh
+        run: |
+          set +e
+          bin/ci-mutation-test.sh
+          rc=$?
+          set -e
+          case "$rc" in
+            0) echo "PIT scored mutants - see the job summary for the survivor list." ;;
+            3) echo "::notice::PIT had nothing in scope: no core main-source class in a decidable package changed." ;;
+            2) echo "::error::PIT could not run, or ran and scored nothing. This is a broken lane, not a clean PR."
+               exit 1 ;;
+            *) echo "::error::PIT exited ${rc}."
+               exit "$rc" ;;
+          esac
 
   # Quarantine AUDIT: the seconds-fast enforcement job on every PR - registry drift and broken owner
   # claims are real, actionable errors that turn it red. It does NOT run any tests (that is
@@ -435,9 +500,101 @@ jobs:
           compare_with_base: true
           max_increase: 10
 
+  # Meta's Infer, every Java checker it ships - not just RacerD. RacerD is the only detector here
+  # that finds races WITHOUT being told where to look: Error Prone's GuardedBy only fires where
+  # somebody wrote the annotation, and this codebase has none, so the racing-double seam tests can
+  # only re-prove seams already found by hand. RacerD infers which locks protect which state from
+  # how the code uses them, and it is still why this lane exists. Alongside it, bin/infer-test.sh
+  # also runs pulse (null derefs, resource leaks), starvation (deadlock via lock-order inversion),
+  # and the checkers enabled by --annotation-reachability --bufferoverrun --cost --loop-hoisting
+  # --scope-leakage - `--racerd-only` used to disable everything but RacerD, including two checkers
+  # that are on by default, which is why the flag is gone and the lane was renamed from RacerD to
+  # Infer to match what it actually runs.
+  #
+  # AN IDENTITY SET, not a count. config/infer-known-findings.txt records which findings are known,
+  # keyed on bug type plus class.method. A bare count ceiling could not distinguish "one finding
+  # fixed" from "one finding swapped for a different one" - both leave the total unchanged - which an
+  # independent cross-model review caught, and which is the same reports-green-while-it-changed class
+  # this lane exists to police. One line per known identity, checked in, so both directions are a
+  # visible diff.
+  #
+  # Fails BOTH ways: a new identity is a new finding, and a known one that stops firing means
+  # somebody fixed it without ratcheting the file.
+  infer:
+    if: github.event_name == 'pull_request'
+    name: "static: infer"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: prepare-deps
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - name: Restore Maven cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            setup-java-Linux-x64-maven-
+
+      # Keyed on the version alone - the toolchain changes only when we bump it, which makes this a
+      # better cache key than the pom-hash ones above. Unpacked it is ~950 MB, so the TARBALL is what
+      # gets cached and it is unpacked per run: the repo-wide cache budget is 10 GB and several jobs
+      # already hold ~/.m2.
+      - name: Restore the Infer toolchain
+        id: infer-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/infer-dist/infer.tar.xz
+          key: infer-linux-x86_64-v1.3.0
+
+      - name: Download Infer
+        if: steps.infer-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/infer-dist
+          curl -sSL --fail -o ~/infer-dist/infer.tar.xz \
+            https://github.com/facebook/infer/releases/download/v1.3.0/infer-linux-x86_64-v1.3.0.tar.xz
+
+      # Runs UNCONDITIONALLY, not only on a cache miss, because the cache is the mutable half. A
+      # fresh download arrives over TLS from a pinned release URL; a restored one arrives from a
+      # writable store keyed by a string anyone with write access to a branch can populate. Verifying
+      # only what was just downloaded would check the half that is already the safer of the two, and
+      # then unpack the other half unexamined.
+      #
+      # The digest was taken from two independent fetches of the pinned URL and the tarball confirmed
+      # to be an Infer distribution. If this step ever fails, do not "fix" it by re-recording the
+      # digest from whatever arrived - that is the failure mode it exists to catch. Bump the cache key
+      # to force a clean download and see whether the digest returns; a genuine upstream re-cut of a
+      # published tag is the rarer explanation and should be confirmed against the release page.
+      - name: Verify the Infer archive against its pinned digest
+        run: |
+          echo "02be62ba931cb43e2d42bbf7abf4bd9a410cf8464cce5453934e25c90a825850  $HOME/infer-dist/infer.tar.xz" \
+            | sha256sum --check --strict -
+
+      - name: Unpack and confirm it runs
+        run: |
+          mkdir -p ~/infer
+          tar -xJf ~/infer-dist/infer.tar.xz -C ~/infer --strip-components=1
+          ~/infer/bin/infer --version
+
+      # Asserts the ceiling in both directions. Analysis itself is ~11s over core's 73 files; the
+      # timeout is for the download on a cache miss.
+      # INFER_BIN and INFER_JDK are set here rather than in an `env:` block on purpose. An earlier
+      # version set all three in `env:` AND overrode two of them inline, so the env values were dead
+      # - and worse, wrong: INFER_BIN pointed at the workspace, while the unpack step above puts the
+      # toolchain in $HOME/infer. Deleting the inline prefix, which is exactly what a later tidy-up
+      # would do, would have pointed the lane at nothing. `$HOME` and `$JAVA_HOME` are not available
+      # to `env:` at all, which is what forced the inline form in the first place.
+      - name: Infer
+        run: INFER_BIN="$HOME/infer/bin/infer" INFER_JDK="$JAVA_HOME" bash bin/infer-test.sh
+
   # SpotBugs static analysis - finds null derefs, concurrency issues, resource leaks.
-  # Uses a baseline from the base branch so only NEW bugs introduced by the PR are
-  # reported. The baseline is generated by the push build and cached.
+  # Whole reactor, main AND test code, with fb-contrib and find-sec-bugs detectors loaded.
+  # Suppression is by rule in config/spotbugs-exclude.xml; the registry that justifies every entry is
+  # docs/inflight/static-spotbugs-rule-registry.md.
   spotbugs:
     if: github.event_name == 'pull_request'
     name: "static: spotbugs"
@@ -457,25 +614,35 @@ jobs:
           key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
           restore-keys: |
             setup-java-Linux-x64-maven-
-      - name: Restore SpotBugs baseline
-        id: spotbugs-baseline
-        uses: actions/cache/restore@v4
-        with:
-          path: .spotbugs-baseline.xml
-          key: spotbugs-baseline-${{ github.base_ref }}-${{ hashFiles('**/src/main/**/*.java') }}
-          restore-keys: |
-            spotbugs-baseline-${{ github.base_ref }}-
-            spotbugs-baseline-
+      # No baseline restore, and no baseline job: suppression is by RULE now, in the checked-in
+      # config/spotbugs-exclude.xml the pom points at, with every entry justified in
+      # docs/inflight/static-spotbugs-rule-registry.md. The job this replaces regenerated an exclude
+      # filter on every push to master, keyed on class + method + bug type, and recorded nothing
+      # about what it swallowed.
+      #
+      # test-compile, not compile: the pom sets includeTests, and target/test-classes has to exist
+      # for that to mean anything. Whole reactor, not `-pl parallel-consumer-core -am` - `-am` adds
+      # only the parent pom, so vertx, reactor, mutiny and the examples went unanalysed.
+      #
+      # `spotbugs:check` IS THE REPORTING HALF, and it is not optional. `spotbugs:spotbugs` writes
+      # spotbugsXml.xml and prints not one finding - the build log says "Skipping ... report goal"
+      # and nothing else - so every bit of reporting was GitHub-side: annotations, the sticky comment,
+      # the check run. Anyone running the build locally got total silence over hundreds of findings,
+      # which review caught by asking the obvious question nobody had: "do they at least get reported,
+      # and in the mvn build output?"
+      #
+      # `failOnError=false` keeps it advisory, so this changes what the lane SAYS and not what it
+      # gates - the staged position the rule registry documents, with its own trigger for making
+      # findings blocking. What `check` adds that neither the annotations nor the sticky comment give
+      # is the RULE NAME on every line, which is the one thing needed to tier a finding in that
+      # registry:
+      #   [ERROR] Medium: ... UTAO_JUNIT_ASSERTION_ODDITIES_ACTUAL_CONSTANT
+      #
+      # Not bound to a lifecycle phase on purpose: SpotBugs at effort=Max over the whole reactor is
+      # minutes, and paying that on every local `mvn test` would get the plugin switched off. Run the
+      # same two goals by hand when you want the list.
       - name: Compile and run SpotBugs
-        run: |
-          EXCLUDE_ARG=""
-          if [ -f .spotbugs-baseline.xml ]; then
-            EXCLUDE_ARG="-Dspotbugs.excludeFilterFile=.spotbugs-baseline.xml"
-            echo "Using baseline — only new bugs will be reported"
-          else
-            echo "No baseline found — reporting all bugs (first run on this base branch)"
-          fi
-          ./mvnw --batch-mode -Pci compile spotbugs:spotbugs $EXCLUDE_ARG -pl parallel-consumer-core -am
+        run: ./mvnw --batch-mode -Pci test-compile spotbugs:spotbugs spotbugs:check -Dspotbugs.failOnError=false
       - name: Post SpotBugs annotations on PR
         if: always()
         uses: jwgmeligmeyling/spotbugs-github-action@v1.2
@@ -489,7 +656,6 @@ jobs:
           script: |
             const fs = require('fs');
             const { execSync } = require('child_process');
-            const hasBaseline = fs.existsSync('.spotbugs-baseline.xml');
             const files = execSync('find . -path "*/target/spotbugsXml.xml" -type f').toString().trim().split('\n').filter(f => f);
             let body;
             if (files.length === 0) {
@@ -501,9 +667,7 @@ jobs:
                 const matches = content.match(/<BugInstance/g);
                 totalBugs += matches ? matches.length : 0;
               }
-              const baselineNote = hasBaseline
-                ? ' (new bugs only — baseline from base branch excluded)'
-                : ' (no baseline available — showing all bugs)';
+              const baselineNote = ' (rule-level exclusions only - see docs/inflight/static-spotbugs-rule-registry.md)';
               if (totalBugs === 0) {
                 body = `## :white_check_mark: SpotBugs Report\n\nNo bugs found${baselineNote}.\n`;
               } else {
@@ -535,57 +699,6 @@ jobs:
           allow-dependencies-licenses: pkg:githubactions/actions/github-script
 
   # ── Push Builds (master) ───────────────────────────────────────────────
-
-  # Generate SpotBugs baseline for PR comparisons. Runs on every push to
-  # master so PR builds can exclude known bugs and only report new ones.
-  spotbugs-baseline:
-    if: github.event_name == 'push'
-    name: "static: spotbugs baseline"
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    needs: prepare-deps
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-java@v5
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-      - name: Restore Maven cache
-        uses: actions/cache/restore@v4
-        with:
-          path: ~/.m2/repository
-          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
-          restore-keys: |
-            setup-java-Linux-x64-maven-
-      - name: Compile and generate SpotBugs XML
-        run: ./mvnw --batch-mode -Pci compile spotbugs:spotbugs -pl parallel-consumer-core -am
-      - name: Convert SpotBugs results to exclude filter
-        run: |
-          # Transform the SpotBugs XML into an exclude filter that can be
-          # passed to future runs via -Dspotbugs.excludeFilterFile. Each
-          # BugInstance becomes a Match element keyed on class + method + bug type.
-          python3 -c "
-          import xml.etree.ElementTree as ET, sys
-          tree = ET.parse('parallel-consumer-core/target/spotbugsXml.xml')
-          root = tree.getroot()
-          out = ET.Element('FindBugsFilter')
-          for bug in root.findall('.//BugInstance'):
-              match = ET.SubElement(out, 'Match')
-              cls = bug.find('Class')
-              method = bug.find('Method')
-              if cls is not None:
-                  ET.SubElement(match, 'Class', name=cls.get('classname', ''))
-              if method is not None:
-                  ET.SubElement(match, 'Method', name=method.get('name', ''))
-              ET.SubElement(match, 'Bug', pattern=bug.get('type', ''))
-          ET.ElementTree(out).write('.spotbugs-baseline.xml', xml_declaration=True, encoding='utf-8')
-          print(f'Baseline: {len(root.findall(\".//BugInstance\"))} bugs excluded')
-          "
-      - name: Cache SpotBugs baseline
-        uses: actions/cache/save@v4
-        with:
-          path: .spotbugs-baseline.xml
-          key: spotbugs-baseline-${{ github.ref_name }}-${{ hashFiles('**/src/main/**/*.java') }}
 
   # Single full build on default Kafka version to gate SNAPSHOT publishing.
   # Uses the same ci-build.sh script that PRs use for Kafka compat testing.

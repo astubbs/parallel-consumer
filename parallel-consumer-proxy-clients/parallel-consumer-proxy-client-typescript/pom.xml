@@ -31,22 +31,25 @@
     -->
     <properties>
         <pc.foreign.skip>false</pc.foreign.skip>
-        <pc.foreign.build.executable>npm</pc.foreign.build.executable>
-        <pc.foreign.build.args>run build</pc.foreign.build.args>
-        <pc.foreign.test.executable>npm</pc.foreign.test.executable>
-        <pc.foreign.test.args>test</pc.foreign.test.args>
+        <pc.foreign.build.executable>bash</pc.foreign.build.executable>
+        <pc.foreign.build.args>${pc.foreign.step} --tool npm -- npm run build</pc.foreign.build.args>
+        <pc.foreign.test.executable>bash</pc.foreign.test.executable>
+        <pc.foreign.test.args>${pc.foreign.step} --tool npm -- npm test</pc.foreign.test.args>
     </properties>
 
     <profiles>
         <!--
-            THE SIDECAR THE END-TO-END TEST DRIVES, AND WHY IT IS A DEPENDENCY.
+            THE SIDECARS THE SUITE DRIVES, AND WHY THEY ARE A DEPENDENCY.
 
-            The suite's end-to-end test spawns the real test-mode sidecar over the real wire, which
-            needs the proxy module's test jar (TestModeMain and the harness), its main jar, and
-            core's test jar underneath. Declaring them here is what makes
+            The suite's end-to-end test spawns the real test-mode sidecar over the real wire, and its
+            handshake test spawns the production Main - which between them need the proxy module's
+            test jar (TestModeMain and the harness), its main jar, and core's test jar underneath.
+            Declaring them here is what makes
             `./mvnw test -pl :parallel-consumer-proxy-client-typescript -am -Dpc.foreignClients` -
-            the CI matrix row's exact command - build those modules first and resolve them;
-            build-classpath below then writes the classpath where the test reads it.
+            the CI matrix row's exact command - build those modules first and resolve them; the
+            clients aggregator's hoisted `sidecar-classpath` execution then writes the classpath
+            where the tests read it, and it binds here only because this module declares
+            maven-dependency-plugin below.
 
             SCOPED TO THIS PROFILE DELIBERATELY. No client depends on the engine, and with the
             profile inactive - every ordinary build - there is no dependency edge here at all. The
@@ -93,22 +96,8 @@
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-dependency-plugin</artifactId>
-                        <!-- version from the root pom's pluginManagement -->
-                        <executions>
-                            <execution>
-                                <id>sidecar-classpath</id>
-                                <!-- After the dependencies above resolve, before the test phase
-                                     where the Node suite runs and reads the file. -->
-                                <phase>generate-test-resources</phase>
-                                <goals>
-                                    <goal>build-classpath</goal>
-                                </goals>
-                                <configuration>
-                                    <outputFile>${project.build.directory}/sidecar-classpath.txt</outputFile>
-                                    <includeScope>test</includeScope>
-                                </configuration>
-                            </execution>
-                        </executions>
+                        <!-- Declaring it is the opt-in; the aggregator's pluginManagement supplies
+                             the version and the `sidecar-classpath` execution. -->
                     </plugin>
                 </plugins>
             </build>

@@ -85,13 +85,14 @@ and nothing to install beyond the repo's own JDK 17.
 # compile and run the unit tests (no sidecar involved)
 bin/build.sh -pl :parallel-consumer-proxy-client-kotlin -am
 
-# the end-to-end test against the REAL test-mode sidecar; -Dpc.foreignClients is what supplies
-# the harness classpath (see the kotlin-e2e-harness profile in pom.xml)
+# the two sidecar-spawning tests - the end-to-end one against the REAL test-mode sidecar, and the
+# handshake against the engine-less `Main`; -Dpc.foreignClients is what supplies the harness
+# classpath (see the kotlin-e2e-harness profile in pom.xml)
 ./mvnw --batch-mode test -pl :parallel-consumer-proxy-client-kotlin -am -Dpc.foreignClients
 ```
 
-The end-to-end test spawns `TestModeMain --mock` as an ordinary child process, so it exercises the
-whole lifecycle contract - launch, port line, loopback connect, handshake, dispatch, report,
+Both spawn their sidecar as an ordinary child process - `TestModeMain --mock` for the end-to-end
+test, `Main` for the handshake - so between them they exercise the
 half-close, reap - rather than an in-process shortcut. It **fails** rather than skips when its
 classpath file is missing, and names the command that produces it.
 
@@ -130,6 +131,6 @@ binding, precisely because it owns a sidecar spawn - which is what keeps that pa
 
 ## Depth
 
-[`client-authoring-guide.md`](../../parallel-consumer-proxy/docs/client-authoring-guide.md) and
-[`protocol-specification.md`](../../parallel-consumer-proxy/docs/protocol-specification.md) own the
+[`client-authoring-guide.md`](../../parallel-consumer-proxy-protocol/docs/client-authoring-guide.md) and
+[`protocol-specification.md`](../../parallel-consumer-proxy-protocol/docs/protocol-specification.md) own the
 protocol; this file does not restate them.

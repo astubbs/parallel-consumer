@@ -42,7 +42,7 @@
         WHAT IS IN IT. Two things, and they are the same thing seen from two sides:
 
           1. Its COMPILE-scope dependencies are the harness classpath - the engine, the proxy
-             test-jar that holds ProxyHarness and TestModeMain, and core's test-jar underneath.
+             test-jar that holds ConformanceHarness and TestModeMain, and core's test-jar underneath.
              Compile scope so they flow transitively: a JVM client that needs to spawn the sidecar
              declares this ONE module at test scope in its own opt-in profile and gets the set,
              instead of restating three dependencies and drifting from them. The Kotlin client's
@@ -82,7 +82,7 @@
             <version>${project.version}</version>
         </dependency>
         <dependency>
-            <!-- ProxyHarness (the in-process engine lane) and TestModeMain (the spawnable sidecar) -->
+            <!-- ConformanceHarness (the in-process engine lane) and TestModeMain (the spawnable sidecar) -->
             <groupId>bz.stub.parallelconsumer</groupId>
             <artifactId>parallel-consumer-proxy</artifactId>
             <version>${project.version}</version>
@@ -120,5 +120,24 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <!--
+                The SpotBugs gate is bound in the parent pom for every module beneath it; this only
+                points it at THIS module's exclusion filter, whose entries carry their own reasoning.
+                ${project.basedir} rather than a shared path in the parent: a relative
+                excludeFilterFile resolves against the module being built, so a filter declared once
+                in the parent would be looked for inside each child anyway.
+            -->
+            <plugin>
+                <groupId>com.github.spotbugs</groupId>
+                <artifactId>spotbugs-maven-plugin</artifactId>
+                <configuration>
+                    <excludeFilterFile>${project.basedir}/spotbugs-exclude.xml</excludeFilterFile>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 
 </project>

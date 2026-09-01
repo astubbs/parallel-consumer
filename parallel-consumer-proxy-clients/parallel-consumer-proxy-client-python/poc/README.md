@@ -1,7 +1,7 @@
 # Python proof-of-concept — the U26 specification probe, preserved
 
 A working Python client, written during the specification probe (U26) by a fresh-context
-agent from `parallel-consumer-proxy/docs/protocol-specification.md` and
+agent from `parallel-consumer-proxy-protocol/docs/protocol-specification.md` and
 `client-authoring-guide.md` ALONE — no Java source was read. It drove a real gRPC session
 against the test-mode sidecar (`TestModeMain --mock`) and exercised: connect + configure,
 wave dispatch, out-of-order per-record reports, failure → redelivery with attempt/history,

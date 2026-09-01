@@ -57,8 +57,10 @@ class of failure that reports success, and the next namespace-wide change will m
   findings that govern its design, and rewrites the escaped form explicitly.
 - **The mutation gate failed open.** Stale, `bin/ci-mutation-test.sh` matched nothing, printed
   `PIT: no core main-source classes changed - nothing to mutate, skipping` and exited 0 - green
-  forever while scoring zero mutants. Its patterns now name `bz.stub.parallelconsumer`; the standing
-  instruction is unchanged - assert the lane actually scores mutants, do not accept the tick.
+  forever while scoring zero mutants. Its patterns now name `bz.stub.parallelconsumer`, and the
+  standing instruction is no longer only an instruction: the script validates its scope against the
+  tree and exits 2 when it matches nothing, exit 3 for a genuine skip
+  ([`ci-mutation-testing.md`](ci-mutation-testing.md)).
 - **An ArchUnit rule could go vacuous silently.** `TestConventionRules.java` pins a fully-qualified
   class name as a *string*; stale, the condition never fires and the rule passes, so the guard keeping
   Docker-dependent tests out of surefire quietly stops guarding. `failOnEmptyShould` does not catch it.

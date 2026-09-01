@@ -4,7 +4,7 @@ package bz.stub.parallelconsumer.proxy.testmode;
  */
 
 import bz.stub.parallelconsumer.proxy.harness.HarnessScenario;
-import bz.stub.parallelconsumer.proxy.harness.ProxyHarness;
+import bz.stub.parallelconsumer.proxy.harness.ConformanceHarness;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -14,7 +14,7 @@ import java.util.function.Consumer;
 /**
  * The test-mode sidecar's entry point: boots the proxy with {@code MockConsumer} and {@code MockProducer} in
  * place of real Kafka clients, so a NON-JVM test can spawn this process over the ordinary child-process path
- * (KTD4) and then drive the {@link ProxyHarness} fixture through the SAME gRPC protocol as production. No
+ * (KTD4) and then drive the {@link ConformanceHarness} fixture through the SAME gRPC protocol as production. No
  * bridge, no test-only transport: the foreign client exercises the real wire, which is the whole fidelity
  * argument for this artifact's existence.
  * <p>
@@ -39,7 +39,7 @@ import java.util.function.Consumer;
  * nothing else to call.
  *
  * @author Antony Stubbs
- * @see ProxyHarness
+ * @see ConformanceHarness
  */
 public final class TestModeMain {
 
@@ -77,7 +77,7 @@ public final class TestModeMain {
      *                        cannot make (e.g. the committed offset); the real process passes a no-op
      */
     static int run(String[] args, PrintStream out, PrintStream err, InputStream parentLifeline,
-                   Consumer<ProxyHarness> harnessObserver) {
+                   Consumer<ConformanceHarness> harnessObserver) {
         boolean mock = false;
         HarnessScenario scenario = HarnessScenario.A_PROCESSED_RECORD_ADVANCES_THE_COMMITTED_OFFSET;
 
@@ -105,7 +105,7 @@ public final class TestModeMain {
             return usage(err, MOCK_FLAG + " is required: the test-mode sidecar only runs mock fixtures");
         }
 
-        try (var harness = new ProxyHarness(scenario)) {
+        try (var harness = new ConformanceHarness(scenario)) {
             int port = harness.startEngine();
             out.println(PORT_LINE_PREFIX + port);
             harnessObserver.accept(harness);

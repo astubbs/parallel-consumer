@@ -4,7 +4,7 @@ Requirements for a sidecar that runs Parallel Consumer and hands records to a no
 application's worker processes over loopback. Plan lives at
 `docs/plans/2026-08-14-001-feat-language-proxy-plan.md` (the 2026-08-12 plan is retired). The
 module family is seeded and the spike has run; the protocol schema is FROZEN
-(`parallel-consumer-proxy/docs/protocol-specification.md` is the contract, and
+(`parallel-consumer-proxy-protocol/docs/protocol-specification.md` is the contract, and
 `bin/check-proto-breaking.sh` is the gate).
 
 ## U1 gate outcomes: gRPC cleared both, and one hint is not optional

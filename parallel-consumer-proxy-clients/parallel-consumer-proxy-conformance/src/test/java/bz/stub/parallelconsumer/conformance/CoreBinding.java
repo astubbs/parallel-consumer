@@ -5,7 +5,7 @@ package bz.stub.parallelconsumer.conformance;
 
 import bz.stub.parallelconsumer.ExceptionInUserFunctionException;
 import bz.stub.parallelconsumer.RecordContext;
-import bz.stub.parallelconsumer.proxy.harness.ProxyHarness;
+import bz.stub.parallelconsumer.proxy.harness.ConformanceHarness;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.Optional;
@@ -42,7 +42,7 @@ public final class CoreBinding implements ConformanceBinding {
     }
 
     @Override
-    public Run execute(ProxyHarness harness, ConformanceScenario scenario) {
+    public Run execute(ConformanceHarness harness, ConformanceScenario scenario) {
         var run = new PrescribedRun(NAME, scenario);
         // The ceiling the scenario prescribes, which every other binding sends over the wire as
         // max_concurrency. The control arm has to run the same configuration or it controls for nothing.

@@ -15,16 +15,17 @@ module_evidence:
       ReconnectWindowTest for the three-state window that holds a dropped session's records rather
       than returning them, ManifestReconcilerTest for what a reconnecting client reclaims, and
       ProxyProcessorProduceTest for the produce path.
-      This module also supplies the harness the whole cross-language suite runs on. ProxyHarness
-      drives two lanes - the engine held in-process, and the same fixture reached by spawning the
-      test-mode sidecar and speaking the production gRPC protocol at it - so a foreign client
+      This module also supplies the harness the whole cross-language suite runs on. ConformanceHarness
+      drives three lanes - the engine held in-process behind a plain Java function, the same fixture
+      reached by spawning the test-mode sidecar and speaking the production gRPC protocol at it, and
+      the mock Kafka clients lent to a client that brings its own engine - so a foreign client
       exercises the real transport rather than a test-only bridge. All thirteen conformance
       bindings, and therefore every language, assert against this module's fixture.
       Behaviour is established able to fail rather than assumed: each conformance scenario was
       proven by a mutation that turns exactly its own row red while the others stay green, and the
       thread confinement in the engine was proven by un-confining one field at a time.
     inspect:
-      - parallel-consumer-proxy/src/test/java/bz/stub/parallelconsumer/proxy/harness/ProxyHarness.java
+      - parallel-consumer-proxy/src/test/java/bz/stub/parallelconsumer/proxy/harness/ConformanceHarness.java
       - parallel-consumer-proxy/src/test/java/bz/stub/parallelconsumer/proxy/engine/ProxyProcessorLivenessTest.java
       - parallel-consumer-proxy/src/test/java/bz/stub/parallelconsumer/proxy/engine/ReconnectWindowTest.java
     limitation: >-

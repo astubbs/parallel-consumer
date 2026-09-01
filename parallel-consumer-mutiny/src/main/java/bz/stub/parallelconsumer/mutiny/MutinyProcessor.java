@@ -10,6 +10,7 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.PollContext;
 import bz.stub.parallelconsumer.PollContextInternal;
 import bz.stub.parallelconsumer.internal.ExternalEngine;
+import bz.stub.parallelconsumer.internal.MdcPropagation;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import io.smallrye.mutiny.Multi;
 import io.smallrye.mutiny.Uni;
@@ -21,6 +22,7 @@ import pl.tlinkowski.unij.api.UniLists;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -28,6 +30,7 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import static bz.stub.parallelconsumer.internal.UserFunctions.carefullyRun;
+import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.logWithoutEscaping;
 
 /**
  * Adapter for using Mutiny as the asynchronous execution engine.
@@ -85,7 +88,13 @@ public class MutinyProcessor<K, V> extends ExternalEngine<K, V> {
      */
     public <T> void onRecord(Function<PollContext<K, V>, Uni<T>> mutinyFunction) {
 
+        final MdcPropagation mdc = getMdcPropagation();
+
         Function<PollContextInternal<K, V>, List<Object>> wrappedUserFunc = pollContext -> {
+
+            // this wrapper runs on the worker thread, where the caller's context is established; the user's function
+            // and the terminal signals below run on the Mutiny executor, so the context is carried explicitly
+            final Map<String, String> executorContext = mdc.capture();
 
             if (log.isTraceEnabled()) {
                 log.trace("Record list ({}), executing void function...",
@@ -98,9 +107,11 @@ public class MutinyProcessor<K, V> extends ExternalEngine<K, V> {
             pollContext.streamWorkContainers()
                     .forEach(x -> x.setWorkType(MUTINY_TYPE));
 
-            Cancellable uni = Uni.createFrom().deferred(() ->
-                            carefullyRun(mutinyFunction, pollContext.getPollContext())
-                    )
+            Cancellable uni = Uni.createFrom().deferred(() -> {
+                        try (var mdcScope = mdc.enter(executorContext)) {
+                            return carefullyRun(mutinyFunction, pollContext.getPollContext());
+                        }
+                    })
                     .onItem()
                     .transformToMulti(result -> {
                         if(result == null) {
@@ -117,8 +128,16 @@ public class MutinyProcessor<K, V> extends ExternalEngine<K, V> {
                     .runSubscriptionOn(this.executor)
                     .subscribe().with(
                             ignored -> {},
-                            throwable -> onError(pollContext, throwable),
-                            () -> onComplete(pollContext)
+                            throwable -> {
+                                try (var mdcScope = mdc.enter(executorContext)) {
+                                    onError(pollContext, throwable);
+                                }
+                            },
+                            () -> {
+                                try (var mdcScope = mdc.enter(executorContext)) {
+                                    onComplete(pollContext);
+                                }
+                            }
                     );
 
             log.trace("asyncPoll - user function finished ok.");
@@ -139,14 +158,6 @@ public class MutinyProcessor<K, V> extends ExternalEngine<K, V> {
     }
 
     private void onError(PollContextInternal<K, V> pollContext, Throwable throwable) {
-        if (throwable instanceof PCRetriableException) {
-            log.debug("Mutiny fail signal", throwable);
-        } else {
-            log.error("Mutiny fail signal", throwable);
-        }
-        pollContext.streamWorkContainers().forEach(wc -> {
-            wc.onUserFunctionFailure(throwable);
-            addToMailbox(pollContext, wc);
-        });
+        onAsyncFailure(pollContext, throwable, "Mutiny fail signal");
     }
 }

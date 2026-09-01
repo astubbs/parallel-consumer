@@ -9,8 +9,8 @@
 
 Key-ordered concurrent Kafka processing from Rust, with the Parallel Consumer engine running as a
 sidecar process. The crate speaks the frozen v1 proxy protocol
-([`protocol-specification.md`](../../parallel-consumer-proxy/docs/protocol-specification.md),
-[`client-authoring-guide.md`](../../parallel-consumer-proxy/docs/client-authoring-guide.md)) and
+([`protocol-specification.md`](../../parallel-consumer-proxy-protocol/docs/protocol-specification.md),
+[`client-authoring-guide.md`](../../parallel-consumer-proxy-protocol/docs/client-authoring-guide.md)) and
 nothing else - it never reads the proxy's Java.
 
 **Wave one.** Connect, `Configure`, dispatch waves, the user's function, per-record reports,
@@ -128,8 +128,9 @@ than being rescued by a spare core:
 | `src/options.rs` | `ClientOptions` and the capability tokens; its `Debug` redacts `kafka_properties` |
 | `src/outcome.rs` | The processor trait, `Outcome`, and `ProcessingError` - the no-exceptions answer |
 | `src/sidecar.rs` | The child process and the lifecycle pipe that reaps it |
-| `tests/session.rs` | The one-record conformance scenario, end to end against the sidecar |
-| `tests/harness/mod.rs` | Locating and spawning the JVM-side test-mode sidecar |
+| `tests/session.rs` | The one-record conformance scenario, end to end against the test-mode sidecar |
+| `tests/handshake.rs` | The handshake against the engine-less sidecar process, and its control arm |
+| `tests/harness/mod.rs` | Locating and spawning the JVM-side sidecar, either one |
 
 Findings, divergences and what wave two owes are in
 [`docs/inflight/clients/rust.md`](../../docs/inflight/clients/rust.md).
