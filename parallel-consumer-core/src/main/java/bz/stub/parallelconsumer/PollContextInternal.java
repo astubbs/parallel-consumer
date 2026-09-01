@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer;
  */
 
 import bz.stub.parallelconsumer.internal.ProducerManager;
+import bz.stub.parallelconsumer.internal.utils.RecordBatchSummary;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import lombok.Getter;
 import lombok.Setter;
@@ -52,6 +53,21 @@ public class PollContextInternal<K, V> {
      */
     public List<WorkContainer<K, V>> getWorkContainers() {
         return streamWorkContainers().collect(Collectors.toList());
+    }
+
+    /**
+     * A short, <b>bounded</b> description of the records in this context - topic-partitions, record counts and offset
+     * ranges - for log lines that must not grow with the batch size.
+     * <p>
+     * {@link #toString()} renders every record (keys and values included), which made the user-function failure log
+     * long enough for log tooling to truncate it (astubbs#170 / confluentinc#640). Use this in the message, and leave
+     * the full object for {@code DEBUG}.
+     *
+     * @return e.g. {@code 3 records across 2 partitions: my-topic-0: 2 records, offsets 5-6; my-topic-1: 1 record,
+     * offset 9}
+     */
+    public String summariseForLog() {
+        return RecordBatchSummary.summariseOffsets(pollContext.getOffsets());
     }
 
 }
