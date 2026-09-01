@@ -197,24 +197,15 @@ public class LoadTest extends DbTest {
 
             // From the start of the WAIT, not the method: setupTestData produces the fixture and is
             // machine time, not product time.
-            Instant waitStarted = Instant.now();
-            try {
+            ThroughputReport.reporting("LoadTest", volume, msgCount::get,
+                    () -> StringUtils.msg("volume={}", volume), () -> {
                 // keep checking how many message's we've processed
                 await().atMost(ceilingFor(volume)).until(() -> {
                     // log.debug("msg count: {}", msgCount.get());
                     pb.stepTo(msgCount.get());
                     return msgCount.get() >= volume;
                 });
-            } catch (ConditionTimeoutException e) {
-                // Reported on the failing exit too, and rethrown unchanged: a run that missed its
-                // deadline is the one whose rate a collector most wants, and it is the one that would
-                // otherwise be missing from every series.
-                ThroughputReport.report("LoadTest", msgCount.get(), volume, waitStarted,
-                        StringUtils.msg("volume={} outcome=FAILED", volume));
-                throw e;
-            }
-            ThroughputReport.report("LoadTest", msgCount.get(), volume, waitStarted,
-                    StringUtils.msg("volume={} outcome=PASSED", volume));
+            });
         }
         async.close();
     }

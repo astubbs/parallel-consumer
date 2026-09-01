@@ -8,6 +8,8 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.function.IntSupplier;
+import java.util.function.Supplier;
 
 /**
  * Emits one comparable throughput figure per performance run, on success <b>and</b> on failure.
@@ -56,5 +58,37 @@ public class ThroughputReport {
         long perSecond = elapsedMs > 0 ? (processed * 1000L) / elapsedMs : -1;
         log.warn("{} test={} processed={} expected={} elapsedMs={} recordsPerSecond={} {}",
                 MARKER, label, processed, expected, elapsedMs, perSecond, context);
+    }
+
+    /**
+     * Runs {@code wait} and reports the rate on BOTH exits - {@code outcome=PASSED} when it returns,
+     * {@code outcome=FAILED} when it throws, with the failure rethrown unchanged.
+     * <p>
+     * <b>Extracted because four performance classes had grown the same fifteen lines.</b> Each captured
+     * an {@link Instant}, wrapped its wait in a try, called a private {@code reportThroughput} on every
+     * exit, and rethrew - and the file-similarity gate measured two of them converging from 54.8% to
+     * 63.6% as the fourth copy landed. The shape is identical everywhere because the requirement is:
+     * <em>a run that missed its deadline is the one whose rate a collector most wants</em>, and that is
+     * a property of the measurement rather than of any one test.
+     * <p>
+     * <b>It catches {@link Throwable}, deliberately.</b> Awaitility's two failure exits -
+     * {@code ConditionTimeoutException} and {@code TerminalFailureException} - are unrelated siblings,
+     * and a test that catches only the timeout reports nothing for the failure mode that actually has a
+     * named cause. An {@code AssertionError} from a {@code fail(...)} inside the wait is a third. Naming
+     * them individually is how the gap reappears; catching the supertype is what makes "report on both
+     * exits" true rather than aspirational.
+     *
+     * @param processed read AFTER the wait, so a failing run reports the count it actually reached
+     */
+    public static void reporting(String label, long expected, IntSupplier processed,
+                                 Supplier<String> context, Runnable wait) {
+        Instant started = Instant.now();
+        try {
+            wait.run();
+        } catch (Throwable failure) {
+            report(label, processed.getAsInt(), expected, started, context.get() + " outcome=FAILED");
+            throw failure;
+        }
+        report(label, processed.getAsInt(), expected, started, context.get() + " outcome=PASSED");
     }
 }

@@ -205,7 +205,8 @@ public class VeryLargeMessageVolumeTest extends BrokerIntegrationTest<String, St
         // Measured from the START OF THE WAIT, not from the method entry: everything before this is
         // producing the fixture and standing up a broker, which is machine time rather than product
         // time, and folding it in would make the rate track container-pull speed.
-        Instant waitStarted = Instant.now();
+        ThroughputReport.reporting("VeryLargeMessageVolumeTest", expectedMessageCount, consumedKeys::size,
+                () -> "", () -> {
         try {
             waitAtMost(ceilingFor(expectedMessageCount))
                     // dynamic reason support still waiting https://github.com/awaitility/awaitility/pull/193#issuecomment-873116199
@@ -221,10 +222,9 @@ public class VeryLargeMessageVolumeTest extends BrokerIntegrationTest<String, St
                         all.assertAll();
                     });
         } catch (ConditionTimeoutException e) {
-            reportThroughput(expectedMessageCount, waitStarted, "FAILED");
             fail(failureMessage + "\n" + e.getMessage());
         }
-        reportThroughput(expectedMessageCount, waitStarted, "PASSED");
+        });
 
         bar.close();
 
@@ -246,8 +246,4 @@ public class VeryLargeMessageVolumeTest extends BrokerIntegrationTest<String, St
      * carry - the same rule {@code MultiInstanceHighVolumeTest} states next door. A failing run's rate
      * is the more interesting of the two and is the one a collector would otherwise never see.
      */
-    private void reportThroughput(long expectedMessageCount, Instant waitStarted, String outcome) {
-        ThroughputReport.report("VeryLargeMessageVolumeTest", consumedKeys.size(), expectedMessageCount,
-                waitStarted, StringUtils.msg("outcome={}", outcome));
-    }
 }

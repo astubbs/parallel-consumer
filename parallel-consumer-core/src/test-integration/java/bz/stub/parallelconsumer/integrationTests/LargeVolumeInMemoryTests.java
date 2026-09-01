@@ -245,9 +245,10 @@ class LargeVolumeInMemoryTests extends ParallelEoSStreamProcessorTestBase {
 
         // In-memory: no broker in the path, so this rate is the cleanest machine-speed reference in
         // the lane - it moves with the runner and with PC's own overhead, and with nothing else.
-        Instant waitStarted = Instant.now();
-        try {
-        waitAtMost(defaultTimeout.multipliedBy(15)).untilAsserted(() -> {
+        ThroughputReport.reporting("LargeVolumeInMemoryTests", quantityOfMessagesToProduce,
+                () -> countProcessed(successfulWork),
+                () -> StringUtils.msg("keys={}", numberOfKeys), () -> {
+            waitAtMost(defaultTimeout.multipliedBy(15)).untilAsserted(() -> {
             // assertj's size checker uses an iterator so must be synchronised.
             // .size() wouldn't need it but this output is nicer
             synchronized (successfulWork) {
@@ -260,19 +261,7 @@ class LargeVolumeInMemoryTests extends ParallelEoSStreamProcessorTestBase {
                     .as("Expected number of produced messages")
                     .hasSize(quantityOfMessagesToProduce);
         });
-        } catch (ConditionTimeoutException e) {
-            // REPORT ON THE FAILING EXIT TOO, and rethrow unchanged. A timed-out run produced no rate at
-            // all, which is the run whose number a collector most wants - and because earlier
-            // parameterised cases have already emitted this class's label, bin/performance-test.sh's
-            // "NOT MEASURED" check cannot notice the missing failing case either. Silence twice over.
-            ThroughputReport.report("LargeVolumeInMemoryTests", countProcessed(successfulWork),
-                    quantityOfMessagesToProduce, waitStarted,
-                    StringUtils.msg("keys={} outcome=FAILED", numberOfKeys));
-            throw e;
-        }
-        ThroughputReport.report("LargeVolumeInMemoryTests", countProcessed(successfulWork),
-                quantityOfMessagesToProduce, waitStarted,
-                StringUtils.msg("keys={} outcome=PASSED", numberOfKeys));
+        });
         bar.close();
 
         log.info("Closing async client");
