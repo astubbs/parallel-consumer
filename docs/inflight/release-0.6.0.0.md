@@ -19,10 +19,11 @@ release.
 `release.yml`'s "no release while tests are quarantined" gate now passes.
 
 **Before dispatching, drop the `(unreleased)` suffix from the `== 0.6.0.0 (unreleased)` changelog
-heading.** The release body is that section rendered by `bin/release-notes.py`; it matches a suffixed
-heading deliberately (so a rehearsal is not blocked by it) but warns, because the frozen section should
-name the version alone. Rehearse with `bin/release-notes.py 0.6.0.0` - that prints the exact body the
-release page will show, and a **Dry run** of the workflow puts it in the job summary.
+heading.** A non-dry-run dispatch will refuse to release until you do
+([`docs/releasing.md`](../releasing.md) owns the rule and why a rehearsal is exempt) - this line is
+only the reminder that 0.6.0.0 has not had it done yet. Rehearse with `bin/release-notes.py 0.6.0.0`:
+that prints the exact body the release page will show, and a **Dry run** of the workflow puts it in
+the job summary.
 
 ## Bugs found while triaging the upstream mirrors (2026-08-05)
 

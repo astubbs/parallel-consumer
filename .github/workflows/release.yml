@@ -110,15 +110,26 @@ jobs:
 
       # Rendered BEFORE anything is committed, tagged, deployed or published: a release whose
       # curated notes are missing must fail while it is still cheap to fix. bin/release-notes.py
-      # exits non-zero when there is no section for this version, or when the section uses
-      # AsciiDoc it will not convert - it never returns an empty or half-mangled body. Dry runs
-      # rehearse it too, and the notes land in the job summary for eyeballing.
+      # exits non-zero when there is no section for this version, when the section renders to
+      # nothing, or when it uses AsciiDoc the renderer will not convert - it never returns an
+      # empty or half-mangled body. Dry runs rehearse it too, and the notes land in the job
+      # summary for eyeballing.
       # CHANGELOG.adoc is identical at master and at the tag (release:prepare only rewrites poms),
       # so rendering here and publishing the file later releases exactly what was rehearsed.
+      # The self-test runs first even though repo-hygiene.yml already ran it on this same master
+      # SHA: it is the only thing standing between a hand-edited renderer and a mangled release
+      # body, and one second is not a price worth reasoning about at this point in the pipeline.
+      # --strict on a REAL release: the section being tagged must not still say `(unreleased)`.
+      # A dry run deliberately tolerates it, so a rehearsal is possible before the heading is
+      # frozen - the whole point of rehearsing.
       - name: Render release notes from CHANGELOG.adoc
         run: |
           bash bin/test-release-notes.sh
-          python3 bin/release-notes.py "$RELEASE_VERSION" > "$RUNNER_TEMP/release-notes.md"
+          if [ "$DRY_RUN" = "true" ]; then
+            python3 bin/release-notes.py "$RELEASE_VERSION" > "$RUNNER_TEMP/release-notes.md"
+          else
+            python3 bin/release-notes.py --strict "$RELEASE_VERSION" > "$RUNNER_TEMP/release-notes.md"
+          fi
           {
             echo "## Release notes for v$RELEASE_VERSION"
             echo

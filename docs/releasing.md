@@ -29,11 +29,18 @@ Workflows: `release.yml` (release), `publish.yml` (snapshot-only).
 **The release body is the version's `CHANGELOG.adoc` section**, converted to Markdown by
 `bin/release-notes.py` (`bin/release-notes.py 0.6.0.0` prints exactly what will be published).
 `release.yml` renders it **before** it commits, tags, deploys or publishes anything, and **fails the
-release** if the section is missing, empty, or written in AsciiDoc the renderer will not convert - it
-never substitutes `--generate-notes`, because an auto-generated commit list is indistinguishable from
-the curated notes having silently vanished, which is how a release ended up with no readable body
-(astubbs#197). A dry run rehearses the render and prints the result to the job summary. The AsciiDoc
-subset a section may use is under *At release time* below.
+release** if the section is missing, renders to nothing, or is written in AsciiDoc the renderer will
+not convert - it never substitutes `--generate-notes`, because an auto-generated commit list is
+indistinguishable from the curated notes having silently vanished, which is how a release ended up
+with no readable body (astubbs#197). "Renders to nothing" is judged on the *converted* output, not on
+the raw lines: a section holding only `//` comments is not empty and still produces a blank release
+page. A dry run rehearses the render and prints the result to the job summary. The AsciiDoc subset a
+section may use is under *At release time* below.
+
+**A real release also requires a frozen heading** - `== 0.6.0.0`, not `== 0.6.0.0 (unreleased)`.
+`release.yml` passes `--strict` whenever `dryRun` is false, so the release stops at the render step
+rather than tagging a changelog that still calls the version unreleased. A dry run deliberately
+tolerates the suffix and only warns, which is what makes rehearsing before the freeze possible.
 
 **Dispatch inputs are env-bound, never interpolated into a `run:` block.** `release.yml` binds
 `releaseVersion`/`developmentVersion`/`dryRun` to `RELEASE_VERSION`/`DEVELOPMENT_VERSION`/`DRY_RUN`
