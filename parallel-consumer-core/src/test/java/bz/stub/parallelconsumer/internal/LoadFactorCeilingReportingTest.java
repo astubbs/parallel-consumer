@@ -5,19 +5,15 @@ package bz.stub.parallelconsumer.internal;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.internal.utils.LogCapture;
 import ch.qos.logback.classic.Level;
-import ch.qos.logback.classic.Logger;
-import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.core.read.ListAppender;
 import org.apache.kafka.clients.consumer.MockConsumer;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.parallel.Execution;
 import org.junit.jupiter.api.parallel.ExecutionMode;
 import org.junit.jupiter.api.parallel.Isolated;
-import org.slf4j.LoggerFactory;
 
-import java.util.List;
 import java.util.stream.Collectors;
 
 import static com.google.common.truth.Truth.assertThat;
@@ -40,13 +36,16 @@ import static com.google.common.truth.Truth.assertThat;
  * These tests drive {@link AbstractParallelEoSStreamProcessor#checkPipelinePressure()} - the real control-loop pass -
  * many times and assert on what reaches the log.
  * <p>
- * NOTE the log capture below is deliberately minimal and private to this test: a reusable
- * {@code LogCapture} helper is arriving on astubbs#203 (the log-verbosity branch), and whichever of the two lands
- * second should delete its own copy and use that one (recorded in
- * {@code docs/inflight/pr-blockers-and-collisions.md}).
+ * The capture is {@link LogCapture}, the shared helper - its javadoc owns the two hazards of raising a JVM-shared
+ * logger and which fix each one takes. Both apply here; see the annotations below for why.
  */
-// Captures a class-wide logger and changes its level, so nothing else may run while it does - not another class
-// (@Isolated), and not its own sibling methods (SAME_THREAD), or their output lands in the capture.
+// LogCapture's second obligation, taken the strict way. The logger raised to DEBUG is
+// AbstractParallelEoSStreamProcessor's, shared by every processor in the JVM and busy, so @Isolated keeps this
+// class from flooding the timing-sensitive close/shutdown tests. The other half of that obligation - scope what you
+// read - has no per-test token to hang on here: these tests drive checkPipelinePressure() directly with no records
+// and so no topic name of their own, and their assertions are an exact WARN count and two empty-list checks, the
+// shapes a single stray foreign line breaks. Removing the concurrency IS the filter, which needs SAME_THREAD as
+// well: @Isolated separates this class from others, not its own two capturing methods from each other.
 @Isolated
 @Execution(ExecutionMode.SAME_THREAD)
 class LoadFactorCeilingReportingTest {
@@ -73,28 +72,32 @@ class LoadFactorCeilingReportingTest {
         var options = optionsBuilder().messageBufferSize(1000).build();
         var module = new PCModule<>(options);
 
-        var events = runPressureChecks(options, module);
+        try (var pc = new TestParallelEoSStreamProcessor<>(options, module);
+             var logs = LogCapture.of(AbstractParallelEoSStreamProcessor.class, Level.DEBUG)) {
+            runPressureChecks(pc);
 
-        // the mechanism: pinned at its maximum from construction, so the old code's warn condition is true from pass 1
-        assertThat(module.dynamicExtraLoadFactor().isStaticFactor()).isTrue();
-        assertThat(module.dynamicExtraLoadFactor().isMaxReached()).isTrue();
+            // the mechanism: pinned at its maximum from construction, so the old code's warn condition is true from pass 1
+            assertThat(module.dynamicExtraLoadFactor().isStaticFactor()).isTrue();
+            assertThat(module.dynamicExtraLoadFactor().isMaxReached()).isTrue();
 
-        assertThat(messagesAt(events, Level.WARN)).isEmpty();
-        assertThat(messagesAt(events, Level.ERROR)).isEmpty();
+            assertThat(logs.messagesAt(Level.WARN)).isEmpty();
+            assertThat(logs.messagesAt(Level.ERROR)).isEmpty();
 
-        // NOTE the two assertions above are negative, so on their own they would pass vacuously if the appender were
-        // ever attached to the wrong logger (say the reporting moved class). The positive debug assertion below is
-        // what anchors them: it can only hold if the capture is live and pointed at the code under test. Keep them
-        // together - see docs/solutions/test-flakiness/vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md
-        // for the same shape costing a real regression.
+            // NOTE the two assertions above are negative, so on their own they would pass vacuously if the capture
+            // were ever attached to the wrong logger (say the reporting moved class). The positive debug assertion
+            // below is what anchors them: it can only hold if the capture is live and pointed at the code under
+            // test. Keep them together - see
+            // docs/solutions/test-flakiness/vacuous-await-condition-brokerpoller-backpressure-2026-07-31.md
+            // for the same shape costing a real regression.
 
-        // it is still observable, just at a level that matches how interesting it is
-        var debug = messagesAt(events, Level.DEBUG).stream()
-                .filter(message -> message.contains("loading factor is fixed"))
-                .collect(Collectors.toList());
-        assertThat(debug).isNotEmpty();
+            // it is still observable, just at a level that matches how interesting it is
+            var debug = logs.messagesAt(Level.DEBUG).stream()
+                    .filter(message -> message.contains("loading factor is fixed"))
+                    .collect(Collectors.toList());
+            assertThat(debug).isNotEmpty();
 
-        assertReportsTheThresholdItActuallyTested(debug.get(0), options, module);
+            assertReportsTheThresholdItActuallyTested(debug.get(0), options, module);
+        }
     }
 
     /**
@@ -113,22 +116,25 @@ class LoadFactorCeilingReportingTest {
             }
         };
 
-        var events = runPressureChecks(options, module);
+        try (var pc = new TestParallelEoSStreamProcessor<>(options, module);
+             var logs = LogCapture.of(AbstractParallelEoSStreamProcessor.class, Level.DEBUG)) {
+            runPressureChecks(pc);
 
-        assertThat(atCeiling.isStaticFactor()).isFalse();
+            assertThat(atCeiling.isStaticFactor()).isFalse();
 
-        var warnings = messagesAt(events, Level.WARN);
-        // Exactly one because the whole loop runs inside the limiter's window. That window is 30s and the loop is
-        // in-memory (a quarter of a second here), so a second warning does not mean the rate limiting broke - it
-        // means this JVM stalled for 30s mid-loop. Diagnose the stall; do not relax the bound, and do not open a
-        // seam onto the limiter to make the bound approximate.
-        assertThat(warnings).hasSize(1);
-        // reworded: a saturation signal, and it names what to change - it no longer reads as a failure
-        assertThat(warnings.get(0)).contains("saturation signal");
-        assertThat(warnings.get(0)).contains("maximumLoadFactor");
-        assertThat(warnings.get(0)).doesNotContain(OLD_MESSAGE);
+            var warnings = logs.messagesAt(Level.WARN);
+            // Exactly one because the whole loop runs inside the limiter's window. That window is 30s and the loop
+            // is in-memory (a quarter of a second here), so a second warning does not mean the rate limiting broke -
+            // it means this JVM stalled for 30s mid-loop. Diagnose the stall; do not relax the bound, and do not
+            // open a seam onto the limiter to make the bound approximate.
+            assertThat(warnings).hasSize(1);
+            // reworded: a saturation signal, and it names what to change - it no longer reads as a failure
+            assertThat(warnings.get(0)).contains("saturation signal");
+            assertThat(warnings.get(0)).contains("maximumLoadFactor");
+            assertThat(warnings.get(0)).doesNotContain(OLD_MESSAGE);
 
-        assertReportsTheThresholdItActuallyTested(warnings.get(0), options, module);
+            assertReportsTheThresholdItActuallyTested(warnings.get(0), options, module);
+        }
     }
 
     /**
@@ -190,43 +196,20 @@ class LoadFactorCeilingReportingTest {
 
     /**
      * Runs {@link #CONTROL_LOOP_PASSES} pressure checks with the queue empty (so it is always below target) and the
-     * last work request marked fulfilled - the state which reaches the ceiling report - capturing everything the
-     * processor logs while doing so.
+     * last work request marked fulfilled - the state which reaches the ceiling report.
+     * <p>
+     * The caller owns the {@link LogCapture}, opened after the processor is constructed and closed before it is, so
+     * neither startup nor shutdown logging lands in what the assertions read.
      */
-    private List<ILoggingEvent> runPressureChecks(ParallelConsumerOptions<String, String> options,
-                                                  PCModule<String, String> module) {
-        var processorLogger = (Logger) LoggerFactory.getLogger(AbstractParallelEoSStreamProcessor.class);
-        var originalLevel = processorLogger.getLevel();
-        var appender = new ListAppender<ILoggingEvent>();
+    private void runPressureChecks(TestParallelEoSStreamProcessor<String, String> pc) {
+        // Same package as AbstractParallelEoSStreamProcessor, so its protected/package-private members are
+        // reachable without a wrapper on the test double - the pressure check only acts once the last work
+        // request is marked fulfilled, which the real control loop does as it distributes work.
+        pc.setLastWorkRequestWasFulfilled(true);
 
-        try (var pc = new TestParallelEoSStreamProcessor<>(options, module)) {
-            // Same package as AbstractParallelEoSStreamProcessor, so its protected/package-private members are
-            // reachable without a wrapper on the test double - the pressure check only acts once the last work
-            // request is marked fulfilled, which the real control loop does as it distributes work.
-            pc.setLastWorkRequestWasFulfilled(true);
-
-            processorLogger.setLevel(Level.DEBUG);
-            appender.start();
-            processorLogger.addAppender(appender);
-            try {
-                for (int pass = 0; pass < CONTROL_LOOP_PASSES; pass++) {
-                    pc.checkPipelinePressure();
-                }
-            } finally {
-                processorLogger.detachAppender(appender);
-                appender.stop();
-                processorLogger.setLevel(originalLevel);
-            }
+        for (int pass = 0; pass < CONTROL_LOOP_PASSES; pass++) {
+            pc.checkPipelinePressure();
         }
-
-        return appender.list;
-    }
-
-    private List<String> messagesAt(List<ILoggingEvent> events, Level level) {
-        return events.stream()
-                .filter(event -> event.getLevel() == level)
-                .map(ILoggingEvent::getFormattedMessage)
-                .collect(Collectors.toList());
     }
 
     /**

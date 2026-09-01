@@ -39,15 +39,15 @@ so it grew with `max.poll.records` and log tooling truncated away the part that 
   `PollContextInternal` calls `toString()` on user keys and values, which is user code running on the
   failure path - the exact hazard `ThrowableUtils.logWithoutEscaping` exists to contain. Do not lift
   it out of the lambda to "tidy up".
-- **The `LogCapture` overlap with astubbs#201 is one-directional, not two copies of a class.**
-  This branch adds the only `LogCapture` that exists; `fix/155-load-factor-noise` has *the same logic
-  inline and private to* `LoadFactorCeilingReportingTest`, and no class of that name. So there is no
-  symmetric "both delete their copy": whichever order they land in, **the one thing to do is convert
-  that inline block in `LoadFactorCeilingReportingTest` onto the shared `LogCapture`** - if this
-  branch lands first, astubbs#201 does it on rebase; if astubbs#201 lands first, it is a follow-up
-  here. Nothing on this branch needs deleting either way, and no duplicate class can reach master.
-  Note the duplicate-code gate cannot see any of this: it diffs each PR against master, where neither
-  the class nor the inline block exists yet.
+- **The `LogCapture` overlap with astubbs#201 is settled, and settled on astubbs#201's side.**
+  This branch adds the only `LogCapture` that exists; `fix/155-load-factor-noise` had *the same logic
+  inline and private to* `LoadFactorCeilingReportingTest`, and no class of that name - so there was
+  never a symmetric "both delete their copy", only the one inline block to convert. Antony's ruling:
+  astubbs#203 is the parent and astubbs#201 the child, joined by a merge rather than a rebase, so
+  this branch is merged into `recut/201-load-factor-noise` and the conversion happened there.
+  **Nothing on this branch needs deleting, then or now.** Note the duplicate-code gate could never
+  have seen any of this: it diffs each PR against master, where neither the class nor the inline
+  block existed.
 - **`LogCapture`'s own javadoc owns the two hazards of capturing a JVM-shared logger** - reading
   someone else's lines, and flooding everyone else with `DEBUG` - along with which fix each one takes
   and why they are not interchangeable. It is stated there rather than here because it outlives this
