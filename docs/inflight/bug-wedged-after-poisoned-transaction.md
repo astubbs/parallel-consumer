@@ -1,5 +1,8 @@
 # Open: does PC recover from a poisoned transaction, or is it wedged until close?
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: stall -->
+
 Surfaced by astubbs#261's CI review, which reproduced the control arm independently. Not a regression
 from that fix - the fix is what makes the state *reachable and visible* rather than silently wrong.
 

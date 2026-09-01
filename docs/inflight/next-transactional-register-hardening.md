@@ -1,8 +1,14 @@
-# Register hardening: what the review found and this branch deliberately did not fix
+# Register hardening: what the review found and deliberately left unfixed
 
-Six reviewers went over the transactional battle test. The mechanical findings were applied on the
-branch; these are the ones that need a design decision rather than an edit, so they are recorded
-instead of rushed. Ranked by how much false assurance each one buys.
+<!-- inflight-type: task -->
+<!-- inflight-impact: test-debt -->
+
+<!-- post-merge: checked-begin - names the PR, and puts the applied findings in the past tense so the
+     note reads the same once the branch is gone -->
+Six reviewers went over the transactional battle test (astubbs#262). Its mechanical findings were
+applied there; these are the ones that need a design decision rather than an edit, so they were
+recorded instead of rushed.
+<!-- post-merge: checked-end --> Ranked by how much false assurance each one buys.
 
 ## 1. A documented, supported build invocation runs zero claim proofs and still reports green
 

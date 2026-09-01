@@ -1,5 +1,8 @@
 # confluentinc#809 and confluentinc#833 are plausibly already fixed here, and nobody has said so
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: stranded-work -->
+
 Two open upstream reports, mirrored as astubbs#175 and astubbs#177. Both show the same signature:
 
 ```

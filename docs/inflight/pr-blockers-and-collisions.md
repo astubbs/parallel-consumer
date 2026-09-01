@@ -31,23 +31,28 @@ Blockers, collisions, and decisions someone is waiting on. Not a PR list - `gh` 
 
 ## The transactional stack - land in this order
 
-One dependency chain, enforced by the `Check PR Dependencies` required check. astubbs#262 sits red on
-that check until its remaining parent merges; that is the gate working, not a failure.
+<!-- post-merge: checked-begin - the numbered items state what each PR IS and what its merge owes,
+     which stays true forever; the live red/green of the dependency gate is deliberately not recorded
+     here, because that is what `gh pr checks` answers and what rots the moment either lands -->
+Two PRs, one dependency chain, declared with `depends on` in astubbs#262's body and enforced by the
+`Check PR Dependencies` required check. A child sitting red on that check while its parent is open is
+the gate working, not a failure - do not try to fix it.
 
 1. **astubbs#257** - produce-lock double release. At `batchSize >= 2` the lock was taken per poll
    context but released per record, so every batch failed and - because only a *success* marks a
    partition dirty - **no commit was ever attempted** and the source offset froze. Its own commit
    message describes the symptom as duplicates; astubbs#262 established it is a **stall**, which is
-   more severe. Worth correcting the description before merge so the changelog generator has the right
-   severity.
-2. **astubbs#262** - the battle test itself. Merges astubbs#257 in. Recommends **rebase-merge, not
-   squash**: the branch holds separable workstreams, and squashing buries two real defect discoveries
-   under one 5,000-line test commit.
+   more severe. Correct that description before merging it, or the changelog generator publishes the
+   wrong severity.
+2. **astubbs#262** - the battle test itself, which merges astubbs#257 in. **Rebase-merge, not
+   squash**: it holds separable workstreams, and squashing buries two real defect discoveries under
+   one 5,000-line test commit.
 
-**astubbs#261** was the third link and **merged on 2026-08-14** - a terminally failed send left a
-partial result set visible at `read_committed`. It is named here rather than deleted because the
-chain's shape is what this entry records, and a reader who knows the stack as three PRs needs to be
-told which one is already master.
+**astubbs#261** was the third link and merged on 2026-08-14 - a terminally failed send left a partial
+result set visible at `read_committed`. It is named rather than dropped because the chain's shape is
+what this entry records, and a reader who knows the stack as three PRs needs telling which one is
+already master.
+<!-- post-merge: checked-end -->
 
 ### Decisions waiting on a human
 

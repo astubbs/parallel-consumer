@@ -1,6 +1,12 @@
 # Cite the KIP in astubbs#223's Exactly-once comparison row
 
-The positioning argument and its evidence live in `STRATEGY.md` on this branch - read that first.
+<!-- inflight-type: task -->
+<!-- inflight-impact: stranded-work -->
+
+<!-- post-merge: checked - `STRATEGY.md` is a root-level document, so once astubbs#262 lands the
+     positioning argument is simply on master; naming the branch was only ever a way of saying "not
+     yet merged". -->
+The positioning argument and its evidence live in `STRATEGY.md` - read that first.
 This entry records only the one change that belongs to a *different* branch.
 
 astubbs/parallel-consumer#223 (`docs/strategy-and-share-groups-comparison`) adds a Share Groups

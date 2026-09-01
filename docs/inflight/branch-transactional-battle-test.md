@@ -1,5 +1,11 @@
 # Transactional battle test - the issue landscape this work sits in
 
+<!-- inflight-type: register -->
+<!-- inflight-impact: coordination -->
+<!-- post-merge: exempt-file - this note IS astubbs#262's issue map, cited from the PR body. Naming the
+     branch and the PR is its subject, not an aside that goes stale; the scope opt-out is the marker for
+     that, per bin/check-branch-self-reference.sh. -->
+
 Branch `test/transactional-mode-battle-test`, astubbs#262. This is the map: every reported issue that
 touches transactional mode, what this work established about it, and what it did not. Kept because
 the issues are scattered across two trackers and a reader arriving at the PR should not have to

@@ -1,5 +1,8 @@
 # An explicitly configured 5s commit interval is silently overwritten with 100ms
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: config-lie -->
+
 Found while proving claim C5 (`COMMIT_INTERVAL_AUTO_REDUCED`) for the transactional battle test. Not
 fixed here - that plan's scope boundary keeps main-code fixes out - so it is recorded rather than lost.
 

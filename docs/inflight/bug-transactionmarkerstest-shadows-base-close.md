@@ -1,5 +1,8 @@
 # `TransactionMarkersTest` shadows the base teardown, so its Kafka clients are never closed
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: crash -->
+
 Found while checking all 29 `BrokerIntegrationTest` subclasses for collisions before hoisting a shared
 teardown into the base class. Not caused by that change, and not fixed by it.
 

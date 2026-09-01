@@ -1,5 +1,8 @@
 # Two pre-existing EoS holes on the produce path, found by review not by test
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: data-loss -->
+
 Both surfaced by the code review of the transactional battle test. Neither is introduced by that work,
 and neither is fixed there - a main-code correctness fix belongs in its own PR with its own diagnosis,
 not smuggled into a test branch. Recorded so they are not lost.

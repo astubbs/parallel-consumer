@@ -156,7 +156,7 @@ output is recorded rather than lost.
 
 ### Sources
 
-- Claims: `parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java`
+- Claims: `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java`
   lines 130-215 (`transactionalJavadoc` tag); `src/docs/README_TEMPLATE.adoc` `[[transaction-system]]`.
 - Method: `AGENTS.md` "Settling it: a fix that works is not evidence of the cause".
 - Seam pattern: `c429d8b6` / astubbs#220, and
@@ -349,9 +349,9 @@ failure, and make a stale recorded sentence a build failure too.
 **Requirements.** R1, R2, R20.
 
 **Files.**
-- `parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/TransactionalClaim.java` (new)
-- `parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/ProvesClaim.java` (new)
-- `parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/TransactionalClaimCoverageTest.java` (new)
+- `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/TransactionalClaim.java` (new)
+- `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/ProvesClaim.java` (new)
+- `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/TransactionalClaimCoverageTest.java` (new)
 
 **Approach.**
 1. An enum with one constant per claim: `BULK_SHARED_TRANSACTION`, `ALL_OR_NONE_PER_SOURCE_OFFSET`,
@@ -407,7 +407,7 @@ message; editing a javadoc claim sentence does the same.
 **Requirements.** R4, R5.
 
 **Files.**
-- `parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/internal/TransactionalBulkCommitTest.java` (new)
+- `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/internal/TransactionalBulkCommitTest.java` (new)
 
 **Approach.** Drive `pc.controlLoop` manually with the `ProducerManagerTest#buildModule` pattern
 (override `pc()` with `isTimeToCommitNow() -> true` and a no-op `close()`). Run several records
@@ -441,9 +441,9 @@ that already prove them.
 **Requirements.** R6, R7, R21.
 
 **Files.**
-- `parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/internal/ProducerManagerTest.java` (modify)
-- `parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/truth/ProducerManagerSubject.java` (modify)
-- `parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/TransactionTimeoutsTest.java` (modify - annotations only)
+- `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/internal/ProducerManagerTest.java` (modify)
+- `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/truth/ProducerManagerSubject.java` (modify)
+- `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/TransactionTimeoutsTest.java` (modify - annotations only)
 
 **Approach.** Extend the existing class rather than adding a sibling - it already owns this lock's
 unit coverage and carries the `@Tag("transactions")` convention. Use the astubbs#220 seam: two
@@ -484,8 +484,8 @@ handoff and confirm the invariant test fails deterministically.
 **Requirements.** R8, R9.
 
 **Files.**
-- `parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/TransactionalVisibilityIT.java` (new)
-- `parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/utils/KafkaClientUtils.java` (modify)
+- `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/TransactionalVisibilityIT.java` (new)
+- `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/utils/KafkaClientUtils.java` (modify)
 
 **Approach.** Extend `BrokerIntegrationTest`. `KafkaClientUtils#setupConsumerProps` already sets
 `isolation.level=read_committed`, so the verifier needs no configuration; the *control* arm is the
@@ -522,7 +522,7 @@ by `TransactionMarkersTest`.
 **Requirements.** R11.
 
 **Files.**
-- `parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/TransactionalBatchVisibilityIT.java` (new)
+- `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/TransactionalBatchVisibilityIT.java` (new)
 
 **Approach.** Produce several result records per input record and assert the output topic at
 `READ_COMMITTED` never shows a partial set. Count consumed records, never offsets (KTD6).
@@ -542,7 +542,7 @@ by `TransactionMarkersTest`.
 **Requirements.** R10, R22.
 
 **Files.**
-- `parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/TransactionalCrashReplayIT.java` (new)
+- `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/TransactionalCrashReplayIT.java` (new)
 
 **Approach.** Per KTD12, abandon the instance without calling `close()` - both close paths commit
 first, so neither can express a crash - and let `transaction.timeout.ms` expire the open
@@ -582,7 +582,7 @@ it counts callbacks rather than broker contents, which is exactly what this unit
 **Requirements.** R12.
 
 **Files.**
-- `parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/TransactionalEagerProcessingIT.java` (new)
+- `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/TransactionalEagerProcessingIT.java` (new)
 
 **Approach.** Count user-function invocations per input record with an external side-effect counter
 while forcing a produce-lock timeout during a commit. The claim is directional, so the test asserts
@@ -604,9 +604,9 @@ the difference between the two settings rather than an absolute count.
 **Requirements.** R13.
 
 **Files.**
-- `parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/utils/ManagedPCInstance.java` (modify)
-- `parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/utils/KafkaClientUtils.java` (modify)
-- `parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/chaostests/ChaosScenarioBase.java` (modify)
+- `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/utils/ManagedPCInstance.java` (modify)
+- `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/utils/KafkaClientUtils.java` (modify)
+- `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/chaostests/ChaosScenarioBase.java` (modify)
 
 **Approach.**
 1. `Config` gains an optional output topic and a produce-shaped user function. `run()` supplies a
@@ -645,8 +645,9 @@ still pass unchanged - the cooperative variant extends the same base and builds 
 **Requirements.** R14.
 
 **Files.**
-- `parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/chaostests/EosOutputLedger.java` (new)
-- `parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/chaostests/EosOutputLedgerIT.java` (new)
+- `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/chaostests/EosOutputLedger.java` (new)
+- `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/chaostests/EosOutputLedgerIT.java` (new)
+<!-- file-refs: N/A - files this plan proposes to create; the work is Phase B, deliberately deferred (docs/inflight/pr-blockers-and-collisions.md), so the paths are a proposal rather than a citation. The package half of each was repaired from io/confluent to bz/stub under docs/citations.md, which requires repairing an address without touching the claim. -->
 
 **Approach.** A pure function over the observed output multiset and the expected key set, mirroring
 `ProgressProbe#ledger` in shape but with a zero duplicate allowance. Its unit test is broker-free
@@ -674,8 +675,8 @@ ledger that cannot tell those apart will report data loss for a healthy run.
 **Requirements.** R15.
 
 **Files.**
-- `parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/utils/ManagedPCInstance.java` (modify)
-- `parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/chaostests/ChaosScenarioBase.java` (modify)
+- `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/utils/ManagedPCInstance.java` (modify)
+- `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/chaostests/ChaosScenarioBase.java` (modify)
 
 **Approach.** Per KTD7, the commit-lock timeout arrives as a `java.util.concurrent.TimeoutException`
 wrapped as the cause of a `RuntimeException`, and `isExpectedCloseException`'s blanket
@@ -707,7 +708,8 @@ proving the tripwire was blind.
 **Requirements.** R13, R14, R23.
 
 **Files.**
-- `parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/chaostests/ChaosTransactionalEosIT.java` (new)
+- `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/chaostests/ChaosTransactionalEosIT.java` (new)
+<!-- file-refs: N/A - files this plan proposes to create; the work is Phase B, deliberately deferred (docs/inflight/pr-blockers-and-collisions.md), so the paths are a proposal rather than a citation. The package half of each was repaired from io/confluent to bz/stub under docs/citations.md, which requires repairing an address without touching the claim. -->
 
 **Approach.** Follow the W1/W4 scenario skeleton: declare constants, build a `Config`, `bootstrapFleet`,
 tune the probe, chain the conductor, `startRun`, await, `settleRun`, `assertScenarioSlos`. Combine
@@ -785,7 +787,7 @@ claim without one is recorded `COVERED_NO_CONTROL`.
 **Requirements.** R3, R19.
 
 **Files.**
-- `parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java` (only for a doc-overreach refutation)
+- `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java` (only for a doc-overreach refutation)
 - `src/docs/README_TEMPLATE.adoc` (verified-as-of note; and corrections for doc-overreach)
 - `README.adoc` (regenerated, never hand-edited)
 - `docs/inflight/` (one file per discovered defect)
