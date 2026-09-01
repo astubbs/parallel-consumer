@@ -26,7 +26,6 @@ import io.micrometer.core.instrument.search.Search;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.admin.ConsumerGroupDescription;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -357,29 +356,7 @@ class NavigatorRateShareTest extends BrokerIntegrationTest<String, String> {
         }
     }
 
-    // ------------------------------------------------------------------
-    // Group stabilisation (see class javadoc for why this precedes producing)
-    // ------------------------------------------------------------------
-
-    private void awaitGroupStableWithOnePartitionEach(int expectedMembers) {
-        await().atMost(ofSeconds(90)).untilAsserted(() -> {
-            ConsumerGroupDescription description = describeGroup();
-            assertThat(description.members()).hasSize(expectedMembers);
-            assertThat(description.members()).allSatisfy(member ->
-                    assertThat(member.assignment().topicPartitions()).hasSize(1));
-        });
-        log.info("Consumer group {} stable: {} members, one partition each", getKcu().getGroupId(),
-                expectedMembers);
-    }
-
-    @SneakyThrows
-    private ConsumerGroupDescription describeGroup() {
-        String groupId = getKcu().getGroupId();
-        return getKcu().getAdmin()
-                .describeConsumerGroups(Collections.singleton(groupId))
-                .all().get()
-                .get(groupId);
-    }
+    // group stabilisation lives on BrokerIntegrationTest (shared with NavigatorDemo)
 
     // ------------------------------------------------------------------
     // Anchored-window measurement (KTD8)
