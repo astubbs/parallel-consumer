@@ -75,8 +75,16 @@ if (baseUnavailable) {
 }
 
 const tracked = sh('git', ['ls-files']).split('\n').filter(Boolean)
+// COMMITTED **AND** STAGED. `git diff <base> HEAD` cannot see a file staged for its first commit, so
+// the pre-commit hook - the one place this rule is meant to stop a new shell script BEFORE it lands -
+// would have allowed exactly the addition it exists to reject, and only CI would have caught it after
+// the fact. The union covers both callers: the hook sees the staged addition, CI sees the committed
+// one, and a file in both is deduplicated.
 const added = mergeBase
-  ? sh('git', ['diff', '--name-only', '--diff-filter=A', mergeBase, 'HEAD']).split('\n').filter(Boolean)
+  ? [...new Set([
+      ...sh('git', ['diff', '--name-only', '--diff-filter=A', mergeBase, 'HEAD']).split('\n'),
+      ...sh('git', ['diff', '--name-only', '--diff-filter=A', '--cached', mergeBase]).split('\n'),
+    ])].filter(Boolean)
   : null
 
 // One read per file, not one per rule. Rules overlap - `^bin/.*\.sh$` and `\.(sh|bash)$` both match
