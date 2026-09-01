@@ -97,6 +97,9 @@ work.
 - **astubbs/parallel-consumer#29**: the test is `@Disabled` again there, now with a full reason on the
   annotation instead of master's bare one. That PR's own failure is resolved - see `eaaa875c4`.
 - **Not done**: any measurement at all. No rate, no scale sweep, no local reproduction.
+  **Superseded 2026-09-01 - see the correction at the foot of this document.** This bullet was
+  wrong when written: the rate had been measured twice in August, and it has now been measured a
+  third time, on Linux, where the test failed.
 
 ## Load-bearing references
 
@@ -120,3 +123,40 @@ work.
   throughput drop. There is no product regression; the control arm settled it.
 - **Reading a CI log through `gh run view --log`** and concluding `MultiInstanceHighVolumeTest` never
   ran. It ran; the log was truncated before the summary.
+
+## Correction, 2026-09-01: "no measurement at all" was wrong, and there is now a failure
+
+Two claims above need repair, and the second is the reason this branch has a result rather than a
+plan.
+
+**"Not done: any measurement at all" was false when written.**
+`docs/inflight/test-largenumberofinstances-residual-failures-unmeasured.md` - cited above as the note
+that owns the question - already recorded nineteen runs of this exact test on 2026-08-28, all green:
+ten at the historical configuration (`6d39ab68f`), a confounded sweep at scales 1/2/4 (`ac37886a3`),
+and a valid sweep at 0.25 and 0.5 (`8774aa2b8`). What was true is the narrower statement that
+`bin/exp-measure-large-instances-failure-rate.sh` had never been run - it landed the same day this
+handoff was written, in `66a9a35e0` (astubbs/parallel-consumer#381), after those measurements were
+taken by hand. "The instrument has never been run" and "the question has never been measured" are not
+the same claim, and conflating them buried a result.
+
+**Mining CI history is listed as a wrong path for the wrong reason.** It is a wrong path - but not
+only because the test never ran in CI. The measurements already existed in the tree, one `grep` from
+the note the handoff itself cites. Reading the cited document first would have cost nothing.
+
+**The rate now exists, and so does a failure.** One failure in ten consecutive runs on a Linux box
+(plus a passing pilot), the first reproduction of this test's failure anywhere but CI. It is a `FLAT`
+stall rather than the overload the August sweep hit, and the ambient probe names
+`ZOMBIE_MEMBER/REBALANCE_BLOCKED` - a member not answering the rebalance, which is a member-side
+story rather than the coordinator-cannot-converge one the standing claim asserts. The full write-up,
+including the three instrumentation gaps that stop it being settled, is in the inflight note under
+**"2026-09-01, on Linux"**.
+
+**The lane question has an answer the handoff did not know about.** `.github/workflows/experiments.yml`
+already exists - non-gating, dispatchable, and running `exp-measure-large-instances-failure-rate` on a
+weekly cron *specifically* because this rate had no sampler. It landed in the same PR as the scripts.
+So "where can this test live" is not an open design problem so much as a tagging one: `@Tag("performance")`
+currently covers both the throughput baselines (a shift is signal; gating is right) and the churn
+capacity profiles (whose own javadoc says a single run is not a verdict), and the gating lane runs
+`-Dincluded.groups=performance` with no exclusions. Splitting the capacity profiles onto their own tag
+would make the class javadoc's "never gates a merge" claim true instead of false, without making any
+lane non-gating - which is what the operator's ruling asked for.
