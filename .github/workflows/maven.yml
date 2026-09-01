@@ -204,8 +204,17 @@ jobs:
       # never-a-pass ("a skip is not a pass") - so it also fails, with its own message, because a lane
       # that silently stops measuring is the failure mode the whole PR exists to remove. Exit 3
       # (nothing in scope) and 0 pass.
-      - name: Fail on throughput regression
-        if: always() && matrix.suite == 'performance' && steps.throughput.outputs.code == '1'
+      # ADVISORY, NOT BLOCKING - deliberately, and this step is the record of why. The 0.50/0.70 bounds
+      # were calibrated against a normalised share, and re-measuring after review corrected the control
+      # set showed normalising ADDS noise on one machine: raw subject 13.4%, share 16.6-17.2%. Bounds
+      # derived from a quantity noisier than the raw measurement are not bounds anybody should be
+      # blocked on. The report still posts, so a red verdict is visible and arguable; it just does not
+      # fail the required check.
+      #
+      # FLIP IT BY DELETING `false &&` BELOW, once a fresh master-lane series confirms the bounds
+      # against the corrected control. That is one line, and it is the whole gate on the gate.
+      - name: Throughput verdict (advisory - see comment above)
+        if: always() && false && matrix.suite == 'performance' && steps.throughput.outputs.code == '1'
         run: |
           echo "The throughput check reported a regression - see the report comment on this PR." >&2
           exit 1

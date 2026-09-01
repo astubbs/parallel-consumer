@@ -16,8 +16,9 @@
 // and the per-class times. No table to maintain, and the data is as fresh as the last push to master.
 //
 // THE MEDIAN, NOT THE LAST RUN, AND THIS IS THE WHOLE POINT. Measured 2026-09-01 on an idle machine:
-// the same commit, eight full-lane runs, MultiInstanceHighVolumeTest spanning 25.9s to 33.8s - about
-// 30% - while the control classes stayed within 5%. Against an instrument that noisy, comparing
+// measured on one unchanged commit, the raw subject moves ~13% while the
+// sleeping controls move ~1% and the CPU-bound one ~6% - and normalising by any of them RAISES the
+// spread to ~17%. See the measurement table in lib/throughput-verdict.mjs. Against an instrument that noisy, comparing
 // against any SINGLE previous run is a coin flip, and a threshold drawn around one point is drawn
 // around noise. A median over several runs is the cheapest thing that is not.
 //
@@ -28,8 +29,9 @@
 // verdict.
 //
 // MACHINE SPEED IS STILL CANCELLED USING THE NEIGHBOURS, and its weakness is now measured rather than
-// assumed: in the noise-floor runs the controls moved 5% while the subject moved 30%, so flat
-// controls do NOT bound subject variance. The normalisation removes machine-to-machine drift, which
+// assumed: measured on one unchanged commit, the raw subject moves ~13% while the
+// sleeping controls move ~1% and the CPU-bound one ~6% - and normalising by any of them RAISES the
+// spread to ~17%. See the measurement table in lib/throughput-verdict.mjs. The normalisation removes machine-to-machine drift, which
 // is real; it does not remove this test's own variance, which is larger. That is why the bounds are
 // coarse and why the report says what the allowable range is rather than only whether it passed.
 //

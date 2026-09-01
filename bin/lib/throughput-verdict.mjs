@@ -31,23 +31,31 @@
 // the whole method rests on. <testcase> carries per-method times and the lanes now upload the failsafe
 // XML, so both sides have them.
 //
-// THE CONTROL MUST BE CPU-BOUND, WHICH IS NOT A DETAIL - IT IS THE PREMISE. Conservation holds only
-// while every term scales with the machine. A test dominated by fixed sleeps does not: LoadTest sleeps
-// 0-5ms per record and LargeVolumeInMemoryTests sleeps 3ms per record, so on a slower CPU their
-// wall-clock barely moves while the subject's grows. Using them as controls would mean the denominator
-// stays put while the numerator rises, and the check reports a regression that is only a slow runner -
-// the exact failure the normalisation exists to prevent. Found in review; both are now excluded.
+// MEASURED 2026-09-01, AND THE RESULT DOES NOT SUPPORT NORMALISING AT ALL ON ONE MACHINE.
+// Eight full-lane runs on a single unchanged commit, robust (outlier-insensitive) spread:
 //
-// It also reframes an earlier measurement rather than merely fixing code. Eight runs on one unchanged
-// commit put the subject at a 33% spread with the controls inside 8%, and that was read as "the
-// machine is stable, the test is noisy". With two of three controls sleep-dominated, "the controls
-// could not move" explains the same numbers, and the data cannot separate the two. The noise floor
-// needs re-measuring against a CPU-bound control before any bound here is called calibrated.
+//     LoadTest        (0-5ms sleep/record)   0.9%   <- inert; not a machine-speed signal, a constant
+//     LargeVolume     (3ms sleep/record)     0.9%   <- inert
+//     VeryLarge       (CPU-bound)            6.1%
+//     subject                               13.4%
+//     share / all three controls            16.6%
+//     share / CPU-bound control only        17.2%
+//     subject raw, no normalisation         13.4%   <- the quietest signal available
 //
-// WHAT THIS STILL CANNOT DO. It removes machine-to-machine variance. It does not remove the subject's
-// OWN run-to-run variance - that is a property of the test, not of the comparison, and no arithmetic
-// here can touch it. It is why the reference is a MEDIAN over several runs and why the bounds are
-// coarse.
+// Two conclusions, and the second was not expected. The sleeping controls really are inert, exactly as
+// review argued - 0.9% cannot describe a machine. But narrowing to the CPU-bound control makes things
+// WORSE, not better: every normalisation ADDS about four points of noise, because dividing by a
+// control compounds its variance rather than cancelling anything. On one idle box there is no
+// machine-to-machine variance to cancel, so the division can only cost.
+//
+// WHAT THIS DOES AND DOES NOT SETTLE. It does not disprove the cross-runner case normalising exists
+// for - every run here is the same box, so this data cannot test it. It does prove normalising is not
+// free, and that the bounds below were calibrated against a quantity noisier than the raw measurement
+// they were meant to improve on.
+//
+// SO THE VERDICT IS ADVISORY, NOT BLOCKING (see maven.yml). Shipping a required check on bounds the
+// measurement does not support would be the "flapping gate that gets switched off within a week" this
+// whole design is written to avoid - and switching it off would take the collection with it.
 
 /** Operator ruling, 2026-09-01: a 50% loss fails, a 30% loss flags. */
 export const FAIL_BELOW = 0.50

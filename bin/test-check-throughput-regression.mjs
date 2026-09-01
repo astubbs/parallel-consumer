@@ -5,8 +5,9 @@
 // file is the evidence the bounds came from - a bound justified only in a commit message is one nobody
 // can re-derive, and one nobody can re-derive is one nobody defends when it fires inconveniently.
 //
-// THE NOISE CASES MATTER MOST. The subject was measured spanning 25.9s to 33.8s on a SINGLE unchanged
-// commit while its control classes held within 5%. Any bound that fires inside that spread produces a
+// THE NOISE CASES MATTER MOST. measured on one unchanged commit, the raw subject moves ~13% while the
+// sleeping controls move ~1% and the CPU-bound one ~6% - and normalising by any of them RAISES the
+// spread to ~17%. See the measurement table in lib/throughput-verdict.mjs. Any bound that fires inside that spread produces a
 // red on a quiet day, and the first person to hit one switches the gate off - taking the collection
 // with it. So this asserts what the gate must NOT do at least as hard as what it must.
 
