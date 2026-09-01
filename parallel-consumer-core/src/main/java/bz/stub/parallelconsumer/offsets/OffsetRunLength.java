@@ -9,6 +9,8 @@ import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIn
 import lombok.experimental.UtilityClass;
 import lombok.extern.slf4j.Slf4j;
 
+import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
+
 import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
@@ -77,8 +79,22 @@ public class OffsetRunLength {
     /**
      * @see #runLengthEncode
      */
-    static HighestOffsetAndIncompletes runLengthDecodeToIncompletes(OffsetEncoding encoding, final long baseOffset, final ByteBuffer in) {
+    static HighestOffsetAndIncompletes runLengthDecodeToIncompletes(OffsetEncoding encoding, final long baseOffset, final ByteBuffer in)
+            throws CorruptOffsetMetadataException {
         in.rewind();
+        // asShortBuffer()/asIntBuffer() silently DROP a trailing partial element, so a body of the wrong width decodes
+        // as a shorter, plausible-looking run list instead of failing: 3 bytes read as one short fabricated five
+        // incomplete offsets from a payload no encoder here could have produced. A whole number of elements is the
+        // one structural claim the buffer can settle on its own.
+        int elementBytes = switch (encoding.version) {
+            case v1 -> Short.BYTES;
+            case v2 -> Integer.BYTES;
+        };
+        if (in.remaining() % elementBytes != 0) {
+            throw new CorruptOffsetMetadataException(msg(
+                    "{} run-length body is {} byte(s), which is not a whole number of {}-byte entries",
+                    encoding.description(), in.remaining(), elementBytes));
+        }
         final ShortBuffer v1ShortBuffer = in.asShortBuffer();
         final IntBuffer v2IntegerBuffer = in.asIntBuffer();
 
@@ -128,6 +144,13 @@ public class OffsetRunLength {
                     case v2 -> v2IntegerBuffer.get();
                 };
 
+                // A run length is a count, so it is never negative in anything the encoder produced. Unchecked, a
+                // negative run walks currentOffset BACKWARDS and yields a highest-seen offset below the committed one,
+                // silently, with no error anywhere downstream to tell it from a real map.
+                if (runLength.longValue() < 0) {
+                    throw new CorruptOffsetMetadataException(msg("negative run length ({}) at offset {}",
+                            runLength, currentOffset));
+                }
                 if (currentRunLengthIsComplete) {
                     log.trace("Ignoring {} completed offset(s) (offset:{})", runLength, currentOffset);
                     currentOffset += runLength.longValue();

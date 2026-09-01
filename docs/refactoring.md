@@ -333,6 +333,14 @@ them, do not copy them back.
 - `TODO should extend java.lang.Error`: should it extend `java.lang.Error`?
   (exception-hierarchy design)
 
+### offsets/OffsetRunLength.java
+- **A structurally valid but implausibly large run length is accepted.** A `RunLengthV2` entry of
+  `Integer.MAX_VALUE` moves the highest-seen offset ~2e9 forward, marking that range as already
+  succeeded, so those records are never processed. The decode-time checks added in astubbs#207 reject
+  only what the payload itself proves wrong, and a long run of completed offsets is exactly what RLE
+  is for - so bounding this means picking a plausibility ceiling, which is a product decision. Detail
+  in `docs/inflight/pr-offset-encoding-policy.md`.
+
 ### offsets/EncodedOffsetPair.java
 - **`invalidOffsetMetadataPolicy(FAIL)` stops the consumer by escaping Kafka's rebalance callback.**
   `handleUnreadableMetadata` throws an `EncodingNotSupportedException` (a checked `InternalException`,

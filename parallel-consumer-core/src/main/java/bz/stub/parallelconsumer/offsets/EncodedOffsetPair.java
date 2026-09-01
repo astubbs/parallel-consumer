@@ -7,6 +7,7 @@ package bz.stub.parallelconsumer.offsets;
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy;
+import bz.stub.parallelconsumer.internal.InternalException;
 import bz.stub.parallelconsumer.internal.PCInternalRuntimeException;
 import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
 import lombok.Getter;
@@ -14,6 +15,8 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.common.TopicPartition;
 
+import java.io.IOException;
+import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import java.util.Comparator;
 import java.util.Optional;
@@ -162,7 +165,7 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
     private static HighestOffsetAndIncompletes handleUnreadableMetadata(long baseOffset,
                                                                         InvalidOffsetMetadataHandlingPolicy errorPolicy,
                                                                         String problem,
-                                                                        Supplier<? extends EncodingNotSupportedException> toThrow,
+                                                                        Supplier<? extends InternalException> toThrow,
                                                                         TopicPartition tp) {
         if (errorPolicy == IGNORE) {
             log.warn("Cannot read the committed offset metadata for partition {} at base offset {}: {}. " +
@@ -218,9 +221,54 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
     public HighestOffsetAndIncompletes getDecodedIncompletes(long baseOffset,
                                                              InvalidOffsetMetadataHandlingPolicy errorPolicy,
                                                              TopicPartition tp) {
-        HighestOffsetAndIncompletes binaryArrayString = switch (encoding) {
-//            case ByteArray -> deserialiseByteArrayToBitMapString(data);
-//            case ByteArrayCompressed -> deserialiseByteArrayToBitMapString(decompressZstd(data));
+        switch (encoding) {
+            case KafkaStreams:
+            case KafkaStreamsV2:
+                return handleUnreadableMetadata(baseOffset,
+                        errorPolicy,
+                        msg("the metadata was written by Kafka Streams ({})", encoding.description()),
+                        KafkaStreamsEncodingNotSupported::new,
+                        tp);
+            // an encoding this build knows of but has no decoder for - same forward-compatibility hazard as an
+            // unrecognised magic byte, so it gets the same policy treatment
+            case ByteArray:
+            case ByteArrayCompressed:
+                return handleUnreadableMetadata(baseOffset,
+                        errorPolicy,
+                        msg("no decoder for encoding: {}", encoding.description()),
+                        () -> new UnsupportedOffsetEncodingException(encoding, describeSource(tp, baseOffset)),
+                        tp);
+            default:
+                break;
+        }
+
+        // A decoder exists, so the magic byte and the encoding are both fine - but the BYTES may still not be
+        // something this build could have written. That is the same event to a user ("PC cannot read this metadata")
+        // and it used to leave by a different door: BufferUnderflowException off the end of a truncated payload, or a
+        // ZstdIOException from a body that is not a zstd frame, neither of which is an OffsetDecodingError, so
+        // loadPartitionStateForAssignment's recovery never saw them and they escaped onPartitionsAssigned.
+        try {
+            return decodeBody(baseOffset);
+        } catch (CorruptOffsetMetadataException | BufferUnderflowException | IOException e) {
+            return handleUnreadableMetadata(baseOffset,
+                    errorPolicy,
+                    msg("the payload is not decodable as {}: {}", encoding.description(), e.getMessage()),
+                    () -> e instanceof CorruptOffsetMetadataException
+                            ? (CorruptOffsetMetadataException) e
+                            : new CorruptOffsetMetadataException(e.toString(), describeSource(tp, baseOffset)),
+                    tp);
+        }
+    }
+
+    /**
+     * Decodes a payload whose encoding this build does have a decoder for.
+     * <p>
+     * Separate from {@link #getDecodedIncompletes(long, InvalidOffsetMetadataHandlingPolicy, TopicPartition)} so that
+     * every way this can fail is caught in one place and routed through the user's policy, rather than each decoder
+     * having to know about it.
+     */
+    private HighestOffsetAndIncompletes decodeBody(long baseOffset) throws CorruptOffsetMetadataException, IOException {
+        return switch (encoding) {
             case BitSet -> deserialiseBitSetWrapToIncompletes(encoding, baseOffset, data);
             case BitSetCompressed -> deserialiseBitSetWrapToIncompletes(BitSet, baseOffset, decompressZstd(data));
             case RunLength -> runLengthDecodeToIncompletes(encoding, baseOffset, data);
@@ -229,19 +277,8 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
             case BitSetV2Compressed -> deserialiseBitSetWrapToIncompletes(BitSetV2, baseOffset, decompressZstd(data));
             case RunLengthV2 -> runLengthDecodeToIncompletes(encoding, baseOffset, data);
             case RunLengthV2Compressed -> runLengthDecodeToIncompletes(RunLengthV2, baseOffset, decompressZstd(data));
-            case KafkaStreams, KafkaStreamsV2 -> handleUnreadableMetadata(baseOffset,
-                    errorPolicy,
-                    msg("the metadata was written by Kafka Streams ({})", encoding.description()),
-                    KafkaStreamsEncodingNotSupported::new,
-                    tp);
-            // an encoding this build knows of but has no decoder for - same forward-compatibility hazard as an
-            // unrecognised magic byte, so it gets the same policy treatment
-            default -> handleUnreadableMetadata(baseOffset,
-                    errorPolicy,
-                    msg("no decoder for encoding: {}", encoding.description()),
-                    () -> new UnsupportedOffsetEncodingException(encoding, describeSource(tp, baseOffset)),
-                    tp);
+            default -> throw new PCInternalRuntimeException(
+                    msg("no decoder for {}, and it was not routed to the policy handler", encoding));
         };
-        return binaryArrayString;
     }
 }

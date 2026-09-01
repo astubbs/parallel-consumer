@@ -42,6 +42,30 @@ resolving: the `InternalRuntimeException` -> `PCInternalRuntimeException` rename
 old class is deleted, so references do not compile), and the astubbs#121 sample-the-high-water-mark-
 once fix in `encodeOffsetsCompressed` (`7eeecc920`) - dropping that one silently loses records.
 
+## Corrupt bodies now go through the policy too, and used to answer rather than fail
+
+The policy originally reached two cases: an unrecognised magic byte, and a known encoding with no
+decoder. A third was left, and probing it found something worse than the escape it was filed as -
+the decoders trusted their own header, so metadata PC did not write produced **answers**:
+
+| Payload | Before | Now |
+|---|---|---|
+| `BitSet` declaring 32767 bits, empty body | 32767 fabricated incomplete offsets, no error | policy |
+| `BitSetV2` declaring `Integer.MAX_VALUE` bits | `OutOfMemoryError` | policy |
+| `BitSetV2`/`BitSet` negative length | highest-seen offset *below* the committed one | policy |
+| `RunLengthV2` negative run | highest-seen offset below the committed one | policy |
+| `RunLength` body one byte too long | trailing byte silently dropped, rest decoded | policy |
+| Truncated length field | `BufferUnderflowException` escaped `onPartitionsAssigned` | policy |
+| Compressed body that is not a zstd frame | `ZstdIOException` escaped `onPartitionsAssigned` | policy |
+
+A wrong offset map is worse than a failed one: nothing downstream can tell it from a real one, and
+the two outcomes are mass replay or mass silent skipping. The checks added are only ones the buffer
+can settle by itself - a declared bit length must be backed by bytes that are actually present, a run
+length is a count so it is never negative, and a run-length body must be a whole number of entries
+(`asShortBuffer()` silently drops a trailing partial element, which is what let the odd-length body
+decode). Everything they reject is routed through `handleUnreadableMetadata` as
+`CorruptOffsetMetadataException`, so it is the same user-visible event as the other two cases.
+
 ## The default is now `IGNORE`, changed from `FAIL`
 
 Forced by the merge, not incidental to it. Once the policy genuinely governs every unreadable path,
@@ -93,16 +117,13 @@ configuration), and a second test pins `FAIL` as genuinely fatal.
   rather than the default, but a deliberate stop should still go through PC's own fatal-error path
   with a message naming the partition, the magic byte and the option that caused it. Queued in
   `docs/refactoring.md`, not fixed here - it reaches beyond the offsets package.
-- **The same defect class survives one step further in, and astubbs#207 does not cover it.** The
-  policy is now consulted for an unrecognised magic byte and for a known-but-undecodable encoding.
-  It is still *not* consulted when the magic byte resolves fine but the payload body is corrupt:
-  `OffsetRunLength`'s `throw new IllegalArgumentException(bit + " in " + in)`, `OffsetBitSet`'s
-  `PCInternalRuntimeException("Invalid state")`, and whatever `decompressZstd` raises on a malformed
-  stream all reach `getDecodedIncompletes`' switch arms directly, not through
-  `handleUnreadableMetadata`. To a user this is the same event - "PC cannot read this metadata" - and
-  it escapes `onPartitionsAssigned` the same way. Deliberately not fixed here: it needs a decision
-  about whether a corrupt body from a *recognised* encoding is a wire-format problem or a bug worth
-  failing on, which is a different question from forward compatibility.
+- **A run length that is structurally valid but implausibly large is still accepted.** A `RunLengthV2`
+  entry of `Integer.MAX_VALUE` moves the highest-seen offset about two billion forward, which marks
+  that whole range as already succeeded. Unlike the shapes now rejected, nothing in the payload
+  proves it wrong - a long stretch of completed offsets is what run-length encoding is *for*, and the
+  decoder has no partition end offset to check it against. Capping it means choosing a plausibility
+  ceiling, which is a product decision rather than a correctness one, so it is recorded rather than
+  guessed at. Queued in `docs/refactoring.md`.
 - **Back-links to add when astubbs#207 merges** (none existed when this note was written, in either
   direction):
   astubbs#207 -> astubbs#118 / astubbs#217 / confluentinc#326; astubbs#118 -> astubbs#207;
