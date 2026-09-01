@@ -8,9 +8,12 @@ A log line that interpolates a record batch, a partition map or a state object g
 part that identified the event. The line is still emitted, and still reads as if it reported
 something - which is why this is filed as misdirection rather than as noise.
 
-**Two instances were fixed**; at least eight more are live in `parallel-consumer-core`. The search
-that found them is written down here so it is not repeated, and the **dismissals matter as much as
-the hits** - three lines look like instances and are not.
+**The pair behind astubbs#169 and astubbs#170 is fixed; the rest of the class is live in
+`parallel-consumer-core`.** The two worth doing next are named below, and the **dismissals matter as
+much as the hits** - several lines have this shape and are correct as they are. The search is
+written down so it is not repeated; re-run it with
+`grep -rnE 'log\.(warn|error)' --include=*.java parallel-consumer-core/src/main` and read what each
+line interpolates.
 
 <!-- post-merge: checked-begin -->
 The fixed pair, and the shape a fix takes, are astubbs#203 (astubbs#169 / confluentinc#631 in
