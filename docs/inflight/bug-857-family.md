@@ -258,9 +258,11 @@ times in the 741,161-line CI log of the run meant to prove it.
 ## Cluster decomposition and the A/B result
 
 astubbs#29's production diff is four independent changes in one April commit. The decomposition, the
-2026-08-18 A/B soak that measured the deadlock fix (master 20/20 fail vs branch 0/20), and the order
-to take them are in
-`docs/plans/2026-08-18-002-fix-857-revoke-path-cluster-decomposition-plan.md`.
+2026-08-18 A/B soak that measured the deadlock fix (master 20/20 fail vs branch 0/20) are in
+`../solutions/architecture-patterns/two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md`,
+which carries all four clusters as sections. The dated plan that first argued the decomposition was
+deleted once every cluster had landed; retrieve it with
+`git show a0ade8a66:docs/plans/2026-08-18-002-fix-857-revoke-path-cluster-decomposition-plan.md`.
 
 ## The sightings, split out by mode
 

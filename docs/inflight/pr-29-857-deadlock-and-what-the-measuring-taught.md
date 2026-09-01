@@ -60,11 +60,17 @@ that got reviewed on its own merits. astubbs/parallel-consumer#376's cooperative
 master as well as here, so do not read it as a control arm for anything; it guards against
 reintroducing the reset-on-assignment this branch once had.
 
-The decomposition those came from is `docs/plans/2026-08-18-002-fix-857-revoke-path-cluster-decomposition-plan.md`,
-which is a dated record and is deliberately NOT being rewritten as pieces leave - it says what was
-true on 2026-08-18, and two of its four clusters have moved since (cluster 3 deleted outright,
-cluster 4 resolved by deleting the mirror rather than gating it). Read it with this paragraph beside
-it.
+The decomposition those came from was a dated plan, deleted 2026-09-02 once all four clusters had
+landed - retrieve it with
+`git show a0ade8a66:docs/plans/2026-08-18-002-fix-857-revoke-path-cluster-decomposition-plan.md`.
+
+It was a dated record and was never rewritten as pieces left it - it says what was true on
+2026-08-18, and all four clusters moved after that (cluster 3 deleted outright, cluster 4 resolved by
+deleting the mirror rather than gating it). Its durable content now lives in
+`../solutions/architecture-patterns/two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md`,
+which carries the four clusters as sections plus the observation the plan could not have made: 3 and
+4 were the same defect twice - a local copy of a fact something else already owned - and both were
+fixed by deleting the copy rather than correcting it.
 
 ## MERGE IS PAUSED - operator decision, 2026-09-01
 
@@ -608,9 +614,8 @@ experiment has no discriminating power as configured, and the fixed arm's green 
 `Acquired commitLock on revoke` (the uncontended path) appears even once. `tryCommitOffsetsOnRevoke()`
 did not execute at all, so the revoke-with-pending-commit window never opened on this box.
 
-This is the exact failure
-`docs/plans/2026-08-18-002-fix-857-revoke-path-cluster-decomposition-plan.md` warned about in
-advance: *"A clean fixed arm with a zero skip-count would be indistinguishable from a probe that
+This is the exact failure the cluster-decomposition plan warned about in advance
+(`git show a0ade8a66:docs/plans/2026-08-18-002-fix-857-revoke-path-cluster-decomposition-plan.md`): *"A clean fixed arm with a zero skip-count would be indistinguishable from a probe that
 never opened the window, which is exactly how this fix looked unproven for four months."*
 
 **Consequence for any future soak: a rep in which the window did not open is not a data point.** It

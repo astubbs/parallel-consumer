@@ -8,7 +8,9 @@ sustained churn, because nobody here has a production deployment to run it in - 
 project keeps finding are the ones that need time and load to appear. A long soak is the nearest
 available substitute, and it is cheap: the machine is idle overnight either way.
 
-**It has already paid for itself once.** The A/B harness in `bin/soak-deadlock-probe.sh` ran a
+**It has already paid for itself once.** The A/B harness (`soak-deadlock-probe.sh`, which moved to
+the overnight-harness branch - astubbs/parallel-consumer#405 - because it is the same kind of
+instrument) ran a
 dozen invocations per arm overnight and turned a single ambiguous result into an unambiguous one,
 with a red control. And a random-seed CI sweep in the same window produced the first replayable seed
 the async stall line has ever had. Both came from running longer, not from thinking harder.

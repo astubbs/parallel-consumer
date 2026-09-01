@@ -281,6 +281,24 @@ one running through this whole document: `paused()` is a consumer call, so only 
 may make it. The control thread reads a per-poll cache, which is safe only because its callers are
 heuristics where a spurious wakeup costs nothing.
 
+### What 3 and 4 have in common, which neither looks like on its own
+
+Both were framed as ordinary bugs - one "half a fix", one "probably a regression" - and that framing
+invites patching the first and reverting the second. Neither is what happened, and the reason is the
+same in both cases: **each kept a local copy of a fact something else already owned.** The counter
+mirrored what the mailbox could tell you; the flag mirrored what Kafka could tell you.
+
+So the fix in both was not to correct the mirror but to **delete it** and derive the answer at the
+point of use - the load gate by conservation, the pause by asking `consumer.paused()`. A corrected
+mirror still needs every future writer to remember to update it; a derived value cannot drift because
+there is nothing to drift from.
+
+**The tell, in advance:** a field whose bugs are all of the form "X changed and Y did not". That is
+not an accounting error to be balanced, it is a second source of truth asking to be removed. This
+repo's own architecture rule for it is `docs/refactoring.md`'s Actor/IPC section, and the general
+version is in the parallel-state guidance: when a subsystem keeps sprouting sync hooks, collapse the
+state rather than adding another.
+
 ## The close path: warnings a user cannot act on
 
 Seven WARN/ERROR lines fired during close. A WARN addresses the operator, but by then they have
@@ -402,8 +420,6 @@ log" silently changes what the query returns. Name the attempt explicitly.
   assumption. This document is the worked case of that rule being broken.
 - `docs/solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md` -
   the confluentinc#857 AB-BA cycle itself, and why it closes only in `PERIODIC_CONSUMER_SYNC`.
-- `docs/plans/2026-08-18-002-fix-857-revoke-path-cluster-decomposition-plan.md` - the four clusters in
-  astubbs/parallel-consumer#29 and the order to take them.
 - `docs/inflight/bug-857-transactional-revoke-wait.md` - the confluentinc#548 sleep-spin as it stands
   today, carrying astubbs/parallel-consumer#44.
 - `docs/refactoring.md` - the Actor/IPC section and the `refactor-thread-model-god-class` entry.
