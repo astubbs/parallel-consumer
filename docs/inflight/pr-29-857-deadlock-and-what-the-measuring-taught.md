@@ -66,6 +66,32 @@ true on 2026-08-18, and two of its four clusters have moved since (cluster 3 del
 cluster 4 resolved by deleting the mirror rather than gating it). Read it with this paragraph beside
 it.
 
+## MERGE IS PAUSED - operator decision, 2026-09-01
+
+**Do not merge this PR, and do not treat a green CI as clearing the hold.** It is paused until the
+`Performance Tests` failure is understood, because that failure is currently unexplained rather than
+merely inconvenient.
+
+What is ruled out, by measurement rather than argument: **lane composition** (the capacity profiles
+that shared a JVM with the throughput test are now `@Disabled` and cost 0.020s - it still failed) and
+**runner speed** (the neighbouring tests in the same run are within 5% of the passing baseline while
+the throughput test is 39% down; a slower machine slows everything proportionally).
+
+That leaves this branch's tree as the only remaining difference between a passing run and a failing
+one. It is **not** established - the instrument's own spread across identical code is 1.54x, and none
+of it reproduces on a development machine, where this tree gives 73,722 rec/s alone and 72,498 in the
+full lane.
+
+**An earlier claim on this branch that there is no product regression has been WITHDRAWN.** It rested
+on a local like-for-like pair, and was retracted once the neighbour timings showed the CI machines
+were comparable. Treat it as unproven in both directions.
+
+The measurement that would settle it - `MultiInstanceHighVolumeTest` alone, on CI, on this tree and on
+master, more than once per side - has never been run. It is owned by
+`handoff/enable-large-number-of-instances`, whose `docs/handoffs/perf-lane-throughput-shortfall.md`
+carries the full evidence.
+<!-- file-refs: N/A - names a document on another branch, which is where that work lives -->
+
 ## NEXT TASKS, in order
 
 **CLOSED 2026-08-31 - whether the fix covers the COOPERATIVE revoke path.** It was an inference

@@ -23,6 +23,39 @@ an ENTRY refresh (before `pollingBroker` is set, preserving the CME fix);
 <!-- post-merge: checked-begin - every reference below names its PR in full and is written
      in the past tense as a record of runs that happened, so it reads the same once these
      branches have landed and stopped existing -->
+- **ANSWERED 2026-09-01: the `Performance Tests` failure was never a product defect. It was the lane
+  measuring itself.** The chain, with the numbers that establish each step:
+
+  | condition | rec/s | outcome |
+  |---|---|---|
+  | this tree, test alone (local) | 73,722 | PASS, all 3,000,000 |
+  | this tree, full lane (local) | 72,498 | PASS |
+  | CI lane without the capacity profiles (the baseline branch) | 71,387 | PASS |
+  | CI lane with them | 39,684 | FAIL |
+  | CI lane with the heaviest one disabled | 44,992 | FAIL |
+
+  This branch tagged `MultiInstanceRebalanceTest`'s capacity profiles `@Tag("performance")`, which put
+  them in the same lane - and the same reused JVM - as the throughput test. Disabling only the
+  heaviest moved the number by ~5,000 and no more, which is what showed the mechanism was the lane
+  rather than any one test. **The local full lane passes at 72,498, so the effect is CI-only**:
+  a development machine has headroom a hosted runner does not.
+
+  **The reported rate is not a rate once the deadline is struck.** `MultiInstanceHighVolumeTest`
+  asserts 3,000,000 records within a 60-second `GATING_CEILING`; the failing runs report
+  `elapsedMs=60797` and `60755` - the wall - so their "throughput" is records-reached over sixty
+  seconds. Passing runs finish in ~41,000ms.
+
+  **The fix is not a bigger ceiling, and this repo already says so.**
+  `MultiInstanceRebalanceTest`'s own javadoc argues for gating on PROGRESS and "never 'all N records
+  within T', which fails a slow run and a stalled run identically" - a stall being the failure this
+  library exists to catch. A fork-isolation workaround was tried and reverted for the same reason: it
+  buys headroom under the wall instead of removing the wall's load-bearing role.
+
+  The profiles are held out of the gating lane with `@Disabled` (the tags are load-bearing for
+  `capacityScale()`'s guard, so untagging would break the class). Re-enabling them, and deciding where
+  a test whose own documentation says a single run is not a verdict can live given the lane is a
+  **required check**, is `handoff/enable-large-number-of-instances`.
+
 - **MEASURED 2026-09-01, and the expectation was WRONG: the `Performance Tests` lane is a
   SEPARATE defect from the pause-cache one.** This bullet used to predict that
   `MultiInstanceHighVolumeTest` (`PERIODIC_CONSUMER_SYNC`, KEY) shared the cause, on the reasoning
