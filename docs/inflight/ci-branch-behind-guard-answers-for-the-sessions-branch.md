@@ -11,6 +11,7 @@ branch the command never touches, and - the half nobody investigates - a silent 
 onto a branch that genuinely is behind its own remote, because the session's branch happened to be
 current.
 
+<!-- post-merge: checked-begin -->
 This is the same defect class astubbs/parallel-consumer#382 fixed in the two refusing guards and
 the two push reminders (mechanism:
 [`a-hook-processes-own-directory-describes-the-session-not-the-command-2026-08-31.md`](../solutions/workflow-issues/a-hook-processes-own-directory-describes-the-session-not-the-command-2026-08-31.md)).
@@ -23,6 +24,7 @@ test surface, not a rider.
 The fix inherits ready-made parts: the derivation order and its self-test idioms (the `-` cwd
 sentinel, the two-worktree fixture, the negative control asserting the pre-fix answer cannot
 reappear) are all in `bin/test-check-agent-hooks.sh` after astubbs#382. Because this hook refuses,
+<!-- post-merge: checked-end -->
 it inlines rather than sourcing `hook-common.sh` -
 [`ci-pr-lookup-is-copied-into-three-hooks.md`](ci-pr-lookup-is-copied-into-three-hooks.md) owns
 that dividing line and counts the copies.
