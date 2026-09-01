@@ -117,7 +117,8 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
         var failureMessage = StringUtils.msg("All keys sent to input-topic should be processed and produced, within time " +
                         "(expected: {} commit: {} order: {} max poll: {})",
                 expectedMessageCount, commitMode, order, maxPoll);
-        Instant waitStarted = Instant.now();
+        ThroughputReport.reporting("MultiInstanceHighVolumeTest", expectedMessageCount, consumedKeys::size,
+                () -> StringUtils.msg("commitMode={} order={} maxPoll={}", commitMode, order, maxPoll), () -> {
         try {
             waitAtMost(ceilingFor(expectedMessageCount))
                     // dynamic reason support still waiting https://github.com/awaitility/awaitility/pull/193#issuecomment-873116199
@@ -133,7 +134,6 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
                         all.assertAll();
                     });
         } catch (ConditionTimeoutException e) {
-            reportThroughput(expectedMessageCount, waitStarted, "FAILED");
             fail(failureMessage + "\n" + e.getMessage());
         } catch (TerminalFailureException e) {
             // The failFast arm above exits through THIS, not ConditionTimeoutException - Awaitility's
@@ -142,10 +142,9 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
             // reported no throughput at all, so bin/performance-test.sh printed NONE FOUND for a run
             // that had just measured a processor death - the exact case the on-failure figure exists
             // for. Rethrown unchanged: this reports, it does not soften the failure.
-            reportThroughput(expectedMessageCount, waitStarted, "FAILED");
             throw e;
         }
-        reportThroughput(expectedMessageCount, waitStarted, "PASSED");
+        });
 
         assertThat(processedCount.get())
                 .as("messages processed and produced by parallel-consumer should be equal")
@@ -165,11 +164,6 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
      * {@code key=value} line exists to remove. Both now say which they are, matching the
      * {@code PC-DEADLINE-HEADROOM} line the ambient probe emits.
      */
-    private void reportThroughput(int expectedMessageCount, Instant waitStarted, String outcome) {
-        ThroughputReport.report("MultiInstanceHighVolumeTest", consumedKeys.size(), expectedMessageCount,
-                waitStarted, StringUtils.msg("commitMode={} order={} maxPoll={} outcome={}",
-                        commitMode, order, maxPoll, outcome));
-    }
 
     private ParallelEoSStreamProcessor<String, String> buildPc(String inputTopicName, int maxPoll, ProcessingOrder order, CommitMode commitMode) {
         var pc = getKcu().buildPc(order, commitMode, maxPoll);
