@@ -470,8 +470,9 @@ co-residency explanation. **The deadlock this PR fixes is real and is being hit.
   where the AB-BA cycle cannot close and the transactional wait cannot run - *"either a fourth defect
   or something outside the product"*. astubbs#373's shard-counter fix was tested against it directly
   and **it fired anyway on that branch's own head**, so that fix is necessary-not-sufficient.
-- The unbounded transactional revoke wait, carrying astubbs#44 - the only issue upstream ever
-  labelled a verified bug. Its design decision is explicitly unsettled.
+- The unbounded transactional revoke wait, carrying astubbs#44 - which holds upstream's
+  `verified bug` label - one of a couple of dozen that carry it. Its design decision is explicitly
+  unsettled.
 - astubbs#175 and astubbs#177, two field reports of `Timeout waiting for commit response`, open for
   months with no reproduction attempt and no owner.
 - The no-rebalance pause described above.

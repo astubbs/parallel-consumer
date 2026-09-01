@@ -172,8 +172,9 @@ class ArchitectureTest {
      *
      * <p>{@code onPartitionsRevoked}'s {@code while (isTransactionCommittingInProgress())
      * Thread.sleep(100)} is unbounded and transactional-mode only. It arrived as confluentinc#548's
-     * fix and is now the defect behind astubbs/parallel-consumer#44 - the only issue upstream ever
-     * labelled a verified bug. Tracked in {@code docs/inflight/bug-857-transactional-revoke-wait.md};
+     * fix and is now the defect behind astubbs/parallel-consumer#44 - which holds upstream's
+     * {@code verified bug} label - one of a couple of dozen that carry it. Tracked in
+     * {@code docs/inflight/bug-857-transactional-revoke-wait.md};
      * remove this entry when that lands.
      */
     private static final Set<String> KNOWN_BLOCKING_VIOLATIONS = new HashSet<>(Arrays.asList(
