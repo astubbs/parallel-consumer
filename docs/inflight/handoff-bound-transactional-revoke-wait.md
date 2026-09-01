@@ -40,7 +40,11 @@ which is open.
 
 ## Current state
 
-**Nothing is started.** No code exists anywhere for this.
+**A reproducer exists; the fix does not.** `Revoke857TransactionalWaitProbeIT` (added 2026-09-01)
+forces the window open and measures the overrun - 5/5 fail on the defect arm at 79s against a 10s
+`max.poll.interval.ms`, 5/5 pass on the control arm. It is an instrument, expected to fail, and is
+not wired into any lane. No main-code change exists, and **the design decision below is still
+open** - though the probe's 79s result now rules out bounding a single transaction as a fix.
 
 - `fix/bound-revoke-transaction-wait` is an **empty branch** cut from an old master - no commits, no
   PR. It is held by the `.claude/worktrees/revoke-wait` worktree (machine-local). Either reset it

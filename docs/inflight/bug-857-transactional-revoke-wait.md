@@ -85,6 +85,15 @@ The candidate is to deadline the **holder** instead - bound the control thread, 
 transaction and can abort itself - rather than the revoke callback that merely notices the overrun.
 Not agreed with the user.
 
+**A measurement now constrains that decision.** `Revoke857TransactionalWaitProbeIT` reproduces the
+overrun, and on the defect arm the callback held the poll thread **79s** against a 10s
+`max.poll.interval.ms` - from a dwell of only 20s. With a 1s commit interval the control thread
+re-takes the write lock as fast as it drops it, so the waiter is starved across *successive*
+transactions and `isTransactionCommittingInProgress()` never reads false long enough to exit the
+loop. **Bounding any single transaction therefore does not fix this**: the deadline has to sit on
+the wait itself, or on the holder's willingness to keep re-acquiring. The probe's javadoc carries
+the full calibration for both arms.
+
 Proceeding past the wait is separately unsafe until producer fencing is recoverable:
 `ProducerFencedException` is wrapped in `InternalRuntimeException` and kills the instance. See
 [`core-recoverable-producer-fencing.md`](core-recoverable-producer-fencing.md) and astubbs#225.
