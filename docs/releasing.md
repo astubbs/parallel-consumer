@@ -172,8 +172,8 @@ it - and a human should re-apply it before freezing:
   and names the construct and the line when it does, which is why the rejection list is **not
   copied here**: `bin/release-notes.py`'s own `UNSUPPORTED` table owns it, and a second copy would
   go stale the first time the table grows. `bin/test-release-notes.sh` runs the renderer over every
-  section of this file on each PR, via `bin/check-all.sh --with-tests` in `repo-hygiene.yml`, so a
-  section reaching for something unsupported fails in CI rather than on the release page.
+  section of `CHANGELOG.adoc` on each PR, via `bin/check-all.sh --with-tests` in `repo-hygiene.yml`,
+  so a section reaching for something unsupported fails in CI rather than on the release page.
 
 ## The `PR Checklist` changelog gate is a different, narrower check
 

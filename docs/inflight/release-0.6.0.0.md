@@ -34,17 +34,13 @@ the job summary.
 
 ## Bugs found while triaging the upstream mirrors (2026-08-05)
 
-None of these has an issue of its own - they were found by reading code to diagnose something else.
+This has no issue of its own - it was found by reading code to diagnose something else.
 
-1. **`PCModule#initDynamicLoadFactor` builds `new DynamicLoadFactor(staticLoadFactor, staticLoadFactor)`** when
-   `messageBufferSize` is set, so `isMaxReached()` is true from startup and
-   `AbstractParallelEoSStreamProcessor` logs *"Max loading factor steps reached"* at WARN on
-   every control-loop pass. Anyone following the README's buffer-tuning advice gets permanent log
-   noise reporting a non-problem. Related: astubbs#155.
-2. **MDC context is not propagated into the worker pool.** PC sets its own `pcId` and `offset` keys
-   but never captures the caller's context map at submit time (no `copyOfContextMap` anywhere), so a
-   caller's `trace_id` is lost crossing into the worker threads and the vert.x event loop. Raised by
-   a user in the `confluentinc#907` thread (astubbs#195).
+- **`PCModule#initDynamicLoadFactor` builds `new DynamicLoadFactor(staticLoadFactor, staticLoadFactor)`** when
+  `messageBufferSize` is set, so `isMaxReached()` is true from startup and
+  `AbstractParallelEoSStreamProcessor` logs *"Max loading factor steps reached"* at WARN on
+  every control-loop pass. Anyone following the README's buffer-tuning advice gets permanent log
+  noise reporting a non-problem. Related: astubbs#155, with the fix on astubbs#201.
 
 ## Marked for 0.6.0.0
 
