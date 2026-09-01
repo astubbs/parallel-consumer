@@ -66,12 +66,21 @@ esac
 # is how two copies of a scan start disagreeing. An empty line is a real answer - "the command did
 # not say" - and the working-directory arm below is what turns each one into a message.
 scan="$(printf '%s' "$payload" | python3 -c '
-import json, shlex, sys
+import json, os, shlex, sys
 try:
     data = json.load(sys.stdin)
     cmd = data.get("tool_input", {}).get("command", "")
     payload_cwd = data.get("cwd") or ""
-    toks = shlex.split(cmd)
+    # OPERATOR-AWARE, INCLUDING NEWLINE, the same lexer pre-commit-gate.sh uses. Plain shlex.split
+    # left operators fused to their neighbours (`feature&&git` read as a branch name) and treated a
+    # line break as whitespace, so `git push -f<newline>git log -1` swallowed the next command as
+    # push arguments and named `log` as the branch - a confident wrong answer, found by two
+    # reviewers at once on astubbs/parallel-consumer#382. A QUOTED newline is untouched: posix
+    # shlex keeps quoted text one token, so a multiline commit message still lexes as one argument.
+    lex = shlex.shlex(cmd, posix=True, punctuation_chars="();<>|&;\n")
+    lex.whitespace = " \t\r"
+    lex.whitespace_split = True
+    toks = list(lex)
 except Exception:
     sys.exit(0)
 
@@ -79,7 +88,7 @@ FORCE = {"--force", "-f", "--force-with-lease", "--force-if-includes"}
 # Push options that consume a SEPARATE value token. Dropping only the flag would leave its value
 # where the repository or the refspec should be.
 PUSH_VALUE_FLAGS = {"-o", "--push-option", "--receive-pack", "--exec", "--repo"}
-OPERATORS = set("();<>|&")
+OPERATORS = set("();<>|&\n")  # must name the same characters as the lexer punctuation above
 
 
 def push_head_ref(rest, sub):
@@ -125,24 +134,84 @@ def push_head_ref(rest, sub):
         name = name[len("refs/heads/"):]
     if not name or name == "HEAD" or name.startswith("refs/"):
         return ""
+    # A `$` or backtick is unexpanded SOURCE TEXT, not the branch git will see - answering with the
+    # literal is the confident-wrong-answer class this hook exists to kill. Fall back to the
+    # labelled inferred tier instead. Mirrored in hook_push_head_ref (hook-common.sh).
+    if "$" in name or "`" in name:
+        return ""
     return name
 
 
 # A LEADING `cd <path> &&` IS THE COMMAND SAYING WHERE IT RUNS, and it outranks the payload cwd for
-# exactly that reason. Only a LEADING one: a `cd` later in a compound command may be undoing an
-# earlier one, and guessing which is worse than not guessing. The trailing strip handles the
-# unspaced `cd path&& git ...` that plain shlex fuses into one token.
+# exactly that reason. Only a LEADING one, AND ONLY WHEN IT IS THE ONLY ONE: this used to trust the
+# first `cd` unconditionally, but `cd A && x && cd B && git commit --amend` runs the amend in B, and
+# presenting A as "the directory the command changes into" is a measured-sounding wrong answer -
+# the exact class this hook exists to kill (reliability review, astubbs/parallel-consumer#382,
+# reproduced with the real tokeniser). With more than one command-position `cd` the honest answer
+# is "ambiguous", so this falls through to the payload cwd, whose label already says it is a guess.
+# The unspaced `cd path&&git ...` form is handled by the operator-aware lexer above.
 cd_prefix = ""
-if len(toks) > 1 and toks[0] == "cd" and not toks[1].startswith("-"):
-    cd_prefix = toks[1].rstrip(";&|")
+cd_count = 0
+at_cmd = True
+for t in toks:
+    if t and all(c in OPERATORS for c in t):
+        at_cmd = True
+        continue
+    if at_cmd and t == "cd":
+        cd_count += 1
+    at_cmd = False
+if cd_count == 1 and len(toks) > 1 and toks[0] == "cd" and not toks[1].startswith("-"):
+    cd_prefix = toks[1]
+
+
+def resolve_against(path, base):
+    """A RELATIVE command-named path is relative to where the COMMAND runs - the payload cwd -
+    never to this hook process, whose directory describes the session. `parallel-consumer-core`
+    exists in every worktree of this repository, so testing a relative path from the wrong
+    directory SUCCEEDS on the wrong tree rather than failing. Unresolvable (no base to anchor it)
+    returns "", which drops to the next, labelled tier rather than guessing
+    (astubbs/parallel-consumer#382, found cross-model)."""
+    if not path:
+        return ""
+    if os.path.isabs(path):
+        return path
+    if base:
+        return os.path.join(base, path)
+    return ""
+
+
+cd_prefix = resolve_against(cd_prefix, payload_cwd)
 
 verdict = ""
 ref = ""
+git_c = ""
 for i, t in enumerate(toks):
     if t.rsplit("/", 1)[-1] != "git":
         continue
     rest = toks[i+1:]
-    sub = next((x for x in rest if not x.startswith("-")), None)
+    # GLOBAL FLAGS THAT TAKE A VALUE, skipped WITH their value - `git -C /path push --force` put
+    # "/path" where the subcommand should be, so the guard matched nothing and a force-push
+    # sailed through in silence (correctness review, astubbs/parallel-consumer#382; the same
+    # defect hook_git_invocations records for the reminders). `-C` is also RECORDED: it is the
+    # command relocating itself, the strongest working-directory statement available. The walk
+    # stops at an operator so the next command cannot donate a subcommand.
+    GIT_VALUE_FLAGS = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path")
+    sub = None
+    j = 0
+    while j < len(rest):
+        x = rest[j]
+        if x and all(c in OPERATORS for c in x):
+            break
+        if x in GIT_VALUE_FLAGS:
+            if x == "-C" and j + 1 < len(rest):
+                git_c = rest[j + 1]
+            j += 2
+            continue
+        if x.startswith("-"):
+            j += 1
+            continue
+        sub = x
+        break
     flags = set(rest)
     # An env-prefixed override reaches here as a token, not as process env.
     if any(x == "REWRITE_HISTORY_CONFIRMED=1" for x in toks):
@@ -181,14 +250,18 @@ for i, t in enumerate(toks):
         verdict, ref = "remote branch deletion", push_head_ref(rest, sub); break
 
 if verdict:
+    # `git -C <rel>` is relative to where git runs - after any leading `cd` - so it anchors to the
+    # resolved cd_prefix first and the payload cwd second.
+    git_c = resolve_against(git_c, cd_prefix or payload_cwd)
     print(verdict)
     print(ref)
     print(cd_prefix)
     print(payload_cwd)
+    print(git_c)
 ' 2>/dev/null || true)"
 # A HERESTRING, NOT A HEREDOC: an unquoted heredoc would expand `$` and `\` inside a path, and a
 # quoted one would not expand `$scan` at all. `IFS=` keeps a path's own leading spaces.
-{ IFS= read -r verdict; IFS= read -r pushed_ref; IFS= read -r cd_prefix; IFS= read -r payload_cwd; } <<<"$scan"
+{ IFS= read -r verdict; IFS= read -r pushed_ref; IFS= read -r cd_prefix; IFS= read -r payload_cwd; IFS= read -r git_c_dir; } <<<"$scan"
 [ -n "$verdict" ] || exit 0
 
 # WHERE THE COMMAND RUNS IS NOT WHERE THIS HOOK RUNS - see the header. Strongest source first, and
@@ -196,7 +269,10 @@ if verdict:
 # whose provenance is hidden.
 workdir=""
 workdir_desc=""
-if [ -n "$cd_prefix" ] && [ -d "$cd_prefix" ]; then
+if [ -n "$git_c_dir" ] && [ -d "$git_c_dir" ]; then
+    workdir="$git_c_dir"
+    workdir_desc="the directory the command names with -C"
+elif [ -n "$cd_prefix" ] && [ -d "$cd_prefix" ]; then
     workdir="$cd_prefix"
     workdir_desc="the directory the command changes into"
 elif [ -n "$payload_cwd" ] && [ -d "$payload_cwd" ]; then

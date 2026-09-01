@@ -2057,10 +2057,15 @@ hb_other="$(mktemp -d)"
   git -c user.email=selftest@example.invalid -c user.name=selftest commit -qm "fixture"
 )
 
-hb_fire() { # <command> [payload-cwd] -> stdout of the hook
+hb_fire() { # <command> [payload-cwd | "-" to omit the cwd field] -> stdout of the hook
     : > "$hb_stub/argv.log"
-    printf '{"tool_name":"Bash","cwd":"%s","tool_input":{"command":"%s"}}' "${2:-$PWD}" "$1" \
-        | PATH="$hb_stub:$PATH" bash "$HIST_HOOK" 2>/dev/null
+    if [ "${2:-}" = "-" ]; then
+        printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$1" \
+            | PATH="$hb_stub:$PATH" bash "$HIST_HOOK" 2>/dev/null
+    else
+        printf '{"tool_name":"Bash","cwd":"%s","tool_input":{"command":"%s"}}' "${2:-$PWD}" "$1" \
+            | PATH="$hb_stub:$PATH" bash "$HIST_HOOK" 2>/dev/null
+    fi
 }
 hb_head() { stub_head_arg "$hb_stub/argv.log"; }
 
@@ -2099,6 +2104,62 @@ hb_out="$(hb_fire 'git commit --amend --no-edit' "$hb_other")"
 assert "an amend is looked up in the tool call's own directory" selftest/other-worktree "$(hb_head)"
 case "$hb_out" in *"$hb_other"*) got=names_the_directory ;; *) got=unattributed ;; esac
 assert "the refusal names the directory it derived the branch from" names_the_directory "$got"
+
+# THE REVIEW ROUND ON astubbs/parallel-consumer#382, pinned. Each of these was a way for this
+# refusing guard to answer about the wrong thing - or not answer at all - found by fresh reviewers
+# and an independent cross-model pass after the first fix landed.
+
+# `git -C <path>` used to put the path where the subcommand should be, so the guard matched NOTHING
+# and a force-push sailed through in silence - a total bypass of the thing this hook refuses.
+hb_out="$(hb_fire "git -C $hb_other push --force origin feats/elsewhere")"
+[ -n "$hb_out" ] && got=DENY || got=ALLOW
+assert "git -C <path> push --force is not a silent bypass" DENY "$got"
+assert "and its refspec still names the branch" feats/elsewhere "$(hb_head)"
+hb_out="$(hb_fire "git -C $hb_other commit --amend --no-edit")"
+assert "git -C relocates the amend lookup to THAT worktree" selftest/other-worktree "$(hb_head)"
+
+# A NEWLINE is a command boundary, not whitespace: `git push -f<newline>git log -1` used to swallow
+# the next command as push arguments and name `log` as the branch - a confident wrong answer where
+# the honest one is the labelled fallback.
+hb_out="$(hb_fire 'git push -f\ngit log -1')"
+assert "a newline-separated payload does not donate a fake branch" "$hb_cwd_branch" "$(hb_head)"
+case "$hb_out" in *"DOES NOT NAME A BRANCH"*) got=says_it_guessed ;; *) got=presented_as_fact ;; esac
+assert "and that fallback says the branch was not named" says_it_guessed "$got"
+hb_fire 'git push --force origin feats/real\ngit log' >/dev/null
+assert "a real refspec before a newline still wins" feats/real "$(hb_head)"
+
+# UNSPACED OPERATORS stay operators: `feature&&git` is not a branch name.
+hb_fire 'git push --force origin feats/spliced&&git status' >/dev/null
+assert "an unspaced && does not fuse into the branch name" feats/spliced "$(hb_head)"
+
+# TWO command-position `cd`s are AMBIGUOUS - the amend may run in either - so the guard must fall
+# back to the payload cwd, whose label already says it is a guess, rather than presenting the
+# FIRST cd as the directory the command changes into.
+hb_dead="$(mktemp -d)"
+hb_fire "cd $hb_dead && echo x && cd $hb_other && git commit --amend --no-edit" "$hb_other" >/dev/null
+assert "two cds fall back to the payload cwd, not the first cd" selftest/other-worktree "$(hb_head)"
+rm -rf "$hb_dead"
+
+# A RELATIVE `cd` is relative to where the COMMAND runs. The hook process sits elsewhere, so
+# resolving it from the hook's own directory would test the wrong tree - and succeed, because
+# same-named subdirectories exist in every worktree of this repository.
+( cd "$hb_other" && mkdir -p relsub && cd relsub && : > .keep )
+hb_fire 'cd relsub && git commit --amend --no-edit' "$hb_other" >/dev/null
+assert "a relative cd resolves against the payload cwd" selftest/other-worktree "$(hb_head)"
+
+# THE LAST-RESORT TIER: no refspec, no cd, no payload cwd leaves only the hook process's own
+# directory, and the refusal must SAY that is what it used - the least trustworthy answer in the
+# derivation order, which is exactly why its label has to survive.
+hb_out="$(hb_fire 'git commit --amend --no-edit' -)"
+case "$hb_out" in *"this hook process's directory"*) got=labelled_last_resort ;; *) got=unlabelled ;; esac
+assert "with no cwd at all, the hook-directory fallback is labelled" labelled_last_resort "$got"
+
+# AN UNEXPANDED $VAR is source text, not a branch - fall back with the label, never assert the
+# literal.
+hb_out="$(hb_fire 'git push --force origin $TARGET_BRANCH')"
+assert "an unexpanded \$VAR refspec falls back to this directory" "$hb_cwd_branch" "$(hb_head)"
+case "$hb_out" in *"DOES NOT NAME A BRANCH"*) got=says_it_guessed ;; *) got=presented_as_fact ;; esac
+assert "and the \$VAR fallback is labelled as a guess" says_it_guessed "$got"
 
 rm -rf "$hb_stub" "$hb_other"
 cd "$hb_prev_cwd" || exit 1
