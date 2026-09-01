@@ -25,6 +25,13 @@
 //      projection chosen because summing in awk was easy; keeping the rows costs nothing here and
 //      lets a later question be asked without re-mining the logs.
 //
+// WHY NODE AND NOT PYTHON, which is a fair question and is settled by the repo rather than by taste:
+// .github/scripts/ already holds eight JS gate implementations, each with a .test.js sibling
+// (file-ref-gate, issue-ref-gate, changelog-ref-gate, roadmap-stage-gate), against exactly one Python
+// file in the whole tree. Node is the established second language here AND already carries the
+// testing convention these scripts lack; Python would be the outlier. That is consistency, not a new
+// dependency.
+//
 // WHAT SHELLING OUT STILL HAPPENS, so the comparison is honest: `gh` for the API (it owns auth) and
 // `unzip` for the archive (Node has no bundled zip reader, and adding a dependency to bin/ is a bigger
 // decision than this spike gets to make). Everything else - parsing, grouping, medians, TSV - is
