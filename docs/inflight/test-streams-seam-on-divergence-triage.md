@@ -49,9 +49,9 @@ Each is defined by a `seam-on-divergence-class:` marker below and applied by
 loses a race is not a property of the diagnosis.
 
 <!-- seam-on-divergence-class: asynchronous-dispatch = Kafka's test drives the task synchronously - addRecords, then process(), then assert - and asserts state that only a record processed BEFORE process() returns can produce. Under PC dispatch the record is registered with the WorkManager and run on a worker, so within the test's synchronous window the partition group is empty, the processor has not run, and whatever it would have thrown has not been thrown yet. -->
-<!-- seam-on-divergence-class: stream-time-never-advances = stream time advances inside PartitionGroup.nextRecord(), which the PC path does not go through, so a STREAM_TIME punctuator never fires and anything gated on the clock reads zero. -->
-<!-- seam-on-divergence-class: exception-type-lost-in-the-worker = an exception raised inside a processor is caught by the worker, delivered one or more pump cycles later and wrapped in a StreamsException, so Kafka's TaskManager never sees the type it dispatches recovery on. -->
 <!-- seam-on-divergence-class: split-poll-wait = wake-on-work split the poll wait into a short poll plus a wait on our own condition, which changes what one iteration of the main loop is and what timeout the consumer is polled with. -->
+<!-- seam-on-divergence-class: stream-time-lags-in-flight-work = stream time on the PC path is a low-water mark that deliberately never passes a record still in flight, so a punctuation cannot close a window over work still inside the chain. Kafka's test adds records, calls process() once and asserts the punctuation stock produces because stock finished processing inside that call. The mark is therefore behind by the records the workers have not finished, and the punctuation is late rather than lost. -->
+<!-- seam-on-divergence-class: processing-threads-mode = Kafka's private processing-threads config, where DefaultTaskExecutor calls task.process from its own thread rather than the StreamThread. Named as out of scope in PcTaskDispatcher's threading contract since the seam landed, and unreachable by default. Only the parameterisations that enable it diverge. -->
 
 **`asynchronous-dispatch`** is the largest and the least interesting: it is the seam working. These
 cases are not evidence of a defect and they are not going to be fixed - Kafka's unit tests assume
@@ -62,13 +62,44 @@ in a way that survives asynchrony. One sub-shape is worth naming because it look
 `ProcessorStateException`, which is the task-lifecycle rung's `validateClean` correctly noticing work
 still in flight.
 
-**`stream-time-never-advances`** is owned by the stream-time and punctuation rung. When that lands,
-these entries should be deleted by the PR that closes them - and the lane will report any that stop
-matching, so a stale one is visible rather than silent.
+## Two classes were retired at the reconciliation, and the retirement was a MEASUREMENT
 
-**`exception-type-lost-in-the-worker`** is owned by the error-surfacing rung and is the third reason
-the dispatch default is off; astubbs/parallel-consumer#394's body diagnoses it in full, with a
-before/after control arm showing this case failing identically on both sides of that rung.
+`stream-time-never-advances` and `exception-type-lost-in-the-worker` were owned by the stream-time
+rung (astubbs/parallel-consumer#396) and the error-surfacing rung
+(astubbs/parallel-consumer#395). Both are gone from the list above, and what replaced them was
+established rather than assumed.
+
+**The method.** The entries were deleted FIRST and the lane re-run, so a mechanism that had not
+actually been closed would match nothing and be reported as unexplained instead of quietly keeping
+its old label. Then, because a failure seen on one branch says nothing about that branch, a
+**control arm** was run: the same seam-on suite at astubbs/parallel-consumer#396's own tip, in a
+detached worktree - which carries the stream-time work and NOT the error-surfacing work, so the one
+term that differs from the reconciled tree is the reconciliation itself.
+
+| Case | Control arm (the sibling's own tip) | Reconciled tree | Reading |
+|---|---|---|---|
+| `StreamThreadTest#shouldReinitializeRevivedTasksInAnyState` | fails on **all three** parameters | passes on `[1]` and `[2]`, fails on `[3]` | the error-surfacing fix is present and did exactly what its rung claimed; `[3]` is the processing-threads mode |
+| `StreamTaskTest#shouldRecordBufferedRecords` | fails, `2.0` against `0.0` | **passes** | the backpressure work closed it - so its entry above is deleted, on this evidence rather than on one stale-report line |
+| `StreamThreadTest#shouldPunctuateActiveTask` | passes | passes | closed on the stream-time rung already |
+| `StreamThreadTest#shouldPunctuateWithTimestampPreservedInProcessorContext` | passes | passes | same |
+| `StreamTaskTest#shouldPunctuateOnceStreamTimeAfterGap` | fails, `7` against **`0`** | fails, `7` against **`6`** | the clock is no longer stuck; the mark is one record behind |
+| `StreamTaskTest#shouldRespectPunctuateCancellationStreamTime` | fails, `false` against `true` | fails, `true` against `false` | the failing assertion **changed sides** - a different line of the test, so a different behaviour |
+
+**Nothing was lost by the merge**: every case is the same or better than at the sibling's own tip.
+The two that still diverge are a NARROWED residue with a different mechanism, which is why they are
+re-attributed to `stream-time-lags-in-flight-work` above rather than left under a name that is no
+longer true. Reading `0` punctuations as "the clock never moves" and `6 of 7` as the same thing
+would have hidden the whole of the stream-time rung's effect.
+
+**`stream-time-lags-in-flight-work` is the seam's own guarantee, seen from Kafka's suite.** It is
+not a defect to fix, and the design would be worse without it - a punctuation that closed a window
+over records still inside the processor chain is exactly what the low-water mark exists to prevent.
+What it IS is a user-visible divergence in the direction the module's own documentation did not
+previously state: astubbs/parallel-consumer#396 pinned the mark *overtaking* stock as a known
+divergence, and this is the mark *lagging* it. That gap is what
+[`core-streams-punctuation-diverges-in-three-measured-ways.md`](core-streams-punctuation-diverges-in-three-measured-ways.md)
+now owns - that note already listed the lag as a measurement it owed, and this run supplied it - and
+it is the named trigger the dispatch default is waiting on.
 
 **`split-poll-wait`** has never had a seam-on measurement of its own. Both entries are consistent
 with the mechanism - one asserts a main-loop iteration count, the other asserts the duration the
@@ -78,7 +109,6 @@ which is what would settle it. That is the strongest open item in this note.
 <!-- seam-on-divergence: org.apache.kafka.streams.processor.internals.StreamTaskTest#shouldProcessInOrder = asynchronous-dispatch -->
 <!-- seam-on-divergence: org.apache.kafka.streams.processor.internals.StreamTaskTest#shouldBeProcessableIfAllPartitionsBuffered = asynchronous-dispatch -->
 <!-- seam-on-divergence: org.apache.kafka.streams.processor.internals.StreamTaskTest#shouldPauseAndResumeBasedOnBufferedRecords = asynchronous-dispatch -->
-<!-- seam-on-divergence: org.apache.kafka.streams.processor.internals.StreamTaskTest#shouldRecordBufferedRecords = asynchronous-dispatch -->
 <!-- seam-on-divergence: org.apache.kafka.streams.processor.internals.StreamTaskTest#shouldRecordE2ELatencyOnSourceNodeAndTerminalNodes = asynchronous-dispatch -->
 <!-- seam-on-divergence: org.apache.kafka.streams.processor.internals.StreamTaskTest#shouldProcessRecordsAfterPrepareCommitWhenEosDisabled = asynchronous-dispatch -->
 <!-- seam-on-divergence: org.apache.kafka.streams.processor.internals.StreamTaskTest#shouldResumePartitionWhenSkippingOverRecordsWithInvalidTs = asynchronous-dispatch -->
@@ -90,15 +120,15 @@ which is what would settle it. That is the strongest open item in this note.
 <!-- seam-on-divergence: org.apache.kafka.streams.processor.internals.StreamThreadTest#shouldLogAndRecordSkippedMetricForDeserializationException = asynchronous-dispatch -->
 <!-- seam-on-divergence: org.apache.kafka.streams.processor.internals.StreamThreadTest#shouldLogAndRecordSkippedRecordsForInvalidTimestamps = asynchronous-dispatch -->
 
-<!-- seam-on-divergence: org.apache.kafka.streams.processor.internals.StreamTaskTest#shouldRespectPunctuateCancellationStreamTime = stream-time-never-advances -->
-<!-- seam-on-divergence: org.apache.kafka.streams.processor.internals.StreamTaskTest#shouldPunctuateOnceStreamTimeAfterGap = stream-time-never-advances -->
-<!-- seam-on-divergence: org.apache.kafka.streams.processor.internals.StreamThreadTest#shouldPunctuateActiveTask = stream-time-never-advances -->
-<!-- seam-on-divergence: org.apache.kafka.streams.processor.internals.StreamThreadTest#shouldPunctuateWithTimestampPreservedInProcessorContext = stream-time-never-advances -->
 
-<!-- seam-on-divergence: org.apache.kafka.streams.processor.internals.StreamThreadTest#shouldReinitializeRevivedTasksInAnyState = exception-type-lost-in-the-worker -->
 
 <!-- seam-on-divergence: org.apache.kafka.streams.processor.internals.StreamThreadTest#shouldRespectNumIterationsInMainLoopWithoutProcessingThreads = split-poll-wait -->
 <!-- seam-on-divergence: org.apache.kafka.streams.processor.internals.StreamThreadTest#shouldRespectPollTimeInPartitionsAssignedStateWithStateUpdater = split-poll-wait -->
+
+<!-- seam-on-divergence: org.apache.kafka.streams.processor.internals.StreamTaskTest#shouldPunctuateOnceStreamTimeAfterGap = stream-time-lags-in-flight-work -->
+<!-- seam-on-divergence: org.apache.kafka.streams.processor.internals.StreamTaskTest#shouldRespectPunctuateCancellationStreamTime = stream-time-lags-in-flight-work -->
+
+<!-- seam-on-divergence: org.apache.kafka.streams.processor.internals.StreamThreadTest#shouldReinitializeRevivedTasksInAnyState = processing-threads-mode -->
 
 ## The finding this triage produced, and it contradicts an inherited one
 

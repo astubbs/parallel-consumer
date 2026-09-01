@@ -25,7 +25,7 @@ time rather than at runtime when the change stops applying.
 -Dpc.streams.dispatch.enabled=true
 ```
 
-**The seam is OFF by default. This is an opt-in preview** - and the reason has now changed twice.
+**The seam is OFF by default. This is an opt-in preview** - and the reason has now changed three times.
 Each time, the measurement that closed one reason named the next, which is worth reading rather than
 skipping.
 
@@ -56,17 +56,32 @@ and the seam-on measurement, taken before and after with nothing else changed, s
 `StreamThreadTest.shouldReinitializeRevivedTasksInAnyState` green on both parameter combinations this
 module supports, with no case that passed before regressing.
 
-**So why is it still off?** Because the flip is a decision about the *reconciled* module, not about
-any one piece of work in flight against it, and the seam-on numbers move with every rung. There is
-also one still-unrefused item left on this path - stream-time punctuation - which belongs to a
-different piece of work and is listed under
-[What is still unsupported and NOT refused](#what-is-still-unsupported-and-not-refused). What holds
-the default now is therefore a *reconciliation step* rather than a named defect, and that is written
-down in
-[`docs/inflight/streams-dispatch-default-flip-is-reserved-until-the-rungs-reconcile.md`](../docs/inflight/streams-dispatch-default-flip-is-reserved-until-the-rungs-reconcile.md).
+**Reason four, open: `STREAM_TIME` punctuation lags stock by the work still in flight.** The flip
+was always a decision about the *reconciled* module rather than about any one rung, because the
+seam-on numbers move with each of them - so the measurement was re-taken once the rungs were
+merged, and it named a fourth reason exactly as the previous three had.
+
+Kafka's own `StreamTaskTest.shouldPunctuateOnceStreamTimeAfterGap` produces six of the seven
+punctuations stock produces, and `shouldRespectPunctuateCancellationStreamTime` now fails a
+different assertion than it did before stream time worked at all. Both add records, call
+`process()` once, and assert what stock produces because stock finished processing inside that
+call. **This is the low-water mark working**: it deliberately never passes a record still in
+flight, which is what stops a punctuation closing a window over work still inside the chain. It is
+still a divergence a user gets silently, and it runs in the direction this README does not state -
+[Stream time](#stream-time) pins the mark *overtaking* stock
+as the known divergence and says nothing about it lagging. Turning the default on while half of a
+two-directional divergence is undocumented would ship a config whose docs are half true.
+
+Closing it needs no code fix. It needs the lagging direction recorded to the same standard as the
+overtaking one - a bound on how far behind the mark can be, or an honest statement that none is
+known. That, and the control arm that established this is the seam and not the reconciliation, are
+in
+[`docs/inflight/core-streams-punctuation-diverges-in-three-measured-ways.md`](../docs/inflight/core-streams-punctuation-diverges-in-three-measured-ways.md)
+and
+[`docs/inflight/test-streams-seam-on-divergence-triage.md`](../docs/inflight/test-streams-seam-on-divergence-triage.md).
 
 Whoever moves the default should re-run the seam-on measurement rather than trusting this section -
-three times now it has named the next reason, so treat "no reason left" as something to show rather
+four times now it has named the next reason, so treat "no reason left" as something to show rather
 than assume.
 
 Three further switches, all process-wide for the reason given in

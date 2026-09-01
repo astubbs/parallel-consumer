@@ -31,9 +31,11 @@
         rebalance carries PC's assignment with it. Nor does exception surfacing: a control-flow
         exception raised inside a processor now keeps its type and reaches Kafka's recovery from the
         pump that dispatched the record, nothing commits past a worker failure, and inflow is bounded
-        by the same buffered.records.per.partition stock uses. What the default waits on now is a
-        reconciliation step rather than a named defect - the seam-on measurement has to be re-taken on
-        the merged module. PcDispatchSwitch's javadoc owns that decision and the measurement behind it.
+        by the same buffered.records.per.partition stock uses. The reconciliation measurement has now
+        been taken on the merged module and the default did not move: Kafka's own suite, run with the
+        seam on, says STREAM_TIME punctuation lags stock by the work still in flight - which is the
+        low-water mark doing its job, and a divergence in the direction this module's documentation
+        does not yet state. PcDispatchSwitch's javadoc owns that decision and the measurement behind it.
 
         Build machinery: the named classes are unpacked from the published kafka-streams sources jar,
         a tracked patch is applied, and the result is compiled into this module's own target/classes,

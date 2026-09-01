@@ -68,17 +68,40 @@ package bz.stub.parallelconsumer.streams;
  * them.</b> Each rung left the default where it found it, and each was right to: a default moved on one
  * rung's evidence while a sibling holds an unclosed reason is a default nobody measured.
  * <p>
- * <b>What remains, and why it is not a fourth trigger.</b>
+ * <b>THE RECONCILED MEASUREMENT HAS NOW BEEN TAKEN, AND IT NAMED A FOURTH REASON. The default stays
+ * OFF.</b> Every rung above declined to move it on its own evidence and reserved the decision for the
+ * merged module, because the seam-on numbers move with each of them. Merged, Kafka's own suite was run
+ * twice through the evidence lane - seam off as the control arm, seam on as the measurement - and two
+ * punctuation cases still diverge: {@code StreamTaskTest.shouldPunctuateOnceStreamTimeAfterGap} produces
+ * six of stock's seven punctuations, and {@code shouldRespectPunctuateCancellationStreamTime} fails a
+ * different assertion than it did before stream time worked at all. Both add records, call
+ * {@code process()} once, and assert what stock produces because stock finished processing inside that
+ * call.
+ * <p>
+ * <b>That is the low-water mark doing its job</b> - it never passes a record still in flight, which is
+ * what stops a punctuation closing a window over work still inside the processor chain - <b>and it is
+ * still a divergence a user gets silently, in the direction the module's own documentation did not
+ * state.</b> The README and {@code CONCEPTS.md} pin the mark <em>overtaking</em> stock as the known
+ * divergence and say nothing about it lagging. Turning the default on while half of a two-directional
+ * divergence is undocumented ships a config whose docs are half true, so it is not being turned on.
+ * Closing it needs no code fix: it needs the lagging direction recorded to the same standard as the
+ * overtaking one. Owned by
+ * {@code docs/inflight/core-streams-punctuation-diverges-in-three-measured-ways.md}, with the
+ * attribution and its control arm in
+ * {@code docs/inflight/test-streams-seam-on-divergence-triage.md}.
+ * <p>
+ * <b>What did NOT hold it, and the control arm that says so.</b>
  * {@code shouldReinitializeRevivedTasksInAnyState}'s third parameter combination stays red under Kafka's
  * private processing-threads config, where {@code DefaultTaskExecutor} calls {@code task.process} from its
  * own thread - out of scope since the seam landed, and named as such in {@link PcTaskDispatcher}'s
- * threading contract.
+ * threading contract. The same run was checked against the stream-time rung's own tip, where that case
+ * fails on <em>all three</em> parameters and the backpressure case fails too: so the reconciliation
+ * carried both siblings' fixes rather than merging one away, which is a different question from whether
+ * the default may move and had to be answered first.
  * <p>
- * Whoever flips this should re-run the seam-on measurement on the <em>reconciled</em> module rather than
- * trusting these paragraphs, and should expect the pattern to repeat: three times now, the measurement has
- * named the next reason - so "no reason left" is something to show, not to assume. The reservation and the
- * procedure are in
- * {@code docs/inflight/streams-dispatch-default-flip-is-reserved-until-the-rungs-reconcile.md}.
+ * Whoever flips this should re-run the seam-on measurement rather than trusting these paragraphs, and
+ * should expect the pattern to repeat: four times now, the measurement has named the next reason - so
+ * "no reason left" is something to show, not to assume.
  * <p>
  * <b>This reverses an inherited decision, and the argument it reverses was a different one.</b> The seam
  * defaulted <em>on</em> in the feasibility study (astubbs#271) on the grounds that depending on a separate,
