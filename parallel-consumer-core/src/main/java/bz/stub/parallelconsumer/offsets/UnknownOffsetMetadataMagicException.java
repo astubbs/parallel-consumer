@@ -25,7 +25,7 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  * @see UnsupportedOffsetEncodingException for the sibling case where the encoding IS known, but this build has no
  *         decoder for it
  */
-// Hand-written ctors (not Lombok @StandardException) - see InternalRuntimeException for why.
+// Hand-written ctors (not Lombok @StandardException) - see PCInternalRuntimeException for why.
 public class UnknownOffsetMetadataMagicException extends EncodingNotSupportedException {
 
     private static final String ADVICE = "This metadata was most likely written by a NEWER version of Parallel " +

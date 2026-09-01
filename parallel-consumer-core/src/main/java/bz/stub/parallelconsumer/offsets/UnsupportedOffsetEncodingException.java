@@ -21,7 +21,7 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  * @author Antony Stubbs
  * @see UnknownOffsetMetadataMagicException for the sibling case where the magic byte matches no known encoding at all
  */
-// Hand-written ctors (not Lombok @StandardException) - see InternalRuntimeException for why.
+// Hand-written ctors (not Lombok @StandardException) - see PCInternalRuntimeException for why.
 public class UnsupportedOffsetEncodingException extends EncodingNotSupportedException {
 
     /**
