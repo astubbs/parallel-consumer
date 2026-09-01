@@ -5,10 +5,10 @@ package bz.stub.parallelconsumer;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.internal.PCInternalRuntimeException;
 import bz.stub.parallelconsumer.internal.ProducerManager;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import lombok.Getter;
-import lombok.Setter;
 import lombok.ToString;
 import lombok.experimental.Delegate;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -17,6 +17,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+
+import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
 /**
  * Internal only view on the {@link PollContext}.
@@ -31,10 +33,51 @@ public class PollContextInternal<K, V> {
     /**
      * Used when running in {@link ParallelConsumerOptions.CommitMode#isUsingTransactionCommitMode()} then the produce
      * lock will be passed around here. It needs to be unlocked when work has been put back in the inbox.
+     * <p>
+     * Exactly one produce lock is acquired per context, so exactly one release is owed. Ownership is therefore handed
+     * over by {@link #takeProducingLock()} rather than merely read: a released lock leaves the context empty, so a
+     * second release attempt is a no-op instead of an {@link IllegalMonitorStateException} on a read lock this thread
+     * no longer holds.
      */
-    @Getter
-    @Setter
-    protected Optional<ProducerManager<K, V>.ProducingLock> producingLock = Optional.empty();
+    private Optional<ProducerManager<K, V>.ProducingLock> producingLock = Optional.empty();
+
+    public synchronized Optional<ProducerManager<K, V>.ProducingLock> getProducingLock() {
+        return producingLock;
+    }
+
+    /**
+     * Sets the produce lock this context owns, refusing to overwrite one it is already holding.
+     * <p>
+     * The one-lock-one-release invariant above is otherwise enforced only by caller convention:
+     * {@code ParallelEoSStreamProcessor#processAndProduceResults} acquires from one of two
+     * branches that are mutually exclusive on
+     * {@link ParallelConsumerOptions#isAllowEagerProcessingDuringTransactionCommit()}, so today a second set cannot
+     * happen. A future call site that broke that exclusivity would silently drop the first lock - never released,
+     * and the next commit's write-lock acquisition would then block forever on a read hold nobody can free. Failing
+     * loudly here turns that into an immediate, attributable error instead of a hang.
+     */
+    public synchronized void setProducingLock(Optional<ProducerManager<K, V>.ProducingLock> producingLock) {
+        if (producingLock.isPresent() && this.producingLock.isPresent()) {
+            // Offsets, not the whole context: this is an exception message, and PollContextInternal's toString
+            // carries every record's key and value. ProducerManager's produce-lock logging identifies a context the
+            // same way for the same reason.
+            throw new PCInternalRuntimeException(msg("Produce lock already held for context: {} - overwriting it "
+                    + "would orphan the first, which is then never released and blocks every later transaction "
+                    + "commit", getOffsets()));
+        }
+        this.producingLock = producingLock;
+    }
+
+    /**
+     * Claims the produce lock for release, clearing it from this context so it can only ever be released once.
+     *
+     * @return the lock, if this context still owns one
+     */
+    public synchronized Optional<ProducerManager<K, V>.ProducingLock> takeProducingLock() {
+        var claimed = producingLock;
+        producingLock = Optional.empty();
+        return claimed;
+    }
 
     public PollContextInternal(List<WorkContainer<K, V>> workContainers) {
         this.pollContext = new PollContext<>(workContainers);

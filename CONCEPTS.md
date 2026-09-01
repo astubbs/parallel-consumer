@@ -4,8 +4,9 @@ Shared domain vocabulary for this project — entities, named processes, and sta
 project-specific meaning. Seeded with core domain vocabulary, then accretes as ce-compound and
 ce-compound-refresh process learnings; direct edits are fine. Glossary only, not a spec or catch-all.
 
-Seeded from the transactional-commit learning of 2026-08-07, so it covers the concurrency and
-transactional-commit area. Other areas of the project are not yet described here.
+Seeded from the transactional-commit learning of 2026-08-07 (the concurrency and
+transactional-commit area) and extended from the guard-lexing learning of 2026-09-01 (the agent
+harness area). Other areas of the project are not yet described here.
 
 ## Relationships
 
@@ -223,6 +224,38 @@ A ratchet is therefore a way to adopt a strict check against code that cannot pa
 today's findings as known, and every new one is blocked from that moment. It is not a suppression
 list - a suppression says "never report this", where a ratchet says "this one is already on the
 books, and here is the list you are expected to shorten".
+
+## Agent harness
+
+### Guard
+A check that runs automatically against an agent's action and can refuse it. Guards are split by
+failure direction, and the split decides their construction: a **refusing guard** must fail closed
+(a guard that cannot run must still block, because its whole value is stopping the action), so it
+inlines its logic rather than depending on anything it might fail to load; an **advisory reminder**
+must fail open (a reminder that breaks must stay silent rather than jam the action it decorates),
+so it may share helpers freely. The two look alike from outside - both observe the same actions -
+which is why the distinction is recorded per guard rather than inferred from where one is installed.
+
+### Advisory reminder
+A guard that only informs: it surfaces context alongside an action - open work, drift, a caveat -
+and never blocks. Its failure budget is the mirror of a refusing guard's: silence is acceptable,
+blocking is not, and a reminder that fires too often trains its reader to skip it, which is the
+same end state as one that never fires.
+
+### Labelled fallback
+The rule that an automated answer must name its own provenance, and that an answer derived from a
+weaker source must say so. A guard that cannot read the authoritative fact (the thing the action
+itself states) degrades tier by tier to weaker sources, and the message carries which tier
+answered - so a wrong answer is checkable instead of confidently misleading. The discipline exists
+because the failure mode it prevents is silent: a guess presented as a measurement reads exactly
+like a measurement.
+
+### Gate
+A repository check that a build or merge must pass, run both locally and in CI from one shared set
+so the two cannot drift. Gates differ from guards in what they inspect: a gate examines the state
+of the tree or the pull request, while a guard examines an action about to happen. A gate that
+cannot run must say so loudly - a skipped gate counted as a pass is the silent failure this
+vocabulary keeps naming from different sides.
 
 ## Flagged ambiguities
 

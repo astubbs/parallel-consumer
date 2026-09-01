@@ -114,8 +114,11 @@ adding a class with a narrow guess in it.
    is project vocabulary (`CONCEPTS.md`), which means the invariant is already written down in
    prose - the ideal case for a sequential specification. `producerTransactionLock` is a
    `ReentrantReadWriteLock`, but `syncBeginTransaction` is guarded by a *separate* `synchronized`
-   method, so two different mechanisms protect one protocol. `bug-producing-lock-double-release.md`
-   records the defect. A known bug in a named protocol is the best target available after item 1.
+   method, so two different mechanisms protect one protocol. **The known defect here has since been
+   <!-- post-merge: checked -->
+   fixed** - the double release, closed by astubbs#257 - so this is no longer a target with a live bug
+   waiting to be caught, which was most of its appeal. The two-mechanisms-for-one-protocol shape
+   stands on its own and is still worth specifying; rank it accordingly.
 4. **`PartitionStateManager` - two maps, one invariant.** `partitionStates` and
    `partitionsAssignmentEpochs` are both `ConcurrentHashMap`s keyed by the same `TopicPartition` and
    must agree; each is individually safe and the pair is not. The identically-keyed-maps signature,

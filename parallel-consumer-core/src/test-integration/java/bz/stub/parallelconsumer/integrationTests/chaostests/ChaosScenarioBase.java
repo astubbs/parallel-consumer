@@ -13,8 +13,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
+import org.awaitility.core.ConditionFactory;
+import org.junit.jupiter.api.Timeout;
+import org.junit.platform.commons.support.AnnotationSupport;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -41,6 +45,152 @@ import static org.awaitility.Awaitility.await;
  */
 @Slf4j
 abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> implements ChaosSeed.Holder {
+
+    /**
+     * <b>Diagnostic only - never a way to make a scenario pass.</b> Set
+     * {@code -Dchaos.diagnoseStallRecovery=true} to answer the one question a gating run structurally
+     * cannot: when a probe violation fires, does whatever it caught <b>ever</b> recover, or is it
+     * wedged forever?
+     * <p>
+     * A gating run destroys that evidence at the moment of detection - {@code failFast} aborts the
+     * wait on the first violation, so unbounded and merely-slow are indistinguishable from the data it
+     * leaves behind. In this mode a scenario's completion wait (built by {@link #diagnosableWait})
+     * does not bail on a violation and instead watches for {@link #effectiveDiagnosticQuietCap}
+     * instead, with a scenario supplying per-poll consumption progress via
+     * {@link #logDiagnosticProgress}. The discriminator is which way the wait ends: the backlog
+     * drains (the finding was bounded) or it times out with consumption flat (unbounded - lost state,
+     * a partition paused and never resumed, or a lost wakeup).
+     * <p>
+     * <b>It cannot turn a red run green.</b> {@code assertScenarioSlos} still asserts the probe's
+     * violations are empty after the wait, whichever way the wait ended, so a run that trips the probe
+     * still fails - it just fails having recorded what happened next. Off by default; the gating
+     * configuration is byte-for-byte unchanged when the property is absent.
+     * <p>
+     * Lives here (rather than on one scenario family) so every scenario can be asked the same
+     * question - it was first proven on {@code AbstractRevokeUnderWorkScenario} (where it collapsed
+     * the whole {@code CLASS2_STALL} line - see that class's "Calibration status" javadoc), and moved
+     * here because {@code ChaosChurnStormIT} needed the identical capability rather than a drifted copy
+     * of it - that scenario's own "Calibration status" javadoc carries what the diagnostic went on
+     * to establish there.
+     */
+    protected static final boolean DIAGNOSE_STALL_RECOVERY = Boolean.getBoolean("chaos.diagnoseStallRecovery");
+
+    /**
+     * How long {@link #DIAGNOSE_STALL_RECOVERY} may watch - owned by {@link DiagnosticQuietCap}, which
+     * holds the requested cap, the teardown reserve, and the arithmetic that fits one inside the
+     * scenario's {@code @Timeout}. It lives outside this hierarchy so it can be tested without booting
+     * Kafka; that class's javadoc explains why that is not merely a preference.
+     * <p>
+     * A diagnostic that promises a watch longer than the enclosing {@code @Timeout} does not deliver a
+     * shorter watch - it delivers an UNINTERPRETABLE one, because JUnit's kill is neither of the two
+     * outcomes the experiment distinguishes ("drained" / "did not drain"), and a killed run reads like
+     * one that ended for its own reasons. Shortening the watch to fit converts that into a real, if
+     * smaller, negative result, and names the number to raise for a longer one.
+     * <p>
+     * Read from the annotation rather than duplicating the literal per subclass, so raising a
+     * scenario's annotation raises its watch with no second edit to forget. Resolved through
+     * {@link AnnotationSupport#findAnnotation}, which is what JUnit itself uses - so this seam tracks
+     * the enforcer rather than approximating it, including meta-present and interface-declared cases.
+     * {@code @Timeout} IS {@code @Inherited} (verified against the pinned junit-jupiter-api), so a
+     * ceiling hoisted onto a shared superclass is still found.
+     * <p>
+     * <b>The one real gap is a METHOD-level {@code @Timeout}</b>, which overrides the class-level one
+     * in JUnit and is invisible to a class lookup. No scenario uses one today - every {@code @Test}
+     * here delegates straight to a driver method - but a method-level override would restore the
+     * silent kill this guard exists to prevent. An absent annotation means no ceiling, so the request
+     * stands.
+     *
+     * @param methodStart when the {@code @Timeout} clock started - the top of the {@code @Test} method,
+     *                     since that is JUnit's own reference point
+     * <p>
+     * <b>Second resolver, deliberately narrower - see {@code AmbientProbeExtension.reportDeadlineHeadroom}.</b>
+     * That one resolves {@code @Timeout} method-then-class, because a class-only lookup made it emit
+     * nothing at all for a suite that declares the annotation on methods. This one resolves
+     * class-only, and that is a decision rather than a copy that drifted: no chaos scenario declares
+     * a method-level {@code @Timeout} today, so the two behave identically, and the gap is documented
+     * below rather than closed.
+     * <p>
+     * Sharing them would cost a new file for what is one lambda
+     * ({@code t -> Duration.ofMillis(t.unit().toMillis(t.value()))}), and the two callers resolve from
+     * different places - an {@code ExtensionContext} there, {@code getClass()} here. Recorded so the
+     * difference is not rediscovered as an oversight and unified without noticing what it costs.
+     * <p>
+     * <b>If you do unify them:</b> {@code Optional.or(...)} is Java 9+ and this module compiles to
+     * Java 8 bytecode through Jabel, so the {@code isPresent()} re-assignment in the other resolver
+     * has to stay.
+     */
+    protected Duration effectiveDiagnosticQuietCap(Instant methodStart) {
+        Duration ceiling = AnnotationSupport.findAnnotation(getClass(), Timeout.class)
+                // toMillis() rather than TimeUnit.toChronoUnit(): the latter is Java 9+, and this
+                // module compiles to Java 8 bytecode through Jabel.
+                .map(t -> Duration.ofMillis(t.unit().toMillis(t.value())))
+                .orElse(null);
+        return DiagnosticQuietCap.within(ceiling, Duration.between(methodStart, Instant.now()),
+                getClass().getSimpleName());
+    }
+
+    /**
+     * Extra scenario-specific guidance logged once when the diagnostic engages, on top of the shared
+     * boilerplate {@link #diagnosableWait} always logs. No-op by default - a scenario overrides this to
+     * point at its own prior-art (e.g. a "Calibration status" javadoc recording an earlier recovery
+     * diagnostic on the same shape), so a reader of THIS run's log is told whether the result is a
+     * re-derivation or a first answer.
+     */
+    protected void logDiagnosticContext() {
+    }
+
+    /**
+     * The terminal wait for a scenario's completion phase: normally capped at {@code gatedCap} with
+     * {@code failFast} on any probe violation ({@code failFastDescription} names it in the awaitility
+     * report) - or, under {@code -Dchaos.diagnoseStallRecovery=true}, capped by
+     * {@link #effectiveDiagnosticQuietCap} instead and with NO fail-fast, so a violation does not abort
+     * the wait. Watching what happens AFTER a violation fires is the entire point of that mode - see
+     * {@link #DIAGNOSE_STALL_RECOVERY}.
+     *
+     * @param alias               the awaitility alias, surfaced in a timeout report
+     * @param methodStart         when the {@code @Timeout} clock started, for
+     *                            {@link #effectiveDiagnosticQuietCap}
+     * @param gatedCap            how long the NORMAL (non-diagnostic) wait may run
+     * @param failFastDescription the reason string attached to the NORMAL wait's {@code failFast}
+     * @param probe               the running scenario's probe, polled for {@code hasViolations}
+     */
+    protected ConditionFactory diagnosableWait(String alias, Instant methodStart, Duration gatedCap,
+                                                String failFastDescription, ProgressProbe probe) {
+        ConditionFactory wait = await().alias(alias).pollInterval(Duration.ofSeconds(2));
+        if (DIAGNOSE_STALL_RECOVERY) {
+            Duration diagnosticCap = effectiveDiagnosticQuietCap(methodStart);
+            // Deliberately no failFast: the whole point is to keep watching AFTER the violation.
+            log.warn("=== chaos.diagnoseStallRecovery ACTIVE - watch cap {} and no fail-fast. This is "
+                    + "a DIAGNOSTIC run: violations are still asserted at the end, so this cannot make "
+                    + "the test pass. ===", diagnosticCap);
+            logDiagnosticContext();
+            return wait.atMost(diagnosticCap);
+        }
+        return wait.atMost(gatedCap).failFast(failFastDescription, probe::hasViolations);
+    }
+
+    /**
+     * Per-poll diagnostic progress line for a {@link #diagnosableWait} wait - only emitted under
+     * {@code -Dchaos.diagnoseStallRecovery=true}, so it costs nothing in a gating run. Both counters are
+     * needed because a completion counter alone cannot tell "nothing is finishing" from "nothing is
+     * happening": a fleet all sitting inside a heavy-tail dwell reads as a flat consumed line while
+     * fully busy. {@code inFlight} (started-minus-consumed) is the difference that makes a flat line
+     * interpretable.
+     *
+     * @param phaseLabel      names the wait in the log line (e.g. "quiet phase", "run")
+     * @param expectedMessages the scenario's total backlog size, for the consumed/expected ratio
+     */
+    protected void logDiagnosticProgress(String phaseLabel, long expectedMessages, AtomicLong totalStarted,
+                                          AtomicLong totalConsumed, ProgressProbe probe, boolean done) {
+        if (!DIAGNOSE_STALL_RECOVERY) {
+            return;
+        }
+        long started = totalStarted.get();
+        long consumed = totalConsumed.get();
+        log.info("[diagnose] {}: consumed={}/{} started={} inFlight={} violations={} observations={} done={}",
+                phaseLabel, consumed, expectedMessages, started, started - consumed,
+                probe.getViolations().size(), probe.getObservations().size(), done);
+    }
 
     /**
      * A processing function with a heavy tail: every {@code heavyEvery}-th record dwells
