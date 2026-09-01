@@ -135,27 +135,15 @@ class ShadowedStreamsControlTest extends BrokerStreamsIntegrationTest {
     }
 
     /**
-     * Reads the output topic until {@link #TOTAL} records have arrived or we give up, preserving arrival order
-     * per key so ordering can be asserted.
+     * Reads the output topic until {@link #TOTAL} records have arrived or we give up, preserving arrival
+     * order per key so ordering can be asserted.
+     * <p>
+     * The reading itself is the shared one - see {@code BrokerStreamsIntegrationTest#consumeByKey}. This
+     * arm and the seam-on dispatch arm had byte-identical copies of it apart from the deadline, and two
+     * arms that read their output differently are not comparable.
      */
-    private Map<String, List<String>> consumeByKey(String outputTopic) {
-        Map<String, List<String>> byKey = new LinkedHashMap<>();
-        try (KafkaConsumer<String, String> consumer = getKcu().createNewConsumer(KafkaClientUtils.GroupOption.NEW_GROUP)) {
-            // UniLists, not List.of - this module inherits the project's --release 8 API surface, so the
-            // Java 9+ collection factories are unavailable even though Jabel allows the newer syntax.
-            consumer.subscribe(UniLists.of(outputTopic));
-
-            await().atMost(Duration.ofSeconds(90)).until(() -> {
-                ConsumerRecords<String, String> polled = consumer.poll(Duration.ofMillis(500));
-                for (ConsumerRecord<String, String> record : polled) {
-                    byKey.computeIfAbsent(record.key(), k -> new ArrayList<>()).add(record.value());
-                }
-                int total = flatten(byKey).size();
-                log.debug("Consumed {}/{} so far", total, TOTAL);
-                return total >= TOTAL;
-            });
-        }
-        return byKey;
+    private Map<String, List<String>> consumeByKey(final String outputTopic) {
+        return consumeByKey(outputTopic, TOTAL, Duration.ofSeconds(90));
     }
 
     /**
@@ -177,9 +165,4 @@ class ShadowedStreamsControlTest extends BrokerStreamsIntegrationTest {
         }
     }
 
-    private static List<String> flatten(Map<String, List<String>> byKey) {
-        List<String> all = new ArrayList<>();
-        byKey.values().forEach(all::addAll);
-        return all;
-    }
 }
