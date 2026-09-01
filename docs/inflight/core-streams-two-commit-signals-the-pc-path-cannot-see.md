@@ -3,6 +3,10 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: data-loss -->
 
+<!-- post-merge: checked-begin -->
+<!-- astubbs/parallel-consumer#271 is cited as the permanent home of the review threads these two
+     findings came from, which is exactly what stays true after it merges - a landed PR is a durable
+     link, and the whole reason this note exists is that a thread is not. -->
 `parallel-consumer-streams` (astubbs#255). Both come from unresolved review threads on
 astubbs/parallel-consumer#271, and **neither is answered by any rung of the reconstructed stack** -
 which is why they are written down here rather than left in a thread that closes when the PR does.
@@ -46,6 +50,7 @@ surfacing and stream time. The other nine threads on astubbs/parallel-consumer#2
 against a named rung or are answered as a documented contract. These two survive all of it, and
 `grep -n 'commitRequested' parallel-consumer-streams/src/main/patch/pc-streams.patch` is the check -
 it finds the declaration and the javadoc, and no read.
+<!-- post-merge: checked-end -->
 
 ## What settling them needs
 
