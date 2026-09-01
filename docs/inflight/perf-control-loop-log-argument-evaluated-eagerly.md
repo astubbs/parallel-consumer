@@ -130,3 +130,35 @@ so a single pair cannot be a verdict - though it is worth noting the passing ban
 71,387 to 109,898 rec/s and the failing band 39,684 to 44,992, and this result sits in the first.
 What would still strengthen it is repetition, which now costs nothing but time: the lane runs this
 test on every push to the PR.
+
+## Reproduced locally as a two-arm control, 2026-09-01 - and the arms do not overlap
+
+The CI result is one run per side. This is the same one-term comparison on different hardware, run
+five times per arm, with the eager form restored from the failing run's head and nothing else
+changed. JVM pinned with `-XX:ActiveProcessorCount=2` to approximate a hosted runner - the same
+mechanism the earlier Linux measurement used.
+
+| arm | records/second |
+|---|---|
+| **A - supplier form (fixed)** | 109,894 · 147,579 · 131,590 · 122,374 · 101,228 |
+| **B - eager form (pre-fix)** | 80,398 · 69,772 · 66,815 · 75,441 · 73,733 |
+
+**No overlap.** The slowest fixed run beats the fastest eager run by about a quarter, and the means
+differ by roughly 1.7x - against 1.77x on CI, on unrelated hardware.
+
+**The order confound was tested rather than argued away.** The first three pairs ran A then B, and
+arm B declined monotonically within itself - the shape a thermally drifting machine also produces. So
+the last two pairs were **interleaved with B first**: `B 75,441 -> A 122,374`, then
+`B 73,733 -> A 101,228`. Under a drift explanation the arm running second is the slower one; A ran
+second both times and was faster by a wide margin.
+
+Each run went through `pc_run_performance` in `bin/lib/chaos-experiment-common.sh`, so the maven
+invocation and the outcome classifier are the shared ones every experiment here uses rather than a
+hand-rolled command line - including the rule that a run which executed no test is not a data point.
+
+**What it does NOT show, and this is the part worth carrying.** Every one of the ten runs **PASSED**,
+both arms included. A development box pinned to two processors still has twelve real cores serving
+Docker, the broker and the OS, so it is not a hosted runner and the 60-second ceiling was never in
+danger. The local experiment measures the *throughput effect*; it cannot reproduce the *failure*.
+That is why the CI run stays the load-bearing evidence for "this fixed the failing gate", and this
+one is corroboration of the mechanism rather than a substitute for it.
