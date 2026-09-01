@@ -159,6 +159,29 @@ check("a bare filename is not a path", () => {
   assert.deepStrictEqual(citationsIn("the README.md says otherwise"), []);
 });
 
+check("a Claude Code import cites the path, not the `@` prefix", () => {
+  // The nested CLAUDE.md bridges import with `@<path>`, and `@` is in TOKEN's character class - so
+  // read literally the first segment is `@..`, which absorbs one of the `..` pops in resolves() and
+  // sends a real path into the module it was cited from. Every module test tree's bridge was
+  // reported dangling at once.
+  assert.deepStrictEqual(
+    citationsIn("@../../../docs/testing-at-write-time.md"), ["../../../docs/testing-at-write-time.md"]);
+  // ...and it must actually resolve from the bridge that wrote it, which is the half a citation
+  // count cannot show.
+  assert.ok(resolves("../../../docs/testing-at-write-time.md",
+    "parallel-consumer-core/src/test/CLAUDE.md",
+    treeOf("docs/testing-at-write-time.md")));
+});
+
+check("the ADJACENT case: a same-directory import is still not a citation", () => {
+  // `@AGENTS.md` is one segment, so TOKEN never fires - the strip above must not turn it into one,
+  // or every bridge in the repo starts citing a file the two-segment rule deliberately ignores.
+  assert.deepStrictEqual(citationsIn("@AGENTS.md"), []);
+  // And an `@` that is genuinely part of prose ahead of a path is not a prefix to eat silently:
+  // stripping is leading-only, so the path either side of it is read exactly as written.
+  assert.deepStrictEqual(citationsIn("see docs/ci.md"), ["docs/ci.md"]);
+});
+
 check("globs, placeholders and elisions are patterns, not paths", () => {
   assert.deepStrictEqual(citationsIn("the bin/check-*.sh scripts"), []);
   assert.deepStrictEqual(citationsIn("name it bin/check-foo.sh and it is granted"), []);
