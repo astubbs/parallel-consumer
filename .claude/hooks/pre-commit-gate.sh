@@ -106,7 +106,7 @@ command -v python3 >/dev/null 2>&1 || exit 0
 # disagreeing - the argument .claude/hooks/check-history-rewrite.sh makes for the same pairing.
 scan_rc=0
 commit_dir="$(python3 - "$payload_file" <<'PYGATE'
-import json, re, shlex, sys
+import json, os, re, shlex, sys
 
 OPERATORS = {"&&", "||", ";", ";;", "|", "&", "(", ")"}
 # An unquoted NEWLINE separates statements exactly like `;`, but shlex's default whitespace
@@ -213,9 +213,15 @@ def commit_bypass_counts(line):
 def leading_cd(line):
     """The path of a LEADING `cd <path> &&`, or "".
 
-    ONLY A LEADING ONE. A `cd` further along may be undoing an earlier one, and guessing which is
-    worse than not guessing. Belt-and-braces either way: the registration matches the command as
-    written, so `cd X && git commit` does not currently fire this hook at all.
+    ONLY A LEADING ONE, AND ONLY WHEN IT IS THE ONLY ONE. This used to trust the first `cd`
+    unconditionally, but `cd A && x && cd B && git commit` runs the commit in B, and gating A
+    against that commit is a confident wrong answer - the class this whole hook exists to kill
+    (reliability review, astubbs/parallel-consumer#382). More than one command-position `cd` is
+    honestly ambiguous, so this returns "" and the caller falls through to the payload cwd.
+    Belt-and-braces either way: the registration matches the command as written, so
+    `cd X && git commit` does not currently fire this hook at all.
+    NO APOSTROPHES IN THIS HEREDOC: the body sits inside a $( ) substitution, and an unbalanced
+    quote stops bash finding the closing paren - proven the first time this docstring was written.
     """
     try:
         lexer = shlex.shlex(line, posix=True, punctuation_chars="();<>|&;\n")
@@ -224,8 +230,33 @@ def leading_cd(line):
         toks = list(lexer)
     except ValueError:
         return ""
-    if len(toks) > 1 and toks[0] == "cd" and not toks[1].startswith("-"):
+    cd_count = 0
+    at_cmd = True
+    for t in toks:
+        if is_separator(t):
+            at_cmd = True
+            continue
+        if at_cmd and t == "cd":
+            cd_count += 1
+        at_cmd = False
+    if cd_count == 1 and len(toks) > 1 and toks[0] == "cd" and not toks[1].startswith("-"):
         return toks[1]
+    return ""
+
+
+def resolve_against(path, base):
+    """A RELATIVE command-named path is relative to where the COMMAND runs - the payload cwd -
+    never to this hook process, whose directory describes the session. Same-named subdirectories
+    exist in every worktree of this repository, so resolving from the wrong directory SUCCEEDS on
+    the wrong tree rather than failing. Unresolvable returns "", dropping to the next, labelled
+    tier (astubbs/parallel-consumer#382, found cross-model; the history guard carries the same
+    helper - change one, change the other)."""
+    if not path:
+        return ""
+    if os.path.isabs(path):
+        return path
+    if base:
+        return os.path.join(base, path)
     return ""
 
 
@@ -256,11 +287,13 @@ if not bypass:
     # run there and leaves the relocated ones to `.githooks/pre-commit`, which git runs inside the
     # target repository. Incomplete, and never wrong about the tree it did read.
     named = set(dirs)
+    cd_dir = resolve_against(leading_cd(cmd), payload_cwd)
     target = ""
     if len(named) == 1 and dirs and dirs[0]:
-        target = dirs[0]
+        # `git -C <rel>` is relative to where git runs - after any leading `cd`.
+        target = resolve_against(dirs[0], cd_dir or payload_cwd)
     if not target:
-        target = leading_cd(cmd)
+        target = cd_dir
     if not target:
         target = payload_cwd
     print(target)

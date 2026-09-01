@@ -465,6 +465,35 @@ assert "git -C names the tree to gate" 2 "${wt_out%%|*}"
 case "$wt_out" in *"GATE OF commit-red"*) got=followed_dash_c ;; *) got="ignored it: ${wt_out#*|}" ;; esac
 assert "...even with no cwd in the payload" followed_dash_c "$got"
 
+# 3b. THE LEADING-CD TIER, previously untested end to end (review round on
+# astubbs/parallel-consumer#382): a leading `cd <path> &&` is the command saying where it runs, and
+# outranks the payload cwd.
+wt_out=$(wt_fire "$session_green" "$commit_green" "cd $commit_red && git commit -m x")
+assert "a leading cd names the tree to gate" 2 "${wt_out%%|*}"
+case "$wt_out" in *"GATE OF commit-red"*) got=followed_the_cd ;; *) got="ignored it: ${wt_out#*|}" ;; esac
+assert "...over the payload cwd" followed_the_cd "$got"
+
+# 3c. TWO command-position cds are AMBIGUOUS - the commit may run in either - so the gate must fall
+# back to the payload cwd rather than trusting the FIRST cd. Pre-fix, this gated wt-commit-green
+# (the first cd) and let the red tree pass.
+wt_out=$(wt_fire "$session_green" "$commit_red" "cd $commit_green && echo x && cd $commit_red && git commit -m x")
+assert "two cds fall back to the payload cwd" 2 "${wt_out%%|*}"
+case "$wt_out" in *"GATE OF commit-red"*) got=gated_the_payload_cwd ;; *) got="gated the first cd: ${wt_out#*|}" ;; esac
+assert "...which is the red tree the commit actually runs in" gated_the_payload_cwd "$got"
+
+# 3d. A RELATIVE cd or -C is relative to the PAYLOAD cwd, never to the hook process - same-named
+# subdirectories exist in every worktree, so the wrong resolution succeeds on the wrong tree.
+mkdir -p "$commit_green/redsub/.githooks"
+( cd "$commit_green/redsub" && git init -q . )
+printf '#!/bin/sh\necho "GATE OF redsub SPOKE"\nexit 1\n' > "$commit_green/redsub/.githooks/pre-commit"
+chmod +x "$commit_green/redsub/.githooks/pre-commit"
+wt_out=$(wt_fire "$session_green" "$commit_green" 'cd redsub && git commit -m x')
+assert "a relative cd resolves against the payload cwd" 2 "${wt_out%%|*}"
+case "$wt_out" in *"GATE OF redsub"*) got=resolved_relative ;; *) got="missed it: ${wt_out#*|}" ;; esac
+assert "...and runs the resolved tree's own gate" resolved_relative "$got"
+wt_out=$(wt_fire "$session_green" "$commit_green" 'git -C redsub commit -m x')
+assert "a relative git -C resolves against the payload cwd" 2 "${wt_out%%|*}"
+
 # 4. A COMMIT FROM A SUBDIRECTORY has to climb: the gate lives at the checkout root, and stopping at
 # the literal directory would find no gate and fail open - a silent skip, not a visible error.
 wt_out=$(wt_fire "$session_green" "$commit_red/nested/deeper" 'git commit -m "from a subdir"')
