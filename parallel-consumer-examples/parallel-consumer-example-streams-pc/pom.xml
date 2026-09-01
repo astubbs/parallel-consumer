@@ -1,0 +1,179 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <artifactId>parallel-consumer-examples</artifactId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>parallel-consumer-example-streams-pc</artifactId>
+    <name>Kafka Parallel Consumer Example - Kafka Streams driven by PC</name>
+
+    <properties>
+        <demo.mainClass>bz.stub.parallelconsumer.examples.streams.pc.StreamsOnPcDemo</demo.mainClass>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- Ahead of the 1.24.0 that testcontainers resolves, and module-local for the same reason
+                 example-streams pins jackson locally rather than in the root pom: this is the only
+                 module that puts testcontainers on a NON-test classpath, so a root pin would change
+                 what every other module's tests run against to fix a problem only this one has.
+
+                 1.24.0 carries CVE-2024-25710 and CVE-2024-26308, both denial-of-service on malformed
+                 archives and both first fixed in 1.26.0. Neither is reachable here - testcontainers
+                 uses this to build Docker contexts and copy files in, never to parse an archive this
+                 demo did not create - but `deps: whole-tree CVE scan` audits the RUNTIME scope, and
+                 this module's compile-scope testcontainers is what first puts it there. A fixed
+                 version is available and pinning costs nothing, so it is pinned rather than argued
+                 about in an exclusion entry.
+
+                 Retire this when testcontainers itself resolves 1.26.0 or newer. -->
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-compress</artifactId>
+                <version>1.28.0</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <!-- MUST BE FIRST, and org.apache.kafka:kafka-streams MUST NOT be declared here at all.
+             This is the whole mechanism. parallel-consumer-streams ships patched copies of the Apache
+             Kafka classes named in its own pom's patched.classes property, in Kafka's OWN package,
+             inside its ordinary jar. They win over the stock kafka-streams jar purely by classpath
+             ORDER, and Maven orders direct dependencies by declaration order in this file. The set is
+             named there and in ClasspathGuard rather than restated here, because a list written in
+             three places drifts in two of them.
+
+             So: kafka-streams arrives TRANSITIVELY from the dependency below (compile scope), which is
+             both how the topology compiles and how the classes we did NOT patch are supplied.
+             Declaring it directly would put the stock jar ahead of the patched classes and the demo
+             would silently measure stock Kafka Streams against itself. Excluding it would break the
+             mechanism outright, because the patched module supplies only a handful of the classes.
+
+             StreamsOnPcDemo asserts all of this at runtime before measuring anything - see
+             ClasspathGuard. Order is a convention, not a guarantee; parallel-consumer-streams/README.md
+             owns that hazard, under "The classpath hazard this module does not solve". -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-streams</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- Testcontainers at COMPILE scope, deliberately and explicitly. The root pom's
+             dependencyManagement pins every testcontainers artifact to <scope>test</scope>; a
+             declaration here that omitted the scope would silently inherit test, and this module's
+             main() lives in src/main/java and would not compile. Versions are omitted on purpose so
+             ${testcontainers.version} still comes from root dependencyManagement. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>compile</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>kafka</artifactId>
+            <scope>compile</scope>
+        </dependency>
+
+        <!-- THERE IS DELIBERATELY NO SLF4J BINDING HERE, and re-adding one would be a regression.
+
+             This module used to declare logback at compile scope, on the reasoning that without a
+             binding main() prints "No SLF4J providers were found" and Kafka's INFO logging then
+             buries the report. The second half of that is wrong, and it was worth measuring rather
+             than believing: SLF4J 2.x with no provider is a NO-OP, not a fallback to console, so a
+             run without logback emits three warning lines at startup and then not one further log
+             line between the classpath check and the summary. Removing it made the report cleaner,
+             not noisier.
+
+             It also removed a finding. `deps: whole-tree CVE scan` audits the RUNTIME scope, so a
+             compile-scope logback in this module was the first thing in the tree to put it there -
+             everywhere else in this repo logback is test scope and invisible to that gate.
+
+             If you want Kafka's logs while debugging the demo, add a binding on YOUR machine rather
+             than to this pom, and check the CVE gate before proposing it back. -->
+
+        <!-- Tests. The core test-jar is here for one class - TestConventionRules, which
+             TestConventionsArchTest points ArchUnit at. Every module with test sources needs its own such
+             test, because ArchUnit imports from the classpath of the module it runs in and a parent
+             package named by a sibling module does not reach this one; EveryModuleWiresUpArchUnitTest in
+             core is what fails the build when one is missing. Test scope, so it cannot reach the demo's
+             runtime classpath and disturb the ordering the block at the top of this file depends on. -->
+        <dependency>
+            <groupId>bz.stub.parallelconsumer</groupId>
+            <artifactId>parallel-consumer-core</artifactId>
+            <version>${project.version}</version>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+
+    </dependencies>
+
+    <!-- The demo is run by activating this profile, NOT by invoking exec:java from the command line.
+
+         Two reasons. Invoking `exec:java` as a CLI goal runs it against every module the reactor
+         selected, and `-am` necessarily selects parallel-consumer-parent, which has no mainClass, so the
+         build fails before reaching this module. And binding exec:java to a lifecycle phase
+         unconditionally would mean a plain `mvn verify` over the repo starts a Docker broker and runs a
+         multi-minute benchmark - CI does exactly that.
+
+         Inside a profile bound to process-classes, neither happens: the binding exists only in this
+         module's pom, so no sibling tries to run it, and it is inert unless -Pdemo is passed.
+
+             ./mvnw -Pdemo -pl parallel-consumer-examples/parallel-consumer-example-streams-pc -am \
+                    -DskipTests process-classes
+
+         process-classes (not package) is deliberate: the reactor then supplies parallel-consumer-streams
+         as target/classes, so the demo runs against classes just built from the patch rather than
+         whatever is installed in ~/.m2. -->
+    <profiles>
+        <profile>
+            <id>demo</id>
+            <build>
+                <plugins>
+                    <!-- Version pinned explicitly. The root pom declares exec-maven-plugin with
+                         <inherited>false</inherited> and does NOT list it in <pluginManagement>, so an
+                         unpinned declaration here would resolve to whatever the latest release is. -->
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <version>3.5.0</version>
+                        <executions>
+                            <execution>
+                                <id>run-demo</id>
+                                <phase>process-classes</phase>
+                                <goals>
+                                    <goal>java</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                        <configuration>
+                            <mainClass>${demo.mainClass}</mainClass>
+                            <!-- exec:java runs main() in a thread it owns. Afterwards it always JOINS any
+                                 surviving non-daemon threads, and this flag governs only what it then does
+                                 to the DAEMON ones: at the default true it interrupts and stops them, and
+                                 reports the resulting InterruptedException as a build failure. Kafka's
+                                 admin and producer threads and Testcontainers' shutdown threads outlive
+                                 main() by design, so the demo would print a complete, correct report and
+                                 then fail the build.
+
+                                 Note what this flag does NOT do: it cannot rescue a leaked non-daemon
+                                 thread, which is joined indefinitely either way. That is why ArmRunner
+                                 closes a KafkaStreams it failed to start rather than letting it leak. -->
+                            <cleanupDaemonThreads>false</cleanupDaemonThreads>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
+</project>

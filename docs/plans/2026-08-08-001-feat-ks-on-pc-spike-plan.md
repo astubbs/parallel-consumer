@@ -409,7 +409,7 @@ the jar, and publishes as an alpha artifact (KTD-S5) - with no Kafka source trac
 - `parallel-consumer-streams/src/main/patch/pc-streams.patch` (create - **empty at this unit**)
 - `parallel-consumer-streams/bin/regen-patch.sh` (create)
 - `parallel-consumer-streams/.gitignore` (create - exclude the generated tree)
-- `parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streams/TestConventionsArchTest.java` (create)
+- `parallel-consumer-streams/src/test/java/bz/stub/parallelconsumer/streams/TestConventionsArchTest.java` (create)
 - `parallel-consumer-streams/src/test/resources/logback-test.xml` (create)
 
 **Approach:**
@@ -456,7 +456,7 @@ behaviour-neutral, or nothing later can be attributed.
 **Dependencies:** U1
 
 **Files:**
-- `parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streams/integrationTests/ShadowedStreamsControlTest.java` (create)
+- `parallel-consumer-streams/src/test/java/bz/stub/parallelconsumer/streams/integrationTests/ShadowedStreamsControlTest.java` (create)
 
 **Approach:**
 
@@ -479,7 +479,7 @@ behaviour-neutral, or nothing later can be attributed.
 not proceed to U4.
 
 **Patterns to follow:**
-`parallel-consumer-examples/parallel-consumer-example-streams/src/test/java/io/confluent/parallelconsumer/examples/streams/integrationTests/StreamsAppTest.java`.
+`parallel-consumer-examples/parallel-consumer-example-streams/src/test/java/bz/stub/parallelconsumer/examples/streams/integrationTests/StreamsAppTest.java`.
 
 **Test scenarios:**
 - Each generated class (not the jar's) is the one loaded - assert on code source, per class.
@@ -506,7 +506,7 @@ load-bearing change - including the caller that would otherwise defeat it.
 **Files:**
 - `parallel-consumer-streams/src/main/patch/pc-streams.patch` (modify - this is now the only place
   Kafka changes are expressed)
-- `parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streams/ProcessorContextConfinementTest.java` (create)
+- `parallel-consumer-streams/src/test/java/bz/stub/parallelconsumer/streams/ProcessorContextConfinementTest.java` (create)
 
 **Approach:**
 
@@ -576,7 +576,7 @@ worker pool, not via `partitionGroup.nextRecord()` on the StreamThread.
    each `WorkContainer` to the worker pool running the existing `doProcess` path.
 5. Report completion through `onSuccessResult` / `onFailureResult` so PC's shard invariant holds - under
    KEY ordering a shard hands out at most one in-flight record at a time
-   (`parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/state/ProcessingShard.java:149-154`).
+   (`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/ProcessingShard.java:149-154`).
    Configure KEY ordering explicitly.
 6. **Disable retries, and record why.** PC's response to `onFailureResult` is to re-dispatch, which
    re-runs the whole chain including `forward` calls that already emitted downstream - duplicates stock
@@ -615,8 +615,8 @@ the flag-off path is green.
 **Dependencies:** U5
 
 **Files:**
-- `parallel-consumer-examples/parallel-consumer-example-streams/src/test/java/io/confluent/parallelconsumer/examples/streams/integrationTests/StockBaselineFixtureTest.java` (create)
-- `parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streams/integrationTests/PcDrivenStreamsProofTest.java` (create)
+- `parallel-consumer-examples/parallel-consumer-example-streams/src/test/java/bz/stub/parallelconsumer/examples/streams/integrationTests/StockBaselineFixtureTest.java` (create)
+- `parallel-consumer-streams/src/test/java/bz/stub/parallelconsumer/streams/integrationTests/PcDrivenStreamsProofTest.java` (create)
 - `parallel-consumer-streams/src/test/resources/stock-baseline-fixture.tsv` (create - the fixture
   itself, tracked so the spike-side test has a baseline without re-running the stock arm, and re-verified
   against a live stock run on every execution of `StockBaselineFixtureTest`. It carries the *inputs* as
@@ -660,7 +660,7 @@ choice, and land the verdict where the next person will find it.
 **Dependencies:** U6
 
 **Files:**
-- `parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streams/integrationTests/PcDrivenStatefulProofTest.java` (create)
+- `parallel-consumer-streams/src/test/java/bz/stub/parallelconsumer/streams/integrationTests/PcDrivenStatefulProofTest.java` (create)
 - `docs/plans/2026-08-08-002-ks-on-pc-spike-result.md` (create - **lands on master**)
 - `parallel-consumer-streams/README.md` (create - the alpha module's front door; **lands on master**)
 - `docs/plans/2026-08-07-002-investigate-kafka-streams-on-pc-report.md` (modify - link the result)
@@ -825,11 +825,11 @@ unit must not disturb)
 **Files:**
 - `parallel-consumer-streams/src/main/patch/pc-streams.patch` (modify - `StreamTask` hunks only;
   the other three patched classes are untouched, and the patch surface stays at four)
-- `parallel-consumer-streams/src/main/java/io/confluent/parallelconsumer/streams/PcTaskDispatcher.java`
+- `parallel-consumer-streams/src/main/java/bz/stub/parallelconsumer/streams/PcTaskDispatcher.java`
   (modify - expose commit-data collection, a commit-outstanding signal, the commit-success
   acknowledgement pass-through, and an abort-style close - no drain, no completion feed-back,
   immediate `shutdownNow` - for the crash test; module class, free to grow)
-- `parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streams/integrationTests/CommitFrontierCrashRestartTest.java`
+- `parallel-consumer-streams/src/test/java/bz/stub/parallelconsumer/streams/integrationTests/CommitFrontierCrashRestartTest.java`
   (create)
 - `docs/plans/2026-08-08-002-ks-on-pc-spike-result.md` (modify - record the measured pile-A delta
   against the predictions)
@@ -1291,7 +1291,7 @@ Lower than assumed. The published sources jar carries **all 678 `.java` files**,
 `SubscriptionInfoData.java`). Those are normally produced by Kafka's message generator from JSON schemas,
 which would have dragged in Kafka's Gradle build; shipped pre-generated, they do not. The only non-class
 resources are four files (`common/message/SubscriptionInfoData.json`,
-`kafka/kafka-streams-version.properties`, `LICENSE`, `NOTICE`).
+`kafka/kafka-streams-version.properties`, `LICENSE`, `NOTICE`). <!-- file-refs: N/A - a path inside the kafka-streams jar, not a path in this repository -->
 
 So a full build is what this module already does for twelve classes, scaled up: unpack, apply the patch,
 compile against `kafka-streams`' own declared dependencies, copy four resources, jar it. Cloning Kafka's

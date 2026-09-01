@@ -30,7 +30,7 @@ A Kafka consumer-group commit carries exactly one metadata string per partition.
 systems in `parallel-consumer-streams` both have a legitimate claim on it.
 
 Kafka Streams writes its own structure there. In the 3.9.2 sources
-(`org/apache/kafka/streams/processor/internals/TopicPartitionMetadata.java`, from
+(`org/apache/kafka/streams/processor/internals/TopicPartitionMetadata.java`, from <!-- file-refs: N/A - an Apache Kafka path inside the published jar, not a path in this repository -->
 `~/.m2/repository/org/apache/kafka/kafka-streams/3.9.2/kafka-streams-3.9.2-sources.jar`)
 `encode()` at line 53 lays down a magic byte (`LATEST_MAGIC_BYTE = 2`, line 34), then the
 partition time as a long, then a serialised processor-metadata map, base64-encoded.
@@ -58,10 +58,10 @@ PC path. `committableOffsetsAndMetadata()` in the patched `StreamTask` returns P
 directly rather than building a Streams structure
 (`parallel-consumer-streams/src/main/patch/pc-streams.patch:370-381`), sourced from
 `PcTaskDispatcher.collectCommitData()`
-(`parallel-consumer-streams/src/main/java/io/confluent/parallelconsumer/streams/PcTaskDispatcher.java:369-372`),
+(`parallel-consumer-streams/src/main/java/bz/stub/parallelconsumer/streams/PcTaskDispatcher.java:369-372`),
 which delegates to
 `WorkManager.collectCommitDataForDirtyPartitions()`
-(`parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/state/WorkManager.java:201-203`).
+(`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/WorkManager.java:201-203`).
 Offset, metadata and the too-large fallback all come from one place. Streams'
 `TopicPartitionMetadata` is simply not written for input partitions on that path.
 
@@ -139,18 +139,18 @@ own `StreamTaskTest` cases that assert Streams' metadata encoding stay red by de
 
 The verified behaviour is that it **degrades** rather than corrupts. PC's payload is valid
 base64 whose leading magic byte is a printable letter
-(`parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/offsets/OffsetEncoding.java:28-43`
+(`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/offsets/OffsetEncoding.java:28-43`
 gives the set: `L`, `l`, `a`, `n`, `J`, `o`, `s`, `e`, `p`), never `1` or `2`. So Streams'
 `decode()` takes its version-switch default branch, logs "Unsupported offset metadata
 version found", and returns UNKNOWN. When PC's too-large fallback strips the payload and
 commits a bare offset
-(`parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/state/PartitionState.java:512-525`),
+(`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/PartitionState.java:512-525`),
 `decode()` returns early on the empty string with no warning at all.
 
 "Degrades gracefully" is a weaker promise than "interoperates", and it is only a promise
 if it is tested. It is:
 `stockRestartOnPcCommittedGroupDegradesGracefully()` in
-`parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streams/integrationTests/CommitFrontierCrashRestartTest.java:201-254`
+`parallel-consumer-streams/src/test/java/bz/stub/parallelconsumer/streams/integrationTests/CommitFrontierCrashRestartTest.java:201-254`
 runs a PC-dispatched topology, crashes it so the group's **last** commit is a
 holes-bearing PC payload (an orderly close would leave a bare offset with empty metadata
 and prove nothing, per the comment at `:218-222`), then takes the same group over with
@@ -165,13 +165,13 @@ is exactly the assumption that turns a graceful degradation into a silent corrup
 PC's core carries scar tissue from the reverse direction, and it is the best available
 argument for the pattern. `OffsetEncoding` reserves two magic bytes purely to *recognise*
 Kafka Streams' format
-(`parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/offsets/OffsetEncoding.java:45-50`),
+(`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/offsets/OffsetEncoding.java:45-50`),
 and `EncodedOffsetPair` has a dedicated branch for them
-(`parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/offsets/EncodedOffsetPair.java:123-130`)
+(`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/offsets/EncodedOffsetPair.java:123-130`)
 whose only two outcomes are "warn, discard the offset map, possibly reprocess" or "throw".
 That branch is governed by a user-facing option,
 `InvalidOffsetMetadataHandlingPolicy`, defaulting to `FAIL`
-(`parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java:334-363`).
+(`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java:334-363`).
 
 An entire enum, a decoder branch, and a public configuration option exist because one
 field had two possible authors. None of that gets better with time; it is what "the field
@@ -197,7 +197,7 @@ stream-time work that needs somewhere to persist a low-water mark anyway
 One budget note for whoever builds it: the broker caps commit metadata
 (`offsets.metadata.max.bytes`, default 4096), and every rider byte competes with PC's own
 hole encoding. The too-large fallback at
-`parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/state/PartitionState.java:512-525`
+`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/PartitionState.java:512-525`
 must account for both, or the rider will quietly evict the encoding that is the reason the
 field has an owner in the first place.
 

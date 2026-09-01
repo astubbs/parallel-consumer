@@ -1,5 +1,8 @@
 # Whole-batch drain time may narrow the "no penalty" claim
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: test-debt -->
+
 **Open question, and it may falsify something we are close to publishing.** Raised 2026-08-11.
 
 The Kafka Streams module claims there is no penalty when Parallel Consumer cannot parallelise - the case

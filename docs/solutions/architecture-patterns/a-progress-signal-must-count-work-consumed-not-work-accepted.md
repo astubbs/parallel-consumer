@@ -92,7 +92,7 @@ caller does with it. If the answer contains the words "block", "sleep", "poll ag
 "back off", or "stop looping", it is a contract about progress and it belongs to the
 caller, not to you. Write that down at the definition site, because the next person to
 touch the method cannot infer it from the type. The current javadoc does exactly that
-(`parallel-consumer-streams/src/main/java/io/confluent/parallelconsumer/streams/PcTaskDispatcher.java:244-251`):
+(`parallel-consumer-streams/src/main/java/bz/stub/parallelconsumer/streams/PcTaskDispatcher.java:244-251`):
 
 ```java
  * @return how many records were CONSUMED from the WorkManager this time round - dispatched to the pool,
@@ -255,7 +255,7 @@ with:
 
 ```
 unzip -p ~/.m2/repository/org/apache/kafka/kafka-streams/3.9.2/kafka-streams-3.9.2-sources.jar \
-  org/apache/kafka/streams/processor/internals/StreamThread.java
+  org/apache/kafka/streams/processor/internals/StreamThread.java <!-- file-refs: N/A - an Apache Kafka path inside the published jar, not a path in this repository -->
 ```
 
 | Layer | Code | Consequence of `false` / `0` |

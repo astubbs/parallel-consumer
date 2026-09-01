@@ -1,5 +1,8 @@
 # Graduating the streams module out of "spike"
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: release-gate -->
+
 The owner's notes on what `parallel-consumer-streams` (astubbs#255) needs before it is a module
 people are asked to take seriously rather than a published experiment. The ranked technical worklist
 is `pr-ks-spike-next-work.md`; packaging, naming, licensing and the user-facing documentation are in

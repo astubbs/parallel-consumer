@@ -11,17 +11,18 @@
 # -DforkCount=4 -DreuseForks=true to run integration in forked per-broker mode
 # (each JVM fork gets its own broker - reliable AND parallel; the ci profile
 # runs sequentially on GitHub-hosted 2-core runners). See
-# docs/SELF_HOSTED_RUNNER.md.
+# docs/self-hosted-runner.md.
 
 set -euo pipefail
 
 # Group exclusions are HARDCODED here, not inherited from the pom default - enforced by
 # QuarantinedAnnotationContractTest (pom inheritance once made the quarantine exclusion a
-# silent no-op for unit tests). Keep in sync with the pom excluded.groups default.
+# silent no-op for unit tests). Keep in sync with the pom excluded.groups default - the two lists
+# drifting is silent in the direction that matters: a lane the pom excludes but this does not runs
+# here, in the GATING suite, which is how the Lincheck lane would have arrived if nobody looked.
 ./mvnw --batch-mode \
   -Pci \
   clean verify \
   -DskipUTs=true \
-  -Dexcluded.groups=performance,chaos,quarantined \
-  -Dsurefire.rerunFailingTestsCount=2 \
+  -Dexcluded.groups=performance,chaos,quarantined,lincheck \
   "$@"

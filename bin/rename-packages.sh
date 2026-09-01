@@ -799,8 +799,16 @@ is_sweep_excluded() { # <path> - excluded from the COMPLETENESS CHECK. Deliberat
     is_self "$1"
 }
 
-frozen_lines() { # <file> -> line numbers inside a freeze region, markers included
-    awk -v b="$FREEZE_BEGIN_ERE" -v e="$FREEZE_END_ERE" '
+frozen_lines() { # <file> -> line numbers inside a freeze region, markers included, COMMA-separated
+    # Comma, not newline, and it is not cosmetic. Both readers below take this set through `awk -v`,
+    # and a -v assignment containing a newline is rejected outright by BSD awk - "awk: newline in
+    # string" - which is a diagnostic on stderr, not a non-zero exit. So on macOS both filters lost
+    # their frozen set while the run carried on: has_rewritable_match saw no match outside a freeze
+    # region, every file carrying a marker was dropped from the rewrite list, and the script printed
+    # "already applied, nothing to do" over a tree it had not touched. The freeze feature was dead on
+    # the platform, silently, exactly as the FREEZE_ID_ERE comment above predicts for a bracket
+    # expression - same failure, one construct along.
+    awk -v b="$FREEZE_BEGIN_ERE" -v e="$FREEZE_END_ERE" 'BEGIN { ORS = "," }
         $0 ~ b { f = 1; print NR; next }
         $0 ~ e { f = 0; print NR; next }
         f      { print NR }
@@ -811,7 +819,7 @@ frozen_lines() { # <file> -> line numbers inside a freeze region, markers includ
 # copy-pasted into each. They differ only in which field carries the line number, and the thing that
 # must never happen is the rewrite and the completeness check disagreeing about what is frozen - so
 # they read the set from one place.
-AWK_FROZEN_SET='BEGIN { n = split(frozen, a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") fz[a[i]] = 1 }'
+AWK_FROZEN_SET='BEGIN { n = split(frozen, a, ","); for (i = 1; i <= n; i++) if (a[i] != "") fz[a[i]] = 1 }'
 
 has_freeze_marker() { # <file> - cheap gate, so the line-set scan runs only where it can matter
     grep -qE "$FREEZE_BEGIN_ERE" "$1" 2>/dev/null
@@ -1610,11 +1618,38 @@ check_prose_guards() {
 $PROSE_GUARDS
 EOF
 
+    # A guard matching NEITHER spelling means one of two very different things, and which one depends
+    # entirely on whether this is master or a branch.
+    #
+    # On master it is the failure this check exists for: somebody reworded the sentence, the guard now
+    # matches nothing, and "none found" reads exactly like a clean tree. Hard refusal.
+    #
+    # On a branch running --defer-prose it usually means the branch simply PREDATES the sentence. The
+    # three guarded claims all arrived in one commit; a branch cut before it never had them to reword.
+    # Refusing there is the guard failing closed on a tree that has nothing to guard - and it cannot be
+    # worked around, because --defer-prose was checked AFTER this die, so the one flag that means
+    # "prose is master's problem" could not reach it. MEASURED on astubbs#38, which had every package
+    # mapped and still could not run.
+    #
+    # So --defer-prose now covers this case too, which is what the flag already promises: the corrected
+    # wording arrives from master at merge. Writing the missing sentence onto the branch would be
+    # authoring master's prose from a branch, which is the thing the guards exist to prevent.
     if [ -n "$orphaned" ]; then
-        echo
-        die "a guarded sentence was reworded rather than corrected:${orphaned}
+        if [ "$DEFER_PROSE" != true ]; then
+            echo
+            die "a guarded sentence was reworded rather than corrected:${orphaned}
      A guard that matches neither spelling reports \"none found\", which reads exactly like a clean
-     tree. Re-point the claim pattern at the new wording, or add the corrected form it should have."
+     tree. Re-point the claim pattern at the new wording, or add the corrected form it should have.
+     On a PR branch that simply predates the sentence, pass --defer-prose."
+        fi
+        echo
+        echo "  --defer-prose: guarded sentence(s) absent in BOTH spellings, carried as follow-ups.${orphaned}"
+        while IFS= read -r line; do
+            [ -n "${line# }" ] || continue
+            note_manual "absent prose guard -${line#      }"
+        done <<EOF
+$orphaned
+EOF
     fi
 
     if [ "$found" -eq 0 ]; then
@@ -1838,10 +1873,10 @@ if [ -s "$MANUAL_FOLLOWUPS" ]; then
 fi
 echo
 echo "  NOT covered here, and NOT green merely because this exited 0:"
-echo "   - The mutation lane EXITS 0 when it matches nothing. On the first PR after this lands,"
-echo "     change a class under the decidable packages and read the job summary for a mutation score"
-echo "     and a survivor list. A green tick carrying 'nothing to mutate, skipping' is the FAILURE"
-echo "     mode, not the pass."
+echo "   - The mutation lane no longer exits 0 when its scope matches nothing - it exits 2, and 3"
+echo "     for a genuine skip. Read the exit code, not the tick. On the first PR after this lands,"
+echo "     change a class under the decidable packages and confirm the job summary carries a"
+echo "     mutation score and a survivor list."
 echo "   - ArchUnit rules pin package names as STRINGS and pass vacuously when they select nothing."
 echo "     Break one on purpose and watch it go red before believing the suite still guards anything."
 echo

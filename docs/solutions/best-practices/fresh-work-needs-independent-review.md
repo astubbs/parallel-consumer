@@ -127,7 +127,7 @@ hazard. Knowing the hazard did not prevent writing it; it prevented seeing it.
 
 The acknowledgement of a successful commit was originally hung off `postCommit`, justified by a comment
 asserting that Kafka only reaches `postCommit` after a commit succeeds. A reviewer sent to Kafka 3.9.2's
-own source refuted it. In `org/apache/kafka/streams/processor/internals/TaskManager.java` (from
+own source refuted it. In `org/apache/kafka/streams/processor/internals/TaskManager.java` (from <!-- file-refs: N/A - an Apache Kafka path inside the published jar, not a path in this repository -->
 `kafka-streams-3.9.2-sources.jar`), `tryCloseCleanActiveTasks` catches a commit exception, logs it,
 reassigns the tasks to the close-dirty set, and then calls `task.postCommit(true)` over the active tasks
 anyway (`TaskManager.java:1621-1644`); `closeDirtyAndRevive` calls `task.postCommit(true)` with no commit
@@ -151,7 +151,7 @@ previous phase's durable output and asserted on it.
 
 The fix scopes each phase's reader past the previous phase's end offset. Both helpers now carry the
 reasoning, in
-`parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streams/integrationTests/CommitFrontierCrashRestartTest.java`:
+`parallel-consumer-streams/src/test/java/bz/stub/parallelconsumer/streams/integrationTests/CommitFrontierCrashRestartTest.java`:
 
 - `outputEndOffset` (`:256-263`) - "Without it, an earliest-reading consumer re-reads the previous
   phase's durable outputs and the restart assertions pass on evidence the restart never produced (U9

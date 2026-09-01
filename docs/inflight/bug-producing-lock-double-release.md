@@ -1,5 +1,10 @@
 # Open question: two paths release the same `ProducingLock`, and nothing stops the second
 
+<!-- inflight-type: bug -->
+<!-- inflight-labels: concurrency -->
+<!-- inflight-impact: stall -->
+
+
 **Not confirmed a defect.** It is an unresolved invariant in the transactional poll-and-produce lock
 lifecycle. Recorded because the reasoning is cheap to lose and the code path is one that has already
 produced two flakes.
@@ -9,14 +14,14 @@ produced two flakes.
 In transactional poll-and-produce, the produce read lock is released from **two** places, on the same
 worker thread, against the same `ProducingLock` instance held in the context:
 
-- `WorkContainer.onPostAddToMailBox` (`WorkContainer.java:271-276`) → `finishProducing` →
+- `WorkContainer.onPostAddToMailBox` (`WorkContainer.java`) → `finishProducing` →
   `ProducerManager.releaseProduceLock` → `ProducingLock.unlock()`
-- `AbstractParallelEoSStreamProcessor.cleanUpContext` (`AbstractParallelEoSStreamProcessor.java:1418-1419`),
+- `AbstractParallelEoSStreamProcessor.cleanUpContext` (`AbstractParallelEoSStreamProcessor.java`),
   in the `finally` of `runUserFunction`
 
 Nothing clears `PollContextInternal#producingLock` between them, so both see a present `Optional`.
 `ProducingLock.unlock()` calls `ReadLock.unlock()` unconditionally
-(`ProducerManager.java:456-459`). A thread holding zero read locks that calls `unlock()` on a
+(`produceLock.unlock()` in `ProducerManager.java`). A thread holding zero read locks that calls `unlock()` on a
 `ReentrantReadWriteLock.ReadLock` throws `IllegalMonitorStateException`. So either both paths do not
 in fact both fire, or something is swallowing it.
 

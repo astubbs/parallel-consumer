@@ -1,5 +1,8 @@
 # `-Dtest=` silently skips the upstream Kafka suite, and the run still goes green
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: misdirection -->
+
 **A measurement hazard that produces a false pass.** Found 2026-08-11, after it cost an agent a full run.
 
 `parallel-consumer-streams` runs Apache Kafka's own test classes against the patched classes in a dedicated

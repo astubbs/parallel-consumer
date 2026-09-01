@@ -1,6 +1,1142 @@
+diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/CogroupedKStream.java kafka-patched/org/apache/kafka/streams/kstream/CogroupedKStream.java
+--- a/org/apache/kafka/streams/kstream/CogroupedKStream.java	2026-02-07 12:00:08.000000000 +1300
++++ b/org/apache/kafka/streams/kstream/CogroupedKStream.java	2026-09-01 15:40:24.728003748 +1200
+@@ -16,6 +16,7 @@
+  */
+ package org.apache.kafka.streams.kstream;
+ 
++import com.google.errorprone.annotations.DoNotCall;
+ import org.apache.kafka.common.utils.Bytes;
+ import org.apache.kafka.streams.KafkaStreams;
+ import org.apache.kafka.streams.KeyValue;
+@@ -295,7 +296,13 @@
+      * @param <W>     the window type
+      *
+      * @return an instance of {@link TimeWindowedCogroupedKStream}
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because window close is driven by {@code observedStreamTime},
++     *             which does not advance there and is corrupted under concurrent read-modify-write. Turn that dispatch
++     *             off ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("windowedBy is not supported on the Parallel Consumer dispatch path (astubbs#255): window close is driven by observedStreamTime, which does not advance there and is corrupted under concurrent read-modify-write")
+     <W extends Window> TimeWindowedCogroupedKStream<K, VAgg> windowedBy(final Windows<W> windows);
+ 
+     /**
+@@ -306,7 +313,13 @@
+      *        the specification of the aggregation {@link SlidingWindows}
+      *
+      * @return an instance of {@link TimeWindowedCogroupedKStream}
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because window close is driven by {@code observedStreamTime},
++     *             which does not advance there and is corrupted under concurrent read-modify-write. Turn that dispatch
++     *             off ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("windowedBy is not supported on the Parallel Consumer dispatch path (astubbs#255): window close is driven by observedStreamTime, which does not advance there and is corrupted under concurrent read-modify-write")
+     TimeWindowedCogroupedKStream<K, VAgg> windowedBy(final SlidingWindows windows);
+ 
+     /**
+@@ -317,7 +330,13 @@
+      *        the specification of the aggregation {@link SessionWindows}
+      *
+      * @return an instance of {@link SessionWindowedCogroupedKStream}
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because window close is driven by {@code observedStreamTime},
++     *             which does not advance there and is corrupted under concurrent read-modify-write. Turn that dispatch
++     *             off ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("windowedBy is not supported on the Parallel Consumer dispatch path (astubbs#255): window close is driven by observedStreamTime, which does not advance there and is corrupted under concurrent read-modify-write")
+     SessionWindowedCogroupedKStream<K, VAgg> windowedBy(final SessionWindows windows);
+ 
+ }
+diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/CogroupedKStreamImpl.java kafka-patched/org/apache/kafka/streams/kstream/internals/CogroupedKStreamImpl.java
+--- a/org/apache/kafka/streams/kstream/internals/CogroupedKStreamImpl.java	2026-02-07 12:00:08.000000000 +1300
++++ b/org/apache/kafka/streams/kstream/internals/CogroupedKStreamImpl.java	2026-09-01 15:40:24.729289038 +1200
+@@ -16,6 +16,7 @@
+  */
+ package org.apache.kafka.streams.kstream.internals;
+ 
++import bz.stub.parallelconsumer.streams.PcUnsupportedConstruct;
+ import org.apache.kafka.common.utils.Bytes;
+ import org.apache.kafka.streams.kstream.Aggregator;
+ import org.apache.kafka.streams.kstream.CogroupedKStream;
+@@ -39,6 +40,15 @@
+ import java.util.Objects;
+ import java.util.Set;
+ 
++// PC dispatch (astubbs#255): the refusal envelope annotates the four DSL INTERFACES with @DoNotCall,
++// because a call site resolves to the symbol its receiver's static type declares. Error Prone then asks
++// every override of such a method to carry the annotation too, which is 118 findings across the four impl
++// classes in this tree. Suppressed rather than propagated, for two reasons that hold together: the impls
++// carry the RUNTIME half of the same refusal - reaching one of these bodies by its internal type still
++// throws, so there is no unrefused path, only one refused a call later than the interface - and every one
++// of these findings is on an override declaration rather than a call site, so nothing that could reach a
++// refused construct is being silenced.
++@SuppressWarnings("DoNotCall")
+ public class CogroupedKStreamImpl<K, VOut> extends AbstractStream<K, VOut> implements CogroupedKStream<K, VOut> {
+ 
+     static final String AGGREGATE_NAME = "COGROUPKSTREAM-AGGREGATE-";
+@@ -98,6 +108,10 @@
+ 
+     @Override
+     public <W extends Window> TimeWindowedCogroupedKStream<K, VOut> windowedBy(final Windows<W> windows) {
++        // PC dispatch (astubbs#255): refused on the PC path - time windows over a cogroup. No-op with the seam off, so
++        // this stays behaviourally identical to stock Kafka Streams and Kafka's own suite is unaffected.
++        PcUnsupportedConstruct.WINDOWED_COGROUPED_AGGREGATION.refuse();
++
+         Objects.requireNonNull(windows, "windows can't be null");
+         return new TimeWindowedCogroupedKStreamImpl<>(
+             windows,
+@@ -111,6 +125,10 @@
+ 
+     @Override
+     public TimeWindowedCogroupedKStream<K, VOut> windowedBy(final SlidingWindows slidingWindows) {
++        // PC dispatch (astubbs#255): refused on the PC path - sliding windows over a cogroup. No-op with the seam off, so
++        // this stays behaviourally identical to stock Kafka Streams and Kafka's own suite is unaffected.
++        PcUnsupportedConstruct.WINDOWED_COGROUPED_AGGREGATION.refuse();
++
+         Objects.requireNonNull(slidingWindows, "slidingWindows can't be null");
+         return new SlidingWindowedCogroupedKStreamImpl<>(
+             slidingWindows,
+@@ -124,6 +142,10 @@
+ 
+     @Override
+     public SessionWindowedCogroupedKStream<K, VOut> windowedBy(final SessionWindows sessionWindows) {
++        // PC dispatch (astubbs#255): refused on the PC path - session windows over a cogroup. No-op with the seam off, so
++        // this stays behaviourally identical to stock Kafka Streams and Kafka's own suite is unaffected.
++        PcUnsupportedConstruct.WINDOWED_COGROUPED_AGGREGATION.refuse();
++
+         Objects.requireNonNull(sessionWindows, "sessionWindows can't be null");
+         return new SessionWindowedCogroupedKStreamImpl<>(sessionWindows,
+             builder,
+diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/KGroupedStreamImpl.java kafka-patched/org/apache/kafka/streams/kstream/internals/KGroupedStreamImpl.java
+--- a/org/apache/kafka/streams/kstream/internals/KGroupedStreamImpl.java	2026-02-07 12:00:08.000000000 +1300
++++ b/org/apache/kafka/streams/kstream/internals/KGroupedStreamImpl.java	2026-09-01 15:40:24.728819122 +1200
+@@ -16,6 +16,7 @@
+  */
+ package org.apache.kafka.streams.kstream.internals;
+ 
++import bz.stub.parallelconsumer.streams.PcUnsupportedConstruct;
+ import org.apache.kafka.common.serialization.Serdes;
+ import org.apache.kafka.common.utils.Bytes;
+ import org.apache.kafka.streams.kstream.Aggregator;
+@@ -39,6 +40,15 @@
+ import java.util.Objects;
+ import java.util.Set;
+ 
++// PC dispatch (astubbs#255): the refusal envelope annotates the four DSL INTERFACES with @DoNotCall,
++// because a call site resolves to the symbol its receiver's static type declares. Error Prone then asks
++// every override of such a method to carry the annotation too, which is 118 findings across the four impl
++// classes in this tree. Suppressed rather than propagated, for two reasons that hold together: the impls
++// carry the RUNTIME half of the same refusal - reaching one of these bodies by its internal type still
++// throws, so there is no unrefused path, only one refused a call later than the interface - and every one
++// of these findings is on an override declaration rather than a call site, so nothing that could reach a
++// refused construct is being silenced.
++@SuppressWarnings("DoNotCall")
+ class KGroupedStreamImpl<K, V> extends AbstractStream<K, V> implements KGroupedStream<K, V> {
+ 
+     static final String REDUCE_NAME = "KSTREAM-REDUCE-";
+@@ -191,6 +201,10 @@
+ 
+     @Override
+     public <W extends Window> TimeWindowedKStream<K, V> windowedBy(final Windows<W> windows) {
++        // PC dispatch (astubbs#255): refused on the PC path - time windows. No-op with the seam off, so
++        // this stays behaviourally identical to stock Kafka Streams and Kafka's own suite is unaffected.
++        PcUnsupportedConstruct.WINDOWED_AGGREGATION.refuse();
++
+ 
+         return new TimeWindowedKStreamImpl<>(
+             windows,
+@@ -206,6 +220,10 @@
+ 
+     @Override
+     public TimeWindowedKStream<K, V> windowedBy(final SlidingWindows windows) {
++        // PC dispatch (astubbs#255): refused on the PC path - sliding windows. No-op with the seam off, so
++        // this stays behaviourally identical to stock Kafka Streams and Kafka's own suite is unaffected.
++        PcUnsupportedConstruct.WINDOWED_AGGREGATION.refuse();
++
+ 
+         return new SlidingWindowedKStreamImpl<>(
+                 windows,
+@@ -221,6 +239,10 @@
+ 
+     @Override
+     public SessionWindowedKStream<K, V> windowedBy(final SessionWindows windows) {
++        // PC dispatch (astubbs#255): refused on the PC path - session windows. No-op with the seam off, so
++        // this stays behaviourally identical to stock Kafka Streams and Kafka's own suite is unaffected.
++        PcUnsupportedConstruct.WINDOWED_AGGREGATION.refuse();
++
+ 
+         return new SessionWindowedKStreamImpl<>(
+             windows,
+diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/KStreamImpl.java kafka-patched/org/apache/kafka/streams/kstream/internals/KStreamImpl.java
+--- a/org/apache/kafka/streams/kstream/internals/KStreamImpl.java	2026-02-07 12:00:08.000000000 +1300
++++ b/org/apache/kafka/streams/kstream/internals/KStreamImpl.java	2026-09-01 15:40:24.730652911 +1200
+@@ -16,6 +16,7 @@
+  */
+ package org.apache.kafka.streams.kstream.internals;
+ 
++import bz.stub.parallelconsumer.streams.PcUnsupportedConstruct;
+ import org.apache.kafka.common.serialization.Serde;
+ import org.apache.kafka.common.utils.Bytes;
+ import org.apache.kafka.streams.KeyValue;
+@@ -80,6 +81,15 @@
+ 
+ import static org.apache.kafka.streams.kstream.internals.graph.OptimizableRepartitionNode.optimizableRepartitionNodeBuilder;
+ 
++// PC dispatch (astubbs#255): the refusal envelope annotates the four DSL INTERFACES with @DoNotCall,
++// because a call site resolves to the symbol its receiver's static type declares. Error Prone then asks
++// every override of such a method to carry the annotation too, which is 118 findings across the four impl
++// classes in this tree. Suppressed rather than propagated, for two reasons that hold together: the impls
++// carry the RUNTIME half of the same refusal - reaching one of these bodies by its internal type still
++// throws, so there is no unrefused path, only one refused a call later than the interface - and every one
++// of these findings is on an override declaration rather than a call site, so nothing that could reach a
++// refused construct is being silenced.
++@SuppressWarnings("DoNotCall")
+ public class KStreamImpl<K, V> extends AbstractStream<K, V> implements KStream<K, V> {
+ 
+     static final String JOINTHIS_NAME = "KSTREAM-JOINTHIS-";
+@@ -943,6 +953,10 @@
+                                            final JoinWindows windows,
+                                            final StreamJoined<K, V, VO> streamJoined,
+                                            final KStreamImplJoin join) {
++        // PC dispatch (astubbs#255): refused on the PC path - every stream-stream join overload funnels through here. No-op with the seam off, so
++        // this stays behaviourally identical to stock Kafka Streams and Kafka's own suite is unaffected.
++        PcUnsupportedConstruct.KSTREAM_KSTREAM_JOIN.refuse();
++
+         Objects.requireNonNull(otherStream, "otherStream can't be null");
+         Objects.requireNonNull(joiner, "joiner can't be null");
+         Objects.requireNonNull(windows, "windows can't be null");
+@@ -1214,6 +1228,10 @@
+                                                         final ValueJoinerWithKey<? super K, ? super V, ? super VG, ? extends VR> joiner,
+                                                         final boolean leftJoin,
+                                                         final Named named) {
++        // PC dispatch (astubbs#255): refused on the PC path - every global-table join overload funnels through here. No-op with the seam off, so
++        // this stays behaviourally identical to stock Kafka Streams and Kafka's own suite is unaffected.
++        PcUnsupportedConstruct.KSTREAM_GLOBALKTABLE_JOIN.refuse();
++
+         Objects.requireNonNull(globalTable, "globalTable can't be null");
+         Objects.requireNonNull(keySelector, "keySelector can't be null");
+         Objects.requireNonNull(joiner, "joiner can't be null");
+@@ -1252,6 +1270,10 @@
+                                                       final ValueJoinerWithKey<? super K, ? super V, ? super VO, ? extends VR> joiner,
+                                                       final Joined<K, V, VO> joined,
+                                                       final boolean leftJoin) {
++        // PC dispatch (astubbs#255): refused on the PC path - every stream-table join overload funnels through here. No-op with the seam off, so
++        // this stays behaviourally identical to stock Kafka Streams and Kafka's own suite is unaffected.
++        PcUnsupportedConstruct.KSTREAM_KTABLE_JOIN.refuse();
++
+         Objects.requireNonNull(table, "table can't be null");
+         Objects.requireNonNull(joiner, "joiner can't be null");
+ 
+diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/internals/KTableImpl.java kafka-patched/org/apache/kafka/streams/kstream/internals/KTableImpl.java
+--- a/org/apache/kafka/streams/kstream/internals/KTableImpl.java	2026-02-07 12:00:08.000000000 +1300
++++ b/org/apache/kafka/streams/kstream/internals/KTableImpl.java	2026-09-01 15:40:24.730002870 +1200
+@@ -16,6 +16,7 @@
+  */
+ package org.apache.kafka.streams.kstream.internals;
+ 
++import bz.stub.parallelconsumer.streams.PcUnsupportedConstruct;
+ import org.apache.kafka.common.serialization.Serde;
+ import org.apache.kafka.common.utils.Bytes;
+ import org.apache.kafka.streams.KeyValue;
+@@ -98,6 +99,15 @@
+  * @param <S> the source's (parent's) value type
+  * @param <V> the value type
+  */
++// PC dispatch (astubbs#255): the refusal envelope annotates the four DSL INTERFACES with @DoNotCall,
++// because a call site resolves to the symbol its receiver's static type declares. Error Prone then asks
++// every override of such a method to carry the annotation too, which is 118 findings across the four impl
++// classes in this tree. Suppressed rather than propagated, for two reasons that hold together: the impls
++// carry the RUNTIME half of the same refusal - reaching one of these bodies by its internal type still
++// throws, so there is no unrefused path, only one refused a call later than the interface - and every one
++// of these findings is on an override declaration rather than a call site, so nothing that could reach a
++// refused construct is being silenced.
++@SuppressWarnings("DoNotCall")
+ public class KTableImpl<K, S, V> extends AbstractStream<K, V> implements KTable<K, V> {
+     private static final Logger LOG = LoggerFactory.getLogger(KTableImpl.class);
+ 
+@@ -543,6 +553,10 @@
+ 
+     @Override
+     public KTable<K, V> suppress(final Suppressed<? super K> suppressed) {
++        // PC dispatch (astubbs#255): refused on the PC path - the only entry point to suppression. No-op with the seam off, so
++        // this stays behaviourally identical to stock Kafka Streams and Kafka's own suite is unaffected.
++        PcUnsupportedConstruct.SUPPRESSION.refuse();
++
+         // this is an eager, but insufficient check
+         // the check only works if the direct parent is materialized
+         // the actual check for "version inheritance" can only be done in the build-phase later
+@@ -731,6 +745,10 @@
+                                           final MaterializedInternal<K, VR, KeyValueStore<Bytes, byte[]>> materializedInternal,
+                                           final boolean leftOuter,
+                                           final boolean rightOuter) {
++        // PC dispatch (astubbs#255): refused on the PC path - every table-table join overload funnels through here. No-op with the seam off, so
++        // this stays behaviourally identical to stock Kafka Streams and Kafka's own suite is unaffected.
++        PcUnsupportedConstruct.KTABLE_KTABLE_JOIN.refuse();
++
+         Objects.requireNonNull(other, "other can't be null");
+         Objects.requireNonNull(joiner, "joiner can't be null");
+         Objects.requireNonNull(joinName, "joinName can't be null");
+@@ -1090,6 +1108,10 @@
+                                                           final TableJoined<K, KO> tableJoined,
+                                                           final Materialized<K, VR, KeyValueStore<Bytes, byte[]>> materialized,
+                                                           final boolean leftJoin) {
++        // PC dispatch (astubbs#255): refused on the PC path - every foreign-key join overload funnels through here. No-op with the seam off, so
++        // this stays behaviourally identical to stock Kafka Streams and Kafka's own suite is unaffected.
++        PcUnsupportedConstruct.KTABLE_KTABLE_FOREIGN_KEY_JOIN.refuse();
++
+         Objects.requireNonNull(foreignKeyTable, "foreignKeyTable can't be null");
+         Objects.requireNonNull(foreignKeyExtractor, "foreignKeyExtractor can't be null");
+         Objects.requireNonNull(joiner, "joiner can't be null");
+diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/KGroupedStream.java kafka-patched/org/apache/kafka/streams/kstream/KGroupedStream.java
+--- a/org/apache/kafka/streams/kstream/KGroupedStream.java	2026-02-07 12:00:08.000000000 +1300
++++ b/org/apache/kafka/streams/kstream/KGroupedStream.java	2026-09-01 15:40:24.732081033 +1200
+@@ -16,6 +16,7 @@
+  */
+ package org.apache.kafka.streams.kstream;
+ 
++import com.google.errorprone.annotations.DoNotCall;
+ import org.apache.kafka.common.utils.Bytes;
+ import org.apache.kafka.streams.KafkaStreams;
+ import org.apache.kafka.streams.KeyValue;
+@@ -543,21 +544,39 @@
+      * @param windows the specification of the aggregation {@link Windows}
+      * @param <W>     the window type
+      * @return an instance of {@link TimeWindowedKStream}
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because window close is driven by {@code observedStreamTime},
++     *             which does not advance there and is corrupted under concurrent read-modify-write. Turn that dispatch
++     *             off ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("windowedBy is not supported on the Parallel Consumer dispatch path (astubbs#255): window close is driven by observedStreamTime, which does not advance there and is corrupted under concurrent read-modify-write")
+     <W extends Window> TimeWindowedKStream<K, V> windowedBy(final Windows<W> windows);
+ 
+     /**
+      * Create a new {@link TimeWindowedKStream} instance that can be used to perform sliding windowed aggregations.
+      * @param windows the specification of the aggregation {@link SlidingWindows}
+      * @return an instance of {@link TimeWindowedKStream}
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because window close is driven by {@code observedStreamTime},
++     *             which does not advance there and is corrupted under concurrent read-modify-write. Turn that dispatch
++     *             off ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("windowedBy is not supported on the Parallel Consumer dispatch path (astubbs#255): window close is driven by observedStreamTime, which does not advance there and is corrupted under concurrent read-modify-write")
+     TimeWindowedKStream<K, V> windowedBy(final SlidingWindows windows);
+ 
+     /**
+      * Create a new {@link SessionWindowedKStream} instance that can be used to perform session windowed aggregations.
+      * @param windows the specification of the aggregation {@link SessionWindows}
+      * @return an instance of {@link TimeWindowedKStream}
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because window close is driven by {@code observedStreamTime},
++     *             which does not advance there and is corrupted under concurrent read-modify-write. Turn that dispatch
++     *             off ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("windowedBy is not supported on the Parallel Consumer dispatch path (astubbs#255): window close is driven by observedStreamTime, which does not advance there and is corrupted under concurrent read-modify-write")
+     SessionWindowedKStream<K, V> windowedBy(final SessionWindows windows);
+ 
+     /**
+diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/KStream.java kafka-patched/org/apache/kafka/streams/kstream/KStream.java
+--- a/org/apache/kafka/streams/kstream/KStream.java	2026-02-07 12:00:08.000000000 +1300
++++ b/org/apache/kafka/streams/kstream/KStream.java	2026-09-01 15:40:24.731448993 +1200
+@@ -16,6 +16,7 @@
+  */
+ package org.apache.kafka.streams.kstream;
+ 
++import com.google.errorprone.annotations.DoNotCall;
+ import org.apache.kafka.common.serialization.Serde;
+ import org.apache.kafka.common.serialization.Serdes;
+ import org.apache.kafka.common.utils.Bytes;
+@@ -1254,7 +1255,14 @@
+      * {@link ValueJoiner}, one for each matched record-pair with the same key and within the joining window intervals
+      * @see #leftJoin(KStream, ValueJoiner, JoinWindows)
+      * @see #outerJoin(KStream, ValueJoiner, JoinWindows)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because join emission is stream-time gated, and stream time
++     *             there is a low-water mark over concurrently dispatched work rather than stock's - so which records
++     *             fall inside a join window moves with dispatch order. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-KStream join is not supported on the Parallel Consumer dispatch path (astubbs#255): join emission is stream-time gated, and stream time there is a low-water mark over concurrently dispatched work rather than stock's, so which records fall inside a join window moves with dispatch order")
+     <VO, VR> KStream<K, VR> join(final KStream<K, VO> otherStream,
+                                  final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
+                                  final JoinWindows windows);
+@@ -1331,7 +1339,14 @@
+      * {@link ValueJoinerWithKey}, one for each matched record-pair with the same key and within the joining window intervals
+      * @see #leftJoin(KStream, ValueJoinerWithKey, JoinWindows)
+      * @see #outerJoin(KStream, ValueJoinerWithKey, JoinWindows)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because join emission is stream-time gated, and stream time
++     *             there is a low-water mark over concurrently dispatched work rather than stock's - so which records
++     *             fall inside a join window moves with dispatch order. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-KStream join is not supported on the Parallel Consumer dispatch path (astubbs#255): join emission is stream-time gated, and stream time there is a low-water mark over concurrently dispatched work rather than stock's, so which records fall inside a join window moves with dispatch order")
+     <VO, VR> KStream<K, VR> join(final KStream<K, VO> otherStream,
+                                  final ValueJoinerWithKey<? super K, ? super V, ? super VO, ? extends VR> joiner,
+                                  final JoinWindows windows);
+@@ -1410,7 +1425,14 @@
+      * {@link ValueJoiner}, one for each matched record-pair with the same key and within the joining window intervals
+      * @see #leftJoin(KStream, ValueJoiner, JoinWindows, StreamJoined)
+      * @see #outerJoin(KStream, ValueJoiner, JoinWindows, StreamJoined)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because join emission is stream-time gated, and stream time
++     *             there is a low-water mark over concurrently dispatched work rather than stock's - so which records
++     *             fall inside a join window moves with dispatch order. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-KStream join is not supported on the Parallel Consumer dispatch path (astubbs#255): join emission is stream-time gated, and stream time there is a low-water mark over concurrently dispatched work rather than stock's, so which records fall inside a join window moves with dispatch order")
+     <VO, VR> KStream<K, VR> join(final KStream<K, VO> otherStream,
+                                  final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
+                                  final JoinWindows windows,
+@@ -1491,7 +1513,14 @@
+      * {@link ValueJoinerWithKey}, one for each matched record-pair with the same key and within the joining window intervals
+      * @see #leftJoin(KStream, ValueJoinerWithKey, JoinWindows, StreamJoined)
+      * @see #outerJoin(KStream, ValueJoinerWithKey, JoinWindows, StreamJoined)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because join emission is stream-time gated, and stream time
++     *             there is a low-water mark over concurrently dispatched work rather than stock's - so which records
++     *             fall inside a join window moves with dispatch order. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-KStream join is not supported on the Parallel Consumer dispatch path (astubbs#255): join emission is stream-time gated, and stream time there is a low-water mark over concurrently dispatched work rather than stock's, so which records fall inside a join window moves with dispatch order")
+     <VO, VR> KStream<K, VR> join(final KStream<K, VO> otherStream,
+                                  final ValueJoinerWithKey<? super K, ? super V, ? super VO, ? extends VR> joiner,
+                                  final JoinWindows windows,
+@@ -1571,7 +1600,14 @@
+      * this {@code KStream} and within the joining window intervals
+      * @see #join(KStream, ValueJoiner, JoinWindows)
+      * @see #outerJoin(KStream, ValueJoiner, JoinWindows)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because join emission is stream-time gated, and stream time
++     *             there is a low-water mark over concurrently dispatched work rather than stock's - so which records
++     *             fall inside a join window moves with dispatch order. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-KStream join is not supported on the Parallel Consumer dispatch path (astubbs#255): join emission is stream-time gated, and stream time there is a low-water mark over concurrently dispatched work rather than stock's, so which records fall inside a join window moves with dispatch order")
+     <VO, VR> KStream<K, VR> leftJoin(final KStream<K, VO> otherStream,
+                                      final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
+                                      final JoinWindows windows);
+@@ -1651,7 +1687,14 @@
+      * this {@code KStream} and within the joining window intervals
+      * @see #join(KStream, ValueJoinerWithKey, JoinWindows)
+      * @see #outerJoin(KStream, ValueJoinerWithKey, JoinWindows)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because join emission is stream-time gated, and stream time
++     *             there is a low-water mark over concurrently dispatched work rather than stock's - so which records
++     *             fall inside a join window moves with dispatch order. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-KStream join is not supported on the Parallel Consumer dispatch path (astubbs#255): join emission is stream-time gated, and stream time there is a low-water mark over concurrently dispatched work rather than stock's, so which records fall inside a join window moves with dispatch order")
+     <VO, VR> KStream<K, VR> leftJoin(final KStream<K, VO> otherStream,
+                                      final ValueJoinerWithKey<? super K, ? super V, ? super VO, ? extends VR> joiner,
+                                      final JoinWindows windows);
+@@ -1734,7 +1777,14 @@
+      * this {@code KStream} and within the joining window intervals
+      * @see #join(KStream, ValueJoiner, JoinWindows, StreamJoined)
+      * @see #outerJoin(KStream, ValueJoiner, JoinWindows, StreamJoined)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because join emission is stream-time gated, and stream time
++     *             there is a low-water mark over concurrently dispatched work rather than stock's - so which records
++     *             fall inside a join window moves with dispatch order. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-KStream join is not supported on the Parallel Consumer dispatch path (astubbs#255): join emission is stream-time gated, and stream time there is a low-water mark over concurrently dispatched work rather than stock's, so which records fall inside a join window moves with dispatch order")
+     <VO, VR> KStream<K, VR> leftJoin(final KStream<K, VO> otherStream,
+                                      final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
+                                      final JoinWindows windows,
+@@ -1819,7 +1869,14 @@
+      * this {@code KStream} and within the joining window intervals
+      * @see #join(KStream, ValueJoinerWithKey, JoinWindows, StreamJoined)
+      * @see #outerJoin(KStream, ValueJoinerWithKey, JoinWindows, StreamJoined)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because join emission is stream-time gated, and stream time
++     *             there is a low-water mark over concurrently dispatched work rather than stock's - so which records
++     *             fall inside a join window moves with dispatch order. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-KStream join is not supported on the Parallel Consumer dispatch path (astubbs#255): join emission is stream-time gated, and stream time there is a low-water mark over concurrently dispatched work rather than stock's, so which records fall inside a join window moves with dispatch order")
+     <VO, VR> KStream<K, VR> leftJoin(final KStream<K, VO> otherStream,
+                                      final ValueJoinerWithKey<? super K, ? super V, ? super VO, ? extends VR> joiner,
+                                      final JoinWindows windows,
+@@ -1900,7 +1957,14 @@
+      * both {@code KStream} and within the joining window intervals
+      * @see #join(KStream, ValueJoiner, JoinWindows)
+      * @see #leftJoin(KStream, ValueJoiner, JoinWindows)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because join emission is stream-time gated, and stream time
++     *             there is a low-water mark over concurrently dispatched work rather than stock's - so which records
++     *             fall inside a join window moves with dispatch order. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-KStream join is not supported on the Parallel Consumer dispatch path (astubbs#255): join emission is stream-time gated, and stream time there is a low-water mark over concurrently dispatched work rather than stock's, so which records fall inside a join window moves with dispatch order")
+     <VO, VR> KStream<K, VR> outerJoin(final KStream<K, VO> otherStream,
+                                       final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
+                                       final JoinWindows windows);
+@@ -1981,7 +2045,14 @@
+      * both {@code KStream} and within the joining window intervals
+      * @see #join(KStream, ValueJoinerWithKey, JoinWindows)
+      * @see #leftJoin(KStream, ValueJoinerWithKey, JoinWindows)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because join emission is stream-time gated, and stream time
++     *             there is a low-water mark over concurrently dispatched work rather than stock's - so which records
++     *             fall inside a join window moves with dispatch order. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-KStream join is not supported on the Parallel Consumer dispatch path (astubbs#255): join emission is stream-time gated, and stream time there is a low-water mark over concurrently dispatched work rather than stock's, so which records fall inside a join window moves with dispatch order")
+     <VO, VR> KStream<K, VR> outerJoin(final KStream<K, VO> otherStream,
+                                       final ValueJoinerWithKey<? super K, ? super V, ? super VO, ? extends VR> joiner,
+                                       final JoinWindows windows);
+@@ -2065,7 +2136,14 @@
+      * both {@code KStream} and within the joining window intervals
+      * @see #join(KStream, ValueJoiner, JoinWindows, StreamJoined)
+      * @see #leftJoin(KStream, ValueJoiner, JoinWindows, StreamJoined)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because join emission is stream-time gated, and stream time
++     *             there is a low-water mark over concurrently dispatched work rather than stock's - so which records
++     *             fall inside a join window moves with dispatch order. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-KStream join is not supported on the Parallel Consumer dispatch path (astubbs#255): join emission is stream-time gated, and stream time there is a low-water mark over concurrently dispatched work rather than stock's, so which records fall inside a join window moves with dispatch order")
+     <VO, VR> KStream<K, VR> outerJoin(final KStream<K, VO> otherStream,
+                                       final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
+                                       final JoinWindows windows,
+@@ -2151,7 +2229,14 @@
+      * both {@code KStream} and within the joining window intervals
+      * @see #join(KStream, ValueJoinerWithKey, JoinWindows, StreamJoined)
+      * @see #leftJoin(KStream, ValueJoinerWithKey, JoinWindows, StreamJoined)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because join emission is stream-time gated, and stream time
++     *             there is a low-water mark over concurrently dispatched work rather than stock's - so which records
++     *             fall inside a join window moves with dispatch order. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-KStream join is not supported on the Parallel Consumer dispatch path (astubbs#255): join emission is stream-time gated, and stream time there is a low-water mark over concurrently dispatched work rather than stock's, so which records fall inside a join window moves with dispatch order")
+     <VO, VR> KStream<K, VR> outerJoin(final KStream<K, VO> otherStream,
+                                       final ValueJoinerWithKey<? super K, ? super V, ? super VO, ? extends VR> joiner,
+                                       final JoinWindows windows,
+@@ -2228,7 +2313,14 @@
+      * {@link ValueJoiner}, one for each matched record-pair with the same key
+      * @see #leftJoin(KTable, ValueJoiner)
+      * @see #join(GlobalKTable, KeyValueMapper, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the table side is read at a stream time that here is
++     *             a low-water mark over concurrently dispatched work - so which version of the table a record sees
++     *             moves with dispatch order. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves
++     *             exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the table side is read at a stream time that there is a low-water mark over concurrently dispatched work, so which version of the table a record sees moves with dispatch order")
+     <VT, VR> KStream<K, VR> join(final KTable<K, VT> table,
+                                  final ValueJoiner<? super V, ? super VT, ? extends VR> joiner);
+ 
+@@ -2306,7 +2398,14 @@
+      * {@link ValueJoinerWithKey}, one for each matched record-pair with the same key
+      * @see #leftJoin(KTable, ValueJoinerWithKey)
+      * @see #join(GlobalKTable, KeyValueMapper, ValueJoinerWithKey)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the table side is read at a stream time that here is
++     *             a low-water mark over concurrently dispatched work - so which version of the table a record sees
++     *             moves with dispatch order. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves
++     *             exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the table side is read at a stream time that there is a low-water mark over concurrently dispatched work, so which version of the table a record sees moves with dispatch order")
+     <VT, VR> KStream<K, VR> join(final KTable<K, VT> table,
+                                  final ValueJoinerWithKey<? super K, ? super V, ? super VT, ? extends VR> joiner);
+ 
+@@ -2384,7 +2483,14 @@
+      * {@link ValueJoiner}, one for each matched record-pair with the same key
+      * @see #leftJoin(KTable, ValueJoiner, Joined)
+      * @see #join(GlobalKTable, KeyValueMapper, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the table side is read at a stream time that here is
++     *             a low-water mark over concurrently dispatched work - so which version of the table a record sees
++     *             moves with dispatch order. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves
++     *             exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the table side is read at a stream time that there is a low-water mark over concurrently dispatched work, so which version of the table a record sees moves with dispatch order")
+     <VT, VR> KStream<K, VR> join(final KTable<K, VT> table,
+                                  final ValueJoiner<? super V, ? super VT, ? extends VR> joiner,
+                                  final Joined<K, V, VT> joined);
+@@ -2465,7 +2571,14 @@
+      * {@link ValueJoinerWithKey}, one for each matched record-pair with the same key
+      * @see #leftJoin(KTable, ValueJoinerWithKey, Joined)
+      * @see #join(GlobalKTable, KeyValueMapper, ValueJoinerWithKey)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the table side is read at a stream time that here is
++     *             a low-water mark over concurrently dispatched work - so which version of the table a record sees
++     *             moves with dispatch order. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves
++     *             exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the table side is read at a stream time that there is a low-water mark over concurrently dispatched work, so which version of the table a record sees moves with dispatch order")
+     <VT, VR> KStream<K, VR> join(final KTable<K, VT> table,
+                                  final ValueJoinerWithKey<? super K, ? super V, ? super VT, ? extends VR> joiner,
+                                  final Joined<K, V, VT> joined);
+@@ -2545,7 +2658,14 @@
+      * {@link ValueJoiner}, one output for each input {@code KStream} record
+      * @see #join(KTable, ValueJoiner)
+      * @see #leftJoin(GlobalKTable, KeyValueMapper, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the table side is read at a stream time that here is
++     *             a low-water mark over concurrently dispatched work - so which version of the table a record sees
++     *             moves with dispatch order. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves
++     *             exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the table side is read at a stream time that there is a low-water mark over concurrently dispatched work, so which version of the table a record sees moves with dispatch order")
+     <VT, VR> KStream<K, VR> leftJoin(final KTable<K, VT> table,
+                                      final ValueJoiner<? super V, ? super VT, ? extends VR> joiner);
+ 
+@@ -2625,7 +2745,14 @@
+      * {@link ValueJoinerWithKey}, one output for each input {@code KStream} record
+      * @see #join(KTable, ValueJoinerWithKey)
+      * @see #leftJoin(GlobalKTable, KeyValueMapper, ValueJoinerWithKey)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the table side is read at a stream time that here is
++     *             a low-water mark over concurrently dispatched work - so which version of the table a record sees
++     *             moves with dispatch order. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves
++     *             exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the table side is read at a stream time that there is a low-water mark over concurrently dispatched work, so which version of the table a record sees moves with dispatch order")
+     <VT, VR> KStream<K, VR> leftJoin(final KTable<K, VT> table,
+                                      final ValueJoinerWithKey<? super K, ? super V, ? super VT, ? extends VR> joiner);
+ 
+@@ -2706,7 +2833,14 @@
+      * {@link ValueJoiner}, one output for each input {@code KStream} record
+      * @see #join(KTable, ValueJoiner, Joined)
+      * @see #leftJoin(GlobalKTable, KeyValueMapper, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the table side is read at a stream time that here is
++     *             a low-water mark over concurrently dispatched work - so which version of the table a record sees
++     *             moves with dispatch order. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves
++     *             exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the table side is read at a stream time that there is a low-water mark over concurrently dispatched work, so which version of the table a record sees moves with dispatch order")
+     <VT, VR> KStream<K, VR> leftJoin(final KTable<K, VT> table,
+                                      final ValueJoiner<? super V, ? super VT, ? extends VR> joiner,
+                                      final Joined<K, V, VT> joined);
+@@ -2789,7 +2923,14 @@
+      * {@link ValueJoinerWithKey}, one output for each input {@code KStream} record
+      * @see #join(KTable, ValueJoinerWithKey, Joined)
+      * @see #leftJoin(GlobalKTable, KeyValueMapper, ValueJoinerWithKey)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the table side is read at a stream time that here is
++     *             a low-water mark over concurrently dispatched work - so which version of the table a record sees
++     *             moves with dispatch order. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves
++     *             exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the table side is read at a stream time that there is a low-water mark over concurrently dispatched work, so which version of the table a record sees moves with dispatch order")
+     <VT, VR> KStream<K, VR> leftJoin(final KTable<K, VT> table,
+                                      final ValueJoinerWithKey<? super K, ? super V, ? super VT, ? extends VR> joiner,
+                                      final Joined<K, V, VT> joined);
+@@ -2820,7 +2961,14 @@
+      * @return a {@code KStream} that contains join-records for each key and values computed by the given
+      * {@link ValueJoiner}, one output for each input {@code KStream} record
+      * @see #leftJoin(GlobalKTable, KeyValueMapper, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the global table is read at a stream time that here
++     *             is a low-water mark over concurrently dispatched work - so which version of the table a record sees
++     *             moves with dispatch order. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves
++     *             exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-GlobalKTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the global table is read at a stream time that there is a low-water mark over concurrently dispatched work, so which version of the table a record sees moves with dispatch order")
+     <GK, GV, RV> KStream<K, RV> join(final GlobalKTable<GK, GV> globalTable,
+                                      final KeyValueMapper<? super K, ? super V, ? extends GK> keySelector,
+                                      final ValueJoiner<? super V, ? super GV, ? extends RV> joiner);
+@@ -2852,7 +3000,14 @@
+      * @return a {@code KStream} that contains join-records for each key and values computed by the given
+      * {@link ValueJoinerWithKey}, one output for each input {@code KStream} record
+      * @see #leftJoin(GlobalKTable, KeyValueMapper, ValueJoinerWithKey)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the global table is read at a stream time that here
++     *             is a low-water mark over concurrently dispatched work - so which version of the table a record sees
++     *             moves with dispatch order. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves
++     *             exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-GlobalKTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the global table is read at a stream time that there is a low-water mark over concurrently dispatched work, so which version of the table a record sees moves with dispatch order")
+     <GK, GV, RV> KStream<K, RV> join(final GlobalKTable<GK, GV> globalTable,
+                                      final KeyValueMapper<? super K, ? super V, ? extends GK> keySelector,
+                                      final ValueJoinerWithKey<? super K, ? super V, ? super GV, ? extends RV> joiner);
+@@ -2884,7 +3039,14 @@
+      * @return a {@code KStream} that contains join-records for each key and values computed by the given
+      * {@link ValueJoiner}, one output for each input {@code KStream} record
+      * @see #leftJoin(GlobalKTable, KeyValueMapper, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the global table is read at a stream time that here
++     *             is a low-water mark over concurrently dispatched work - so which version of the table a record sees
++     *             moves with dispatch order. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves
++     *             exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-GlobalKTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the global table is read at a stream time that there is a low-water mark over concurrently dispatched work, so which version of the table a record sees moves with dispatch order")
+     <GK, GV, RV> KStream<K, RV> join(final GlobalKTable<GK, GV> globalTable,
+                                      final KeyValueMapper<? super K, ? super V, ? extends GK> keySelector,
+                                      final ValueJoiner<? super V, ? super GV, ? extends RV> joiner,
+@@ -2918,7 +3080,14 @@
+      * @return a {@code KStream} that contains join-records for each key and values computed by the given
+      * {@link ValueJoinerWithKey}, one output for each input {@code KStream} record
+      * @see #leftJoin(GlobalKTable, KeyValueMapper, ValueJoinerWithKey)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the global table is read at a stream time that here
++     *             is a low-water mark over concurrently dispatched work - so which version of the table a record sees
++     *             moves with dispatch order. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves
++     *             exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-GlobalKTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the global table is read at a stream time that there is a low-water mark over concurrently dispatched work, so which version of the table a record sees moves with dispatch order")
+     <GK, GV, RV> KStream<K, RV> join(final GlobalKTable<GK, GV> globalTable,
+                                      final KeyValueMapper<? super K, ? super V, ? extends GK> keySelector,
+                                      final ValueJoinerWithKey<? super K, ? super V, ? super GV, ? extends RV> joiner,
+@@ -2954,7 +3123,14 @@
+      * @return a {@code KStream} that contains join-records for each key and values computed by the given
+      * {@link ValueJoiner}, one output for each input {@code KStream} record
+      * @see #join(GlobalKTable, KeyValueMapper, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the global table is read at a stream time that here
++     *             is a low-water mark over concurrently dispatched work - so which version of the table a record sees
++     *             moves with dispatch order. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves
++     *             exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-GlobalKTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the global table is read at a stream time that there is a low-water mark over concurrently dispatched work, so which version of the table a record sees moves with dispatch order")
+     <GK, GV, RV> KStream<K, RV> leftJoin(final GlobalKTable<GK, GV> globalTable,
+                                          final KeyValueMapper<? super K, ? super V, ? extends GK> keySelector,
+                                          final ValueJoiner<? super V, ? super GV, ? extends RV> valueJoiner);
+@@ -2990,7 +3166,14 @@
+      * @return a {@code KStream} that contains join-records for each key and values computed by the given
+      * {@link ValueJoinerWithKey}, one output for each input {@code KStream} record
+      * @see #join(GlobalKTable, KeyValueMapper, ValueJoinerWithKey)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the global table is read at a stream time that here
++     *             is a low-water mark over concurrently dispatched work - so which version of the table a record sees
++     *             moves with dispatch order. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves
++     *             exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-GlobalKTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the global table is read at a stream time that there is a low-water mark over concurrently dispatched work, so which version of the table a record sees moves with dispatch order")
+     <GK, GV, RV> KStream<K, RV> leftJoin(final GlobalKTable<GK, GV> globalTable,
+                                          final KeyValueMapper<? super K, ? super V, ? extends GK> keySelector,
+                                          final ValueJoinerWithKey<? super K, ? super V, ? super GV, ? extends RV> valueJoiner);
+@@ -3026,7 +3209,14 @@
+      * @return a {@code KStream} that contains join-records for each key and values computed by the given
+      * {@link ValueJoiner}, one output for each input {@code KStream} record
+      * @see #join(GlobalKTable, KeyValueMapper, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the global table is read at a stream time that here
++     *             is a low-water mark over concurrently dispatched work - so which version of the table a record sees
++     *             moves with dispatch order. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves
++     *             exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-GlobalKTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the global table is read at a stream time that there is a low-water mark over concurrently dispatched work, so which version of the table a record sees moves with dispatch order")
+     <GK, GV, RV> KStream<K, RV> leftJoin(final GlobalKTable<GK, GV> globalTable,
+                                          final KeyValueMapper<? super K, ? super V, ? extends GK> keySelector,
+                                          final ValueJoiner<? super V, ? super GV, ? extends RV> valueJoiner,
+@@ -3063,7 +3253,14 @@
+      * @return a {@code KStream} that contains join-records for each key and values computed by the given
+      * {@link ValueJoinerWithKey}, one output for each input {@code KStream} record
+      * @see #join(GlobalKTable, KeyValueMapper, ValueJoinerWithKey)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the global table is read at a stream time that here
++     *             is a low-water mark over concurrently dispatched work - so which version of the table a record sees
++     *             moves with dispatch order. Turn that dispatch off ({@code PcDispatchSwitch}) and this behaves
++     *             exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KStream-GlobalKTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): the global table is read at a stream time that there is a low-water mark over concurrently dispatched work, so which version of the table a record sees moves with dispatch order")
+     <GK, GV, RV> KStream<K, RV> leftJoin(final GlobalKTable<GK, GV> globalTable,
+                                          final KeyValueMapper<? super K, ? super V, ? extends GK> keySelector,
+                                          final ValueJoinerWithKey<? super K, ? super V, ? super GV, ? extends RV> valueJoiner,
+diff -ruN kafka-pristine/org/apache/kafka/streams/kstream/KTable.java kafka-patched/org/apache/kafka/streams/kstream/KTable.java
+--- a/org/apache/kafka/streams/kstream/KTable.java	2026-02-07 12:00:08.000000000 +1300
++++ b/org/apache/kafka/streams/kstream/KTable.java	2026-09-01 15:40:24.732775324 +1200
+@@ -16,6 +16,7 @@
+  */
+ package org.apache.kafka.streams.kstream;
+ 
++import com.google.errorprone.annotations.DoNotCall;
+ import org.apache.kafka.common.serialization.Serde;
+ import org.apache.kafka.common.utils.Bytes;
+ import org.apache.kafka.streams.KafkaStreams;
+@@ -727,7 +728,13 @@
+      *
+      * @param suppressed Configuration object determining what, if any, updates to suppress
+      * @return A new KTable with the desired suppression characteristics.
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because "only the final result per window" is a statement about
++     *             stream time, which does not advance there. Turn that dispatch off ({@code PcDispatchSwitch}) and this
++     *             behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("suppress is not supported on the Parallel Consumer dispatch path (astubbs#255): \"only the final result per window\" is a statement about stream time, which does not advance there")
+     KTable<K, V> suppress(final Suppressed<? super K> suppressed);
+ 
+     /**
+@@ -1174,7 +1181,13 @@
+      * {@link ValueJoiner}, one for each matched record-pair with the same key
+      * @see #leftJoin(KTable, ValueJoiner)
+      * @see #outerJoin(KTable, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because results are emitted per update in arrival order, which
++     *             concurrent dispatch does not preserve. Turn that dispatch off ({@code PcDispatchSwitch}) and this
++     *             behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KTable-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): results are emitted per update in arrival order, which concurrent dispatch does not preserve")
+     <VO, VR> KTable<K, VR> join(final KTable<K, VO> other,
+                                 final ValueJoiner<? super V, ? super VO, ? extends VR> joiner);
+ 
+@@ -1250,7 +1263,13 @@
+      * {@link ValueJoiner}, one for each matched record-pair with the same key
+      * @see #leftJoin(KTable, ValueJoiner)
+      * @see #outerJoin(KTable, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because results are emitted per update in arrival order, which
++     *             concurrent dispatch does not preserve. Turn that dispatch off ({@code PcDispatchSwitch}) and this
++     *             behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KTable-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): results are emitted per update in arrival order, which concurrent dispatch does not preserve")
+     <VO, VR> KTable<K, VR> join(final KTable<K, VO> other,
+                                 final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
+                                 final Named named);
+@@ -1329,7 +1348,13 @@
+      * {@link ValueJoiner}, one for each matched record-pair with the same key
+      * @see #leftJoin(KTable, ValueJoiner, Materialized)
+      * @see #outerJoin(KTable, ValueJoiner, Materialized)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because results are emitted per update in arrival order, which
++     *             concurrent dispatch does not preserve. Turn that dispatch off ({@code PcDispatchSwitch}) and this
++     *             behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KTable-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): results are emitted per update in arrival order, which concurrent dispatch does not preserve")
+     <VO, VR> KTable<K, VR> join(final KTable<K, VO> other,
+                                 final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
+                                 final Materialized<K, VR, KeyValueStore<Bytes, byte[]>> materialized);
+@@ -1409,7 +1434,13 @@
+      * {@link ValueJoiner}, one for each matched record-pair with the same key
+      * @see #leftJoin(KTable, ValueJoiner, Materialized)
+      * @see #outerJoin(KTable, ValueJoiner, Materialized)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because results are emitted per update in arrival order, which
++     *             concurrent dispatch does not preserve. Turn that dispatch off ({@code PcDispatchSwitch}) and this
++     *             behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KTable-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): results are emitted per update in arrival order, which concurrent dispatch does not preserve")
+     <VO, VR> KTable<K, VR> join(final KTable<K, VO> other,
+                                 final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
+                                 final Named named,
+@@ -1493,7 +1524,13 @@
+      * left {@code KTable}
+      * @see #join(KTable, ValueJoiner)
+      * @see #outerJoin(KTable, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because results are emitted per update in arrival order, which
++     *             concurrent dispatch does not preserve. Turn that dispatch off ({@code PcDispatchSwitch}) and this
++     *             behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KTable-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): results are emitted per update in arrival order, which concurrent dispatch does not preserve")
+     <VO, VR> KTable<K, VR> leftJoin(final KTable<K, VO> other,
+                                     final ValueJoiner<? super V, ? super VO, ? extends VR> joiner);
+ 
+@@ -1576,7 +1613,13 @@
+      * left {@code KTable}
+      * @see #join(KTable, ValueJoiner)
+      * @see #outerJoin(KTable, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because results are emitted per update in arrival order, which
++     *             concurrent dispatch does not preserve. Turn that dispatch off ({@code PcDispatchSwitch}) and this
++     *             behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KTable-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): results are emitted per update in arrival order, which concurrent dispatch does not preserve")
+     <VO, VR> KTable<K, VR> leftJoin(final KTable<K, VO> other,
+                                     final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
+                                     final Named named);
+@@ -1662,7 +1705,13 @@
+      * left {@code KTable}
+      * @see #join(KTable, ValueJoiner, Materialized)
+      * @see #outerJoin(KTable, ValueJoiner, Materialized)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because results are emitted per update in arrival order, which
++     *             concurrent dispatch does not preserve. Turn that dispatch off ({@code PcDispatchSwitch}) and this
++     *             behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KTable-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): results are emitted per update in arrival order, which concurrent dispatch does not preserve")
+     <VO, VR> KTable<K, VR> leftJoin(final KTable<K, VO> other,
+                                     final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
+                                     final Materialized<K, VR, KeyValueStore<Bytes, byte[]>> materialized);
+@@ -1749,7 +1798,13 @@
+      * left {@code KTable}
+      * @see #join(KTable, ValueJoiner, Materialized)
+      * @see #outerJoin(KTable, ValueJoiner, Materialized)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because results are emitted per update in arrival order, which
++     *             concurrent dispatch does not preserve. Turn that dispatch off ({@code PcDispatchSwitch}) and this
++     *             behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KTable-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): results are emitted per update in arrival order, which concurrent dispatch does not preserve")
+     <VO, VR> KTable<K, VR> leftJoin(final KTable<K, VO> other,
+                                     final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
+                                     final Named named,
+@@ -1832,7 +1887,13 @@
+      * both {@code KTable}s
+      * @see #join(KTable, ValueJoiner)
+      * @see #leftJoin(KTable, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because results are emitted per update in arrival order, which
++     *             concurrent dispatch does not preserve. Turn that dispatch off ({@code PcDispatchSwitch}) and this
++     *             behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KTable-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): results are emitted per update in arrival order, which concurrent dispatch does not preserve")
+     <VO, VR> KTable<K, VR> outerJoin(final KTable<K, VO> other,
+                                      final ValueJoiner<? super V, ? super VO, ? extends VR> joiner);
+ 
+@@ -1915,7 +1976,13 @@
+      * both {@code KTable}s
+      * @see #join(KTable, ValueJoiner)
+      * @see #leftJoin(KTable, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because results are emitted per update in arrival order, which
++     *             concurrent dispatch does not preserve. Turn that dispatch off ({@code PcDispatchSwitch}) and this
++     *             behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KTable-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): results are emitted per update in arrival order, which concurrent dispatch does not preserve")
+     <VO, VR> KTable<K, VR> outerJoin(final KTable<K, VO> other,
+                                      final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
+                                      final Named named);
+@@ -2000,7 +2067,13 @@
+      * both {@code KTable}s
+      * @see #join(KTable, ValueJoiner)
+      * @see #leftJoin(KTable, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because results are emitted per update in arrival order, which
++     *             concurrent dispatch does not preserve. Turn that dispatch off ({@code PcDispatchSwitch}) and this
++     *             behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KTable-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): results are emitted per update in arrival order, which concurrent dispatch does not preserve")
+     <VO, VR> KTable<K, VR> outerJoin(final KTable<K, VO> other,
+                                      final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
+                                      final Materialized<K, VR, KeyValueStore<Bytes, byte[]>> materialized);
+@@ -2087,7 +2160,13 @@
+      * both {@code KTable}s
+      * @see #join(KTable, ValueJoiner)
+      * @see #leftJoin(KTable, ValueJoiner)
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because results are emitted per update in arrival order, which
++     *             concurrent dispatch does not preserve. Turn that dispatch off ({@code PcDispatchSwitch}) and this
++     *             behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KTable-KTable join is not supported on the Parallel Consumer dispatch path (astubbs#255): results are emitted per update in arrival order, which concurrent dispatch does not preserve")
+     <VO, VR> KTable<K, VR> outerJoin(final KTable<K, VO> other,
+                                      final ValueJoiner<? super V, ? super VO, ? extends VR> joiner,
+                                      final Named named,
+@@ -2106,7 +2185,13 @@
+      * @param <KO>                the key type of the other {@code KTable}
+      * @param <VO>                the value type of the other {@code KTable}
+      * @return a {@code KTable} that contains the result of joining this table with {@code other}
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the subscription store is updated and read across both
++     *             halves without ordering concurrent dispatch can honour. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KTable-KTable foreign-key join is not supported on the Parallel Consumer dispatch path (astubbs#255): the subscription store is updated and read across both halves without ordering concurrent dispatch can honour")
+     <VR, KO, VO> KTable<K, VR> join(final KTable<KO, VO> other,
+                                     final Function<V, KO> foreignKeyExtractor,
+                                     final ValueJoiner<V, VO, VR> joiner);
+@@ -2127,8 +2212,13 @@
+      * @return a {@code KTable} that contains the result of joining this table with {@code other}
+      *
+      * @deprecated since 3.1, removal planned for 4.0. Use {@link #join(KTable, Function, ValueJoiner, TableJoined)} instead.
++     *             Separately, {@code parallel-consumer-streams} also refuses this on the Parallel Consumer dispatch
++     *             path (astubbs#255), because the subscription store is updated and read across both halves without
++     *             ordering concurrent dispatch can honour; turn that dispatch off ({@code PcDispatchSwitch}) and it
++     *             behaves exactly as stock Kafka Streams.
+      */
+     @Deprecated
++    @DoNotCall("KTable-KTable foreign-key join is not supported on the Parallel Consumer dispatch path (astubbs#255): the subscription store is updated and read across both halves without ordering concurrent dispatch can honour")
+     <VR, KO, VO> KTable<K, VR> join(final KTable<KO, VO> other,
+                                     final Function<V, KO> foreignKeyExtractor,
+                                     final ValueJoiner<V, VO, VR> joiner,
+@@ -2151,7 +2241,13 @@
+      * @param <KO>                the key type of the other {@code KTable}
+      * @param <VO>                the value type of the other {@code KTable}
+      * @return a {@code KTable} that contains the result of joining this table with {@code other}
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the subscription store is updated and read across both
++     *             halves without ordering concurrent dispatch can honour. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KTable-KTable foreign-key join is not supported on the Parallel Consumer dispatch path (astubbs#255): the subscription store is updated and read across both halves without ordering concurrent dispatch can honour")
+     <VR, KO, VO> KTable<K, VR> join(final KTable<KO, VO> other,
+                                     final Function<V, KO> foreignKeyExtractor,
+                                     final ValueJoiner<V, VO, VR> joiner,
+@@ -2172,7 +2268,13 @@
+      * @param <KO>                the key type of the other {@code KTable}
+      * @param <VO>                the value type of the other {@code KTable}
+      * @return a {@code KTable} that contains the result of joining this table with {@code other}
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the subscription store is updated and read across both
++     *             halves without ordering concurrent dispatch can honour. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KTable-KTable foreign-key join is not supported on the Parallel Consumer dispatch path (astubbs#255): the subscription store is updated and read across both halves without ordering concurrent dispatch can honour")
+     <VR, KO, VO> KTable<K, VR> join(final KTable<KO, VO> other,
+                                     final Function<V, KO> foreignKeyExtractor,
+                                     final ValueJoiner<V, VO, VR> joiner,
+@@ -2196,8 +2298,13 @@
+      * @return a {@code KTable} that contains the result of joining this table with {@code other}
+      *
+      * @deprecated since 3.1, removal planned for 4.0. Use {@link #join(KTable, Function, ValueJoiner, TableJoined, Materialized)} instead.
++     *             Separately, {@code parallel-consumer-streams} also refuses this on the Parallel Consumer dispatch
++     *             path (astubbs#255), because the subscription store is updated and read across both halves without
++     *             ordering concurrent dispatch can honour; turn that dispatch off ({@code PcDispatchSwitch}) and it
++     *             behaves exactly as stock Kafka Streams.
+      */
+     @Deprecated
++    @DoNotCall("KTable-KTable foreign-key join is not supported on the Parallel Consumer dispatch path (astubbs#255): the subscription store is updated and read across both halves without ordering concurrent dispatch can honour")
+     <VR, KO, VO> KTable<K, VR> join(final KTable<KO, VO> other,
+                                     final Function<V, KO> foreignKeyExtractor,
+                                     final ValueJoiner<V, VO, VR> joiner,
+@@ -2223,7 +2330,13 @@
+      * @param <KO>                the key type of the other {@code KTable}
+      * @param <VO>                the value type of the other {@code KTable}
+      * @return a {@code KTable} that contains the result of joining this table with {@code other}
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the subscription store is updated and read across both
++     *             halves without ordering concurrent dispatch can honour. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KTable-KTable foreign-key join is not supported on the Parallel Consumer dispatch path (astubbs#255): the subscription store is updated and read across both halves without ordering concurrent dispatch can honour")
+     <VR, KO, VO> KTable<K, VR> join(final KTable<KO, VO> other,
+                                     final Function<V, KO> foreignKeyExtractor,
+                                     final ValueJoiner<V, VO, VR> joiner,
+@@ -2243,7 +2356,13 @@
+      * @param <KO>                the key type of the other {@code KTable}
+      * @param <VO>                the value type of the other {@code KTable}
+      * @return a {@code KTable} that contains only those records that satisfy the given predicate
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the subscription store is updated and read across both
++     *             halves without ordering concurrent dispatch can honour. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KTable-KTable foreign-key join is not supported on the Parallel Consumer dispatch path (astubbs#255): the subscription store is updated and read across both halves without ordering concurrent dispatch can honour")
+     <VR, KO, VO> KTable<K, VR> leftJoin(final KTable<KO, VO> other,
+                                         final Function<V, KO> foreignKeyExtractor,
+                                         final ValueJoiner<V, VO, VR> joiner);
+@@ -2264,8 +2383,13 @@
+      * @return a {@code KTable} that contains the result of joining this table with {@code other}
+      *
+      * @deprecated since 3.1, removal planned for 4.0. Use {@link #leftJoin(KTable, Function, ValueJoiner, TableJoined)} instead.
++     *             Separately, {@code parallel-consumer-streams} also refuses this on the Parallel Consumer dispatch
++     *             path (astubbs#255), because the subscription store is updated and read across both halves without
++     *             ordering concurrent dispatch can honour; turn that dispatch off ({@code PcDispatchSwitch}) and it
++     *             behaves exactly as stock Kafka Streams.
+      */
+     @Deprecated
++    @DoNotCall("KTable-KTable foreign-key join is not supported on the Parallel Consumer dispatch path (astubbs#255): the subscription store is updated and read across both halves without ordering concurrent dispatch can honour")
+     <VR, KO, VO> KTable<K, VR> leftJoin(final KTable<KO, VO> other,
+                                         final Function<V, KO> foreignKeyExtractor,
+                                         final ValueJoiner<V, VO, VR> joiner,
+@@ -2287,7 +2411,13 @@
+      * @param <KO>                the key type of the other {@code KTable}
+      * @param <VO>                the value type of the other {@code KTable}
+      * @return a {@code KTable} that contains the result of joining this table with {@code other}
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the subscription store is updated and read across both
++     *             halves without ordering concurrent dispatch can honour. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KTable-KTable foreign-key join is not supported on the Parallel Consumer dispatch path (astubbs#255): the subscription store is updated and read across both halves without ordering concurrent dispatch can honour")
+     <VR, KO, VO> KTable<K, VR> leftJoin(final KTable<KO, VO> other,
+                                         final Function<V, KO> foreignKeyExtractor,
+                                         final ValueJoiner<V, VO, VR> joiner,
+@@ -2308,7 +2438,13 @@
+      * @param <KO>                the key type of the other {@code KTable}
+      * @param <VO>                the value type of the other {@code KTable}
+      * @return a {@code KTable} that contains the result of joining this table with {@code other}
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the subscription store is updated and read across both
++     *             halves without ordering concurrent dispatch can honour. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KTable-KTable foreign-key join is not supported on the Parallel Consumer dispatch path (astubbs#255): the subscription store is updated and read across both halves without ordering concurrent dispatch can honour")
+     <VR, KO, VO> KTable<K, VR> leftJoin(final KTable<KO, VO> other,
+                                         final Function<V, KO> foreignKeyExtractor,
+                                         final ValueJoiner<V, VO, VR> joiner,
+@@ -2332,8 +2468,13 @@
+      * @return a {@code KTable} that contains the result of joining this table with {@code other}
+      *
+      * @deprecated since 3.1, removal planned for 4.0. Use {@link #leftJoin(KTable, Function, ValueJoiner, TableJoined, Materialized)} instead.
++     *             Separately, {@code parallel-consumer-streams} also refuses this on the Parallel Consumer dispatch
++     *             path (astubbs#255), because the subscription store is updated and read across both halves without
++     *             ordering concurrent dispatch can honour; turn that dispatch off ({@code PcDispatchSwitch}) and it
++     *             behaves exactly as stock Kafka Streams.
+      */
+     @Deprecated
++    @DoNotCall("KTable-KTable foreign-key join is not supported on the Parallel Consumer dispatch path (astubbs#255): the subscription store is updated and read across both halves without ordering concurrent dispatch can honour")
+     <VR, KO, VO> KTable<K, VR> leftJoin(final KTable<KO, VO> other,
+                                         final Function<V, KO> foreignKeyExtractor,
+                                         final ValueJoiner<V, VO, VR> joiner,
+@@ -2359,7 +2500,13 @@
+      * @param <KO>                the key type of the other {@code KTable}
+      * @param <VO>                the value type of the other {@code KTable}
+      * @return a {@code KTable} that contains the result of joining this table with {@code other}
++     * @deprecated Not deprecated by Apache Kafka: {@code parallel-consumer-streams} refuses this on the Parallel
++     *             Consumer dispatch path (astubbs#255), because the subscription store is updated and read across both
++     *             halves without ordering concurrent dispatch can honour. Turn that dispatch off
++     *             ({@code PcDispatchSwitch}) and this behaves exactly as stock Kafka Streams.
+      */
++    @Deprecated
++    @DoNotCall("KTable-KTable foreign-key join is not supported on the Parallel Consumer dispatch path (astubbs#255): the subscription store is updated and read across both halves without ordering concurrent dispatch can honour")
+     <VR, KO, VO> KTable<K, VR> leftJoin(final KTable<KO, VO> other,
+                                         final Function<V, KO> foreignKeyExtractor,
+                                         final ValueJoiner<V, VO, VR> joiner,
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java kafka-patched/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java
 --- a/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java	2026-08-10 21:33:30.334157788 +1200
++++ b/org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java	2026-09-01 15:40:24.734612696 +1200
 @@ -44,8 +44,13 @@
      private final Serde<?> keySerde;
      private final Serde<?> valueSerde;
@@ -129,7 +1265,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/AbstractPr
      @Override
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java kafka-patched/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java
 --- a/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java	2026-08-10 21:33:30.335138181 +1200
++++ b/org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java	2026-09-01 15:40:24.735049862 +1200
 @@ -243,7 +243,11 @@
                      "multiple times.");
          }
@@ -175,7 +1311,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/ProcessorC
      }
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java kafka-patched/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java
 --- a/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java	2026-08-10 21:33:30.336098117 +1200
++++ b/org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java	2026-09-01 15:40:24.735444362 +1200
 @@ -64,6 +64,7 @@
  import java.util.Objects;
  import java.util.Optional;
@@ -209,24 +1345,29 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/RecordColl
      @Override
 diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask.java kafka-patched/org/apache/kafka/streams/processor/internals/StreamTask.java
 --- a/org/apache/kafka/streams/processor/internals/StreamTask.java	2026-02-07 12:00:08.000000000 +1300
-+++ b/org/apache/kafka/streams/processor/internals/StreamTask.java	2026-08-10 21:33:40.852147539 +1200
-@@ -16,6 +16,7 @@
++++ b/org/apache/kafka/streams/processor/internals/StreamTask.java	2026-09-01 15:40:24.735740986 +1200
+@@ -16,6 +16,9 @@
   */
  package org.apache.kafka.streams.processor.internals;
  
++import bz.stub.parallelconsumer.streams.PcDispatchSwitch;
++import bz.stub.parallelconsumer.streams.PcSupportedEnvelope;
 +import bz.stub.parallelconsumer.streams.PcTaskDispatcher;
  import org.apache.kafka.clients.consumer.Consumer;
  import org.apache.kafka.clients.consumer.ConsumerConfig;
  import org.apache.kafka.clients.consumer.ConsumerRecord;
-@@ -52,6 +53,7 @@
+@@ -52,14 +55,18 @@
  import org.apache.kafka.streams.state.internals.ThreadCache;
  
  import java.io.IOException;
 +import java.time.Duration;
  import java.util.Collections;
++import java.util.EnumSet;
  import java.util.HashMap;
  import java.util.HashSet;
-@@ -60,6 +62,7 @@
++import java.util.Iterator;
+ import java.util.List;
+ import java.util.Map;
  import java.util.Objects;
  import java.util.Optional;
  import java.util.Set;
@@ -234,7 +1375,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
  import java.util.function.Function;
  import java.util.stream.Collectors;
  
-@@ -84,7 +87,12 @@
+@@ -84,7 +91,12 @@
      private final int maxBufferedSize;
      private final AbstractPartitionGroup partitionGroup;
      private final RecordCollector recordCollector;
@@ -248,7 +1389,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
      private final Map<TopicPartition, Long> consumedOffsets;
      private final Map<TopicPartition, Long> committedOffsets;
      private final Map<TopicPartition, Long> highWatermark;
-@@ -94,7 +102,8 @@
+@@ -94,7 +106,8 @@
      private final PunctuationQueue systemTimePunctuationQueue;
      private final StreamsMetricsImpl streamsMetrics;
  
@@ -258,17 +1399,22 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
  
      private final Sensor closeTaskSensor;
      private final Sensor processRatioSensor;
-@@ -113,8 +122,32 @@
+@@ -113,8 +126,62 @@
      private final ProcessingExceptionHandler processingExceptionHandler;
  
      private StampedRecord record;
 +
 +    /**
 +     * PC dispatch (astubbs#255): non-null when this task feeds Parallel Consumer instead of its own
-+     * {@link #partitionGroup}. Decided once, in the constructor, so a task cannot change record paths
-+     * mid-run and strand records in the path it abandoned. Null is the stock path.
++     * {@link #partitionGroup}. Null is the stock path, and <b>which of the two this task is stays decided
++     * for its whole life</b> - the constructor settles it, so a task cannot change record paths mid-run and
++     * strand records in the path it abandoned.
++     * <p>
++     * <b>Not final since U10, and the mutation is one narrow case:</b> {@link #revive()} replaces a closed
++     * dispatcher with a fresh one. The task object survives a dirty close there, so the field has to as
++     * well; what may never change is null-ness, which {@code revive()} asserts rather than assumes.
 +     */
-+    private final PcTaskDispatcher pcDispatcher;
++    private PcTaskDispatcher pcDispatcher;
 +
 +
 +    /** PC dispatch (astubbs#255): how long {@link #suspend()} waits for in-flight work before giving up. */
@@ -283,6 +1429,31 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
 +     */
 +    private final Map<TopicPartition, RecordQueue> pcRecordQueues = new HashMap<>();
 +
++    /**
++     * PC dispatch (astubbs#255, U14): the partitions this path has paused for backpressure, and only those.
++     * Touched only from the StreamThread, in {@link #addRecords} and {@link #pcProcess}, which is why a
++     * plain {@link HashSet} is right here.
++     * <p>
++     * It exists so the resume can mirror the pause exactly. Kafka pauses partitions for reasons unrelated to
++     * buffering, and a resume computed from the whole assignment would hand those back early.
++     */
++    private final Set<TopicPartition> pcPausedPartitions = new HashSet<>();
++
++    /**
++     * PC dispatch (astubbs#255, U13): which punctuation types this task has already warned about. Once per
++     * task per type, not once per registration - a topology with several punctuators would otherwise repeat
++     * the same paragraph for each.
++     * <p>
++     * <b>Written from {@code schedule}, which runs on whichever thread called
++     * {@code ProcessorContext.schedule}</b> - the StreamThread during {@code init()}, or a WORKER during
++     * {@code process()} on this path. An earlier version of this comment said "the thread building the
++     * topology", which is false and would have been reused to justify a plain field on state where the race
++     * is not benign. It is benign here: the only cost is the same warning printed twice, and it can never be
++     * lost, because any caller reading false warns. Left as a plain {@link EnumSet} deliberately rather than
++     * by omission.
++     */
++    private final Set<PunctuationType> pcPunctuatorWarnings = EnumSet.noneOf(PunctuationType.class);
++
      private boolean commitNeeded = false;
 -    private boolean commitRequested = false;
 +    // PC dispatch (astubbs#255, U9 review): volatile because context.commit() runs on PC WORKER threads
@@ -292,7 +1463,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
      private boolean hasPendingTxCommit = false;
      private Optional<Long> timeCurrentIdlingStarted;
  
-@@ -191,8 +224,6 @@
+@@ -191,8 +258,6 @@
  
          recordQueueCreator = new RecordQueueCreator(this.logContext, config.timestampExtractor, config.deserializationExceptionHandler);
  
@@ -301,10 +1472,19 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
          final Sensor enforcedProcessingSensor;
          enforcedProcessingSensor = TaskMetrics.enforcedProcessingSensor(threadId, taskId, streamsMetrics);
          final long maxTaskIdleMs = config.maxTaskIdleMs;
-@@ -225,6 +256,10 @@
+@@ -225,6 +290,19 @@
          }
          timeCurrentIdlingStarted = Optional.empty();
          processingExceptionHandler = config.processingExceptionHandler;
++
++        // PC dispatch (astubbs#255): the backstop for the unsupported surface. The DSL refusals only fire for
++        // someone who called windowedBy/join/suppress; the Processor API reaches a WindowStore through
++        // addStateStore without touching KStream at all, and exactly-once is a config key rather than a
++        // topology shape. This constructor is the one place holding both the topology and the config, so the
++        // check costs no additional patched class. It is a no-op with the seam off - Kafka's own StreamTaskTest
++        // builds EOS-enabled tasks, and the behaviour-preservation claim is a seam-off claim.
++        // Deliberately BEFORE the dispatcher below: a refused task must not leave a worker pool behind.
++        PcSupportedEnvelope.checkTask(id.toString(), topology.stateStores(), config.eosEnabled);
 +
 +        // PC dispatch (astubbs#255): the switch. Off by default, so the stock path above stays the one that
 +        // runs unless a test or a system property says otherwise.
@@ -312,30 +1492,49 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
      }
  
      // create queues for each assigned partition and associate them
-@@ -314,8 +349,45 @@
+@@ -314,8 +392,64 @@
          }
      }
  
 +    /**
-+     * PC dispatch (astubbs#255): refuse revival rather than hang.
++     * PC dispatch (astubbs#255, U10): give a revived task a live dispatcher, rather than refusing to revive.
 +     * <p>
-+     * {@code closeDirtyAndRevive} resurrects <em>this same instance</em> after a dirty close, but the
-+     * dispatcher is final and was closed on the way down - so a revived task would register records into a
-+     * dispatcher that never hands them out again: no progress, no exception, nothing in the log. That silent
-+     * stall costs whoever hits it a day before they suspect the seam. Failing here converts it into an
-+     * immediate, named error.
++     * {@code closeDirtyAndRevive} resurrects <em>this same instance</em> after a dirty close, and the
++     * dispatcher went down with it: its worker pool is shut down, its {@code PcWorkSignal} registration is
++     * gone and its partitions are given back to the WorkManager. Registering records into that object would
++     * mean no progress, no exception and nothing in the log - which is why the rung below this one
++     * ({@code PcDispatchSwitch}, astubbs/parallel-consumer#389) threw an {@code IllegalStateException} here
++     * instead: a loud-failure floor, deliberately not lifecycle support.
 +     * <p>
-+     * Recreating the dispatcher instead is the real fix and belongs with the rebalance work; this is the
-+     * loud-failure floor until then.
++     * <b>Revival is ordinary, which is why the floor could not stay.</b> {@code TaskCorruptedException} is
++     * what Kafka raises when a consumer's offset falls outside the topic's retained range, and its recovery
++     * is close-dirty-then-revive. With the seam on, the throw left the run loop <em>uncaught on the
++     * StreamThread</em> - measured against Kafka's own {@code StreamThreadTest}, where it killed three cases
++     * outright. A recoverable event must not be a fatal one.
++     * <p>
++     * So the task builds itself a new dispatcher over the partitions it holds <em>now</em>, on the thread
++     * doing the reviving - which is what makes this the rebalance unit's work rather than the seam's. Nothing
++     * is stranded by the swap: the closed dispatcher had already drained its mailbox and revoked its
++     * partitions, and no offset it never committed was ever reported to Kafka, so the revived task re-reads
++     * exactly the records a stock revived task would.
++     * <p>
++     * <b>Null-ness may not change here.</b> A task that was built on the PC path stays on it, and one built
++     * on the stock path never acquires a dispatcher - a mid-run flip of the switch must not silently move a
++     * live task between record paths. {@code createIfEnabled} returning null while this task holds a
++     * dispatcher means exactly that flip happened, and it is a wiring error rather than a state to support.
 +     */
 +    @Override
 +    public void revive() {
 +        if (pcDispatcher != null && pcDispatcher.isClosed()) {
-+            throw new IllegalStateException(
-+                "PC dispatch (astubbs#255): task " + id + " cannot be revived - its PC dispatcher was closed "
-+                    + "with the task and would accept records without ever dispatching them. Revival under PC "
-+                    + "dispatch is not supported yet; run with the seam off "
-+                    + "(-Dpc.streams.dispatch.enabled=false) if this path is required.");
++            final PcTaskDispatcher revived = PcTaskDispatcher.createIfEnabled(id.toString(), inputPartitions());
++            if (revived == null) {
++                throw new IllegalStateException(
++                    "PC dispatch (astubbs#255): task " + id + " is on the PC path but the dispatch switch is "
++                        + "now off, so reviving it would silently move it to the stock record path. The "
++                        + "switch must not be changed while a Streams instance is running.");
++            }
++            log.info("PC dispatch rebuilt for revived task {} over {}", id, inputPartitions());
++            pcDispatcher = revived;
 +        }
 +        super.revive();
 +    }
@@ -358,7 +1557,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
          switch (state()) {
              case CREATED:
                  transitToSuspend();
-@@ -437,7 +509,23 @@
+@@ -437,7 +571,28 @@
                  // the commitNeeded flag just indicates whether we have reached RUNNING and processed any new data,
                  // so it only indicates whether the record collector should be flushed or not, whereas the state
                  // manager should always be flushed; either there is newly restored data or the flush will be a no-op
@@ -373,6 +1572,11 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
 +                    // output is not yet durable, which is the crash-loss window this unit exists to close.
 +                    // Collecting first is safe because a worker's order is send -> success -> mailbox: every
 +                    // offset in the collected map had its sends in the producer before this line ran.
++                    //
++                    // U14: this can legitimately come back EMPTY even though pcAwareCommitNeeded() said yes.
++                    // A worker failure fences collection, so nothing commits past the record that failed -
++                    // the two questions are deliberately not the same one, and PcTaskDispatcher's
++                    // collectCommitData() javadoc owns why.
 +                    if (pcDispatcher != null) {
 +                        final Map<TopicPartition, OffsetAndMetadata> pcCommitData = pcDispatcher.collectCommitData();
 +                        flush();
@@ -383,7 +1587,50 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
                      // we need to flush the store caches before flushing the record collector since it may cause some
                      // cached records to be processed and hence generate more records to be sent out
                      //
-@@ -645,7 +733,9 @@
+@@ -588,6 +743,25 @@
+     public void updateInputPartitions(final Set<TopicPartition> topicPartitions, final Map<String, List<String>> allTopologyNodesToSourceTopics) {
+         super.updateInputPartitions(topicPartitions, allTopologyNodesToSourceTopics);
+         partitionGroup.updatePartitions(topicPartitions, recordQueueCreator::createQueue);
++
++        // PC dispatch (astubbs#255, U10): the same update has to reach PC, or the dispatcher keeps the
++        // partition set it was CONSTRUCTED with. Under cooperative rebalancing this method is how a live task
++        // gains and loses partitions without being closed, so without this a newly-assigned partition has no
++        // assignment epoch and EpochAndRecordsMap silently drops every one of its records - zero registered,
++        // no exception, a topology that just looks idle. Revoking is equally load-bearing: it is what bumps
++        // the epoch that lets PC recognise and discard an outcome arriving for a partition somebody else now
++        // owns.
++        if (pcDispatcher != null) {
++            pcDispatcher.updatePartitions(topicPartitions);
++            // PC dispatch (astubbs#255, U14): prune the paused set the same way the dispatcher prunes its
++            // own per-partition state, and for a sharper reason than symmetry. A revoked partition's
++            // buffered count drops to zero, which reads as "resume me" - so a stale entry here puts a
++            // partition the consumer no longer owns into partitionsToResume, and mainConsumer.resume()
++            // throws IllegalStateException for an unassigned partition, killing the StreamThread on the next
++            // poll after a routine cooperative rebalance.
++            pcPausedPartitions.retainAll(topicPartitions);
++        }
++
+         processorContext.getProcessorMetadata().setNeedsCommit(true);
+     }
+ 
+@@ -598,6 +772,16 @@
+         clearCommitStatuses();
+         switch (state()) {
+             case SUSPENDED:
++                // PC dispatch (astubbs#255, U10): recycling is a close, and it did not route through
++                // close(boolean) where the dispatcher shutdown lives - so an active-to-standby recycle left
++                // the dispatcher in the static ACTIVE registry, its worker pool running, its PcWorkSignal
++                // registration answering the wake gate, and its partitions never revoked in the WorkManager.
++                // Four leaks per recycle, dormant only because no test configures standby replicas. Same call
++                // the close path makes, so the two teardown routes cannot drift apart again.
++                if (pcDispatcher != null) {
++                    TaskManager.executeAndMaybeSwallow(true, pcDispatcher::close, "PC dispatch close on recycle", log);
++                }
++
+                 stateMgr.recycle();
+                 partitionGroup.close();
+                 recordCollector.closeClean();
+@@ -645,7 +829,9 @@
      public void maybeCheckpoint(final boolean enforceCheckpoint) {
          // commitNeeded indicates we may have processed some records since last commit
          // and hence we need to refresh checkpointable offsets regardless whether we should checkpoint or not
@@ -394,7 +1641,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
              stateMgr.updateChangelogOffsets(checkpointableOffsets());
          }
  
-@@ -655,7 +745,9 @@
+@@ -655,7 +841,9 @@
      private void validateClean() {
          // It may be that we failed to commit a task during handleRevocation, but "forgot" this and tried to
          // closeClean in handleAssignment. We should throw if we detect this to force the TaskManager to closeDirty
@@ -405,7 +1652,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
              log.debug("Tried to close clean but there was pending uncommitted data, this means we failed to"
                            + " commit and should close as dirty instead");
              throw new TaskMigratedException("Tried to close dirty task as clean");
-@@ -673,6 +765,12 @@
+@@ -673,6 +861,12 @@
       * You must commit a task and checkpoint the state manager before closing as this will release the state dir lock
       */
      private void close(final boolean clean) {
@@ -418,7 +1665,15 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
          switch (state()) {
              case SUSPENDED:
                  TaskManager.executeAndMaybeSwallow(
-@@ -765,12 +863,20 @@
+@@ -723,6 +917,7 @@
+         record = null;
+         closeTaskSensor.record();
+         partitionsToResume.clear();
++        pcPausedPartitions.clear();
+ 
+         transitionTo(State.CLOSED);
+     }
+@@ -765,12 +960,20 @@
       */
      @SuppressWarnings("unchecked")
      public boolean process(final long wallClockTime) {
@@ -439,7 +1694,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
              record = partitionGroup.nextRecord(recordInfo, wallClockTime);
  
              // if there is no record to process, return immediately
-@@ -780,10 +886,13 @@
+@@ -780,10 +983,13 @@
          }
  
          try {
@@ -455,7 +1710,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
              }
  
              // update the consumed offset map after processing is done
-@@ -792,7 +901,7 @@
+@@ -792,7 +998,7 @@
  
              // after processing this record, if its partition queue's buffered size has been
              // decreased to the threshold, we can then resume the consumption on this partition
@@ -464,7 +1719,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
                  partitionsToResume.add(partition);
              }
  
-@@ -843,8 +952,15 @@
+@@ -843,8 +1049,15 @@
          throw error;
      }
  
@@ -481,7 +1736,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
          // process the record by passing to the source node of the topology
          final ProcessorNode<Object, Object, Object, Object> currNode = (ProcessorNode<Object, Object, Object, Object>) recordInfo.node();
          log.trace("Start processing one record [{}]", record);
-@@ -870,16 +986,108 @@
+@@ -870,16 +1083,243 @@
          log.trace("Completed processing one record [{}]", record);
      }
  
@@ -497,9 +1752,21 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
 +     * behaves too (the exception reaches the uncaught-exception handler via the StreamThread), except that
 +     * here it arrives one or more pump cycles late, and records dispatched in between will have run. Second,
 +     * {@code isProcessable} and {@code partitionGroup.readyToProcess} are not consulted: they answer
-+     * questions about a buffer this path does not fill. Stream-time punctuation goes with them, since stream
-+     * time advances at partition-group selection - noted as a caveat, and irrelevant to the stateless and
-+     * non-windowed topologies this module runs.
++     * questions about a buffer this path does not fill. <b>Task idling goes with them</b> - a user's
++     * {@code max.task.idle.ms} has no effect on this path, recorded as a divergence (astubbs#255, U13).
++     * Stream-time punctuation used to go with them too, for a different reason; since U13 it does not, and
++     * {@link #pcAwareStreamTime()} is where stream time now comes from.
++     * <p>
++     * <b>A worker's failure is surfaced with its own TYPE, and from the pump that dispatched it</b>
++     * (astubbs#255, U14). Both halves matter, and the pair of them is what closed the last named reason for
++     * the seam's default being off. {@code TaskCorruptedException} and {@code TaskMigratedException} are
++     * Kafka's <em>control-flow</em> signals to the {@code TaskManager} rather than processing errors: stock
++     * Streams lets them out of {@code process()} with their type intact, and recovery dispatches on that
++     * type. An earlier revision of this method wrapped every failure in a {@code StreamsException}, so
++     * recovery never fired and an application stock Streams would have recovered shut down instead; and it
++     * delivered the failure at the <em>next</em> pump, which could be a whole {@code runOnce} later.
++     * {@link #pcClassifyFailure} fixes the type and {@code PcTaskDispatcher.awaitOutcomeIfIdle()} fixes the
++     * timing. {@code PcDispatchSwitch}'s javadoc owns what that does and does not settle about the default.
 +     *
 +     * @return true if any record was CONSUMED from the WorkManager this call - deliberately not
 +     *         "handed to the worker pool". A record resolved without ever reaching the pool, such as a
@@ -508,12 +1775,126 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
 +     *         pool submissions instead would report a stall on every route that bypasses the pool.
 +     */
 +    private boolean pcProcess(final long wallClockTime) {
-+        final Throwable failure = pcDispatcher.pollFailure();
-+        if (failure != null) {
-+            throw new StreamsException(
-+                String.format("Exception caught in PC-dispatched processing. taskId=%s", id()), failure);
++        pcThrowAnyFailure();
++
++        final int consumed = pcDispatcher.dispatchAvailable(rawRecord -> pcPrepare(wallClockTime, rawRecord));
++
++        if (consumed == 0) {
++            // Nothing was handed out. If that was for want of WORK rather than for want of a pool slot, the
++            // outcome of what is already running is the only thing that can change anything - and this is
++            // the point at which Kafka's own loop breaks out and returns to poll(). Waiting for that outcome
++            // here buys the property stock has for free: the failure of a record reaches the TaskManager
++            // from the same runOnce that ran it, with its own type, in time for the recovery Kafka
++            // dispatches on that type.
++            //
++            // awaitOutcomeIfIdle() is what declines to wait in the SATURATED case, and it is not an
++            // optimisation - waiting there throttles intake sixteen-fold. Its javadoc carries the
++            // measurement.
++            pcDispatcher.awaitOutcomeIfIdle();
++            pcThrowAnyFailure();
 +        }
-+        return pcDispatcher.dispatchAvailable(rawRecord -> pcPrepare(wallClockTime, rawRecord)) > 0;
++
++        // Build the resume set. On the stock path this is done inside the per-record branch of process(),
++        // against the queue the record came from; there is no single current partition here, because one
++        // pump can consume from several at once.
++        //
++        // Only partitions THIS path paused are candidates, which is narrower than "every input partition at
++        // or below the threshold" and deliberately so. Kafka pauses partitions for reasons that have nothing
++        // to do with buffering - addPartitionsForOffsetReset pauses until the reset completes - and a resume
++        // set built from the whole assignment would hand those back early, restarting fetches on a partition
++        // whose offsets are still being reset. Mirroring the pause exactly is also what makes the resume
++        // provably no more eager than the pause, which is the property the memory bound depends on.
++        //
++        // resumePollingForPartitionsWithAvailableSpace(), which Kafka calls at the top of every runOnce
++        // before pollPhase, is what actually applies this set. Without this loop it stays empty forever on
++        // the PC path and a pause set in addRecords is never undone.
++        //
++        // NOT gated on isBackpressureEnabled(). The pause is a durable effect on the consumer while the
++        // switch is only a flag, so gating the resume on it strands every partition this path had paused the
++        // moment an operator flips the escape hatch off - turning the switch installed to rescue someone
++        // from a silent stall into the cause of one. Resuming is unconditionally safe here because the set
++        // only ever holds partitions this path paused itself.
++        if (!pcPausedPartitions.isEmpty()) {
++            // Switched off, every pause this path holds is released regardless of occupancy: "disabled" has
++            // to mean the consumer ends up unpaused, not frozen wherever the flag happened to catch it.
++            final boolean releaseAll = !PcDispatchSwitch.isBackpressureEnabled();
++            final Iterator<TopicPartition> paused = pcPausedPartitions.iterator();
++            while (paused.hasNext()) {
++                final TopicPartition partition = paused.next();
++                if (releaseAll || pcDispatcher.getBufferedRecordCount(partition) <= maxBufferedSize) {
++                    partitionsToResume.add(partition);
++                    paused.remove();
++                }
++            }
++        }
++
++        return consumed > 0;
++    }
++
++    /**
++     * PC dispatch (astubbs#255, U14): rethrow a worker's failure on this thread, as the exception stock's
++     * {@link #process(long)} would have thrown for the same cause.
++     */
++    private void pcThrowAnyFailure() {
++        final PcTaskDispatcher.Failure failure = pcDispatcher.pollFailure();
++        if (failure != null) {
++            throw pcClassifyFailure(failure);
++        }
++    }
++
++    /**
++     * PC dispatch (astubbs#255, U14): the exception {@link #pcProcess} throws for a worker's failure.
++     * <p>
++     * The blanket {@code StreamsException} wrapper this replaces destroyed the two types Kafka's recovery
++     * dispatches on. {@code TaskCorruptedException} and {@code TaskMigratedException} both extend
++     * {@code StreamsException} and both reach here <em>unwrapped</em>, because
++     * {@code ProcessorNode.process} rethrows exactly those two (and {@code FailedProcessingException})
++     * rather than handing them to the processing-exception handler - so passing a {@code StreamsException}
++     * straight through is all that is needed, and is what stock's own catch ladder does.
++     * <p>
++     * The rest of the ladder mirrors the stock half of {@code process(long)} in the same order, and the
++     * message mirrors {@code handleException}'s in naming the record, because the failure being surfaced is
++     * that of one record out of {@code poolSize} running concurrently and "which one" is the first question
++     * anyone asks.
++     * <p>
++     * <b>Stock's EOS arm is deliberately absent rather than reproduced.</b> There, a {@code TimeoutException}
++     * under exactly-once becomes a {@code TaskCorruptedException}; here exactly-once is refused at task
++     * construction by {@link PcSupportedEnvelope}, so that branch is unreachable and writing it would be
++     * dead code that looks like coverage.
++     * <p>
++     * <b>And NO raw {@code TimeoutException} passthrough</b>, which is where matching stock's TYPE would
++     * break stock's CONTRACT. Stock rethrows a {@code TimeoutException} unchanged and {@code TaskExecutor}
++     * reads that as RETRIABLE: it calls {@code maybeInitTaskTimeoutOrThrow}, logs "will move to next task and
++     * retry later", and keeps the task RUNNING - which is safe there only because the record is still in the
++     * {@code RecordQueue} and genuinely will be re-selected. This path cannot honour it: retries are
++     * disabled, so the record is permanently failed, and the dispatcher's failure bar has closed dispatch, so
++     * {@code process()} returns false for ever, no second exception is produced, {@code task.timeout.ms}
++     * never trips, and the partition stays paused above its threshold. Zero throughput, no exception,
++     * nothing logged, reachable from an ordinary broker timeout. Wrapping tells the truth - this task is
++     * dead - and {@code TaskExecutor}'s {@code StreamsException} branch kills it loudly.
++     */
++    private RuntimeException pcClassifyFailure(final PcTaskDispatcher.Failure failure) {
++        final Throwable cause = failure.getCause();
++        if (cause instanceof FailedProcessingException) {
++            // Stock does not keep this wrapper in the stack trace either - see its own catch of the same
++            // type, which unwraps before handling.
++            return pcWrapFailure(failure, cause.getCause());
++        }
++        if (cause instanceof StreamsException) {
++            return (StreamsException) cause;
++        }
++        return pcWrapFailure(failure, cause);
++    }
++
++    private StreamsException pcWrapFailure(final PcTaskDispatcher.Failure failure, final Throwable cause) {
++        return new StreamsException(
++            String.format(
++                "Exception caught in PC-dispatched processing. taskId=%s, topic=%s, partition=%d, offset=%d",
++                id(),
++                failure.getTopic(),
++                failure.getPartition(),
++                failure.getOffset()),
++            cause);
 +    }
 +
 +    /**
@@ -527,7 +1908,7 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
 +     * @return the work to run, or null if the record was dropped on the way in - a bad timestamp, or a
 +     *         deserialisation error the configured handler chose to continue past
 +     */
-+    private Runnable pcPrepare(final long wallClockTime, final ConsumerRecord<byte[], byte[]> rawRecord) {
++    private PcTaskDispatcher.PreparedRecord pcPrepare(final long wallClockTime, final ConsumerRecord<byte[], byte[]> rawRecord) {
 +        final TopicPartition partition = new TopicPartition(rawRecord.topic(), rawRecord.partition());
 +        final RecordQueue queue = pcRecordQueues.computeIfAbsent(partition, recordQueueCreator::createQueue);
 +
@@ -552,7 +1933,13 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
 +        final RecordInfo recordInfo = new RecordInfo();
 +        recordInfo.queue = queue;
 +
-+        return () -> pcRunChain(wallClockTime, stamped, recordInfo);
++        // PC dispatch (astubbs#255, U13): the record's stream timestamp travels to the dispatcher with the
++        // work, because only this method knows it. stamped.timestamp is what the configured
++        // TimestampExtractor returned - which a payload-time topology points at a field inside the value, and
++        // which is therefore NOT rawRecord.timestamp(). Reaching for the broker's timestamp here would be
++        // silently wrong on exactly the topologies that care most about stream time.
++        return new PcTaskDispatcher.PreparedRecord(
++            () -> pcRunChain(wallClockTime, stamped, recordInfo), stamped.timestamp);
 +    }
 +
 +    /**
@@ -586,14 +1973,52 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
  
      @Override
      public void recordProcessTimeRatioAndBufferSize(final long allTaskProcessMs, final long now) {
-         bufferedRecordsSensor.record(partitionGroup.numBuffered());
+-        bufferedRecordsSensor.record(partitionGroup.numBuffered());
 -        processRatioSensor.record((double) processTimeMs / allTaskProcessMs, now);
 -        processTimeMs = 0L;
++        // PC dispatch (astubbs#255, U14): through numBuffered(), which is dispatcher-aware - the raw
++        // partitionGroup call reports zero on the PC path, so active-buffer-count read zero however much PC
++        // was holding.
++        bufferedRecordsSensor.record(numBuffered());
 +        processRatioSensor.record((double) processTimeMs.sumThenReset() / allTaskProcessMs, now);
      }
  
      /**
-@@ -1102,6 +1310,15 @@
+@@ -1045,6 +1485,33 @@
+                 final TopicPartitionMetadata committedTimestampAndMeta = TopicPartitionMetadata.decode(metadata.metadata());
+                 final long committedTimestamp = committedTimestampAndMeta.partitionTime();
+                 partitionGroup.setPartitionTime(partition, committedTimestamp);
++                // PC dispatch (astubbs#255, U13): seed the dispatcher's mark too, or stream time restarts at
++                // UNKNOWN on a path where nothing else restores it. Kafka's own
++                // shouldReadCommittedStreamTime* cases caught exactly this the moment streamTime() started
++                // reading the dispatcher instead of the partition group.
++                //
++                // It is a MAX, like everything else that moves the mark, so a seed can only ever raise it -
++                // which is precisely what setPartitionTime does to the partition group one line up.
++                //
++                // The PC path's OWN RecordQueue is seeded here too, and that is a second, separate defect.
++                // RecordQueue.updateHead hands its own partitionTime to timestampExtractor.extract(record,
++                // partitionTime), and pcRecordQueues creates its queues lazily at UNKNOWN - so a topology
++                // using Kafka's shipped UsePartitionTimeOnInvalidTimestamp threw on the first record after a
++                // restart with an invalid embedded timestamp, where stock recovered from the committed
++                // value. Seeding the queue is what makes the extractor see what stock's extractor sees.
++                // Recorded as an open hole by U13 and closed here.
++                //
++                // Note what NEITHER of these solves: a group whose commits were written by THIS module
++                // carries PC's frontier payload, not Streams' TopicPartitionMetadata, so the decode above
++                // yields UNKNOWN and there is nothing to seed from. That is measured, not assumed -
++                // StreamTimePunctuatorRefireOnRestartTest pins it - and the general case still needs
++                // KTD-S7's opaque rider. This restores stream time for a group whose metadata still carries
++                // it: a stock-written group, or Kafka's own tests.
++                if (pcDispatcher != null) {
++                    pcDispatcher.seedStreamTime(committedTimestamp);
++                    pcRecordQueues.computeIfAbsent(partition, recordQueueCreator::createQueue)
++                        .setPartitionTime(committedTimestamp);
++                }
+                 log.debug("A committed timestamp was detected: setting the partition time of partition {}"
+                     + " to {} in stream task {}", partition, committedTimestamp, id);
+ 
+@@ -1102,6 +1569,35 @@
       */
      @Override
      public void addRecords(final TopicPartition partition, final Iterable<ConsumerRecord<byte[], byte[]>> records) {
@@ -603,42 +2028,216 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
 +        // error to explain it.
 +        if (pcDispatcher != null) {
 +            pcDispatcher.registerRecords(partition, records);
++
++            // PC dispatch (astubbs#255, U14): the same backpressure the stock branch below applies, from the
++            // same threshold, with the occupancy read from PC instead of from the RecordQueue. Without it
++            // nothing bounds inflow on this path: PC holds the records, partitionGroup.numBuffered() is
++            // always zero, the pause never fires, and a processor slower than the broker feed accumulates
++            // records in a queue Kafka Streams cannot see, with no limit but heap.
++            //
++            // NOTE for whoever finds a partition unpaused after a rebalance: TaskManager blanket-resumes the
++            // whole assignment when restoration completes, which wipes a per-partition pause. Stock carries
++            // the same hazard. It is self-healing - the next batch for that partition re-checks here - so it
++            // is recorded rather than defended against.
++            final int pcQueueSize = pcDispatcher.getBufferedRecordCount(partition);
++            if (log.isTraceEnabled()) {
++                log.trace("Registered records with PC for partition {}, PC now holds {} undispatched", partition, pcQueueSize);
++            }
++            if (PcDispatchSwitch.isBackpressureEnabled() && pcQueueSize > maxBufferedSize) {
++                mainConsumer.pause(singleton(partition));
++                // Remembered so the resume can mirror the pause exactly - see pcProcess.
++                pcPausedPartitions.add(partition);
++            }
 +            return;
 +        }
 +
          final int newQueueSize = partitionGroup.addRawRecords(partition, records);
  
          if (log.isTraceEnabled()) {
-@@ -1288,8 +1505,28 @@
+@@ -1150,6 +1646,14 @@
+ 
+         final PunctuationSchedule schedule = new PunctuationSchedule(processorContext.currentNode(), startTime, interval, punctuator);
+ 
++        // PC dispatch (astubbs#255, U13): warn at REGISTRATION, once per task per type. A punctuator is the
++        // one construct that reaches this seam without passing any of the three refusal layers - it is not a
++        // DSL method call, not a state store type, and not a config key, so nothing else can tell the user.
++        // Refusing it was considered and rejected: both punctuation types DO fire on this path and produce
++        // correct output for the common shapes, so a refusal would break topologies that work today. What
++        // was missing is that they diverge silently, which is what these two paragraphs remove.
++        pcWarnAboutPunctuator(type);
++
+         switch (type) {
+             case STREAM_TIME:
+                 // STREAM_TIME punctuation is data driven, will first punctuate as soon as stream-time is known and >= time,
+@@ -1170,8 +1674,82 @@
+      *
+      * @throws TaskMigratedException if the task producer got fenced (EOS only)
+      */
++    /**
++     * PC dispatch (astubbs#255, U13): tell the user, once per task per punctuation type, how punctuation
++     * differs here - because nothing else will.
++     *
++     * <p><b>The decision this method records, and what the evidence says.</b> The handover ranked
++     * "WALL_CLOCK_TIME punctuators fire with no warning and their effects never become commit-covered" as
++     * the top open defect, with {@code hasUncommittedWork() || commitNeeded} as a one-line candidate fix.
++     * Four measured branches shrank that framing to almost nothing:
++     * <ul>
++     *   <li><b>Effects are not lost.</b> {@code PunctuatorEffectSurvivalTest} reads the output topic and the
++     *       store's changelog <em>before</em> {@code close()}, with a five-minute-linger negative control
++     *       arm that must find nothing and does: a punctuator's forwards and store writes reach the broker
++     *       on the producer's own schedule, before and independently of any commit. Non-EOS only, which is
++     *       the whole supported envelope here.</li>
++     *   <li><b>Offsets do commit, and {@code postCommit} does run.</b>
++     *       {@code PostCommitCheckpointGapTest} was written to confirm "the PC path never checkpoints" and
++     *       refuted it - 12,000 records checkpointed at changelog 11,862-11,929 against stock's 11,999. The
++     *       real gap is an idle-window tail: when no work completes between the commit and
++     *       {@code TaskExecutor}'s second loop, that round's checkpoint refresh is skipped, bounded by the
++     *       final commit round, with clean close checkpointing regardless.</li>
++     *   <li><b>Commit cadence cannot evidence the candidate fix.</b>
++     *       {@code PunctuatorCommitCoverageTest} shows {@code commit-total} is pinned at zero on an idle PC
++     *       task by that same second loop, so it carries no information about punctuation at all.</li>
++     * </ul>
++     * So the one-liner is <b>not taken</b>: its only remaining benefit is a little less changelog replay
++     * after a crash landing in an idle window, and its cost is a commit-cadence change for every PC-path
++     * caller plus a {@code TaskMigratedException} on a clean close after a punctuate-only interval. What the
++     * evidence does support is loud degradation, which is this method.
++     *
++     * <p><b>What survives, and differs by type.</b> The concurrency clause is the one that can corrupt user
++     * state rather than merely retime output, and it applies to <em>both</em> types identically - which is
++     * why WALL_CLOCK_TIME is warned about here at all, where before only STREAM_TIME was.
++     */
++    private void pcWarnAboutPunctuator(final PunctuationType type) {
++        if (pcDispatcher == null || !pcPunctuatorWarnings.add(type)) {
++            return;
++        }
++
++        // Clause 3 in the old STREAM_TIME warning, promoted to the shared opening because it is the one that
++        // is neither timing nor bookkeeping. Stock guarantees punctuate() and process() never overlap for
++        // one task; here punctuate() runs on the StreamThread via TaskExecutor while up to poolSize records
++        // are still inside the chain on workers. A plain KeyValueStore is SUPPORTED on this path
++        // (PcSupportedEnvelope refuses only the window/session/versioned/buffer stores), so the obvious
++        // punctuator - "iterate the store now that everything up to T is done" - races the processors
++        // writing that same non-thread-safe store.
++        final String sharedHazard =
++            "The punctuator runs CONCURRENTLY with up to {} records still inside the processor chain - "
++                + "stock never overlaps punctuate() and process() for one task - so a punctuator that "
++                + "touches a state store races the processors writing it. What it forwards or writes is "
++                + "also outside Parallel Consumer's commit frontier: measured non-EOS, those effects still "
++                + "reach the broker on the producer's own schedule, but a crash landing in an idle window "
++                + "can cost extra changelog replay, and under exactly-once they would sit in an open "
++                + "transaction. Run with -Dpc.streams.dispatch.enabled=false for stock behaviour.";
++
++        if (type == PunctuationType.STREAM_TIME) {
++            log.warn("PC dispatch (astubbs#255): task {} registered a STREAM_TIME punctuator. Stream time here "
++                    + "is a low-water mark over work in flight rather than the partition group's, so firing "
++                    + "times differ from stock and may differ between runs over identical input; where PC's "
++                    + "KEY-shard dispatch order differs from stock's timestamp order the mark can also sit "
++                    + "ABOVE a record not yet run. Punctuations can be SKIPPED rather than merely delayed, "
++                    + "because PunctuationSchedule collapses every interval crossed in one jump into a "
++                    + "single firing and on this path such jumps are the normal case. And after a restart "
++                    + "against a group THIS module committed, the mark is not restored at all, so "
++                    + "punctuators re-fire over event time an earlier run already covered. " + sharedHazard,
++                id, pcDispatcher.getPoolSize());
++        } else {
++            log.warn("PC dispatch (astubbs#255): task {} registered a WALL_CLOCK_TIME punctuator. Its FIRING "
++                    + "TIMES are unaffected - maybePunctuateSystemTime is byte-for-byte stock on this path "
++                    + "and reads the system clock, not stream time - so this warning is about what the "
++                    + "punctuator DOES, not about when it runs. " + sharedHazard,
++                id, pcDispatcher.getPoolSize());
++        }
++    }
++
+     public boolean maybePunctuateStreamTime() {
+-        final long streamTime = partitionGroup.streamTime();
++        final long streamTime = pcAwareStreamTime();
+ 
+         // if the timestamp is not known yet, meaning there is not enough data accumulated
+         // to reason stream partition time, then skip.
+@@ -1189,11 +1767,38 @@
+     }
+ 
+     public boolean canPunctuateStreamTime() {
+-        final long streamTime = partitionGroup.streamTime();
++        final long streamTime = pcAwareStreamTime();
+         return streamTimePunctuationQueue.canPunctuate(streamTime);
+     }
+ 
+     /**
++     * PC dispatch (astubbs#255, U13): where stream time comes from, on each path.
++     * <p>
++     * On the stock path it is {@code partitionGroup.streamTime()} - the max over records the partition group
++     * has selected, advanced inside {@code nextRecord()} before the record is processed. The PC path never
++     * calls {@code nextRecord()} (KTD8 - one record path, switched), so that value sat at
++     * {@link RecordQueue#UNKNOWN} for the life of every PC-dispatched task: STREAM_TIME punctuators never
++     * fired and {@code ProcessorContext.currentStreamTimeMs()} returned -1 forever, both silently.
++     * <p>
++     * The PC value is the dispatcher's <b>low-water mark over work in flight</b>: the lowest stream timestamp
++     * still executing, or the highest dispatched when nothing is.
++     * <p>
++     * <b>It is not a drop-in for stock's value, and an earlier version of this comment said it was.</b>
++     * Within a batch it lags stock. Between batches the pool empties and it rises to the highest timestamp
++     * ever dispatched - and PC hands records out per KEY shard rather than in stock's timestamp order, so
++     * wherever those orders differ the mark overtakes what stock would hold. What it still guarantees is
++     * narrower: it never passes a record that is <em>currently in flight</em>, so a punctuation cannot close
++     * a window over work still inside the chain. See
++     * {@code PcTaskDispatcher#getStreamTimeLowWaterMark()} for the full statement and the measurement.
++     * <p>
++     * Both paths start at {@link RecordQueue#UNKNOWN}, which is why the UNKNOWN guard in
++     * {@link #maybePunctuateStreamTime()} needed no change.
++     */
++    private long pcAwareStreamTime() {
++        return pcDispatcher != null ? pcDispatcher.getStreamTimeLowWaterMark() : partitionGroup.streamTime();
++    }
++
++    /**
+      * Possibly trigger registered system-time punctuation functions if
+      * current system timestamp has reached the defined stamp
+      * Note, this is called irrespective of the presence of new records
+@@ -1288,8 +1893,43 @@
          return sb.toString();
      }
  
 +    /**
-+     * PC dispatch (astubbs#255, U9): "is there completed work no successful commit has covered yet", answered by
-+     * whichever path owns completion. On the PC path that is PC's dirty state; on the stock path it is the raw
-+     * {@link #commitNeeded} field, deliberately NOT the {@link #commitNeeded()} override, which also sweeps the
-+     * consumer position and mutates state - the three gates below want the plain question.
++     * PC dispatch (astubbs#255, U9): "is there work no successful commit has covered yet", answered by
++     * whichever path owns completion. On the PC path that is PC's own accounting; on the stock path it is the
++     * raw {@link #commitNeeded} field, deliberately NOT the {@link #commitNeeded()} override, which also
++     * sweeps the consumer position and mutates state - the three gates below want the plain question.
 +     * <p>
 +     * One helper rather than the same ternary at three call sites: {@code prepareCommit} (which also gates the
 +     * pre-commit flush), {@code maybeCheckpoint}, and {@code validateClean} must always agree about whether
 +     * work is outstanding, and three copies is how they would silently stop agreeing.
++     * <p>
++     * <b>U10: this asks the dispatcher for uncommitted work, INCLUDING work still in flight, where it used to
++     * ask only about completed work.</b> On the stock path those are the same question - processing is
++     * synchronous, so there is no third state - and the distinction only exists because dispatch is
++     * asynchronous. {@code validateClean} is the caller that made it matter: with the completed-only answer,
++     * {@code closeClean()} on a task whose records were still inside the processor chain succeeded silently,
++     * where Kafka's contract is to throw {@code TaskMigratedException} so the TaskManager closes it dirty.
++     * <p>
++     * Committing while work is in flight is safe by construction and is not a regression in commit volume
++     * worth avoiding: {@code collectCommitData()} returns PC's frontier, which sits <em>below</em> every
++     * in-flight record precisely because those records are incomplete. The extra commits are bounded by the
++     * commit interval, which is the cadence stock keeps anyway once it has processed anything.
 +     */
 +    private boolean pcAwareCommitNeeded() {
-+        return pcDispatcher != null ? pcDispatcher.hasCommitDataOutstanding() : commitNeeded;
++        return pcDispatcher != null ? pcDispatcher.hasUncommittedWork() : commitNeeded;
 +    }
 +
      @Override
      public boolean commitNeeded() {
-+        // PC dispatch (astubbs#255, U9): PC's own dirty flag is the answer on the PC path - completed work
-+        // exists that no successful commit has covered. The consumer-position sweep below reads
-+        // consumedOffsets, which the PC path no longer maintains.
++        // PC dispatch (astubbs#255, U9): PC's own accounting is the answer on the PC path. The
++        // consumer-position sweep below reads consumedOffsets, which the PC path no longer maintains.
++        //
++        // U10: uncommitted work rather than completed-but-uncommitted work, for the reason given on
++        // pcAwareCommitNeeded. A task holding records that are still running genuinely will need a commit,
++        // and answering "no" here is what let TaskExecutor take a task to a clean close over live work.
 +        if (pcDispatcher != null) {
-+            return pcDispatcher.hasCommitDataOutstanding();
++            return pcAwareCommitNeeded();
 +        }
          // we need to do an extra check if the flag was false, that
          // if the consumer position has been updated; this is because
          // there may be non data records such as control markers bypassed
-@@ -1357,6 +1594,16 @@
+@@ -1357,6 +1997,16 @@
  
      public void updateCommittedOffsets(final TopicPartition topicPartition, final Long offset) {
          committedOffsets.put(topicPartition, offset);
@@ -655,3 +2254,96 @@ diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamTask
      }
  
      public void updateEndOffsets(final TopicPartition topicPartition, final Long offset) {
+@@ -1372,12 +2022,28 @@
+     }
+ 
+     // below are visible for testing only
++    /**
++     * PC dispatch (astubbs#255, U14): dispatcher-aware, because on the PC path the partition group is empty
++     * by construction and this would otherwise always answer zero - taking the {@code active-buffer-count}
++     * metric and {@link #hasRecordsQueued()} down with it.
++     * <p>
++     * What PC reports here is records it holds that no worker has started, which is what Kafka's
++     * {@code RecordQueue.size()} means on the stock path: a record being processed has left the buffer.
++     */
+     int numBuffered() {
++        if (pcDispatcher != null) {
++            return pcDispatcher.getBufferedRecordCount();
++        }
+         return partitionGroup.numBuffered();
+     }
+ 
+     long streamTime() {
+-        return partitionGroup.streamTime();
++        // PC dispatch (astubbs#255, U13): this is what ProcessorContextImpl.currentStreamTimeMs() delegates
++        // to, so routing it through pcAwareStreamTime() fixes a PUBLIC API - ProcessingContext#currentStreamTimeMs
++        // - that returned a constant -1 on the PC path, reachable from any Processor with no refused DSL call
++        // in sight. That is not incidental to the punctuation fix; it is the more likely of the two for a
++        // user to hit. Do not "simplify" it back to the partition group.
++        return pcAwareStreamTime();
+     }
+ 
+     private class RecordQueueCreator {
+diff -ruN kafka-pristine/org/apache/kafka/streams/processor/internals/StreamThread.java kafka-patched/org/apache/kafka/streams/processor/internals/StreamThread.java
+--- a/org/apache/kafka/streams/processor/internals/StreamThread.java	2026-02-07 12:00:08.000000000 +1300
++++ b/org/apache/kafka/streams/processor/internals/StreamThread.java	2026-09-01 15:40:24.734161614 +1200
+@@ -16,6 +16,7 @@
+  */
+ package org.apache.kafka.streams.processor.internals;
+ 
++import bz.stub.parallelconsumer.streams.PcWorkSignal;
+ import org.apache.kafka.clients.admin.Admin;
+ import org.apache.kafka.clients.consumer.Consumer;
+ import org.apache.kafka.clients.consumer.ConsumerConfig;
+@@ -1223,9 +1224,33 @@
+             // other useful work while waiting for the join response
+             records = pollRequests(Duration.ZERO);
+         } else if (state == State.RUNNING || state == State.STARTING || (state == State.PARTITIONS_ASSIGNED && stateUpdaterEnabled)) {
+-            // try to fetch some records with normal poll time
+-            // in order to get long polling
+-            records = pollRequests(pollTime);
++            // PC dispatch (astubbs#255): WAKE ON WORK. This is the only blocking wait in the run loop, and it
++            // is the one that prices everything else. Kafka polls and processes on this one thread, so
++            // blocking here for the full poll.ms costs stock nothing - there is no work it could be doing
++            // instead. Under PC dispatch that is false: workers are completing in the background, and a
++            // blocked poll stalls DISPATCH, not just this thread. Measured at 0.69x against stock on the
++            // single-key arm - the asynchronous path SLOWER than the synchronous one.
++            //
++            // Worse, the inner work loop below breaks back out to poll whenever a pass dispatched nothing,
++            // and under an async dispatcher "dispatched nothing" also means "the pool is full" or "every key
++            // is already in flight" - states that resolve on a worker completion and never on a broker fetch.
++            // So the loop chooses to block precisely when a completion is imminent.
++            //
++            // So: poll briefly to collect whatever the broker already has, then wait on OUR OWN condition for
++            // the rest of the budget, woken the instant a worker completes. Deliberately NOT wakeup(), which
++            // means shutdown to Kafka Streams and would arm the next poll if delivered while not polling.
++            // Only taken while PC actually has work outstanding - idle, the stock full-budget poll below is
++            // exactly right, and shortening it would delay broker records for nothing.
++            if (PcWorkSignal.hasActiveWorkOnCurrentThread()) {
++                records = pollRequests(PcWorkSignal.SHORT_POLL);
++                if (records.isEmpty()) {
++                    PcWorkSignal.awaitWorkForRemainderOf(pollTime);
++                }
++            } else {
++                // try to fetch some records with normal poll time
++                // in order to get long polling
++                records = pollRequests(pollTime);
++            }
+         } else if (state == State.PENDING_SHUTDOWN) {
+             // we are only here because there's rebalance in progress,
+             // just poll with zero to complete it
+@@ -1433,6 +1458,14 @@
+     public void shutdown() {
+         log.info("Informed to shut down");
+         final State oldState = setState(State.PENDING_SHUTDOWN);
++
++        // PC dispatch (astubbs#255): end this thread's wake-on-work wait now rather than letting it run out.
++        // Shutdown here only sets the state and lets the loop notice, so a thread parked in pollPhase would
++        // otherwise sit out the rest of poll.ms - the same bill stock pays while blocked in the consumer, but
++        // there is no reason to pay it once we own the wait. Runs on the CALLING thread, not on this one,
++        // which is why the signal is addressed by owner rather than read from a thread local.
++        PcWorkSignal.wakeOwner(this);
++
+         if (oldState == State.CREATED) {
+             // The thread may not have been started. Take responsibility for shutting down
+             completeShutdown(true);

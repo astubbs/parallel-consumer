@@ -1,5 +1,8 @@
 # The Kafka Streams task lifecycle under PC dispatch is untested, and diverges in six known ways
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: blind-spot -->
+
 For `parallel-consumer-streams` (astubbs#255), and **relevant to the Connect module too** - it wraps a
 task whose lifecycle the framework drives the same way, so most of these questions transfer.
 

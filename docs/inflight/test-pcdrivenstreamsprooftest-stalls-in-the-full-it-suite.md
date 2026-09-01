@@ -1,5 +1,8 @@
 # `PcDrivenStreamsProofTest` stalls in the full integration suite, but not alone
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: misdirection -->
+
 **Found 2026-08-11 while re-deriving README figures. Characterised with a control arm, not yet diagnosed.**
 
 `PcDrivenStreamsProofTest.pcDrivenOutputMatchesTheStockBaseline`, repeat `[2]`, times out on a two-minute

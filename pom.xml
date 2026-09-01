@@ -2,6 +2,7 @@
 <!--
 
     Copyright (C) 2020-2026 Confluent, Inc. and contributors
+    Modifications Copyright (C) 2026 Antony Stubbs and contributors
 
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
@@ -9,7 +10,7 @@
 
     <groupId>bz.stub.parallelconsumer</groupId>
     <artifactId>parallel-consumer-parent</artifactId>
-    <name>Kafka Parallel Consumer</name>
+    <name>Parallel Consumer for Apache Kafka</name>
     <version>0.6.0.0-SNAPSHOT</version>
     <description>Parallel Apache Kafka client wrapper with client side queueing, a simpler consumer/producer API with key concurrency and extendable non-blocking IO processing.
     </description>
@@ -37,10 +38,11 @@
         <module>parallel-consumer-vertx</module>
         <module>parallel-consumer-reactor</module>
         <module>parallel-consumer-mutiny</module>
-        <!-- Alpha/experimental (astubbs#255) - published like any other module, but explicitly not
-             production-ready; see its README. Ordered before parallel-consumer-examples, which is the
-             module that skips publishing: the examples pom records a central-publishing-maven-plugin
-             bug where a skipPublishing module LAST in reactor order suppressed the whole bundle. -->
+        <!-- Alpha/experimental (astubbs#255), and NOT published - its own pom carries the deploy and
+             signing skips plus skipPublishing, and says why. Ordered before parallel-consumer-examples,
+             which is the other module that skips publishing: the examples pom records a
+             central-publishing-maven-plugin bug where a skipPublishing module LAST in reactor order
+             suppressed the whole bundle, so neither of them may be the final entry above. -->
         <module>parallel-consumer-streams</module>
         <module>parallel-consumer-examples</module>
     </modules>
@@ -75,9 +77,14 @@
         <!-- Copyright-header conformance is enforced by bin/check-copyright-headers.sh, run in the
              `validate` phase by exec-maven-plugin (below), so a plain `mvn` build catches violations
              and not only the copyright.yml GitHub Action. It is provenance-aware: upstream-derived
-             files keep the Confluent header, fork-original files use the fork header - see AGENTS.md
-             "Copyright rules for this fork". Skip it with -Dcopyright.skip=true. -->
+             files keep the Confluent header, fork-original files use the fork header - see
+             docs/copyright.md. Skip it with -Dcopyright.skip=true. -->
         <copyright.skip>false</copyright.skip>
+        <!-- OSS Index dependency audit. Off by default because the API needs an account token that
+             not every contributor will have - see the ossindex-maven-plugin config below for how to
+             supply one and switch this to false. -->
+        <ossindex.skip>true</ossindex.skip>
+        <ossindex.fail>true</ossindex.fail>
         <delombok.output>${project.basedir}/target/delombok</delombok.output>
 
         <!-- standard props -->
@@ -92,14 +99,18 @@
         <!-- JUnit 5 test groups (failsafe). Override on the command line:
              -Dincluded.groups=performance    (run only performance tests)
              -Dincluded.groups=chaos          (run only the Chaos Pain Suite - see integrationTests.chaostests)
+             -Dincluded.groups=lincheck       (run only the Lincheck lane - use bin/lincheck-test.sh, which
+                                               also activates -Plincheck for the JVM args it needs)
              -Dexcluded.groups=               (run everything incl. performance, chaos + quarantined)
              -Dexcluded.groups=transactions,performance,chaos  (skip multiple groups)
              NB overrides REPLACE the default list - include performance, chaos AND quarantined when
              excluding. `quarantined` = known-failing-on-master tests (see @Quarantined): out of the
              gating suites so green means mergeable, but still run by the non-gating CI lane
-             (bin/quarantined-test.sh). -->
+             (bin/quarantined-test.sh). `lincheck` = scheduler-controlled concurrency tests: seconds per
+             class at the committed bounds but superlinear in them, and a model-checking run needs the
+             -Plincheck JVM args, so it is opt-in like chaos. -->
         <included.groups></included.groups>
-        <excluded.groups>performance,chaos,quarantined</excluded.groups>
+        <excluded.groups>performance,chaos,quarantined,lincheck</excluded.groups>
 
         <!-- version numbers -->
         <!-- plugins -->
@@ -107,9 +118,14 @@
         <auto-service.version>1.1.1</auto-service.version>
         <surefire.version>3.5.6</surefire.version>
         <spotbugs.version>4.10.3</spotbugs.version>
+        <forbiddenapis.version>3.10</forbiddenapis.version>
+        <fb-contrib.version>7.7.4</fb-contrib.version>
+        <findsecbugs.version>1.14.0</findsecbugs.version>
+        <findbugs-slf4j.version>1.5.0</findbugs-slf4j.version>
         <spotbugs-maven-plugin.version>4.10.3.0</spotbugs-maven-plugin.version>
         <pitest.version>1.25.8</pitest.version>
         <pitest-junit5.version>1.2.3</pitest-junit5.version>
+        <central-publishing-maven-plugin.version>0.11.0</central-publishing-maven-plugin.version>
 
         <!-- core -->
         <slf4j.version>2.0.18</slf4j.version>
@@ -125,6 +141,21 @@
              static state. Forks are reused to amortise JVM startup. -->
         <surefire.forkCount>1</surefire.forkCount>
 
+        <!-- Fallback so core's surefire <argLine>@{argLine} ...</argLine> still resolves when JaCoCo has not
+             set it (-Djacoco.skip=true, or any profile that drops prepare-agent). Late-replacement of an
+             undefined property is passed to the JVM verbatim and the fork dies before running a test. -->
+        <argLine></argLine>
+
+        <!-- JDK internals Lincheck's model-checking strategy must reach to snapshot and restore object graphs
+             between invocations. Empty by default and switched on per-run, because these are a blunt
+             instrument: applied to the whole module they weaken the isolation for EVERY test in it, not just
+             the Lincheck ones. Blank here, filled by the `lincheck` profile.
+             Without them the model checker dies on the first object it cannot read -
+             InaccessibleObjectException: module java.base does not "opens java.util" - while the STRESS
+             strategy needs none of it. Measured on JDK 17.0.18-tem;
+             docs/plans/2026-08-25-001-test-lincheck-poc-plan.md carries the reasoning and the CI cost. -->
+        <lincheck.jvm.args></lincheck.jvm.args>
+
         <!-- tests deps-->
         <junit.version>5.14.4</junit.version>
         <junit.platform.version>1.14.4</junit.platform.version>
@@ -136,14 +167,26 @@
              wiremock-jre8 2.35.2 otherwise drags in byte-buddy 1.12.18, which wins the conflict
              and lacks the JAVA_V21 field mockito 5.23 needs -> MockitoInitializationException.
              Remove this pin once wiremock 3.x (a deferred major) drops the stale transitive.
-             Test/provided scope only - not in the shipped artifact. See docs/inflight.md. -->
+             Test/provided scope only - not in the shipped artifact.
+             See docs/inflight/deps-deferred-majors.md, the wiremock-jre8 row. -->
         <byte-buddy.version>1.17.7</byte-buddy.version>
         <truth-generator-maven-plugin.version>0.1.1</truth-generator-maven-plugin.version>
         <jabel.version>1.0.0</jabel.version>
+        <!-- PINNED BELOW CURRENT, and the pin is temporary. 2.43.0 is the first Error Prone
+             release compiled to class file version 65 (Java 21); JDK 17, which this build
+             requires, reads to 61 and cannot load the plugin class at all. Raising the
+             toolchain is not the escape: Jabel's bundled Byte Buddy refuses class file 65, so
+             no JDK satisfies both. 2.42.0 is the last release on the near side of that line.
+             The pin lifts when Jabel goes, which is tracked with the release 8 target it
+             exists to serve - see docs/inflight/static-error-prone-rule-registry.md. -->
+        <error-prone.version>2.42.0</error-prone.version>
+        <nullaway.version>0.12.7</nullaway.version>
+        <netty.version>4.1.137.Final</netty.version>
         <logback.version>1.6.1</logback.version>
         <!-- Held at 1.13.0: keep the micrometer family version-aligned with
              micrometer-registry-prometheus (pinned to 1.12.x in example-metrics until the
-             prometheus package rename is migrated). See docs/inflight.md. -->
+             prometheus package rename is migrated).
+             See docs/inflight/deps-deferred-majors.md, the micrometer-core row. -->
         <micrometer-core.version>1.13.15</micrometer-core.version>
     </properties>
 
@@ -276,7 +319,8 @@
                     <plugin>
                         <groupId>org.sonatype.central</groupId>
                         <artifactId>central-publishing-maven-plugin</artifactId>
-                        <version>0.11.0</version>
+                        <!-- version comes from pluginManagement below, so the examples module's
+                             skipPublishing declaration inherits it outside this profile too -->
                         <extensions>true</extensions>
                         <configuration>
                             <publishingServerId>central</publishingServerId>
@@ -286,6 +330,24 @@
                     </plugin>
                 </plugins>
             </build>
+        </profile>
+
+        <!-- Lincheck lane: scheduler-controlled concurrency testing over the state classes. Non-gating and
+             opt-in, the same shape as the chaos suite - the `lincheck` tag sits in ${excluded.groups} by
+             default, so `-Plincheck` alone selects nothing and `bin/lincheck-test.sh` is the supported entry
+             point (it sets the group filters too).
+
+             All this profile does is fill ${lincheck.jvm.args}. They stay OUT of the default build because
+             an add-opens grant weakens module isolation for every test in the fork, not only the Lincheck
+             ones, and a permanent blanket grant is how a real encapsulation failure elsewhere stops being
+             visible.
+             The STRESS strategy needs none of these; the model checker needs all of them, because it walks
+             and restores the object graph of the class under test between invocations. -->
+        <profile>
+            <id>lincheck</id>
+            <properties>
+                <lincheck.jvm.args>--add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.lang.invoke=ALL-UNNAMED --add-opens java.base/java.lang.reflect=ALL-UNNAMED --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.util.concurrent=ALL-UNNAMED --add-opens java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens java.base/java.util.concurrent.locks=ALL-UNNAMED --add-opens java.base/java.io=ALL-UNNAMED --add-opens java.base/java.nio=ALL-UNNAMED --add-opens java.base/java.time=ALL-UNNAMED --add-opens java.base/jdk.internal.misc=ALL-UNNAMED --add-exports java.base/jdk.internal.util=ALL-UNNAMED --add-exports java.base/sun.security.action=ALL-UNNAMED</lincheck.jvm.args>
+            </properties>
         </profile>
     </profiles>
 
@@ -305,6 +367,22 @@
             <version>${lombok.version}</version>
             <scope>provided</scope>
         </dependency>
+        <!-- Supplies @GuardedBy, which Error Prone's GuardedBy check (already enabled at ERROR, see
+             the annotationProcessorPaths below) reads to make a locking decision a compile error
+             rather than a comment. The CHECK ran long before this entry existed; the ANNOTATION did
+             not, and it resolved only in test scope - so writing one in src/main/java failed with
+             "package com.google.errorprone.annotations.concurrent does not exist", which reads as
+             "Error Prone is not set up" when the analysis was in fact wired correctly.
+             `provided` because @GuardedBy is CLASS-retention: javac needs it, nothing reads it at
+             runtime, and consumers of this library must not inherit it on their classpath.
+             The rule that makes this load-bearing:
+             parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md -->
+        <dependency>
+            <groupId>com.google.errorprone</groupId>
+            <artifactId>error_prone_annotations</artifactId>
+            <version>${error-prone.version}</version>
+            <scope>provided</scope>
+        </dependency>
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
@@ -314,6 +392,19 @@
             <groupId>pl.tlinkowski.unij</groupId>
             <artifactId>pl.tlinkowski.unij.api</artifactId>
             <version>${version.unij}</version>
+            <exclusions>
+                <!-- unij 0.1.3 pulls slf4j-api 1.7.28 transitively, against the 2.0.18 declared
+                     directly above. Maven's nearest-wins already resolved to 2.0.18, so nothing was
+                     broken - but a silent version split is precisely the shape that made wiremock's
+                     ASM 9.4 pin kill Lincheck's transformer while it reported success. Excluded
+                     rather than managed, because the API is declared here directly and there is no
+                     second opinion to reconcile. Found by dependencyConvergence on the run that
+                     added it; it was the rule's first act. -->
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>slf4j-api</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>pl.tlinkowski.unij</groupId>
@@ -417,6 +508,20 @@
 
     <dependencyManagement>
         <dependencies>
+            <!-- Netty arrives transitively through vertx-core, so the only lever here is a pin.
+                 CVE-2026-75596 (CVSS 6.9) lands on netty-handler 4.1.136.Final, which is the version
+                 the August 2026 batch (-59898, -59899, -59901) was fixed in - see the
+                 excludeVulnerabilityIds comment below, which records that batch. Importing the BOM
+                 rather than pinning netty-handler alone keeps every netty artifact on one version;
+                 pinning a single one is how a codec and a handler end up a release apart. Drop this
+                 block once vertx-core resolves 4.1.137.Final or later on its own. -->
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-bom</artifactId>
+                <version>${netty.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
             <!-- Pin byte-buddy so mockito 5.23 gets the version it needs (see byte-buddy.version
                  property); overrides the stale 1.12.18 pulled transitively by wiremock-jre8. -->
             <dependency>
@@ -433,6 +538,17 @@
                 <groupId>io.micrometer</groupId>
                 <artifactId>micrometer-core</artifactId>
                 <version>${micrometer-core.version}</version>
+            </dependency>
+            <!-- Pin lz4-java ahead of what kafka-clients 3.9.2 ships (1.10.1), which is vulnerable to
+                 CVE-2026-59949 (out-of-bounds read in the JNI XXHash entry points, fixed in 1.11.1).
+                 Note the coordinate: Kafka moved to the at.yawk maintained fork, not org.lz4. Nothing
+                 here calls the LZ4 API directly, so this is hygiene rather than exposure, but it is a
+                 leaf transitive with Java 7 bytecode and no API surface we touch, so the bump is free.
+                 Drop this once the Kafka client we depend on ships 1.11.1 or newer itself. -->
+            <dependency>
+                <groupId>at.yawk.lz4</groupId>
+                <artifactId>lz4-java</artifactId>
+                <version>1.11.2</version>
             </dependency>
             <!-- External -->
             <dependency>
@@ -582,7 +698,144 @@
                 <version>3.2.0</version>
                 <configuration>
                     <scope>runtime</scope>
-                    <fail>false</fail>
+                    <!-- Off by default and visibly off, rather than on and hoping: the API no longer
+                         serves anonymous component-report requests, and a run without credentials 401s
+                         and still reports SUCCESS - so a green audit is never by itself evidence that
+                         it scanned. `authId` names a <server> in settings.xml holding the account
+                         token; once that exists, run it with `mvn test-compile -Dossindex.skip=false`
+                         (not `validate` - the mojo needs test-scope resolution) and confirm the run
+                         actually returned findings, because nothing else will. Clear the client's
+                         on-disk report cache first, or a warm cache will answer for it.
+
+                         Why `fail` cannot police this, and both traps in full:
+                         docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md
+                         What the first authenticated run found, and this scanner's false-positive
+                         rate: docs/solutions/security-issues/oss-index-reports-need-reading-before-acting-2026-08-12.md -->
+                    <authId>ossindex</authId>
+                    <skip>${ossindex.skip}</skip>
+                    <fail>${ossindex.fail}</fail>
+                    <!-- Greenlit findings. Every entry here is one we have read and cannot act on -
+                         either no fixed release exists, or the finding does not apply to the version
+                         we resolve. Nothing is excluded because it was inconvenient. Without these
+                         the audit can never be moved to fail=true, because there is no version of the
+                         reactor that satisfies them. Full reasoning:
+                         docs/inflight/deps-cve-backlog.md.
+
+                         Each entry says what would retire it. Re-check them whenever this list is
+                         touched: an exclusion that has quietly become fixable is the failure mode.
+
+                         The list is in two parts, and the difference matters. The STANDING entries
+                         below are open-ended - retiring them needs someone else to act (an upstream
+                         release that does not exist, a disputed record being settled, a migration we
+                         have deferred). The TEMPORARY entries at the end are waiting on a specific
+                         upstream fix that is already written and merged, and are expected to be
+                         deleted within weeks. If a temporary entry is more than a release cycle old,
+                         that is a bug in this list, not a fact about the world.
+
+                         THE FORMAT BELOW IS ENFORCED, not a convention. bin/check-cve-exclusions.sh
+                         (Repo Hygiene) parses this block on every PR:
+
+                           * every id must sit under a comment - an unclassified id reads as
+                             standing-forever, which is how temporary becomes permanent by accident;
+                           * any comment saying TEMPORARY must carry `TEMPORARY-SINCE: YYYY-MM-DD`,
+                             and undated / unparseable / future-dated all FAIL rather than passing as
+                             "not expired yet";
+                           * a temporary entry older than 90 days fails the check, naming itself.
+
+                         Nothing else was ever going to tell us: these ids are not in OSV, NVD or
+                         GHSA, so no Dependabot alert exists to chase them. -->
+                    <excludeVulnerabilityIds>
+                        <!-- org.hdrhistogram:HdrHistogram (via micrometer-core). Both are
+                             VulDB-assigned, local-access-only, and carry isDisputed: true in the CVE
+                             record itself - "still unclear if this vulnerability genuinely exists".
+                             GHSA has accepted neither, which is why Dependabot is silent. 2.2.2 is
+                             the newest release on Central, so there is nothing to upgrade to, and it
+                             is transitive so it is not independently upgradable either.
+                             RETIRE WHEN: HdrHistogram publishes a fixed release, or the records are
+                             rejected/withdrawn. -->
+                        <excludeVulnerabilityId>CVE-2026-14683</excludeVulnerabilityId>
+                        <excludeVulnerabilityId>CVE-2026-14686</excludeVulnerabilityId>
+
+                        <!-- io.netty:netty-codec-http (via vertx-core). No public record exists: not
+                             in OSV, not in GHSA, and cveawg.mitre.org returns CVE_RECORD_DNE. The
+                             neighbouring ids are the real Netty August 2026 batch (-59898, -59899,
+                             -59901), all fixed in 4.1.136.Final, which is what we already resolve. So
+                             this is either a reserved id or a misattribution, and it cannot be acted
+                             on because there is nothing to read.
+                             RETIRE WHEN: the record is published and can be assessed - re-check when
+                             Vert.x 5 lands (docs/inflight/deps-deferred-majors.md). -->
+                        <excludeVulnerabilityId>CVE-2026-59903</excludeVulnerabilityId>
+
+                        <!-- io.micrometer:micrometer-core. Real, but there is no publicly available
+                             fix: the advisory's 1.13.x/1.14.x patches ship only in the commercial
+                             repository, and Central stops at 1.13.15 / 1.14.14, both affected. The
+                             minimum public fix is 1.15.12. Not reachable here either - the advisory
+                             scopes it to HTTP *server* instrumentation, and this project uses only
+                             Counter/Gauge/Timer/DistributionSummary/KafkaClientMetrics, with
+                             example-metrics serving over the JDK's own com.sun.net.httpserver.
+                             RETIRE WHEN: the io.micrometer.prometheus -> prometheusmetrics package
+                             rename is migrated, which is what unblocks 1.15.x. -->
+                        <excludeVulnerabilityId>CVE-2026-40984</excludeVulnerabilityId>
+
+                        <!-- com.fasterxml.jackson.core:jackson-databind (example-streams only). False
+                             positive: GHSA-rcqc-6cw3-h962 gives introduced 2.21.0 / fixed 2.21.4, and
+                             the module resolves 2.18.9. The vulnerable code is in unwrapped-creator
+                             handling that the 2.18 line does not have. OSS Index's version range is
+                             over-broad; Dependabot does not report it.
+                             RETIRE WHEN: OSS Index corrects the range, or the module moves onto a
+                             2.21.x that is genuinely in scope (then it needs >= 2.21.5, not an
+                             exclusion). -->
+                        <excludeVulnerabilityId>CVE-2026-54518</excludeVulnerabilityId>
+
+                        <!-- ==== TEMPORARY-SINCE: 2026-08-11 - delete when Jackson 2.18.10 ships ====
+
+                             The date is machine-read by bin/check-cve-exclusions.sh, which fails the
+                             Repo Hygiene check once this entry is 90 days old. Change it only after
+                             re-checking upstream, never to buy quiet.
+
+                             com.fasterxml.jackson.core:jackson-databind, example-streams only, at
+                             runtime scope via kafka-streams 3.9.2. Unlike everything above, these two
+                             are NOT permanent: both fixes are already merged upstream on the 2.18
+                             branch, milestone 2.18.10, and there is simply no release carrying them
+                             yet.
+
+                               CVE-2026-68497 (8.7, CWE-770) - unbounded allocation deserializing
+                               javax.xml.datatype.Duration / XMLGregorianCalendar. Fix: FasterXML/
+                               jackson-databind#6127, merged 2026-07-29, adds the StreamReadConstraints
+                               number-length limit to CoreXMLDeserializers.
+
+                               CVE-2026-19032 (6.3, CWE-470) - java.nio.file.Path deserialization
+                               accepts arbitrary URI schemes. Fix: FasterXML/jackson-databind#6129,
+                               merged 2026-08-06, restricts the accepted schemes.
+
+                             There is nothing to bump TO. Neither id is in OSV, NVD or GHSA yet, so the
+                             only public record is Sonatype's own; the fixed-version data comes from the
+                             two merged PRs. Every released 2.x artifact predates both merges - the
+                             newest on each line are 2.18.9 (2026-07-08), 2.21.5 (2026-07-07) and
+                             2.22.1 (2026-07-07) - so moving up a line does not help, and moving lines
+                             is separately blocked (2.21.0-2.21.3 would make CVE-2026-54518 above real,
+                             and a global pin breaks VertxTest through wiremock-jre8).
+
+                             Neither is reachable in this example: StreamsApp is String-serde end to
+                             end, constructs no ObjectMapper, and never names Path, Duration or
+                             XMLGregorianCalendar. jackson-databind is present only because
+                             kafka-streams drags it in for its own internal metadata.
+
+                             Being an example is why this is excludable rather than shipped risk: the
+                             examples parent sets maven.deploy.skip / maven.install.skip /
+                             skipPublishing, so no consumer of the library inherits this dependency.
+                             That is a statement about blast radius, not about the vulnerability -
+                             an example is still code people copy, and if either advisory had touched
+                             core, vertx, reactor or mutiny this would have been a bump or a stop, not
+                             an exclusion. It was checked: they resolve no jackson-databind at runtime
+                             at all.
+
+                             RETIRE WHEN: jackson-databind 2.18.10 is on Central. Then bump the
+                             jackson-bom import in parallel-consumer-example-streams/pom.xml and DELETE
+                             these two lines - do not carry them forward. -->
+                        <excludeVulnerabilityId>CVE-2026-68497</excludeVulnerabilityId>
+                        <excludeVulnerabilityId>CVE-2026-19032</excludeVulnerabilityId>
+                    </excludeVulnerabilityIds>
                 </configuration>
                 <executions>
                     <execution>
@@ -687,6 +940,67 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.15.0</version>
                 <configuration>
+                    <!-- javac's own analysis, which was entirely switched off: there was no
+                         <compilerArgs> block in this build at all. NOT -Werror yet - Jabel, Lombok
+                         and the release 8 target produce a first-run pile, and mutiny's 17
+                         override means the two source levels disagree about what is worth warning
+                         about. Promoting to -Werror is a second step once the inventory is at zero;
+                         until then this is a channel somebody has to actually read.
+                         -processing: the annotation processors here (Lombok, Jabel, the Truth
+                         generator) are deliberate, and their warnings drown everything else. -->
+                    <compilerArgs combine.children="append">
+                        <arg>-Xlint:all</arg>
+                        <arg>-Xlint:-processing</arg>
+                        <!-- javac caps output at 100 warnings per compilation and says nothing when it
+                             truncates. With -Xlint:all and Error Prone both feeding this stream, the cap
+                             hides most of the report and the visible count reads as the total: the same
+                             reactor reported roughly a tenth of its real haul before this was lifted.
+                             A static-analysis channel that silently truncates is worse than none. -->
+                        <arg>-Xmaxwarns</arg>
+                        <arg>100000</arg>
+                        <!-- Error Prone is a javac PLUGIN, not an annotation processor, so it is switched
+                             on with -Xplugin and is unaffected by the explicit <annotationProcessors> list
+                             below. It still has to be on the processor PATH, which is why the two
+                             coordinates are added there - and note that merely putting it there arms it:
+                             javac loads every com.sun.source.util.Plugin provider on the processor path
+                             before consulting which plugin was requested, so there is no way to stage the
+                             dependency ahead of enabling it.
+                             -XDcompilePolicy and should-stop are Error Prone's own requirements; without
+                             them javac runs the plugin against a half attributed AST. -->
+                        <arg>-XDcompilePolicy=simple</arg>
+                        <arg>--should-stop=ifError=FLOW</arg>
+                        <!-- The off set. Every entry has a reason and a re-enable trigger in
+                             docs/inflight/static-error-prone-rule-registry.md, and the set only ever
+                             shrinks; a check that is off and not in that file is a bug in this setup.
+                             They are off because they arrive in bulk, and bulk on arrival is what makes
+                             a new engine get ignored. NullAway is the deliberate exception and stays on
+                             despite its volume, because nullness is the class this codebase's tracked
+                             defects actually live in. AnnotatedPackages is load bearing, not tuning:
+                             with neither it nor OnlyNullMarked, NullAway does not fall silent, it
+                             crashes the compiler while constructing the checker. -->
+                        <!-- Generated sources are excluded by PATH, not by trusting the @Generated
+                             annotation: the Truth generator's output alone contributed 44 findings,
+                             all in files rewritten on every build, so nobody can act on one and the
+                             count moves when a clean run regenerates them. Verified by counting
+                             findings under target/generated to zero, not by the build going green. -->
+                        <arg>-Xplugin:ErrorProne -XepExcludedPaths:.*/target/generated-[^/]*/.* -XepOpt:NullAway:AnnotatedPackages=bz.stub -Xep:UnnecessaryParentheses:OFF -Xep:InvalidInlineTag:OFF -Xep:MissingSummary:OFF -Xep:EmptyBlockTag:OFF -Xep:InvalidParam:OFF -Xep:InvalidBlockTag:OFF -Xep:UnrecognisedJavadocTag:OFF -Xep:InvalidLink:OFF -Xep:AlmostJavadoc:OFF -Xep:NotJavadoc:OFF -Xep:UnusedMethod:OFF -Xep:UnusedVariable:OFF -Xep:BadImport:OFF -Xep:CanonicalDuration:OFF -Xep:JavaDurationGetSecondsToToSeconds:OFF</arg>
+                        <!-- javac's internals are not exported on JDK 17 and Error Prone reads them.
+                             These have to reach the COMPILER's JVM, not Maven's, which is what -J does and
+                             what <fork> below is for. Omit them and the plugin dies with an
+                             IllegalAccessError on BasicJavacTask rather than anything self explanatory. -->
+                        <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED</arg>
+                        <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED</arg>
+                        <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.main=ALL-UNNAMED</arg>
+                        <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.model=ALL-UNNAMED</arg>
+                        <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED</arg>
+                        <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.processing=ALL-UNNAMED</arg>
+                        <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED</arg>
+                        <arg>-J--add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED</arg>
+                        <arg>-J--add-opens=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED</arg>
+                        <arg>-J--add-opens=jdk.compiler/com.sun.tools.javac.comp=ALL-UNNAMED</arg>
+                    </compilerArgs>
+                    <!-- Required by the -J args above; they configure the compiler's JVM. -->
+                    <fork>true</fork>
                     <annotationProcessorPaths>
                         <path>
                             <groupId>com.google.auto.service</groupId>
@@ -704,6 +1018,19 @@
                             <artifactId>jabel-javac-plugin</artifactId>
                             <version>${jabel.version}</version>
                         </path>
+                        <path>
+                            <groupId>com.google.errorprone</groupId>
+                            <artifactId>error_prone_core</artifactId>
+                            <version>${error-prone.version}</version>
+                        </path>
+                        <!-- NullAway rides on Error Prone and is version coupled to it: 0.12.7 dies on
+                             2.43.0 and later with a NoClassDefFoundError, because it takes Error Prone as
+                             compileOnly and no dependency declares the constraint. Move both together. -->
+                        <path>
+                            <groupId>com.uber.nullaway</groupId>
+                            <artifactId>nullaway</artifactId>
+                            <version>${nullaway.version}</version>
+                        </path>
                     </annotationProcessorPaths>
                     <!-- enable language preview features -->
                     <source>${source.version}</source>
@@ -714,6 +1041,44 @@
                         </annotationProcessor>
                     </annotationProcessors>
                 </configuration>
+                <executions>
+                    <!-- RAWTYPES IS OFF FOR TEST COMPILATION ONLY, and the reason is signal-to-noise
+                         measured rather than taste. `-Xlint:all` over core plus parent reports 843
+                         deduplicated warnings; 559 of them come from
+                         target/generated-test-sources/truth-assertions-managed, the Truth assertion
+                         generator's own output, and 535 of those are `rawtypes` on generated `List`
+                         parameters. Two thirds of the channel is therefore code nobody wrote, cannot
+                         edit, and will regenerate identically next build.
+
+                         That matters because the whole justification for turning this on was that it
+                         be read. The registry's own bar - "a warning channel nobody reads is
+                         decoration" - is not met at 66% generated noise, and the count is what makes
+                         the inventory meaningless: 843 with generated sources, 284 without.
+
+                         javac cannot scope a warning by path, so the scope available is the
+                         compilation unit. Main compilation keeps EVERY category, which is where the
+                         signal is - 58 warnings, our own deprecated API and our own generics. Test
+                         compilation drops `rawtypes` alone, which costs 42 real warnings in test code
+                         and removes 535 generated ones. Every other category stays on everywhere, so
+                         unchecked, deprecation and serial are unaffected in tests.
+
+                         This is the same trade already made one block above with `-Xlint:-processing`,
+                         for the same reason and by the same measurement.
+
+                         Appending works because javac applies -Xlint left to right: the plugin-level
+                         `-Xlint:all` is narrowed by this `-Xlint:-rawtypes`, not replaced by it. -->
+                    <execution>
+                        <id>default-testCompile</id>
+                        <goals>
+                            <goal>testCompile</goal>
+                        </goals>
+                        <configuration>
+                            <compilerArgs combine.children="append">
+                                <arg>-Xlint:-rawtypes</arg>
+                            </compilerArgs>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -758,9 +1123,17 @@
                     <skipTests>${skipTests}</skipTests>
                     <skipITs>${skipITs}</skipITs>
                     <parallel>methods</parallel>
-                    <!-- Performance tests are excluded by default and run on dedicated hardware via the
-                         performance.yml workflow on a self-hosted runner. Override with -Dgroups=performance
-                         to run only performance tests, or -Dexcluded.groups= to run everything. -->
+                    <!-- Performance tests are excluded by default. There is no performance.yml and no
+                         dedicated hardware: what actually runs them is the "Performance Tests" leg of
+                         maven.yml (ubuntu-latest, a REQUIRED check on every PR, via bin/performance-test.sh)
+                         and chaos-pain.yml on the self-hosted runner.
+                         Select them with BOTH -Dincluded.groups=performance AND -Dexcluded.groups= - which is
+                         what bin/performance-test.sh does, and the reason to use it rather than a hand-rolled
+                         mvnw line. The include alone selects nothing: exclusion beats inclusion in JUnit
+                         Platform and excluded.groups already contains performance, so the run exits BUILD
+                         SUCCESS having tested nothing. NOT -Dgroups=performance either: the groups element
+                         below is pinned to ${included.groups}, so the explicit pom value wins and a bare
+                         -Dgroups is silently ignored - the same trap as -DforkCount vs -Dsurefire.forkCount. -->
                     <groups>${included.groups}</groups>
                     <excludedGroups>${excluded.groups}</excludedGroups>
                 </configuration>
@@ -797,6 +1170,36 @@
                     </execution>
                 </executions>
             </plugin>
+            <!-- Register item 6. Bans JVM-default-dependent API in MAIN code: the default charset, locale
+                 and timezone, whose results differ between a developer's machine and a user's JVM. This is
+                 the same class SpotBugs reaches from the other direction with DM_DEFAULT_ENCODING and
+                 MDM_STRING_BYTES_ENCODING, and for a LIBRARY it matters more than for an application: the
+                 JVM belongs to the caller.
+                 Bound to `check` only, not `testCheck`. Test code is a separate decision with its own haul,
+                 the same way the SpotBugs rule registry treats it.
+                 NOT YET banning parallelStream(): three main-code sites exist today, and the reason to
+                 remove them is real but is a behaviour change in a hot path. See
+                 docs/inflight/static-forbidden-apis-parallelstream.md, which carries the signature line
+                 ready to paste. A rule that fails on arrival needs the code fixed or the rule narrowed,
+                 never a suppression. -->
+            <plugin>
+                <groupId>de.thetaphi</groupId>
+                <artifactId>forbiddenapis</artifactId>
+                <version>${forbiddenapis.version}</version>
+                <configuration>
+                    <targetVersion>${release.target}</targetVersion>
+                    <bundledSignatures>
+                        <bundledSignature>jdk-unsafe</bundledSignature>
+                    </bundledSignatures>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>com.github.spotbugs</groupId>
                 <artifactId>spotbugs-maven-plugin</artifactId>
@@ -805,6 +1208,40 @@
                     <effort>Max</effort>
                     <threshold>Medium</threshold>
                     <xmlOutput>true</xmlOutput>
+                    <!-- Test code is main code for a concurrency library: the harnesses, the chaos
+                         suite and the Lincheck lane are where the trickiest threading lives, and
+                         until now none of it was analysed - includeTests defaults to false, and the
+                         CI goal ran `compile` rather than `test-compile`, so target/test-classes did
+                         not even exist. Which rules this switches OFF, and what turns each back on,
+                         is docs/inflight/static-spotbugs-rule-registry.md. -->
+                    <includeTests>true</includeTests>
+                    <!-- Suppression is BY RULE, in a file you can read in a diff - never the
+                         auto-generated baseline this replaces, which regenerated on every push and
+                         recorded nothing about what it swallowed. Same reasoning that refuses
+                         FreezingArchRule in docs/inflight/static-archunit-main-code-rules.md. -->
+                    <excludeFilterFile>${maven.multiModuleProjectDirectory}/config/spotbugs-exclude.xml</excludeFilterFile>
+                    <plugins>
+                        <!-- fb-contrib earns its place on measurement, not reputation: its
+                             MUI_CONTAINSKEY_BEFORE_GET named ShardManager.removeWorkFromShardFor's
+                             check-then-get seam with no harness at all - the defect astubbs#345
+                             then fixed. It reports zero there now, which is the expected state, not
+                             the rule going quiet: docs/inflight/static-spotbugs-rule-registry.md. -->
+                        <plugin>
+                            <groupId>com.mebigfatguy.fb-contrib</groupId>
+                            <artifactId>fb-contrib</artifactId>
+                            <version>${fb-contrib.version}</version>
+                        </plugin>
+                        <plugin>
+                            <groupId>com.h3xstream.findsecbugs</groupId>
+                            <artifactId>findsecbugs-plugin</artifactId>
+                            <version>${findsecbugs.version}</version>
+                        </plugin>
+                        <plugin>
+                            <groupId>jp.skypencil.findbugs.slf4j</groupId>
+                            <artifactId>bug-pattern</artifactId>
+                            <version>${findbugs-slf4j.version}</version>
+                        </plugin>
+                    </plugins>
                 </configuration>
                 <dependencies>
                     <dependency>
@@ -900,8 +1337,31 @@
                                     </excludes>
                                 </bannedDependencies>
                                 <reactorModuleConvergence />
+                                <!-- Register item 5. wiremock-jre8 pinning ASM 9.4 made Lincheck's
+                                     transformer die per-class WHILE REPORTING SUCCESS - a false PASS
+                                     on every calibration verdict, caught only by a deliberately
+                                     broken control probe. This is the rule that catches THAT case:
+                                     it fires when resolution settles on a version LOWER than
+                                     something in the graph asks for, which is the shape that breaks
+                                     things silently.
+                                     Its stricter sibling, dependencyConvergence, is deliberately NOT
+                                     here. It was switched on, it immediately found a real split
+                                     (unij dragging slf4j-api 1.7.28 against the 2.0.18 declared
+                                     directly, now excluded above), and behind that sit three more in
+                                     Kafka's transitive tree. Those are tracked in
+                                     docs/inflight/deps-convergence-tail.md rather than blocking this
+                                     change, because divergence where the HIGHER version wins is
+                                     untidy, not dangerous. -->
+                                <requireUpperBoundDeps />
                                 <banDuplicatePomDependencyVersions />
                                 <requireSameVersions />
+                                <!-- Catches the "version declared only inside a profile, consumed from a child
+                                     module" trap: Maven only degrades that to a build WARNING, which scrolls past.
+                                     central-publishing-maven-plugin was in exactly that state - versioned in the
+                                     `maven-central` profile, declared version-less in the examples module - so every
+                                     ordinary build printed six malformed-model warnings. Verified to fail on the
+                                     unfixed tree, so this rule guards the fix rather than rubber-stamping it. -->
+                                <requirePluginVersions />
                             </rules>
                         </configuration>
                     </execution>
@@ -1064,6 +1524,11 @@
         <pluginManagement>
             <plugins>
                 <plugin>
+                    <groupId>org.sonatype.central</groupId>
+                    <artifactId>central-publishing-maven-plugin</artifactId>
+                    <version>${central-publishing-maven-plugin.version}</version>
+                </plugin>
+                <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-site-plugin</artifactId>
                     <version>4.0.0-M16</version>
@@ -1113,10 +1578,6 @@
         <repository>
             <id>central</id>
             <url>https://repo1.maven.org/maven2/</url>
-        </repository>
-        <repository>
-            <id>confluent</id>
-            <url>https://packages.confluent.io/maven/</url>
         </repository>
         <repository>
             <id>astubbs-truth-generator</id>

@@ -21,6 +21,7 @@ related:
   - "branch debug/committedoffset-firstpoll-stall (the instrumented hunt that captured it)"
 tags: [flaky-tests, offset-reset, latest, awaitility, test-harness, solved]
 ---
+  <!-- file-refs: N/A - quotes an earlier pointer; that write-up was never committed to master -->
 
 # SOLVED: the `committedOffsetRemoved[latest]` stall was an offset-reset race in the test harness
 

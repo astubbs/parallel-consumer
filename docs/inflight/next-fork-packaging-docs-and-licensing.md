@@ -1,5 +1,8 @@
 # Publishing patched-Kafka modules: packaging, docs, and licensing
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: release-gate -->
+
 Raised when `parallel-consumer-streams` (astubbs#255) flipped from throwaway to a published
 alpha module. A second worktree is doing the same for Kafka **Connect**, so these questions now apply
 to a family of modules rather than one, and answering them once is cheaper than twice.
@@ -37,7 +40,7 @@ keyspace and a heavy-tailed cost distribution: **25.8/s to 96.0/s, 3.72x, 47 sec
 Reproduced hours apart. It leads because it is *relatable* - "how long until we are caught up" is a
 question every operator has asked at an uncomfortable hour, it needs no explanation of key ordering,
 and the workload was not chosen to flatter us. Full results:
-`docs/plans/2026-08-11-001-realistic-benchmark-result.md`.
+the realistic-benchmark result document, which lives on the forest branch `test/ks-streams-realistic-domain-benchmark` and is read with `git show 24928ab8c:docs/plans/2026-08-11-001-realistic-benchmark-result.md`.
 
 **Then the head-of-line measurement, as the property in isolation.** One partition, one 1500ms record
 at the head, twentyfour 25ms records behind it on other keys, same JVM and patched classes, switching
@@ -98,7 +101,7 @@ end-to-end does not. So the no-cost claim is publishable. Keep drain time printe
 regression cannot hide behind a healthy-looking median.
 
 **The realistic-domain benchmark now EXISTS** - `test/ks-streams-realistic-domain-benchmark`, results in
-`docs/plans/2026-08-11-001-realistic-benchmark-result.md`, front door `parallel-consumer-streams/DEMO.md`.
+the realistic-benchmark result document, which lives on the forest branch `test/ks-streams-realistic-domain-benchmark` and is read with `git show 24928ab8c:docs/plans/2026-08-11-001-realistic-benchmark-result.md`, front door `parallel-consumer-streams/DEMO.md`.
 Card-payment authorisation screening, Zipf-skewed keys, heavy-tailed costs, chosen for what is
 *unfavourable* about it. It refuted six predictions, including that backlog catch-up would be independent
 of wake-on-work (it is not - that fix is two thirds of the benefit). Most of its cells are still one run

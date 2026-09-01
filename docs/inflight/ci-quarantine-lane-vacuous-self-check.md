@@ -1,5 +1,8 @@
 # The quarantine lane's self-check passes when it found nothing to check
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: misdirection -->
+
 **A gate that certifies more than it measured.** Found 2026-08-11 while sweeping for other instances of the
 review-gate defect class.
 

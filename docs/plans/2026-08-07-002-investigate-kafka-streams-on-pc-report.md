@@ -102,7 +102,7 @@ New classes, all in `parallel-consumer-core`:
 | `PCStream.java` | 25 | interface; its only javadoc is a class-level `todo docs`, its nine methods have none |
 | `PCTopologyBuilder.java` | 27 | interface, six `stream(...)` overloads + `build()` |
 | `PCTopolgy.java` | 9 | **empty class body**, and misspelled in the source |
-| `internal/PCTopologyBuilderImpl.java` | 72 | see §2.3 |
+| `internal/PCTopologyBuilderImpl.java` | 72 | see §2.3 | <!-- file-refs: N/A - a hypothetical class in a design estimate, never written -->
 
 Plus a `void start(PCTopolgy)` method added to `ParallelStreamProcessor`, a rename of the user
 function interfaces (§2.6), and ~98 lines of exploratory sketch in the streams example app
@@ -327,7 +327,7 @@ Necessary but not sufficient - see §4.5.
 
 ### 4.3 A free win: the selection side is already solved upstream
 
-Kafka ships `processor/internals/SynchronizedPartitionGroup.java`, every method `synchronized`,
+Kafka ships `processor/internals/SynchronizedPartitionGroup.java`, every method `synchronized`, <!-- file-refs: N/A - an Apache Kafka path inside the published jar, not a path in this repository -->
 selected at `StreamTask.java:199-207` when the internal `__processing.threads.enabled__` flag is set
 (`StreamsConfig.java:1310-1313`; trunk `:1440-1449`). It serialises record *selection*, not record
 *execution* - exactly the split route B wants. `PartitionGroup`'s `streamTime`, `totalBuffered` and
@@ -338,7 +338,7 @@ own. It is useful because it removes an item from the diff.
 
 ### 4.4 The one load-bearing change
 
-`processor/internals/AbstractProcessorContext.java:47-48`:
+`processor/internals/AbstractProcessorContext.java:47-48`: <!-- file-refs: N/A - an Apache Kafka path inside the published jar, not a path in this repository -->
 
 ```java
 protected ProcessorRecordContext recordContext;

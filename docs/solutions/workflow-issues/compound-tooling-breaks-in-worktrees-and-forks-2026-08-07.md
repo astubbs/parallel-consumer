@@ -6,7 +6,7 @@ module: tooling
 problem_type: workflow_issue
 component: development_workflow
 severity: medium
-status: "Known, unfixed upstream. Workarounds below are per-invocation; a plugin update discards any local patch."
+status: "Known, unfixed upstream. Workarounds for 1 and 2 are per-invocation; a plugin update discards any local patch. 3 has a per-clone fix (`gh repo set-default`), but it is local config, so the habit still has to hold."
 applies_when:
   - Running any Compound Engineering skill from a git worktree rather than the main checkout
   - Running any tool that derives a repo identity from the working directory's basename
@@ -81,6 +81,20 @@ This one is worse than a missing result, because a verification step that treats
 "unverified" will **downgrade a correct claim**: an open PR citation gets softened to "pending", and a
 doc that was right becomes wrong.
 
+The cause is `gh`'s own preference: with both an `origin` and an `upstream` remote and nothing saying
+otherwise, it picks `upstream`, so `gh pr list`, `gh pr view`, `gh run view` and `gh pr create` all
+address `confluentinc` out of the box. There is a one-time `gh repo set-default` fix and a command
+that verifies it; `AGENTS.md` carries both, because they belong before an agent's first command. It
+writes local, uncommitted config, though: CI runners, other machines and fresh agent sandboxes all
+start without it, so qualifying `gh` in anything written down remains the durable half.
+
+**The loud case is the harmless one.** `gh pr view 259` errors with "Could not resolve to a
+PullRequest" purely because upstream happens to have no PR 259, and you go looking. The damaging case
+succeeds: the merged-PR prior-art search returns **upstream's** history, finds nothing relevant, and
+reads as "no prior art" - the exact false confidence *Before you investigate anything* exists to
+prevent. That command sat unqualified in that very table in `AGENTS.md` until astubbs#278, so every
+agent who ran it searched `confluentinc` and had no way to tell.
+
 ## Why This Matters
 
 Each failure produces a *plausible* output, so nothing prompts a second look:
@@ -126,3 +140,5 @@ The same shape works for the fork trap - run the command with and without `-R` a
   defects routine rather than rare.
 - `AGENTS.md` *Before you investigate anything* - the merged-PR search there depends on `-R` being
   passed; without it the search silently returns nothing on this fork.
+- `AGENTS.md`, the `gh` default-repo section - the rule and the one-time fix, citing this write-up
+  for the incident behind them.

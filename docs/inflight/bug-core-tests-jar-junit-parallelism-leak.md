@@ -1,6 +1,12 @@
 # `parallel-consumer-core`'s tests jar leaks JUnit parallelism into every consuming module
 
-`parallel-consumer-core/src/test/resources/junit-platform.properties` is packaged at the **root** of the
+<!-- inflight-type: bug -->
+<!-- inflight-impact: config-lie -->
+<!-- inflight-state: closed - fixed on master by astubbs/parallel-consumer#265, which removed the packaged properties file; kept because this branch's own reasoning cites it -->
+
+The file this note is about no longer exists - astubbs/parallel-consumer#265 removed it, and
+`git show 15f1ebe23^:parallel-consumer-core/src/test/resources/junit-platform.properties` is how to read
+what this note read. It was packaged at the **root** of the
 `parallel-consumer-core` **tests** jar. JUnit Platform reads `junit-platform.properties` from the root of
 the classpath, so **every module that depends on that jar silently inherits it** - which is every module
 with integration tests:

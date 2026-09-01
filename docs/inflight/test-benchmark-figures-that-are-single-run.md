@@ -1,9 +1,12 @@
 # Which benchmark figures are reproduced, and which are one run
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: test-debt -->
+
 **Capture-now note so the numbers are not quoted with more confidence than they earned.** Written
 2026-08-11 from the realistic-domain benchmark on `test/ks-streams-realistic-domain-benchmark`.
 
-Full results: `docs/plans/2026-08-11-001-realistic-benchmark-result.md`. Front door: `parallel-consumer-streams/DEMO.md`.
+Full results: the realistic-benchmark result document, which lives on the forest branch `test/ks-streams-realistic-domain-benchmark` and is read with `git show 24928ab8c:docs/plans/2026-08-11-001-realistic-benchmark-result.md`. Front door: `parallel-consumer-streams/DEMO.md`.
 
 ## Reproduced, safe to quote
 

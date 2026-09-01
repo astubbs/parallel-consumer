@@ -1,5 +1,8 @@
 # Benchmark ordinary DSL work with no artificial delay - and mind the joins problem
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: test-debt -->
+
 **Requested 2026-08-11.** Every benchmark so far pays a simulated cost per record - a sleep standing in
 for a blocking service call. That is legitimate, because blocking IO is the case this module exists for,
 and it is also the shape a sceptic attacks first: *you only win because you invented the wait.*

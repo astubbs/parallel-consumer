@@ -1,5 +1,8 @@
 # What the benchmark refutations say to test next
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: test-debt -->
+
 **Capture-now note.** Six predictions were refuted on 2026-08-11, and each refutation points at a
 question worth answering. Ranked by what would change a decision rather than by curiosity.
 

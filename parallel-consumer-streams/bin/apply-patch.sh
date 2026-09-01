@@ -2,7 +2,7 @@
 #
 # Copyright (C) 2026 Antony Stubbs and contributors
 #
-# Applies the spike's patch to the Kafka sources unpacked into the generated-sources tree.
+# Applies the tracked patch to the Kafka sources unpacked into the module's generated tree.
 #
 # Called from the pom at process-sources - NOT generate-sources, which is where the unpack runs. The
 # split is deliberate: binding both to one phase would order them by plugin declaration order in the
@@ -11,7 +11,7 @@
 #   $1  the directory holding the freshly unpacked (pristine) Kafka sources
 #   $2  the patch file to apply
 #
-# An EMPTY patch file is an explicit, successful no-op - that is U3's control arm, where the generated
+# An EMPTY patch file is an explicit, successful no-op - that is the harness's control arm, where the generated
 # classes must be byte-for-byte the released sources so any behaviour difference is the harness's fault
 # and nothing else's. We check emptiness ourselves rather than relying on `patch`, whose behaviour on
 # empty input differs between the BSD patch on macOS and GNU patch on CI.

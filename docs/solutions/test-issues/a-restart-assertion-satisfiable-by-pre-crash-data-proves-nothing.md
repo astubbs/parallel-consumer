@@ -34,7 +34,7 @@ related_components:
 ## Context
 
 In astubbs/parallel-consumer#271 (issue astubbs#255), two integration tests in
-`parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streams/integrationTests/CommitFrontierCrashRestartTest.java`
+`parallel-consumer-streams/src/test/java/bz/stub/parallelconsumer/streams/integrationTests/CommitFrontierCrashRestartTest.java`
 existed to prove requirement R10: kill an instance mid-run, restart it, and the record that was in
 flight at the crash is redelivered and reprocessed. That is the whole point of committing the
 frontier rather than the consumer position, and it is the property the plan's exit criteria demand a
@@ -44,7 +44,8 @@ kill-restart test demonstrate
 Both tests drained the output topic after the restart with a fresh consumer group reading from the
 earliest offset. `KafkaClientUtils` defaults its consumers to
 `OffsetResetStrategy.EARLIEST`
-(`parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/utils/KafkaClientUtils.java:87`),
+(`parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/utils/KafkaClientUtils.java`, the
+`offsetResetPolicy` field),
 so a new group subscribing to the output topic re-reads the entire topic from offset zero. The
 records the FIRST phase had already written durably were sitting right there. The assertion
 `outputs.contains(BLOCKER_VALUE)` was satisfied by phase-1 output.

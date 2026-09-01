@@ -61,7 +61,8 @@ cardinality-only variant of it.
 **The tell was magnitude, not direction.** The buggy control's median was 19568ms against the
 experiment's 1865ms - roughly an order of magnitude apart, not the "somewhat different, control
 absorbed the effect" shape a real cardinality-only control produces. See the comment recording the
-fix at `parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streams/integrationTests/HeadOfLineBlockingBenchmarkTest.java:258-263`:
+fix at `parallel-consumer-streams/src/test/java/bz/stub/parallelconsumer/streams/integrationTests/HeadOfLineBlockingBenchmarkTest.java:258-263`:
+<!-- file-refs: N/A - the benchmark quoted here is on the astubbs/parallel-consumer#271 branch forest at its pre-rename path; this section records what was measured there -->
 
 ```java
 // Cost is chosen by VALUE, not by key. Keying it on SLOW_KEY made the single-key control change two
@@ -77,6 +78,7 @@ carries it. Cardinality became, and stayed, the only difference between experime
 also `docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md`, section U8, "Two corrections made
 during the run" (around line 774-779), which records the same fix and its numbers as part of the
 benchmark's audit trail.
+<!-- file-refs: N/A - the benchmark and the plan named here live on the astubbs/parallel-consumer#271 branch forest, at their pre-rename paths; this paragraph is a record of a fix made there -->
 
 With the fixture corrected, the control produced a genuinely informative result: PC measured **0.69x**
 on p50 with a single key - *slower* than stock, as it must be when key ordering forbids concurrency
@@ -159,3 +161,4 @@ ballpark as the experiment's, adjusted only for the term you changed? `19568ms` 
   workload correct.
 - `astubbs/parallel-consumer#271` - the PR containing the fix and both benchmarks.
 - `astubbs/parallel-consumer#255` - the tracking issue for the Kafka Streams dispatch spike.
+<!-- file-refs: N/A - the companion write-up named here is on the same branch forest and has not been carried onto this stack -->

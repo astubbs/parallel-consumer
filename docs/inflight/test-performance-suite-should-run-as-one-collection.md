@@ -1,5 +1,8 @@
 # The Kafka Streams performance suite should run as one collection
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: test-debt -->
+
 **Requested 2026-08-11.** The benchmarks are accumulating - head-of-line blocking, the realistic domain
 workload, the synthetic matrix (key distribution, processing profile, payload size), backlog catch-up with
 a depth sweep, and partition composition. More are queued.

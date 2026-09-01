@@ -1,5 +1,9 @@
 # Branches that must re-check `STRATEGY.md` before they merge
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: coordination -->
+
+
 `STRATEGY.md` is a claims document, and unlike the README nothing tests it. The branches below either
 **change what it should say** or **can falsify a claim already in it**. Each one should re-read the
 named section as part of its own merge prep - not afterwards, when nobody is looking.
@@ -96,7 +100,7 @@ overlaps `STRATEGY.md`'s **Tracks**; per-module maturity and what pre-1.0 reserv
 **Milestones**, which `STRATEGY.md` currently omits entirely. The risk is not contradiction, it is
 two documents owning the same question. Settle the division of labour when the first of them merges.
 
-**`next-testing-suite-as-product-docs.md`** - promoting the test suite from hygiene to a positioning
+**`docs/plans/2026-08-10-001-docs-testing-evidence-plan.md`** - promoting the test suite from hygiene to a positioning
 asset is a strategy-level move, not a chore. If it holds, Reliability is no longer only an internal
 track.
 

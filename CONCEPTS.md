@@ -5,7 +5,8 @@ project-specific meaning. Seeded with core domain vocabulary, then accretes as c
 ce-compound-refresh process learnings; direct edits are fine. Glossary only, not a spec or catch-all.
 
 Seeded from the transactional-commit learning of 2026-08-07, so it covers the concurrency and
-transactional-commit area. Other areas of the project are not yet described here.
+transactional-commit area, and extended since with the vocabulary of running Kafka Streams on this
+project's dispatch. Other areas of the project are not yet described here.
 
 ## Relationships
 
@@ -20,7 +21,30 @@ about when one side may be taken or must wait.
 **Control loop**
 The project's single controller thread: it drains completions, decides when to commit, and hands work
 out to the worker pool. It is the only thread that commits, which is why commit decisions are
-described from its point of view.
+described from its point of view. It is the project's own **owner thread**; when the project is
+embedded in a host framework, the owner is one of that framework's threads instead.
+
+**Owner thread**
+The one thread permitted, at a given moment, to touch work state that is not thread-safe. Distinct
+from the control loop, which is only the standalone case of it: an embedding hands ownership to
+whichever of the host framework's threads drives that unit of work, and the owner can differ at
+different points in the unit's life.
+
+Ownership is enforced by refusing calls from every other thread, so anything a foreign thread must
+legitimately be able to ask has to be answerable without touching owned state at all. That is why a
+question is never allowed to mutate here: a predicate that quietly drains the **completion mailbox**
+"to stay accurate" turns a safe read into an ownership violation, and the violation is silent unless
+something is checking.
+
+**Completion mailbox**
+The queue workers publish finished work into, and which only the owner thread drains. Workers never
+touch the work state directly; publishing is the whole of their interaction with it, and the drain is
+where completions become visible to commit decisions.
+
+Whether outstanding work is counted at publication or at the drain is a real distinction, not an
+implementation detail. A count taken at the drain is safe for any thread to read and still wrong,
+because it reports nothing outstanding for work that has genuinely finished and is merely waiting to
+be drained - and "nothing outstanding" about finished work is the answer that loses records.
 
 **Broker poller**
 The thread that fetches records from the broker and keeps the consumer's group membership alive,
@@ -32,9 +56,27 @@ The unit of ordering. Records are distributed to shards by key or by partition d
 configured ordering, and a shard processes its records in order while different shards run in
 parallel. This is how the project gets concurrency without adding partitions.
 
+**Admission target**
+The number of records the engine allows in flight at once — the control variable that governs
+concurrency. Today it is derived statically from the user's configured concurrency limit; the self-scaling
+work makes it adaptive. Distinct from thread count: threads are capacity, admission is the throttle, so the same
+mechanism governs the thread-pool and async engines alike.
+
 **In-flight work**
 Records handed to the worker pool and not yet resolved as succeeded or failed. Distinct from records
-merely fetched: in-flight work is what a commit must wait for, and what a shutdown must drain.
+merely fetched: in-flight work is what a commit must wait for, and what a shutdown must drain. A
+record leaves this state by being published to the **completion mailbox**, so at every instant a
+dispatched record is either in flight or published, never neither.
+
+**Commit frontier**
+The offset a partition would resume from if consumption restarted — the highest offset committed for
+it. It is *exclusive*: it names the next record expected to be polled, not the last one completed.
+
+The frontier advances only across a contiguous run of completed records, so a completed record sitting
+above an in-flight one does not move it. A partition can therefore have most of its work done and still
+be committing its starting offset. That property is also what makes the frontier the thing worth
+asserting about a commit: which intermediate offsets a partition commits on the way there depends on
+when the periodic commit happens to fire, but where it ends up does not.
 
 ## Transactional commit
 
@@ -71,23 +113,81 @@ only when something is dirty.
 The asymmetry is load-bearing: a partition whose records are all failing is never dirty, so no commit
 is attempted for it, and anything waiting on a commit-time behaviour will wait indefinitely.
 
-**Frontier**
-The highest offset up to which *everything* on a partition is contiguously complete — the boundary
-between settled territory and territory with unfinished work in it. It advances only when the gap
-behind it closes: with 10 and 12 still running, completed 11 and 13 do not move it. The frontier is
-what the project commits as the consumer-group offset, which is why a crash-time commit can never
-cover an in-flight record: loss is impossible by construction, not by care. In the code it is
-`getOffsetHighestSequentialSucceeded() + 1`.
+## Kafka Streams on this project's dispatch
 
-**Frontier semantics** (or **frontier plus holes**)
-The commit design built on the frontier: commit the safe resume point, and encode the exceptions —
-records completed *beyond* the frontier — into the commit's metadata field, so a restart resumes at
-the frontier without losing the in-flight records and without repeating the completed ones. The same
-shape as TCP's cumulative ACK plus SACK blocks. Contrast with a **high-water mark**, a single
-per-partition number that assumes sequential completion and silently loses in-flight records when
-completion is out of order — the defect class the Kafka Streams module's U9 exists to remove, and the
-reason that fix is a deletion rather than a repair: no amount of locking lets one number express
-"12 done, 10 and 11 still running".
+**Seam**
+The switch that decides whether a Kafka Streams topology runs on this project's concurrent dispatch or
+on stock Kafka Streams' single processing thread. It is the module's central device: with the seam off,
+behaviour must be identical to stock, which is what lets the module use Apache Kafka's own unmodified
+test suite as its behaviour-preservation evidence.
+
+Because that evidence depends on seam-off runs staying stock, every run-time refusal is conditional on
+the seam rather than unconditional. A check that fired with the seam off would refuse constructs Kafka's
+own suite builds, and would void the claim it exists to protect. The build-time half of a refusal is the
+exception, and cannot be otherwise - see **Refused construct**.
+
+**Supported envelope**
+The set of Kafka Streams constructs that stay correct when records are dispatched concurrently rather
+than one at a time. Membership is decided once, when a task is constructed, rather than per record, so a
+topology reaching outside the envelope fails at startup instead of quietly producing wrong answers.
+
+The boundary is currently drawn as a named set of refused constructs with everything else admitted, so
+an unrecognised construct is allowed by default. The stronger form, in which everything is refused until
+proven supported, is a known and deliberately deferred alternative: it needs the whole upstream suite
+running first, or the refused surface is defined by whatever nobody has looked at.
+
+**Refused construct**
+A Kafka Streams feature the module rejects outright rather than documenting as a caveat, because
+concurrent dispatch would make it answer wrongly rather than fail. Most of them are refused for one
+underlying reason: they gate on stream time, and on this project's dispatch path stream time is a
+different quantity from the one they were written against - see **In-flight low-water mark**. Which
+records fall inside a window, which version of a table a record reads, and which update is final
+therefore move with dispatch order rather than being properties of the data alone. This sentence used
+to say the clock simply never advanced, which was true before the dispatch path derived one of its
+own and is the commonest stale claim about this module.
+
+A refusal names both the construct and the mechanism that breaks it, and says it will recur until the
+topology changes or the seam is turned off. That last part is load-bearing rather than padding: the
+condition is a property of the topology and the switch rather than a transient fault, so a handler that
+responds by replacing the failed thread will rebalance in a loop.
+
+A refusal is announced twice, and the two halves differ in an easily missed way. The build-time
+announcement is attached to the Kafka Streams method itself and cannot be conditional, because it is
+fixed at the point the method is compiled and nothing there can read a switch; the run-time refusal is
+conditional on the seam, and stays silent while the seam is off. Because the build-time half decorates a
+method Apache Kafka owns rather than anything this project wrote, it has to name this project as the
+party refusing and keep its objection distinct from any deprecation Apache Kafka has of its own - a
+marker on someone else's symbol is read as that symbol's owner speaking unless it says otherwise.
+
+**In-flight low-water mark**
+The event-time clock this project's dispatch path publishes in place of the one stock Kafka Streams
+advances as it selects records in order: the lowest event timestamp among the records currently
+executing, or the highest ever handed out when nothing is executing, and never allowed to move
+backwards.
+
+It guarantees one thing and is routinely misread as guaranteeing more. What it guarantees is that the
+mark never passes a record that is *currently executing*, so an operation triggered by the clock cannot
+close over work still inside the chain. What it is **not** is an ordering boundary: because the mark
+only ever rises, a record handed out later may carry a lower timestamp and run below it, and because
+records are handed out per key rather than in timestamp order, the mark can sit above a record that has
+not started. Reading it as a watermark - "no earlier element will follow" - is the mistake that makes a
+windowed operator look safe behind it.
+
+It also says nothing about work accepted but not yet handed out, and nothing about records not yet
+fetched. That silence is not a divergence: the stock clock keeps it too.
+
+**Punctuator**
+A callback a topology schedules to run on an interval rather than per record, against either the event
+clock or the wall clock. It is the one construct that reaches this dispatch path without passing any
+refusal check, because it is a call made on the processor context while the task is already running
+rather than a shape anything can inspect beforehand - so the only honest treatment left is to warn at
+registration.
+
+Two things about it differ here and neither is about timing. Its effects are outside this project's
+commit accounting, so nothing it emits or writes is covered by the frontier a commit advances. And it
+runs *concurrently with records still inside the chain*, where stock guarantees the two never overlap
+for one task - which turns the obvious punctuator, the one that sweeps a store now that everything up
+to a point is done, into a race against the processors writing that store.
 
 ## Test reliability
 
@@ -101,11 +201,130 @@ A test that awaits a consequence whose precondition it cannot guarantee will occ
 load-tightness flake: the margin is not too small, the awaited event may simply never happen in some
 interleavings, so no timeout is long enough to make the test reliable.
 
+**Tick-path assertion**
+A test assertion that pins the intermediate observations a system passed through on its way to a settled
+state, rather than pinning the settled state itself. Because those intermediates are only captured when
+a periodic action happens to fire, the assertion's truth is a property of the machine's speed rather
+than of the code under test — green on an idle box, red under load, with both readings correct.
+
+Distinct from a load-tightness flake and an unforceable trigger: no deadline is too tight, and no
+awaited event is missing. The awaited condition is one of several legitimate outcomes, and once a
+different one has occurred it can never become true, so the wait always expires in full.
+
+**Timing proxy**
+A bound on elapsed time asserted as though it established a correctness property it cannot actually
+reach — "nothing has progressed for N seconds" standing in for "it is wedged". Because a busy system
+and a stuck one both stop advancing the watched value, the bound cannot separate them, and every
+crossing needs a second experiment before it means anything.
+
+Distinct from a load-tightness flake, and the distinction decides the fix. A load-tightness flake has
+the right property and too small a margin, so more margin repairs it. A timing proxy has the wrong
+property, so widening only postpones the next false crossing and blinds the bound to the defect it was
+sized against.
+
+Two of its behaviours mislead readers rather than tests. Its recorded peak is fixed by the instrument
+— bound plus detection latency — so repeated near-identical measurements read as a signature while
+discriminating nothing. And because any one crossing fails the whole run, its false-positive rate
+compounds with the number of independent scenarios, so a suite gets redder as it gets more thorough.
+
+**Observation (as against a violation)**
+A probe finding that is measured and reported but never fails the run, as distinct from a violation,
+which gates. The split exists so a detector aimed at a timing property can keep producing its number
+without asserting a verdict it cannot support.
+
+Demotion suppresses the finding, never the measurement: the peak a demoted detector records is what a
+future re-calibration reads, so a detector that stopped measuring would delete that evidence with
+nothing going red to say so. An observation's only reader is a passing run's own output, which is why
+where it is printed matters as much as that it is recorded.
+
 **Ambient probe**
 The always-on recorder attached to broker integration tests, which annotates a failure with
 consumer-group progress evidence so the contention-versus-product-bug question is answered before
-manual diagnosis starts. Its verdict is only informative when its detectors could have fired for the
-test in question — a short, low-volume test cannot trip them, and a clean reading there means nothing.
+manual diagnosis starts. Its clean verdict is only informative when its detectors could have fired for
+the test in question — a short, low-volume test cannot trip them, so it needs a positive control like
+any other instrument.
+
+**Red-proof**
+The verification that a new or extended test fails against the code as it was before the fix it
+guards — a regression test that has never failed proves nothing.
+
+**Priced bound**
+A scenario, iteration or repetition budget on a probabilistic probe that was derived from a measured
+per-attempt hit rate, rather than chosen because the probe passed at it. The distinction is the whole
+difference between a test and a flake: a probe that explores for a race has a hit *rate*, and only a
+budget priced against that rate has a known miss probability.
+
+A priced bound is a claim about the machine it was priced on, because the same probe finds the same
+race at materially different rates on different hardware — so a rate quoted without its machine is
+incomplete in the way a distance quoted without units is. Pricing a bound therefore also means
+recording which machine it belongs to, and treating a bound carried onto other hardware as
+unmeasured until it is measured there.
+
+**Starved run**
+A deliberate run of a probabilistic probe far below its intended budget, so that it misses often
+enough for the miss fraction to estimate the per-attempt hit rate. It is the cheap way to price a
+bound: runs at the intended budget almost never miss and so carry almost no information, while the
+rate recovered from starved runs prices every candidate budget at once.
+
+The proof requires a deliberately mismatched pair: old code, new tests. Any procedure that reverts
+both together produces a matched pair and a vacuous pass, so a red-proof that does not go red is
+first evidence against the method, not for the code. The same demand applied to an analyser rather
+than a test is what catches inert configuration.
+
+**Inert configuration**
+Analysis or build settings that are present in the source, syntactically valid, and never reach the
+run they were written for - so the tool executes correctly against a configuration that is not the
+one you wrote. Distinct from a broken tool: nothing errors, nothing is skipped, and the report is
+truthful about a scope nobody intended.
+
+It is invisible to every signal except a count, because the absence of findings it produces is
+indistinguishable from a clean codebase. Suppressions are the mirror case: one matching nothing looks
+exactly like one that works. The verification is therefore to assert the number - that a disabled
+rule reports zero, that an enabled one reports more than zero - never to observe that the build
+passed.
+
+**Positive control**
+An arm of a measurement whose only job is to register a hit, proving the instrument could have detected
+something on this run. Its own reading is never the result — it is what licenses reading every other
+number, so a zero there makes the rest of the run uninterpretable rather than clean.
+
+Required wherever a negative is the outcome being reported, because a tool that observed nothing and a
+tool that could observe nothing produce the same output.
+
+**Control arm**
+An arm that declares the anomaly it is watching for to be *forbidden*, so the run fails if it appears.
+Distinct from a positive control, which must fire: a control arm must not, and the distinction is what
+separates a checked claim from an unchecked one. The same absence observed without that declaration is
+only a bound at the sample size reached.
+
+**Faithful arm**
+An arm that keeps every real surrounding access in place, run alongside a reduced arm that strips them,
+so the pair says whether the surrounding code was closing the hole by accident rather than by design.
+The gap between the two rates is the result; collapsing the arms into one deletes it.
+
+**Replica probe**
+A probe that reproduces the code it models by hand instead of importing it — necessary when the probe
+must control declarations the real code does not expose, and bound to its subject by nothing but
+whoever copied it. Its distinguishing property is that it decays silently: when the modelled code
+moves, the probe keeps passing, so it needs a correspondence check that fails on divergence or it is
+only as current as its last manual review.
+
+## Ratchet
+
+A gate that can only turn one way: the recorded set of accepted findings may **shrink**, never
+silently grow. Fix one, delete its entry; introduce one, the build fails.
+
+The word is used here for an **identity set**, not a threshold - the distinction is the whole point.
+A ceiling of "at most N findings" is satisfied just as well by fixing one defect and introducing
+another, so it cannot tell a codebase that improved from one that swapped a problem for a different
+problem. Keying on the identity of each finding closes that: an unfamiliar identity is a new defect,
+and a missing one means somebody fixed something without recording it, which is how a set quietly
+stops meaning anything. Both directions fail on purpose.
+
+A ratchet is therefore a way to adopt a strict check against code that cannot pass it yet: accept
+today's findings as known, and every new one is blocked from that moment. It is not a suppression
+list - a suppression says "never report this", where a ratchet says "this one is already on the
+books, and here is the list you are expected to shorten".
 
 ## Flagged ambiguities
 
@@ -114,3 +333,13 @@ test in question — a short, low-volume test cannot trip them, and a clean read
   a real deadline missed under contention, and an unforceable trigger is an awaited event that never
   occurred. All three present as the same expired await, and the whole diagnostic difficulty of this
   area is telling them apart.
+- **An un-priced bound is the fifth member, and the only one that is a test-authoring fault rather
+  than a diagnosis problem.** A probabilistic probe whose budget was chosen because it passed, not
+  priced against a measured hit rate, presents as an ordinary intermittent red. It is told apart by
+  asking whether the probe's hit rate was ever measured at all: if it was not, the red is neither a
+  product bug nor contention but an unfinished calibration, and the fix is to price the bound rather
+  than to diagnose the run.
+- **A tick-path assertion presents as that same expired await, and is the fourth member of the
+  confusion.** It is told apart by asking whether what the test actually saw is *also correct*: the
+  other three all mean the expected thing did not happen, while a tick-path assertion means something
+  equally valid happened instead.

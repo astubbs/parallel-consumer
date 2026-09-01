@@ -138,8 +138,8 @@ the new commit's base, do not fight the patch. Take the file from the final stat
 target is the final tree, not any intermediate one:
 
 ```bash
-git checkout <original-head> -- path/to/File.java
-git add path/to/File.java
+git checkout <original-head> -- path/to/File.java  # file-refs: N/A - a placeholder in a recipe, not a citation
+git add path/to/File.java                          # file-refs: N/A - same placeholder
 ```
 
 This is legitimate specifically because step 4 checks the *end state*, not the path taken to get

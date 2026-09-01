@@ -1,5 +1,8 @@
 # Kafka Streams on PC (astubbs#255) - handover
 
+<!-- inflight-type: register -->
+<!-- inflight-impact: coordination -->
+
 State as of 2026-08-13. Nine branches, one open PR. Read this before touching any of them.
 
 ## Branches
@@ -25,7 +28,7 @@ Every branch carries `8a0762a4` (the cross-thread fix) and everything before it.
 ## PRs
 
 - **astubbs#271** (`feats/ks-on-pc-spike`) - all checks green. **BLOCKED by 10 unresolved review threads**, not by CI. Four are uncovered by in-flight work; *"a worker's failure can be committed past"* is the one to answer first. Others map to U13 (STREAM_TIME punctuation), U14 (backpressure), U10 (`revive()`).
-- **astubbs#274 / astubbs#275** - the review-gate fix, split in two. #274 is workflow-only and **its `claude-review` cannot pass by construction** (the action refuses to review a PR editing its own workflow). A human must merge it knowingly; that unblocks #275.
+- **astubbs#274 / astubbs#275** - the review-gate fix, split in two. astubbs#274 is workflow-only and **its `claude-review` cannot pass by construction** (the action refuses to review a PR editing its own workflow). A human must merge it knowingly; that unblocks astubbs#275.
 
 ## Traps that have cost real time
 
@@ -57,7 +60,7 @@ Every branch carries `8a0762a4` (the cross-thread fix) and everything before it.
 
 - Plan: `docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md` (KTDs are settled; `Current Shortcomings` is the living gap list the README points at)
 - Result: `docs/plans/2026-08-08-002-ks-on-pc-spike-result.md`
-- Benchmark results: `docs/plans/2026-08-11-001-realistic-benchmark-result.md`, front door `parallel-consumer-streams/DEMO.md`
+- Benchmark results: the realistic-benchmark result document, which lives on the forest branch `test/ks-streams-realistic-domain-benchmark` and is read with `git show 24928ab8c:docs/plans/2026-08-11-001-realistic-benchmark-result.md`, front door `parallel-consumer-streams/DEMO.md`
 - Worklist: `docs/inflight/pr-ks-spike-next-work.md`; rebalance gaps: `pr-streams-rebalance-coverage-gaps.md`
 - Eight learning docs in `docs/solutions/` from this work. Vocabulary in `CONCEPTS.md`.
 

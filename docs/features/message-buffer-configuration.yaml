@@ -1,0 +1,31 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Explicit message-buffer sizing
+category: operability
+module: parallel-consumer-core
+maturity: production-use
+availability:
+  status: published
+  since: 0.5.2.8
+  evidence:
+    tag: 0.5.2.8
+    path: CHANGELOG.adoc
+    basis: Added message-buffer configuration options for direct control of buffered work.
+summary: Set a concrete upper bound for buffered work instead of relying only on the adaptive load-factor controls.
+use_this_when:
+  - Capacity planning requires a fixed work-buffer target.
+  - The adaptive load factor does not match a known memory or downstream-concurrency budget.
+setup:
+  option: ParallelConsumerOptions.messageBufferSize
+  interaction: A positive messageBufferSize derives a static load factor and overrides dynamic load-factor settings.
+opt_in:
+  mechanism: Set messageBufferSize when building ParallelConsumerOptions.
+  isolated_from_stable_modules: false
+boundaries:
+  - A buffer limit is not a throughput target; ordering and downstream capacity still cap useful parallelism.
+  - Setting this option changes how the load factor is computed, so review existing dynamic-load-factor configuration.
+references:
+  - label: Message-buffer option
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java

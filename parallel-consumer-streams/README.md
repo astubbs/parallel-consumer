@@ -1,460 +1,703 @@
-# `parallel-consumer-streams` - Kafka Streams, driven by Parallel Consumer
+# `parallel-consumer-streams` - a Kafka Streams topology on Parallel Consumer's worker pool
 
-> ## ALPHA. EXPERIMENTAL. NOT PRODUCTION READY.
-> This is published so people can try it, not because it is finished. Large parts of Kafka Streams do
-> not work here, **and they do not say so** - they run to completion and emit wrong answers. This
-> README says which. **Field testers wanted** -
-> [astubbs#255](https://github.com/astubbs/parallel-consumer/issues/255).
+> ## ALPHA. EXPERIMENTAL. NOT PUBLISHED. SEAM OFF BY DEFAULT.
+> This module is in the reactor so the machinery below can be built and reviewed. It is **not**
+> published to Maven Central, deliberately - see
+> [The classpath hazard this module does not solve](#the-classpath-hazard-this-module-does-not-solve).
+> Tracking issue: [astubbs#255](https://github.com/astubbs/parallel-consumer/issues/255).
 
-Stock Kafka Streams processes one partition strictly one record at a time. If a record takes a second
-of blocking IO, every record behind it in that partition waits a second, whatever key it has and
-however cheap it is. Your only lever is more partitions.
+Apache Kafka Streams parallelises across *partitions*. Inside one partition,
+`PartitionGroup.nextRecord()` hands records over strictly one at a time, so one slow record delays
+everything queued behind it whatever key it carries. That serialisation has no semantic justification
+when the records are on different keys, and removing it is what this module is for: `StreamTask`'s
+record selection is replaced by Parallel Consumer's `WorkManager` and a worker pool, so records on
+distinct keys of one partition run concurrently through the *unmodified* processor chain. A topology's
+own code does not change.
 
-This module removes that constraint from *inside* the topology. Records on **different keys in the
-same partition** run concurrently, in your unmodified processor chain, with per-key order preserved.
-In this module's own benchmark, the typical record behind a 1.5 second blocker went from **1872ms to
-366ms**, and the quickest from 1554ms to 27ms.
+`processor.internals` is package-private, explicitly not an API, and offers no seam where this needs
+one - so the module also carries a repeatable way to change those internals that keeps no Apache
+source in this repository, states the size of the change as a reviewable number, and fails at build
+time rather than at runtime when the change stops applying.
 
-Two questions follow immediately, and they are the whole of this document. There is a third answer you
-should not have to take from us at all: it is a **switch**, so you can
-[run your own topology both ways](#do-not-take-any-of-this-on-trust-run-your-own-topology-both-ways)
-and check both the speed and the correctness claims on your own code.
+## Turning it on, and why it is off
 
----
+```
+-Dpc.streams.dispatch.enabled=true
+```
 
-## 1. Why is this even possible?
+**The seam is OFF by default. This is an opt-in preview** - and the reason has now changed three times.
+Each time, the measurement that closed one reason named the next, which is worth reading rather than
+skipping.
 
-There is one point inside a Kafka Streams task where the task takes the next record off the partition
-and hands it into the processor chain. That handover is the only thing this module replaces.
+**Reason one, closed: a missing refusal.** Joins, windows, suppression and exactly-once were
+unsupported *and not refused*, so a topology using one was dispatched anyway and got wrong behaviour
+with nothing in the log to say so. See
+[What is refused, and how you find out](#what-is-refused-and-how-you-find-out).
 
-| | Stock Kafka Streams | With this module |
+**Reason two, closed: revival.** Run Apache Kafka's own suite against the patched classes with the
+seam *on* and `StreamThreadTest` reached `StreamTask.revive()` through Kafka's ordinary
+task-corruption recovery - a `TaskCorruptedException` closes the task dirty and revives the same
+instance, whose PC dispatcher had been closed on the way down. The loud-failure
+`IllegalStateException` that stopped that becoming a silent stall was caught by nothing and left the
+run loop uncaught on the StreamThread. A revived task now **rebuilds its dispatcher** over the
+partitions it holds at that moment, and the seam-on measurement, taken before and after with nothing
+else changed, shows those three cases green, no exception leaving any StreamThread, and no case that
+passed before regressing - plus five `StreamTaskTest` close and checkpoint cases going green with
+them, because the same work taught `validateClean` to see records that are still running.
+
+**Reason three, closed: a typed control-flow exception raised inside a processor.** A
+`TaskCorruptedException` or `TaskMigratedException` is how a topology tells Kafka's `TaskManager` to
+recover a task rather than fail. On the PC path a worker's exception was wrapped in a
+`StreamsException` *and* delivered one or more pump cycles later, so the type never reached the
+machinery that dispatches on it and an application stock Streams would have recovered shut down
+instead. Both halves are fixed - see
+[Error surfacing: the type, the timing, and the commit fence](#error-surfacing-the-type-the-timing-and-the-commit-fence) -
+and the seam-on measurement, taken before and after with nothing else changed, shows
+`StreamThreadTest.shouldReinitializeRevivedTasksInAnyState` green on both parameter combinations this
+module supports, with no case that passed before regressing.
+
+**Reason four, open: `STREAM_TIME` punctuation lags stock by the work still in flight.** The flip
+was always a decision about the *reconciled* module rather than about any one rung, because the
+seam-on numbers move with each of them - so the measurement was re-taken once the rungs were
+merged, and it named a fourth reason exactly as the previous three had.
+
+Kafka's own `StreamTaskTest.shouldPunctuateOnceStreamTimeAfterGap` produces six of the seven
+punctuations stock produces, and `shouldRespectPunctuateCancellationStreamTime` now fails a
+different assertion than it did before stream time worked at all. Both add records, call
+`process()` once, and assert what stock produces because stock finished processing inside that
+call. **This is the low-water mark working**: it deliberately never passes a record still in
+flight, which is what stops a punctuation closing a window over work still inside the chain. It is
+still a divergence a user gets silently, and it runs in the direction this README does not state -
+[Stream time](#stream-time) pins the mark *overtaking* stock
+as the known divergence and says nothing about it lagging. Turning the default on while half of a
+two-directional divergence is undocumented would ship a config whose docs are half true.
+
+Closing it needs no code fix. It needs the lagging direction recorded to the same standard as the
+overtaking one - a bound on how far behind the mark can be, or an honest statement that none is
+known. That, and the control arm that established this is the seam and not the reconciliation, are
+in
+[`docs/inflight/core-streams-punctuation-diverges-in-three-measured-ways.md`](../docs/inflight/core-streams-punctuation-diverges-in-three-measured-ways.md)
+and
+[`docs/inflight/test-streams-seam-on-divergence-triage.md`](../docs/inflight/test-streams-seam-on-divergence-triage.md).
+
+Whoever moves the default should re-run the seam-on measurement rather than trusting this section -
+four times now it has named the next reason, so treat "no reason left" as something to show rather
+than assume.
+
+Three further switches, all process-wide for the reason given in
+[`PcDispatchSwitch`](src/main/java/bz/stub/parallelconsumer/streams/PcDispatchSwitch.java) (there is
+no seam through `KafkaStreams` to inject a collaborator):
+
+| Property | Default | What it does |
 |---|---|---|
-| Who picks the next record | the task, from the head of the partition | Parallel Consumer's work manager |
-| How many at once, per partition | exactly one | as many as the pool allows, one per key |
-| Ordering guarantee | per partition | **per key** - weaker than per partition, and usually the one a topology actually relies on |
-| The processor chain itself | unmodified | **unmodified** |
-| Concurrency ceiling | your partition count | your key count, up to the worker pool size |
+| `pc.streams.dispatch.enabled` | `false` | the seam itself |
+| `pc.streams.dispatch.poolSize` | `4` | worker threads per task, and PC's `maxConcurrency` |
+| `pc.streams.wakeOnWork.enabled` | `true` | the split poll wait; unreachable while the seam is off |
+| `pc.streams.backpressure.enabled` | `true` | pausing a partition once PC holds more than `buffered.records.per.partition` for it; unreachable while the seam is off. **Off is the control arm of the memory-bound proof, not a supported mode** - it restores unbounded accumulation under a slow processor |
 
-Parallel Consumer already knows how to select the next runnable record while respecting key order,
-track what is in flight, and commit only what is genuinely finished. It has done that for a plain
-consumer for years. All this module does is let a Kafka Streams task ask it the question that the task
-was previously answering with "the next one, then wait".
+A value that is neither `true` nor `false` throws rather than being read as the default - a typo in
+the property that selects an arm would otherwise produce a run that looks like the arm you asked for
+and is not.
 
-That substitution is the whole idea, and it needed **no new Parallel Consumer API**. What it did need
-is a patch to Apache Kafka, because the handover point is not extensible - see
-[How it is built](#how-it-is-built).
-
-**What it is not.** This is not "Kafka Streams, but faster". It is *within one partition* and it is
-for *blocking* work. Stock Streams already parallelises across partitions, and that is not what is
-being compared anywhere in this document. CPU-bound topologies will not behave like the numbers below.
+**Being process-wide is a real limitation, not a simplification.** Two `KafkaStreams` instances in one
+JVM cannot be configured differently. What that would take, and the unfinished implementation of it,
+is recorded in
+[`docs/inflight/streams-dispatch-switch-is-jvm-wide-not-per-instance.md`](../docs/inflight/streams-dispatch-switch-is-jvm-wide-not-per-instance.md).
 
 ---
 
-## 2. Why do we believe it works?
+## The mechanism
 
-Because of what fails, and does not fail, when you run it. Every figure below has a companion figure
-that qualifies it, and they are printed together on purpose: on their own, each one misleads.
+Four steps, all with plugins this build already had. The module's [`pom.xml`](pom.xml) carries the
+reasoning for each in place; this is the shape.
+
+1. **Unpack** the named classes from the published `kafka-streams` **sources** jar, twice - a
+   *pristine* copy that is the regeneration baseline, and a working copy. `maven-dependency-plugin`,
+   at `generate-sources`.
+2. **Apply** the tracked patch to the working copy, dry-running first so a rejected hunk fails the
+   build rather than leaving a half-applied tree that compiles.
+   [`bin/apply-patch.sh`](bin/apply-patch.sh), at `process-sources`.
+3. **Compile** the working copy into this module's own `target/classes`, by adding it as a source
+   root. `build-helper-maven-plugin`.
+4. **Let classpath order do the rest.** `target/classes` precedes the `kafka-streams` jar, so the
+   patched classes win while every one of their thousand siblings still loads from the jar. Same
+   package name and same classloader, so package-private access still works - without a fork.
+
+**No Apache Kafka source is committed to this repository.** Only
+[`src/main/patch/pc-streams.patch`](src/main/patch/pc-streams.patch) is tracked; the generated trees
+are gitignored. Kafka's own test *fixture* `InternalMockProcessorContext` gets the same treatment
+through a second, smaller patch, for the reason given below.
+
+### What the patch changes, and why exactly these classes
+
+| Class | Change | Why it is in the set |
+|---|---|---|
+| `AbstractProcessorContext` | the current record context and current processor node move from two `protected` fields to thread-confined ones | stock Streams holds one of these per task and gets away with it because exactly one thread is ever inside the task |
+| `ProcessorContextImpl` | reads and writes them through the accessors instead of the inherited fields | it is a subclass doing `getfield`/`putfield` on those fields, so leaving it alone defeats the confinement *with no compile error to say so* |
+| `RecordCollectorImpl` | two `HashMap`s become `ConcurrentHashMap`s | written from the producer's I/O thread for every in-flight send; the compiler would never have demanded this class, so it is named rather than discovered |
+| `StreamTask` | record selection and the commit gates ask the dispatcher instead of the partition group; the processor chain runs on a worker | **the seam itself**, and the only class here that references Parallel Consumer - which is what let the machinery rung land the three above without it |
+| `StreamThread` | the poll wait is split: a short poll, then a wait on our own condition that a worker completion ends | it owns the only blocking wait in the run loop, and nothing else can split it - see [wake-on-work](#wake-on-work-why-the-poll-wait-is-split) |
+| `KStream`, `KTable`, `KGroupedStream`, `CogroupedKStream` | the refused overloads gain `@DoNotCall`, `@Deprecated` and a javadoc `@deprecated` tag naming this module | a call site resolves to the symbol its receiver's **static type** declares, so the compile-time half of a refusal has to sit on the interface - an annotation on the impl would never be consulted |
+| `KStreamImpl`, `KTableImpl`, `KGroupedStreamImpl`, `CogroupedKStreamImpl` | the same operators throw `UnsupportedOperationException` naming the construct, when the seam is on | an interface method has no body to throw from; this is the run-time half, and it is what refuses a topology built reflectively or from a language the annotations do not reach |
+
+That is the whole patch. The set is **named in the pom, not discovered**
+(`patched.classes`), and the stop-threshold is stated there: if it has to grow much past a dozen, the
+sprawl is itself the answer to "how little had to change", and this is a fork by instalments. It is
+now thirteen - past that line rather than at it, which the pom says out loud along with the smaller
+alternative that was weighed and its cost.
+
+Kafka's `InternalMockProcessorContext` needs the second patch because it *also* reads those fields
+directly. Un-patched, every `RecordCollectorTest` case dies at construction with a
+`NoSuchFieldError` - so without the fixture patch the oracle below cannot run at all.
+
+---
+
+## Why we believe the machinery works
+
+The technique's failure mode is **silence**, not error. If the jar's copy of a class wins the
+classpath race, every test still passes - it is simply testing unmodified Kafka Streams against
+itself, beautifully. So each claim here has a control.
+
+### The generated classes really do win
+
+[`ShadowedClassLoadingTest`](src/test/java/bz/stub/parallelconsumer/streams/ShadowedClassLoadingTest.java)
+asserts it directly rather than inferring it from behaviour: each generated class loads from a code
+source under `/classes/` and not a `.jar`; `PartitionGroup`, `RecordQueue` and `TaskManager`, which
+are deliberately *not* generated, still load from the jar - which is what makes this shadowing rather
+than a fork; and every generated class shares both a package name and a **classloader** with them,
+because different classloaders split the package and break package-private access while the names
+still match.
+
+Those three are chosen for adjacency, not convenience: `PartitionGroup` is the buffer the seam
+bypasses, `RecordQueue` is reached into by the seam's own record preparation, and `TaskManager`
+constructs `StreamTask`. If generation ever sprawled past the declared set, those are the first three
+it would reach.
+
+`StreamTask` and `StreamThread` used to be that list, on the machinery rung, precisely so the
+assertion would have to flip *visibly* on the day the generated set grew. It flipped on the execution
+seam.
+
+**"Same runtime package" is a per-package property**, and the refusal envelope took the generated set
+into two more packages - so the jar-resident list gained `Materialized` and `ConsumedInternal`, one
+neighbour for each. Without them the coexistence claim about those packages would have been checked
+against nothing while still passing. The test fails loudly on a generated class in a package with no
+declared neighbour rather than skipping it, and a further test reads `patched.classes` out of the pom
+through surefire and asserts the two lists are the same set - because "keep this in sync" is a comment,
+not a check.
+
+### An empty patch is a no-op, and that is checked by the tooling
+
+`apply-patch.sh` treats a patch with no hunks as an explicit, successful no-op - checking emptiness
+itself rather than trusting `patch`, whose behaviour on empty input differs between BSD `patch` on
+macOS and GNU `patch` on CI. Run the build that way and the generated tree is byte-for-byte the
+released sources. Without that baseline, a later behavioural difference could not be attributed
+between the technique and the change.
 
 ### Apache Kafka's own test suite, run against the patched classes
 
-With the seam **off**, Kafka's own tests pass unmodified against our patched classes:
-
-| Apache Kafka test class | Run | Failures |
-|---|---|---|
-| `StreamTaskTest` | 101 | 0 |
-| `RecordCollectorTest` | 59 | 0 |
-| `ProcessorContextImplTest` | 28 | 0 |
-| **Total** | **188** | **0** |
-
-Zero skipped as well as zero failed. Not rewritten, not recompiled, not excluded, no assertion
-relaxed - Kafka's own compiled test classes, taken from the `kafka-streams` test jar on Maven Central.
-This runs on every build of this module, no profile and no flag.
-
-**And here is what that number does not mean.** With the seam **on**, the same `StreamTaskTest` is
-**67 of 101**. All 34 failures are in that one class: `RecordCollectorTest` and `ProcessorContextImplTest`
-still pass 59 and 28 with the seam on, because neither of them constructs a `StreamTask`. Those 34 are
-the semantic gap between this module and stock Kafka Streams, measured rather than estimated, and they
-are what
-[Current Shortcomings](../docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md#current-shortcomings)
-is drawn from.
-
-So: 188 is a claim that **the patch does not break Kafka when it is not being used**. It is not a claim
-of equivalence. Quote it without the 67 and it says something untrue.
-
-> **If you re-derive these counts yourself, do not scope the run with `-Dtest=`.** It silently
-> overrides this execution's `<includes>`, so Kafka's suite does not run at all - and the build still
-> goes green, with the number you were checking never computed. Run the module's whole `test` phase and
-> read the per-class counts out of `target/surefire-reports-kafka-upstream/`.
-
-### Head-of-line blocking, and the control that costs us the headline
-
-One partition. One record costing 1500ms at the head. Twenty-four records costing 25ms each behind it,
-on other keys. Same JVM, same patched classes, same broker; the *only* thing that changes between the
-two arms is whether the seam is on.
-
-| Fast-record latency, n=24 | Stock dispatch | PC dispatch | |
-|---|---|---|---|
-| quickest | 1554ms | 27ms | *57.6x - read the note* |
-| **median** | **1872ms** | **366ms** | **5.1x** |
-| slowest | 2226ms | 814ms | 2.7x |
-| *control: identical run, all records on **one** key (median)* | *1934ms* | *2715ms* | ***0.71x*** |
-
-**The median is the speedup: 5.1x here, and 5.1x to 8.0x across three runs.**
-
-**The minimum states the claim, and is not a speed multiplier.** "A fast record does not have to wait
-for a slow one" is falsified if even the luckiest fast record waited, and demonstrated if a single one
-did not - so the quickest is the statistic that states it, and under stock dispatch the quickest still
-paid the full 1.5 seconds, because the partition is handed over one record at a time. But 57.6x is
-bounded by the fixture's own construction: the workload is 1500ms over 25ms, so the quickest record
-can never beat 60x, and 57.6x is that ratio minus the handoff. It is a figure we designed rather than
-discovered, and the first competent reader will divide 1500 by 25. Quote it as evidence that
-head-of-line blocking is gone. Never as a speed multiplier.
-
-**The last row is against us, and it is the most important row in the table.** Put every record on a
-single key and the seam does not merely stop helping - it **loses**, at 0.71x. Key ordering permits
-one in-flight record per key, so with one key there is nothing to run concurrently and the honest
-expectation is 1.00x. No absence of concurrency can produce a number below it. Something is being
-*paid* here, on every workload, and concurrency is merely hiding it in the rows above.
-
-**The cause is known, and it is not key ordering.** `StreamThread` is a single thread that both polls
-and processes, so blocking for up to `poll.ms` - **100ms by default** - costs stock Kafka Streams
-nothing: while that thread is parked there is by definition no processing it could be doing instead.
-Under the seam that assumption is false. Workers finish *during* the poll wait, and neither their
-completions nor the records they unblock can move until poll returns. With one key, Parallel Consumer
-releases one record at a time, so the thread dispatches a single record and goes straight back into a
-100ms block.
-
-The size of it is visible in the control's own numbers. Ideal serial time for that arm is
-`1500 + 24 x 25 = 2100ms`. Stock drained the batch in 2270ms, overshooting by 170ms; the seam took
-3949ms, overshooting by 1849ms. That is roughly **67ms per record of cost that bought nothing** - the
-same order as the 100ms poll it is waiting on. A separate one-term experiment on `poll.ms` alone,
-recorded in
-[Current Shortcomings](../docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md#current-shortcomings),
-attributes nearly all of it to that wait.
-
-**So set `poll.ms` low yourself while the seam is on** - it recovers most of the gap today. That is a
-workaround and not the fix; the fix is to wake the blocked poll the moment a worker completes, and it
-is on the same worklist as the largest single win available. Until it lands, the honest statement of
-this module's converging case is "worse", not "no better".
-
-That row stays in the table for two reasons. Dropping the unflattering row of your own benchmark is how
-benchmarks become marketing. And it is what *licenses* the rows above it: had the seam still won with
-one key, the 5.1x would be coming from a faster harness or a warm-up artefact rather than from key
-concurrency, and both results would have to be withdrawn rather than published.
-
-**The third row is the weakest.** At n=24 the slowest sample is the last record queued through a pool
-of four, so it measures pool depth rather than blocking, and we do not lean on it.
-
-Two caveats attach to every figure here, and to any figure quoted from it: the comparison is **within
-one partition** (stock Kafka Streams parallelises across partitions, and that is not what is being
-measured), and the workload is **blocking IO**, which is the case Parallel Consumer exists for.
-CPU-bound work will not behave like this.
-
-The table is one run of three taken on the same machine, and deliberately the one with the *lowest*
-median gain. Across all three the median ratio was 5.1x to 8.0x, the quickest-record ratio 51.5x to
-57.6x, and the single-key control 0.67x to 0.71x - so the control reproduces, and the median is the
-figure with real spread in it. Quote it as a range if you quote it at all. Absolute latencies move with
-machine load, which is why the test asserts a floor of 3x on the median rather than the measured
-figure, and a ceiling of 1.5x on the control. Reproduce with `HeadOfLineBlockingBenchmarkTest`
-([source](src/test/java/bz/stub/parallelconsumer/streams/integrationTests/HeadOfLineBlockingBenchmarkTest.java)) -
-it is an integration test, so `./mvnw -pl .,parallel-consumer-streams verify` - or better,
-[run it against your own topology](#do-not-take-any-of-this-on-trust-run-your-own-topology-both-ways).
-
-### Crash safety, proven rather than argued
-
-The hard part of running records out of order is knowing what you are allowed to commit. Commit too
-eagerly and a crash silently swallows work that was still running.
-
-Parallel Consumer's answer is the one it already uses everywhere else, and this module inherits it
-whole. It commits the **frontier**: the offset below which *everything* is contiguously finished. Work
-that finished *above* the frontier is not thrown away - it is recorded in the commit's metadata as a
-list of exceptions, so a restart resumes at the frontier without redoing what is already done. It is
-the same shape as TCP's cumulative ACK plus its SACK blocks. Both terms are defined in
-[`CONCEPTS.md`](../CONCEPTS.md).
-
-The test is written red-first, and it is an integration test against a real broker rather than an
-argument:
-
-| What is checked | Result |
-|---|---|
-| A commit lands while the head record is still parked inside the chain | committed offset is **0**, the parked record's own offset - never higher |
-| Kill the process at that moment, with no drain and no final commit | restart replays the in-flight record; **11 of 11 outputs present, nothing lost** |
-| Restart the same consumer group with the seam **off** | stock Kafka Streams reads our commit metadata and continues, no crash |
-
-Against the pre-fix mechanism the first row committed offset 11 - the consumer position - which is the
-defect the test exists to demonstrate. Source:
-[`CommitFrontierCrashRestartTest`](src/test/java/bz/stub/parallelconsumer/streams/integrationTests/CommitFrontierCrashRestartTest.java).
-
-### Do not take any of this on trust: run your own topology both ways
-
-Every benchmark invites the same reply, and it is a fair one: *you chose that workload*. So the
-seam is a switch, and the switch is the point.
-
-**One term changes.** Same JVM, same broker, same patched classes, same topology, same data - dispatch
-on, then dispatch off. Every measurement in this document was produced that way, and the same control
-is available to you on code we have never seen. Two uses, and the second is the stronger:
-
-| | What you do | What it tells you |
-|---|---|---|
-| **Performance** | Run *your* topology both ways: your key distribution, your processing costs, your partition count | Whether this helps *you*. It is evidence we cannot manufacture and cannot be accused of rigging |
-| **Correctness** | Point an existing Kafka Streams test suite at your app with dispatch **on**, and see whether it still passes | Whether the parallel path preserves the behaviour *your own tests already encode* |
-
-The correctness use is what this module's own proof tests do against a stock fixture, handed to each
-adopter for the code they actually care about. It turns "trust our alpha" into "verify it on your own
-code", which for an alpha is a far better offer than any number we could publish. It also matters more
-here than it would elsewhere, because nothing in this module will *tell* you when it is wrong - see
-[what does not work](#what-does-not-work---and-it-will-not-tell-you). Your own assertions are the
-detector.
-
-**What makes the A/B meaningful is what happens when it is off.** With dispatch disabled the topology
-behaves exactly as stock Kafka Streams. The choice is made once, when each task is constructed, and a
-task that chose the stock path never takes the parallel one: no worker pool, no work manager, nothing
-to bypass at runtime. That is why Kafka's own 188 still pass. So a suite that goes red with dispatch on
-and green with it off has isolated the seam rather than something else in your build.
-
-**Two honest limits on the correctness use**, because it is easy to over-read:
-
-- A green suite with dispatch on is strong evidence about **your topology**. It is not a general
-  equivalence proof, and it does not retire the 34 `StreamTaskTest` failures above.
-- Every known gap still applies. Stream-time behaviour, caching on state stores, retries and EOS do not
-  become safe because your tests pass, and a suite that never exercises them proves nothing about them.
-  Read
-  [Current Shortcomings](../docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md#current-shortcomings)
-  first, and treat a green run as evidence for what you tested.
-
-Today the switch is a JVM-wide system property, described under [Trying it](#trying-it) - fine for a
-benchmark harness or a test suite, awkward if you want two differently-configured instances in one
-process.
-
-### Output equality
-
-For a stateless topology and for a non-windowed aggregation over a state store, output is identical to
-a stock Kafka Streams baseline generated in a **different Maven module** that has no dependency on this
-one - with a test asserting the patched classes are absent from that JVM, so "stock" means stock.
-
-Two things make that a claim about the *seam* rather than about the harness, and both are asserted
-rather than assumed: every record must have reached the chain through the worker pool (a counter, since
-output equality on its own would be satisfied by the stock path doing all the work), and a pool of four
-must have had **at least three records inside the chain at once**. The stateless arm is a
-`@RepeatedTest(3)`, because one green run of a concurrency experiment is a coin toss with the schedule.
-Full write-up in the [result document](../docs/plans/2026-08-08-002-ks-on-pc-spike-result.md).
-
----
-
-## What does not work - and it will not tell you
-
-**This is the sharpest edge on the module, and it is worth reading before anything else here.**
-Everything known to be broken is **silently** broken. There is no exception, no warning and no log
-line. Build a topology that uses one of the constructs below, run it with the seam on, and it will
-start, run to completion, and emit plausible wrong answers.
-
-That is not an oversight in the reporting; it is the shape of the defect. These constructs read a
-stream-time counter that never advances on this path, and several of them mutate a non-volatile `long`
-from every worker thread. Nothing about either failure mode is detectable from inside the operator, so
-nothing throws.
-
-**The practical consequence: your own assertions are the only detector you have.** Run the switch both
-ways and compare outputs, on every topology you care about. A run that merely completes tells you
-nothing.
-
-The list itself is deliberately **not** enumerated in full here. Implementation has not stopped, so a
-list in this README goes stale the week it is written. The living list, with the mechanism behind each
-item and an assessment of what closing it would cost, is
-**[Current Shortcomings](../docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md#current-shortcomings)**.
-
-Read it before relying on this anywhere that matters. In outline:
-
-- **Stream time does not advance**, because it advanced at the selection step this module replaced.
-  `STREAM_TIME` punctuation never fires. Wall-clock punctuation is unaffected and works normally.
-- **Windows, joins and suppression are downstream of that**, and are worse than merely
-  stream-time-blind: window close, join emission and suppression all read fields that are plain
-  non-volatile `long`s doing read-modify-write, mutated from every worker. Under concurrency they are
-  corrupted, not just reordered. Results change, not only their timing.
-- **Caching must be disabled on state stores**, which changes what your topology emits - with caching
-  on the DSL emits roughly one record per key per commit interval, with it off it emits every update.
-- **Retries are off**, and a failure surfaces one pump cycle later than it would in stock, rather than
-  synchronously at the throw.
-- **Exactly-once is out of scope.** This module is at-least-once. The obstacle is on the Streams side:
-  the transaction is per-`StreamThread`, so a worker's send joins a transaction covering every task on
-  that thread.
-- **Consumer backpressure never fires.** `StreamTask`'s buffer is what pauses a partition, and the PC
-  path never fills it, so PC's own concurrency limits are the only inflow control there is.
-- **Rebalance is unexercised.** Not known broken; not tested either, which for an alpha is the same
-  thing in practice. Every test here runs one `StreamThread`, one partition, one task.
-
----
-
-## Does this change anything if you only use plain Parallel Consumer?
-
-**No, and that is checkable rather than a reassurance.**
-
-The sentence "Parallel Consumer now patches Kafka Streams internals" is alarming if you read it as a
-change to the library you already use. It is not one:
-
-| Claim | How to check it |
-|---|---|
-| This module is a **leaf**. It depends on `parallel-consumer-core`; nothing depends on it | grep the reactor for `parallel-consumer-streams` - the only hits are its own pom and the `<module>` line in the root pom |
-| Adding it **changed no shipped code in any existing module** | diff this branch against `master`: outside this module and the docs, nothing under any `src/main` changed at all. The edits are the root pom's `<module>` line, a `NOTICE` addition attributing the modified Apache classes, a skip in the copyright-header script for generated Apache source, and new test-only files in the examples module |
-| The patched Kafka classes exist **only inside this module's own jar** | they are compiled from a patch at build time into this module's `target/classes` |
-| The seam is **unreachable** from core, vert.x and reactor | no source in those modules names `PcDispatchSwitch` or the `bz.stub.parallelconsumer.streams` package. The stock-baseline fixture in the examples module asserts *at runtime* that the patched classes are absent from a JVM that does not depend on this module, and fails the build if one appears |
-
-So **taking the dependency is the entire opt-in, and not taking it is a complete opt-out** that
-requires no configuration, no flag, and no knowledge that this module exists.
-
----
-
-## Trying it
-
-Take the dependency, and the seam is on. Nobody puts an alpha module called
-`parallel-consumer-streams` on their classpath by accident, so there is no second switch to find.
-
-```xml
-<dependency>
-    <groupId>bz.stub.parallelconsumer</groupId>
-    <artifactId>parallel-consumer-streams</artifactId>
-    <version>${parallel-consumer.version}</version>
-</dependency>
-```
-
-Same version as the rest of Parallel Consumer; this module is released in lockstep with core.
-
-> **Read the classpath hazard below before you do this in an application.** It is the single biggest
-> reason this is alpha, and it is a packaging problem rather than a code one.
-
-| Property | Default | Effect |
-|---|---|---|
-| `pc.streams.dispatch.enabled` | `true` | `false` gives stock, serial Kafka Streams dispatch back. This is the A/B control described [above](#do-not-take-any-of-this-on-trust-run-your-own-topology-both-ways) |
-| `pc.streams.dispatch.poolSize` | `4` | Worker threads per task; also Parallel Consumer's max concurrency |
-
-A value for the first that is neither `true` nor `false` fails loudly rather than being read as "off" -
-a typo in the property whose whole job is to disable the seam would otherwise leave a control arm
-silently uncontrolled.
-
-Also worth setting while the seam is on: a **low `poll.ms`**. The default 100ms throttles dispatch on
-this branch, which is what the single-key control measures. See
-[the control row](#head-of-line-blocking-and-the-control-that-costs-us-the-headline).
-
-From a test, so that each arm states which path it wants rather than inheriting a default:
-
-```java
-PcDispatchSwitch.enable(4);            // worker threads per task
-// PcDispatchSwitch.disable();         // ... or the stock path, said out loud
-try {
-    // ... build and run the topology ...
-} finally {
-    PcDispatchSwitch.resetToDefault(); // hand the JVM back as you found it
-}
-```
-
-Two things to know before you get a surprising result:
-
-- **The switch is process-wide static state**, decided once when the task is constructed, so a task
-  never changes record paths halfway through a run. Tests that touch it must be `@Isolated`.
-- **There is no example application yet.** The working demonstrations on this branch are the
-  integration tests under
-  [`src/test/.../integrationTests`](src/test/java/bz/stub/parallelconsumer/streams/integrationTests) -
-  `PcDrivenStreamsProofTest` and `PcDrivenStatefulProofTest` are the two to read first. The existing
-  `parallel-consumer-example-streams` module shows the *old* pattern (a topology handing slow work to a
-  separate Parallel Consumer downstream) and does not use this module.
-
-### The classpath hazard
-
-**Do not combine this module with a different `kafka-streams` version than it was built against**
-(currently **3.9.2**).
-
-This module ships a handful of compiled classes in Apache Kafka's *own* packages, and depends on
-`kafka-streams` for the other thousand. The mechanism is that ours precede the real jar on the
-classpath and win. Inside this module's build that is controlled and asserted. As a published
-dependency it is not defensible, in three distinct ways:
-
-1. **Classpath order is a convention, not a guarantee.** Maven, Gradle, IDEs, shaded uber-jars and
-   Spring Boot's loader may order entries differently. When ours lose you silently get pure stock Kafka
-   Streams, with no error - the worst shape a failure can take.
-2. **Class loading is per class, so the result is always a mixture.** That works only while both halves
-   are the same version, and nothing checks that they are. Bump `kafka-streams` to 3.10 without
-   bumping this module and you run our 3.9.2-derived internals against their 3.10 internals. That is
-   the outcome of a routine dependency bump, not an exotic misconfiguration.
-3. **It is illegal on the module path.** JPMS forbids split packages outright.
-
-The options for fixing it properly, and why the leading one turns on Maven *coordinates* rather than on
-forking, are weighed in
-[Current Shortcomings](../docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md#current-shortcomings)
-(the parked packaging entry) and in
-[`docs/inflight/next-fork-packaging-docs-and-licensing.md`](../docs/inflight/next-fork-packaging-docs-and-licensing.md).
-
----
-
-## How it is built
-
-**No Apache Kafka source is committed to this repository.** Four classes are unpacked from the
-published `kafka-streams` sources jar at `generate-sources`, patched with the tracked
-[`src/main/patch/pc-streams.patch`](src/main/patch/pc-streams.patch), and compiled into
-`target/classes`, which precedes the `kafka-streams` jar on the classpath.
-
-The patch is **657 lines across those four classes** - `StreamTask`, `AbstractProcessorContext`,
-`ProcessorContextImpl` and `RecordCollectorImpl`. A second, smaller patch does the same to one of
-Kafka's own *test* fixtures, `InternalMockProcessorContext`, which reads the fields the main patch
-thread-confines; without it Kafka's `RecordCollectorTest` cannot construct its subject at all, and the
-188 above would not be measurable.
-
-Those four were named deliberately rather than discovered by the compiler - `RecordCollectorImpl` is
-constructed outside `StreamTask` and nothing forces it into the set, but its non-concurrent maps are
-written from every worker thread through the `to()` sink.
-
-### Kafka version pinning, and re-deriving the patch
-
-The module is pinned to the reactor's `${kafka.version}`, currently **3.9.2**, and the patch is derived
-against exactly those sources. `org.apache.kafka.streams.processor.internals` is package-private,
-unsupported and explicitly not an API, so those classes may change shape in any patch release.
-
-**On a Kafka bump the patch will need re-deriving.** The build fails *loudly* when it stops applying -
-`bin/apply-patch.sh` dry-runs first and fails on any rejected hunk - rather than drifting into a runtime
-`NoSuchMethodError`, which is what a vendored copy would do. That is a real improvement, and it is
-still a recurring maintenance obligation with a 188-test regression run behind each one.
-
-On Kafka trunk and 4.x the target classes have already diverged materially: `ProcessorContextImpl` is
-`final` and the record context is mutated in place. A green result on 3.9 does **not** transfer
-unexamined.
+Kafka publishes its **compiled** tests to Maven Central. This module takes them as a `test`-classifier
+dependency and points a dedicated surefire execution at them, so Kafka's own `StreamTaskTest`,
+`StreamThreadTest`, `RecordCollectorTest` and `ProcessorContextImplTest` exercise **our** copies of
+the patched classes. Nothing is excluded, rewritten, recompiled or relaxed. It runs in the
+module's normal `test` phase, on every build, with no profile and no flag.
+
+This is also the reason **no refused signature was deleted**. Those tests are Kafka's own *compiled*
+classes, never recompiled here, so a deleted method would link-fail against classes this project does
+not own - and the behaviour-preservation evidence would be forfeited by the very change meant to make
+the module honest. Refusal is therefore additive: annotations, and a throw guarded on the seam.
+
+That is the behaviour-preservation claim, and it is the strongest one available: **anything the patch
+broke that Kafka tested, fails here.**
+
+**The claim is about the patch, and it only means anything with the seam OFF**, so that execution
+pins `pc.streams.dispatch.enabled=false` rather than inheriting whatever the default happens to be.
+The pin is not redundant with the default being off today - deleting it would make the oracle
+silently follow the default the day it moves.
+
+Some of `StreamThreadTest` is skipped, by Kafka's own `assumeTrue`/`assumeFalse` on its
+`stateUpdaterEnabled` x `processingThreadsEnabled` parameter matrix. Those assumptions are evaluated
+on the first line of each method, from the test's own parameters, before any patched code runs -
+so nothing in this patch can influence them. That is a mechanism, not a measurement, which is why it
+is stated here without a number.
+
+> **Re-derive the counts; never copy them.** They move with the patch, with `kafka.version`, and with
+> the seam. Run the module's whole `test` phase and read the per-class numbers out of
+> `target/surefire-reports-kafka-upstream/`.
+>
+> **Do not scope the run with `-Dtest=`.** It silently overrides that execution's `<includes>`, so
+> Kafka's suite does not run at all - and the build still goes green, with the number you were
+> checking never computed. It has cost several people a whole run.
+>
+> **"Zero failures" has one known exception**, and it is Kafka's own flake rather than this patch's:
+> `StreamThreadTest.shouldLogAndRecordSkippedRecordsForInvalidTimestamps` asserts on a thread name
+> that depends on which thread logged. Diagnosed, with its control arm and what to do about it, in
+> [`docs/inflight/test-streamthreadtest-invalid-timestamps-flake.md`](../docs/inflight/test-streamthreadtest-invalid-timestamps-flake.md).
+> If that exact case fails, re-run. **Anything else that fails is real.**
+
+### The same suite with the seam ON, and what its failures mean
+
+The execution above is a claim about the **patch**. It says nothing about the path this module
+actually ships, because it runs with the switch off. The opposite measurement is a second execution
+over the same four classes with `pc.streams.dispatch.enabled=true`, and a lane that reads both:
 
 ```bash
-./mvnw -pl parallel-consumer-streams -am process-sources   # patched tree into target/kafka-patched
-# edit target/kafka-patched/... - RUN NO MAVEN in between, `unpack` silently reverts your edits
-parallel-consumer-streams/bin/regen-patch.sh               # re-derives pc-streams.patch
+bin/ci-streams-seam-on-evidence.sh
 ```
 
-`regen-patch.sh` warns when the hunk count drops, which is the tripwire for a silently lost edit.
+**Seam-on failures are the measurement, not a regression.** Kafka's tests assert on things this
+design deliberately does differently - a refused construct throws where stock would have run it, a
+committed offset is Parallel Consumer's frontier rather than Streams' `consumedOffsets`, a record
+handed to a worker has not been processed by the time `process()` returns. So the seam-on execution
+carries `testFailureIgnore` and never reddens a build. **What gates is the execution after it**: every
+case that passes with the seam off and fails with it on must be explained by a *named mechanism*, and
+one that is not fails the lane. That split is the only arrangement in which "these failures are
+expected" and "a new divergence fails the build" are both true.
+
+Three of the mechanisms are derived from the code at run time - the refusal envelope's own enum
+supplies both the marker and the construct name, and the commit-encoding class is recognised from the
+`OffsetAndMetadata` the assertion itself renders. The rest are attributions that no stack trace can
+produce ("this test drives the task synchronously"), and those live in
+[`docs/inflight/test-streams-seam-on-divergence-triage.md`](../docs/inflight/test-streams-seam-on-divergence-triage.md)
+with the mechanism and the rung that owns each one, so the PR that closes one edits the attribution
+in the same change.
+
+**The seam-off run is the lane's control arm**, and the lane checks its integrity first: a
+control-arm failure must carry a `flaky-case:` marker in `docs/inflight/`, or the lane stops and says
+there is nothing trustworthy to difference against. That is what lets the invalid-timestamps flake
+above be *named* rather than re-run - the lane relaxes the oracle's own fail-fast for its run only,
+so one known flake no longer costs a full re-run of both arms.
+
+**Do not narrow this run with `-Dtest=` either**, and do not read a report directory the lane did not
+write: `SurefireArm` refuses a directory that is missing, empty, or older than the build that is
+reading it, because all three parse as a clean pass.
+
+### The laws Kafka's own suite cannot state
+
+Kafka's suite is the oracle for *behaviour preservation*. It cannot state the properties this module
+exists for, because stock Kafka Streams has no way to express them - there is no stock arm in which
+two records of one partition run at once, so no stock test asserts what happens when they do. Four
+broker-backed arms do, and each carries its control:
+
+| Law | The arm | Its control |
+|---|---|---|
+| Records of distinct keys on one partition run **concurrently**, and records of one key never do | `PcDrivenStreamsDispatchTest` | the same topology and data with the switch off, asserting the dispatch counter is zero and the chain was walked one record at a time |
+| PC-driven output is **identical to what stock Kafka Streams produced**, record for record | `PcDrivenStreamsProofTest` | a baseline generated in a JVM that provably never loaded the patch - see below - plus a same-harness seam-off arm that separates "the patch changed the output" from "concurrency changed the output" |
+| The same holds for a **stateful** topology, where Kafka's own store wrappers read the per-task record context ambiently | `PcDrivenStatefulProofTest` | its own external stock baseline, and an ambient-context probe that fails on a record context crossing threads |
+| **Nothing is lost or double-counted across a crash**: the committed frontier is a point below which every record has been processed, not the offset of the last one handed out | `CommitFrontierCrashRestartTest` | a stock arm through the same crash and restart |
+| The patched classes are behaviour-preserving under **serial** dispatch | `ShadowedStreamsControlTest` | it *is* the control - stock, single-threaded Streams running our generated classes |
+
+**The output baselines are generated in another module, and that is the whole point.** This module
+compiles patched copies of Kafka's classes into its own build output, which precedes the
+`kafka-streams` jar on the classpath, so *every* `KafkaStreams` instance in this JVM runs the patch. A
+"stock arm" written here would share every defect the patch introduced and the comparison would prove
+nothing. The baselines come from `parallel-consumer-example-streams`, which does not depend on this
+module and asserts its own classpath is stock before recording a row, and they are tracked as
+fixtures. The fixture carries the **inputs** as well as the outputs, and the arms here replay those
+inputs rather than rebuilding them from a second copy of the generation rules - so the two arms cannot
+drift in what they were fed.
+
+**The commit-frontier law is also what the seam-on lane defers to.** That lane cannot tell a
+deliberate encoding divergence from an offset regression inside a Kafka unit test, and says so; this
+arm can, because it asserts on records that arrived rather than on a base64 metadata string.
+
+### Wake-on-work: why the poll wait is split
+
+`StreamThread` polls the consumer and runs the topology on **one** thread, so blocking in
+`Consumer#poll()` for the full `poll.ms` costs stock Kafka Streams nothing - there is by definition no
+processing it could be doing instead. Hand records to a worker pool and that inverts: records complete
+*during* the poll wait, and neither their completions nor the records they unblock can move until poll
+returns. Worse, the inner work loop breaks back out to poll whenever a pass dispatched nothing - which
+under an asynchronous dispatcher also means "the pool is full" or "every available key is already in
+flight", states that resolve on a worker completion and never on a broker fetch. The loop therefore
+chooses to block at precisely the moments a completion is imminent.
+
+So the patched `StreamThread` polls briefly to collect whatever the broker already has, then waits on
+[`PcWorkSignal`](src/main/java/bz/stub/parallelconsumer/streams/PcWorkSignal.java) for the rest of its
+budget, and a worker completion ends that wait immediately. It is deliberately **not**
+`KafkaConsumer#wakeup()`: that word already means *shutdown* to Kafka Streams, and a wake delivered
+while the thread is not polling arms the *next* poll instead, so a stray completion could swallow a
+shutdown - a failure that shows up once in a thousand shutdowns and never reproduces on demand.
+
+**Wake-on-work was measured as roughly two thirds of the backlog benefit**, by ablating it rather than
+by arguing from mechanism - which had predicted the opposite, that a saturated topic would leave the
+split wait idle. That measurement, its refuted prediction and its arms are owned by
+[`docs/solutions/best-practices/ablate-your-own-change-not-only-the-baseline.md`](../docs/solutions/best-practices/ablate-your-own-change-not-only-the-baseline.md);
+**this rung does not re-derive it and no figure is repeated here**, because the benchmark that
+produces one is a separate unit and a number copied out of its write-up drifts silently from it. What
+this rung ships is the mechanism and the tests that show it is load-bearing.
+
+### Backpressure: what bounds memory on this path
+
+Stock Kafka Streams pauses a partition once its `RecordQueue` holds more than
+`buffered.records.per.partition`, and resumes it when processing brings the queue back down. On the PC
+path there is no `RecordQueue` to measure: the records went to Parallel Consumer,
+`partitionGroup.numBuffered()` answers zero however much PC is holding, the pause never fired, and
+**nothing bounded inflow but heap**. A topology with a processor slower than the broker feed simply
+accumulated.
+
+The pause is now applied from the same threshold with the occupancy read from PC, and the resume
+mirrors it exactly - **only partitions this path paused are ever handed back**, because Kafka pauses
+partitions for reasons that have nothing to do with buffering (an offset reset, for one) and a resume
+computed from the whole assignment would restart fetches on those. Mirroring is also what makes the
+resume provably no more eager than the pause, which is the property the bound rests on.
+
+**"Buffered" means accepted and not yet handed to a worker**, which is what Kafka's own
+`RecordQueue.size()` means - a record being processed has left the buffer. The two definitions differ
+by the in-flight set, which the pool size bounds, so this is both the faithful analogue and the only
+unbounded quantity of the two.
+
+**The count is derived from Parallel Consumer's own incomplete-offset set, not maintained alongside
+it.** A count raised by predicting what PC would accept drifts the moment PC applies a rule the
+prediction does not model - a re-delivered offset, for instance, which PC's shard drops because it
+already holds a live container for it, so the count goes up and never comes back down and the
+partition is paused for good. Deriving is immune to it. Why that was not obvious, and the objection it
+had to answer, are in
+[`docs/solutions/architecture-patterns/predicting-what-a-collaborator-will-accept-drifts-derive-the-count-from-its-own-state.md`](../docs/solutions/architecture-patterns/predicting-what-a-collaborator-will-accept-drifts-derive-the-count-from-its-own-state.md).
+
+**The bound is proven with a control arm rather than asserted.** `BackpressureBoundIntegrationTest`
+runs the same topology, data, processing cost, broker and JVM twice, varying only
+`pc.streams.backpressure.enabled`, and samples occupancy from a watcher thread throughout - because
+the interesting quantity is a *peak*, and a peak is invisible to any assertion made after the run.
+Two ways it could pass vacuously are closed: the fixed arm must also **reach** its threshold, or a run
+that never filled the buffer would pass with the feature deleted; and every record must come out the
+far end, because a bound achieved by dropping records is not a bound.
+
+Over a 600-record backlog with a processor slower than the feed, the arms measured **596 held with the
+pause off against 30 with it on** - the fixed arm landing exactly on its derived bound of
+`buffered.records.per.partition` plus one poll batch, which is what says the derivation is right rather
+than merely generous. Re-derive rather than copy: the figures move with the machine, and the arm prints
+them.
+
+### Error surfacing: the type, the timing, and the commit fence
+
+A worker's exception cannot be thrown where it happened, so it is carried back to the StreamThread.
+Three things have to be true for that to be equivalent to what stock does.
+
+**The type survives.** `TaskCorruptedException` and `TaskMigratedException` are Kafka's *control-flow*
+signals to the `TaskManager` - close this task dirty, revive it, re-initialise its state - and
+`StreamThread` dispatches recovery on the type. They are passed through unchanged, exactly as stock's
+own catch ladder does. Everything else is wrapped in a `StreamsException` naming the topic, partition
+and offset, because what failed is one record out of `poolSize` running concurrently and "which one"
+is the first question anyone asks.
+
+**One deliberate divergence from stock, and it is the interesting one.** Stock rethrows a
+`TimeoutException` raw, which its `TaskExecutor` reads as *retriable* - keep the task running and come
+back to it. That is safe there because the record is still in the queue and will be re-selected. Here
+retries are disabled and the failure bar has closed dispatch, so honouring it would mean `process()`
+returning false for ever, `task.timeout.ms` never tripping, and the partition staying paused: zero
+throughput, no exception, nothing in the log, from an ordinary broker timeout. It is wrapped instead.
+**Matching the exception TYPE would have broken the exception CONTRACT.**
+
+**The timing survives.** A pump that dispatched work and then runs out of it waits, bounded, for the
+outcome of what is in flight, and re-checks before returning - so the failure of a record reaches the
+`TaskManager` from the same `runOnce` that ran it, which is what Kafka's own recovery test asserts.
+
+**That wait is gated on running out of WORK rather than out of pool capacity, and the gate is the
+interesting part.** Unconditional, it also fired in the saturated case - pool full, plenty of work,
+nowhere to put it - where the StreamThread's next act would have been to poll. Measured with the pause
+switched off so nothing else bounded inflow, that cost a **sixteen-fold** intake throttle, and worse:
+it silently supplied a second memory bound, which made the memory-bound proof's own control arm look
+almost bounded. A contaminated control arm turns a measurement into a reassurance. The residual the
+gate leaves - at `poolSize` 1 a single record fills the pool, so the same-`runOnce` guarantee is a
+guarantee about a pool with a spare slot - and the latency it still costs in the starved regime are
+recorded in
+[`docs/inflight/perf-streams-failure-settle-wait-has-no-throughput-arm.md`](../docs/inflight/perf-streams-failure-settle-wait-has-no-throughput-arm.md).
+
+**Nothing commits past a failure.** Kafka's loop runs process, then punctuate, then commit, so a
+failure landing in that window would otherwise let a scheduled commit make *another key's* offsets
+durable for a task about to be closed dirty and rewound - and for a `TaskCorruptedException` that is
+worse than a duplicate, because recovery wipes the state those offsets claim to cover. A pending
+failure therefore fences commit-data collection. It does **not** fence the "is there work outstanding"
+question, which is the opposite one: that is what `validateClean` turns into a `TaskMigratedException`
+so the task closes dirty, and fencing it would make a failed task look clean to close.
+
+A failure also **stops further dispatch**, so what runs after a known failure is bounded to what was
+already in flight rather than to a whole poll budget. In-flight records are left to finish rather than
+interrupted: a worker cancelled mid-chain leaves a half-forwarded record.
+
+The knowledge behind all of this is owned by
+[`docs/solutions/architecture-patterns/an-async-seam-owes-a-control-flow-exception-both-its-type-and-its-timing.md`](../docs/solutions/architecture-patterns/an-async-seam-owes-a-control-flow-exception-both-its-type-and-its-timing.md),
+including why fixing the type alone was declined: with the timing untouched, no test can tell the
+unwrap from its absence.
+
+### Task lifecycle: what happens when a task changes hands
+
+Kafka Streams moves a task around a great deal - it suspends it, recycles it into a standby, gains and
+loses its partitions in a cooperative rebalance, closes it dirty and revives the same object. The
+dispatcher was originally built to live exactly as long as one `StreamTask` constructor call, which
+held only while none of that happened.
+
+| Event | What the dispatcher does now |
+|---|---|
+| Partitions change (`updateInputPartitions`) | revoke, then assign, in Parallel Consumer's own order - the revoke is what bumps the epoch that lets a late outcome for a partition somebody else now owns be recognised and dropped |
+| Suspend | drain, bounded; a worker still inside the chain would be forwarding into a record collector about to close |
+| Recycle to standby (`prepareRecycle`) | close, through the same call the close path makes - this route previously bypassed it and leaked the registry entry, the worker pool, the wake-signal registration and PC's partition state |
+| Close | drain, revoke, and mark everything published as covered, because a closed dispatcher owns nothing and will never commit again |
+| Revive after a dirty close | **build a new dispatcher** over the partitions the task holds now; the closed one has no route back to a running worker pool |
+
+Two rules hold the rest together. **In-flight work on a revoked partition is abandoned, not awaited** -
+the epoch fence makes its outcome unusable, and that is the at-least-once trade Parallel Consumer's
+core already makes rather than a policy invented here. And **a question may never mutate**: the
+"is there work outstanding" query is reachable from Kafka's state-updater thread, so it reads counters
+and touches neither the `WorkManager` nor the completion mailbox, while everything that does touch
+them stays owner-thread-only and says so at runtime. That rule and how it was arrived at are owned by
+[`docs/solutions/architecture-patterns/a-query-must-never-mutate-derive-thread-safety-from-callers.md`](../docs/solutions/architecture-patterns/a-query-must-never-mutate-derive-thread-safety-from-callers.md).
+
+The distinction that makes a clean close honest is that "is a commit worth attempting" and "is it safe
+to walk away" are **the same question on the stock path** - processing is synchronous, so a record is
+either finished or not started. Asynchronous dispatch creates a third state, and `validateClean()` is
+the caller that has to see it: without that, `closeClean()` over records still inside the processor
+chain succeeded silently where Kafka's contract is to throw `TaskMigratedException` and close dirty.
+
+The end-to-end arm is `RebalanceUnderPcDispatchTest`: two `KafkaStreams` instances in one application
+id over a multi-partition topic, the second joining mid-run, both dispatching through Parallel
+Consumer. It asserts no loss, duplicates bounded by **capacity rather than by a fraction of
+throughput**, that the handover actually happened (with a reader `assign`ed and `seek`ed past the
+position captured when the second instance started, so it cannot be satisfied by the first
+instance's earlier output), and that ownership moved rather than being shared.
+
+### Stream time
+
+Stock Kafka Streams advances stream time inside `PartitionGroup.nextRecord()`, at *selection*, before
+the record is processed. The PC path never calls `nextRecord()` - that is the whole seam - so before
+this work the value sat at `UNKNOWN` for the life of every dispatched task. Two things followed, both
+silently: `STREAM_TIME` punctuators never fired, and `ProcessorContext.currentStreamTimeMs()` returned
+a constant `-1`. The second is the more likely of the two for a user to hit, because it is reachable
+from any processor with no refused DSL call in sight.
+
+Stream time now comes from the dispatcher as an **in-flight low-water mark**: the lowest stream
+timestamp still executing, or the highest ever dispatched when nothing is, clamped monotone. The
+timestamp is the one the configured `TimestampExtractor` produced, carried across the seam with the
+work rather than read off the `ConsumerRecord` - a payload-time topology points its extractor at a
+field inside the value, so those are two different numbers.
+
+**What it guarantees is narrower than a watermark, and the difference matters:**
+
+- **It never passes a record that is currently in flight**, so a punctuation cannot close a window
+  over work still inside the processor chain. That is the property worth having.
+- **It is not an order boundary.** The monotone clamp means a record dispatched later can carry a
+  lower timestamp and sit below the mark; `PcTaskDispatcher` counts exactly those, and that counter is
+  what a future decision about reinstating any windowed operator turns on.
+- **It can sit ABOVE what stock would hold.** Between batches the pool empties and the mark rises to
+  the highest ever dispatched - and PC hands records out per KEY shard rather than in stock's
+  timestamp order, so wherever those orders differ the mark overtakes stock. It needs neither
+  concurrency nor a second partition: three records on one partition with three distinct keys give
+  `[0, 2, 2]` where stock reports `[0, 1, 2]`, which is pinned as a characterisation test. An earlier
+  version of this work claimed "never ahead of stock"; that claim was false and was retracted.
+
+A task restoring from a committed partition time seeds the mark, and the PC path's own `RecordQueue`
+with it - without the second half, a topology using Kafka's shipped `UsePartitionTimeOnInvalidTimestamp`
+throws on the first record after a restart with an invalid embedded timestamp, where stock recovers.
+Neither half helps when the group's commits were written by *this* module: those carry Parallel
+Consumer's frontier payload rather than Streams' `TopicPartitionMetadata`, so there is nothing to
+decode. That is the re-fire gap named under
+[What is still unsupported and NOT refused](#what-is-still-unsupported-and-not-refused).
 
 ---
 
-## Reporting what you find
+## What is refused, and how you find out
 
-Field reports are the point of publishing this. Please report on
-**[astubbs#255](https://github.com/astubbs/parallel-consumer/issues/255)**, and include:
+Everything currently known to be broken on this path is **physically refused**. You do not get a
+plausible wrong answer.
 
-1. **Your topology's shape** - stateless or stateful, and whether caching is disabled. **A construct
-   that produced wrong output without complaining is the single most useful report we can get**,
-   because nothing in this module detects that today and your run is the only detector there was.
-2. **The switch state** - `pc.streams.dispatch.enabled` and `poolSize`, and whether the same run is
-   correct with the seam off. *A result with no seam-off control arm cannot be attributed to this
-   module.*
-3. **Kafka version**, and whether you re-derived the patch.
-4. **What you compared against** - output equality against stock, per-key ordering, aggregate values.
-   **The most valuable report of all is your own test suite run both ways**: what passed with dispatch
-   on, what did not, and what the failures looked like.
-5. **Reproduction rate** - "3 of 20 runs" is worth far more than "sometimes".
-6. **Your `poll.ms`**, if you are reporting a performance figure. The default throttles dispatch here,
-   so a slow result at 100ms may be measuring that rather than your topology.
+That matters more than it sounds. None of these constructs throws in stock Kafka Streams, and none of
+them would have thrown here either. They read a stream-time counter that never advances on the PC
+path - `PartitionGroup.nextRecord()` is where stock Streams advances it, and the PC path does not go
+through it - and several of them read-modify-write a **non-volatile `long`** from every worker, so
+under concurrent dispatch the value is corrupted rather than merely stale. Left reachable, the
+topology runs to completion and emits the wrong numbers, silently. Refusing is the only honest
+behaviour available until the semantics are fixed.
 
-Anything already in
-[Current Shortcomings](../docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md#current-shortcomings)
-is known. The valuable reports are the ones *outside* that list, and any evidence that something on it
-is worse than stated.
+### Three layers, because no one of them covers the surface
+
+| You get | When |
+|---|---|
+| A **compile error** - `@DoNotCall` under Error Prone, a deprecation warning without it | you write `join`, `leftJoin`, `outerJoin`, `windowedBy` or `suppress` against `KStream`, `KTable`, `KGroupedStream` or `CogroupedKStream` |
+| An `UnsupportedOperationException` naming the construct, at topology construction | you build that topology with the seam on |
+| An `UnsupportedOperationException` naming the construct, at task construction | your topology reaches a `WindowStore`, `SessionStore`, versioned key-value store or suppression buffer **through the Processor API**, or sets `processing.guarantee` to exactly-once |
+
+The DSL layer only fires for someone who called a refused method. The Processor API reaches the same
+machinery without touching `KStream` at all - `topology.addStateStore(Stores.windowStoreBuilder(...))`
+connects a window store to a plain `Processor` - and exactly-once is not a topology shape at all, it
+is one configuration key. The third layer is what covers both, and it lives in `StreamTask`'s
+constructor because that is the one place holding both the topology and the task config, so it costs
+no additional patched class.
+
+The store check is by **interface, never by class name**: the stores that reach the task are wrapped
+several layers deep, and every wrapper implements the interface it wraps. `instanceof` sees through
+the whole stack; a name match sees the outermost wrapper and breaks the first time Kafka adds one.
+The versioned key-value store is the trap in that design and is worth knowing about - it extends
+`StateStore` directly rather than `WindowStore`, so it looks ordinary, and it is reachable with **no
+refused DSL call anywhere** via `Materialized.as(Stores.persistentVersionedKeyValueStore(...))`. The
+general rule that came out of that is written up in
+[`a-type-gate-is-a-claim-about-a-hierarchy-you-did-not-write.md`](../docs/solutions/architecture-patterns/a-type-gate-is-a-claim-about-a-hierarchy-you-did-not-write.md).
+
+### The two run-time layers are conditional on the seam; the compile-time one cannot be
+
+With `-Dpc.streams.dispatch.enabled=false` the whole of the refusal's run-time half is inert and every
+one of these topologies builds and runs exactly as stock Kafka Streams does. That is both the escape
+hatch and the reason Kafka's own suite still passes: several of those tests build precisely the
+constructs listed here, and an unconditional check would refuse them and void the
+behaviour-preservation claim.
+
+**The compile-time layer is not conditional and cannot be** - an annotation in a class file cannot
+read a system property. If you have deliberately turned the seam off and want the call anyway,
+suppress `DoNotCall` at that call site. This repository does compile under Error Prone, so that is a
+hard error here rather than a theoretical one, and the module's own refusal test carries exactly that
+suppression: deleting it fails the build with one error per refused call site, which is the cheapest
+available falsification of the compile-time layer.
+
+Every refused method also carries a javadoc `@deprecated` tag naming **this module** as the thing
+refusing it. Without that, an IDE strikes `stream.join(...)` through with no reason attached, and the
+obvious inference - that Apache Kafka deprecated `join` - is false and alarming. The general shape of
+that mistake is written up in
+[`a-deprecation-without-an-explanation-misattributes-itself-to-the-wrong-party.md`](../docs/solutions/architecture-patterns/a-deprecation-without-an-explanation-misattributes-itself-to-the-wrong-party.md).
+
+### If you hit the task-construction refusal, it will not stop on its own
+
+That throw leaves `StreamTask`'s constructor, is caught by nothing on the way out, and reaches
+`KafkaStreams`' uncaught-exception handler. Under `StreamsUncaughtExceptionHandlerResponse.REPLACE_THREAD`
+the thread is replaced with no backoff and no attempt limit - and the replacement is refused for the
+same reason, so the application rebalances in a loop. The refusal is a property of the topology and
+the switch, not a transient failure. **Do not pair `REPLACE_THREAD` with a topology this module can
+refuse.** Moving the check ahead of `KafkaStreams.start()` is the structural fix and is not done here.
+
+### Reinstatement is evidence-gated, not judgement-gated
+
+A construct comes off the refused list when Kafka's own suite exercises it with the seam **on** and
+passes - not when someone reads the code and concludes it looks fine. `bin/ci-streams-seam-on-evidence.sh`
+is that evidence: it reports every refused construct by name, taken from the enum itself, so the
+question "does Kafka's suite still refuse this one" has an answer somebody can run.
+
+### What is still unsupported and NOT refused
+
+**Punctuation - now WARNED rather than silent, and still not refused.** A punctuator is a call on the
+processor context rather than a topology shape or a store type, so all three refusal layers are blind
+to it: there is nothing structural to inspect at build time or at task construction. Both punctuation
+types nevertheless *work* here, so refusing them would break topologies that run today. Instead, each
+type logs a warning **once per task, at registration**, naming the divergences below - and that log
+line is the only channel a user has. It is covered by `PunctuatorWarningTest`, whose seam-off control
+asserts a stock task says nothing.
+
+This section used to read *"under PC dispatch stream time never advances, so the punctuator simply
+never fires"*. That is no longer true - see [Stream time](#stream-time) - and the item is now
+"implemented, loud, and with two measured gaps" rather than "unimplemented and silent".
+
+- **`STREAM_TIME`** - the firing *times* differ. Stream time is the low-water mark described below, so
+  punctuation lags stock within a batch and can overtake it between batches; punctuations may be
+  **skipped rather than delayed**, because `PunctuationSchedule` collapses every interval crossed in
+  one jump into a single firing and on this path such jumps are the normal case; and after a restart
+  against a group *this module* committed, the mark is not restored at all, so punctuators re-fire
+  over event time an earlier run already covered (`StreamTimePunctuatorRefireOnRestartTest` measures
+  this against a seam-off control - stock fires at the restored mark, PC fires below the earlier run's
+  base).
+- **`WALL_CLOCK_TIME`** - the firing times are **unaffected**. `maybePunctuateSystemTime` is
+  byte-for-byte stock on this path and reads the system clock.
+- **Both** - the punctuator runs **concurrently with records still inside the processor chain**. Stock
+  guarantees `punctuate()` and `process()` never overlap for one task; here they do. A plain
+  `KeyValueStore` is *supported*, so the obvious punctuator - "iterate the store now that everything
+  up to T is done" - races the processors writing that same non-thread-safe store. **This is the
+  clause that can corrupt user state rather than merely retime output**, and it is why wall-clock
+  punctuation is warned about at all.
+- **Both** - what a punctuator forwards or writes sits outside PC's commit frontier. Measured non-EOS,
+  those effects still reach the broker on the producer's own schedule
+  (`PunctuatorEffectSurvivalTest`, with a five-minute-linger negative control), and `postCommit` runs
+  normally under load (`PostCommitCheckpointGapTest` - 12,000 records checkpointed within a commit
+  round of stock). What is left is an idle-window tail: a crash landing in an idle moment costs a
+  little extra changelog replay. Under exactly-once the forward would sit in an open transaction, but
+  EOS is refused.
+
+**Kafka's own processing-threads mode.** With Kafka's private `__processing.threads.enabled__` config
+on, `DefaultTaskExecutor` calls `task.process` from its own thread, which drives the dispatcher off
+the thread it was bound to. It is unreachable by default and has been named as out of scope in
+[`PcTaskDispatcher`](src/main/java/bz/stub/parallelconsumer/streams/PcTaskDispatcher.java)'s threading
+contract since the seam landed; it is listed here so a seam-on run showing that parameter of
+`StreamThreadTest` red is recognised rather than re-diagnosed.
+
+A typed control-flow exception raised inside a processor **used to be on this list and is not any
+more** - see
+[Error surfacing: the type, the timing, and the commit fence](#error-surfacing-the-type-the-timing-and-the-commit-fence).
+
+---
+
+## The classpath hazard this module does not solve
+
+**This module is not published, and that is the reason.**
+
+It compiles a handful of classes into Apache Kafka's *own* package namespace and depends on
+`kafka-streams` for the rest. Inside this module's build that is controlled and asserted. As a
+published dependency it is not defensible, in three distinct ways:
+
+1. **Classpath order is a convention, not a guarantee.** Maven, Gradle, IDEs, shaded uber-jars and
+   Spring Boot's loader may order entries differently. When ours lose, you silently get stock Kafka
+   Streams with no error - the worst shape a failure can take.
+2. **Class loading is per class, so the result is always a mixture.** That works only while both
+   halves are the same version, and nothing checks that they are. A routine `kafka-streams` bump
+   would run our patched internals against their newer ones.
+3. **It is illegal on the module path.** JPMS forbids split packages outright.
+
+Merging an isolated leaf module is cheap to reverse; publishing an artifact is not - **merge freely,
+publish deliberately**. The pom carries the deploy, signing and publishing skips, and says so at the
+point of the skip.
+
+`NOTICE` already carries the Apache 2.0 section 4(b) statement naming the modified classes, so the
+obligation is discharged for whatever is eventually distributed rather than deferred to the day it is.
+
+---
+
+## Working on the patch
+
+**Never hand-edit `pc-streams.patch`.** Its `@@` headers encode line counts; edit the generated Java
+and re-derive.
+
+```bash
+# 1. unpack the pristine tree AND produce the patched one. process-sources, NOT generate-sources -
+#    generate-sources only unpacks, and regenerating from that tree deletes every hunk.
+./mvnw -pl .,parallel-consumer-streams process-sources
+
+# 2. edit parallel-consumer-streams/target/kafka-patched/... like normal Java.
+#    RUN NO MAVEN between here and step 3 - unpack silently reverts your edits and says nothing.
+
+# 3. re-derive the tracked patch
+parallel-consumer-streams/bin/regen-patch.sh
+
+# 4. commit the patch. The generated trees are gitignored and never committed.
+```
+
+The `.` in `-pl .,parallel-consumer-streams` is required: selecting the leaf module alone fails at
+`enforcer:enforce`, because the parent is not in the reactor.
+
+[`bin/regen-patch.sh`](bin/regen-patch.sh) warns when the hunk count drops, which is the tripwire for
+edits lost to a stray maven run. Its header owns the rest, including why the hunk count is a proxy
+rather than an invariant, and how to reconcile two branches that both regenerate the patch (merge the
+generated Java, never the patch).
+
+The fixture patch is re-derived the same way, with all three arguments:
+
+```bash
+parallel-consumer-streams/bin/regen-patch.sh kafka-test-pristine kafka-test-patched src/main/patch/pc-streams-testfixtures.patch
+```
+
+### On a Kafka version bump
+
+The patch is derived against exactly the sources of the reactor's `${kafka.version}`, and
+`org.apache.kafka.streams.processor.internals` is package-private, unsupported, and free to change
+shape in any patch release. When it stops applying, the build fails **loudly** at `apply-patch.sh`,
+which is a real improvement on a vendored copy: that would compile fine and throw `NoSuchMethodError`
+in production. It remains a recurring maintenance obligation, with the upstream suite above as the
+regression run behind each one.
+
+On Kafka trunk and 4.x these classes have already diverged materially - `ProcessorContextImpl` is
+`final` there, and the record context is mutated in place. A green result on 3.9 does **not** transfer
+unexamined.
 
 ---
 
 ## Further reading
 
-- [Result: can PC's work-shard manager drive a Kafka Streams processor chain?](../docs/plans/2026-08-08-002-ks-on-pc-spike-result.md) - the full write-up, the evidence, and the reproduction rates
-- [The plan](../docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md) - requirements, key technical decisions, and the live Current Shortcomings list
-- [The origin analysis](../docs/plans/2026-08-07-002-investigate-kafka-streams-on-pc-report.md) - why the seam is where it is, and the routes that were rejected
-- [`CONCEPTS.md`](../CONCEPTS.md) - the project's vocabulary, including *frontier* and *frontier semantics*
+- [Patch a dependency's internals at build time instead of vendoring or forking it](../docs/solutions/architecture-patterns/patch-a-dependency-at-build-time-without-vendoring-it.md) -
+  the technique in general, its practices, and when not to apply it
+- [astubbs#255](https://github.com/astubbs/parallel-consumer/issues/255) - the tracking issue for
+  Kafka Streams on Parallel Consumer
+- [astubbs#271](https://github.com/astubbs/parallel-consumer/pull/271) - the feasibility study this
+  machinery was cut from, where the execution seam and its measurements still live

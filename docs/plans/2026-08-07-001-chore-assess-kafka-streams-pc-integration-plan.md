@@ -434,7 +434,7 @@ Recorded in the report so they remain discoverable:
   "doesn't yet").
 - Add a `src/docs/development/upstream-map.yaml` entry for `confluentinc#390`.
 - Revise the A7 verdict in `src/docs/development/upstream-pr-analysis.adoc:180`.
-- Create `docs/inflight/parked-pc-stream-dsl.md` capturing the stateless-DSL idea and its boundary.
+- Create `docs/inflight/parked-pc-stream-dsl.md` capturing the stateless-DSL idea and its boundary. <!-- file-refs: N/A - a note this plan proposed writing and nobody wrote; the plan is a dated record of what was proposed -->
 - A separate plan for the stateless DSL itself, if it is ever pursued.
 
 ---

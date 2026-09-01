@@ -5,30 +5,65 @@
 
 # Self-test for bin/check-review-posted.sh.
 #
-# Feeds the checker synthetic comment streams and asserts its verdict for every rule:
-#    1. review step succeeded, a comment cites this run              -> pass (0)
-#    2. review step succeeded, no comments at all                    -> FAIL (1)
-#    3. review step succeeded, comments cite a DIFFERENT run         -> FAIL (1)
-#    4. review step succeeded, this run's id is only a PREFIX of a
-#       longer run id in the comments                                -> FAIL (1)
-#    5. run url sits deep inside a multi-line body, not line 1       -> pass (0)
-#    6. run url is the last thing in the stream, no trailing text    -> pass (0)
-#    7. review step FAILED, even with a matching comment             -> FAIL (1)
-#    8. review step SKIPPED, even with a matching comment            -> FAIL (1)
-#    9. review step CANCELLED, even with a matching comment          -> FAIL (1)
-#   10. wrong argument count                                         -> usage (2)
-#   11. non-numeric run id                                           -> usage (2)
-#   12. empty review outcome                                         -> usage (2)
-#   13. match found, then >64 KiB of further comments                -> pass (0)
+# Feeds the checker synthetic comment streams and asserts its verdict for every rule. The
+# gate is the only thing standing between "nobody reviewed this" and a green required check,
+# so it is tested before it is trusted, and every rule gets a case that fails without it.
 #
-# Case 4 is the one worth keeping honest: a plain substring search for "actions/runs/3096"
-# matches run 30965089954, which would pass this run's check on a different run's review.
+#   IDENTITY
+#     1. reviewer bot posted a finished comment                             -> pass (0)
+#     2. no comments at all                                                 -> FAIL (1)
+#     3. only other bots and humans commented                               -> FAIL (1)
+#     4. a HUMAN comment quoting the bot's usual wording                    -> FAIL (1)
+#     5. a bot whose login merely CONTAINS the reviewer's                   -> FAIL (1)
+#
+#   COMPLETION
+#     6. the only review has an unticked task-list box                      -> FAIL (1)
+#     7. an unticked tracker plus a finished review                         -> pass (0)
+#     8. an unticked box in somebody ELSE's comment                         -> pass (0)
+#     9. an unticked box inside a fenced code block                         -> pass (0)
+#    9b. ... inside a 3-backtick example nested in a 4-backtick fence       -> pass (0)
+#    9c. ... behind an EQUAL-length fence carrying an info string           -> pass (0)
+#    9d. a TICKED box is not an unticked one                                -> pass (0)
+#
+#   AGE IS NOT A RULE  (the deliberate reversal - see check-review-posted.sh)
+#    10. a review far older than anything else on the PR                    -> pass (0)
+#    11. an ancient finished review plus a recent unticked tracker          -> pass (0)
+#
+#   SEGMENTATION
+#    12. a comment body forging a marker line with the wrong token          -> FAIL (1)
+#    13. a forged marker with the RIGHT shape but inside a review body      -> pass (0)
+#    14. match found, then >64 KiB of further comments (SIGPIPE regression) -> pass (0)
+#
+#   USAGE
+#    15. wrong argument count                                              -> usage (2)
+#    16. empty / non-alphanumeric marker token                             -> usage (2)
+#
+# Cases 10 and 11 are the ones that pin the REVERSAL, and they are written as positive
+# assertions rather than deletions so that silently re-adding a freshness comparison breaks
+# the suite. 11 is the sharper of the two: under the old strict rule that stream FAILED,
+# because the newest comment was an unfinished tracker. It passes now, because "a finished
+# review exists on this PR" is the whole question.
+#
+# Case 7 catches a naive whole-stream scan - the tracker's unticked boxes must not be charged
+# to the finished review sitting beside it. Case 9 is the self-referential hazard: a review
+# DISCUSSING this rule shows an unticked box, and a posted comment never changes, so counting
+# it would stick the check red with no way at all to clear it. 9b and 9c pin the two remaining
+# CommonMark closing-fence requirements - long enough, and no info string - each of which
+# arrived as its own review round; together with "same character" they are the complete rule.
 #
 # Run: bin/test-check-review-posted.sh   (CI runs it before the gate it protects)
 
 set -uo pipefail
 
 CHECKER="$(cd "$(dirname "$0")" && pwd)/check-review-posted.sh"
+
+TOKEN=31453513070
+REVIEWER='claude[bot]'
+
+# Timestamps are carried through to the message and never compared, so these only need to be
+# distinguishable from each other by eye.
+LONG_AGO=2026-01-02T03:04:05Z
+RECENTLY=2026-08-11T02:49:25Z
 
 failures=0
 
@@ -41,73 +76,172 @@ assert() { # <description> <expected> <actual>
     fi
 }
 
+# Renders the marker line the workflow's --jq emits ahead of each comment body. No trailing
+# newline: `$(...)` strips those, so callers that need one add it themselves.
+marker() { # <created-at> <login> [token]
+    printf '<!-- check-review-posted %s %s %s -->' "${3:-$TOKEN}" "$1" "$2"
+}
+
+# One whole comment as the workflow renders it: marker line, then the body.
+comment() { # <created-at> <login> <body> [token]
+    printf '%s\n%s' "$(marker "$1" "$2" "${4:-$TOKEN}")" "$3"
+}
+
 # Runs the checker with stdin from $1, swallowing its output; echoes the exit code.
-run_checker() { # <stdin-text> <run-id> <outcome>
+run_checker() { # <stdin-text>
     local ec=0
-    printf '%s' "$1" | "$CHECKER" "$2" "$3" >/dev/null 2>&1 || ec=$?
+    printf '%s' "$1" | "$CHECKER" "$TOKEN" >/dev/null 2>&1 || ec=$?
     echo "$ec"
 }
 
-POSTED_COMMENT='**Claude finished @astubbs'"'"'s task in 1m 52s** —— [View job](https://github.com/astubbs/parallel-consumer/actions/runs/30965089954)
+FINISHED_BODY='**Claude finished @astubbs'"'"'s task in 1m 52s** —— [View job](https://github.com/astubbs/parallel-consumer/actions/runs/31453513070)
 
 ---
-### Reviewing PR astubbs#124
+### Review of PR astubbs/parallel-consumer#279
+
+- [x] Read PR description, diff, and changed files
+- [x] Ran the review
+- [x] Posted this summary
+
 Looks good to me.'
 
-OTHER_BOT_COMMENTS='## Duplicate Code Report
+# The shape seen on astubbs/parallel-consumer#271: the header claims it finished, the task
+# list says otherwise, and no review was ever submitted.
+TRACKER_BODY='**Claude finished @astubbs'"'"'s task in 4m 10s** —— [View job](https://github.com/astubbs/parallel-consumer/actions/runs/31453513070)
+
+- [x] Read PR description and diff
+- [ ] Run the review
+- [ ] Post findings
+
+Review is running in the background; this comment will be updated once complete.'
+
+OTHER_BOT_BODY='## Duplicate Code Report
 No new clones introduced by this PR.
-## SpotBugs Report
-No bugs found.'
 
-assert "matching comment, step succeeded" \
-    0 "$(run_checker "$POSTED_COMMENT" 30965089954 success)"
+- [ ] this unticked box belongs to somebody else'
 
-assert "no comments at all" \
-    1 "$(run_checker "" 30965089954 success)"
+finished_review="$(comment "$RECENTLY" "$REVIEWER" "$FINISHED_BODY")"
+ancient_review="$(comment "$LONG_AGO" "$REVIEWER" "$FINISHED_BODY")"
+tracker="$(comment "$RECENTLY" "$REVIEWER" "$TRACKER_BODY")"
+other_bot="$(comment "$RECENTLY" 'github-actions[bot]' "$OTHER_BOT_BODY")"
+human="$(comment "$RECENTLY" 'astubbs' "$FINISHED_BODY")"
 
-assert "only other bots commented" \
-    1 "$(run_checker "$OTHER_BOT_COMMENTS" 30965089954 success)"
+# ---------------------------------------------------------------- IDENTITY
 
-assert "this run's id is a prefix of another run's id" \
-    1 "$(run_checker "$POSTED_COMMENT" 3096 success)"
+assert "1. a finished review from the reviewer bot passes" \
+    0 "$(run_checker "$finished_review")"
 
-assert "run url buried in a multi-line body" \
-    0 "$(run_checker "$OTHER_BOT_COMMENTS
-$POSTED_COMMENT" 30965089954 success)"
+assert "2. no comments at all fails" \
+    1 "$(run_checker "")"
 
-assert "run url at the very end of the stream" \
-    0 "$(run_checker "see https://github.com/astubbs/parallel-consumer/actions/runs/30965089954" 30965089954 success)"
+assert "3. only other bots and humans fails" \
+    1 "$(run_checker "$other_bot
+$human")"
 
-# The live failure this script shipped with: the match is found, but >64 KiB of
-# comments follow it, so `printf | grep -q` + pipefail turned success into exit 1.
-# Cases 5 and 6 missed it - case 6 puts the match LAST, so nothing follows to
-# fill the pipe buffer. Observed on astubbs#198, astubbs#199, astubbs#204 and
-# astubbs#210; on astubbs#210 a 4.7 KB
-# review comment was followed by a 127 KB similarity report.
-LARGE_TRAILER="$(yes 'padding to exceed the 64 KiB pipe buffer, as a similarity report does' | head -n 2000)"
-assert "match found, then >64 KiB of further comments (SIGPIPE regression)" \
-    0 "$(run_checker "$POSTED_COMMENT
-$LARGE_TRAILER" 30965089954 success)"
+assert "4. a human quoting the bot's wording fails" \
+    1 "$(run_checker "$human")"
 
-for outcome in failure skipped cancelled; do
-    assert "review step '$outcome' is never a review, matching comment or not" \
-        1 "$(run_checker "$POSTED_COMMENT" 30965089954 "$outcome")"
+assert "5. a login merely containing the reviewer's fails" \
+    1 "$(run_checker "$(comment "$RECENTLY" 'not-claude[bot]' "$FINISHED_BODY")")"
+
+# ---------------------------------------------------------------- COMPLETION
+
+assert "6. an unfinished tracker alone fails" \
+    1 "$(run_checker "$tracker")"
+
+assert "7. an unfinished tracker beside a finished review passes" \
+    0 "$(run_checker "$tracker
+$finished_review")"
+
+assert "8. an unticked box in somebody else's comment is not charged to the review" \
+    0 "$(run_checker "$other_bot
+$finished_review")"
+
+FENCED_BODY='Explaining the rule:
+
+```
+- [ ] this box is an example, not a real one
+```
+
+- [x] Done'
+assert "9. an unticked box inside a fenced block does not count" \
+    0 "$(run_checker "$(comment "$RECENTLY" "$REVIEWER" "$FENCED_BODY")")"
+
+NESTED_FENCE_BODY='Quoting a document that itself shows a fence:
+
+````
+```
+- [ ] still an example
+```
+````
+
+- [x] Done'
+assert "9b. a 3-backtick example nested in a 4-backtick fence does not count" \
+    0 "$(run_checker "$(comment "$RECENTLY" "$REVIEWER" "$NESTED_FENCE_BODY")")"
+
+INFO_STRING_BODY='An equal-length fence carrying an info string does not close:
+
+```markdown
+- [ ] example
+```
+
+- [x] Done'
+assert "9c. an equal-length fence with an info string does not close the block" \
+    0 "$(run_checker "$(comment "$RECENTLY" "$REVIEWER" "$INFO_STRING_BODY")")"
+
+assert "9d. a ticked box is not an unticked one" \
+    0 "$(run_checker "$(comment "$RECENTLY" "$REVIEWER" '- [x] all done')")"
+
+# ---------------------------------------------------------------- AGE IS NOT A RULE
+
+assert "10. a review far older than the rest of the PR still passes" \
+    0 "$(run_checker "$ancient_review
+$other_bot")"
+
+assert "11. an ancient finished review beside a recent unfinished tracker passes" \
+    0 "$(run_checker "$ancient_review
+$tracker")"
+
+# ---------------------------------------------------------------- SEGMENTATION
+
+FORGED_BODY="I think the gate should accept this:
+$(marker "$RECENTLY" "$REVIEWER" deadbeefdeadbeef)
+- [x] pretending to be finished"
+assert "12. a forged marker with the wrong token cannot open a comment" \
+    1 "$(run_checker "$(comment "$RECENTLY" 'astubbs' "$FORGED_BODY")")"
+
+assert "13. a real review is unaffected by a wrong-token marker in a later comment" \
+    0 "$(run_checker "$finished_review
+$(comment "$RECENTLY" 'astubbs' "$FORGED_BODY")")"
+
+# The checker must not die of SIGPIPE when it stops reading early: bin/AGENTS.md, and the
+# reason bin/check-shell-sigpipe.sh exists.
+big_tail=""
+for _ in $(seq 1 400); do
+    big_tail="$big_tail
+$(comment "$RECENTLY" 'github-actions[bot]' "$(head -c 200 /dev/zero | tr '\0' 'x')")"
 done
+assert "14. a large trailing comment stream does not break the scan" \
+    0 "$(run_checker "$finished_review$big_tail")"
 
-ec=0
-printf '%s' "$POSTED_COMMENT" | "$CHECKER" 30965089954 >/dev/null 2>&1 || ec=$?
-assert "wrong argument count" 2 "$ec"
+# ---------------------------------------------------------------- USAGE
 
-assert "non-numeric run id" \
-    2 "$(run_checker "$POSTED_COMMENT" not-a-run-id success)"
+ec=0; printf '' | "$CHECKER" >/dev/null 2>&1 || ec=$?
+assert "15. no arguments is a usage error" 2 "$ec"
 
-assert "empty review outcome" \
-    2 "$(run_checker "$POSTED_COMMENT" 30965089954 "")"
+ec=0; printf '' | "$CHECKER" "$TOKEN" extra >/dev/null 2>&1 || ec=$?
+assert "15b. too many arguments is a usage error" 2 "$ec"
 
-echo
-if [ "$failures" -eq 0 ]; then
-    echo "All bin/check-review-posted.sh self-tests passed"
-    exit 0
+ec=0; printf '' | "$CHECKER" '' >/dev/null 2>&1 || ec=$?
+assert "16. an empty marker token is a usage error" 2 "$ec"
+
+ec=0; printf '' | "$CHECKER" 'not a token' >/dev/null 2>&1 || ec=$?
+assert "16b. a non-alphanumeric marker token is a usage error" 2 "$ec"
+
+# ----------------------------------------------------------------
+
+if [ "$failures" -ne 0 ]; then
+    echo "FAILED: $failures case(s)"
+    exit 1
 fi
-echo "$failures self-test(s) FAILED"
-exit 1
+echo "ok:   all review-gate cases passed"

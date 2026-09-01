@@ -62,7 +62,7 @@ entry, a module's README description, or a maturity annotation the language
 or framework provides for exactly this purpose. In this codebase that
 mechanism is `org.apache.kafka.common.annotation.InterfaceStability.Evolving`,
 applied to `ParallelConsumerOptions` in
-`parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java`.
+`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java`.
 That annotation says "this API may still change" without lying about what the
 class is.
 
@@ -144,7 +144,7 @@ public class TestEnvironment {
 **Correct usage that the sweep deliberately kept - status vocabulary describing
 status, or method vocabulary describing method, is not the defect:**
 
-`parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streams/integrationTests/HeadOfLineBlockingBenchmarkTest.java`
+`parallel-consumer-streams/src/test/java/bz/stub/parallelconsumer/streams/integrationTests/HeadOfLineBlockingBenchmarkTest.java`
 keeps "Experiment A" and "control arm" throughout:
 
 ```java
@@ -176,7 +176,7 @@ The fix that actually serves the import-site-warning goal is a contract word
 that stays true after the status changes ("preview", "experimental",
 "unstable"), or the mechanism the language already provides for it:
 `@InterfaceStability.Evolving` on `ParallelConsumerOptions` in
-`parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java`
+`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java`
 signals instability at the declaration site without claiming the class is
 about a "spike."
 
@@ -185,7 +185,7 @@ about a "spike."
 - PR astubbs/parallel-consumer#271 (issue astubbs#255) - the Kafka Streams module rename
 - astubbs#240 - the Kafka Connect branch where the correction originated
   (`SpikeTestSupport` -> `TestEnvironment`)
-- `parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java` -
+- `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java` -
   `@InterfaceStability.Evolving` precedent for signaling instability without a status word
-- `parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streams/integrationTests/HeadOfLineBlockingBenchmarkTest.java` -
+- `parallel-consumer-streams/src/test/java/bz/stub/parallelconsumer/streams/integrationTests/HeadOfLineBlockingBenchmarkTest.java` -
   preserved "Experiment A" / "control arm" as correct method vocabulary, not status vocabulary

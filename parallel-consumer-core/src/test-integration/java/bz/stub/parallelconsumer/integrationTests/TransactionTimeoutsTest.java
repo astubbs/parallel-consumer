@@ -77,6 +77,18 @@ class TransactionTimeoutsTest extends BrokerIntegrationTest<String, String> {
      */
     private static final int OFFSET_TO_MARK_DIRTY = OFFSET_TO_GO_SLOW + 1;
 
+    /**
+     * How long {@link #produceTimeout()}'s injected commit holds the transaction open, and how long after
+     * that block begins the output topic is checked.
+     * <p>
+     * The check must finish well inside the hold. It asserts that nothing new becomes visible <em>while the
+     * commit is blocked</em>, so a check that outlives the block is asserting nothing - and worse, it fails,
+     * because by then PC is entitled to have committed.
+     */
+    private static final Duration SLOW_COMMIT_HOLD = ofSeconds(5);
+
+    private static final Duration BLOCKED_WINDOW_CHECK_DELAY = ofSeconds(1);
+
 
     private ParallelEoSStreamProcessor<String, String> pc;
 
@@ -278,6 +290,8 @@ class TransactionTimeoutsTest extends BrokerIntegrationTest<String, String> {
     void produceTimeout() {
         final int OFFSET_TO_PRODUCE_SLOWLY = NUMBER_TO_SEND + 2;
 
+        // Counted down as the slow commit STARTS holding the transaction open - which is what phase 2's
+        // at-most check anchors to, so that it runs while the block is in force rather than racing its end.
         CountDownLatch produceLock = new CountDownLatch(1);
 
         // inject system that causes commit to take too long
@@ -308,10 +322,13 @@ class TransactionTimeoutsTest extends BrokerIntegrationTest<String, String> {
                 long offset = offsetAndMetadata.offset();
 
                 boolean firstCycle = produceLock.getCount() > 0;
+                // Keyed on the exact base offset, which assumes offsets 5 and 6 both complete between two
+                // commit ticks. Nothing enforces that: a tick landing between them commits for real with a
+                // lower base. Never observed in 9 instrumented runs, and left as-is - see the ledger entry.
                 if (offset == OFFSET_TO_PRODUCE_SLOWLY && firstCycle) {
                     log.debug("Causing commit to take too long which will trigger produce lock timeout");
                     produceLock.countDown();
-                    ThreadUtils.sleepQuietly(5000); // sleep for some time to simulate timeout
+                    ThreadUtils.sleepQuietly(SLOW_COMMIT_HOLD.toMillis()); // sleep for some time to simulate timeout
                     log.debug("Causing commit to take too long COMPLETE");
                 }
 
@@ -353,7 +370,21 @@ class TransactionTimeoutsTest extends BrokerIntegrationTest<String, String> {
         getKcu().produceMessages(getTopic(), EXTRA_TO_SEND);
 
         // assert output topic - still has ONLY got the new records due to commit being blocked
-        assertConsumer.assertConsumedAtMostOffset(OUTPUT_TOPIC, NUMBER_TO_SEND - 1); // only base records committed ok to output topic
+        //
+        // Anchored to the START of the block, rather than run in the hope of overlapping it. This used to
+        // wait a flat 5s from wherever the test happened to reach it, while the block it checks also lasts
+        // 5s and starts on PC's own commit cadence - so two 5s windows raced, and the whole margin was
+        // `commit tick - assert poll latency`, measured at ~500ms on an idle box. Broker or runner latency
+        // ate it, the transaction committed inside the assertion's own poll window, and it surfaced as
+        // "headOffset expected to be at most 4, but was 8" - a genuine EOS-looking failure with nothing
+        // wrong in PC.
+        //
+        // The anchor is load-bearing, by negative control: move the check back outside the block (set
+        // BLOCKED_WINDOW_CHECK_DELAY past SLOW_COMMIT_HOLD) and this fails 2/2 on the at-most assertion.
+        // The original margin was reproduced the same way - 700ms of added latency here failed 3/3, while
+        // the same 700ms added before the send passed 3/3, and the fixed test passes 3/3 with it.
+        LatchTestUtils.awaitLatch(produceLock);
+        assertConsumer.assertConsumedAtMostOffset(OUTPUT_TOPIC, NUMBER_TO_SEND - 1, BLOCKED_WINDOW_CHECK_DELAY); // only base records committed ok to output topic
 
         // wait for eventually retry on the blocked / slow sending offset
         await().untilAsserted(() -> Truth.assertThat(retryCount.get()).isAtLeast(1));

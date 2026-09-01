@@ -167,10 +167,10 @@ was not. Whether that is a nuisance or data loss depends on what the acknowledge
 it releases state.
 
 Follow the chain in this project. The hook calls `PcTaskDispatcher.onCommitSuccess`
-(`parallel-consumer-streams/src/main/java/io/confluent/parallelconsumer/streams/PcTaskDispatcher.java:389-391`),
+(`parallel-consumer-streams/src/main/java/bz/stub/parallelconsumer/streams/PcTaskDispatcher.java:389-391`),
 which is the only caller of PC's `setClean`. That reaches
 `PartitionState.onOffsetCommitSuccess`
-(`parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/state/PartitionState.java:221-224`):
+(`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/PartitionState.java:221-224`):
 
 ```java
 public void onOffsetCommitSuccess(OffsetAndMetadata committed) { //NOSONAR
@@ -195,7 +195,7 @@ This defect class already has a confirmed instance inside this repository, found
 core module: `ConsumerManager.commitSync` caught `CommitFailedException`, logged it, and returned
 normally, so `AbstractOffsetCommitter.retrieveOffsetsAndCommit()` carried straight on to
 `onOffsetCommitSuccess()` and marked the offsets clean
-(`parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/MockConsumerCommitFailedTest.java:9-29`).
+(`parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/MockConsumerCommitFailedTest.java:9-29`).
 Different framework, same shape: **something downstream of a failure took a normal return as a success
 signal.** Two instances is a class, not a coincidence.
 
@@ -299,7 +299,7 @@ For each hook you are about to depend on:
   reviewer refutes something you believed.
 - `docs/inflight/pr-streams-task-lifecycle-and-rebalance.md` - the six known lifecycle divergences under
   PC dispatch, including revival and the `prepareRecycle()` leak.
-- `parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/MockConsumerCommitFailedTest.java` -
+- `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/MockConsumerCommitFailedTest.java` -
   the same defect class in the core module, where a swallowed `CommitFailedException` produced a false
   success acknowledgement.
 - astubbs/parallel-consumer#271, issue astubbs#255 - the PR and issue this was learned on.

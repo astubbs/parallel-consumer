@@ -102,7 +102,7 @@ public long getOffsetHighestSequentialSucceeded() {
 }
 ```
 
-`parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/state/PartitionState.java:455-475`.
+`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/PartitionState.java:455-475`.
 The committed value is that plus one, the next offset to poll
 (`:427-429`), and the pairing with the exception list is a three-line method
 (`:413-419`): a frontier, plus an optional encoded payload.
@@ -110,7 +110,7 @@ The committed value is that plus one, the next offset to poll
 The exceptions are the second half, and they are what turn "resume safely" into "resume
 safely without redoing everything". PC encodes the *incomplete* offsets below the highest
 succeeded (`:442-447`), base64 into the commit's metadata field
-(`parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/offsets/OffsetMapCodecManager.java:241-250`).
+(`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/offsets/OffsetMapCodecManager.java:241-250`).
 That is the complement of the obvious encoding, and it is deliberate: over the bounded
 range between the frontier and the highest completed item, naming the holes and naming
 the completions carry identical information, and the holes are the smaller set.
@@ -170,7 +170,7 @@ run was not tripped by `consumedOffsets` at all, but by a *different* single-num
 sitting behind it. With the partition group empty on the PC path, stock's
 `committableOffsetsAndMetadata()` falls back to `consumer.position()` and commits every
 polled record
-(`parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streams/integrationTests/CommitFrontierCrashRestartTest.java:57-59`).
+(`parallel-consumer-streams/src/test/java/bz/stub/parallelconsumer/streams/integrationTests/CommitFrontierCrashRestartTest.java:57-59`).
 Two independent expressions of the same defect class, one of which nobody had written
 down. Any code path still capable of producing a single-number answer is a latent instance.
 
@@ -181,7 +181,7 @@ mark hid:
 
 - **Collection must not clear anything.** PC's dirty state clears only on a successful
   commit acknowledgement
-  (`parallel-consumer-streams/src/main/java/io/confluent/parallelconsumer/streams/PcTaskDispatcher.java:365-372`),
+  (`parallel-consumer-streams/src/main/java/bz/stub/parallelconsumer/streams/PcTaskDispatcher.java:365-372`),
   so a commit that fails after collection leaves the partition dirty and the next cycle
   re-collects. The acknowledgement is wired to Streams' success branch specifically, not to
   `postCommit`, which Kafka also reaches after a swallowed failure and after no commit at
@@ -300,9 +300,9 @@ drains completions but never waits for in-flight work, "which is precisely what 
 frontier below them"
 (`PcTaskDispatcher.java:357-372`), and reaches
 `WorkManager.collectCommitDataForDirtyPartitions()`
-(`parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/state/WorkManager.java:201-203`),
+(`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/WorkManager.java:201-203`),
 the same method core's own committer has always used
-(`parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/AbstractOffsetCommitter.java:32`).
+(`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/AbstractOffsetCommitter.java:32`).
 
 **The assertion that separates fixed from broken.** The parked record sits at offset 0 with
 ten completed records behind it:

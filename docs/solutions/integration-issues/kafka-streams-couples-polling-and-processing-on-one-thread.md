@@ -57,8 +57,8 @@ the StreamThread, an external task executor, a reactive bridge.
 ## Guidance
 
 **1. Read the framework's run loop before you add a thread to it.** Kafka 3.9.2,
-`org/apache/kafka/streams/processor/internals/StreamThread.java` (extract it with
-`unzip -p ~/.m2/repository/org/apache/kafka/kafka-streams/3.9.2/kafka-streams-3.9.2-sources.jar org/apache/kafka/streams/processor/internals/StreamThread.java`).
+`org/apache/kafka/streams/processor/internals/StreamThread.java` (extract it with <!-- file-refs: N/A - an Apache Kafka path inside the published jar, not a path in this repository -->
+`unzip -p ~/.m2/repository/org/apache/kafka/kafka-streams/3.9.2/kafka-streams-3.9.2-sources.jar org/apache/kafka/streams/processor/internals/StreamThread.java`). <!-- file-refs: N/A - an Apache Kafka path inside the published jar, not a path in this repository -->
 The loop is `runLoop()` at line 690, which calls `runOnceWithoutProcessingThreads()` at line 713. Its
 own javadoc states the coupling outright (`StreamThread.java:933-943`):
 
@@ -183,7 +183,7 @@ is nothing else to do" comment in the source are all the same shape.
 
 **The measurement (one-term control, only `poll.ms` changed).** From
 `docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md:1333-1343`, using
-`parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streams/integrationTests/HeadOfLineBlockingBenchmarkTest.java`
+`parallel-consumer-streams/src/test/java/bz/stub/parallelconsumer/streams/integrationTests/HeadOfLineBlockingBenchmarkTest.java`
 (one blocking 1500ms record at the head of a partition, 24 fast 25ms records behind it, pool of 4,
 `NUM_STREAM_THREADS_CONFIG` pinned to 1 at line 275 so the only concurrency is the one under test):
 
@@ -211,7 +211,7 @@ preparation (corrupted or dropped) has no worker to complete it, so its key-mate
 available on the *next* pump. Under KEY ordering that stalled the whole key for a full poll cycle:
 one poison pill, `~poll.ms` of head-of-line blocking. The fix was to feed synchronous outcomes back
 within the same pass, and the comment recording it is at
-`parallel-consumer-streams/src/main/java/io/confluent/parallelconsumer/streams/PcTaskDispatcher.java:264-268`:
+`parallel-consumer-streams/src/main/java/bz/stub/parallelconsumer/streams/PcTaskDispatcher.java:264-268`:
 
 ```java
 // The pump loops while preparation consumes records SYNCHRONOUSLY (corrupted or dropped records:

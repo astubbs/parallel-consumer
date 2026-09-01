@@ -55,7 +55,7 @@ abstract class AbstractQuarantineScriptTest {
         Path docs = fixture.resolve("docs");
         Files.createDirectories(docs);
         String content = "# Quarantined tests - live registry\n\n## Currently quarantined\n\n" + entries;
-        Files.write(docs.resolve("QUARANTINED_TESTS.md"), content.getBytes(StandardCharsets.UTF_8));
+        Files.write(docs.resolve("quarantined-tests.md"), content.getBytes(StandardCharsets.UTF_8));
     }
 
     private static String readFully(InputStream in) throws IOException {

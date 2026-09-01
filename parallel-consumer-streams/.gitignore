@@ -1,3 +1,4 @@
 # Generated at build time from the kafka-streams sources jar - never tracked.
-# Verification Contract item 3: `git ls-files | grep 'org/apache/kafka/.*\.java'` must return nothing.
+# The invariant, checkable at any time: `git ls-files | grep 'org/apache/kafka/.*\.java'` must return
+# nothing. No Apache Kafka source is committed to this repository; only src/main/patch/*.patch is.
 target/

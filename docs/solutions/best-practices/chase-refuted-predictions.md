@@ -199,7 +199,7 @@ assert is an offset check - and found the first claim false in two separate plac
   (`parallel-consumer-streams/src/main/patch/pc-streams.patch:538-546`) and by having the pump feed
   synchronous outcomes back within the same pass, so a synchronously-consumed record's key-mate
   becomes available immediately
-  (`parallel-consumer-streams/src/main/java/io/confluent/parallelconsumer/streams/PcTaskDispatcher.java:264-311`).
+  (`parallel-consumer-streams/src/main/java/bz/stub/parallelconsumer/streams/PcTaskDispatcher.java:264-311`).
 - **`process()` reported progress as dispatched-to-pool.** Consuming a batch of corrupted records
   dispatched nothing, so `process()` returned "no progress" to a caller that paces on exactly that
   signal. Fixed: progress is records *consumed* - dispatched, dropped, or failed at preparation

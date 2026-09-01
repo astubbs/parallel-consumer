@@ -1,5 +1,8 @@
 # Wanted before this alpha is taken seriously: a hostile Kafka Streams core-developer review
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: process -->
+
 For the `parallel-consumer-streams` PR (astubbs#255).
 
 ## The brief

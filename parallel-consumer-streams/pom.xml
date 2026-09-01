@@ -14,42 +14,104 @@
     </parent>
 
     <artifactId>parallel-consumer-streams</artifactId>
-    <name>Kafka Parallel Consumer - Kafka Streams (ALPHA - EXPERIMENTAL)</name>
+    <name>Kafka Parallel Consumer - Kafka Streams (ALPHA - EXPERIMENTAL, NOT PUBLISHED)</name>
     <description>
-        ALPHA / EXPERIMENTAL - NOT PRODUCTION READY. Field-testing volunteers wanted.
+        ALPHA / EXPERIMENTAL - NOT PRODUCTION READY, AND NOT PUBLISHED.
 
         Runs a Kafka Streams processor chain on Parallel Consumer's WorkManager and worker pool instead
         of the serial PartitionGroup.nextRecord() -> StreamTask.process() loop, so records on distinct
-        keys of one partition execute concurrently through the unmodified ProcessorNode chain.
+        keys of one partition execute concurrently through the unmodified ProcessorNode chain. A
+        topology's own code does not change.
 
-        The seam is ON BY DEFAULT: depending on this artifact is the opt-in. Turn it off, and get stock
-        Kafka Streams dispatch back, with -Dpc.streams.dispatch.enabled=false. This is an alpha with
-        known gaps, tracked in docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md - read them before
-        relying on this anywhere that matters. If you try it, please report what you find on astubbs#255.
+        THE SEAM IS OFF BY DEFAULT - this is an opt-in preview. Turn it on for a JVM with
+        -Dpc.streams.dispatch.enabled=true. Joins, windows, suppression, versioned and session stores
+        and EOS are unsupported and are now REFUSED by name, at build time and at task construction,
+        rather than allowed to return silently wrong answers. Task lifecycle no longer holds it either:
+        a revived task rebuilds its dispatcher, and a task changing partitions in a cooperative
+        rebalance carries PC's assignment with it. Nor does exception surfacing: a control-flow
+        exception raised inside a processor now keeps its type and reaches Kafka's recovery from the
+        pump that dispatched the record, nothing commits past a worker failure, and inflow is bounded
+        by the same buffered.records.per.partition stock uses. The reconciliation measurement has now
+        been taken on the merged module and the default did not move: Kafka's own suite, run with the
+        seam on, says STREAM_TIME punctuation lags stock by the work still in flight - which is the
+        low-water mark doing its job, and a divergence in the direction this module's documentation
+        does not yet state. PcDispatchSwitch's javadoc owns that decision and the measurement behind it.
+
+        Build machinery: the named classes are unpacked from the published kafka-streams sources jar,
+        a tracked patch is applied, and the result is compiled into this module's own target/classes,
+        which precedes the kafka-streams jar on the classpath. Apache Kafka's own compiled test suite
+        is then run against the patched classes, with the seam OFF, as the behaviour-preservation
+        oracle. Issue astubbs#255.
 
         NO APACHE KAFKA SOURCE IS COMMITTED TO THIS REPOSITORY. The patched Kafka classes are generated
-        at build time by unpacking them from the published kafka-streams sources jar and applying
-        src/main/patch/pc-streams.patch. Only that patch file is tracked. See the plan's KTD-S4 and KTD1:
-        docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md
+        at build time; only src/main/patch/*.patch is tracked. README.md owns the mechanism and the
+        developer loop, and docs/solutions/architecture-patterns/patch-a-dependency-at-build-time-without-vendoring-it.md
+        owns the technique in general.
     </description>
 
     <properties>
+        <!-- PUBLICATION IS OFF FOR THIS MODULE, DELIBERATELY - "merge freely, publish deliberately".
+             Merging an isolated leaf module is cheap to reverse; publishing an artifact that carries
+             compiled, modified Apache Kafka classes in Apache's own package namespace is not. The
+             split-package hazard that makes publication a decision rather than a formality is stated in
+             README.md, "The classpath hazard this module does not solve".
+
+             maven.install.skip is deliberately NOT set: a local `./mvnw install` still puts the jar in
+             the local repository, which is how anyone experiments with it. It is the remote publication
+             that is off. Ordering matters as well as the flags - see the <module> comment in the root
+             pom for the central-publishing-maven-plugin bug this module must not be positioned into. -->
+        <maven.deploy.skip>true</maven.deploy.skip>
+        <gpg.skip>true</gpg.skip>
+
         <!-- Where the unpacked-then-patched Kafka sources land. Generated, gitignored, never tracked.
 
              Deliberately NOT under target/generated-sources: the root pom adds that whole directory as an
              *integration-test* source root for every module (see its build-helper add-integration-test-source
-             execution). Generating there compiles these four classes a second time into target/test-classes,
+             execution). Generating there compiles these classes a second time into target/test-classes,
              which then precedes target/classes on the surefire classpath - two copies of the same patched
              Kafka classes, and the one that wins is an accident of classpath order rather than a decision. -->
         <kafka.patched.dir>${project.build.directory}/kafka-patched</kafka.patched.dir>
         <kafka.pristine.dir>${project.build.directory}/kafka-pristine</kafka.pristine.dir>
 
-        <!-- The classes this module patches. Named deliberately, not discovered: RecordCollectorImpl is
-             required (its non-concurrent maps are written from every worker thread via the to() sink)
-             but is constructed outside StreamTask, so the compiler never demands it. ProcessorContextImpl
-             is required because it reads/writes AbstractProcessorContext's fields directly.
-             If this list has to grow much past a dozen, that sprawl is itself the answer to "how little had to change". -->
-        <patched.classes>org/apache/kafka/streams/processor/internals/StreamTask.java,org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java,org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java,org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java</patched.classes>
+        <!-- The classes this module patches. Named deliberately, not discovered.
+
+             AbstractProcessorContext holds the current record and the current processor node in two
+             `protected` fields that stock Streams gets away with because exactly one thread is ever inside
+             a task. Thread-confining them is the groundwork every concurrent execution seam needs, and it
+             cannot be done in isolation: ProcessorContextImpl reads and writes those inherited fields
+             directly, so it has to move to the accessors in the same change or the confinement is bypassed
+             by getfield/putfield without a single compile error to say so.
+
+             RecordCollectorImpl is here for a different reason and is the one the compiler would never have
+             demanded: it is constructed outside StreamTask, and its non-concurrent maps are written from
+             the producer's I/O thread for every in-flight send.
+
+             StreamTask is the execution seam itself - the point where a record is selected and the processor
+             chain is run. It is the only class here that references Parallel Consumer, which is what let the
+             rung below this one (astubbs#379) carry the three above without it.
+
+             StreamThread owns the poll wait, and nothing else can split it. Wake-on-work needs a worker
+             completion to end that wait instead of letting it run out; see PcWorkSignal. It has the widest
+             blast radius of the five if a future Kafka reshapes the poll phase, which is why it has its own
+             kill switch and why StreamThreadTest joins the upstream oracle below.
+
+             If this list has to grow much past a dozen, that sprawl is itself the answer to "how little had
+             to change" - see the "Do not apply when" section of the technique write-up.
+
+             The eight kstream entries are the refusal envelope (astubbs#255), and they come in matched pairs
+             for a reason the compiler enforces. A call site resolves to the symbol its receiver's STATIC TYPE
+             declares, so `stream.join(...)` against a KStream variable resolves to KStream#join - an
+             annotation on KStreamImpl is invisible there. That is why the four public INTERFACES carry
+             @DoNotCall/@Deprecated. Conversely an interface method has no body to throw from, which is why
+             the four IMPLS carry the runtime refusal. Neither half substitutes for the other.
+
+             This list is now thirteen, which is past the point the sentence above sets rather than at it.
+             Stated rather than absorbed: the smaller alternative is a single check in InternalStreamsBuilder
+             keyed on the DSL's graph-node types, at the cost of a message one step removed from the method
+             the user actually called. It reaches ten, not five - the four IMPLS go away and
+             InternalStreamsBuilder arrives, but the four INTERFACES stay patched, because the compile-time
+             refusal is the half that has to sit on the symbol a call site resolves to. -->
+        <patched.classes>org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java,org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java,org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java,org/apache/kafka/streams/processor/internals/StreamTask.java,org/apache/kafka/streams/processor/internals/StreamThread.java,org/apache/kafka/streams/kstream/KStream.java,org/apache/kafka/streams/kstream/KTable.java,org/apache/kafka/streams/kstream/KGroupedStream.java,org/apache/kafka/streams/kstream/CogroupedKStream.java,org/apache/kafka/streams/kstream/internals/KStreamImpl.java,org/apache/kafka/streams/kstream/internals/KTableImpl.java,org/apache/kafka/streams/kstream/internals/KGroupedStreamImpl.java,org/apache/kafka/streams/kstream/internals/CogroupedKStreamImpl.java</patched.classes>
 
         <!-- Module-local and explicitly versioned on purpose: pinning jackson-databind in root
              dependencyManagement forces WireMock (parallel-consumer-vertx) onto an incompatible Jackson and
@@ -58,11 +120,11 @@
              Deliberately AHEAD of the 2.16.2 that kafka-streams 3.9.2 resolves, rather than matching it.
              2.16.2 carries two high-severity PolymorphicTypeValidator bypasses (GHSA-j3rv-43j4-c7qm,
              GHSA-rmj7-2vxq-3g9f), both first patched at 2.18.8, and this declaration is compile scope, so
-             the version chosen here is the one that reaches anyone depending on this module. Neither
+             the version chosen here is the one that would reach anyone depending on this module. Neither
              advisory is reachable from the generated sources - Kafka's use here is metadata
-             serialisation, not polymorphic deserialisation of untrusted input - but shipping a flagged
-             version to consumers to save a patch bump is not a trade worth making. Held on the 2.18 line to
-             stay close to what the jar was built against. -->
+             serialisation, not polymorphic deserialisation of untrusted input - but carrying a flagged
+             version to save a patch bump is not a trade worth making. Held on the 2.18 line to stay close
+             to what the jar was built against. -->
         <kafka.streams.jackson.version>2.18.9</kafka.streams.jackson.version>
 
         <!-- Only used by Kafka's own test suite (see the build section). Matched to what Kafka 3.9 builds
@@ -74,22 +136,50 @@
              InternalMockProcessorContext extends AbstractProcessorContext and, as shipped, reads and
              writes the `recordContext` / `currentNode` fields directly. Thread-confining those fields
              turns every one of those getfield/putfield instructions into a NoSuchFieldError at
-             construction time, so all 59 RecordCollectorTest cases die before reaching a single
-             assertion. Regenerating the fixture from the published test-sources jar and converting it to
-             the accessors - exactly what the patch already does to ProcessorContextImpl - is what lets
-             those tests run at all. Still no Apache source in the repository: generated, gitignored,
-             only the patch is tracked. -->
+             construction time, so every RecordCollectorTest case dies before reaching a single assertion.
+             Regenerating the fixture from the published test-sources jar and converting it to the
+             accessors - exactly what the main patch does to ProcessorContextImpl - is what lets those
+             tests run at all. Still no Apache source in the repository: generated, gitignored, only the
+             patch is tracked. -->
         <kafka.test.patched.dir>${project.build.directory}/kafka-test-patched</kafka.test.patched.dir>
         <kafka.test.pristine.dir>${project.build.directory}/kafka-test-pristine</kafka.test.pristine.dir>
         <patched.test.classes>org/apache/kafka/test/InternalMockProcessorContext.java</patched.test.classes>
+
+        <!-- THE SEAM-ON EVIDENCE LANE, opt-in. See the kafka-upstream-tests-seam-on execution for what it
+             measures and bin/ci-streams-seam-on-evidence.sh for the lane that reads it. Off here because the
+             seam-on run is EXPECTED to have failures - they are the measurement - and a red gate on every
+             build trains people to ignore it. -->
+        <seam.on.upstream.skip>true</seam.on.upstream.skip>
+
+        <!-- Whether a failure in the seam-OFF oracle stops the build. TRUE everywhere except inside the
+             seam-on evidence lane, and the exception is the point rather than a loosening.
+
+             In an ordinary build the oracle is the behaviour-preservation gate and a failure must be fatal.
+             In the lane the same run is the CONTROL ARM, and stopping on its first failure means the
+             measured arm never runs at all - so a known, already-diagnosed flake in Kafka's own suite costs
+             a fifteen-minute re-run and teaches exactly the habit this repository has a write-up against.
+             The lane relaxes this ONE execution and then makes the verdict itself: every control-arm failure
+             must carry a flaky-case marker in the inflight ledger, or SeamOnDivergenceLaneTest fails. That
+             assertion is not relaxed, so nothing is being waved through - the failure is being classified
+             instead of being allowed to abort the measurement. -->
+        <seam.off.upstream.failure.ignore>false</seam.off.upstream.failure.ignore>
+
+        <!-- Handed to the classifier so a report directory left behind by an earlier run cannot be read as
+             this run's result. Surefire forks a fresh JVM per execution, all of them after this timestamp is
+             stamped, so "older than the build started" is exactly the stale case. Format pinned because the
+             classifier parses it; module-local, so nothing outside this module sees the change. -->
+        <maven.build.timestamp.format>yyyy-MM-dd'T'HH:mm:ss'Z'</maven.build.timestamp.format>
     </properties>
 
     <dependencies>
+        <!-- The seam's own dependency, and the reason this module stopped being pure build machinery: the
+             generated StreamTask calls into PcTaskDispatcher, which drives core's WorkManager directly. -->
         <dependency>
             <groupId>bz.stub.parallelconsumer</groupId>
             <artifactId>parallel-consumer-core</artifactId>
             <version>${project.version}</version>
         </dependency>
+
         <dependency>
             <groupId>org.apache.kafka</groupId>
             <artifactId>kafka-streams</artifactId>
@@ -104,8 +194,25 @@
             <artifactId>jackson-databind</artifactId>
             <version>${kafka.streams.jackson.version}</version>
         </dependency>
+        <!-- Not optional despite nothing here importing it directly. kafka-streams pulls
+             jackson-annotations 2.16.2 transitively while the databind above pulls 2.18.9, and the root
+             pom's enforcer RequireUpperBoundDeps rule fails the build on that pairing - correctly, since
+             the resolved 2.16.2 would be older than what databind was built against. Declaring it here at
+             the same version is the fix that keeps both halves of Jackson on one line. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-annotations</artifactId>
+            <version>${kafka.streams.jackson.version}</version>
+        </dependency>
 
         <!-- Tests -->
+
+        <!-- The shared TestConventionRules that TestConventionsArchTest points ArchUnit at, and
+             BrokerIntegrationTest, which is what BrokerStreamsIntegrationTest extends to reach a
+             TestContainers broker. Core's MAIN classes come from the compile-scope declaration above, which
+             the test jar also needs at runtime: a test-scoped dependency's own dependencies do not come
+             with it, and the core tests jar registers MyRunListener as a JUnit TestExecutionListener
+             through ServiceLoader, which reaches into core's StringUtils. -->
         <dependency>
             <groupId>bz.stub.parallelconsumer</groupId>
             <artifactId>parallel-consumer-core</artifactId>
@@ -114,9 +221,8 @@
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>org.apache.kafka</groupId>
-            <artifactId>kafka-streams-test-utils</artifactId>
-            <version>${kafka.version}</version>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-params</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -124,6 +230,22 @@
             <artifactId>awaitility</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <!-- TopologyTestDriver, which the refusal envelope's Processor API backstop arms build a real
+             topology against. It runs the topology on the calling thread, which is exactly right here and
+             exactly wrong for the dispatch arms below: a refusal is thrown while the task is CONSTRUCTED, so
+             no worker pool and no broker are needed to observe it, and the driver is several orders of
+             magnitude cheaper than a container per case. -->
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-streams-test-utils</artifactId>
+            <version>${kafka.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- The broker-backed arms: BrokerIntegrationTest starts a TestContainers Kafka, and the seam-on
+             proofs need a real StreamThread against a real broker - a TopologyTestDriver runs the topology
+             on the calling thread and so cannot exercise either the worker pool or the poll wait. -->
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>testcontainers</artifactId>
@@ -147,8 +269,8 @@
             <scope>test</scope>
         </dependency>
 
-        <!-- Apache Kafka's own test suite, and the fixtures it is built on. These are what make the
-             188-test upstream execution below possible; see the comment on that surefire execution. -->
+        <!-- Apache Kafka's OWN test suite, and the fixtures it is built on. These are what make the
+             upstream execution below possible; see the comment on that surefire execution. -->
 
         <!-- Kafka's compiled tests, plus the org.apache.kafka.test.* fixtures they are built on
              (InternalMockProcessorContext, MockSourceNode, MockClientSupplier, ...). Preferred over
@@ -191,11 +313,6 @@
             <groupId>org.hamcrest</groupId>
             <artifactId>hamcrest</artifactId>
             <version>${hamcrest.version}</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.junit.jupiter</groupId>
-            <artifactId>junit-jupiter-params</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -280,7 +397,8 @@
 
             <!-- 2. Apply the tracked patches. The script dry-runs first and fails the build on any
                     rejected hunk - a half-applied patch is the worst failure available here. An empty
-                    patch is an explicit no-op (that is U3's control arm).
+                    patch is an explicit no-op, which is the control arm that falsifies the harness
+                    independently of anything the patch intends to change.
 
                     Bound to process-sources / process-test-sources, NOT the matching generate-* phase, so
                     each is ordered AFTER the unpack above by lifecycle phase. Within a single phase Maven
@@ -357,22 +475,27 @@
                 </executions>
             </plugin>
 
-            <!-- 4. Apache Kafka's OWN test suite, run against our patched classes, in the module's
-                    NORMAL test run - no profile, no flag, every build.
-
-                    THE COUNT IS A DELIBERATE, CITABLE CLAIM: 188 of Apache Kafka's own tests
-                    (StreamTaskTest 101, RecordCollectorTest 59, ProcessorContextImplTest 28) pass
-                    unmodified against the patched classes, ZERO skipped. That sentence appears in the
-                    module README and in the result document as a substantiated claim; this execution is
-                    its provenance. If the number here ever changes, change it there too - and if a test
-                    is ever excluded or an assertion relaxed, the claim is void.
+            <!-- 4. THE ORACLE. Apache Kafka's OWN test suite, run against our patched classes, in the
+                    module's NORMAL test run - no profile, no flag, every build.
 
                     This is the strongest behaviour-preservation gate available: Kafka publishes its
                     compiled tests to Central, our patched classes precede the kafka-streams jar on the
-                    classpath (proven by ShadowedClassLoadingTest), so Kafka's own StreamTaskTest /
-                    ProcessorContextImplTest / RecordCollectorTest exercise OUR StreamTask, OUR
-                    AbstractProcessorContext and OUR RecordCollectorImpl - not the released ones.
-                    Anything the patch broke that Kafka tested, fails here.
+                    classpath (proven directly by ShadowedClassLoadingTest), so Kafka's own
+                    ProcessorContextImplTest and RecordCollectorTest exercise OUR AbstractProcessorContext,
+                    OUR ProcessorContextImpl and OUR RecordCollectorImpl - not the released ones. Anything
+                    the patch broke that Kafka tested fails here.
+
+                    StreamTaskTest is included although StreamTask itself is NOT in patched.classes: it is
+                    the richest exercise of the patched context and collector there is, driving both
+                    through a real task rather than a fixture. It is also where the seam lands next, so
+                    keeping it in the include list now means the seam's arrival changes a number rather
+                    than introducing a suite.
+
+                    THE COUNTS ARE A CITABLE CLAIM AND MUST BE RE-DERIVED, NEVER COPIED. They move with
+                    the patch, with the Kafka version and with the seam. Read them out of
+                    target/surefire-reports-kafka-upstream/ after running the module's whole `test` phase.
+                    Do NOT scope the run with -Dtest=: it silently overrides the <includes> below, this
+                    suite does not run at all, and the build still goes green having computed nothing.
 
                     Surefire only scans target/test-classes by default, so <dependenciesToScan> is what
                     makes it look inside the kafka-streams test jar at all. It sits on this extra
@@ -389,6 +512,13 @@
                     <classpathDependencyExcludes>
                         <classpathDependencyExclude>org.slf4j:slf4j-reload4j</classpathDependencyExclude>
                     </classpathDependencyExcludes>
+                    <!-- Handed to ShadowedClassLoadingTest so it can assert its own list against the real
+                         property rather than against a "keep in sync" comment. A class added here and not
+                         there would otherwise be silently unproven - which is precisely the false positive
+                         that test exists to prevent. -->
+                    <systemPropertyVariables>
+                        <patched.classes>${patched.classes}</patched.classes>
+                    </systemPropertyVariables>
                 </configuration>
                 <executions>
                     <execution>
@@ -398,31 +528,37 @@
                             <goal>test</goal>
                         </goals>
                         <configuration>
+                            <!-- False in every ordinary build: this execution IS the behaviour-preservation
+                                 gate. The seam-on evidence lane sets it true, because there this run is the
+                                 control arm and aborting on its first failure means the measured arm never
+                                 runs - see the property's own comment. -->
+                            <testFailureIgnore>${seam.off.upstream.failure.ignore}</testFailureIgnore>
                             <dependenciesToScan>
                                 <dependency>org.apache.kafka:kafka-streams</dependency>
                             </dependenciesToScan>
-                            <!-- Only the tests of classes we patch. Scanning the whole jar would run
-                                 ~2500 tests of code this module never touches, and drown the signal. -->
+                            <!-- Only the tests of the classes we patch. Scanning the whole jar would run
+                                 ~2500 tests of code this module never touches, and drown the signal.
+
+                                 StreamThreadTest joined this list with the fifth patched class. The rule is
+                                 "the tests of the classes we patch", so patching StreamThread without it
+                                 would have left the widest-blast-radius class as the one part of the patch
+                                 with no upstream suite behind it. -->
                             <includes>
                                 <include>org/apache/kafka/streams/processor/internals/StreamTaskTest.java</include>
+                                <include>org/apache/kafka/streams/processor/internals/StreamThreadTest.java</include>
                                 <include>org/apache/kafka/streams/processor/internals/ProcessorContextImplTest.java</include>
                                 <include>org/apache/kafka/streams/processor/internals/RecordCollectorTest.java</include>
                             </includes>
                             <reportsDirectory>${project.build.directory}/surefire-reports-kafka-upstream</reportsDirectory>
-                            <!-- The 188 is a BEHAVIOUR-PRESERVATION claim about the patch, and it only
-                                 means that with the seam OFF. Stated here rather than inherited: the
-                                 seam now defaults ON (PcDispatchSwitch - depending on the artifact is
-                                 the opt-in), and with it on Kafka's StreamTaskTest is 67/101, recorded
-                                 separately as the measured gap. Nothing about this execution may depend
-                                 on what the default happens to be.
+                            <!-- The oracle's independence from the seam. Written by the rung below this one
+                                 (astubbs#379) ahead of any reader; PcDispatchSwitch is now that reader, and
+                                 the pin stays exactly as it was.
 
-                                 The seam-ON figure was 68/101 when first recorded; re-derived as 67/101
-                                 on 2026-08-11, twice, by flipping this one property to true. It moves
-                                 with the dispatcher, so re-derive it rather than copying it. -->
-                            <!-- Re-derive the seam-OFF counts with the module's whole `test` phase, and
-                                 read them from surefire-reports-kafka-upstream/. Do NOT scope the run
-                                 with -Dtest=: it silently overrides the <includes> above, this suite
-                                 does not run at all, and the build still goes green. -->
+                                 It is deliberately NOT redundant with the seam defaulting off. This
+                                 execution's claim - Kafka's own suite passes against the patched classes -
+                                 only means anything with the seam OFF, and it is a claim about the PATCH,
+                                 not about a default. Deleting the pin because the default agrees with it
+                                 today would make the oracle silently follow the default the day it moves. -->
                             <systemPropertyVariables>
                                 <pc.streams.dispatch.enabled>false</pc.streams.dispatch.enabled>
                             </systemPropertyVariables>
@@ -431,7 +567,7 @@
                             </classpathDependencyExcludes>
                             <!-- Kafka's tests are written for a serial JUnit runner: StreamTaskTest
                                  pins a fixed state-directory name and MockProducer/MockConsumer are
-                                 shared per instance, so running them concurrently fails 159 of them
+                                 shared per instance, so running them concurrently fails most of them
                                  on state-dir locks alone and says nothing about our patch.
                                  Concurrency arrives on this module by accident anyway - the
                                  parallel-consumer-core tests jar ships a junit-platform.properties
@@ -448,7 +584,173 @@
                             <excludedGroups combine.self="override"/>
                         </configuration>
                     </execution>
+
+                    <!-- 4b. THE SAME UPSTREAM CLASSES, SEAM ON. The execution above is a
+                         BEHAVIOUR-PRESERVATION claim - the patch changes nothing while the switch is off.
+                         This one is the opposite measurement: what Kafka's own suite says about the path this
+                         module actually ships. It is the evidence the refusal envelope's reinstatement rule
+                         needs, because a refused construct only comes back when Kafka's suite exercises it
+                         seam-ON and passes.
+
+                         SKIPPED BY DEFAULT and testFailureIgnore=true, because the failures ARE the
+                         measurement rather than a regression. What turns that measurement into a gate is the
+                         execution after it: every failure seam-on that was green seam-off must be explained
+                         by a named mechanism, and one that is not fails the lane. So this execution never
+                         goes red and the classifier does - which is the only arrangement in which "the
+                         failures are expected" and "a new divergence fails the build" are both true.
+
+                         Run it through bin/ci-streams-seam-on-evidence.sh, which deletes both report
+                         directories first. Do NOT use -Dtest= to narrow it: that overrides the includes
+                         below, the suite never runs, and the build goes green having computed nothing. -->
+                    <execution>
+                        <id>kafka-upstream-tests-seam-on</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>test</goal>
+                        </goals>
+                        <configuration>
+                            <skipTests>${seam.on.upstream.skip}</skipTests>
+                            <testFailureIgnore>true</testFailureIgnore>
+                            <dependenciesToScan>
+                                <dependency>org.apache.kafka:kafka-streams</dependency>
+                            </dependenciesToScan>
+                            <!-- Deliberately the SAME include list as the seam-off execution above. The
+                                 classifier set-differences the two arms case by case, and a case present in
+                                 one arm and absent from the other cannot be differenced - it would be
+                                 silently dropped from the divergence set. SeamOnDivergenceClassifier asserts
+                                 the two arms cover the same classes rather than trusting this comment. -->
+                            <includes>
+                                <include>org/apache/kafka/streams/processor/internals/StreamTaskTest.java</include>
+                                <include>org/apache/kafka/streams/processor/internals/StreamThreadTest.java</include>
+                                <include>org/apache/kafka/streams/processor/internals/ProcessorContextImplTest.java</include>
+                                <include>org/apache/kafka/streams/processor/internals/RecordCollectorTest.java</include>
+                            </includes>
+                            <reportsDirectory>${project.build.directory}/surefire-reports-kafka-upstream-seam-on</reportsDirectory>
+                            <systemPropertyVariables>
+                                <pc.streams.dispatch.enabled>true</pc.streams.dispatch.enabled>
+                            </systemPropertyVariables>
+                            <classpathDependencyExcludes>
+                                <classpathDependencyExclude>ch.qos.logback:logback-classic</classpathDependencyExclude>
+                            </classpathDependencyExcludes>
+                            <!-- Same serial-runner requirement as the seam-off execution above. -->
+                            <properties>
+                                <configurationParameters>
+                                    junit.jupiter.execution.parallel.enabled = false
+                                </configurationParameters>
+                            </properties>
+                            <groups combine.self="override"/>
+                            <excludedGroups combine.self="override"/>
+                        </configuration>
+                    </execution>
+
+                    <!-- 4c. THE GATE ON 4b. Reads both report directories, set-differences them, and
+                         classifies every divergence by the mechanism its own recorded failure names.
+                         Explained divergences pass; one that matches no known mechanism fails this
+                         execution, and therefore the build.
+
+                         Runs in the same opt-in as 4b, and LAST, because it reads what 4b wrote. It is
+                         excluded from the default test execution by name for the same reason - run before
+                         the reports exist it can only report their absence. -->
+                    <execution>
+                        <id>seam-on-evidence-classification</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>test</goal>
+                        </goals>
+                        <configuration>
+                            <skipTests>${seam.on.upstream.skip}</skipTests>
+                            <includes>
+                                <include>**/SeamOnDivergenceLaneTest.java</include>
+                            </includes>
+                            <reportsDirectory>${project.build.directory}/surefire-reports-seam-on-lane</reportsDirectory>
+                            <systemPropertyVariables>
+                                <seam.on.reports.dir>${project.build.directory}/surefire-reports-kafka-upstream-seam-on</seam.on.reports.dir>
+                                <seam.off.reports.dir>${project.build.directory}/surefire-reports-kafka-upstream</seam.off.reports.dir>
+                                <seam.on.evidence.buildStartedAt>${maven.build.timestamp}</seam.on.evidence.buildStartedAt>
+                                <patched.classes>${patched.classes}</patched.classes>
+                            </systemPropertyVariables>
+                            <groups combine.self="override"/>
+                            <excludedGroups combine.self="override"/>
+                        </configuration>
+                    </execution>
+
+                    <!-- The classifier is not part of the module's ordinary test run: it reads report
+                         directories that only exist once 4b has run, so here it could only ever report their
+                         absence. Named rather than tagged, because the two Kafka executions above already
+                         override the group filters and a tag would not reach them.
+
+                         THE OTHER TWO ENTRIES ARE THE ROOT POM'S AND ARE REPEATED ON PURPOSE. An <excludes>
+                         list here REPLACES the inherited one rather than adding to it, so declaring only the
+                         classifier silently pulled every `integrationTests` class - which is where this
+                         module's broker-backed arms live - into the surefire `test` phase, making the unit
+                         lane need Docker. It went unnoticed for exactly one build, because everything passed.
+                         combine.children="append" would express the intent, but a literal list is what a
+                         reader can check against the root pom without knowing that attribute exists. -->
+                    <execution>
+                        <id>default-test</id>
+                        <configuration>
+                            <excludes>
+                                <exclude>**/integrationTest*/**/*.java</exclude>
+                                <exclude>**/*IT.java</exclude>
+                                <exclude>**/SeamOnDivergenceLaneTest.java</exclude>
+                            </excludes>
+                        </configuration>
+                    </execution>
                 </executions>
+            </plugin>
+
+            <!-- 5. The same SLF4J-binding split as surefire above, on the OTHER lane - and it was missing.
+                    That exclusion sits on the surefire plugin's configuration, which failsafe does not
+                    inherit, so this module's own INTEGRATION tests were binding reload4j while the pom's
+                    comment above said "our own tests keep logback (and logback-test.xml)". Nothing went red
+                    for it, because nothing asserted on a log line in that lane until
+                    PunctuatorWarningTest did - and what it got was a ClassCastException casting an
+                    org.slf4j.reload4j adapter to a logback Logger.
+
+                    The Kafka-fork execution is surefire's and keeps reload4j, so LogCaptureAppender still
+                    works there; this only makes the failsafe lane agree with the unit lane and with
+                    src/test/resources/logback-test.xml, which was already being ignored here. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <configuration>
+                    <classpathDependencyExcludes>
+                        <classpathDependencyExclude>org.slf4j:slf4j-reload4j</classpathDependencyExclude>
+                    </classpathDependencyExcludes>
+                </configuration>
+            </plugin>
+
+            <!-- The generated Apache Kafka classes are not ours to hold to this project's static-analysis
+                 rules. `target/classes` here holds nothing else, so this exclusion is the whole module -
+                 and it says something true rather than hiding something of ours: the root pom's
+                 jdk-unsafe signatures fire on locale-dependent String.format calls that are in Kafka's
+                 RELEASED source, at sites the patch does not touch. Fixing them would mean patching
+                 Apache code for a rule Apache never adopted, growing the change-set that this module's
+                 whole design exists to keep small and re-derivable.
+
+                 Everything of ours in this module - PcTaskDispatcher, PcWorkSignal and the rest of the
+                 seam - sits under bz.stub and is NOT matched by this pattern, so it gets the same
+                 analysis as every other module. The same scoping decision, for the same reason, is
+                 already made for ArchUnit in TestConventionsArchTest. -->
+            <plugin>
+                <groupId>de.thetaphi</groupId>
+                <artifactId>forbiddenapis</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>org/apache/kafka/**</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+
+            <!-- Publication off, the plugin's own switch. The properties above stop deploy and signing;
+                 this stops the Central bundle from carrying the module. See the properties block for why
+                 publication is a deliberate decision rather than a default. -->
+            <plugin>
+                <groupId>org.sonatype.central</groupId>
+                <artifactId>central-publishing-maven-plugin</artifactId>
+                <configuration>
+                    <skipPublishing>true</skipPublishing>
+                </configuration>
             </plugin>
         </plugins>
     </build>

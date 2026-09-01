@@ -13,19 +13,114 @@ package bz.stub.parallelconsumer.streams;
  * {@code maxBufferedSize}, and the run stalls with the consumer paused and no error anywhere to say why.
  * So this is a switch, not a fan-out.
  * <p>
- * It defaults to <b>on</b>. <b>Depending on the artifact is the opt-in.</b> Nobody puts
- * {@code parallel-consumer-streams} on their classpath by accident - it is a separate, loudly-labelled
- * alpha artifact - and having done so deliberately, they wanted the PC seam. Making them also set a system
- * property is friction that buys nothing.
+ * <h2>It defaults to OFF, and this is an opt-in preview</h2>
+ * Turn it on for a whole JVM with {@code -Dpc.streams.dispatch.enabled=true}, or per test with
+ * {@link #enable(int)}.
  * <p>
- * The property is still how you turn it <b>off</b>: {@code -Dpc.streams.dispatch.enabled=false} puts a
- * whole JVM back on stock Kafka Streams dispatch, which is what an A/B comparison needs. Tests that want the
- * stock path say so explicitly with {@link #disable()} rather than leaning on a default, because a control arm
- * that is only a control by default stops being one the moment the default moves - as it just did.
+ * <b>THREE reasons have now been closed and the default still has not moved. Each time, the measurement
+ * that closed one uncovered the next - and this time it did not.</b> The reason was originally a missing
+ * refusal: joins, windows, suppression, versioned and session stores and exactly-once are now refused,
+ * loudly and by name, at build time and at task construction ({@link PcUnsupportedConstruct},
+ * {@link PcSupportedEnvelope}). It then became revival: {@code StreamTask.revive()} threw rather than
+ * rebuilding the dispatcher that went down with the task, and the throw left Kafka's run loop uncaught.
+ * It then became exception surfacing, which this rung closed and which is described below.
  * <p>
- * (An earlier revision defaulted this off, so that the U3 control arm stayed stock without saying so. That was
- * a test concern being paid for by every user of the artifact; the tests now state their requirement at each
- * site instead.)
+ * <b>The evidence for closing the revival reason, because "it looks fixed now" is not one.</b> Run Apache
+ * Kafka's own suite against the patched classes with the seam <em>on</em>, before and after the task
+ * lifecycle unit, changing nothing else. Before, {@code StreamThreadTest} reached {@code revive()} through
+ * ordinary task-corruption recovery - {@code TaskCorruptedException} is what Kafka raises when a consumer's
+ * offset falls outside the topic's retained range - and the loud-failure {@code IllegalStateException}
+ * there left the run loop uncaught on the StreamThread, three times over. After, revival rebuilds the
+ * dispatcher, {@code shouldRecoverFromInvalidOffsetExceptionOnRestoreAndFinishRestore} passes on every
+ * parameter, no exception leaves any StreamThread at all, and <b>nothing that passed before regressed</b> -
+ * five {@code StreamTaskTest} close/checkpoint cases went green with it, because the same unit taught
+ * {@code validateClean} to see work that is still running.
+ * <p>
+ * <b>And the evidence for closing the third one, exception surfacing.</b> A {@code TaskCorruptedException}
+ * or {@code TaskMigratedException} thrown by a <em>processor</em> was caught by the worker, wrapped in a
+ * {@code StreamsException} and delivered one or more pump cycles later, so Kafka's {@code TaskManager}
+ * never saw the type it dispatches recovery on. <b>Both halves are fixed</b> - the patched
+ * {@code StreamTask.pcClassifyFailure} passes the control-flow types through unchanged, and
+ * {@link PcTaskDispatcher#awaitOutcomeIfIdle()} makes a pump that has run out of work wait for the
+ * outcome of what it already dispatched, so the failure reaches the {@code TaskManager} from the same
+ * {@code runOnce}. Nothing commits past it either
+ * ({@link PcTaskDispatcher#collectCommitData()} fences on a pending failure), which is
+ * astubbs/parallel-consumer#271's other open thread. Same experiment as above, one term changed:
+ * {@code shouldReinitializeRevivedTasksInAnyState} goes green on both parameter combinations this module
+ * supports, {@code StreamTaskTest.shouldRecordBufferedRecords} goes green with the backpressure work, and
+ * <b>nothing regresses</b>. Each half was sabotaged separately with the prediction stated first, and each
+ * time exactly those two cases went red and nothing else moved - so neither half is carrying the other.
+ * <p>
+ * <b>The fourth named item is stream-time punctuation, and closing it did not add a reason either.</b> It
+ * was never one of the three triggers above - it was recorded in {@code docs/inflight/} as a separate
+ * outstanding item, explicitly already priced in when the refusal reason closed - and it is now closed on
+ * its own terms (astubbs#255, U13). Punctuation fires on this path: stream time is a low-water mark over
+ * work in flight, and both punctuation types warn at registration about how they diverge, including the
+ * concurrency hazard that can corrupt a state store rather than merely retime output. Two divergences are
+ * pinned as <em>known</em> rather than fixed - the mark can overtake stock where PC's KEY-shard order
+ * differs from stock's timestamp order, and after a restart against a group this module committed the mark
+ * is not restored at all, so punctuators re-fire over covered event time. The item therefore moves from
+ * "unimplemented and silent" to "implemented, loud, and with two measured gaps", and that pricing stands.
+ * <p>
+ * <b>So the chain, end to end, is: refusal (astubbs/parallel-consumer#389), revival
+ * (astubbs/parallel-consumer#394), exception surfacing (astubbs/parallel-consumer#395), each closed with a
+ * seam-on measurement and a control arm, plus punctuation (astubbs/parallel-consumer#396) closed beside
+ * them.</b> Each rung left the default where it found it, and each was right to: a default moved on one
+ * rung's evidence while a sibling holds an unclosed reason is a default nobody measured.
+ * <p>
+ * <b>THE RECONCILED MEASUREMENT HAS NOW BEEN TAKEN, AND IT NAMED A FOURTH REASON. The default stays
+ * OFF.</b> Every rung above declined to move it on its own evidence and reserved the decision for the
+ * merged module, because the seam-on numbers move with each of them. Merged, Kafka's own suite was run
+ * twice through the evidence lane - seam off as the control arm, seam on as the measurement - and two
+ * punctuation cases still diverge: {@code StreamTaskTest.shouldPunctuateOnceStreamTimeAfterGap} produces
+ * six of stock's seven punctuations, and {@code shouldRespectPunctuateCancellationStreamTime} fails a
+ * different assertion than it did before stream time worked at all. Both add records, call
+ * {@code process()} once, and assert what stock produces because stock finished processing inside that
+ * call.
+ * <p>
+ * <b>That is the low-water mark doing its job</b> - it never passes a record still in flight, which is
+ * what stops a punctuation closing a window over work still inside the processor chain - <b>and it is
+ * still a divergence a user gets silently, in the direction the module's own documentation did not
+ * state.</b> The README and {@code CONCEPTS.md} pin the mark <em>overtaking</em> stock as the known
+ * divergence and say nothing about it lagging. Turning the default on while half of a two-directional
+ * divergence is undocumented ships a config whose docs are half true, so it is not being turned on.
+ * Closing it needs no code fix: it needs the lagging direction recorded to the same standard as the
+ * overtaking one. Owned by
+ * {@code docs/inflight/core-streams-punctuation-diverges-in-three-measured-ways.md}, with the
+ * attribution and its control arm in
+ * {@code docs/inflight/test-streams-seam-on-divergence-triage.md}.
+ * <p>
+ * <b>What did NOT hold it, and the control arm that says so.</b>
+ * {@code shouldReinitializeRevivedTasksInAnyState}'s third parameter combination stays red under Kafka's
+ * private processing-threads config, where {@code DefaultTaskExecutor} calls {@code task.process} from its
+ * own thread - out of scope since the seam landed, and named as such in {@link PcTaskDispatcher}'s
+ * threading contract. The same run was checked against the stream-time rung's own tip, where that case
+ * fails on <em>all three</em> parameters and the backpressure case fails too: so the reconciliation
+ * carried both siblings' fixes rather than merging one away, which is a different question from whether
+ * the default may move and had to be answered first.
+ * <p>
+ * Whoever flips this should re-run the seam-on measurement rather than trusting these paragraphs, and
+ * should expect the pattern to repeat: four times now, the measurement has named the next reason - so
+ * "no reason left" is something to show, not to assume.
+ * <p>
+ * <b>This reverses an inherited decision, and the argument it reverses was a different one.</b> The seam
+ * defaulted <em>on</em> in the feasibility study (astubbs#271) on the grounds that depending on a separate,
+ * loudly-labelled alpha artifact <em>is</em> the opt-in, so demanding a system property as well is friction
+ * that buys nothing. That is still a good argument, and it is why this is not written as "on is unsafe":
+ * it beats the objection it was aimed at, which was that an earlier revision defaulted off merely so a
+ * control-arm test would stay stock without having to say so. A test concern must never be paid for by
+ * every user of the artifact, and it is not being paid for here - the arms below still state their
+ * requirement at each site. What the artifact-is-the-opt-in argument does not cover is a user who opts in
+ * to <em>per-key concurrency</em> and gets <em>silently altered semantics</em> on a topology shape nobody
+ * refused. That objection is now answered by the refusal envelope above, the revival one by the lifecycle
+ * unit, and the exception-type route by the error-surfacing unit. Do not restore on-by-default merely because these
+ * paragraphs look like timidity - and do not restore it merely because they no longer name a defect either.
+ * Restore it against a fresh seam-on measurement taken on the reconciled module, and say so with the
+ * numbers.
+ * <p>
+ * Tests that want the stock path still say so explicitly with {@link #disable()} rather than leaning on the
+ * default, because a control arm that is only a control by default stops being one the moment the default
+ * moves - which it has now done twice.
  * <p>
  * Global mutable static state is normally a smell. Here it is the only thing that reaches the call site:
  * {@code StreamTask} is constructed several layers inside {@code KafkaStreams}, with no seam through which a
@@ -37,9 +132,9 @@ package bz.stub.parallelconsumer.streams;
 public final class PcDispatchSwitch {
 
     /**
-     * Set {@code -Dpc.streams.dispatch.enabled=false} to turn the seam off for a whole JVM and get stock
-     * Kafka Streams dispatch back. Unset, or {@code =true}, means the seam is on. Tests should call
-     * {@link #disable()} / {@link #enable(int)} instead, so they can put it back afterwards.
+     * Set {@code -Dpc.streams.dispatch.enabled=true} to turn the seam on for a whole JVM. Unset, or
+     * {@code =false}, leaves stock Kafka Streams dispatch in place. Tests should call
+     * {@link #enable(int)} / {@link #disable()} instead, so they can put it back afterwards.
      */
     public static final String ENABLED_PROPERTY = "pc.streams.dispatch.enabled";
 
@@ -50,17 +145,112 @@ public final class PcDispatchSwitch {
      */
     public static final String POOL_SIZE_PROPERTY = "pc.streams.dispatch.poolSize";
 
+    /**
+     * Set {@code -Dpc.streams.wakeOnWork.enabled=false} to put the patched {@code StreamThread} back on a
+     * single full-budget {@code Consumer#poll()} - see {@link PcWorkSignal} for what that costs.
+     * <p>
+     * Two reasons this exists rather than the seam being the only switch. It is an escape hatch on a fifth
+     * patched Kafka class, which is the one with the widest blast radius if a future Kafka changes the poll
+     * phase under us. And it is the <b>control arm</b>: the before/after measurement for wake-on-work has to
+     * vary exactly one term, and flipping this leaves the build, the JVM, the broker and the warm-up
+     * identical in a way that comparing against a parent commit never can.
+     */
+    public static final String WAKE_ON_WORK_PROPERTY = "pc.streams.wakeOnWork.enabled";
+
+    /**
+     * Set {@code -Dpc.streams.backpressure.enabled=false} to stop the PC path pausing a partition when it is
+     * holding more than {@code buffered.records.per.partition} records for it.
+     * <p>
+     * Two reasons this exists, the same two as {@link #WAKE_ON_WORK_PROPERTY}. It is the <b>control arm</b>:
+     * the memory-bound proof has to vary exactly one term, and flipping this leaves the build, the JVM, the
+     * broker and the data identical in a way that comparing against a parent commit never can. And it is an
+     * escape hatch on the one change in this module whose failure mode is a <em>silent stall</em> rather
+     * than an exception - a partition that is paused and never resumed looks exactly like an idle topology -
+     * so an operator needs a way to take it out of the picture without rebuilding.
+     * <p>
+     * Turning it off restores unbounded accumulation under a processor slower than the broker feed. That is
+     * the point of a control arm, and it is not a mode anyone should run in production.
+     */
+    public static final String BACKPRESSURE_PROPERTY = "pc.streams.backpressure.enabled";
+
     private static final int DEFAULT_POOL_SIZE = 4;
 
-    private static volatile boolean enabled = readEnabledProperty();
+    /**
+     * Absent means OFF for the seam, and absent means ON for wake-on-work. The two defaults differ because
+     * the questions differ: the seam asks "may this JVM run topologies through PC at all", which nothing has
+     * yet made safe to answer yes by default, while wake-on-work asks "given that it is running through PC,
+     * should the poll wait be split", where the stock answer is measurably the wrong one and the whole
+     * mechanism exists to fix it. Wake-on-work is unreachable while the seam is off, so it never applies to
+     * a JVM that did not ask for the seam - see {@link #isWakeOnWorkEnabled()}.
+     */
+    private static final boolean SEAM_DEFAULT = false;
+    private static final boolean WAKE_ON_WORK_DEFAULT = true;
+
+    /**
+     * ON, like wake-on-work and for the same reason: given that a topology is running through PC, the stock
+     * answer to "should inflow be bounded" is unambiguously yes - stock Kafka Streams pauses the partition
+     * itself, and the PC path silently stopped doing so. Off is the control arm, not a supported mode.
+     */
+    private static final boolean BACKPRESSURE_DEFAULT = true;
+
+    private static volatile boolean enabled = readBooleanProperty(ENABLED_PROPERTY, SEAM_DEFAULT);
 
     private static volatile int poolSize = Integer.getInteger(POOL_SIZE_PROPERTY, DEFAULT_POOL_SIZE);
+
+    private static volatile boolean wakeOnWork = readBooleanProperty(WAKE_ON_WORK_PROPERTY, WAKE_ON_WORK_DEFAULT);
+
+    private static volatile boolean backpressure = readBooleanProperty(BACKPRESSURE_PROPERTY, BACKPRESSURE_DEFAULT);
 
     private PcDispatchSwitch() {
     }
 
     public static boolean isEnabled() {
         return enabled;
+    }
+
+    /**
+     * Whether the patched {@code StreamThread} should split its poll wait and let a worker completion end it.
+     * <p>
+     * Reports false whenever the seam is off, unconditionally: with records going through Kafka's own
+     * {@code PartitionGroup} there are no workers, nothing can raise the signal, and a split wait would be
+     * pure cost. That keeps the patch's condition to a single call - a seam-off run takes the stock poll
+     * without the patch having to ask two questions.
+     */
+    public static boolean isWakeOnWorkEnabled() {
+        return enabled && wakeOnWork;
+    }
+
+    /**
+     * Turn wake-on-work off (or back on) for this JVM. Intended for the control arm of the benchmark; the
+     * system property is the equivalent for a whole run.
+     */
+    public static void setWakeOnWork(final boolean wakeOnWorkEnabled) {
+        wakeOnWork = wakeOnWorkEnabled;
+    }
+
+    /**
+     * Whether the patched {@code StreamTask} should pause a partition once PC is holding more than
+     * {@code buffered.records.per.partition} records for it.
+     * <p>
+     * Reports false whenever the seam is off, unconditionally - with records going through Kafka's own
+     * {@code PartitionGroup}, {@code addRecords} already applies the stock pause from the real queue size,
+     * and asking twice could only pause a partition Kafka had decided not to pause. Same shape as
+     * {@link #isWakeOnWorkEnabled()}, so the patch asks one question rather than two.
+     * <p>
+     * <b>The resume is deliberately NOT gated on this.</b> A pause is a durable effect on the consumer while
+     * this is only a flag, so releasing a pause has to happen whatever the flag says - see the resume loop in
+     * the patched {@code StreamTask.pcProcess}.
+     */
+    public static boolean isBackpressureEnabled() {
+        return enabled && backpressure;
+    }
+
+    /**
+     * Turn the PC-path pause off (or back on) for this JVM. Intended for the control arm of the memory-bound
+     * proof; the system property is the equivalent for a whole run.
+     */
+    public static void setBackpressure(final boolean backpressureEnabled) {
+        backpressure = backpressureEnabled;
     }
 
     public static int getPoolSize() {
@@ -90,25 +280,32 @@ public final class PcDispatchSwitch {
     }
 
     /**
-     * Put the switch back to what this JVM started with - {@link #ENABLED_PROPERTY} if it was set, on
+     * Put the switch back to what this JVM started with - each property if it was set, its default
      * otherwise. Intended as a test teardown: leaving the switch wherever the last test left it re-creates
-     * exactly the implicit-default coupling that flipping this default was meant to remove.
+     * exactly the implicit-default coupling that stating each arm's requirement was meant to remove.
      */
     public static void resetToDefault() {
         poolSize = Integer.getInteger(POOL_SIZE_PROPERTY, DEFAULT_POOL_SIZE);
-        enabled = readEnabledProperty();
+        enabled = readBooleanProperty(ENABLED_PROPERTY, SEAM_DEFAULT);
+        wakeOnWork = readBooleanProperty(WAKE_ON_WORK_PROPERTY, WAKE_ON_WORK_DEFAULT);
+        backpressure = readBooleanProperty(BACKPRESSURE_PROPERTY, BACKPRESSURE_DEFAULT);
     }
 
     /**
-     * Absent, the seam is on - depending on the artifact is the opt-in. A value that is neither
-     * {@code true} nor {@code false} fails loudly rather than being silently read as "off": a typo in a
-     * property whose whole job is to turn the seam off would otherwise leave the seam on, and the run would
-     * look like a control arm while being nothing of the kind.
+     * Absent takes {@code whenAbsent}; anything that is not {@code true}/{@code false} throws rather than
+     * being silently read as the default. A typo in a property whose whole job is to move the seam would
+     * otherwise leave it wherever it already was, and the run would look like the arm it was asked for while
+     * being nothing of the kind.
+     * <p>
+     * Shared by every switch rather than copied, because that loud-failure rule is the whole point and two
+     * copies is how one of them quietly stops enforcing it. The default is a parameter for the same reason:
+     * the switches genuinely differ (see {@link #SEAM_DEFAULT}), and a second reader is how they would
+     * drift.
      */
-    private static boolean readEnabledProperty() {
-        final String raw = System.getProperty(ENABLED_PROPERTY);
+    private static boolean readBooleanProperty(final String property, final boolean whenAbsent) {
+        final String raw = System.getProperty(property);
         if (raw == null) {
-            return true;
+            return whenAbsent;
         }
         if ("true".equalsIgnoreCase(raw)) {
             return true;
@@ -116,7 +313,8 @@ public final class PcDispatchSwitch {
         if ("false".equalsIgnoreCase(raw)) {
             return false;
         }
-        throw new IllegalArgumentException("System property " + ENABLED_PROPERTY + " must be 'true' or "
-                + "'false', was '" + raw + "'. The seam is ON unless this property says 'false'.");
+        throw new IllegalArgumentException("System property " + property + " must be 'true' or "
+                + "'false', was '" + raw + "'. Absent, it is "
+                + (whenAbsent ? "ON" : "OFF") + ".");
     }
 }

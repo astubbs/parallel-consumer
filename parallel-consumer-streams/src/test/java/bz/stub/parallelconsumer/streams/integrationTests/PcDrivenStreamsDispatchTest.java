@@ -43,14 +43,16 @@ import static org.awaitility.Awaitility.await;
  * {@link PcDispatchSwitch}. That is what makes the dispatch marker meaningful - correct output is asserted in
  * both, so output alone would prove nothing about which path ran.
  * <p>
- * {@code @Isolated} is not decoration. The switch is process-wide (see {@link PcDispatchSwitch} for why it has
- * to be), and this module runs tests concurrently, so without isolation the flag-on arm could turn PC
- * dispatch on underneath {@link ShadowedStreamsControlTest} - silently converting the control arm into a
- * second PC arm and destroying the only baseline the module has.
+ * {@code @Isolated} is not decoration. The switch and the counters are process-wide (see
+ * {@link PcDispatchSwitch} for why they have to be), and this module runs tests concurrently, so without
+ * isolation the seam-on arm could turn PC dispatch on underneath
+ * {@link #withTheSwitchOffNothingIsDispatchedAndTheOutputIsStillCorrect()} - silently converting the control
+ * arm into a second PC arm, and a control that is only a control when nothing else is running is not one.
+ * The same applies to any other class that touches the switch, which is why they all carry it.
  *
  * @author Antony Stubbs
  * @see bz.stub.parallelconsumer.streams.PcTaskDispatcherTest
- * @see ShadowedStreamsControlTest
+ * @see WakeOnWorkShutdownTest
  */
 @Slf4j
 @Isolated
@@ -282,27 +284,7 @@ class PcDrivenStreamsDispatchTest extends BrokerStreamsIntegrationTest {
     }
 
     private Map<String, List<String>> consumeByKey(final String outputTopic) {
-        Map<String, List<String>> byKey = new LinkedHashMap<>();
-        try (KafkaConsumer<String, String> consumer = getKcu().createNewConsumer(KafkaClientUtils.GroupOption.NEW_GROUP)) {
-            consumer.subscribe(UniLists.of(outputTopic));
-
-            await().atMost(Duration.ofSeconds(120)).until(() -> {
-                ConsumerRecords<String, String> polled = consumer.poll(Duration.ofMillis(500));
-                for (ConsumerRecord<String, String> record : polled) {
-                    byKey.computeIfAbsent(record.key(), k -> new ArrayList<>()).add(record.value());
-                }
-                int total = flatten(byKey).size();
-                log.debug("Consumed {}/{} so far", total, TOTAL);
-                return total >= TOTAL;
-            });
-        }
-        return byKey;
-    }
-
-    private static List<String> flatten(final Map<String, List<String>> byKey) {
-        List<String> all = new ArrayList<>();
-        byKey.values().forEach(all::addAll);
-        return all;
+        return consumeByKey(outputTopic, TOTAL, Duration.ofSeconds(120));
     }
 
     /**

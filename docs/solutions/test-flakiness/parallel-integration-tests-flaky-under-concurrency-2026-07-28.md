@@ -174,5 +174,5 @@ tests").
 ## Related
 
 - Experiment PR that produced the GitHub-hosted numbers: astubbs#66 (`ci/reenable-parallel-tests`, do-not-merge).
-- Self-hosted runner setup + speedup context: [`docs/SELF_HOSTED_RUNNER.md`](../../SELF_HOSTED_RUNNER.md).
+- Self-hosted runner setup + speedup context: [`docs/self-hosted-runner.md`](../../self-hosted-runner.md).
 - In-flight flaky-test fixes: astubbs#63, `fix/flaky-ensure-topic-timeout`.

@@ -3,10 +3,10 @@
 # Copyright (C) 2026 Antony Stubbs and contributors
 #
 
-# Regenerate docs/TODO_INDEX.md - an index of every TODO/FIXME/XXX marker in the tree.
+# Regenerate docs/todo-index.md - an index of every TODO/FIXME/XXX marker in the tree.
 #
 # Usage:
-#   bin/todo-index.sh            # rewrite docs/TODO_INDEX.md
+#   bin/todo-index.sh            # rewrite docs/todo-index.md
 #   bin/todo-index.sh --check    # exit 1 if the committed index is stale (for CI)
 #
 # Why generated and not hand-maintained: a hand-written list of TODOs is wrong the day after it is
@@ -31,11 +31,38 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-OUT="docs/TODO_INDEX.md"
+OUT="docs/todo-index.md"
 SELF="bin/todo-index.sh"
 
+# ARGUMENTS ARE PARSED STRICTLY, AND THAT IS THE SECURITY BOUNDARY - not tidiness. The review agent
+# is granted this script as `Bash(bin/todo-index.sh --check)` precisely so it can ask whether the
+# committed index is stale WITHOUT being able to rewrite the tree it is inspecting.
+#
+# A permissive parser breaks that grant open from the other side. The previous
+# `[[ "${1:-}" == "--check" ]]` silently ignored anything it did not recognise, so
+# `bin/todo-index.sh --check=false` left CHECK_MODE false, fell through to the REWRITE path, and
+# exited 0 - while still matching any prefix-shaped grant of `--check`. Reported by the review agent
+# on astubbs/parallel-consumer#286 and reproduced there.
+#
+# Rejecting unknown arguments keeps the guarantee HERE, where it holds however the caller was
+# granted, instead of resting on an allowlist string in two workflow files getting its wildcard
+# right. Exits 2 on a usage error, leaving 1 to mean "the index is stale".
 CHECK_MODE=false
-[[ "${1:-}" == "--check" ]] && CHECK_MODE=true
+case $# in
+    0) ;;
+    1)
+        if [[ "$1" == "--check" ]]; then
+            CHECK_MODE=true
+        else
+            printf 'usage: %s [--check]\n' "$SELF" >&2
+            exit 2
+        fi
+        ;;
+    *)
+        printf 'usage: %s [--check]\n' "$SELF" >&2
+        exit 2
+        ;;
+esac
 
 # Files worth scanning: source, scripts, build and workflow config. Deliberately excludes build
 # output, the git dir, and agent scratch dirs.
@@ -73,9 +100,9 @@ MARKER_RE='\b([Tt][Oo][Dd][Oo]|[Ff][Ii][Xx][Mm][Ee]|XXX)\b'
 # NOTE: this filter is applied to `grep -n` output, so line-anchored patterns must allow the
 # leading "<lineno>:" prefix - anchoring on ^[[:space:]] alone silently never matches.
 #   references TO a marker elsewhere, e.g. "the run-length optimisation TODO on {@link X}"
-#   compound names    todo-index.sh, TODO_INDEX.md   (a filename, not a marker - this one is live:
-#                                                     .github/workflows/claude-code-review.yml names
-#                                                     the script in a comment)
+#   compound names    todo-index.sh, todo-index.md   (a filename, not a marker - this one is live:
+#                                                     the review workflows name the script in a
+#                                                     comment)
 NOT_A_MARKER_RE='(\b([Tt][Oo][Dd][Oo]|[Ff][Ii][Xx][Mm][Ee]|XXX)[A-Za-z0-9_]*[[:space:]]*(=|\+=)|\$\{#?[Tt][Oo][Dd][Oo]|^[0-9]+:[[:space:]]*[A-Za-z_]*[Tt][Oo][Dd][Oo][A-Za-z_]*:|"[^"]*[Tt][Oo][Dd][Oo][^"]*"|(optimisation|optimization) TODO|[Tt][Oo][Dd][Oo][-_][A-Za-z])'
 
 emit_body() {
@@ -124,17 +151,13 @@ count_markers() {
 }
 
 generate() {
-    local count
-    count=$(count_markers)
-
     cat <<EOF
 # TODO index
 
 **Generated file - do not edit by hand.** Regenerate with \`bin/todo-index.sh\`
 (\`bin/todo-index.sh --check\` fails if this file is stale).
 
-Every \`TODO\` / \`FIXME\` / \`XXX\` marker in the tracked tree, grouped by module. **$count marker(s)** at
-the time of generation.
+Every \`TODO\` / \`FIXME\` / \`XXX\` marker in the tracked tree, grouped by module.
 
 ## Prioritised? See the refactoring backlog
 
@@ -157,6 +180,11 @@ grep -rn "check legacy is recursive"
 
 A line number would be wrong within a day and would drag this file into every unrelated diff. The
 marker's own text is stable until someone edits the marker.
+
+For the same reason this file carries no marker **count**: it would be a second, drifting statement
+of something the list below already says exactly, and the two would disagree the moment either moved.
+Count the entries if you need a number. \`bin/todo-index.sh\` prints one to the console when it runs,
+where it cannot go stale.
 
 ## How to use this
 

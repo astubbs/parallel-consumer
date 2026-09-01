@@ -25,7 +25,7 @@
 #   4. commit the patch. The generated trees are gitignored and never committed.
 #
 # Editing generated files feels wrong, and it is the honest cost of not committing Apache Kafka source
-# into this repository (see the plan's KTD-S4). This script is what keeps that cost small.
+# into this repository - see README.md, "The mechanism". This script is what keeps that cost small.
 #
 # PARALLEL BRANCHES ARE FINE. RECONCILE AT THE SOURCE, NOT AT THE PATCH.
 # Two branches regenerating this file will conflict, and the conflicts look terrible: they land on `@@`
@@ -72,7 +72,7 @@
 # Rule of thumb: after you start editing, run regen-patch.sh BEFORE you run maven again. The hunk-count
 # comparison at the end of this script is the tripwire - if it says the count went DOWN, you lost work.
 #
-# The patch is the deliverable: its line count is the spike's answer to "how little had to change".
+# The patch is the deliverable: its line count is the answer to "how little had to change".
 #
 # There is a second tree, generated at generate-test-sources in every build: Kafka's own test fixtures,
 # which need the same accessor conversion for the same reason. Re-derive that one with:
@@ -144,5 +144,5 @@ if [[ "$hunks" -eq 0 ]]; then
 else
     echo "regen-patch: wrote $patch_file"
     echo "regen-patch: $files file(s), $hunks hunk(s), $lines lines"
-    echo "regen-patch: that line count is the spike's change-set size - quote it in the result doc"
+    echo "regen-patch: that line count is the change-set size - quote it wherever the size is claimed"
 fi

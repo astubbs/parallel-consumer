@@ -4,7 +4,13 @@ package bz.stub.parallelconsumer.streams.integrationTests;
  */
 
 import bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest;
+import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsBuilder;
@@ -12,7 +18,14 @@ import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.errors.StreamsUncaughtExceptionHandler;
 import org.apache.kafka.streams.errors.StreamsUncaughtExceptionHandler.StreamThreadExceptionResponse;
 
+import pl.tlinkowski.unij.api.UniLists;
+import pl.tlinkowski.unij.api.UniSets;
+
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -83,19 +96,122 @@ abstract class BrokerStreamsIntegrationTest extends BrokerIntegrationTest<String
         return startAndAwaitRunning(streams);
     }
 
+    /**
+     * The application's own committed offset for one input partition, or {@code null} when the group has
+     * never committed.
+     * <p>
+     * The reader carries the app's group id but <b>never subscribes</b>, so it performs an OffsetFetch
+     * without joining the group and cannot rebalance the topology under test. Shared because two arms of
+     * this module need it and a second copy of that subtlety is how one of them silently starts
+     * rebalancing what it is measuring.
+     */
+    OffsetAndMetadata committedOffsetOrNull(final String applicationId, final TopicPartition partition) {
+        try (KafkaConsumer<String, String> groupReader = getKcu().createNewConsumer(applicationId)) {
+            return groupReader.committed(UniSets.of(partition)).get(partition);
+        }
+    }
+
+    /**
+     * Sleeps for the full duration, restoring the interrupt flag and failing loudly if interrupted.
+     *
+     * @param what what the sleep is for, used in the failure message - a bare "interrupted" tells the
+     *             reader nothing about which wait died
+     */
+    static void sleepThrough(final Duration duration, final String what) {
+        try {
+            Thread.sleep(duration.toMillis());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while " + what, e);
+        }
+    }
+
     private static KafkaStreams startAndAwaitRunning(final KafkaStreams streams) {
         streams.start();
 
         AtomicInteger polls = new AtomicInteger();
-        await().atMost(STARTUP_TIMEOUT).until(() -> {
-            KafkaStreams.State state = streams.state();
-            // Every tenth poll, not every one: a slow start would otherwise bury the run's own logging under
-            // a line per Awaitility interval, and the state only matters when it stops changing.
-            if (polls.getAndIncrement() % 10 == 0) {
-                log.info("Waiting for Streams to run, state={}", state);
-            }
-            return state == KafkaStreams.State.RUNNING;
-        });
+        try {
+            await().atMost(STARTUP_TIMEOUT).until(() -> {
+                KafkaStreams.State state = streams.state();
+                // Every tenth poll, not every one: a slow start would otherwise bury the run's own logging
+                // under a line per Awaitility interval, and the state only matters when it stops changing.
+                if (polls.getAndIncrement() % 10 == 0) {
+                    log.info("Waiting for Streams to run, state={}", state);
+                }
+                return state == KafkaStreams.State.RUNNING;
+            });
+        } catch (Throwable startupFailure) {
+            // Close where it was started. The client is already start()ed by the time this await runs, so a
+            // timeout here would otherwise orphan live threads, a consumer, a producer and group membership
+            // that no caller can reach - the instance is never returned, so no caller-side try/finally can
+            // close it. A caller-side null guard does not help for the same reason.
+            log.error("Streams did not reach RUNNING; closing the partially started client", startupFailure);
+            streams.close(Duration.ofSeconds(30));
+            throw startupFailure;
+        }
         return streams;
+    }
+
+    /**
+     * Simulated processing cost, shared because every arm that needs a slow processor needs the same
+     * behaviour on interrupt: restore the flag and fail loudly. An arm that swallowed the interrupt would
+     * silently stop simulating cost, and the measurement it was taking would quietly become meaningless
+     * rather than failing.
+     */
+    static void sleep(final Duration duration) {
+        try {
+            Thread.sleep(duration.toMillis());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while simulating processing cost", e);
+        }
+    }
+
+    /**
+     * Drain an output topic into a per-key list, in arrival order, until {@code expected} records have been
+     * read or the deadline passes.
+     * <p>
+     * <b>Shared because a drifted copy of topic-reading logic is a named source of flaky CI in this
+     * repository</b>, and because two arms that read their output differently are not comparable however
+     * carefully the rest of the experiment is controlled. The duplicate-code check flagged this as a real
+     * clone between the seam-on dispatch arm and the stock control arm - the two halves were byte-identical
+     * apart from the deadline, which is exactly the shape that drifts.
+     * <p>
+     * The deadline stays a PARAMETER rather than moving here with a shared default: how long an arm is
+     * willing to wait is a property of the workload it is running, and this class deliberately holds only
+     * what the arms must agree on.
+     *
+     * @param expected the record count that ends the wait. The caller asserts on the contents; this only
+     *                 decides when to stop reading, so a short read fails at the caller's assertion with the
+     *                 records it did get rather than here with a timeout and nothing to look at
+     */
+    Map<String, List<String>> consumeByKey(final String outputTopic,
+                                           final int expected,
+                                           final Duration timeout) {
+        Map<String, List<String>> byKey = new LinkedHashMap<>();
+        try (KafkaConsumer<String, String> consumer =
+                     getKcu().createNewConsumer(KafkaClientUtils.GroupOption.NEW_GROUP)) {
+            // UniLists, not List.of - this module inherits the project's --release 8 API surface, so the
+            // Java 9+ collection factories are unavailable even though Jabel allows the newer syntax.
+            consumer.subscribe(UniLists.of(outputTopic));
+
+            await().atMost(timeout).until(() -> {
+                ConsumerRecords<String, String> polled = consumer.poll(Duration.ofMillis(500));
+                for (ConsumerRecord<String, String> record : polled) {
+                    byKey.computeIfAbsent(record.key(), key -> new ArrayList<>()).add(record.value());
+                }
+                int total = flatten(byKey).size();
+                log.debug("Consumed {}/{} from {} so far", total, expected, outputTopic);
+                return total >= expected;
+            });
+        }
+        return byKey;
+    }
+
+    /** Every value read, ignoring which key carried it - for counting, never for order. */
+    static List<String> flatten(final Map<String, List<String>> byKey) {
+        List<String> all = new ArrayList<>();
+        byKey.values().forEach(all::addAll);
+        return all;
     }
 }

@@ -1,5 +1,8 @@
 # Build a realistic case we expect NOT to win, and publish it
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: test-debt -->
+
 **Requested 2026-08-11.** We have unfavourable numbers already - single key 0.99x, steady-state below
 saturation 0.99x, CPU at equal thread count 1.19x, Zipf 1.5 at 2.00x. But every one of them is a
 **synthetic floor**: a degenerate configuration chosen to isolate a property.
