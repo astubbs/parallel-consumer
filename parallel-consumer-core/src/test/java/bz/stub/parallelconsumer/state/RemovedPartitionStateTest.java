@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import pl.tlinkowski.unij.api.UniLists;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.SortedSet;
 import java.util.stream.Collectors;
@@ -161,7 +162,7 @@ class RemovedPartitionStateTest {
      */
     @Test
     void droppedBatchIsWarnedAsABoundedSummary() {
-        var batch = new PolledTestBatch(new ModelUtils(), DROPPED_BATCH_TP, 100, 599);
+        var batch = new PolledTestBatch(mu, DROPPED_BATCH_TP, 100, 599);
         var state = new RemovedPartitionState<String, String>();
 
         List<String> warnings;
@@ -192,7 +193,7 @@ class RemovedPartitionStateTest {
     /**
      * @return only the lines about this test's own partition - the logger is shared JVM-wide
      */
-    private List<String> mine(List<String> messages) {
+    private List<String> mine(Collection<String> messages) {
         return messages.stream()
                 .filter(message -> message.contains(DROPPED_BATCH_TP.topic()))
                 .collect(Collectors.toList());

@@ -17,6 +17,7 @@ import static com.google.common.truth.Truth.assertThat;
 import static bz.stub.parallelconsumer.internal.utils.RecordBatchSummary.MAX_PARTITIONS_LISTED;
 import static java.util.Arrays.asList;
 import static java.util.Collections.emptyList;
+import static java.util.Collections.nCopies;
 import static java.util.Collections.singletonList;
 
 /**
@@ -28,6 +29,15 @@ import static java.util.Collections.singletonList;
 class RecordBatchSummaryTest {
 
     private static final TopicPartition TP = new TopicPartition("my-topic", 3);
+
+    private static final int PARTITIONS = 500;
+
+    private static final int RECORDS_PER_PARTITION = 1000;
+
+    /**
+     * Kafka's own limit on a topic name, so the longest one this class can ever be handed.
+     */
+    private static final int LONGEST_LEGAL_TOPIC_NAME = 249;
 
     @Test
     void summarisesCountAndOffsetRangeForOnePartition() {
@@ -94,24 +104,62 @@ class RecordBatchSummaryTest {
      */
     @Test
     void lineIsBoundedRegardlessOfBatchAndPartitionCount() {
-        Map<TopicPartition, List<Long>> hugeBatch = new HashMap<>();
-        for (int partition = 0; partition < 500; partition++) {
-            List<Long> offsets = new ArrayList<>();
-            for (long offset = 0; offset < 1000; offset++) {
-                offsets.add(offset);
-            }
-            hugeBatch.put(new TopicPartition("my-topic", partition), offsets);
-        }
-
-        String summary = RecordBatchSummary.summariseOffsets(hugeBatch);
+        String summary = RecordBatchSummary.summariseOffsets(hugeBatchOn("my-topic"));
 
         assertThat(summary).startsWith("500000 records across 500 partitions: ");
         assertThat(summary).contains("my-topic-0: 1000 records, offsets 0-999");
         // only the first few partitions are named, the rest are counted
-        assertThat(summary).contains("and " + (500 - MAX_PARTITIONS_LISTED) + " more partitions");
+        assertThat(summary).contains("and " + (PARTITIONS - MAX_PARTITIONS_LISTED) + " more partitions");
         assertThat(summary).doesNotContain("my-topic-" + MAX_PARTITIONS_LISTED + ":");
         // a fixed ceiling - the whole point of the class
         assertThat(summary.length()).isLessThan(400);
+    }
+
+    /**
+     * The same batch under Kafka's longest legal topic name.
+     * <p>
+     * Without this, the ceiling asserted above is an artefact of an eight-character name rather than a property of
+     * the class: a listed entry still carries its topic's name, so the true bound is
+     * {@value RecordBatchSummary#MAX_PARTITIONS_LISTED} names plus a fixed overhead. What the class promises is that
+     * the line stops growing with the <em>batch</em>, and that is what {@link #ceilingFor} makes checkable - here the
+     * name is 30x longer and the identical 500,000-record batch still lands under its own derived ceiling.
+     */
+    @Test
+    void theBoundIsSetByTheTopicNameAndTheCapAlone() {
+        String longestName = String.join("", nCopies(LONGEST_LEGAL_TOPIC_NAME, "x"));
+
+        String summary = RecordBatchSummary.summariseOffsets(hugeBatchOn(longestName));
+
+        assertThat(summary).startsWith("500000 records across 500 partitions: ");
+        assertThat(summary).contains("and " + (PARTITIONS - MAX_PARTITIONS_LISTED) + " more partitions");
+        assertThat(summary.length()).isLessThan(ceilingFor(longestName));
+    }
+
+    /**
+     * {@link #PARTITIONS} partitions of {@link #RECORDS_PER_PARTITION} records each - half a million records, all on
+     * one topic, which is the shape a large assignment actually takes.
+     */
+    private static Map<TopicPartition, List<Long>> hugeBatchOn(String topic) {
+        Map<TopicPartition, List<Long>> hugeBatch = new HashMap<>(PARTITIONS);
+        for (int partition = 0; partition < PARTITIONS; partition++) {
+            List<Long> offsets = new ArrayList<>(RECORDS_PER_PARTITION);
+            for (long offset = 0; offset < RECORDS_PER_PARTITION; offset++) {
+                offsets.add(offset);
+            }
+            hugeBatch.put(new TopicPartition(topic, partition), offsets);
+        }
+        return hugeBatch;
+    }
+
+    /**
+     * The ceiling derived from what the class actually caps - the number of partitions it names - rather than from
+     * whatever a particular test's topic happens to be called. Each named entry is
+     * {@code <topic>-<partition>: <count> records, offsets <lowest>-<highest>}, so the fixed part is comfortably
+     * under 80 characters (two 19-digit offsets and a 10-digit partition being the worst case), plus the
+     * separators, the totals prefix and the "and N more partitions" tail.
+     */
+    private static int ceilingFor(String topic) {
+        return MAX_PARTITIONS_LISTED * (topic.length() + 80 + 2) + 100;
     }
 
 }

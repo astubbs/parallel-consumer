@@ -48,18 +48,35 @@ so it grew with `max.poll.records` and log tooling truncated away the part that 
   here. Nothing on this branch needs deleting either way, and no duplicate class can reach master.
   Note the duplicate-code gate cannot see any of this: it diffs each PR against master, where neither
   the class nor the inline block exists yet.
-- **Anything using `LogCapture` is touching a JVM-shared logger, and the suite can run concurrently**
-  (`parallel-consumer-core/pom.xml` passes `junit.jupiter.execution.parallel.mode.default=concurrent`
-  to surefire, under `${parallel-tests}` - which the `ci` profile sets false, so the hazard is a
-  local-run one). Two distinct hazards, and they need different fixes - do not assume one implies the
-  other:
-  - *Reading someone else's lines.* Fixed by filtering captured lines on a topic name unique to the
-    test. Both capture sites do this (`UserFunctionFailureLoggingTest` on `INPUT_TOPIC`,
-    `RemovedPartitionStateTest` on its own randomised topic). It is what lets those tests keep exact
-    counts (`hasSize(1)`) instead of relaxing to "at least one".
-  - *Flooding everyone else with DEBUG.* Only `@Isolated` fixes this, and only
-    `UserFunctionFailureLoggingTest` needs it - it holds the capture open across an `await()`, so the
-    window is seconds wide. `RemovedPartitionStateTest`'s window is a single synchronous call.
-  Without the `@Isolated`, `closeAfterSingleMessageShouldBeEventBasedFast` and
+- **`LogCapture`'s own javadoc owns the two hazards of capturing a JVM-shared logger** - reading
+  someone else's lines, and flooding everyone else with `DEBUG` - along with which fix each one takes
+  and why they are not interchangeable. It is stated there rather than here because it outlives this
+  note: a future consumer reads the class, not a deleted branch note. What is branch-specific, and
+  only here: without the `@Isolated` on `UserFunctionFailureLoggingTest`,
+  `closeAfterSingleMessageShouldBeEventBasedFast` and
   `queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown` failed. If those two go
   intermittent again, suspect this first.
+- **This PR fixes two instances of a defect class with at least eight live ones, and does not widen
+  to the rest.** Named here so the search is not repeated. The two worth doing next, both strictly
+  worse than what this PR fixed:
+  - `state/PartitionStateManager.java`, anchor `or is this a race? Please file a GH issue` - renders a
+    whole `PartitionState` at **WARN**, and `PartitionState` is Lombok `@ToString` with no
+    `@ToString.Exclude`, so it prints `incompleteOffsets` - every tracked incomplete record, **keys
+    and values included**, on a line that asks the operator to paste it into a public issue. The fix
+    belongs on the *type* (`@ToString.Exclude` plus a size accessor), which also fixes the two other
+    sites that render it (`AbstractParallelEoSStreamProcessor`, anchor `Partitions revoked {}, state:
+    {}`, and `PartitionStateManager`, anchor `Reassignment of previously revoked partition`).
+  - `internal/ConsumerOffsetCommitter.java`, anchor `Error committing offsets: {}, exception: ` -
+    renders `Map<TopicPartition, OffsetAndMetadata>` at **ERROR**, and PC writes its encoded offset
+    map into that metadata, capped per partition at `DefaultMaxMetadataSize` (4096). So it is
+    partitions x up to 4KB of base64, on the line you most need intact.
+  Checked and **dismissed**: `state/PartitionState.java`, anchor `Offsets {} have been removed from
+  partition {}` - the offset list *is* the diagnostic payload there (the offsets are non-contiguous
+  by construction, being the ones missing from the batch), so a range summary would destroy what the
+  line exists to give. Same file, anchor `Polled an empty batch of records? {}` - guarded by
+  `records.isEmpty()`, so bounded by construction. `internal/AbstractParallelEoSStreamProcessor.java`,
+  anchor `Worker pool is shut down, not submitting work` - already bounded by hand; converting it to
+  `RecordBatchSummary` would change `REJECTED_SUBMISSION_MESSAGE`, which
+  `SubmitWorkToPoolShutdownRaceTest` asserts on. The vertx/reactor/mutiny/examples modules render only
+  a single `WorkContainer`, whose hand-written `toString` prints one key and no value - not this
+  class.

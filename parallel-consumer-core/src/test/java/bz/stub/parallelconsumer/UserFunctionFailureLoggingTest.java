@@ -7,12 +7,11 @@ package bz.stub.parallelconsumer;
 import ch.qos.logback.classic.Level;
 import bz.stub.parallelconsumer.internal.utils.LogCapture;
 import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
-import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.parallel.Isolated;
 
-import java.util.List;
+import java.util.Collection;
 import java.util.Optional;
 import java.util.stream.Stream;
 
@@ -38,7 +37,6 @@ import static org.awaitility.Awaitility.await;
  */
 @Isolated
 @Timeout(value = 2, unit = MINUTES)
-@Slf4j
 class UserFunctionFailureLoggingTest extends ParallelEoSStreamProcessorTestBase {
 
     @Test
@@ -72,12 +70,12 @@ class UserFunctionFailureLoggingTest extends ParallelEoSStreamProcessorTestBase 
         }
     }
 
-    private Optional<String> failureLine(List<String> messages) {
+    private Optional<String> failureLine(Collection<String> messages) {
         return mine(messages).filter(message -> message.contains("Exception caught in user function running stage"))
                 .findFirst();
     }
 
-    private Optional<String> fullContextLine(List<String> messages) {
+    private Optional<String> fullContextLine(Collection<String> messages) {
         return mine(messages)
                 .filter(message -> message.startsWith("Full context of the batch that failed in the user function:"))
                 .findFirst();
@@ -86,7 +84,7 @@ class UserFunctionFailureLoggingTest extends ParallelEoSStreamProcessorTestBase 
     /**
      * @return only the lines about this test's own consumer - the logger is shared JVM-wide
      */
-    private Stream<String> mine(List<String> messages) {
+    private Stream<String> mine(Collection<String> messages) {
         return messages.stream().filter(message -> message.contains(INPUT_TOPIC));
     }
 
