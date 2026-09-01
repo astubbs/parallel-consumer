@@ -344,5 +344,8 @@ and never asked what the neighbouring one already does.
 - **The injection layer and the gates.** Backlog.md is a tracker with a Kanban board; it is not wired
   into agent lifecycle events, and it does not enforce a repository's conventions.
 
-**The practical consequence for `ci-node-query-client.md`:** build the tunnel, and treat the
-cross-branch reader as an adopt-or-justify decision rather than as the novel part.
+**The practical consequence for `ci-node-query-client.md`:** build the tunnel, and put the
+cross-branch reader back into the adopt-or-build decision that
+[`process-adopt-external-harness.md`](../inflight/process-adopt-external-harness.md) owns - with the
+default now on adopt, because it ships. Rebuilding it is still allowed; it just has to be argued for
+in that note rather than assumed because the capability sounded novel.

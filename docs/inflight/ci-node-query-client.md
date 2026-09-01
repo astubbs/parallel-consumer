@@ -19,8 +19,10 @@ branches for newer states. TypeScript, MIT, actively maintained.
 owns the survey; §10 there records how this was missed on the first pass.
 
 So "read the notes on every branch and report drift" is **not** the differentiator it looked like.
-Design accordingly: either adopt that capability or justify rebuilding it, and do not spend the
-budget proving something a `npm i -g` already does.
+That capability belongs back in the adopt-or-build decision that
+[`process-adopt-external-harness.md`](process-adopt-external-harness.md) owns, with the default on
+adopt because it ships - rebuilding it is still open, it just has to be argued there rather than
+assumed here. Do not spend the budget proving something an `npm i -g` already does.
 
 ## The half nobody ships: the GitHub tunnel
 
