@@ -34,6 +34,9 @@
 // EXIT CODES: 0 ran (whatever it found), 2 cannot run - including a usage error. Self-test:
 // bin/test-inflight.mjs.
 
+import { freshnessWarnings } from './lib/git.mjs'
+import { corpusIndex, drift, findNotes, prsByBranch, stranded } from './lib/notes.mjs'
+import { formatDrift, formatFind, formatStranded, formatWarnings } from './lib/notes-views.mjs'
 import {
     format, formatHeader, formatSection, formatTail,
     priorArt, summary as priorArtSummary, usage as priorArtUsage,
@@ -49,8 +52,15 @@ import {
  * exits and never decides a code: a search that ran and found nothing is `ok: true`, because "no
  * hits" and "could not look" are different answers and this repo has been bitten by conflating them.
  *
+ * A command may instead carry `sub`, a nested registry. That is deliberately how the word "in-flight"
+ * is disambiguated rather than by renaming the tool: `inflight note drift` is unmistakably about ONE
+ * NOTE, while `inflight stranded` is a question about the whole directory. The product keeps its name
+ * and the vocabulary does the work - Antony's call, and the right one, because the collision was only
+ * ever between two senses of a word this repo already uses for both.
+ *
  * @typedef {{name: string, summary: string, when: string, usage: string,
- *            run: (args: string[], emit: (s: string) => void) => {ok: boolean, reason?: string}}} Command
+ *            sub?: Command[],
+ *            run?: (args: string[], emit: (s: string) => void) => {ok: boolean, reason?: string}}} Command
  * @type {Command[]}
  */
 const COMMANDS = [
@@ -80,10 +90,97 @@ const COMMANDS = [
             return { ok: true }
         },
     },
+    {
+        name: 'note',
+        summary: 'questions about ONE in-flight note, across every branch tip',
+        when: 'you have a note or a feature name and need to know where it lives and how it varies',
+        usage: `Usage: bin/inflight.mjs note <find|drift> [args...]`,
+        sub: [
+            {
+                name: 'find',
+                summary: 'which note is this, and which branches carry it',
+                when: 'you know the feature but not the filename - including notes that never reached master',
+                usage: `Usage: bin/inflight.mjs note find <fuzzy-name>
+
+Substring match over every in-flight note path that exists on ANY ref, not just the checked-out one.
+Measured 2026-09-01: 570 note paths exist across the refs and 165 are on origin/master, so the
+working tree can show you under a third of them.
+
+  bin/inflight.mjs note find 857
+  bin/inflight.mjs note find quarantine`,
+                run: (args, emit) => {
+                    const query = args[0]
+                    if (!query) return { ok: false, reason: 'note find: give a fuzzy name to match' }
+                    const index = corpusIndex()
+                    emit(formatWarnings(freshnessWarnings(index.baseline, index.refs.length)))
+                    emit(formatFind(findNotes(index, query), query, index))
+                    return { ok: true }
+                },
+            },
+            {
+                name: 'drift',
+                summary: 'how one note differs across every branch tip, and what each branch is',
+                when: 'before editing a shared note, and when two branches may disagree about what is open',
+                usage: `Usage: bin/inflight.mjs note drift [--all] <path>
+
+Reports only what is DIVERGENT: versions carrying content the baseline has never held. A branch that
+simply has not merged recently is not drift - it is behind, it gets further behind every time anyone
+edits the note, and it is nobody's finding. For the fork's most-edited note that filter removes 198
+of the 274 carrying refs.
+
+Clusters by BLOB, so identical copies are one row and the diff runs once per distinct version rather
+than once per ref. Each branch is named by facts only - its PR title, else the title of a note it
+carries that the baseline does not, else the branch name. Nothing is summarised or inferred.
+
+--all also lists the behind-only versions.
+
+  bin/inflight.mjs note drift docs/inflight/bug-857-family.md`,
+                run: (args, emit) => {
+                    const all = args.includes('--all')
+                    const path = args.find((a) => a !== '--all')
+                    if (!path) return { ok: false, reason: 'note drift: give a note path (see: note find)' }
+                    const index = corpusIndex()
+                    emit(formatWarnings(freshnessWarnings(index.baseline, index.refs.length)))
+                    emit(formatDrift(drift(index, path, { prs: prsByBranch(), all })))
+                    return { ok: true }
+                },
+            },
+        ],
+    },
+    {
+        name: 'stranded',
+        summary: 'notes that exist on a branch and have never reached master',
+        when: 'looking for knowledge that will be lost if nobody acts - the stranded-work impact',
+        usage: `Usage: bin/inflight.mjs stranded
+
+A note absent from master is not automatically stranded. Three filters run, and the middle one was
+expected to do most of the work and did almost none - stated because the wrong prediction is worth
+more than the right conclusion:
+
+  present on master now                          not stranded
+  its blob lives on master under another path    a rename, proven exactly - removed 1 of 405
+  master's HISTORY once had this path            it landed and was git rm'd - removed 40 more
+
+What survives is clustered by ref-set, because one workstream's notes share their refs and listing
+them separately buries the finding under its own volume.`,
+        run: (args, emit) => {
+            const index = corpusIndex()
+            emit(formatWarnings(freshnessWarnings(index.baseline, index.refs.length)))
+            emit(formatStranded(stranded(index), index))
+            return { ok: true }
+        },
+    },
 ]
 
+/** Flatten one level, so help and lookup see `note find` as a first-class name. */
+const flatten = (cmds, prefix = '') => cmds.flatMap((c) => (c.sub
+    ? [{ ...c, path: `${prefix}${c.name}` }, ...flatten(c.sub, `${prefix}${c.name} `)]
+    : [{ ...c, path: `${prefix}${c.name}` }]))
+
+const ALL = flatten(COMMANDS)
+
 function help() {
-    const width = Math.max(...COMMANDS.map((c) => c.name.length))
+    const width = Math.max(...ALL.map((c) => c.path.length))
     return [
         "bin/inflight.mjs - the front door for this repo's in-flight tooling.",
         '',
@@ -91,8 +188,8 @@ function help() {
         '       bin/inflight.mjs help [<command>]',
         '',
         'Commands:',
-        ...COMMANDS.flatMap((c) => [
-            `  ${c.name.padEnd(width)}  ${c.summary}`,
+        ...ALL.flatMap((c) => [
+            `  ${c.path.padEnd(width)}  ${c.summary}`,
             `  ${' '.repeat(width)}  when: ${c.when}`,
         ]),
         '',
@@ -107,15 +204,24 @@ function dispatch(argv, emit) {
     if (!name) return { ok: false, reason: help() }
 
     if (name === 'help' || name === '--help' || name === '-h') {
-        const topic = COMMANDS.find((c) => c.name === rest[0])
+        if (!rest.length) return { ok: true, reason: help() }
+        // Longest match first, so `help note drift` beats `help note`.
+        const topic = [...ALL].sort((a, b) => b.path.length - a.path.length)
+            .find((c) => rest.join(' ').startsWith(c.path))
         if (topic) return { ok: true, reason: topic.usage }
-        if (rest[0]) return { ok: false, reason: `inflight: no such command '${rest[0]}'\n\n${help()}` }
-        return { ok: true, reason: help() }
+        return { ok: false, reason: `inflight: no such command '${rest.join(' ')}'\n\n${help()}` }
     }
 
-    const command = COMMANDS.find((c) => c.name === name)
-    if (!command) return { ok: false, reason: `inflight: no such command '${name}'\n\n${help()}` }
-    return command.run(rest, emit)
+    const top = COMMANDS.find((c) => c.name === name)
+    if (!top) return { ok: false, reason: `inflight: no such command '${name}'\n\n${help()}` }
+    if (!top.sub) return top.run(rest, emit)
+
+    const child = top.sub.find((c) => c.name === rest[0])
+    if (!child) {
+        const which = rest[0] ? `'${name} ${rest[0]}'` : `'${name}' on its own`
+        return { ok: false, reason: `inflight: no such command ${which}\n\n${top.usage}` }
+    }
+    return child.run(rest.slice(1), emit)
 }
 
 const { ok, reason } = dispatch(process.argv.slice(2), (s) => console.log(s))

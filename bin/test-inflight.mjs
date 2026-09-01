@@ -46,6 +46,8 @@ function invoke(binDir, args) {
 }
 
 const lib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'prior-art.mjs')).href)
+const notes = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'notes.mjs')).href)
+const gitlib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'git.mjs')).href)
 
 /**
  * Source with comments removed, so a check about CODE is not answered by prose. The first cut of
@@ -155,10 +157,11 @@ const CHECKS = [
             const help = invoke(binDir, ['help']).out
             return names.every((n) => help.includes(n))
         },
-        mutate: (binDir) => {
-            const f = join(binDir, 'inflight.mjs')
-            writeFileSync(f, readFileSync(f, 'utf8').replace(/\.\.\.COMMANDS\.flatMap\(\(c\) => \[[\s\S]*?\n {8}\]\),/, ''))
-        },
+        // Through patch() like every other, after this one anchor went stale and failed SILENTLY -
+        // a raw .replace on a regex that matches nothing leaves the mutant identical to the original,
+        // so the control reports a pass having tested exactly nothing.
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+            '        ...ALL.flatMap((c) => [', '        ...[].flatMap((c) => ['),
     },
     {
         id: 'usage-names-the-front-door-not-the-library',
@@ -180,12 +183,9 @@ const CHECKS = [
             const r = invoke(binDir, ['nosuchthing'])
             return r.code === 2 && r.out.includes('nosuchthing')
         },
-        mutate: (binDir) => {
-            const f = join(binDir, 'inflight.mjs')
-            patch(f,
-                "    if (!command) return { ok: false, reason: `inflight: no such command '${name}'\\n\\n${help()}` }",
-                '    if (!command) return { ok: true }')
-        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+            '    if (!top) return { ok: false, reason:',
+            '    if (!top) return { ok: true } // mutant: a typo now looks like a successful run\n    if (globalThis.__never) return { ok: false, reason:'),
     },
     {
         id: 'bare-invocation-is-a-usage-error',
@@ -202,12 +202,9 @@ const CHECKS = [
         id: 'explicit-help-succeeds',
         why: 'asking for help is not an error, and conflating the two trains agents to ignore the code',
         run: async (binDir) => invoke(binDir, ['help']).code === 0,
-        mutate: (binDir) => {
-            const f = join(binDir, 'inflight.mjs')
-            patch(f,
-                '        return { ok: true, reason: help() }',
-                '        return { ok: false, reason: help() }')
-        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+            '        if (!rest.length) return { ok: true, reason: help() }',
+            '        if (!rest.length) return { ok: false, reason: help() }'),
     },
     {
         id: 'dispatch-reaches-the-library',
