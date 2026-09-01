@@ -18,8 +18,10 @@ intake paused indefinitely, and a restart clears it because the counter is in-me
 this family's symptom signature (halts after rebalance, resumes on restart), and possibly
 astubbs#183 (confluentinc#875) as well. **Hypothesis, not a diagnosis**: no reporter's instance has
 been tied to the counter, and the mirror's primary mechanism (the lost-partition skip) is different.
-The fix - deriving the gate by conservation - lands independently of this attribution; if reports
-persist after it ships, this mechanism is ruled out for them, which is also information.
+The fix - deriving the gate by conservation - landed independently of this attribution, as
+astubbs/parallel-consumer#336 (`3e668a448`), so **the test this paragraph proposed is now running in
+the wild**: if reports persist against a version carrying it, this mechanism is ruled out for them,
+which is also information. Nobody has checked yet.
 
 **Withdrawn for astubbs#183 specifically, 2026-09-01 - that report has a better-matching mechanism
 that is already fixed, and it is not in this family at all.** The paragraph above nominates the
@@ -209,6 +211,37 @@ partition committed-frozen for 100s of the *quiet* phase against ~40s of legitim
 replay changes nothing about the code paths. What the replay establishes is that "can" was doing
 work it could not support: mode-compatibility narrows the candidates and never attributes.
 
+## A fifth open item, 2026-09-01: a rebalance stall the astubbs#29 fix does not close either
+
+`MultiInstanceRebalanceTest.largeNumberOfInstances`, `PERIODIC_CONSUMER_ASYNCHRONOUS`/`UNORDERED`.
+Reproduced twice: once in ten consecutive runs on an idle Linux box, and once on CI at `55edffaf4`.
+
+**The mode table above rules astubbs#29's cycle out by construction.** In
+`PERIODIC_CONSUMER_ASYNCHRONOUS` the commit path never blocks, so the AB-BA pair has no second edge -
+the same reasoning that separates the `ChaosChurnStormIT` sightings from the
+`ChaosRevokeUnderWork*` ones. It is also not the throughput defect found the same week: the CI
+reproduction is on a tree carrying that fix.
+
+The signature, identical across both reproductions:
+
+```
+FLAT for 13s - it stopped rather than ran out of time | no consumer diagnostic supplied
+ZOMBIE_MEMBER/REBALANCE_BLOCKED: dwelling in PreparingRebalance for 15s (bound 15s)
+                                 - a member is not answering the rebalance
+```
+
+**This is protocol-VISIBLE, which distinguishes it from the fourth item above.** That one is a stall
+with the group STABLE and heartbeats flowing. Here the group cannot converge because a member has gone
+silent, and the members are PC instances - so it is a member-side story, not a coordinator one.
+
+**What stops it being a diagnosis** is that the capacity profile kills instances continuously, so an
+instance killed mid-`JoinGroup` is by construction a member that stops answering. The sharp question
+is one of identity - **is the unresponsive member one the harness stopped, or one still running?** -
+and it is unanswerable from what the runs currently record, because
+`ProgressTracker.withDiagnostic(...)` has never been wired, so every stall ends "no consumer
+diagnostic supplied". `test-largenumberofinstances-residual-failures-measured-not-explained.md` owns
+the thread and the three instrumentation gaps.
+
 ## astubbs#29's own reproducer cannot currently settle anything
 
 `RebalanceEoSDeadlockTest` fails 5/5 in CI on that branch for two reasons independent of the
@@ -319,7 +352,6 @@ Nothing was recorded from astubbs/parallel-consumer#200 itself, and correctly so
 PR, and a sighting written from an unrelated branch is how a ledger acquires entries nobody can vouch
 for. The capture reached this file by being carried to the branch that owns the investigation.
 
-## Delete when` at the end.)
 
 <!-- post-merge: checked-end -->
 
@@ -2139,6 +2171,16 @@ astubbs/parallel-consumer#57 - the same crossings again, which is why they take 
 the sixteenth despite two of them predating it.
 <!-- post-merge: checked-end --> This file may be retired once astubbs#29 lands and the
 remaining open item - the original deadlock - has its own solutions write-up.
+
+**Status of that criterion, 2026-09-02: half met, and the other half moved.** The deadlock's write-up
+exists - `../solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md`
+- so only the merge is outstanding. But "the remaining open item" is no longer singular: a fourth and
+a fifth open item have been added above since this criterion was written, and the fifth reproduces on
+a tree carrying the fix.
+<!-- post-merge: checked - names the PR and describes what its merge would do to this file; reads the same once it has merged -->
+**Retiring this file when astubbs/parallel-consumer#29 lands would delete two live unexplained
+stalls**, so the criterion needs rewriting rather than applying: what may retire on the merge is the
+deadlock's own section, not the register.
 
 
 <!-- post-merge: checked-end -->
