@@ -95,9 +95,21 @@ const rateFrom = text =>
 // path, while the exit that actually fires in practice - the bootstrapping 404 below - returned
 // earlier and wrote nothing. Two exits, one reporting, and the silent one was the common case. If you
 // add an exit, it writes a report or it is the same bug again.
-const writeReport = body => {
+// EVERY report carries a machine-readable payload, and that is not decoration. The PR comment is
+// updated in place, so without it each push destroys the only record of what the previous push
+// measured, and the reader gets a number with nothing to compare it to. The workflow reads this back
+// off its own last comment to render a delta and to notice when the STATUS changed.
+//
+// The status is set into `reportStatus` on the line before each call rather than passed as an
+// argument. That is deliberate: the report bodies are template literals containing escaped
+// backticks, and an earlier attempt to add a second argument landed the status INSIDE the prose of
+// all six messages, because the closing `) it matched was an escaped one in the text. A separate
+// assignment cannot go wrong that way.
+let reportStatus = 'unset'
+const writeReport = (body, data = {}) => {
   mkdirSync('target', { recursive: true })
-  writeFileSync(REPORT, body + '\n')
+  const payload = JSON.stringify({ status: reportStatus, ...data })
+  writeFileSync(REPORT, `${body}\n\n<!-- pc-throughput-data: ${payload} -->\n`)
   console.log(body.replace(/[|*#]/g, '').replace(/\n{2,}/g, '\n'))
 }
 
@@ -117,6 +129,7 @@ if (!(observedRate > 0)) {
   // A missing rate is a finding, not a quiet pass: the test did not run, or the emitter is no longer
   // reached, and both look identical to a clean lane otherwise.
   console.error(`check-throughput-regression: no usable rate for ${SUBJECT} in ${summaryFile}.`)
+  reportStatus = 'no-rate'
   writeReport(`### 🟠 Throughput — no rate to report
 
 The performance lane ran but produced no usable \`recordsPerSecond\` for \`${SUBJECT}\`. Either the test did not run, or \`ThroughputReport\` is no longer reached.
@@ -126,6 +139,7 @@ The performance lane ran but produced no usable \`recordsPerSecond\` for \`${SUB
 }
 if (!(observedControl > 0)) {
   console.error('check-throughput-regression: no control class ran, so machine speed cannot be cancelled.')
+  reportStatus = 'no-control'
   writeReport(`### 🟠 Throughput — no control ran
 
 | | |
@@ -153,6 +167,7 @@ try {
   // workflow therefore always failed its own check, blaming the wrong thing.
   const err = `${e?.stderr ?? ''}${e?.stdout ?? ''}${e?.message ?? ''}`
   if (/404|could not find any workflows|not found/i.test(err)) {
+    reportStatus = 'bootstrapping'
     writeReport(`### ⚪ Throughput — no reference yet (bootstrapping)
 
 | | |
@@ -169,6 +184,7 @@ The numbers above are this run's, recorded here rather than left in a job log.`)
   const firstLine = err.trim().split('\n')[0]
   console.error('check-throughput-regression: could not list master baseline runs.')
   console.error(`  ${firstLine}`)
+  reportStatus = 'check-failed'
   writeReport(`### 🟠 Throughput — the check could not run
 
 | | |
@@ -191,6 +207,7 @@ ${firstLine}
 // throughput reporting displayed no throughput report. A report saying "here are this run's numbers,
 // there is nothing to compare them against yet" is the useful thing to post, not silence.
 if (runs.length === 0) {
+  reportStatus = 'no-reference'
   writeReport(`### ⚪ Throughput — no reference yet
 
 | | |
@@ -240,9 +257,14 @@ try {
 } finally { rmSync(work, { recursive: true, force: true }) }
 
 if (reference.length === 0) {
+  // "No comparable reference" has been read as "no baseline exists". Baselines usually DO exist here
+  // - they just ran a different set of tests, most often because the PR itself enabled or disabled
+  // some. Say how many were found and what this run's case set is, so the reader can tell a matrix
+  // change they made from one they did not.
   const why = mismatched.length
-    ? `every candidate ran a different set of test cases than this run (${mismatched.join(', ')}) - the test matrix changed, so the runs are not comparable`
+    ? `${mismatched.length} baseline run(s) were found and none ran the same set of test cases as this run (${mismatched.join(', ')}), so none is comparable. This is usually the PR's own doing: enabling or disabling a test in this lane changes the matrix.`
     : 'master baseline runs exist but carry no usable artifact yet'
+  reportStatus = 'incomparable'
   writeReport(`### ⚪ Throughput — no comparable reference
 
 | | |
@@ -290,6 +312,8 @@ const report = `### ${icon} Throughput — ${word}
 Runs used: ${reference.map(r => r.sha).join(', ')}
 </details>`
 
-writeReport(report)
+reportStatus = word
+writeReport(report, { ratio: Number(ratio.toFixed(3)), rate: observedRate,
+                      share: Number(observedShare.toFixed(3)), refs: reference.length })
 console.log(`\nreport written to ${REPORT}`)
 process.exit(verdict.exit)

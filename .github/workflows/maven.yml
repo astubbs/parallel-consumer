@@ -227,13 +227,58 @@ jobs:
             const marker = '<!-- pc-throughput-report -->'
             const { owner, repo } = context.repo
             const issue_number = context.issue.number
-            // Update in place rather than appending on every push: a PR with fifteen throughput
-            // comments is a PR where nobody reads the throughput comment.
+
+            // The reporter embeds one line of machine-readable state. Read it off both the new report and the
+            // previous comment, so this run can say what CHANGED rather than only what it measured - reading
+            // our own last comment is the only store available, since no series is kept anywhere by decision.
+            const readData = text => {
+              const m = /<!-- pc-throughput-data: (.*?) -->/.exec(text ?? '')
+              try { return m ? JSON.parse(m[1]) : null } catch { return null }
+            }
+
             const existing = (await github.rest.issues.listComments({ owner, repo, issue_number }))
               .data.find(c => c.body.includes(marker))
-            const payload = `${marker}\n${body}`
-            if (existing) await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: payload })
-            else await github.rest.issues.createComment({ owner, repo, issue_number, body: payload })
+            const prev = readData(existing?.body)
+            const cur = readData(body)
+
+            // A delta, never a verdict: this test's own run-to-run spread is wide enough that a single-push
+            // difference is noise far more often than it is a change. Shown because an in-place update
+            // otherwise destroys the only record of what the previous push measured.
+            let delta = ''
+            if (prev && cur) {
+              const bits = []
+              if (prev.status !== cur.status) bits.push(`status **${prev.status} -> ${cur.status}**`)
+              if (typeof prev.rate === 'number' && typeof cur.rate === 'number' && prev.rate > 0) {
+                const pc = ((cur.rate - prev.rate) / prev.rate) * 100
+                bits.push(`rate ${prev.rate} -> ${cur.rate} (${pc >= 0 ? '+' : ''}${pc.toFixed(1)}%)`)
+              }
+              if (typeof prev.ratio === 'number' && typeof cur.ratio === 'number') bits.push(`ratio ${prev.ratio} -> ${cur.ratio}`)
+              if (bits.length) delta = `\n\n_Since the previous push: ${bits.join(', ')}. One push of difference sits inside this test's measured spread - read it as movement, not as a result._`
+            }
+
+            const payload = `${marker}\n${body}${delta}`
+
+            // NORMALLY UPDATE IN PLACE: a PR with fifteen throughput comments is a PR where nobody reads the
+            // throughput comment.
+            //
+            // EXCEPT WHEN THE STATUS CHANGES. Editing a comment thirty scrolls up produces no notification and
+            // no visible change to anyone reading the PR top to bottom, so a run that went green to red used to
+            // announce itself by silently rewriting a comment nobody was looking at. On a status change the old
+            // comment is retired - its marker renamed so later pushes stop targeting it - and a fresh one is
+            // posted at the bottom where it will be seen. Number-only movement still updates in place; only the
+            // VERDICT earns a new comment, or this is back to fifteen of them.
+            const statusChanged = prev && cur && prev.status !== cur.status
+            if (existing && !statusChanged) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: payload })
+            } else {
+              if (existing) {
+                const retired = existing.body
+                  .replace(marker, '<!-- pc-throughput-report (superseded) -->')
+                  .replace(/^### /m, `### [superseded - status changed to ${cur?.status}] `)
+                await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: retired })
+              }
+              await github.rest.issues.createComment({ owner, repo, issue_number, body: payload })
+            }
 
       # Exit 1 is a regression. Exit 2 is the check being UNABLE to measure, which this repo treats as
       # never-a-pass ("a skip is not a pass") - so it also fails, with its own message, because a lane

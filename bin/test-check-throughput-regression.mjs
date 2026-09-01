@@ -11,6 +11,10 @@
 // red on a quiet day, and the first person to hit one switches the gate off - taking the collection
 // with it. So this asserts what the gate must NOT do at least as hard as what it must.
 
+import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { spawnSync } from 'node:child_process'
 import { verdictFor, FAIL_BELOW, WARN_BELOW, median } from './lib/throughput-verdict.mjs'
 
 let failures = 0
@@ -76,6 +80,44 @@ check('a missing control is not a pass', verdictFor({ subject: 27, control: 0 },
 check('fail bound is a 50% loss', FAIL_BELOW, 0.50)
 check('flag bound is a 30% loss', WARN_BELOW, 0.70)
 
+
+// THE REPORT MUST CARRY A REAL STATUS, CHECKED BY RUNNING IT RATHER THAN BY GREPPING FOR ONE.
+//
+// The first version of this test asserted each status literal appeared somewhere in the source. It
+// passed while all six had been inserted INSIDE the prose of their own messages - the report read
+// "control classes (`...`, 'no-control') produced a time" and the payload came out `{}`. Grepping
+// for a string proves the string exists, not that it is in the right place.
+//
+// The reporter chdirs to the repo root (so it always finds the lane's own target/), which means this
+// cannot be isolated with a scratch cwd - it has to run in the repo and put its fixture where the
+// reporter will look. Anything already there is saved and put back, because a developer with a real
+// report on disk should not lose it to a self-test. `no-control` is the cheapest path to reach: a
+// summary carrying a rate, with no control classes present.
+{
+  const root = fileURLToPath(new URL('..', import.meta.url))
+  const summary = join(root, 'target/performance-throughput.txt')
+  const report = join(root, 'target/throughput-report.md')
+  const saved = [summary, report].map(f => [f, existsSync(f) ? readFileSync(f, 'utf8') : null])
+  try {
+    mkdirSync(join(root, 'target'), { recursive: true })
+    writeFileSync(summary,
+      'PC-THROUGHPUT test=MultiInstanceHighVolumeTest processed=3 expected=3 elapsedMs=1 recordsPerSecond=75000 outcome=PASSED\n')
+    spawnSync(process.execPath, [join(root, 'bin/check-throughput-regression.mjs')], { encoding: 'utf8' })
+    const text = existsSync(report) ? readFileSync(report, 'utf8') : ''
+    const m = /<!-- pc-throughput-data: (.*?) -->/.exec(text)
+    const data = m ? JSON.parse(m[1]) : {}
+    check('the report carries a machine-readable payload', Boolean(m), true)
+    check('the payload names a real status', data.status, 'no-control')
+    check('the status did not land inside the message', text.includes('control classes (`'), true)
+  } finally {
+    for (const [f, body] of saved) {
+      if (body === null) rmSync(f, { force: true })
+      else writeFileSync(f, body)
+    }
+  }
+}
+
 if (failures === 0) { console.log('\nAll throughput-verdict self-tests passed'); process.exit(0) }
 console.error(`\n${failures} throughput-verdict self-test(s) failed`)
 process.exit(1)
+
