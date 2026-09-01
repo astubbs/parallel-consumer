@@ -89,6 +89,31 @@ jobs:
             name: "Performance Tests"
             cmd: "bin/performance-test.sh"
             timeout: 60
+          # Lincheck - scheduler-controlled concurrency testing over the state classes. It existed
+          # without running ANYWHERE: six test classes, a runner script, and no workflow referencing
+          # them, while every CI script passed -Dexcluded.groups=...,lincheck. Built in astubbs#347 and
+          # never wired up, which is the "a test that never runs is not a passing test" case AGENTS.md
+          # names - and nothing went red for a week to say so.
+          #
+          # GATING, like the chaos entry below and for the same reason: a Lincheck violation is a real
+          # finding, not a timing wobble. The model checker explores interleavings deterministically
+          # rather than sampling them, so a reported violation reproduces.
+          #
+          # THE RISK WORTH NAMING is the STRESS arms, not the model-checking ones. Their hit rate is
+          # machine-dependent - measured at 3.4x across two machines in
+          # docs/inflight/test-lincheck-lane-open-items.md - and their bounds were priced on the machine
+          # that wrote them, not on a hosted runner. If this entry flakes, that is the cause and the fix
+          # is repricing the bound in the test, NOT a retry: this repo removed surefire reruns because
+          # they hid three flakes. Demote to advisory before masking anything.
+          #
+          # ~2m30s for the whole lane, most of it WorkManagerLincheckTest, whose inverted arm cannot
+          # stop early and always pays its full bound. bin/lincheck-test.sh's header owns the five flags
+          # that each fail silently on their own.
+          - suite: lincheck
+            name: "Lincheck"
+            cmd: "bin/lincheck-test.sh"
+            timeout: 20
+
           # Chaos Pain Suite - the per-PR ambient tripwire. It ran on the self-hosted `highcpu` box
           # until 2026-08-26, on the premise that it needed many real cores to provoke anything.
           # Measured head-to-head on the SAME commit (d8beb162f), that premise did not survive:
