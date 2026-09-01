@@ -118,7 +118,7 @@ PR astubbs#85 → astubbs#83; PR body carries `depends on #85`). New worktree `.
 - [x] **Unit 1: extract the shared driver (no behavior change)** - DONE; same-seed eager re-run in family (dwell 28.1s, stag 101s)
 
 **Files:**
-- Create: `parallel-consumer-core/src/test-integration/java/io/confluent/parallelconsumer/integrationTests/chaostests/AbstractRevokeUnderWorkScenario.java`
+- Create: `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/chaostests/AbstractRevokeUnderWorkScenario.java`
 - Modify: `.../chaostests/ChaosRevokeUnderWorkIT.java` (becomes thin eager subclass; javadoc + calibration record stay here)
 
 **Approach:** mechanical extraction of the two-phase driver; knobs = `useCooperativeAssignor()`

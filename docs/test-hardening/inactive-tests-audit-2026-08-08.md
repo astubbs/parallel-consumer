@@ -415,7 +415,7 @@ feature first, and each already has a home in the tracker.
 
 - **`poisonPillGoesToDeadLetterQueue`** - **parallel-consumer has no dead-letter-queue concept and
   never has.** Zero occurrences of dead-letter or DLQ in any `src/main/java` in the tree. Tracked as
-  **astubbs#149** (mirroring `confluentinc#310`), and `docs/inflight/next-candidates.md` already
+  **astubbs#149** (mirroring `confluentinc#310`), and `docs/inflight/process-candidate-ranking.md` already
   ranks DLQ as **the most-demanded missing feature**. The stub is a 2020-era vote for that feature,
   not a test debt.
 - **`maxPerPartition`** - **no per-partition in-flight limit exists.** `ParallelConsumerOptions` has
@@ -546,7 +546,7 @@ misclassifies badly in both directions.
 | `ReactorTest.publishOn`, `.subscribeOn` | same shape |
 | `JavaEnvTest.checkJavaEnvironment` | one `log.error` (also 3.4) |
 | `ParallelEoSStreamProcessorTest.closeWithoutRunningShouldBeEventBasedFast` | name/body mismatch (also 3.2) |
-| `MockConsumerEarlyCloseTest.mockConsumer` | 70-line hang test; the class `@Timeout` is the only check - **and it is broken, see 9.1. Both halves are fixed by open PR astubbs#206** |
+| `MockConsumerEarlyCloseTest.closesCleanlyWhileRetryingAPermanentlyFailingBroker` (was `mockConsumer`) | 70-line hang test; the class `@Timeout` is the only check - **and it is broken, see 9.1. Both halves are fixed by open PR astubbs#206** |
 | `ShardKeyTest.nullKey` | throws-only NPE regression guard |
 | `InterruptionTests.waitOnZeroCausesInfiniteWait` | `@Timeout(1, SECONDS)` is the check |
 | `WorkManagerOffsetMapCodecManagerTest.runLengthEncodingCompression` | helper verified to only log |
@@ -590,7 +590,7 @@ misclassifies badly in both directions.
 ### Which of the 15 matter
 
 Genuinely worth fixing: `closeWithoutRunningShouldBeEventBasedFast`, `stringVsByteVsBitSetEncoding`.
-`MockConsumerEarlyCloseTest.mockConsumer` belongs on that list too, but is **already owned by open PR
+`MockConsumerEarlyCloseTest.closesCleanlyWhileRetryingAPermanentlyFailingBroker` belongs on that list too, but is **already owned by open PR
 astubbs#206**, which both fixes its timeout (9.1) and gives it a real assertion - so it is not work
 for anyone else.
 
@@ -757,7 +757,7 @@ Four things found along the way that nobody was looking for.
 `MockConsumerEarlyCloseTest`, `MockConsumerSaslAuthenticationTest`, `MockConsumerCommitTimeoutTest`.
 
 This is worse than cosmetic because of how it interacts with section 6:
-`MockConsumerEarlyCloseTest.mockConsumer` has **no assertion at all** - the entire test is "PC closes
+`MockConsumerEarlyCloseTest.closesCleanlyWhileRetryingAPermanentlyFailingBroker` has **no assertion at all** - the entire test is "PC closes
 rather than hanging", and the timeout *is* the assertion. With the unit wrong, it cannot fail by
 hanging within any realistic CI budget; it would simply wedge the job. Every other `@Timeout` in the
 tree is written correctly (`@Timeout(60)`, `@Timeout(120)`, `@Timeout(value = 3, unit = MINUTES)`),
@@ -794,13 +794,6 @@ remove the project's JUnit 4 surface: `CoreAppMetricsIntegrationTest` also impor
 
 **9.3 `assumeWorkingCodec` conceals what it does** - see section 5.1. Of everything in this audit,
 this is the finding most likely to mislead someone reading a green test report.
-
-**9.4 Wall-clock burned by a test that cannot fail.** `MockConsumerEarlyCloseTest.mockConsumer`
-sleeps 5 seconds unconditionally and asserts nothing - so with 9.1's broken timeout, that is ~5
-seconds per run spent on a test with no way to fail except by throwing. (`ProgressBarTest.width`
-sleeps 10 seconds by construction but is `@Disabled`, so it costs nothing.) The assertion half of
-this is fixed by astubbs#206; the unconditional sleep is not, and remains fair game once that PR
-lands.
 
 ---
 
@@ -866,6 +859,7 @@ modelled on `bin/todo-index.sh`. It is consistent with repo convention and worth
 does not address why the previous audit was lost - that was invisibility, not drift - and its gate
 would fail the PR Checklist job on any open PR that touches a test annotation, `astubbs#29`
 included.
+<!-- file-refs: N/A - names the generated file that was decided against; see docs/refactoring.md -->
 
 Per repo convention, triage for these lives in `docs/refactoring.md`, not here. This document is the
 inventory and the evidence.
@@ -924,3 +918,4 @@ at `git show a69cd348:docs/plans/2026-08-12-001-test-recover-manual-test-procedu
 recovered rungs now live in the tests themselves - `LoadTest.RECOVERED_VOLUMES`, the concurrency
 ladder in `TransactionAndCommitModeTest`, the environment dump in `AmbientProbeExtension`, and the
 Vert.x 5xx characterization in `VertxTest`.
+<!-- file-refs: N/A - the follow-up plan named here was never committed to master -->

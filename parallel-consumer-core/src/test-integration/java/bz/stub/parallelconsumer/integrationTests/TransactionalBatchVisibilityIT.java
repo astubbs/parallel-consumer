@@ -410,7 +410,7 @@ class TransactionalBatchVisibilityIT extends BrokerIntegrationTest<String, Strin
      *
      * <h2>Why it happened</h2>
      * {@code ProducerManager#produceMessages} installed a {@code Callback} - the one its own comment described as
-     * "only needed if not using tx" - which threw {@code InternalRuntimeException} from
+     * "only needed if not using tx" - which threw {@code PCInternalRuntimeException} from
      * {@code Callback#onCompletion}. {@code KafkaProducer#doSend} invokes that callback from inside its
      * {@code catch (ApiException)} handler and calls {@code transactionManager.maybeTransitionToErrorState(e)}
      * only <em>afterwards</em>. The throw escaped the handler first, so the transaction was never moved into the

@@ -14,7 +14,9 @@ re-derived from scratch:
 - [**`src/docs/development/upstream-map.yaml`**](../src/docs/development/upstream-map.yaml) - the
   **state tracker**, and the **source of truth** for the *facts*: which fork branch/PR maps to
   which upstream issue/PR, its work group, and current status. Its header documents the schema.
-  Validate and render with `scripts/upstream-map.py {validate,table,refs}`. Design follows Debian
+  Validate and render with `scripts/upstream-map.py {validate,table,refs}`;
+  `bin/check-upstream-map.sh` runs that validation as a gate, so a schema error fails a PR rather
+  than waiting for someone to run the script by hand. Design follows Debian
   DEP-3, Yocto `Upstream-Status:` and OpenShift's `UPSTREAM:` fork conventions.
 - [**`src/docs/development/upstream-pr-analysis.adoc`**](../src/docs/development/upstream-pr-analysis.adoc) -
   the **plan**: *editorial* analysis with rankings, verdicts, and the recommended merge order. When
@@ -44,13 +46,23 @@ the mirrors move on.
 **When you start work that maps to an upstream PR, add or update its entry in `upstream-map.yaml`**
 - do not just note it in prose. And **it does not stop at "start work"**.
 
-Nothing automated checks the *fork* side: `upstream-map.py validate` only checks the schema, and
+Nothing automated checks the *fork* side, and the gate above does not change that:
+`upstream-map.py validate` checks the SHAPE of an entry, never whether its claims are true, and
 `upstream-sweep.sh` only watches upstream - so a manifest that says `prs: []` while a fork PR is
 open still passes every check, and the mapping quietly rots (a 2026-08-04 audit found five such
-entries). Update the entry **at every lifecycle transition of your own work, in the same commit that
+entries). Read a green gate as "this file parses and its states are spelled correctly", nothing
+more. Update the entry **at every lifecycle transition of your own work, in the same commit that
 causes it**: opening a PR (`prs:` + `status: pr-open`), finishing on a branch without a PR
 (`status: ready`), merging (`merged`), releasing (`released`), abandoning
 (`superseded`/`wontfix`).
+
+**For `merged`, write it in the branch and push it *before* you merge.** That reads like claiming
+something untrue and is not: branch content is visible to nobody until it lands, and the moment it
+lands the entry is correct. Leaving it until after the merge is the expensive order - your branch is
+gone, the fix is a commit straight to master, and until someone remembers, the manifest is wrong.
+Three entries were found stale exactly this way (astubbs#204, astubbs#31, astubbs#258 - one of them
+for a week). `.claude/hooks/check-upstream-map-merged.sh` refuses a `gh pr merge` while the entry
+still says `pr-open`, and goes quiet once it does not.
 
 Loose ends do **not** go in this manifest - it has no `todo:` field. Anything a command can answer
 ("how far behind is PR #N?" - `git rev-list --left-right --count`) should be asked of the command
@@ -181,7 +193,7 @@ which is what makes the mirror set verifiable against upstream.
 
 `scripts/upstream-sweep.sh --audit` lists the zero-reply discussions. The unread backlog and the
 threads worth acting on are tracked in
-[`docs/inflight/next-upstream-discussions-unanswered.md`](inflight/next-upstream-discussions-unanswered.md).
+[`docs/inflight/upstream-discussions-unanswered.md`](inflight/upstream-discussions-unanswered.md).
 
 ## Backlinking upstream
 
@@ -235,7 +247,110 @@ Known blind spots, recorded so a clean audit is not mistaken for completeness: a
 on a quiet day never trips the bulk-day heuristic, and a discussion with one dismissive reply is not
 "zero reply". The audit narrows the field; only reading discharges the coverage obligation, which is
 tracked in
-[`docs/inflight/next-upstream-coverage-completeness.md`](inflight/next-upstream-coverage-completeness.md).
+[`docs/inflight/upstream-coverage-completeness.md`](inflight/upstream-coverage-completeness.md).
+
+### Swept PR heads that only upstream had - now preserved as tags
+
+A mirror records what a closed PR *said*. It does not keep the code. The 35 PRs closed in the
+2023-06-15 sweep were reachable through `refs/pull/<n>/head` **in the upstream repository**, which is
+not a copy we control: if that repository goes, the commits go with it, and a mirror describing work
+whose diff no longer exists is close to useless.
+
+Two things are **not** loss events, and both are easy to assume are. Deleting the *branch* behind a
+PR does not lose the commit - `refs/pull/<n>/head` is held by the base repository and outlives its
+branch. Nor does a contributor's fork vanishing: all 35 heads were raised from branches in
+`confluentinc/parallel-consumer` itself (every `head.label` is `confluentinc:<branch>`), so no third
+party holds any of them. **The single exposure is loss of `confluentinc/parallel-consumer`.**
+
+There is a second, narrower risk, and it belongs to this fork rather than upstream: the 29 heads that
+are safe are safe only because some `origin/*` branch *contains* them. Deleting one of those fork
+branches can orphan a head that reads as preserved today. That - not any upstream branch - is what
+the recurring check below has to watch.
+
+Checked 2026-08-14 per PR with
+
+```bash
+git branch -r --contains <head> --list 'origin/*'
+```
+
+reconciled against a live `git ls-remote --heads origin`, because three stale local tracking refs
+would otherwise have counted as safe. **Restricting to `origin/*` is the whole point of the check**:
+a full clone of this fork also carries `upstream` (see AGENTS.md - `gh` defaults to the wrong repo
+here), and a head contained only in `upstream/*` is exactly the case being looked for. A bare
+`git branch -r --contains` searches every remote, so it would report the upstream-only heads as
+preserved and the archive would never have been created. **29 were reachable from a branch that
+still exists on this fork** -
+note *reachable from*, not *raised from*: confluentinc#271's own branch is long gone and its head
+survives only because an unrelated branch contains it, while confluentinc#22, confluentinc#270 and
+confluentinc#405 have same-named fork branches that do **not** contain their heads, which is why they
+are in the table below. **Six were reachable from nothing on this fork.** They are now pinned as
+annotated tags:
+
+| Upstream PR | Author | What it was |
+|---|---|---|
+| confluentinc#22 | astubbs | Dynamic concurrency control (WIP) |
+| confluentinc#204 | astubbs | Run user functions on a Vert.x verticle instead of a Java thread pool |
+| confluentinc#270 | astubbs | Shared-nothing architecture - partition events |
+| confluentinc#405 | astubbs | Remove static state |
+| confluentinc#443 | **Robbie-Palmer** | Python support |
+| confluentinc#506 | astubbs | Fix chart links |
+
+Each is tagged `archive/upstream-pr-<n>`. **The tag name, target SHA and check date are deliberately
+not repeated here** - they live only in `branch_accounting` in
+[`upstream-map.yaml`](../src/docs/development/upstream-map.yaml), this repo's owner of fork-upstream
+facts. A corrected SHA updated in one copy while the other still read as authoritative is exactly the
+drift this section exists to prevent; the table above carries only what does not change.
+
+Each tag's message carries the upstream title, author, head branch name and closure date, so the
+provenance survives without the upstream thread. confluentinc#443 is worth one note: it is the only
+one raised by an outside contributor, that contributor's own fork is already gone, and it made no
+difference - the head was on `confluentinc:pyallel-consumer` like every other, which is why the
+exposure above is stated as upstream-repository loss and nothing else.
+
+Tagging is deliberate over branching: tags are not swept by branch-cleanup tooling and read as
+archival rather than live work. An annotated tag is also fetched by every clone, which
+`refs/pull/<n>/head` is not - so the copy actually propagates. Note the tags do **not** put the
+objects outside the GitHub fork network; that is acceptable because deleting a public parent re-roots
+the network to a surviving fork rather than destroying its objects. If an out-of-network copy is ever
+wanted, `git bundle` is the tool, and nobody has decided it is needed.
+
+Recording the SHAs in the manifest is what makes the check redoable without re-querying upstream; the
+PR numbers alone did not allow it.
+
+Their objects are not reachable from any branch, so a plain `git fetch` in a clone made before they
+were pushed will not bring them down - use `git fetch origin --tags` to get the commits locally.
+Name the remote: on a branch tracking `upstream`, a bare `git fetch --tags` fetches from there and
+leaves all six fork-only tags unavailable. Verifying
+the tags still exist needs no fetch at all: `git ls-remote --tags origin 'archive/upstream-pr-*'`
+asks the remote directly.
+
+**The same pass, run over branch tips instead of swept PR heads (2026-08-17):** every
+`upstream/*` branch tip was checked for containment in any origin branch *or tag* (the tag half is
+what the 2026-08-14 command missed - `git branch -r --contains` cannot see the archive tags, so
+re-running it verbatim would report four already-preserved heads as lost). Ten non-bot tips were
+reachable from nothing on this fork and are now pinned as `archive/upstream-branch/<name>` annotated
+tags: the release-line branches (`0.5.3.x`, `v0.5.2.x-dev`, `v0.6.x`), upstream's final `master`,
+`docs/back-pressure` (the swept confluentinc#508 head, out of the 2026-08-14 pass's scope),
+`features/batching`, `PL-176/DontDrainIssue` (content unassessed - flagged in
+`docs/inflight/branch-audit-orphans.md`), `python-cd-pipeline`, `correct-failing-license-check`,
+and `DP-12547` (already ruled out as content below; pinned so the ruling stays checkable). The
+dependabot/renovate/chore branches were deliberately not tagged - recreatable version bumps, not
+work - though they are now mirrored with the rest.
+
+**Superseded 2026-08-20 by the branch mirror.** Every upstream branch, bot ones included, is now a
+branch on this fork under `upstream/*`, so tags are no longer the only copy. They are kept because an
+annotated tag is the more durable pin: a branch can be deleted or force-moved, a tag is the record
+that a specific commit was deliberately preserved. Tag names, SHAs, the PR each tip belongs to, and
+the check date now live in ONE place - `branch_accounting` in
+[`upstream-map.yaml`](../src/docs/development/upstream-map.yaml). The former
+`preserved_branch_tips` and `sweep-2023-admin-closure.preserved_heads` recorded the same commits
+under two framings and have been folded into it.
+
+**Re-running this is not yet automated.** Branches get deleted, so a head safe today can be orphaned
+tomorrow - but no script checks it: `--audit` covers tracking and mirroring, not reachability, and
+would report clean with every tag above deleted. Until a containment check is wired into
+`upstream-sweep.sh`, this is a manual step to repeat whenever the sweep cohort is revisited. Tracked
+with the rest of the decision backlog in astubbs#300.
 
 ### Surfaces checked and ruled out
 

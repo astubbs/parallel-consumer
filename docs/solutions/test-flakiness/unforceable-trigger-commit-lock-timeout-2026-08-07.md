@@ -248,12 +248,18 @@ find candidates: *sleep-as-synchronisation* in integration tests, and *awaits on
 `isClosedOrFailed` uses in this repo are guards).
 
 **Explicitly NOT an instance - `TransactionTimeoutsTest.produceTimeout`.** This is the most important
-line in the section, because it is the nearest sibling: same file, same lock, and still listed as an
-open flake in `docs/inflight/test-load-tightness-flakes.md`. It **latches its trigger and keeps a real
-margin** - the injected `sendOffsetsToTransaction` counts its latch down while already holding the
-commit write lock and then sleeps 5s, and the worker attempts the produce read lock at `latch + 1s`
-against a 2s deadline. Its "tight assertion" classification stands. **Do not "fix" it the way
-`commitTimeout` was fixed** - it does not have this defect.
+line in the section, because it is the nearest sibling: same file, same lock. It **latches its trigger
+and keeps a real margin** - the injected `sendOffsetsToTransaction` counts its latch down while already
+holding the commit write lock and then sleeps 5s, and the worker attempts the produce read lock at
+`latch + 1s` against a 2s deadline. **Do not "fix" it the way `commitTimeout` was fixed** - it does not
+have this defect.
+
+> **Correction, 2026-08-13.** Two claims above have since been falsified. `produceTimeout` is no longer
+> an open flake - it was solved, and the sentence "its 'tight assertion' classification stands" was
+> right only by accident. The tightness was not in the assertion's threshold: its phase-2 at-most check
+> waited a flat 5s while the commit block it was checking also lasted 5s, leaving a ~500ms margin that
+> nobody had measured. Ruling it out of *this* defect class was correct, and that is what stands.
+> See [`at-most-assertion-raced-the-block-it-checked-2026-08-13.md`](at-most-assertion-raced-the-block-it-checked-2026-08-13.md).
 
 Relatives found, neither the same defect:
 

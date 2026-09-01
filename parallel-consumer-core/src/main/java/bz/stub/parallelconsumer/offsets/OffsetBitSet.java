@@ -5,7 +5,7 @@ package bz.stub.parallelconsumer.offsets;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.internal.InternalRuntimeException;
+import bz.stub.parallelconsumer.internal.PCInternalRuntimeException;
 import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
 import lombok.extern.slf4j.Slf4j;
 
@@ -60,7 +60,7 @@ public class OffsetBitSet {
         int originalBitsetSize = switch (encoding) {
             case BitSet -> wrap.getShort();
             case BitSetV2 -> wrap.getInt();
-            default -> throw new InternalRuntimeException("Invalid state");
+            default -> throw new PCInternalRuntimeException("Invalid state");
         };
         ByteBuffer slice = wrap.slice();
         SortedSet<Long> incompletes = deserialiseBitSetToIncompletes(baseOffset, originalBitsetSize, slice);

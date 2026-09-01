@@ -81,17 +81,19 @@ outcome_of() {
 # is_flapping <Class>: 1 if the class's annotation carries flapping = true (single-annotation files only)
 is_flapping() {
     local f
-    f=$(quarantined_files | while read -r qf; do
-            [ "$(basename "$qf" .java)" = "$1" ] && { echo "$qf"; break; }
-        done)
+    # Same class of defect as bin/check-quarantine-registry.sh carried: the inline
+    # `quarantined_files | while ... break` this replaces exits 1 when NO file matches, and under
+    # this script's `set -e` that killed the report at the assignment. quarantine-common.sh's
+    # `quarantined_file_for_class` header owns the mechanism.
+    f=$(quarantined_file_for_class "$1")
     [ -n "$f" ] && grep -q 'flapping = true' "$f" && echo 1 || echo 0
 }
 
 annotation_location() { # <Class> -> path:line of the @Quarantined( line
     local f
-    f=$(quarantined_files | while read -r qf; do
-            [ "$(basename "$qf" .java)" = "$1" ] && { echo "$qf"; break; }
-        done)
+    f=$(quarantined_file_for_class "$1")
+    # Reachable only now: with the inline lookup, `set -e` killed the script one line above and this
+    # documented fallback never ran.
     [ -n "$f" ] || { echo "unknown"; return; }
     local line
     line=$(grep -nE "$QUARANTINE_ANNOTATION_ERE" "$f" | head -1 | cut -d: -f1)

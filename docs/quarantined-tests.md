@@ -35,10 +35,25 @@ reporter).
 
 Rules (full discipline in [`docs/testing.md`](testing.md), AGENTS.md, and the `@Quarantined` javadoc):
 
-1. **No quarantine without diagnosis** - undiagnosed red stays red and blocks, on purpose. The
-   repository owner can grant an explicit exception when the blocking cost outweighs the pressure;
-   the entry must say so ("rule-1 exception"), keep the failure signature as its reason, and carry
-   the diagnosis as its open task.
+1. **No quarantine without evidence** - and *evidence* is not the same as a root cause. Either will
+   do: a diagnosed mechanism, **or** a recorded sighting ledger (dates, runs, the failure signature,
+   and what shows it is master-state rather than PR-state). What stays banned is quarantining on a
+   hunch - "it's red sometimes" is not evidence, and a single failure is a sighting, not a ledger.
+
+   The rule used to demand a diagnosis outright. That was wrong in a way worth recording: it
+   conflated *"we don't know the mechanism"* with *"we don't know whether it's ours"*, and only the
+   second justifies blocking. A test with a sighting ledger **is** a finding - it is known
+   master-state flaky - it simply has no root cause yet. Demanding one before quarantine leaves an
+   undiagnosed red blocking every unrelated PR, which trains everyone to read red as normal; this
+   repo already deleted surefire retries for hiding flakes, and a permanently-red gate destroys the
+   same signal more thoroughly. The tell that the old default was miscalibrated: its only escape
+   hatch was an owner-granted exception, so every undiagnosed red had to be escalated to the owner
+   or left blocking - the rule had no path a contributor could take on the evidence they had.
+
+   The bar it does NOT lower: quarantine still defers rather than forgives. The lane keeps running
+   the test, the registry keeps it loud, and rule 5 still blocks a release while the list is
+   non-empty. And it is never a licence to label something "just a flaky test" - that is the label
+   the drain-zombie carried right up until it turned out to be a real product bug.
 2. **Quarantine is master-state, not PR-state** - see AGENTS.md, Testing.
 3. **Re-enable = the owning fix PR deletes the annotation AND this entry in the same commit**, after
    merging master - atomically restoring the test to the gating lane.
@@ -59,16 +74,12 @@ Rules (full discipline in [`docs/testing.md`](testing.md), AGENTS.md, and the `@
 
 ## Currently quarantined
 
-Every entry below is a timing flake rather than a deterministic failure, so all carry
-`flapping = true`: a pass proves nothing and the lane reports it without demanding action. All
-were hidden by the surefire retry until astubbs#224 removed it.
+**Empty - nothing is quarantined.** Both entries this branch inherited have gone, and neither by a
+lapse: `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing`
+was diagnosed and fixed on master by astubbs#351 (it asserted an offset it had itself frozen), and
+`ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` is this branch's own
+rule-3 re-enable - astubbs#265 deleted the wall-clock assertion that flaked, and astubbs#262, its
+owner, deletes the annotation and this entry together.
 
-- [ ] `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` -
-  **UNDIAGNOSED, quarantined as an explicit rule-1 exception by owner decision**: at 4/45 it is the
-  most frequent tracked flake and blocked every PR. Fails as `ConditionTimeout` at the
-  `getHighestSeenOffset()` assertion - the committed high-water mark never reaches
-  `expectedHighestSeen` (139), with a different actual each run (136 and 132 seen). An earlier
-  quarantine attributed it to the retry-delay sleep and was reverted: that code runs *after* the
-  failing assertion, so it cannot be the cause. No owner - diagnosing it is the open task; the
-  unverified hypothesis and its falsification path are in
-  [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).
+An empty list is the goal state, not a signal the registry stopped being used: rule 5 stops blocking
+releases only while it stays that way, and the next flake met gets an entry here as before.

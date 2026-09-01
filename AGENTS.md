@@ -72,16 +72,31 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 
 | Document | Read it when |
 |---|---|
-| [`docs/testing.md`](docs/testing.md) | Writing or debugging tests: suite split, the ambient probe autopsy, the quarantine lane, the chaos suite, shared test utilities |
+| [`docs/logging.md`](docs/logging.md) | Changing a logback file, adding a log stream, or wondering why a logging change had no effect - the two test profiles and how to prove which one loaded |
+| [`docs/testing.md`](docs/testing.md) | Writing or debugging tests: suite split, **why a run prints nothing and the flag that fixes it**, the ambient probe autopsy, the quarantine lane, the chaos suite, shared test utilities |
 | [`docs/ci.md`](docs/ci.md) | CI is red, or you are changing a workflow: what each workflow does, the self-hosted lanes, how to fetch a failed job's log |
 | [`docs/investigating.md`](docs/investigating.md) | Past the prior-art checks and into diagnosis: control arms, instrumentation traps, reporting rates |
+| [`docs/compound-engineering.md`](docs/compound-engineering.md) | Asking whether a piece of work is *finished* - the failure-to-mechanism loop, what "done" means beyond green, and the three techniques `investigating.md` does not own |
 | [`docs/issue-references.md`](docs/issue-references.md) | Writing any reference to an issue or PR - the full convention and the gate |
 | [`docs/citations.md`](docs/citations.md) | Repairing a citation that no longer resolves, in a plan or solution write-up you may not rewrite |
 | [`docs/copyright.md`](docs/copyright.md) | Adding, renaming or extracting a file: which header it gets and why |
 | [`docs/releasing.md`](docs/releasing.md) | Cutting a release, or generating its changelog section |
 | [`docs/upstream.md`](docs/upstream.md) | Work that maps to upstream: the manifest, commit trailers, issue mirrors, the sweep |
 | [`docs/self-hosted-runner.md`](docs/self-hosted-runner.md) | Setting up or operating the self-hosted highcpu runner |
+| [`docs/agent-harness.md`](docs/agent-harness.md) | Adding a rule you need agents to follow *reliably*, **or making code teach an agent how to use it at the moment of use** - which layers fire on their own, and which are merely available |
+| [`docs/merge-checklist.md`](docs/merge-checklist.md) | Getting a PR ready to merge - what to offer the author, including the squash message and reorganising the commits |
 | [`bin/AGENTS.md`](bin/AGENTS.md) | Writing or changing a script in `bin/` - the shell conventions, including the ones no check enforces |
+| [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) | Adding, editing or retiring a note in `docs/inflight/` - what may live there, the tag vocabulary, and where a note's content goes when its work lands |
+| [`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md`](parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md) | Changing a field in the engine - the `@GuardedBy` rule, the known shared state and its ledgers, and the shard-map pin |
+
+**A directory with its own `AGENTS.md` owns the rules for what goes in it - read it before you write
+there, not after review catches you.** The table above routes the ones that exist today; `find . -name
+AGENTS.md` is the check that it is still complete. This rule is here because the routing was complete
+and got missed anyway: astubbs#206 added a `docs/inflight/` note describing work that PR itself landed,
+which the directory's first rule - track only what is currently OPEN - forbids. Routing is necessary
+but not sufficient: the nested `CLAUDE.md` bridges described in
+[`docs/agent-harness.md`](docs/agent-harness.md) are what make a directory's `AGENTS.md` arrive when
+a file in it is touched, rather than waiting to be opened.
 
 **Where work and knowledge are recorded:**
 
@@ -89,10 +104,10 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 |---|---|---|
 | **`AGENTS.md`** (this file) | Rules that bind every agent, and the map above | Work items of any kind; anything only one topic needs |
 | **`STRATEGY.md`** (repo root) | What the product is and why: target problem, the client-side guiding choice, who it is for, success metrics, tracks under investment | A roadmap or feature list. It is a *claims* document nothing tests - work that falsifies a claim must update it; the branches that will are named in `docs/inflight/pr-strategy-doc-merge-triggers.md` |
-| **`docs/inflight/`** | *Transient* cross-branch state, **one file per item**, named `<category>-<slug>.md` (`bug-`, `test-`, `ci-`, `deps-`, `pr-`, `branch-`, `release-`, `parked-`, `next-`). Rules in [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) | A backlog. A file is deleted when its work lands - and never a committed index file, which every PR would edit |
-| **`docs/refactoring.md`** | The deferred-work backlog: internal refactors grouped by file, **breaking changes queued for the next major** (release-gated section), and the **triage of `TODO`/`FIXME`/`XXX` markers** | In-flight work; anything already started |
+| **`docs/inflight/`** | *Transient* cross-branch state, **one file per item**, named `<area>-<slug>.md` - the prefix names an AREA, never a status. Rules, the prefix table and the tag vocabulary in [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md), which owns them | A backlog. A committed index file, which every PR would edit. **Not a place knowledge goes to die**: when your PR resolves a note, migrate what outlives it to its durable owner first - deleting the file is one of four outcomes, and that doc names them |
+| **`docs/refactoring.md`** | Refactors **too small to deserve their own note** - a line or two each, grouped by file, no owner or tags - plus **breaking changes queued for the next major** (release-gated section) and the **triage of `TODO`/`FIXME`/`XXX` markers** | Anything carrying a decision, evidence or tracking - that is a `docs/inflight/` note; promote the line and delete it in the same commit |
 | **`docs/todo-index.md`** | Generated inventory of every marker in the tree (`bin/todo-index.sh`, `--check` fails when stale) | Priorities - deliberately unsorted; triage goes in `refactoring.md` |
-| **`docs/quarantined-tests.md`** | CI-enforced registry of quarantined tests and, when one exists, their owning fix PR (unowned entries are legal, flagged advisory) | Tests that merely flake - quarantine requires a diagnosis, or a recorded owner-granted exception |
+| **`docs/quarantined-tests.md`** | CI-enforced registry of quarantined tests and, when one exists, their owning fix PR (unowned entries are legal, flagged advisory) | Tests that merely flake - quarantine requires evidence: a diagnosis, or a recorded sighting ledger proving it is master-state |
 | **`docs/test-hardening/`** | Dated audits of tests that do not run, do not assert, or were never written - per-test evidence and the commit that disabled each one | A live or generated registry - each audit is point-in-time; triage goes in `refactoring.md` |
 | **`CONCEPTS.md`** (repo root) | Shared domain vocabulary whose meaning here is project-specific (produce/commit lock pair, *dirty*, shard, in-flight work). Entries stand alone - no file paths, class names or current config values | A spec, an architecture doc, or general programming vocabulary |
 | **`docs/solutions/`** | Write-ups of problems already **solved**, by category, with YAML frontmatter (`module`, `tags`, `problem_type`) for searching | Open problems |
@@ -101,8 +116,30 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | **`src/docs/development/upstream-pr-analysis.adoc`** | Editorial analysis of upstream PRs: rankings, verdicts, merge order | Facts - when it and the manifest disagree, the manifest wins |
 | **`CHANGELOG.adoc`** | Release notes, regenerated at release time | Per-PR entries of any kind - see [Changelog](#changelog) |
 
-Rule of thumb: **happening now** → `docs/inflight/`; **should happen later** → `refactoring.md`;
-**already happened** → `CHANGELOG.adoc` or `docs/solutions/`.
+Rule of thumb - and the axis is **weight**, not when the work happens:
+
+- **A refactor too small to deserve its own note** → [`docs/refactoring.md`](docs/refactoring.md). One
+  or two lines, no owner, no tags, no state. It is a lightweight list of things that should be tidied,
+  and nothing about it says *when*.
+- **Anything needing context, evidence, tracking or a decision** → `docs/inflight/`, one file per item,
+  tagged. Including work decided to happen **later**: a note may carry
+  `inflight-state: deferred - <what it waits on>` and still belongs here. Deferred is a schedule, not
+  an exile - and it is why "later → refactoring.md" was wrong.
+- **Already settled** → [`docs/solutions/`](docs/solutions/) for the knowledge. **Not
+  `CHANGELOG.adoc`** - see [Changelog](#changelog): a PR never adds an entry, the file is generated at
+  release time from commit messages, so "put it in the changelog" is an instruction nobody may follow.
+
+**When a `refactoring.md` line outgrows a line or two - it needs a decision, has a blocker, or has
+evidence worth keeping - promote it to a note and delete the line in the same commit.** Neither file
+may state it twice. The stale-arrival guard is the worked example: a one-line tidy-up in
+`refactoring.md` until it turned out to be blocked on a null-safety decision, at which point it became
+`docs/inflight/core-stale-arrival-guard-needs-a-null-safety-decision.md`.
+
+This wording replaces "happening now → inflight; should happen later → refactoring.md", which stopped
+being true the moment `docs/inflight/` gained deferred notes - they are "later" work and none of them
+belong in `refactoring.md`. The count is deliberately not written here; it was 34 when this paragraph
+landed and drifted within days. `grep -l 'inflight-state:.*deferred' docs/inflight/*.md` answers it,
+which is the rule [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) states about this very file.
 
 ### Cite by anchor, never by line number
 
@@ -111,6 +148,11 @@ citation while the file and the section are both intact, so it still reads as va
 checks it. Cite the path plus the smallest distinctive greppable string - an identifier, a flag, a
 config key, a quoted literal; a long quotation is brittle the other way, breaking on a reword. Run
 the grep before you commit the citation.
+
+**The path half is now enforced: `bin/check-file-refs.sh` fails a cited path that does not exist**,
+across the whole tree, and the `PR Checklist` workflow runs the same module - so deleting a file
+also fails the PR that leaves citations behind. The anchor half is still yours: a gate can only tell
+you the file is there, never that your quoted string is still in it.
 
 Repairing one that has already gone stale in a dated record is its own procedure, because those
 documents may not be rewritten to match today's code - [`docs/citations.md`](docs/citations.md)
@@ -159,9 +201,18 @@ and the traps that voided earlier experiments.
 | Open PRs (collision check) | `gh pr list -R astubbs/parallel-consumer`, then `gh pr diff <n> -R astubbs/parallel-consumer --name-only` |
 | **Merged** PRs, by file | `gh pr list -R astubbs/parallel-consumer --state merged --limit 100 --json number,title,files --jq '.[] \| select(.files[]?.path \| test("<ClassName>")) \| "\(.number) \(.title)"'` |
 | Issues, `--state all` | `gh issue list -R astubbs/parallel-consumer --state all --limit 300` - fork issues *and* `upstream-mirror` ones; read the upstream original, not the mirror's summary |
+| **The javadoc of the thing you are about to run or change** | `grep -rn "Calibration status" --include=*.java .` - chaos scenarios record their prior experiments, seeds and verdicts in the class javadoc, nowhere else |
 
+- **The titles are already in your context**, injected at session start by
+  `.claude/hooks/inject-recorded-knowledge.sh` - so "I did not know it existed" is not available as
+  an excuse, and the check costs one grep against a list you have been handed.
 - **Grep the mechanism, not the symptom.** The failing test's name is the weakest search term
   available. Search the class, the lock, the option, the exception, the log line.
+- **A test's own javadoc is prior art, and the six commands above will not find it.** The chaos
+  scenarios carry a `Calibration status` block naming the shapes already tried, the seeds, and what
+  each run established - including experiments that were run and are worth not repeating. Running
+  `ChaosRevokeUnderWorkIT`'s recovery diagnostic in August 2026 re-derived a result its own javadoc
+  already recorded from the 90s/45s shape. Read the class before you run it.
 - **`--state open` is a collision check, not a prior-art search.** The PR that already solved
   something in your file is, by definition, merged; the issue documenting it is usually closed.
   Searching only the open list produces false confidence, which is worse than not looking.
@@ -169,16 +220,33 @@ and the traps that voided earlier experiments.
 Once you have a hypothesis, [`docs/investigating.md`](docs/investigating.md) carries the method for
 settling it: **a fix that works is not evidence of the cause.**
 
-## Read the commits you inherit
+## Read the record you inherit - the commits, and the branch's own PR
 
-The same rule one step earlier: read the record before you build on it, not before you ship.
+The same rule one step earlier: read the record before you build on it, not before you ship. It has
+**two triggers**, and the second one is the one that gets missed.
 
-Whenever your base moves under you - cutting a worktree from a master that advanced, merging master
-in mid-flight, rebasing, replaying, or picking a branch back up - run
+**`git fetch --all --prune` before you read any ref, every session.** A remote-tracking ref is a
+cache, and a stale one answers confidently: `origin/<your-branch>` can be weeks behind while every
+`git log` and `rev-list` you run looks healthy, because another session, another machine or a
+sweep across every open branch pushed to it. Claude Code sessions get this done for them by
+`.claude/hooks/check-branch-behind-its-own-remote.sh`, which also refuses a merge or rebase onto a
+branch behind its own published tip; nothing fetches for anyone else, so it is on you.
+
+**Your base moved under you** - cutting a worktree from a master that advanced, merging master in
+mid-flight, rebasing, replaying, or picking a branch back up. Run
 `git log --oneline <old-base>..<new-base>` and read the **bodies** of anything touching your area.
 You inherit decisions, constraints, and sometimes instructions addressed to your branch. A green
 build proves the code still compiles; it proves nothing about whether the ground under your design
 moved.
+
+**You were handed a branch** - a worktree, a PR to review, a simplify or dedupe pass. Read its own
+commits, its `docs/inflight/` handoff note if it has one, **and its PR body *and* its PR comments**
+before you change anything. A PR body here routinely defends, by name, the decision a simplify pass
+would reverse on sight, and the comments carry scope added after the body was written.
+`.claude/hooks/inject-branch-context.sh` puts all of that in front of Claude Code at session start,
+at every subagent dispatch, and inside the subagent itself - so the failure it leaves is the one
+nothing can catch: **dispatching an agent without that context in its prompt**, which is how five
+agents at once were sent to reverse five deliberate decisions on 2026-08-24.
 
 Three things hide there, and none announce themselves: an instruction to your branch; a decision
 that reshapes your work (a renamed module, a new document naming the project's approach); and an
@@ -216,9 +284,11 @@ section does.
 - **Assert the renames git RECORDED *and* their pairing - a bare R-count reads a mis-paired rename
   as healthy.** `bin/rename-packages.sh` asserts both; if you moved anything by hand, do both by
   hand.
-- **Confirm the mutation lane scored mutants rather than trusting its tick.**
-  `bin/ci-mutation-test.sh` exits **0** printing "nothing to mutate, skipping" when its package
-  regex is stale, which is indistinguishable from a pass in the job summary.
+- **Confirm the mutation lane scored mutants rather than trusting its tick.** A stale package regex
+  used to exit **0** printing "nothing to mutate, skipping", indistinguishable from a pass;
+  `bin/ci-mutation-test.sh` now exits 2 for it, and 3 for a genuine skip.
+  [`docs/ci.md`](docs/ci.md) owns the lane and its exit codes, so this bullet goes with the rest of
+  this section.
 
 ## Overview
 
@@ -276,13 +346,13 @@ chaos suite, the ambient probe - and wins where the two disagree. Four rules bin
   test an uncontended broker: passes → contention; still fails → investigate the code, do not mask
   it. Say in the commit/PR which cause you established and how. Loosening deadlines to go green
   hides exactly the bugs this library exists to prevent. **When a broker integration test fails,
-  read its `=== AMBIENT PROBE AUTOPSY ===` block before diagnosing by hand** - and check the
+  read its `AMBIENT PROBE AUTOPSY` block before diagnosing by hand** - and check the
   probe's thresholds before believing a clean one.
 - **A flake fails the build - there is no retry, deliberately.** The CI scripts no longer pass
   `-Dsurefire.rerunFailingTestsCount=2`: it retried failures into green runs and hid three flakes no
   ledger knew about, one of them a regression of an already-fixed one. **Do not restore it to get a
-  build green** - the lever is `@Quarantined` with a diagnosis
-  ([`docs/testing.md`](docs/testing.md)), which relocates the signal where a retry destroys it, and
+  build green** - the lever is `@Quarantined` with evidence: a diagnosis, or a sighting ledger
+  ([`docs/quarantined-tests.md`](docs/quarantined-tests.md)), which relocates the signal where a retry destroys it, and
   nothing enforces this. Background:
   [`docs/solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md`](docs/solutions/workflow-issues/ci-retries-hid-flakes-from-the-ledger-2026-08-07.md);
   the flakes it uncovered are open in
@@ -347,7 +417,8 @@ flip - `#29` and `#114` mean different things in each repo.
   than a broken one**. Cite both numbers, fork first: `(astubbs#119, confluentinc#857)`.
 - **`Fixes astubbs#167` closes nothing** - closing keywords need `astubbs/parallel-consumer#167`.
 - **Run `bin/check-issue-refs.sh` before you push.** It calls the same gate module CI does, so the
-  rule cannot drift; a red run is always real. CI additionally scans the PR body.
+  rule cannot drift; a red run is always real. Both scan the PR body when one is reachable; before
+  a PR exists, the body stays CI's to catch.
 
 [`docs/issue-references.md`](docs/issue-references.md) **owns this topic** - the threshold, the
 exemptions, the reasoning - and wins where the two disagree.
@@ -372,8 +443,34 @@ Nothing lints commit messages, so all of this is on you.
   `cherry-pick/893-...`, `upstream-pr-905`. It keeps the mapping greppable.
 - Upstream-related commits carry DEP-3 provenance trailers -
   [`docs/upstream.md`](docs/upstream.md).
+- **Write prose to a FILE and pass `-F`/`--body-file`. Never put a commit message, PR body or issue
+  comment in a shell string** - not with `-m`, not with a heredoc, however carefully quoted. Prose
+  contains apostrophes and backticks, and both are shell metacharacters. Observed: an apostrophe
+  silently truncated a commit message mid-sentence (the commit still succeeded, exit 0), and
+  backticks in a PR body were *executed* as commands.
+  **Quoting the heredoc delimiter does not save you, and believing it does is why this keeps
+  recurring.** The interactive shell here is fish, so an agent's `bash -c '...'` is first a *fish*
+  single-quoted string; fish escapes only `\` and `'` inside those, so the first apostrophe in your
+  prose ends the string and fish parses the rest - backticks included. The bash-level quoting never
+  gets a say. Applies equally to `gh pr comment`, `gh pr edit` and `gh issue comment`.
 
 ## PR Discipline
+
+- **Before you push, run `bin/check-all.sh`** - it globs every gate in `bin/` and runs them
+  concurrently, so the set cannot drift from whatever you remembered and it finishes in seconds.
+  `--with-tests` adds the self-tests, which take far longer and answer a different question ("do the
+  gates still work"), so they are CI's job and not part of the routine sweep. `bin/AGENTS.md` owns
+  the detail, including why a skip is never counted as a pass. This exists because a hand-picked
+  sweep of seven gates missed one and CI caught it.
+
+- **Read the analysis output on your own PR before asking for review:
+  `bin/check-pr-analysis-surfaces.sh [PR]`.** The tools report to five places that are not each
+  other, so checking by hand is a scavenger hunt nobody performs - and a finding nobody read is
+  indistinguishable from one that does not exist. The script splits findings **on a line your diff
+  wrote** (yours, and the only thing that sets its exit code) from those merely **in a file you
+  touched** (inherited - leave those to the registries). Its header owns the detail and the worked
+  incident: astubbs#356 turned `-Xlint:all` and SpotBugs-over-tests on, both fired on files it was
+  editing - one on a line it had just rewritten for a different detector - and nobody looked.
 
 - **Before merging a fix, look for other instances of the same defect - and say what you found,
   including "none".** A fix that removes today's instance invites tomorrow's. Once you can name the
@@ -382,24 +479,24 @@ Nothing lints commit messages, so all of this is on you.
   reading if it says where you looked, and ruling one out is a real result (astubbs#220 is the
   worked example). Do this at merge prep, once the class is understood; doing it mid-diagnosis just
   widens the investigation.
-- **Before merging, recommend a merge strategy - and say why.** A long-lived PR accumulates fix-ups
-  nobody wants in the permanent log, but usually also two or three genuinely separate pieces of
-  work. Do not default; look at the actual commits:
-  - **Re-cut the commits** - `git reset --mixed <merge-base>`, restage into a handful of atomic
-    commits, rebase-merge - when the branch holds distinct workstreams someone will later want to
-    bisect to or revert independently. The test for "atomic" is whether the message needs an "and
-    also". **`git fetch origin master` first, every time**, and reset to the **merge-base**, not to
-    `origin/master`: a stale ref or the wrong base silently reverts whatever master gained
-    meanwhile, and the tell is files appearing in the staged set that the branch never touched.
-    Verify with `git diff <old-tip> HEAD` - it must be empty, proving history changed and content
-    did not.
-  - **Squash-merge** when the branch is one idea and the intermediate commits are noise. If you
-    recommend this, **write the suggested squash message out in full** - it becomes the permanent
-    record, and the default concatenation of every subject is unreadable.
-  - **Rebase-merge as-is** only when the existing commits are already clean and atomic.
-
-  Release notes are generated from the commit log, so this choice decides what a future changelog
-  has to work with.
+- **Before merging, recommend a merge strategy - and say why**, and **offer** to write the squash
+  message and to re-cut the commits into atomic units rather than doing either silently. Keep the
+  recommendation to a line or two, and **never write the squash message into the PR body** - that is
+  the reviewer-facing description of the change, and a merge artefact there becomes a second one that
+  drifts. Where it does go is the checklist's call, not this file's.
+  [`docs/merge-checklist.md`](docs/merge-checklist.md) **owns this** - why the choice matters to the
+  generated release notes, the three strategies and when each applies, and the reset-to-merge-base
+  trap that silently reverts master.
+- **`--theirs`/`--ours` take the whole file; a conflict is one hunk.** Both flags discard
+  everything else the branch did in that file, and a merge that takes the other side renders as
+  *nothing at all* - there is no removal for diff-vs-base review to show. Prove the branch changed
+  nothing else before using either; afterwards read every removal in
+  `git diff <pre-merge-tip>..HEAD -- <files>`, and audit **every file the merge's conflict list
+  names** rather than stopping when the suite goes green - green only proves the *tested* losses
+  came back. Across a package rename the plain diff reports every file as wholly rewritten, so
+  normalise the namespace on both sides first. Worked incident, including the losses that survived
+  a dozen review rounds because nothing fails when prose vanishes:
+  [`docs/solutions/workflow-issues/theirs-took-the-whole-file-and-the-repair-stopped-at-the-tests-2026-08-18.md`](docs/solutions/workflow-issues/theirs-took-the-whole-file-and-the-repair-stopped-at-the-tests-2026-08-18.md).
 - **Closing something as superseded: link both directions, and link a durable anchor.** Name the
   successor from the closed PR *and* the predecessor from the successor - a reader arrives from
   whichever side they know about, and a one-way link strands the other half. If the successor does
@@ -442,6 +539,16 @@ Nothing lints commit messages, so all of this is on you.
   the issue-reference gate reads the body too, and a bare number below the threshold fails it. Both
   forms are equally understood by `dependencies-action` (`partialLinkRegex`), so nothing is lost.
 
+- **A rung in a stack has to earn its PR.** A branch carrying only a document does not need one
+  unless somebody must review that document *separately from the work it describes* - and if the
+  answer is "whoever picks the work up will read it", that is not separately. astubbs#332 was a
+  branch and a draft PR for a single 118-line design note, and the cost was not cosmetic: two PRs
+  of shipped, tested code stacked above it and were gated by the dependency rule behind a draft
+  whose own first paragraph said three decisions were open and not to start. Neither of them
+  referenced its subject; the stacking was chronology, not dependency. Fold the document into the
+  PR whose work it belongs to, and keep the rung for work that a reviewer can actually accept or
+  reject on its own.
+
 ## Worktree ownership
 
 **Never do any work in the main checkout. Every task gets a worktree.** The main clone at the repo
@@ -471,11 +578,13 @@ branch, and never pipe a git command whose failure must stop an `&&` chain (or t
 
 ## Refactoring backlog
 
-Deferred internal refactors live in [`docs/refactoring.md`](docs/refactoring.md) - see the table
+Small internal refactors live in [`docs/refactoring.md`](docs/refactoring.md) - see the table
 above for what it owns, including `TODO`/`FIXME`/`XXX` triage and the release-gated breaking-change
 queue. When you notice one, drop a `// TODO(refactor): <one line>` marker at the spot
-(`grep -rn "TODO(refactor)" --include=*.java` lists them) and, if it warrants context, add an entry
-to the doc - **do not start a parallel list**. Promote an item to a branch or PR only when you
+(`grep -rn "TODO(refactor)" --include=*.java` lists them) and add a line or two to the doc - **do not
+start a parallel list**. **The moment it needs more than that** - a decision, a blocker, evidence
+worth keeping - **it is a `docs/inflight/` note instead**, and a line already there is promoted and
+deleted in the same commit; [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) owns that call. Promote an item to a branch or PR only when you
 actually start it; if it maps to an upstream issue, link it rather than duplicate it.
 
 ## Upstream tracking

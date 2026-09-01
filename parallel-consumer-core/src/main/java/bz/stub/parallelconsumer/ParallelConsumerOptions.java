@@ -7,6 +7,7 @@ package bz.stub.parallelconsumer;
 
 import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.internal.DynamicLoadFactor;
+import bz.stub.parallelconsumer.internal.MdcPropagation;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tag;
@@ -577,4 +578,27 @@ public class ParallelConsumerOptions<K, V> {
      */
     @Builder.Default
     public final boolean ignoreReflectiveAccessExceptionsForAutoCommitDisabledCheck = false;
+
+    /**
+     * Whether the SLF4J {@link org.slf4j.MDC} (Mapped Diagnostic Context) of the thread that starts Parallel Consumer
+     * is carried into the threads that run your function - the worker pool, and the Vert.x / Reactor / Mutiny engines.
+     * On by default.
+     * <p>
+     * With this on, diagnostic context you have already established - a {@code trace_id}, a {@code request_id}, a
+     * tenant - is visible in the logs your function writes, and in Parallel Consumer's own log lines. The context is
+     * snapshotted once, when you call {@code poll*}, so put what you want propagated into the MDC before then; a
+     * request-scoped value set at that moment will be pinned to the consumer for its whole life, which is unlikely to
+     * be what you want.
+     * <p>
+     * Parallel Consumer's own keys take precedence on a collision: {@code pcId}
+     * ({@link AbstractParallelEoSStreamProcessor#MDC_INSTANCE_ID}) and {@code offset} are applied after yours.
+     * <p>
+     * Switching this off restores the pre-0.6.0.1 behaviour exactly: no context crosses into the worker pool, and
+     * anything your function puts into the MDC is left on the pooled thread for the next, unrelated, record to
+     * inherit.
+     *
+     * @see MdcPropagation
+     */
+    @Builder.Default
+    private final boolean propagateMdc = true;
 }

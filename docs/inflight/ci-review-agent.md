@@ -1,5 +1,10 @@
 # Automated PR reviewer - gaps that affect what you can trust
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: misdirection -->
+<!-- inflight-state: deferred - after v6, affects how we work rather than what ships -->
+
+
 How the reviewer and its gate work, and the contract for asking for a review, are in
 [`docs/ci.md`](../ci.md). This file is only the open gaps.
 
@@ -13,7 +18,9 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   PR. That is the same boundary the previous gate drew -
   it guards against the action failing quietly, not against the author - but it is worth re-reading
   if the review ever stops feeling load-bearing.
-- **The DISPATCHED reviewer cannot open inline review comments; the comment route can.** The
+- **The DISPATCHED reviewer cannot open inline review comments; the comment route can** - read off
+  the action's entity-event handling below, not off an observed thread; see the measured note linked
+  further down for what has and has not actually been seen. The
   action installs the inline-comment MCP server only for an *entity* event. `workflow_dispatch` is
   not one, so on a dispatch the tool does not exist and the grant was removed rather than left
   inert - blocking findings arrive as a marked section in the summary comment, and
@@ -24,33 +31,108 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   (an `issue_comment` command phrase would, and would restore tag mode wholesale). Weigh that
   against what the dispatch route uniquely gives - `-f focus` and the packaged procedure - before
   assuming it should be replaced.
-- **OPEN, and it is the first thing to do after this lands: the dispatched reviewer has never
-  completed an end-to-end review.** Nothing has yet observed it read a PR, post a summary comment
-  as `claude[bot]`, and turn `claude-review` green in one run - only the individual mechanisms were
-  proved on runners. It could not be verified before merging, because `claude-code-action` refuses
-  to run unless the invoking workflow file is byte-identical to the default branch's copy: `--ref
-  <your branch>` is refused and `--ref master` runs the old copy. So the very first action after
-  the merge is a `--ref master` dispatch against a live PR, and **reading the run** rather than
-  assuming. Until someone has done that and said so here, treat the reviewer as unproven. The same
-  constraint is inherited by whoever edits the reviewer next - your change will land unverified
-  too. Reviewing a PR that edits this workflow is a separate thing and does work; the mechanism is
-  in [`docs/ci.md`](../ci.md).
+- **OBSERVED 2026-08-14, and it failed: the dispatched reviewer ran a full review and posted
+  nothing.** This is the end-to-end check the previous revision of this entry asked for, now done
+  and read rather than assumed. `--ref master`, `-f pr=297`, `-f focus=<a three-point steer>`, run
+  [`31770555653`](https://github.com/astubbs/parallel-consumer/actions/runs/31770555653). The
+  `Run Claude Code Review` step ran **7m12s** and reported `conclusion=success`. On the PR
+  afterwards: no `claude[bot]` issue comment, no PR review, `No buffered inline comments` in the
+  log, and `claude-review` still red. Every step of both jobs was green, including the guard and
+  the `refresh-gate`. So the reviewer is not merely unproven - one full billed review has now been
+  spent producing nothing, and **nothing in the system noticed**. Treat a green reviewer run as
+  saying only that the action exited, until the post-condition below exists.
+
+  Not yet established: whether it reviewed and declined to post, or never got that far.
+  `Bash(gh pr comment:*)` **is** granted, and the appended system prompt makes posting mandatory
+  and non-optional ("your LAST action"), so the instruction and the capability were both present.
+  The next dispatch should be read against `claude-execution-output.json` to tell those apart.
+
+- **THE GUARD CANNOT CATCH THAT, because it tests the wrong thing.** The reviewer job's "Refuse to
+  report success for a review that did not run" step branches only on
+  `steps.claude-review.outputs.conclusion`. That detects an *abort* - the workflow-validation skip
+  it was written for - and is structurally incapable of detecting a run that reviews, concludes
+  `success`, and posts nothing. That is the same class as the `--comment` regression this repo
+  already ate ("ran green for months while never posting a single review"), so the guard added
+  afterwards does not cover the case that motivated it. **The missing piece already exists**:
+  `bin/check-review-posted.sh` answers exactly "is there a finished `claude[bot]` comment on this
+  PR", and the gate uses it - the reviewer job simply never asks it about its own output. Running
+  it as a post-condition on the reviewer job turns "billed, ran, said nothing" from green into red
+  with the reason attached. Highest-value fix in this file after the check-run entry below.
+
+- **Nothing announces a dispatched review at its start, so an in-flight billed review is
+  invisible - and so is the `-f focus` steer.** Until it posts, the only record that a review was
+  requested, by whom, and what it was steered toward, is the requester's shell history. This is
+  not an oversight but an unreplaced casualty: `track_progress: true` used to post the sticky
+  `claude[bot]` comment at the start, and it is now hard-set `false` because the action refuses
+  `track_progress` on any non-entity event and aborts the run outright (which killed the first
+  live dispatch, run 31464598166). What replaced it - the FINISH WITH A SUMMARY COMMENT
+  instruction - covers only the end, and the entry above is the case where the end never comes.
+  The fix does not depend on the action at all: a plain `gh pr comment` step before it, posting
+  the PR number, the run URL and the verbatim `focus`. The action can refuse its own sticky
+  comment; it cannot refuse a step that does not involve it.
+
+  **The steer is the part worth posting.** It is appended to the packaged procedure and materially
+  shapes where the review looks hardest, so a reader who cannot see it cannot tell a narrow review
+  from a broad one - and cannot tell whether a "no findings" result was steered away from the area
+  they care about.
+
+- **What the dispatch route buys over `@claude review this`, since the comment route otherwise
+  looks strictly better.** Exactly one thing: the **packaged procedure**. `plugins:
+  'code-review@claude-code-plugins'` plus `/code-review:code-review <repo>/pull/<n> --comment`
+  invokes a versioned multi-step review; a mention passes whatever was typed as the *entire*
+  prompt, silently substituting an improvised review that still looks like a review. Three things
+  commonly assumed to be advantages are **not** - both routes carry the same curated tool
+  allowlist, both execute the default branch's workflow copy, and both satisfy the gate, which
+  matches `.user.login == 'claude[bot]'` and nothing else. Against that one advantage the comment
+  route announces itself by construction and can open inline review threads that mechanically
+  block the merge. Worth re-deciding only alongside the trigger question in the inline-comment
+  entry above; recorded here so the next reader does not re-derive it.
+
+  The constraint that made all of this unverifiable before merge still holds: `claude-code-action`
+  refuses to run unless the invoking workflow file is byte-identical to the default branch's copy,
+  so `--ref <your branch>` is refused and `--ref master` runs the old copy. Whoever edits the
+  reviewer next lands their change unverified in exactly the same way. Reviewing a PR that edits
+  this workflow is a separate thing and does work; the mechanism is in [`docs/ci.md`](../ci.md).
 
   **The comment route is no better off, for a different reason.** It looks testable - just comment
   on a PR - but `issue_comment` workflows always run the **default branch's** copy, so a comment
   exercises master's `claude.yml`, never the one on your branch. The tool grants and the
-  `refresh-gate` added there are unverified in exactly the same way. After the merge, exercise
-  both: a `--ref master` dispatch, and an `@claude review this` comment on a live PR - checking
-  that the comment route really does open an inline thread, and that `claude-review` clears itself.
-- **The duplication scanners are pointed away from where agents duplicate.** `dups: clones` and
-  `dups: similarity` scan `parallel-consumer-*/src` only, and the similarity job additionally
-  filters `file_extensions: 'java'` - so `docs/`, `.github/`, `bin/` and `AGENTS.md` are scanned by
-  neither. Both were green throughout astubbs/parallel-consumer#287 while one contract sat restated
-  in nine files, four of them stale. Two separate follow-ups, and they are not substitutes:
-  (a) point a clone engine at `docs/` and `.github/` - jscpd handles markdown - which catches
-  verbatim copy-paste between docs, a frequent agent behaviour, but **not** paraphrase; and (b) for
-  a contract specifically, a narrow guard asserting the canonical phrasing appears in its one home
-  and nowhere else, which is more reliable than any similarity metric. Full write-up:
+  `refresh-gate` added there are unverified in exactly the same way.
+
+<!-- post-merge: checked-begin -->
+  **Both routes have since been exercised and measured**, and the result is closed, so it lives in
+  [`docs/solutions/workflow-issues/the-two-review-routes-measured-2026-08-17.md`](../solutions/workflow-issues/the-two-review-routes-measured-2026-08-17.md)
+  rather than here. The short version: the comment route posts, at both ends; the dispatch route can
+  run for nine minutes, conclude success, and post nothing, leaving `claude-review` green on an older
+  comment. **The inline thread is now settled**: astubbs#267 was the PR with blocking findings, and
+  `@claude review this` opened **10** inline threads on one head and **2** more on re-review after
+  the head moved - real file-and-line threads that `resolveReviewThread` closed, not a summary
+  comment. So the mechanism the entry above infers from the event type is confirmed by observation.
+<!-- post-merge: checked-end -->
+
+  **Reproduced again 2026-08-19 on astubbs/parallel-consumer#320**, and this sighting narrows it.
+  Run `32218074377`: dispatched with a long, specific `-f focus` naming four areas, ran 5m47s,
+  concluded **success**, and posted neither an issue comment nor a review. The two comment-route
+  reviews on the same PR that morning both posted normally, so the difference is the route, not the
+  reviewer or the diff. `claude-review` stayed green throughout on a comment from 04:22 - which is
+  the part that makes this worse than a plain failure: a run that produces nothing is
+  indistinguishable, from the gate's side, from one that found nothing.
+
+  **So the practical rule until this is fixed: ask for a review by comment.** `-f focus` is the only
+  thing the dispatch route uniquely buys, and a steer that reliably produces no review is worth less
+  than an unsteered one that posts. Say the focus in the `@claude review this` comment instead.
+- **A contract restated in nine files still has no mechanical guard.** Follow-up (a) - point a clone
+  engine at `docs/`, `.github/` and `bin/` - **landed** in astubbs/parallel-consumer#320: both jobs
+  now scan `.` rather than a whitelist of Java module directories. Do not read that as the problem
+  being solved. It catches **verbatim copy-paste**, and the failure recorded in the write-up was
+  **paraphrase**: nine sentences saying one thing, sharing almost no token runs, which no clone
+  engine can see. astubbs/parallel-consumer#320 hit the same wall from the other side - a genuine
+  22-line clone that both engines are structurally unable to compare, because it was JavaScript
+  embedded in a YAML string on one side and a shell heredoc on the other.
+  What remains open is follow-up (b), which is the one that would actually have caught astubbs#287: for a
+  contract specifically, a narrow guard asserting the canonical phrasing appears in its one home and
+  nowhere else. More reliable than any similarity metric, because it tests the thing you care about
+  instead of a proxy for it. Full write-up:
   [`docs/solutions/workflow-issues/duplication-scanners-do-not-look-where-agents-duplicate-2026-08-12.md`](../solutions/workflow-issues/duplication-scanners-do-not-look-where-agents-duplicate-2026-08-12.md).
 - **NOT ENFORCED YET: the two tool allowlists can drift apart.** `claude.yml` and
   `claude-code-review-dispatch.yml` now carry byte-identical `--allowedTools` lists (the comment
@@ -73,11 +155,13 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   rather than a judgement about comment metadata. This is now the single highest-value change left
   in this area. Do not confuse it with restoring head-freshness as a *rule* - that is a separate,
   deliberately parked decision in
-  [`parked-strict-review-gate-freshness.md`](parked-strict-review-gate-freshness.md).
+  [`ci-strict-review-gate-freshness.md`](ci-strict-review-gate-freshness.md).
 - **The gate runs from the PR's own checkout.** A `pull_request` job checks out the PR, so both
   the gate script and the workflow file come from the tree they are policing. Pre-existing and
-  repo-wide rather than anything the on-demand split introduced: `copyright`, `shell: sigpipe`,
-  the issue-reference gate and the quarantine audit all execute PR-authored code the same way,
+  repo-wide rather than anything the on-demand split introduced: `copyright`, `repo: hygiene`
+  (which folded the old `shell: sigpipe` job into itself along with the rest of
+  `repo-hygiene.yml`'s per-concern jobs), the issue-reference gate and the quarantine audit all
+  execute PR-authored code the same way,
   and on a `pull_request` trigger the workflow file is inherently PR-supplied, so no change
   confined to one workflow closes it. Checking the gate script out from the base ref would close
   the script-tampering half and leave the workflow-file half open - a half-measure worth doing
@@ -108,6 +192,7 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
   it. (That ambiguity is exactly why `AGENTS.md` -> "Cite by anchor" forbids `file:line`.) The rule it ran
   into is stated once, canonically, in [`docs/ci.md`](../ci.md) -> "Editing the reviewer"; this
   entry does not restate it.
+  <!-- file-refs: N/A - names the script this note PROPOSES writing; it does not exist yet -->
 
   **What is left open is only that the grants remain unexercised**, which is the general condition
   of the bullet above rather than anything specific to these four: a grant a PR adds can never apply
@@ -141,3 +226,34 @@ How the reviewer and its gate work, and the contract for asking for a review, ar
 - **`bin/ci-integration-test.sh` is granted but unproven** against the 30-minute cap -
   Testcontainers on a 2-core hosted runner is slow, and an overrun looks like a timeout rather than
   a misconfiguration. Also unverified whether Docker works inside the action's sandbox at all.
+- **The `@claude` trigger fires on prose about it**, so a comment merely discussing the mechanism
+  starts a billed job. Own note, since it is a distinct open defect:
+  [`ci-claude-trigger-fires-on-prose.md`](ci-claude-trigger-fires-on-prose.md).
+<!-- post-merge: checked-begin -->
+- **The dispatched reviewer can run, report success, and post NOTHING - and the step that exists to
+  catch that cannot see it.** Measured on astubbs#348: `claude-code-review-dispatch.yml --ref master
+  -f pr=348` produced
+  [run 32800879336](https://github.com/astubbs/parallel-consumer/actions/runs/32800879336), whose
+  `review` job ran 02:18:07-02:20:16 and concluded **success**, ending with `No buffered inline
+  comments`. No `claude[bot]` issue comment and no review appeared on the PR, before or after -
+  checked with `gh api repos/astubbs/parallel-consumer/issues/348/comments` and
+  `gh pr view 348 --json reviews`. The job's own appended system prompt is unambiguous that this may
+  not happen: *"FINISH BY POSTING A SUMMARY COMMENT. THIS IS NOT OPTIONAL"*.
+
+  The guard is the step literally named **"Refuse to report success for a review that did not
+  run"**, and its log shows it deciding on `CONCLUSION: success` and printing *"The reviewer ran and
+  concluded successfully."* It reads the **action's exit status**, so it catches a reviewer that
+  CRASHED and is blind to one that ran and stayed silent - which is the failure that actually
+  happens. A ~2-minute run is the tell, against 1m39s-2m45s for mention-route reviews that did post,
+  but nothing checks duration either.
+
+  **The gate is not falsely satisfied** - `claude-review` still wants a `claude[bot]` comment, so it
+  stays red. The damage is to the REQUESTER: the run is green, the dispatch looks done, and an agent
+  or human reasonably reports "review completed" with a run URL and no findings behind it. That has
+  now happened twice, the other on astubbs#350.
+
+  **The fix is cheap and belongs in the guard**: after the reviewer step, query the PR for a
+  `claude[bot]` comment newer than the job's start time and fail the step when there is none. That
+  turns a silent no-op into a red run, which is the only signal a requester will not misread. Until
+  it exists, **verify a dispatched review by reading the PR, never by reading the run**.
+<!-- post-merge: checked-end -->

@@ -150,7 +150,7 @@ public enum TransactionalClaim {
             + "next commit SUCCEEDS, making result|poison-key-0|0 and |1 visible at read_committed. Two of five "
             + "records from one source offset, visible. The instance neither failed nor shut down. Mechanism: "
             + "ProducerManager#produceMessages installs a Callback - the one its own comment calls 'only needed "
-            + "if not using tx' - that throws InternalRuntimeException from Callback#onCompletion; "
+            + "if not using tx' - that throws PCInternalRuntimeException from Callback#onCompletion; "
             + "KafkaProducer#doSend invokes it from inside its catch (ApiException) handler and only AFTERWARDS "
             + "calls transactionManager.maybeTransitionToErrorState(e), so the throw escapes first and the "
             + "transaction is never moved to abortable-error. Nothing else in PC covers the case: a failed "

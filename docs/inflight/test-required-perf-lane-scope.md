@@ -1,5 +1,10 @@
 # What belongs in the required Performance Tests lane
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: blind-spot -->
+<!-- inflight-state: deferred - after v6, tuning -->
+
+
 `bin/performance-test.sh` is the "Performance Tests" leg of `maven.yml` - **a required check on every PR**,
 `ubuntu-latest`, `timeout-minutes: 60`, and no retry (`AGENTS.md`: a flake fails the build, deliberately).
 Anything `@Tag("performance")` therefore blocks merges. Two questions about that scope are open.

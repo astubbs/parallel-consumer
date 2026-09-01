@@ -138,7 +138,8 @@ class ProducerManagerTest {
      * <p>
      * This is load-bearing, not tidying: the lock must not be released until the work has reached the
      * controller's inbound queue - see {@link AbstractParallelEoSStreamProcessor#cleanUpContext},
-     * which states the invariant and is the sanctioned release point. Releasing it inside the user function opens
+     * which states the invariant and is the <em>only</em> sanctioned release point since astubbs#257 removed the
+     * per-record release that used to run from {@code addToMailbox}. Releasing it inside the user function opens
      * a window in which the controller can take the commit lock, drain a mailbox that does not yet contain this
      * work, and commit an offset one behind - the ~1-in-6 flake written up in
      * {@code docs/plans/2026-08-03-001-investigate-transactional-commit-flake.md} §11.

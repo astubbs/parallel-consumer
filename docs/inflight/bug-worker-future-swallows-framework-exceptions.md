@@ -1,5 +1,8 @@
 # Nothing reads the worker thread's `Future`, so framework exceptions vanish
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: blind-spot -->
+
 `AbstractParallelEoSStreamProcessor.submitWorkToPoolInner` submits each batch to the worker pool and
 parks the result on the work container:
 

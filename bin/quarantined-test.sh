@@ -33,7 +33,7 @@ if [ "${QUARANTINE_SKIP_CHECKS:-0}" != "1" ]; then
   fi
 fi
 echo "=== Quarantine audit (entries are diagnosed, or recorded rule-1 exceptions; empty fixedBy = unowned) ==="
-grep -rnE --include='*.java' --exclude-dir=target -A 4 "$QUARANTINE_ANNOTATION_ERE" . || echo "(no @Quarantined tests - this lane is empty)"
+quarantined_audit || echo "(no @Quarantined tests - this lane is empty)"
 echo "==================================================================================================="
 
 ./mvnw --batch-mode \

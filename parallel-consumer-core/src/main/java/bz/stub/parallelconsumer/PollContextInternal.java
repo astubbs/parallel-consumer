@@ -5,7 +5,7 @@ package bz.stub.parallelconsumer;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.internal.InternalRuntimeException;
+import bz.stub.parallelconsumer.internal.PCInternalRuntimeException;
 import bz.stub.parallelconsumer.internal.ProducerManager;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import lombok.Getter;
@@ -61,7 +61,7 @@ public class PollContextInternal<K, V> {
             // Offsets, not the whole context: this is an exception message, and PollContextInternal's toString
             // carries every record's key and value. ProducerManager's produce-lock logging identifies a context the
             // same way for the same reason.
-            throw new InternalRuntimeException(msg("Produce lock already held for context: {} - overwriting it "
+            throw new PCInternalRuntimeException(msg("Produce lock already held for context: {} - overwriting it "
                     + "would orphan the first, which is then never released and blocks every later transaction "
                     + "commit", getOffsets()));
         }

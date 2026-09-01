@@ -1,5 +1,9 @@
 # `maxFailureHistory` is settable and does nothing
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: config-lie -->
+
+
 `ParallelConsumerOptions.maxFailureHistory` is declared with a default of 10 and is **read nowhere in
 the source tree**. `WorkContainer` keeps only `lastFailureReason`. Setting the option changes nothing.
 

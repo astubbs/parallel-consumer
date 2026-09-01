@@ -100,6 +100,11 @@ hide failures identically.
 ## Related
 
 - `docs/inflight/test-untracked-ci-flakes.md` - the three flakes this surfaced, still open
+  *(Citation flag, not a repair: the file still holds this ledger, but "three, still open" has
+  drifted - two closed since. astubbs#260 established the shutdown-commit assertion was wrong, and
+  astubbs#265 fixed the `PCMetricsTest` counter/gauge race; both were removed from the ledger rather
+  than annotated, per `docs/inflight/AGENTS.md`. One of the scan's three remains open there. The
+  claim above is left as written - it was true on 2026-08-07.)*
 - `docs/solutions/test-issues/flaky-topic-creation-timeout-2026-07-28.md` - reached the same conclusion
   about retries from the other direction
 - `docs/inflight/test-load-tightness-flakes.md` - the hand-maintained ledger this compared against
