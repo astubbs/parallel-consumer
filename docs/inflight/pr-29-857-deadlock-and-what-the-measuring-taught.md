@@ -21,18 +21,25 @@ structurally. The second was NOT resolved by taking master's file: neither side 
 was rebuilt from both. Master's seven dated sections and this branch's six analytical ones are all
 present; taking master's file wholesale would have deleted the commit-mode discriminator table.
 
-**PR astubbs/parallel-consumer#29 is still BLOCKED, and that is still correct.** astubbs#57,
-astubbs#322 and astubbs#267 remain open (checked 2026-08-27). The merge changes nothing about that.
+**SUPERSEDED 2026-09-01 - and it was wrong when written.** This paragraph said astubbs#57,
+astubbs#322 and astubbs#267 "remain open (checked 2026-08-27)". All three are merged, and two of
+them - astubbs#57 and astubbs#322 - landed on 2026-08-26, the day *before* that check claims to have
+run. The check either did not happen or read something other than the PRs' states. Left visible
+rather than deleted, because a stale status line that nobody notices is exactly what produced the
+sentence above it.
 
-**`PCMetrics.java` has NOT been switched to master's, and must not be yet.** The instruction in
-`835b593cf` is conditional - *merge master AFTER astubbs#57 lands, then take master's side* - and
-astubbs#57 has not landed, so master's copy does not yet carry its better version. Master's
+**DISCHARGED 2026-09-01: `PCMetrics.java` now carries master's version, which is what the
+condition asked for.** The instruction in `835b593cf` was conditional - *merge master AFTER
+astubbs#57 lands, then take master's side*. astubbs#57 merged on 2026-08-26 and today's master merge
+took it, so the condition is met and the action is done. What follows is the reasoning as it stood
+while the condition was still open; it is kept because it explains why the order mattered. Master's
 `removeMeter` today has no guard at all, so taking it now would delete this branch's teardown fix and
 reintroduce the throwing-registry defect. The file did not conflict, so this branch's version
 survived untouched, which is the right state. **When astubbs#57 lands, merge master again and take
 master's side then** - the reasoning is in `835b593cf` and is unchanged.
 
-**The verification runs this note asks for have NOT been done.** The tree compiles (`./mvnw
+**Still true, and it refers to the 2026-08-27 merge - a LATER master merge happened on
+2026-09-01 and has had no behavioural verification either.** The tree compiles (`./mvnw
 test-compile`, all modules including test-integration) and `bin/check-all.sh` passes 15/15, but the
 deadlock probe, `ShardManagerStaleContainerTest`, `OutForProcessingCounterDriftProbeTest` and
 `InstanceStallProbeIT` have not been run against the merged tree. A compile is not evidence about
@@ -102,30 +109,38 @@ master's corrected calibration text over this branch's retracted claim.
    run by what actually caught it; re-run it against the torture corpus rather than the astubbs#344
    arms, since the corpus is where the counter-example lives.
 
-2. **Confirm the drain result on a second seed.** The async line was demoted to a timing proxy on one
-   firing. The Class 2 demotion used two. Cheap, and it is what makes the demotion safe to act on.
+2. **CLOSED 2026-09-01: the drain result is confirmed, and its instruments are retired.** This asked
+   for a second firing because the demotion rested on one. `ChaosChurnStormIT`'s calibration javadoc
+   now records the backlog draining on ALL SIX firings collected, which settles it. The two runners
+   built to ask the question were deleted on astubbs/parallel-consumer#381 and their method written
+   up in `docs/solutions/test-flakiness/` - so do not go looking for them.
 
 3. **Migrate the records out of this note, then fix this PR's title and body.** The note is deleted
    when the PR lands and it holds the week's findings; the title claims the symptom rather than the
    mechanism, and the body is stale in four ways.
 
-4. **The transactional revoke wait - NOT YET.** It carries astubbs#44, the only issue upstream ever
-   labelled a verified bug, but astubbs#257 and astubbs#262 are open over the same area.
+4. **The transactional revoke wait - NOT YET.** It carries astubbs#44, which holds upstream's
+   `verified bug` label - one of a couple of dozen that do; an earlier revision of this line called
+   it the only one, which is false. astubbs#257 and astubbs#262 are open over the same area.
    astubbs#262 sets out to prove or falsify every documented transactional guarantee, which will
    likely reframe the question. Chasing it first means resolving against a moving target.
 
-5. **The two unreproduced field reports** (astubbs#175, astubbs#177). astubbs#352, the commit-failure
-   seam, addresses their shape and is already open.
+5. **One unreproduced field report, not two.** astubbs#177 was CLOSED on 2026-09-01, leaving
+   astubbs#175. astubbs#352, the commit-failure seam, addresses its shape and is already open - but
+   that issue's own Fork status already names a likely cause (an unhandled
+   `RebalanceInProgressException`) and rates it very likely fixed on the fork, so confirming that
+   against the reporter's version outranks waiting on astubbs#352.
 
-**Still owed at merge:** merge-strategy recommendation and squash message (100+ commits; `e81ac20fe`
-is mislabelled `docs(inflight)` but carries 584 lines of detector code); the one-line `stage_detail`
-fix in `docs/data/roadmap.yaml` (`known-defects-cleared` still says "mitigation drafted on
-astubbs#29") that no gate will ask for.
+**Still owed at merge:** the squash message. The strategy is settled - squash, because the separable
+workstreams have already left as their own PRs and what remains is one idea with a long research
+narrative. The roadmap half of this item is DONE: `known-defects-cleared`'s `stage_detail` no longer
+says "mitigation drafted" and now records a fix measured against a one-term control on both
+assignors.
 
-**Unfinished:** one more `/ce-compound` run for the second learning - the four-arm measurement showing
-the eager `CLASS2_STALL` is the detector meeting the workload, not a defect. The skill takes one
-learning per run; the first (metrics teardown) is captured in
-`docs/solutions/runtime-errors/a-throwing-meter-registry-kills-the-poll-thread-and-strands-close.md`.
+**DONE 2026-09-01: the compounding pass is discharged.** Both learnings landed - the metrics-teardown
+one in `docs/solutions/runtime-errors/a-throwing-meter-registry-kills-the-poll-thread-and-strands-close.md`,
+and the rest across `docs/solutions/best-practices/` and `docs/solutions/workflow-issues/`. The note
+that tracked the pass was deleted once it had nothing left, as it said it should be.
 
 **Do not re-attribute the eager `CLASS2_STALL` sightings to this PR.** Four measured arms say
 otherwise; details below and in `test-857-revoke-under-work-sightings.md`.
