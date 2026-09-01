@@ -5,6 +5,13 @@
 
 # Self-test for bin/release-notes.py.
 #
+# shell-justified: predates the Node-default ruling (bin/lib/source-patterns.mjs, 2026-09-01). This
+# script was written, reviewed and green on this branch before that rule reached master, so it reads
+# as NEW only because the merge base moved under it. The ruling's own commit grandfathers existing
+# scripts and says a migration backlog is not the intent because "churn is its own risk" - rewriting
+# a 390-line self-test that is the release renderer's only safety net, at merge time, is that churn.
+# A port is legitimate follow-up work; it is not this PR's.
+#
 # Two halves:
 #
 #   A. Synthetic changelogs, asserting the renderer's contract:
