@@ -20,8 +20,9 @@ import java.util.Optional;
  * <b>The calls split into two disciplines, and the engine must not mix them up:</b>
  * <ul>
  *   <li><b>Mutating</b> - {@link #join}, {@link #leave}, {@link #readQuantum}, {@link #spend}. The engine's
- *       lifecycle and control-loop seams own these: join on the running transition, leave at close-entry
- *       (R16), one {@code readQuantum} per control-loop pass (the lease-renewing pull, KTD4), one
+ *       lifecycle and control-loop seams own these: join on the running transition, leave at the closing
+ *       transition (R16 - after any drain completes, so a draining member keeps its credit supply), one
+ *       {@code readQuantum} per control-loop pass (the lease-renewing pull, KTD4), one
  *       {@code spend} per tagged resource immediately after a claim CAS win (KTD1).</li>
  *   <li><b>Pure reads</b> - {@link #currentLease}, {@link #nextCreditAt}, the rate views, and
  *       {@link #conservationLedger}. Safe from any thread at any frequency: they never renew a lease, never
@@ -69,9 +70,10 @@ public interface ResourceAllocator {
     void join(String memberId, Instant now);
 
     /**
-     * Mutating - membership lifecycle (R16). The engine calls this at close-entry. The leaver's share is
-     * re-divided from the NEXT quantum; its unspent live credits are lost immediately - expired, never
-     * redistributed mid-window (R6, KD9's death-loses-capacity).
+     * Mutating - membership lifecycle (R16). The engine calls this exactly once, at its transition to
+     * closing - AFTER any drain completes, so a draining member keeps earning the credits its drain needs.
+     * The leaver's share is re-divided from the NEXT quantum; its unspent live credits are lost immediately -
+     * expired, never redistributed mid-window (R6, KD9's death-loses-capacity).
      */
     void leave(String memberId, Instant now);
 

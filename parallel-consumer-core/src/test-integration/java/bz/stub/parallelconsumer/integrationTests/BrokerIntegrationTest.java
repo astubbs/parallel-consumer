@@ -329,4 +329,13 @@ public abstract class BrokerIntegrationTest<K, V> {
                 .get(groupId);
     }
 
+    /**
+     * Count of hook-recorded firings in {@code [start, end)} - the anchored-window measurement primitive
+     * shared by the navigator test and demo. Insertion order is irrelevant, only the timestamps count.
+     */
+    protected static long countIn(java.util.concurrent.ConcurrentLinkedQueue<java.time.Instant> firings,
+                                  java.time.Instant start, java.time.Instant end) {
+        return firings.stream().filter(firing -> !firing.isBefore(start) && firing.isBefore(end)).count();
+    }
+
 }

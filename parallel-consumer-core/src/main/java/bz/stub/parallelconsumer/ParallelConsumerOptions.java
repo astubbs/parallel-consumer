@@ -35,6 +35,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.function.Function;
 
+import static bz.stub.parallelconsumer.internal.utils.StringUtils.isBlank;
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
 import static java.time.Duration.ofMillis;
@@ -842,7 +843,7 @@ public class ParallelConsumerOptions<K, V> {
                     Fields.resourceTags, tags.size(), tags, Fields.resourceAllocator, Fields.meterRegistry));
         }
         for (String resourceName : tags) {
-            if (resourceName == null || resourceName.trim().isEmpty()) {
+            if (isBlank(resourceName)) {
                 throw new IllegalArgumentException(msg(
                         "{} contains a null/blank tag ({}) - every entry must name a real resource, since a " +
                                 "missing name cannot be looked up in the supplied {} and would fail unhelpfully " +

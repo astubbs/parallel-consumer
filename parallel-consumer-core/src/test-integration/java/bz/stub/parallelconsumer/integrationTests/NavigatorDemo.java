@@ -302,7 +302,4 @@ public class NavigatorDemo extends BrokerIntegrationTest<String, String> {
         }
     }
 
-    private static long countIn(ConcurrentLinkedQueue<Instant> firings, Instant start, Instant end) {
-        return firings.stream().filter(firing -> !firing.isBefore(start) && firing.isBefore(end)).count();
-    }
 }

@@ -394,11 +394,6 @@ class NavigatorRateShareTest extends BrokerIntegrationTest<String, String> {
         return firings.stream().max(Instant::compareTo).map(Instant::toString).orElse("none");
     }
 
-    /** Count of firings in {@code [start, end)} - insertion order is irrelevant, only the timestamps count. */
-    private static long countIn(ConcurrentLinkedQueue<Instant> firings, Instant start, Instant end) {
-        return firings.stream().filter(firing -> !firing.isBefore(start) && firing.isBefore(end)).count();
-    }
-
     // ------------------------------------------------------------------
     // Navigator view sampling (the R13 hook, taken inside the user function)
     // ------------------------------------------------------------------
