@@ -293,6 +293,45 @@ jobs:
             // the bare form would still work; that is worth the framing, and the run link beside it
             // survives either way.
             //
+            // AND NOT AT THE CONVERSATION TIMELINE, WHICH WAS TRIED AND MEASURED RATHER THAN GUESSED.
+            // The obvious wish is to scroll the reader to this commit's row in the conversation they
+            // are already on, instead of navigating anywhere. It cannot be done, and the evidence is
+            // one `curl` of the rendered PR page:
+            //
+            //   * THERE IS NO PER-COMMIT ANCHOR. The only fragment targets GitHub emits on a PR
+            //     conversation are `#commits-pushed-<7char>`, `#issuecomment-<id>`,
+            //     `#pullrequestreview-<id>`, `#ref-pullrequest-<id>` and the issue itself. The commit
+            //     rows inside a push event carry no `id`, so the row this stamp names is not
+            //     addressable at all.
+            //   * `#commits-pushed-` IS A PUSH ANCHOR KEYED ON THE PUSH'S OLDEST COMMIT, NOT THE HEAD -
+            //     measured against a push whose contents were known exactly (three commits; the anchor
+            //     is the first of them).
+            //   * A SINGLE-COMMIT PUSH HAS NO ANCHOR EITHER, which is the half that kills the idea.
+            //     It renders as a lone commit row badged `octicon-git-commit` with NO `id`, where a
+            //     multi-commit push renders as `octicon-repo-push` and carries one. So the fragment
+            //     does not merely key on the wrong commit; for the one shape of push where head and
+            //     oldest COINCIDE, it does not exist. Parsing this PR's timeline items in DOM order and
+            //     reading which commits each contains shows it directly: two `repo-push` items holding
+            //     two commits each, one holding three, and a single commit sitting alone, anchorless,
+            //     between them.
+            //
+            // Grouping is also GitHub's rendering choice rather than a one-to-one record of pushes -
+            // consecutive pushes can be coalesced into one event - so even "the oldest commit of my
+            // push" is not a stable key for a push after the fact.
+            //
+            // Across this branch's 8 commits, the head sha was an anchor ZERO times. A stamp linking
+            // `#commits-pushed-${head}` would therefore never resolve; it would land the reader at the
+            // top of a long PR every time, while claiming to point at a commit. The failure is benign
+            // but it is not occasional, and a link that never does what it says is worse than one that
+            // always lands on the right commit - which is the one question this stamp exists to answer.
+            //
+            // Deriving the push's oldest commit instead was rejected on three counts: the issues
+            // timeline API returns `committed` events with NO push grouping, so it is not recoverable
+            // here; `github.event.before` exists on `synchronize` but not on `opened`; and the link
+            // would then target a different commit from the sha printed beside it - reintroducing, in
+            // a worse form, the two-abbreviations-of-one-commit confusion the seven-character change
+            // above exists to remove.
+            //
             // SEVEN CHARACTERS, because GitHub abbreviates to seven everywhere else on this page. At
             // nine the comment showed a second, different-looking abbreviation of the same commit, so
             // a reader had to stop and check it was even the same one.
