@@ -49,7 +49,16 @@ try:
     # real push. `git push; echo done` was worse and commoner: the token is `push;`, so even the
     # SPACED form missed. punctuation_chars makes the operators their own tokens, which is exactly
     # what the git-token scan below assumes it is walking.
-    lex = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+    # NEWLINE IS AN OPERATOR, NOT WHITESPACE. shlex treats \n as plain whitespace by default, so
+    # `git push -f<newline>git log -1` fused across the line break and the push swallowed the next
+    # command as its arguments - hook_push_head_ref then answered `log` as the pushed branch, a
+    # confident wrong answer with no caveat (found by cross-model review on
+    # astubbs/parallel-consumer#382). Removing \n from whitespace and adding it to the punctuation
+    # set makes each line break an operator token, which the args-stop below already knows to stop
+    # at. A QUOTED newline is untouched: posix shlex keeps quoted text as one token, so a multiline
+    # commit message still lexes as one argument.
+    lex = shlex.shlex(cmd, posix=True, punctuation_chars="();<>|&;\n")
+    lex.whitespace = " \t\r"
     lex.whitespace_split = True
     toks = list(lex)
 except Exception:
@@ -80,15 +89,17 @@ for i, t in enumerate(toks):
             # never emitted. Re-tokenising in the caller is what this file exists to prevent, so the
             # ONE tokeniser emits both and the two views below differ only in what they cut.
             #
-            # STOP AT ANY OPERATOR TOKEN, not a hand-listed few. `punctuation_chars=True` makes shlex
-            # emit `> >> < << ( ) ; ;; | || & &&` as tokens of their own, and an earlier version
-            # named only the command SEPARATORS. That left redirections inside the argument list, so
-            # `git merge origin/master > out.log` walked args as ["origin/master", ">", "out.log"] -
-            # and a redirect target named like a control flag or a remedy ref could then spoof the
-            # exemption test in the consumer. Testing that every character is punctuation catches the
-            # whole family, including operators nobody has thought of, and cannot catch a real
-            # argument: refs, paths and flags all contain at least one non-operator character.
-            OPERATORS = set("();<>|&")
+            # STOP AT ANY OPERATOR TOKEN, not a hand-listed few. The punctuation set makes shlex
+            # emit `> >> < << ( ) ; ;; | || & &&` - and, per the lexer note above, `\n` - as tokens
+            # of their own, and an earlier version named only the command SEPARATORS. That left
+            # redirections inside the argument list, so `git merge origin/master > out.log` walked
+            # args as ["origin/master", ">", "out.log"] - and a redirect target named like a control
+            # flag or a remedy ref could then spoof the exemption test in the consumer. Testing that
+            # every character is punctuation catches the whole family, including merged runs like
+            # `&&\n`, and cannot catch a real argument: refs, paths and flags all contain at least
+            # one non-operator character. This set and the lexer punctuation string above must name
+            # the same characters.
+            OPERATORS = set("();<>|&;\n")
             k, args = j + 1, []
             while k < len(toks) and not (toks[k] and all(c in OPERATORS for c in toks[k])):
                 args.append(toks[k]); k += 1
@@ -153,8 +164,11 @@ hook_push_head_ref() { # <invocations - the output of hook_git_invocations>
             case "$t" in
                 # Push options that consume a SEPARATE value token. Dropping only the flag would
                 # leave its value where the repository or the refspec should be - the same class of
-                # bug this file records above for `git -C /path push`.
-                -o|--push-option|--receive-pack|--exec|--repo) skip=1; continue ;;
+                # bug this file records above for `git -C /path push`. Attached forms (`--repo=x`)
+                # are already skipped by the `-?*` arm; the cost is only ever a SAFE miss - with
+                # `--repo=origin feats/x` the refspec lands in the repository slot, no second
+                # positional appears, and the caller falls back WITH its inferred-answer label.
+                -o|--push-option|--receive-pack|--exec|--repo|--recurse-submodules) skip=1; continue ;;
                 -?*) continue ;;
             esac
             count=$((count + 1))
@@ -171,7 +185,13 @@ EOF
         esac
         dst="${dst#+}"
         dst="${dst#refs/heads/}"
-        case "$dst" in ''|HEAD|refs/*) continue ;; esac
+        # A `$` or backtick means the shell would EXPAND this before git saw it - the token here is
+        # the unexpanded source text, so `git push origin "$TARGET_BRANCH"` would otherwise be
+        # answered with the literal string `$TARGET_BRANCH`, queried against gh as though it were a
+        # branch. A ref can technically contain `$`, but a wrong literal presented as authoritative
+        # is the exact defect class this helper exists to fix; falling back to the labelled
+        # inferred-answer tier is the honest reading (cross-model review, astubbs/parallel-consumer#382).
+        case "$dst" in ''|HEAD|refs/*|*\$*|*\`*) continue ;; esac
         printf '%s\n' "$dst"
         return 0
     done <<EOF

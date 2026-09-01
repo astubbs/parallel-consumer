@@ -48,9 +48,14 @@ hook_lib="${BASH_SOURCE[0]%/*}/lib/hook-common.sh"
 # ONE tokeniser spawn answers both of this hook's questions - "is this a push?" here, and "which
 # branch does it name?" below. `hook_git_runs "$payload" push` would pay python3 a second time to
 # walk the same token list, the economy hook-common.sh's `hook_git_runs_any` records. A push
-# invocation is a line reading `push` or `push<TAB>args...`.
+# invocation is a line reading `push` or `push<TAB>args...` - matched with the haystack WRAPPED in
+# newlines so every line has a boundary on both sides. The first version matched a bare `push` only
+# at the string's start or end, so `git push && git status` (invocation list `push`,`status`) never
+# fired the reminder at all - the exact silently-stops-working class hook-common.sh exists to stop,
+# reintroduced by the refactor meant to save a process spawn (caught by three reviewers at once on
+# astubbs/parallel-consumer#382).
 invocations="$(hook_git_invocations "$payload")"
-case "$invocations" in push|push$'\t'*|*$'\n'push|*$'\n'push$'\t'*) ;; *) exit 0 ;; esac
+case $'\n'"$invocations"$'\n' in *$'\n'push$'\n'*|*$'\n'push$'\t'*) ;; *) exit 0 ;; esac
 
 root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$root" ] || exit 0

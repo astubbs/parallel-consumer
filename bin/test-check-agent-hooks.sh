@@ -1641,6 +1641,17 @@ for form in 'git add -A&&git commit -m x&&git push' 'git push;echo done' 'git pu
     assert "reminds with unspaced/semicolon operators: $form" reminded "$got"
 done
 
+# A COMMAND AFTER THE PUSH. `git push && git status` tokenises to the invocation lines
+# `push`,`status`, and the first single-tokeniser-spawn refactor matched a bare `push` line only at
+# the start or end of the whole list - so the commonest compound push of all went silent. Found
+# three times over by review on astubbs/parallel-consumer#382; these pin the per-line match, and
+# the `\n` form pins the lexer treating a line break as a command boundary.
+for form in 'git push && git status' 'git commit -m x && git push && git tag y' 'git push\ngit status'; do
+    out="$(push_fire "$form")"
+    case "$out" in *PUSH_OPEN_ITEM*) got=reminded ;; *) got=silent ;; esac
+    assert "reminds on a push FOLLOWED by another command: $form" reminded "$got"
+done
+
 # ...and the matching negative control the review asked for: a CHAIN of git calls with no push in it
 # must stay silent. The positive chained cases above cannot show that on their own.
 for form in 'git add -A && git commit -m x' 'git fetch origin&&git status'; do
@@ -1701,6 +1712,23 @@ case "$out" in *"names no branch"*) got=says_it_inferred ;; *) got=presented_as_
 assert "and the reminder says the branch was inferred" says_it_inferred "$got"
 case "$out" in *'"deny"'*) got=blocked ;; *) got=advisory ;; esac
 assert "the caveat did not turn the reminder into a deny" advisory "$got"
+
+# VALUE-TAKING PUSH OPTIONS. Dropping only the flag leaves its value where the repository should
+# be, shifting every positional: `-o ci.skip` would read `ci.skip` as the repo and `origin` as the
+# refspec. `--recurse-submodules` was the one missing from the skip list (cross-model review,
+# astubbs/parallel-consumer#382).
+push_fire_logged 'git push -o ci.skip origin feats/somewhere-else' >/dev/null
+assert "a value-taking push option does not shift the refspec" feats/somewhere-else "$(push_head)"
+push_fire_logged 'git push --recurse-submodules on-demand origin feats/somewhere-else' >/dev/null
+assert "--recurse-submodules value is not read as the repository" feats/somewhere-else "$(push_head)"
+
+# AN UNEXPANDED SHELL VARIABLE is source text, not a branch: the shell would expand it before git
+# ever saw it, so asserting anything about the literal is a confident wrong answer. Fall back to
+# the directory and say the branch was inferred.
+out="$(push_fire_logged 'git push origin $SOMEBRANCH')"
+assert "an unexpanded \$VAR refspec falls back to the directory branch" selftest/push-fixture "$(push_head)"
+case "$out" in *"names no branch"*) got=says_it_inferred ;; *) got=presented_as_fact ;; esac
+assert "and the \$VAR fallback says the branch was inferred" says_it_inferred "$got"
 rm -rf "$push_log_stub"
 
 # THROTTLED, or a push loop repeats the whole note and teaches the reader to skip it.
@@ -1812,6 +1840,27 @@ assert "the same base tip is not reported twice" throttled "$got"
 drift_moved="$(drift_ctx "$(drift_fire)")"
 case "$drift_moved" in *MASTER-SUBJECT-TWO*) got=reported_again ;; *) got="stayed quiet" ;; esac
 assert "a base ref that moved is reported again at once" reported_again "$got"
+
+# THE PUSH REFSPEC NAMES THE BRANCH, and the measurement must describe the SAME branch as the name
+# (astubbs/parallel-consumer#382). Two halves: pushing the base branch itself by refspec must be
+# silent even from a drifted worktree - the pre-fix hook read HEAD and would have reported this
+# worktree's drift against a push that never touched it - and pushing a named side branch must be
+# measured by that branch's own ref, so the session worktree's overlap cannot leak into its report.
+( cd "$drift_repo" && git branch -q sidework "$(git merge-base basefix feature)" )
+drift_refspec_tmp="$(mktemp -d)"
+out="$(printf '{"tool_name":"Bash","tool_input":{"command":"git push origin basefix"}}' |
+    env TMPDIR="$drift_refspec_tmp" MASTER_DRIFT_REF=basefix MASTER_DRIFT_FETCH_FLOOR_SECONDS=0 bash "$DRIFT_HOOK" 2>/dev/null)"
+[ -z "$out" ] && got=silent || got="reported the session's drift"
+assert "pushing the base branch BY REFSPEC is silent even from a drifted worktree" silent "$got"
+drift_side_tmp="$(mktemp -d)"
+out="$(printf '{"tool_name":"Bash","tool_input":{"command":"git push origin sidework"}}' |
+    env TMPDIR="$drift_side_tmp" MASTER_DRIFT_REF=basefix MASTER_DRIFT_FETCH_FLOOR_SECONDS=0 bash "$DRIFT_HOOK" 2>/dev/null)"
+drift_side_report="$(drift_ctx "$out")"
+case "$drift_side_report" in *MASTER-SUBJECT-ONE*) got=measured_sidework ;; *) got="no report" ;; esac
+assert "a refspec-named branch is measured by its own local ref" measured_sidework "$got"
+case "$drift_side_report" in *"BOTH sides"*) got="leaked the worktree's overlap" ;; *) got=no_false_overlap ;; esac
+assert "and the session worktree's overlap is not attributed to it" no_false_overlap "$got"
+rm -rf "$drift_refspec_tmp" "$drift_side_tmp"
 
 # UNCOMMITTED WORK COUNTS AS THIS BRANCH'S, which the hook states as a deliberate choice: a file you
 # are editing right now is the one you most want to hear about. `untouched.txt` is in neither side's
