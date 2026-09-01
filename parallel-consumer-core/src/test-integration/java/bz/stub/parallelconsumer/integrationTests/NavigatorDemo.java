@@ -50,7 +50,8 @@ import static java.time.Duration.ofSeconds;
  *     -Dtest=skipall -DfailIfNoTests=false -Dsurefire.failIfNoSpecifiedTests=false \
  *     -Dfailsafe.failIfNoSpecifiedTests=false</pre>
  * The rate-share <b>assertions</b> live in {@link NavigatorRateShareTest}, which CI runs on every PR; this
- * class is the same storyline optimised for eyes instead of gates.
+ * class is the same storyline optimised for eyes instead of gates. The demo conventions this class follows
+ * (the asserted-twin rule, the wrapper, the output discipline) are owned by {@code docs/demos.md}.
  */
 public class NavigatorDemo extends BrokerIntegrationTest<String, String> {
 

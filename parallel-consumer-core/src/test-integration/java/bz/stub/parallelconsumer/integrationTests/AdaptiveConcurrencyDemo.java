@@ -36,7 +36,7 @@ import static org.awaitility.Awaitility.waitAtMost;
  * <p>
  * <b>{@link #adaptiveDiscoversWhatTheClassicDemoHardCodes()}</b> - a slot-limited service:
  * {@value #DOWNSTREAM_CAPACITY_SLOTS} requests at once, {@value #SERVICE_TIME_MS}ms each (a semaphore around a
- * sleep, per the demo ledger's simulated-work rule). A HARD knee: every arm at or above
+ * sleep, per docs/demos.md's simulated-work rule). A HARD knee: every arm at or above
  * {@value #DOWNSTREAM_CAPACITY_SLOTS} slots saturates the same {@code slots/serviceTime} ceiling, so matching
  * throughput between such arms is arithmetic, not discovery - the columns that separate the arms are the
  * <b>avg request time</b> (extra slots buy queueing, not work) and, for the adaptive arm, the target trajectory.
