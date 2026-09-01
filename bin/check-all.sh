@@ -146,13 +146,21 @@ run_capture() { # <script>|SKIP:<reason> <label> <outfile-prefix>
             return 0 ;;
     esac
     start=$(date +%s)
-    if ! syntax="$(bash -n "$script" 2>&1)"; then
+    # DISPATCH BY EXTENSION. Everything used to be shell, so this ran every gate through bash - which
+    # gives a .mjs gate a bash syntax error and reports a clean rule as a broken gate. Discovery and
+    # execution are separate holes: the glob above decides whether a Node gate is SEEN, this decides
+    # whether it can RUN.
+    case "$script" in
+        *.mjs) checker="node --check"; runner="node" ;;
+        *)     checker="bash -n";      runner="bash" ;;
+    esac
+    if ! syntax="$($checker "$script" 2>&1)"; then
         end=$(date +%s)
         printf '%s\n%s\n%s\n' "PARSE" "$((end - start))" "$label" > "$pre.meta"
         printf '%s\n' "$syntax" > "$pre.out"
         return 0
     fi
-    out="$(PR_NUMBER="${PR_NUMBER:-}" bash "$script" 2>&1)"; rc=$?
+    out="$(PR_NUMBER="${PR_NUMBER:-}" $runner "$script" 2>&1)"; rc=$?
     end=$(date +%s)
     printf '%s\n%s\n%s\n' "$rc" "$((end - start))" "$label" > "$pre.meta"
     printf '%s\n' "$out" > "$pre.out"
@@ -272,7 +280,12 @@ fi
 if [ "$MODE" = "all" ] || [ "$MODE" = "gates" ]; then
     echo "=== gates ==="
     set --
-    for g in bin/check-*.sh; do
+    # BOTH SUFFIXES. Node is now the default for new scripts here ("Write it in Node unless you can say
+    # why not", bin/AGENTS.md), so a gate written the new way must be swept by the same run as the old
+    # ones. Globbing only *.sh does not make a Node gate fail - it makes it INVISIBLE: the sweep prints
+    # "15 ran, 15 passed" having swept one fewer gate than the directory contains, and says nothing.
+    # Quieter than a failure and worse, which is the exact shape this script exists to prevent.
+    for g in bin/check-*.sh bin/check-*.mjs; do
         [ -f "$g" ] || continue
         n="$(basename "$g")"
         [ "$n" = "$SELF" ] && continue                       # never recurse
