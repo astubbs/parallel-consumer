@@ -107,7 +107,8 @@ cat > "$payload_file" 2>/dev/null || exit 0
 # CHEAP BAIL BEFORE PAYING FOR python3, which fires on every tool call of every subagent. Every key
 # tested here precedes `tool_input` in the payloads Claude Code emits, so 4 KB is enough to decide
 # and a 150 KB dispatch prompt is never read. `head -c` on a FILE, not a pipe into grep - the
-# pipefail/EPIPE trap bin/AGENTS.md documents, which bin/check-shell-sigpipe.sh scans this directory
+# pipefail/EPIPE trap bin/AGENTS.md documents, which the `sigpipe-into-grep-q` rule in
+# bin/lib/source-patterns.mjs scans this directory
 # for.
 head=$(head -c 4000 "$payload_file" 2>/dev/null) || exit 0
 case "$head" in

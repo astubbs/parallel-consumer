@@ -744,15 +744,18 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * no longer account for that record: it is neither in flight nor completed, so nothing will retry it and
      * nothing will report it.
      * <p>
-     * <b>The reachable route is the produce lock, not the queue - worth naming, because "a queue add cannot fail"
-     * reads as though this can never fire.</b> {@link #addToMailbox} also calls
-     * {@link WorkContainer#onPostAddToMailBox}, which in transactional commit mode releases the produce lock through
-     * {@code ProducerManager#finishProducing}; its {@code ensureProduceStarted} sanity check throws when the read
-     * hold count is below one. {@code docs/inflight/bug-producing-lock-double-release.md} records an open question
-     * about exactly that invariant - two paths release the same lock and nothing stops the second - on a path that
-     * has already produced two flakes. So this is a suspected-live route, which is the argument for making it loud
-     * rather than for assuming it is unreachable. The queue add itself only throws on a bounded queue that is full,
-     * or on {@code OutOfMemoryError}.
+     * <b>The route this was written for has since been closed, and the guard is kept deliberately.</b> When
+     * astubbs#267 added these guards, {@link #addToMailbox} also released the produce lock, so a double release
+     * raised {@link ProduceLockNotHeldException} from {@code ProducerManager#finishProducing} straight through the
+     * mailbox path - that was the named, suspected-live route. astubbs#257 made {@code cleanUpContext} the single
+     * release point and removed the release from {@link #addToMailbox}, so core's {@link #addToMailbox} is now a
+     * queue add and nothing else, and that route is gone.
+     * <p>
+     * <b>It is still reachable, which is why nothing here was deleted.</b> {@link #addToMailbox} is a
+     * {@code protected} extension point and {@link ExternalEngine} overrides it to return the dispatch permit, so a
+     * subclass can still throw here; and the queue add itself throws on {@code OutOfMemoryError}. What changed is
+     * that PC no longer has a known invariant on this path, not that the path became infallible - and an
+     * unmailboxable record is equally unaccountable whichever route produced it.
      * <p>
      * {@code Throwable} rather than {@code Exception} at the call sites, because an {@code Error} raised here would
      * otherwise pass straight through the very guards this path exists to be. Continuing from there risks committing past work that was never done - a silent
@@ -798,12 +801,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
             // The call sites name PCInternalRuntimeException as the expected arm and keep a broad backstop, because
             // anything escaping them strands the sibling records behind it. This second line is what the arm buys
-            // once it reaches here: a PC invariant break reads differently from an unenumerated route, and the
-            // known invariant is the produce lock. docs/inflight/core-exception-hierarchy-cleanup.md owns the
-            // wider cleanup that this and ProduceLockNotHeldException are two instances of.
+            // once it reaches here: a PC invariant break reads differently from an unenumerated route. The produce
+            // lock was the known instance until astubbs#257 removed the release from addToMailbox; no named route
+            // has replaced it, so the message says what the type means rather than naming a route that is gone.
+            // docs/inflight/core-exception-hierarchy-cleanup.md owns the wider cleanup that this and
+            // ProduceLockNotHeldException are two instances of.
             if (mailboxingThrew instanceof PCInternalRuntimeException) {
-                log.error("The cause above is one of PC's own invariants; the known route is the produce-lock "
-                        + "release in onPostAddToMailBox (docs/inflight/bug-producing-lock-double-release.md).");
+                log.error("The cause above is one of PC's own invariants breaking inside the mailbox path, not a "
+                        + "user failure - so it is a bug in PC rather than an operating condition.");
             }
 
             if (this.failureReason == null) {
@@ -1843,8 +1848,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 try {
                     addToMailbox(context, wc); // always add on error
                 } catch (PCInternalRuntimeException pcInvariantBroke) {
-                    // The EXPECTED shape: one of PC's own invariants, reachable here as
-                    // ProduceLockNotHeldException from the produce-lock release inside addToMailbox.
+                    // The EXPECTED shape: one of PC's own invariants. It was reachable here as
+                    // ProduceLockNotHeldException from the produce-lock release inside addToMailbox until
+                    // astubbs#257 made cleanUpContext the single release point; the arm stays because
+                    // addToMailbox is an extension point and ExternalEngine overrides it.
                     //
                     // NOT a finally around the call above: an exception from a finally supersedes everything and
                     // propagates straight out of this loop, so a single failure here would strand every container
@@ -1969,8 +1976,30 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         return intermediateResults;
     }
 
+    /**
+     * The single release point for a context's produce lock.
+     * <p>
+     * Only unlock our producing lock once every {@link WorkContainer} of this context has been safely returned to the
+     * controller's inbound queue, so we know they'll all be included properly before the next commit as succeeded
+     * offsets. As in order for the controller to perform the transaction commit, it will be blocked from acquiring its
+     * commit lock until all produce locks have been returned, inbound queue processed, and thus their representative
+     * offsets placed into the commit payload (offset map).
+     * <p>
+     * This runs in the {@code finally} of {@link #runUserFunction}, which is strictly after the whole batch has been
+     * added to the mailbox on the success path, after the failure handler's re-add on the error path, and is the only
+     * release for work handed to an external engine ({@link ExternalEngine}) that never reaches the mailbox here at
+     * all. Releasing per-{@link WorkContainer} instead would release after the *first* record of a batch, leaving the
+     * rest of it exposed to exactly the commit window this lock exists to close - and would owe one release per record
+     * against a lock acquired once per context.
+     * <p>
+     * The lock is <b>taken</b> rather than read, so the context is left empty and a second release is a no-op instead
+     * of an {@link IllegalMonitorStateException} on a read lock this thread no longer holds.
+     */
     private void cleanUpContext(final PollContextInternal<K, V> context) {
-        context.getProducingLock().ifPresent(ProducerManager.ProducingLock::unlock);
+        context.takeProducingLock().ifPresent(lock -> producerManager
+                // a lock can only exist because a ProducerManager handed it out
+                .orElseThrow(() -> new PCInternalRuntimeException("Produce lock held, but there is no producer manager to return it to"))
+                .finishProducing(lock));
     }
 
     protected void addToMailBoxOnUserFunctionSuccess(PollContextInternal<K, V> context, WorkContainer<K, V> wc, List<?> resultsFromUserFunction) {
@@ -1995,12 +2024,16 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * {@code catch (Throwable)} with nobody able to say what they were catching. Declared, a caller can narrow to
      * the expected arm honestly and keep a backstop for the rest, rather than treating the two as the same thing.
      *
-     * @throws ProduceLockNotHeldException the reachable route. {@link WorkContainer#onPostAddToMailBox} releases the
-     *                                     produce lock in transactional commit mode, and
-     *                                     {@code ProducerManager#finishProducing} rejects a release when the lock is
-     *                                     not held. {@code docs/inflight/bug-producing-lock-double-release.md} is an
-     *                                     open question about that invariant.
-     * @throws PCInternalRuntimeException  any other PC invariant reached through the same call.
+     * @throws PCInternalRuntimeException a PC invariant broken by an override of this method. <b>Core's own body no
+     *                                    longer has one.</b> Until astubbs#257 it also released the produce lock
+     *                                    here, and {@code ProducerManager#finishProducing} rejecting a release it
+     *                                    did not hold - {@link ProduceLockNotHeldException} - was the named
+     *                                    reachable route. {@code cleanUpContext} is now the single release point, so
+     *                                    core's body is a queue add and nothing else. The declaration stays because
+     *                                    this is a {@code protected} extension point: {@link ExternalEngine}
+     *                                    overrides it to return the dispatch permit, and a caller still needs to be
+     *                                    able to narrow honestly rather than guard with {@code catch (Throwable)}
+     *                                    and no idea what it is guarding.
      * @implNote The queue add is NOT a meaningful throw route here, which is worth stating because
      *         {@link java.util.Queue#add} documents four. {@link #workMailBox} is an unbounded
      *         {@link java.util.concurrent.LinkedBlockingQueue}, so its {@code IllegalStateException} capacity clause
@@ -2013,8 +2046,6 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         String state = wc.isUserFunctionSucceeded() ? "succeeded" : "FAILED";
         log.trace("Adding {} {} to mailbox...", state, wc);
         workMailBox.add(ControllerEventMessage.of(wc));
-
-        wc.onPostAddToMailBox(pollContext, producerManager);
     }
 
     public void registerWork(EpochAndRecordsMap<K, V> polledRecords) {

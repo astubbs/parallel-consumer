@@ -4,7 +4,10 @@
 #
 
 # Self-test for bin/lib/quarantine-common.sh - the scan that check-quarantine-registry.sh,
-# check-quarantine-owners.sh and quarantined-test.sh all read their file list from.
+# check-quarantine-owners.sh and quarantined-test.sh all read their file list from - AND, in the
+# section at the foot of this file, for what bin/check-quarantine-registry.sh actually SAYS when it
+# finds drift. Both halves belong here: the gate's reporting failed inside the shared lookup, not in
+# its own message code, so splitting them would have put the fixture and the mechanism in two files.
 #
 # WHY THIS EXISTS. The exclusion of `.claude` from the scan is a behaviour change with a specific
 # cause: `.claude/worktrees/<name>` holds a full checkout of some OTHER branch, so without it the
@@ -139,6 +142,122 @@ assert "the PREVIOUS implementation does leak the .git copy" YES \
     "$(contains "$old" ".git/some-tooling-copy/Stashed.java")"
 assert "the PREVIOUS implementation already excluded target" NO \
     "$(contains "$old" "target/generated-sources/Generated.java")"
+
+echo "--- quarantined_occurrences: a file with no match must count 0, on ONE line ---"
+
+# The bug this covers is invisible to a string comparison that happens to fail anyway, so assert the
+# exact bytes and then assert that a numeric test survives them - which is how the callers use it.
+no_match_file=$(mktemp)
+printf 'class NothingQuarantinedHere {}\n' > "$no_match_file"
+
+assert "no match counts exactly 0" "0" "$(quarantined_occurrences "$no_match_file")"
+
+numeric_ok=NO
+if [ "$(quarantined_occurrences "$no_match_file")" -eq 0 ] 2>/dev/null; then numeric_ok=YES; fi
+assert "the result survives a numeric test" YES "$numeric_ok"
+
+# Negative control, in this file's established style: the shipped-before implementation must fail
+# both, or the fixture has stopped reaching the defect and the two assertions above are vacuous.
+previous_occurrences() { grep -cE "$QUARANTINE_ANNOTATION_ERE" "$1" 2>/dev/null || echo 0; }
+
+assert "the PREVIOUS implementation returns two lines" "$(printf '0\n0')" \
+    "$(previous_occurrences "$no_match_file")"
+
+old_numeric_ok=NO
+if [ "$(previous_occurrences "$no_match_file")" -eq 0 ] 2>/dev/null; then old_numeric_ok=YES; fi
+assert "the PREVIOUS implementation breaks a numeric test" NO "$old_numeric_ok"
+
+rm -f "$no_match_file"
+
+echo
+echo "--- check-quarantine-registry.sh: drift is EXPLAINED, not merely refused ---"
+
+# THE GATE REFUSED SILENTLY IN EXACTLY THE CASE IT EXISTS TO CATCH. Its registry -> code loop ended
+# in `f=$(quarantined_files | while read -r qf; do [ ... ] && { echo "$qf"; break; }; done)`. When no
+# annotated class matches the entry, the final `[ ... ]` fails, the `while` carries that status out,
+# `pipefail` promotes it to the pipeline, the assignment takes it, and `set -e` kills the script
+# BEFORE the `DRIFT:` line can print. Exit 1 was right; the explanation was destroyed, so the gate
+# said nothing at all about the one thing it had found.
+#
+# CONTROL ARM, one term changed and everything else identical: `set -euo pipefail` printed nothing
+# and exited 1, `set -uo pipefail` printed the full DRIFT line and exited 1 - which is what named
+# `set -e` plus the loop status as the mechanism rather than the reporting code.
+#
+# THE NEGATIVE CONTROL BELOW IS THE SHIPPED PRE-FIX LOOP, patched back into a copy of the gate, so
+# the fixture is PROVEN to reach the defect rather than assumed to - the same discipline as
+# `previous_implementation()` above. If the anchor line it patches ever stops existing, the control
+# fails loudly instead of passing vacuously.
+
+gate_fixture="$(mktemp -d)"
+trap 'rm -rf "$fixture" "$gate_fixture"' EXIT
+mkdir -p "$gate_fixture/docs" "$gate_fixture/bin/lib"
+annotated "$gate_fixture/parallel-consumer-core/src/test/java/Present.java"
+cp "$repo_root/bin/lib/quarantine-common.sh" "$gate_fixture/bin/lib/quarantine-common.sh"
+cat > "$gate_fixture/docs/quarantined-tests.md" <<'MD'
+# Quarantined tests - fixture
+
+- [ ] `Present.aTest` - an entry whose class really is annotated
+- [ ] `Vanished.someTest` - an entry naming a class with no @Quarantined anywhere in the tree
+MD
+
+run_gate() { # <gate-path> -> prints "<exit>|<output>"
+    local out rc=0
+    out="$(QUARANTINE_CHECK_ROOT="$gate_fixture" bash "$1" 2>&1)" || rc=$?
+    printf '%s|%s' "$rc" "$out"
+}
+
+gate_result="$(run_gate "$repo_root/bin/check-quarantine-registry.sh")"
+gate_rc="${gate_result%%|*}"
+gate_out="${gate_result#*|}"
+
+case "$gate_out" in
+    *"DRIFT:"*Vanished.someTest*) got=named_the_stale_entry ;;
+    '')                           got=said_nothing_at_all ;;
+    *)                            got="$gate_out" ;;
+esac
+assert "a stale registry entry is NAMED, not just refused" named_the_stale_entry "$got"
+assert "and the gate still fails" 1 "$gate_rc"
+
+# The other half of the same run: a genuinely annotated entry must not be reported as drift, or the
+# case above would pass on a gate that simply shouts about everything.
+case "$gate_out" in *Present*) got=false_positive ;; *) got=quiet_about_the_good_one ;; esac
+assert "the entry whose class IS annotated is not reported" quiet_about_the_good_one "$got"
+
+# --- negative control: the fixture must reach the defect ---
+previous_gate="$gate_fixture/bin/previous-check-quarantine-registry.sh"
+python3 - "$repo_root/bin/check-quarantine-registry.sh" "$previous_gate" <<'PY'
+import sys
+
+ANCHOR = '    f=$(quarantined_file_for_class "$cls")\n'
+SHIPPED_BEFORE_THE_FIX = (
+    '    f=$(quarantined_files | while read -r qf; do\n'
+    '            [ "$(basename "$qf" .java)" = "$cls" ] && { echo "$qf"; break; }\n'
+    '        done)\n'
+)
+src = open(sys.argv[1]).read()
+if ANCHOR not in src:
+    sys.stderr.write("anchor line not found - the negative control no longer patches anything\n")
+    sys.exit(1)
+open(sys.argv[2], "w").write(src.replace(ANCHOR, SHIPPED_BEFORE_THE_FIX))
+PY
+prev_result="$(run_gate "$previous_gate")"
+prev_rc="${prev_result%%|*}"
+prev_out="${prev_result#*|}"
+[ -z "$prev_out" ] && got=silent || got="$prev_out"
+assert "the PREVIOUS implementation refuses with NO explanation" silent "$got"
+assert "...while still exiting 1, which is why nobody noticed" 1 "$prev_rc"
+
+echo
+echo "--- quarantined_file_for_class(): the lookup both gates share ---"
+
+cd "$gate_fixture"
+assert "finds the file of an annotated class" \
+    "./parallel-consumer-core/src/test/java/Present.java" "$(quarantined_file_for_class Present)"
+# The whole defect in one line: a miss must be an empty answer, never a failing status. Called
+# inside a `$(...)` under this file's own `set -e`, a non-zero return here would kill the suite.
+assert "a class with no annotation answers empty" "" "$(quarantined_file_for_class Vanished)"
+quarantined_file_for_class Vanished >/dev/null
+assert '...and returns 0, so set -e does not kill the caller' 0 "$?"
 
 echo
 if [ "$failures" -gt 0 ]; then
