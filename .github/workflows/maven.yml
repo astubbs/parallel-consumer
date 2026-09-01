@@ -177,7 +177,11 @@ jobs:
       # Posted as a comment rather than left in the job log, because a number nobody retrieves is a
       # number nobody has. The duplication checks already comment here; this follows them.
       - name: Post the throughput report
-        if: always() && matrix.suite == 'performance' && github.event_name == 'pull_request'
+        # SAME-REPOSITORY PRs ONLY. On a fork PR GitHub downgrades GITHUB_TOKEN to read-only, so the
+        # comment write 403s - and because this sits in the REQUIRED Performance Tests job, that failure
+        # would fail the check even when the lane and the verdict are both green. The report still lands
+        # as an artifact for fork PRs; only the comment is skipped.
+        if: always() && matrix.suite == 'performance' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/github-script@v7
         with:
           script: |
@@ -220,11 +224,11 @@ jobs:
       # docs/solutions/workflow-issues/gh-run-view-log-truncation.md says truncates silently when read
       # the obvious way. A short window here would defeat the purpose of collecting at all.
       #
-      # THIS IS A STOPGAP AND SHOULD NOT BE READ AS THE GATE'S PRECONDITION BEING MET. An artifact is
-      # per-run and still expires, so a distribution still means downloading N runs by hand
-      # (`gh run download <run-id> -n performance-throughput-<n>`). It replaces log-scraping with a
-      # machine-readable file; it does not accumulate. Storing a series durably was considered and
-      # declined - no data branch, no write grant (operator decision, 2026-09-01).
+      # THE GATE IS NO LONGER DEFERRED - this workflow now runs it, and a red verdict fails the required
+      # Performance Tests job. What remains open is retention: artifacts expire, so the reference is
+      # bounded by the number of recent master runs still holding one, and a long quiet period on master
+      # shrinks it. Storing a durable series was considered and declined - no data branch, no write grant
+      # (operator decision, 2026-09-01) - so the accumulating-artifact design is the open follow-up.
       # Per-METHOD timings, which the job log does not carry - see the comment on the same step in
       # perf-baseline.yml for why class granularity is the weaker instrument.
       - name: Upload failsafe reports

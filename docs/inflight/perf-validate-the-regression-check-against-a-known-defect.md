@@ -1,11 +1,16 @@
-# The throughput regression check has never caught anything, and there is a known defect to point it at
+# The detector fires; what is still open is whether it catches anything the deadline would miss
 
 <!-- inflight-type: task -->
+<!-- inflight-state: open - the validation it was opened for is DONE (the red/black ran); what remains is the under-the-ceiling experiment described at the foot -->
 <!-- inflight-impact: coordination -->
 
-**Update 2026-09-01: the primary evidence arrived from history instead, and the check now FAILS on
-this defect rather than warning. What is left below is a confirmation, not the experiment that
-settles it - see the last section.**
+**The validation this note was opened for is COMPLETE** - the red/black ran in CI, the detector fired,
+and the numbers are at the foot. It stays open for a different and smaller item, named in the last
+section: nothing has yet shown the check catching a regression the pre-existing wall-clock ceiling
+would have missed, because every regression observed so far breached that ceiling too. The experiment
+for that is an injected slowdown sized NOT to breach it.
+
+Retitled and re-scoped rather than left as a completed validation presented as live work.
 
 **A detector that has never fired is not a working detector.** `bin/check-throughput-regression.mjs`
 was reasoned into existence from a regression that was diagnosed by hand; nothing has yet confirmed it

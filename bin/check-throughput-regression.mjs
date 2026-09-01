@@ -49,7 +49,11 @@ process.chdir(resolve(dirname(fileURLToPath(import.meta.url)), '..'))
 
 const REPO = process.env.PC_REPO ?? 'astubbs/parallel-consumer'
 const SUBJECT = 'MultiInstanceHighVolumeTest'
-const CONTROLS = ['VeryLargeMessageVolumeTest', 'LargeVolumeInMemoryTests', 'LoadTest']
+// CPU-BOUND CONTROLS ONLY - see the premise note in lib/throughput-verdict.mjs. LoadTest and
+// LargeVolumeInMemoryTests are excluded because they sleep per record (0-5ms and 3ms), so their
+// wall-clock does not scale with the machine and they cannot serve as a machine-speed reference.
+// One honest control beats three where two are inert.
+const CONTROLS = ['VeryLargeMessageVolumeTest']
 const REFERENCE_RUNS = Number(process.env.PC_REFERENCE_RUNS ?? 10)
 const REPORT = 'target/throughput-report.md'
 
@@ -87,6 +91,7 @@ const observedRate = rateFrom(readFileSync(summaryFile, 'utf8'))
 const observedClasses = methodSecondsFrom(globSync('**/target/failsafe-reports/TEST-*.xml'))
 const observedControl = CONTROLS.filter(c => observedClasses.has(c))
   .reduce((a, c) => a + observedClasses.get(c), 0)
+const observedSubject = observedClasses.get(SUBJECT) ?? 0
 
 if (!(observedRate > 0)) {
   // A missing rate is a finding, not a quiet pass: the test did not run, or the emitter is no longer
@@ -123,16 +128,35 @@ try {
   console.error(`  ${err.trim().split('\n')[0]}`)
   process.exit(CANNOT)
 }
+// A REPORT IS WRITTEN EVEN WITH NO REFERENCE. The first version wrote one only when it could compute a
+// verdict, so on a repository where the master lane has never run - which is every repository until
+// this lands - the check exited quietly and the PR comment never appeared at all. The PR that adds
+// throughput reporting displayed no throughput report. A report saying "here are this run's numbers,
+// there is nothing to compare them against yet" is the useful thing to post, not silence.
+const writeReport = body => {
+  mkdirSync('target', { recursive: true })
+  writeFileSync(REPORT, body + '\n')
+  console.log(body.replace(/[|*#]/g, '').replace(/\n{2,}/g, '\n'))
+}
+
 if (runs.length === 0) {
-  // Correct on a repository where the master lane has not run yet. Bootstrapping, not a fault - and
-  // saying so beats inventing a reference.
-  console.log('check-throughput-regression: no `perf baseline (master)` runs yet - nothing to compare against.')
-  console.log('  The reference builds itself once that workflow has run on master.')
+  writeReport(`### ⚪ Throughput — no reference yet
+
+| | |
+|---|---|
+| **This run** | ${observedRate} rec/s |
+| Subject time | ${observedSubject.toFixed(1)}s |
+| Control time | ${observedControl.toFixed(1)}s |
+
+Nothing to compare against: the \`perf baseline (master)\` workflow has not run on master yet, so there are no reference artifacts. **This is bootstrapping, not a fault** — the reference builds itself once that workflow runs, which cannot happen until this PR lands.
+
+Recorded here so the numbers are visible now rather than only in a job log.`)
   process.exit(NOTHING_IN_SCOPE)
 }
 
 const work = mkdtempSync(join(tmpdir(), 'thr-'))
 const reference = []
+const incomplete = []
 try {
   for (const [id, sha] of runs) {
     const dir = join(work, id); mkdirSync(dir, { recursive: true })
@@ -145,7 +169,15 @@ try {
     const classes = methodSecondsFrom(xml)
     const control = CONTROLS.filter(c => classes.has(c)).reduce((a, c) => a + classes.get(c), 0)
     const subject = classes.get(SUBJECT) ?? 0
-    if (subject > 0 && control > 0) reference.push({ id, sha: sha.slice(0, 9), rate, subject, control })
+    // COMPLETE RUNS ONLY. `if: always()` uploads artifacts from a FAILED lane too, which may hold a
+    // subset of the reports. A partial control set gives an incomparable denominator and can move the
+    // median enough to invent a pass or a regression, so every expected control must be present.
+    const missing = CONTROLS.filter(c => !classes.has(c))
+    if (subject > 0 && control > 0 && missing.length === 0) {
+      reference.push({ id, sha: sha.slice(0, 9), rate, subject, control })
+    } else if (missing.length) {
+      incomplete.push(`${sha.slice(0, 9)} (missing ${missing.join(', ')})`)
+    }
   }
 } finally { rmSync(work, { recursive: true, force: true }) }
 
@@ -154,7 +186,6 @@ if (reference.length === 0) {
   process.exit(NOTHING_IN_SCOPE)
 }
 
-const observedSubject = observedClasses.get(SUBJECT) ?? 0
 const v = verdictFor({ subject: observedSubject, control: observedControl }, reference)
 const { observedShare, referenceShare, ratio, icon, word } = v
 const pct = n => `${(n * 100).toFixed(0)}%`
@@ -189,8 +220,6 @@ const report = `### ${icon} Throughput — ${word}
 Runs used: ${reference.map(r => r.sha).join(', ')}
 </details>`
 
-mkdirSync('target', { recursive: true })
-writeFileSync(REPORT, report + '\n')
-console.log(report.replace(/[|*#]/g, '').replace(/\n{2,}/g, '\n'))
+writeReport(report)
 console.log(`\nreport written to ${REPORT}`)
 process.exit(verdict.exit)

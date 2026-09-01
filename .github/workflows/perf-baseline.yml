@@ -55,6 +55,10 @@ on:
 
 permissions:
   contents: read
+  # The throughput check lists and downloads recent runs of THIS workflow to build its reference.
+  # Without actions: read those calls fail, the check exits 2 ("cannot run"), and continue-on-error
+  # leaves the job green - a permanently dead step that looks like a working one.
+  actions: read
 
 jobs:
   throughput:
