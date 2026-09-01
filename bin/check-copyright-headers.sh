@@ -138,6 +138,8 @@ EXEMPT_PATHS="
 *.sln|Visual Studio solution format carries no comment syntax
 *.bin|binary test fixture
 *.patch|a diff of third-party source, regenerated wholesale by its own tool - the NOTICE names what it modifies
+*/stock-baseline-fixture.tsv|regenerated wholesale by StockBaselineFixtureSupport in parallel-consumer-example-streams - a header would be destroyed on the next run
+*/stock-stateful-baseline-fixture.tsv|regenerated wholesale by StockBaselineFixtureSupport in parallel-consumer-example-streams - a header would be destroyed on the next run
 */py.typed|PEP 561 marker, required by the spec to be empty
 */META-INF/services/*|JDK ServiceLoader registry - the file's entire content is the provider list
 *.md|prose - never distributed detached from LICENSE, so a per-file notice has no recipient

@@ -284,27 +284,7 @@ class PcDrivenStreamsDispatchTest extends BrokerStreamsIntegrationTest {
     }
 
     private Map<String, List<String>> consumeByKey(final String outputTopic) {
-        Map<String, List<String>> byKey = new LinkedHashMap<>();
-        try (KafkaConsumer<String, String> consumer = getKcu().createNewConsumer(KafkaClientUtils.GroupOption.NEW_GROUP)) {
-            consumer.subscribe(UniLists.of(outputTopic));
-
-            await().atMost(Duration.ofSeconds(120)).until(() -> {
-                ConsumerRecords<String, String> polled = consumer.poll(Duration.ofMillis(500));
-                for (ConsumerRecord<String, String> record : polled) {
-                    byKey.computeIfAbsent(record.key(), k -> new ArrayList<>()).add(record.value());
-                }
-                int total = flatten(byKey).size();
-                log.debug("Consumed {}/{} so far", total, TOTAL);
-                return total >= TOTAL;
-            });
-        }
-        return byKey;
-    }
-
-    private static List<String> flatten(final Map<String, List<String>> byKey) {
-        List<String> all = new ArrayList<>();
-        byKey.values().forEach(all::addAll);
-        return all;
+        return consumeByKey(outputTopic, TOTAL, Duration.ofSeconds(120));
     }
 
     /**
