@@ -32,14 +32,59 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { RULES } from './lib/source-patterns.mjs'
 
+/** exit codes, per bin/check-all.sh's contract */
+const VIOLATION = 1, CANNOT = 2, NOTHING_IN_SCOPE = 3
+
 const sh = (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8' }).trim()
 
+// SHALLOW CLONES DO NOT ERROR, THEY LIE. `git merge-base HEAD origin/master` on a shallow clone
+// returns a commit that is not the merge base, with exit 0 - so an `added-files` rule silently
+// compares against the wrong point and reports a wrong answer confidently. Reproduced on a real
+// shallow checkout during review of this PR, not theorised.
+//
+// This repo already answers it that way elsewhere - check-copyright-headers.sh guards its fork point
+// with `git cat-file -e <ref>^{commit}` before trusting it. This is the one new script here that
+// skipped the convention, which is a poor look for the gate whose whole subject is silent wrong
+// answers.
+//
+// FAIL CLOSED (exit 2, "cannot run"), never open. A gate that cannot establish its baseline must say
+// so; reporting "no violations" because it could not look is the failure this file exists to prevent.
 let mergeBase = null
-try { mergeBase = sh('git', ['merge-base', 'HEAD', 'origin/master']) } catch { /* reported per rule */ }
+let baseUnavailable = null
+try {
+  if (sh('git', ['rev-parse', '--is-shallow-repository']) === 'true') {
+    baseUnavailable = 'the repository is a shallow clone, so merge-base cannot be trusted'
+  } else {
+    // Prove the ref is actually present before asking merge-base about it: a single-branch or
+    // narrowly-scoped fetch leaves no local origin/master, and merge-base's answer then means nothing.
+    sh('git', ['cat-file', '-e', 'origin/master^{commit}'])
+    mergeBase = sh('git', ['merge-base', 'HEAD', 'origin/master'])
+  }
+} catch {
+  baseUnavailable = 'origin/master is not present locally (single-branch or narrow fetch)'
+}
+
+if (baseUnavailable) {
+  const needsBase = RULES.some(r => r.scope === 'added-files')
+  if (needsBase) {
+    console.error(`check-source-patterns: cannot determine what this branch ADDED - ${baseUnavailable}.`)
+    console.error('  Fetch full history for origin/master (git fetch --unshallow, or fetch that ref) and re-run.')
+    console.error('  Refusing to report "no violations" from a baseline that cannot be established.')
+    process.exit(CANNOT)
+  }
+}
 
 const tracked = sh('git', ['ls-files']).split('\n').filter(Boolean)
+// COMMITTED **AND** STAGED. `git diff <base> HEAD` cannot see a file staged for its first commit, so
+// the pre-commit hook - the one place this rule is meant to stop a new shell script BEFORE it lands -
+// would have allowed exactly the addition it exists to reject, and only CI would have caught it after
+// the fact. The union covers both callers: the hook sees the staged addition, CI sees the committed
+// one, and a file in both is deduplicated.
 const added = mergeBase
-  ? sh('git', ['diff', '--name-only', '--diff-filter=A', mergeBase, 'HEAD']).split('\n').filter(Boolean)
+  ? [...new Set([
+      ...sh('git', ['diff', '--name-only', '--diff-filter=A', mergeBase, 'HEAD']).split('\n'),
+      ...sh('git', ['diff', '--name-only', '--diff-filter=A', '--cached', mergeBase]).split('\n'),
+    ])].filter(Boolean)
   : null
 
 // One read per file, not one per rule. Rules overlap - `^bin/.*\.sh$` and `\.(sh|bash)$` both match
@@ -90,14 +135,14 @@ for (const rule of RULES) {
   console.error(`  FIX: ${rule.fix}`)
 }
 
-if (cannot > 0 && violations === 0) process.exit(2)
+if (cannot > 0 && violations === 0) process.exit(CANNOT)
 if (violations > 0) {
   console.error('\nRules live in bin/lib/source-patterns.mjs - adding one is a row, not a script.')
-  process.exit(1)
+  process.exit(VIOLATION)
 }
 if (inScope === 0) {
   console.log('check-source-patterns: no files in scope for any rule')
-  process.exit(3)
+  process.exit(NOTHING_IN_SCOPE)
 }
 const against = baseUsed ? `, new-file rules against ${baseUsed.slice(0, 9)}` : ''
 console.log(`check-source-patterns: ${RULES.length} rule(s) clean over ${inScope} file(s) in scope${against}`)
