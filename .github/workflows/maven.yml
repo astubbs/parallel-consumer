@@ -847,6 +847,11 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Post SpotBugs summary to PR
         if: always()
+        # A COMMENT WRITE MUST NOT FAIL THE JOB - the same reasoning as the throughput step above, and
+        # missing here for the same reason it was missing there. This step summarises analysis that has
+        # already run and already posted its annotations, so a rate limit or a 500 while posting would
+        # fail the lane for something that is not the lane's business.
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |
@@ -870,8 +875,28 @@ jobs:
                 body = `## :warning: SpotBugs Report\n\n**${totalBugs} bug(s) found**${baselineNote}. See the annotations on the Files Changed tab for details.\n`;
               }
             }
-            const comments = await github.rest.issues.listComments({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number });
-            const existing = comments.data.find(c => c.body.includes('SpotBugs Report'));
+            // PAGINATE, AND ONLY TRUST OUR OWN COMMENTS - the same two-part fix the throughput step's
+            // lookup carries a few hundred lines above. Both halves are pre-existing on master and not
+            // introduced by this PR; they are fixed here because it is the same defect class in the same
+            // file, and a second branch to change two lines costs more than it saves.
+            //
+            // WHY THE PAGINATION BUG IS LATENT RATHER THAN VISIBLE, which is the part worth writing down:
+            // the issue-comments API returns 30 per page OLDEST FIRST, so a sticky comment born EARLY
+            // sits on page one forever and keeps being found. It only breaks when the comment is born
+            // LATE - created once the PR already has 30+ comments, it lands on page two, `find` never
+            // sees it again, and every later push takes the create branch. So it does not miss once and
+            // recover: it duplicates on EVERY push, and each duplicate is itself on page two. The busiest
+            // PRs in this repo today are 13, 11, 11, 10 and 9 comments, all comfortably above the fold,
+            // which is exactly why nobody has met it.
+            //
+            // The author filter is the other half. `includes('SpotBugs Report')` matches ANY comment
+            // carrying that string - including a human quoting the report - and `find` takes the oldest
+            // match, so a person who wrote about SpotBugs before the bot first posted would have their
+            // comment silently OVERWRITTEN by the next run. Restricting to a Bot author is what makes
+            // this lookup mean "the comment this workflow wrote" rather than "any comment on the topic".
+            const all = await github.paginate(github.rest.issues.listComments,
+              { owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, per_page: 100 });
+            const existing = all.find(c => c.body.includes('SpotBugs Report') && c.user?.type === 'Bot');
             if (existing) {
               await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body });
             } else {
