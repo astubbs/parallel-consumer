@@ -87,6 +87,15 @@ UNSUPPORTED = [
 # that would ship mangled markup is an error, not a pass.
 UNBALANCED_MONOSPACE = "odd number of ` - one monospace span is left open"
 
+# AsciiDoc's UNCONSTRAINED monospace, ``like this``. convert_inline masks spans by splitting on a
+# SINGLE backtick, so a doubled delimiter yields an empty span and hands the text between the two
+# delimiters to convert_prose as if it were prose: ``link:docs/x[y]`` comes back rewritten INSIDE
+# what the author wrote as monospace, which is the one thing convert_inline promises never happens.
+# The count is even, so the check above cannot see it. Zero instances in CHANGELOG.adoc, so this
+# rejects rather than teaching the masker two delimiter widths - same contract as the table above.
+RE_UNCONSTRAINED_MONO = re.compile(r"``")
+UNCONSTRAINED_MONOSPACE = "``unconstrained monospace`` - write it as a single-backtick `span`"
+
 # convert_inline stands this character in for a monospace span while it converts the prose
 # around it, so one already in the source would be restored as the wrong span. Nothing legible
 # puts a NUL in a changelog; rejecting it is cheaper than defending against it.
@@ -113,6 +122,13 @@ RE_LINK_MACRO = re.compile(r"link:([^\s\[\]]+)\[([^\]]*)\]")
 # from being read as an emphasis span - a naive `\*{1,2}(...)\*{1,2}` mangles it into `3 ** 4 ** 5`.
 # The backreference keeps `*x*` and `**x**` symmetric instead of pairing one delimiter with two.
 RE_BOLD = re.compile(r"(?<![\w*])(\*{1,2})(?![\s*])(.+?)(?<![\s*])\1(?![\w*])")
+
+# A bullet marker is structure, not content. `* ` in the source converts to `- `, which is not
+# blank, so a body of contentless bullets clears a bare `.strip()` test and publishes a release
+# page of empty bullets - the astubbs#197 blank body reached one indirection further on. Stripping
+# is deliberately limited to the two list markers convert_line emits: over-stripping would fail a
+# real section as "no notes", and a blocked release is the worse of the two failures.
+RE_LIST_MARKER = re.compile(r"^\s*(?:[-*+]|\d+\.)\s")
 
 
 class NoSection(Exception):
@@ -162,6 +178,8 @@ def first_problem(line):
             return why
     if CODE_SPAN_MASK in line:
         return STRAY_MASK
+    if RE_UNCONSTRAINED_MONO.search(line):
+        return UNCONSTRAINED_MONOSPACE
     if line.count("`") % 2:
         return UNBALANCED_MONOSPACE
     return None
@@ -293,14 +311,19 @@ def to_markdown(body, repo_url, ref):
     return "\n".join(out) + "\n"
 
 
+def has_content(markdown):
+    """True if any line carries something once its list marker is off - see RE_LIST_MARKER."""
+    return any(RE_LIST_MARKER.sub("", line).strip() for line in markdown.splitlines())
+
+
 def render(text, version, repo_url, ref):
     """Return (markdown, heading_suffix). Never returns an empty body - see the module docstring."""
     suffix, body = find_section(text.splitlines(), version)
     check_supported(body)
     markdown = to_markdown(body, repo_url, ref)
-    if not markdown.strip():
+    if not has_content(markdown):
         raise NoSection("the `== %s` section produces no notes - it is empty, or holds only "
-                        "`//` comments and `+` continuations" % version)
+                        "`//` comments, `+` continuations and contentless bullets" % version)
     return markdown, suffix
 
 

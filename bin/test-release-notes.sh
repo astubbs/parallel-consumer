@@ -17,8 +17,9 @@
 #        4.  a version prefix does NOT match a longer version (0.6.0.1 vs 0.6.0.10)
 #        5.  a missing section is exit 2, not empty output
 #        6.  a present-but-empty section is exit 2 - INCLUDING one that is non-empty but
-#            renders to nothing (only `//` comments, only a `+`), which is the same empty
-#            release body astubbs#197 was about, reached by a different route
+#            renders to nothing (only `//` comments, only a `+`, only contentless bullets,
+#            whose `- ` markers are not blank), which is the same empty release body
+#            astubbs#197 was about, reached by a different route
 #        7.  AsciiDoc outside the convertible subset is exit 3, not mangled markup
 #        8.  headings, bullets, ordered lists, admonitions, continuations and comments
 #        9.  bold: AsciiDoc `*one*` and `**two**` both become Markdown `**two**`
@@ -188,6 +189,33 @@ assert "a section that renders to nothing fails loudly" \
 assert "...and prints nothing to stdout rather than an empty body" \
     0 "$(render "$RENDERS_TO_NOTHING" 0.6.0.0 | wc -c | tr -d ' ')"
 
+# The same promise one indirection further on: a bullet MARKER is not content. `* ` converts to
+# `- `, which is not blank, so judging emptiness with a bare `.strip()` exits 0 and publishes a
+# release page of empty bullets. The trailing space is written as an expansion because the line
+# is not a bullet without it, and a literal one here is what editors and diff tools strip.
+SP=' '
+CONTENTLESS_BULLETS=$(changelog "== 0.6.0.0
+
+*$SP
+*$SP
+
+== 0.5.3.3
+
+Body.")
+assert "a section of contentless bullets fails loudly" \
+    2 "$(render_status "$CONTENTLESS_BULLETS" 0.6.0.0)"
+assert "...and prints no empty-bullet body to stdout" \
+    0 "$(render "$CONTENTLESS_BULLETS" 0.6.0.0 | wc -c | tr -d ' ')"
+# ...while ONE bullet with a label keeps the section alive: the predicate must not over-reject.
+LABELLED_BULLET=$(changelog "== 0.6.0.0
+
+*$SP
+* Real item.")
+assert "a contentless bullet beside a real one still renders" \
+    0 "$(render_status "$LABELLED_BULLET" 0.6.0.0)"
+assert "...and the real item survives" \
+    "- Real item." "$(render "$LABELLED_BULLET" 0.6.0.0 | tail -n 1)"
+
 # argparse's own exit code is 2, which is this script's "no section for that version". Sharing it
 # would send a release operator looking for a missing changelog section over a mistyped flag.
 assert "a usage error is exit 1, not the no-section code" \
@@ -195,7 +223,8 @@ assert "a usage error is exit 1, not the no-section code" \
 
 for construct in '[source,java]' '----' '|===' '[[anchor]]' 'include::other.adoc[]' \
                  'ifdef::x[]' ':attribute: value' 'see <<other-section>>' \
-                 "'''" '<<<' 'an unclosed `monospace span'; do
+                 "'''" '<<<' 'an unclosed `monospace span' \
+                 '``unconstrained monospace``' '``link:docs/x[y]``'; do
     UNSUPPORTED=$(changelog "== 0.6.0.0
 
 $construct")
