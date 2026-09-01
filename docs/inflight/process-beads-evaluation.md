@@ -21,6 +21,17 @@ which owns the findings.** Its three headline results, so a reader knows whether
 - **Compaction is the one thing worth stealing regardless of the decision.** We have no answer to
   index inflation beyond a person noticing.
 
+**The survey widened on 2026-09-01 and changed the question**, so the document also carries the rest
+of the field and whether the nearest neighbour composes with us. Two results move the decision:
+
+- **Beads was built for a different problem** - the "50 First Dates" problem across a fleet of
+  twenty or thirty parallel agents, which is what Gas Town orchestrates. A fleet needs one shared
+  store no branch owns; we have one repository whose state is the thing tracked. That is a better
+  reason to decline than any feature comparison, and it holds whatever the probes return.
+- **`sd0xdev/sd0x-dev-flow`, not Beads, is the nearest neighbour** - and it stacks at the Claude
+  layer while colliding *silently* at the git layer, because `core.hooksPath` takes exactly one path
+  and this repo sets it to `.githooks`.
+
 ## What is left, and it needs `bd` to have run
 
 The document's §6 carries the probe list and the install decision. **Run it; do not read about it** -

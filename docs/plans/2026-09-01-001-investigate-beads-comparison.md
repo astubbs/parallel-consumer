@@ -195,3 +195,104 @@ written there, because a documentary pass has not earned one. On the documentati
 - **The GitHub link-graph work is provisionally un-gated.** No GitHub import is documented, so
   `ci-issue-index-has-no-edges.md` is probably building something Beads was never going to provide.
   Probe 5 is what makes that safe to rely on.
+
+---
+
+## 8. The rest of the field, surveyed 2026-09-01
+
+Added after the sections above, because "is Beads the right tracker" turned out to be the wrong
+question. Same evidence standard as §0 - documentation and READMEs, nothing run.
+
+**And a correction to how the first pass was conducted.** The survey in
+[`process-adopt-external-harness.md`](../inflight/process-adopt-external-harness.md) established that
+the *ideas* here are published - a named field, arXiv papers, guides from LangChain, Addy Osmani,
+HumanLayer and Software Mansion, and a Medium piece titled almost exactly our thesis. That is
+evidence about a literature, and it was briefly used to conclude something about a **market** -
+whether anything installable already does this. Those are different claims needing different
+instruments, and
+[`docs/solutions/workflow-issues/negative-results-need-an-instrument-that-could-have-said-yes.md`](../solutions/workflow-issues/negative-results-need-an-instrument-that-could-have-said-yes.md)
+owns why that substitution is a reporting error rather than a small one. The product survey below is
+the instrument that could have said yes.
+
+### The trackers
+
+| Project | What it is | Why it is not us |
+|---|---|---|
+| **Backlog.md** | One plain markdown file per task in the tree, CLI, terminal Kanban, web UI, dependencies | The only candidate that **keeps** branch travel, because it is files. It would replace a working thing and impose its schema over our axes. |
+| **git-bug** (Go, ~10k stars, active) | Issues as git objects, CLI/TUI/web, **GitHub and GitLab bridges** | Bugs live in their own refs, so they do not travel with a branch either. Interesting for exactly one thing - the bridges are the edge data `issue-index.md` lacks. |
+| **Claude Code Tasks** (v2.1.16+) | First-party `TaskCreate`/`TaskUpdate`/`TaskList`/`TaskGet`, dependencies, blockers, states | State lives in `~/.claude/tasks/<id>/` - outside the repo, per-user, not in git, invisible to Codex and to humans. Tool exposure has been reported as unstable. **Watch, do not adopt.** |
+| **OpenClaw** | Plain markdown memory - a long-term `MEMORY.md` plus date-named daily logs in a `memory` directory - injected at session start, no database, no cloud | The closest thing to our *idea*, and organised on a different axis: it lives in the **agent's** workspace and is **chronological**. A daily log says what happened; it cannot say that this test lies. |
+
+### The harness frameworks
+
+| Project | What it is | Overlap |
+|---|---|---|
+| **`karanb192/claude-code-hooks`** (~492 stars) | 20 marketplace-installable hooks; every hook tested in CI on three Node versions | Closest on **guardrails**. Ships `config-guard` and `instructions-audit` - a hole we have - plus `dead-rules-audit`, which is our rules-into-mechanisms thesis, shipping. |
+| **`sd0xdev/sd0x-dev-flow`** (~188 stars) | *"A reference implementation of harness engineering for Claude Code"* | **Closest on the thesis, by a distance.** See below. |
+| **Superpowers, ECC, `wshobson/agents`** | Skills frameworks, agent bundles, operator layers | Large and popular, and orthogonal. They ship *capabilities*; none ships a record of what is true about a repository right now. |
+
+### `sd0x-dev-flow` is the nearest neighbour, and it invalidates a claim made earlier in this session
+
+It ships a **six-layer architecture** (Skills / Model / Rules / Hooks+State / Codex / Scripts+Agents);
+**tiered rules - Anchor, Default, Guidance** - which is `AGENTS.md`'s own binds-everyone versus
+situational split as a shipped taxonomy; `SessionStart` **re-injection of git baseline and owed-gate
+reminders after compaction**, with state bound to the tree digest so any edit re-opens its gate; and
+**`commit-msg-guard` plus an optional `pre-push-gate`** at the git level.
+
+That last one **contradicts** a claim made an hour earlier in this same investigation, that nobody
+ships push-time or merge-time reminders. They do. Of the three gaps asserted, one is simply wrong,
+and the other two are narrower than stated: they order injected content **by gate dependency graph**,
+so ordering exists but is not by consequence; and they inject **session state**, not a curated repo
+corpus.
+
+### What actually looks distinctive, once the field is surveyed
+
+Not the injection - that is commodity, with better implementations than ours shipping today. The
+distinctive claim is one axis:
+
+> **Everyone else's memory lives beside the agent. Ours lives beside the code.**
+
+Claude Code Tasks in `~/.claude/tasks/`, OpenClaw in `~/.openclaw/workspace/`, Beads generation 2 in
+`refs/dolt/data`. All of them are the agent's memory, following the agent. `docs/inflight/` follows
+the *branch*, which is why a note can stop being true when its branch does, and why two branches are
+allowed to disagree about what is open.
+
+**And that difference is not an oversight on their part - it is the different problem they were built
+for.** Beads was written for the "50 First Dates" problem across a fleet of twenty or thirty parallel
+agents, which is what Gas Town orchestrates; a fleet genuinely needs one shared store that no single
+branch owns. We have one repository whose state is the thing being tracked. **Beads is correctly
+designed for its problem, and its problem is not ours** - which is a better reason to decline than
+any feature comparison, and it survives whatever the probes in §6 return.
+
+---
+
+## 9. Would `sd0x-dev-flow` stack on top of what we have?
+
+The reason to ask: if the nearest neighbour composes, adopting it is additive and the build-or-adopt
+framing is a false choice.
+
+**On the Claude Code side: yes, and by design.** Hooks *merge* across sources rather than replacing
+each other - user, project, local, plugin and managed settings all contribute, and
+`disableAllHooks` cannot disable managed ones. Identical handlers defined in more than one settings
+file run once; a plugin's copy of the same handler stays separate. Three consequences that matter
+here:
+
+- **All matching hooks run in parallel.** Nothing may assume it runs before or after another hook.
+- **Conflicts resolve deny-first**: exit 2 blocks whether or not JSON is printed, and a
+  `permissionDecision` of `allow` cannot override it. So stacking gives you the **union of everyone's
+  blocks**. Adding a twenty-hook plugin adds twenty new ways for the session to be stopped, and
+  `docs/agent-harness.md` records what one misconfigured blocking hook did here: it took away *every*
+  Bash command in the session, including the one that would have fixed the hook.
+- **Injected context competes for the same window.** Ours already carries the inflight index, the
+  solutions titles and the branch's own record.
+
+**On the git side: no, and the failure is silent.** `core.hooksPath` takes exactly one path, and this
+repo sets it to `.githooks`. A `commit-msg-guard` or `pre-push-gate` installed the usual way either
+writes into `.git/hooks` - which git ignores entirely while `core.hooksPath` is set, so their guard
+never fires and nothing says so - or repoints `core.hooksPath`, which disables our pre-commit gates
+and nothing says that either. **Both halves of that collision are silent, which is the failure class
+this whole harness exists to remove.** Composing at the git layer means merging their scripts into
+`.githooks/` by hand and owning the result.
+
+So the answer is *yes at the Claude layer, no at the git layer, and the Claude layer costs blast
+radius and context*. That is worth knowing before anyone treats stacking as free.

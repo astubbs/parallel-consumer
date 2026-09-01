@@ -34,6 +34,13 @@ matrix and published pieces from Anthropic and Martin Fowler.
   markdown-file variant.
 - All MIT, so adoption is legally cheap.
 
+**Extended 2026-09-01, and the extension moved the question.** The survey above asked which *hooks
+project* to adopt. Widening it to the trackers, to the first-party features that have since shipped,
+and to whether the nearest neighbour composes with us is recorded in
+[`docs/plans/2026-09-01-001-investigate-beads-comparison.md`](../plans/2026-09-01-001-investigate-beads-comparison.md),
+which owns those findings - including that `sd0xdev/sd0x-dev-flow` is closer to this repo's thesis
+than anything named above.
+
 ## What adoption would cost us, honestly
 
 - **The conventions are not in the code.** The tag vocabulary, the weight-axis boundary between
