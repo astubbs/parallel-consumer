@@ -71,9 +71,14 @@ arm, because it holds the machine fixed and changes only the concurrency. If it 
 of the two unattributed lines above belongs to this fork. If it still stalls, the load is a red
 herring and this is a defect in completion on the PC path, which is the error-surfacing rung's ground.
 
-Before either, add a second sighting cheaply: the lane runs on every push and on every merge to
-master, so the rate accumulates whether or not anybody asks for it. A second sighting is worth more
-than a second opinion here - one occurrence cannot distinguish a rare race from a one-off.
+Before either, keep collecting: the lane runs on every push and on every merge to master, so the rate
+accumulates whether or not anybody asks for it.
+
+**Second attempt: green.** The same lane, the same code, a later push on the same PR - the whole
+streams integration suite passed, this class included. So it is intermittent rather than a standing
+break, which is what makes the core-count arm worth running rather than merely re-running: a green
+re-run says nothing about the cause, and this note exists so that the next green one is not mistaken
+for a diagnosis.
 
 ## Delete when
 
