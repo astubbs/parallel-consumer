@@ -54,7 +54,7 @@ The refusal is built in layers. Layers 1 and 2 sit on the DSL methods themselves
 exists because the DSL is not the only way in. `topology.addStateStore(Stores.windowStoreBuilder(...))`
 attaches a window store to a plain `Processor` without ever constructing a `KStream`, so no patched DSL
 method is called and layers 1 and 2 are never consulted
-(`parallel-consumer-streams/src/main/java/io/confluent/parallelconsumer/streams/PcSupportedEnvelope.java:22-27`).
+(`parallel-consumer-streams/src/main/java/bz/stub/parallelconsumer/streams/PcSupportedEnvelope.java:22-27`).
 The backstop runs once, in the patched `StreamTask` constructor, over `ProcessorTopology.stateStores()`
 plus the task config's exactly-once flag, and it runs *before* the PC dispatcher is created so a refused
 task never allocates a worker pool nothing will shut down.
@@ -392,9 +392,9 @@ them (`PcSupportedEnvelope.java:47-53`).
   how this was found, though not why it was missable.
 - [Kafka Streams couples polling and processing on one thread](../integration-issues/kafka-streams-couples-polling-and-processing-on-one-thread.md) -
   why single-threaded assumptions are load-bearing throughout Kafka Streams in the first place.
-- `parallel-consumer-streams/src/main/java/io/confluent/parallelconsumer/streams/PcSupportedEnvelope.java` -
+- `parallel-consumer-streams/src/main/java/bz/stub/parallelconsumer/streams/PcSupportedEnvelope.java` -
   the backstop, the classify chain, and the reasoning for classifying by interface rather than by name.
-- `parallel-consumer-streams/src/main/java/io/confluent/parallelconsumer/streams/PcUnsupportedConstruct.java` -
+- `parallel-consumer-streams/src/main/java/bz/stub/parallelconsumer/streams/PcUnsupportedConstruct.java` -
   the refused set, each with the mechanism that breaks it.
 - `docs/plans/2026-08-10-001-feat-refuse-unsupported-streams-surface-plan.md:508-513` - OQ4, the review
   finding that added versioned stores; `:493-496` - OQ1, the deferred default-refuse rule this finding

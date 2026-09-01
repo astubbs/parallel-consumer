@@ -264,9 +264,9 @@ plausible sentence said it could not matter.
 - [../test-issues/a-restart-assertion-satisfiable-by-pre-crash-data-proves-nothing.md](../test-issues/a-restart-assertion-satisfiable-by-pre-crash-data-proves-nothing.md)
   - the same ablation move in the test-validity domain ("delete or disable ONLY the mechanism under
   test and confirm red"), where the question is binary rather than an apportionment of credit.
-- `parallel-consumer-streams/src/main/java/io/confluent/parallelconsumer/streams/PcDispatchSwitch.java:53-98`
+- `parallel-consumer-streams/src/main/java/bz/stub/parallelconsumer/streams/PcDispatchSwitch.java:53-98`
   - the kill switch, its javadoc justifying itself as the control arm, and the in-JVM setter.
-- `parallel-consumer-streams/src/main/java/io/confluent/parallelconsumer/streams/PcWorkSignal.java`
+- `parallel-consumer-streams/src/main/java/bz/stub/parallelconsumer/streams/PcWorkSignal.java`
   - the mechanism being ablated: `hasActiveWorkOnCurrentThread()` (line 213) decides whether to split
   the poll wait, `awaitWorkForRemainderOf(Duration)` (line 230) performs it.
 - `parallel-consumer-streams/README.md`, "Wake on work" section - the user-facing description and the
@@ -283,7 +283,7 @@ plausible sentence said it could not matter.
 - On branch `test/ks-streams-realistic-domain-benchmark` only:
   `docs/plans/2026-08-11-001-test-ks-streams-realistic-benchmark-plan.md` (KTD1 and P9, the suppressed
   arm), `docs/plans/2026-08-11-001-realistic-benchmark-result.md` (section 2.1, the measurement),
-  `parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streams/integrationTests/BacklogCatchUpBenchmarkTest.java`
+  `parallel-consumer-streams/src/test/java/bz/stub/parallelconsumer/streams/integrationTests/BacklogCatchUpBenchmarkTest.java`
   (the three-arm replacement test), `parallel-consumer-streams/DEMO.md` (the user-facing front door the
   attribution attaches to).
 - `astubbs/parallel-consumer#271` - the Kafka Streams dispatch PR, **open** at the time of writing.

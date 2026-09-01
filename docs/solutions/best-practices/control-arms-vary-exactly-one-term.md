@@ -61,7 +61,7 @@ cardinality-only variant of it.
 **The tell was magnitude, not direction.** The buggy control's median was 19568ms against the
 experiment's 1865ms - roughly an order of magnitude apart, not the "somewhat different, control
 absorbed the effect" shape a real cardinality-only control produces. See the comment recording the
-fix at `parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streams/integrationTests/HeadOfLineBlockingBenchmarkTest.java:258-263`:
+fix at `parallel-consumer-streams/src/test/java/bz/stub/parallelconsumer/streams/integrationTests/HeadOfLineBlockingBenchmarkTest.java:258-263`:
 <!-- file-refs: N/A - the benchmark quoted here is on the astubbs/parallel-consumer#271 branch forest at its pre-rename path; this section records what was measured there -->
 
 ```java

@@ -227,7 +227,7 @@ publishes after the drain is not claimed by a commit whose map does not contain 
 **Failures are deliberately not counted.** `recordFailure` (`:547-553`) queues the container but does not touch
 the counter, because a failure does not make a commit worth attempting: PC leaves the offset incomplete and
 `PartitionState.onFailure`
-(`parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/state/PartitionState.java:268-270`) is a
+(`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/PartitionState.java:268-270`) is a
 no-op, so the partition never turns dirty. That asymmetry is the reason the query counts successes rather than
 the mailbox's size, which would have been the obvious cheap "is there anything pending" answer. With retries
 disabled in this module, a poison pill sits in PC's accounting forever, so a size-based query would report a
@@ -402,7 +402,7 @@ The root-cause claim was settled with a controlled experiment carrying both arms
 
 ### The regression test that pins the split
 
-`parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streams/PcTaskDispatcherTest.java:743-771`
+`parallel-consumer-streams/src/test/java/bz/stub/parallelconsumer/streams/PcTaskDispatcherTest.java:743-771`
 drives a thread named `StateUpdater-1` by hand and asserts the foreign thread gets the *same* answer without
 throwing, then that it sees a subsequent commit rather than a stale cached one:
 

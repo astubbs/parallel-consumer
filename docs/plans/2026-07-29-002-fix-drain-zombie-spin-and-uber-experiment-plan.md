@@ -70,7 +70,7 @@ whether the combined fixes eliminate the residual stalls.
   two names the plan turns on - `signalStop` and `shutdownRequested` - are gone from the tree
   entirely, removed by the very fix this plan proposed when it landed in `bd7172418` (PR astubbs#80).
   For the pre-fix code as this plan read it: `git show
-  bd7172418^:parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/BrokerPollSystem.java`
+  bd7172418^:parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/BrokerPollSystem.java`
   and the sibling `ConsumerManager.java`, grep `signalStop` and `shutdownRequested`. The method names
   above are the durable anchors and all still exist; in today's code the flag's three read sites
   survive under `closeInProgressSignal` - grep `while (!closeInProgressSignal.getAsBoolean())` for the

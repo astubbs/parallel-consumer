@@ -31,7 +31,7 @@ tags:
 
 ## Context
 
-`HeadOfLineBlockingBenchmarkTest` (`parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streams/integrationTests/HeadOfLineBlockingBenchmarkTest.java`)
+`HeadOfLineBlockingBenchmarkTest` (`parallel-consumer-streams/src/test/java/bz/stub/parallelconsumer/streams/integrationTests/HeadOfLineBlockingBenchmarkTest.java`)
 is part of the `ks-spike` work on astubbs/parallel-consumer#271 (issue astubbs#255): does routing a Kafka
 Streams topology's dispatch through PC's `WorkManager` remove head-of-line blocking? Stock Kafka Streams
 hands a partition's records over one at a time (`PartitionGroup.nextRecord()`); PC dispatches by key
@@ -198,7 +198,7 @@ just doesn't gate the test. Result at the corrected statistics: min 1541ms -> 27
 - `docs/plans/2026-08-08-001-feat-ks-on-pc-spike-plan.md`, section U8 - the plan that originally
   specified p99 for A1/A2, and the source of the "predictions stated before running" discipline that
   made the wrong choice visible instead of silently accepted.
-- `parallel-consumer-streams/src/test/java/io/confluent/parallelconsumer/streams/integrationTests/HeadOfLineBlockingBenchmarkTest.java` -
+- `parallel-consumer-streams/src/test/java/bz/stub/parallelconsumer/streams/integrationTests/HeadOfLineBlockingBenchmarkTest.java` -
   the test itself; see the `Latencies` class (test:358-391) for the percentile implementation and the
   assertion comments at test:120-148 for the reasoning captured in place.
 <!-- file-refs: N/A - this write-up is a record of work done on the astubbs/parallel-consumer#271 branch forest, and names that forest's plan, its sibling write-up and its benchmark at their pre-rename paths. Repointing them at this stack would make the record describe a run that never happened -->

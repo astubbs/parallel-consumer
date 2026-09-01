@@ -300,7 +300,7 @@ Options to consider (not mutually exclusive), roughly in order of increasing inv
       merged master, which carries the fix this write-up called for (`bd7172418`, PR astubbs#80), so
       `signalStop` and `shutdownRequested` no longer appear on it at all and both cited lines are now
       blank. The method names are the durable anchors; for the code as verified, `git show
-      bd7172418^:parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/BrokerPollSystem.java`
+      bd7172418^:parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/BrokerPollSystem.java`
       and the sibling `ConsumerManager.java`, grep `signalStop` and `shutdownRequested`. Re-running the
       check on the branch today would find nothing - because the branch moved, not because the
       2026-07-29 finding was wrong. The repair establishes where to look; it does not re-verify.)
