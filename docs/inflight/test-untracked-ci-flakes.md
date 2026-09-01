@@ -19,12 +19,58 @@ Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutio
 | Test | Rate | Why it is worth attention |
 |---|---|---|
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. Mechanism known and owned (astubbs#262), quarantined - see below |
-| `JStreamParallelEoSStreamProcessorTest.testConsumeAndProduce` and `.testFlatMapProduce` | 1 seen (2026-09-01) | Not from the original scan - found in a **local** core unit run on a parallel re-cut of astubbs#207, not on astubbs#207 itself. Both failed together on produced-record count (`Expected size: 1/2 but was: 0`), i.e. the returned stream carried nothing. UNDIAGNOSED - see below | <!-- post-merge: checked -->
+| `ParallelEoSStreamProcessorTest.processInKeyOrder` | 4 seen (2026-09-01), all under load | Not from the original scan - found running the full core suite on astubbs#207 while the box was also running CI. Its **`[sanity check input data]` precondition** fails fast (~0.6s) with `polled` empty. **Distinct from the documented `processInKeyOrder` flake**, whose fix is merged - see below | <!-- post-merge: checked -->
+| `JStreamParallelEoSStreamProcessorTest.testConsumeAndProduce` and `.testFlatMapProduce` | 1 seen (2026-09-01) | Not from the original scan - found in a **local** core unit run on a parallel re-cut of astubbs#207, not on astubbs#207 itself. Both failed together on produced-record count (`Expected size: 1/2 but was: 0`), i.e. the returned stream carried nothing. **Mechanism now known and owned by astubbs#116** - see below | <!-- post-merge: checked -->
 | `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 3 seen (2026-08-18, 2026-08-19, 2026-08-25) | Not from the original scan - each found while babysitting a branch carrying **no main Java**. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third sighting carries the failing batch contents and they point at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
 
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
 door, and for the same reason: two of that family turned out to be real product bugs, and the third
 was neither tight nor a stall but a test that could not force its own trigger.
+
+<!-- post-merge: checked-begin -->
+
+### `processInKeyOrder` - a precondition that waits a fixed number of cycles for an event
+
+**Not the flake `docs/solutions/test-flakiness/assert-the-commit-frontier-not-the-tick-path.md`
+already records**, and worth saying so first, because the test name is the same and that write-up
+reads as closed. That one is a 30s `ConditionTimeoutException` inside `assertCommitLists`, and its
+fix landed with astubbs#264. This one fails in about 0.6 seconds, before any commit assertion is
+reached:
+
+```
+java.lang.AssertionError:
+[sanity check input data]
+Actual and expected should have same size but actual size is: 0
+while expected size is: 9
+Actual was: []
+```
+
+`ParallelEoSStreamProcessorTest.java`, grep `sanity check input data` - the line is
+`assertThat(polled).as("sanity check input data").hasSameSizeAs(locks)`, and the only thing standing
+between it and the poll it depends on is `awaitForOneLoopCycle()`. That is a fixed number of control
+cycles used as a proxy for "the consumer has polled its records", so under contention the cycle
+elapses before the poll lands and the test's own precondition is false. Same defect class as the
+solution doc above - asserting something only eventually true - in a different shape: a fixed wait
+standing in for the event, which is what astubbs#265 removed elsewhere in this suite.
+
+**Control-armed, which is why it is recorded as contention rather than suspected:**
+
+| Arm | Result |
+|---|---|
+| Full suite, fresh worktree, machine otherwise idle, at astubbs#207's tip | green 559/0 |
+| Full suite, fresh worktree, machine otherwise idle, at the commit before it | green 559/0 |
+| Full suite, machine also running CI and a second build | 2 failures, twice running |
+| `ParallelEoSStreamProcessorTest` alone, machine loaded | green 68/68 |
+
+The failing parameters differ between runs (`[2]` then `[1]` and `[3]`), which is what rules out a
+deterministic break introduced by the branch it was seen on - astubbs#207 touches offset decoding and
+nothing this test exercises.
+
+**Classify before touching it.** The read above is a diagnosis from the assertion and its
+surroundings, not a fix that has been demonstrated; the honest next step is to replace the cycle
+count with a condition on `polled` and show it red before green.
+
+<!-- post-merge: checked-end -->
 
 <!-- post-merge: checked-begin -->
 
@@ -45,9 +91,23 @@ master and twice with that change, all green, and this class passes in isolation
 offsets change is implicated and the failure did not reproduce - which also means nothing here is
 diagnosed.
 
-The suspicion worth testing first, because both tests share it: the assertion reads the result stream
-without waiting for the produce to land, so it is an ordering question rather than a product one. That
-is a guess. **Classify before touching it** - the same rule as the rest of this ledger.
+**The mechanism is astubbs#116's, and this sighting is evidence for it.** That PR - *"a result stream
+that ends before the results arrive"*, fixing astubbs#122 / confluentinc#912 - found that the bridge
+from the result queue to the returned `Stream` returned `false` from `Spliterator#tryAdvance` the
+first time the queue polled empty. `tryAdvance` has no way to say "nothing right now": `false` means
+*no more, ever*. So a momentary gap ended the stream permanently.
+
+Its own description says eight tests across core and vertx "collected the stream on the calling
+thread and asserted a size" and "passed **only because the stream quit early** - they encoded the
+defect". `testConsumeAndProduce` and `testFlatMapProduce` are two of them, and they assert exactly
+the sizes seen empty here. So this is not a test-infrastructure flake: it is the product defect
+astubbs#116 fixes, observed racing the other way for once, and it explains why both failed together
+and why the class passes in isolation.
+
+**Do not diagnose or quarantine this separately - it goes away with astubbs#116**, whose
+`JStreamLiveResultStreamTest` covers the behaviour directly. Delete this entry when that PR lands.
+Recorded anyway rather than dropped, because a sighting that confirms a fix is already written is
+worth more than one nobody wrote down.
 
 <!-- post-merge: checked-end -->
 

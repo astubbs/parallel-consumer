@@ -105,6 +105,45 @@ configuration), and a second test pins `FAIL` as genuinely fatal.
   paths now agree with it. Any branch merging its own `IGNORE` handling must use `baseOffset - 1`.
   **Still live on master** via astubbs#217's `of(baseOffset)`, so astubbs#207 is what fixes it.
 
+## Also in this PR, found at merge prep rather than by a gate
+
+- **`docs/features/invalid-offset-metadata-policy.yaml` had been falsified by this work** and is
+  corrected. Four claims were untrue - most bluntly "FAIL is the default and stops the application",
+  and a `boundaries` entry saying unrecognizable metadata "is not made fatal by this option", which
+  is astubbs#217's contract this PR overturns. `check-docs-data.sh` and the `docs data: audit` lane
+  both stayed green over it, because they validate structure and not truth. The PR checklist box for
+  `docs/features/` had been answered "N/A - no user-facing feature added", which was wrong.
+- **Javadoc lost in the merge, restored.** Taking this branch's side of `OffsetMapCodecManager`
+  dropped master's parameter and `@throws` documentation on both `deserialiseIncompleteOffsetMapFromBase64`
+  overloads and both `decodeCompressedOffsets` overloads. Restored as *coverage*, not text: master's
+  wording asserted the astubbs#217 contract ("Metadata that cannot be decoded at all raises
+  `OffsetDecodingError` under either policy"), which is exactly what this PR changes. This is the
+  failure mode `AGENTS.md` warns about for whole-file conflict resolution - prose vanishes and
+  nothing goes red.
+- **Two dangling javadoc citations**, in the two exception classes this branch adds: both said "see
+  `InternalRuntimeException` for why", and that class was renamed and deleted on master in
+  astubbs#267. `check-file-refs.sh` validates cited paths, not class names in comments.
+- **SpotBugs `MOM_MISLEADING_OVERLOAD_MODEL`**: this branch gave the private instance
+  `deserialiseIncompleteOffsetMapFromBase64` a new signature, so a pre-existing instance-plus-static
+  overload shape landed as a new-line finding. Renamed to `decodeOffsetMapForPartition`, which is
+  also the more honest name - the instance form is the only one that consults the user's configured
+  policy.
+
+## Harvested from a parallel re-cut
+
+A second session independently re-cut this work as `recut/207-offset-policy-bypass`, then stood down
+(pushed only so its handoff pointed at real commits; no PR; never force-pushed over this head). Its
+design disposition - that astubbs#217 supersedes this routing - is **not** adopted. Two things from
+it are folded in:
+
+- the `magicByteOfAnEncodingThatDoesNotExistYet()` helper was defined here but not applied in
+  `ForeignOffsetMetadataOnAssignmentTest`, which still hard-coded `(byte) 42` in the test whose whole
+  subject is the unknown-magic path. Now derived from the enum there too.
+- a `JStreamParallelEoSStreamProcessorTest` flake sighting that would otherwise have gone with the
+  abandoned branch. Carried into `docs/inflight/test-untracked-ci-flakes.md` - and, chasing it,
+  **astubbs#116 turns out to both explain and fix it**, so it is recorded there with a mechanism and
+  an owner rather than as an undiagnosed flake.
+
 ## Left open
 
 - `ByteArray` / `ByteArrayCompressed` remain encoder-less and decoder-less enum constants. They now
