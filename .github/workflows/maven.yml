@@ -256,28 +256,36 @@ jobs:
               if (bits.length) delta = `\n\n_Since the previous push: ${bits.join(', ')}. One push of difference sits inside this test's measured spread - read it as movement, not as a result._`
             }
 
-            const payload = `${marker}\n${body}${delta}`
+            // AN IN-PLACE UPDATE LOOKS DEAD. The comment body can be identical to last week's and there is
+            // nothing on it to say a run happened - no timestamp, no commit, no link - so a reader cannot tell
+            // a fresh verdict from a stale one, and the honest reaction to that is to stop trusting it.
+            // Stamping the head sha and the run link is what makes "updated in place" legible as "updated".
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`
+            const stamp = `\n\n<sub>Updated for \`${context.payload.pull_request.head.sha.slice(0, 9)}\` · [run ${context.runId}](${runUrl}) · ${new Date().toISOString().replace('T', ' ').slice(0, 16)} UTC</sub>`
+
+            const payload = `${marker}\n${body}${delta}${stamp}`
 
             // NORMALLY UPDATE IN PLACE: a PR with fifteen throughput comments is a PR where nobody reads the
             // throughput comment.
             //
             // EXCEPT WHEN THE STATUS CHANGES. Editing a comment thirty scrolls up produces no notification and
             // no visible change to anyone reading the PR top to bottom, so a run that went green to red used to
-            // announce itself by silently rewriting a comment nobody was looking at. On a status change the old
-            // comment is retired - its marker renamed so later pushes stop targeting it - and a fresh one is
-            // posted at the bottom where it will be seen. Number-only movement still updates in place; only the
-            // VERDICT earns a new comment, or this is back to fifteen of them.
+            // announce itself by silently rewriting a comment nobody was looking at. On a status change a fresh
+            // comment is posted at the bottom, and the old one is retired: its marker renamed so later pushes
+            // stop targeting it, and a link forward so a reader who lands on the stale one is not stranded.
+            // Number-only movement still updates in place; only the VERDICT earns a new comment.
             const statusChanged = prev && cur && prev.status !== cur.status
             if (existing && !statusChanged) {
               await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: payload })
             } else {
+              const created = await github.rest.issues.createComment({ owner, repo, issue_number, body: payload })
               if (existing) {
                 const retired = existing.body
                   .replace(marker, '<!-- pc-throughput-report (superseded) -->')
                   .replace(/^### /m, `### [superseded - status changed to ${cur?.status}] `)
-                await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: retired })
+                await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id,
+                  body: `${retired}\n\n<sub>Superseded by [a newer report](${created.data.html_url}).</sub>` })
               }
-              await github.rest.issues.createComment({ owner, repo, issue_number, body: payload })
             }
 
       # Exit 1 is a regression. Exit 2 is the check being UNABLE to measure, which this repo treats as

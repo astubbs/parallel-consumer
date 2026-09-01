@@ -245,7 +245,10 @@ try {
     const missing = CONTROLS.filter(c => !classes.has(c))
     const caseSet = classes.get('__cases__')
     if (observedCases && caseSet && caseSet !== observedCases) {
-      mismatched.push(sha.slice(0, 9))
+      // Keep the READING, not just the sha. Refusing to compute a verdict is right; hiding the
+      // numbers is not - a reader wants to see roughly where this run sits even when nothing here
+      // can be a control, and withholding them sends them to the job logs to find out.
+      mismatched.push({ sha: sha.slice(0, 9), rate, subject, control })
       continue
     }
     if (subject > 0 && control > 0 && missing.length === 0) {
@@ -262,8 +265,19 @@ if (reference.length === 0) {
   // some. Say how many were found and what this run's case set is, so the reader can tell a matrix
   // change they made from one they did not.
   const why = mismatched.length
-    ? `${mismatched.length} baseline run(s) were found and none ran the same set of test cases as this run (${mismatched.join(', ')}), so none is comparable. This is usually the PR's own doing: enabling or disabling a test in this lane changes the matrix.`
+    ? `${mismatched.length} baseline run(s) were found and none ran the same set of test cases as this run, so none is comparable. This is usually the PR's own doing: enabling or disabling a test in this lane changes the matrix.`
     : 'master baseline runs exist but carry no usable artifact yet'
+
+  // SHOW THE NUMBERS ANYWAY, flagged. Refusing to compute a verdict from an incomparable run is the
+  // right call; refusing to SHOW it is a different decision that nobody asked for, and it sends the
+  // reader to the job logs to find out roughly where they stand. Every borrowed row carries the
+  // caveat beside it, so a number cannot be lifted out of this table without its warning.
+  const rows = mismatched.length
+    ? `\n\n| Run | Rate | Subject | Comparable? |\n|---|---|---|---|\n| **this run** | **${observedRate} rec/s** | ${observedSubject.toFixed(1)}s | — |\n` +
+      mismatched.map(m => `| \`${m.sha}\` | ${m.rate} rec/s | ${m.subject.toFixed(1)}s | ⚠️ different test set - not a control |`).join('\n') +
+      `\n\nThe baseline rows are shown for orientation only. They ran a different workload, so a difference between them and this run is not a measurement of anything - do not read one as a regression or an improvement.`
+    : ''
+
   reportStatus = 'incomparable'
   writeReport(`### ⚪ Throughput — no comparable reference
 
@@ -272,7 +286,7 @@ if (reference.length === 0) {
 | **This run** | ${observedRate} rec/s |
 | Subject time | ${observedSubject.toFixed(1)}s |
 
-${why}.
+${why}${rows}
 
 Refusing to compare against a run whose workload differs, rather than averaging the difference in and calling the result a verdict.`)
   process.exit(NOTHING_IN_SCOPE)
