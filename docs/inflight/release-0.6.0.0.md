@@ -8,6 +8,13 @@
 comments. This file is the detail behind it. Keep them in step: if a blocker is resolved here, tick it
 there.
 
+**Six mirrors carrying the `0.6.0.0` label came out of the 2026-08-20 triage with no engineering
+left in them.** astubbs#155, astubbs#169 and astubbs#170 need their written fixes de-conflicted and
+merged; astubbs#161 and astubbs#181 need a maintainer decision; astubbs#177 needs a comment saying
+what survived its own merged fix. [`process-candidate-ranking.md`](process-candidate-ranking.md) owns
+the ranking and says what each one needs - this file does not repeat it, because a second ordering
+here is how the two drift.
+
 Not yet released: the pom is `0.6.0.0-SNAPSHOT`, there is no `v0.6.0.0` tag, and the changelog section
 is written. Cutting it = dispatch the **Release** workflow with `releaseVersion=0.6.0.0` and the next
 dev version; `release:prepare` rewrites the poms, tags `v0.6.0.0` and pushes to `master`, then that tag
