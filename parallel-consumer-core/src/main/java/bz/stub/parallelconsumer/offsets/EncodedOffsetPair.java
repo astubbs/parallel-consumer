@@ -122,8 +122,17 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
             case RunLengthV2Compressed -> runLengthDecodeToIncompletes(RunLengthV2, baseOffset, decompressZstd(data));
             case KafkaStreams, KafkaStreamsV2 ->{
                 if (errorPolicy == ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.IGNORE) {
-                    log.warn("Ignoring existing Kafka Streams offset metadata and reusing offsets");
-                    yield HighestOffsetAndIncompletes.of(baseOffset);
+                    log.warn("Ignoring existing Kafka Streams offset metadata and reusing offsets - " +
+                            "resuming from the committed offset {}, so records completed but not committed before " +
+                            "this point will be replayed", baseOffset);
+                    // baseOffset - 1, NOT baseOffset. baseOffset is the COMMITTED offset, i.e. the next one to be
+                    // polled, and the one offset we know for certain was not completed - that is why it is the commit
+                    // point. Claiming it as seen-and-succeeded makes PartitionState#isRecordPreviouslyCompleted skip
+                    // that record and pushes getOffsetToCommit() to baseOffset + 1, so discarding metadata we cannot
+                    // read would silently discard one record with it. Matches the no-metadata-at-all branch of
+                    // OffsetMapCodecManager#decodeCompressedOffsets, which is the same situation - a committed offset
+                    // with no readable map to go with it - and always used nextExpectedOffset - 1.
+                    yield HighestOffsetAndIncompletes.of(baseOffset - 1);
                 } else {
                     throw new KafkaStreamsEncodingNotSupported();
                 }

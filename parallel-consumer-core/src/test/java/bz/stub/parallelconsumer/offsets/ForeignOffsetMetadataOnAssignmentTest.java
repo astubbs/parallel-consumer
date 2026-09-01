@@ -106,6 +106,15 @@ class ForeignOffsetMetadataOnAssignmentTest {
         assertThat(wm.getPm().getPartitionState(TP))
                 .as("partition should still be assigned")
                 .isNotNull();
+
+        // Control arm for the Kafka Streams case below. An unrecognised magic byte recovers by a different route -
+        // OffsetDecodingError caught in loadPartitionStateForAssignment, which drops the map and builds a default
+        // partition state, leaving offsetHighestSucceeded at KAFKA_OFFSET_ABSENCE rather than deriving it from the
+        // committed offset. The two paths therefore land on different numbers, deliberately; what both must hold is
+        // that nothing at or above the committed offset is claimed as already succeeded, or a record is skipped.
+        assertThat(wm.getPm().getPartitionState(TP).getOffsetHighestSucceeded())
+                .as("discarding unreadable metadata must not mark the record at the committed offset as completed")
+                .isLessThan(COMMITTED_OFFSET);
     }
 
     /**
@@ -126,5 +135,18 @@ class ForeignOffsetMetadataOnAssignmentTest {
         assertThat(wm.getPm().getPartitionState(TP))
                 .as("partition should still be assigned")
                 .isNotNull();
+
+        // The invariant the IGNORE policy actually has to hold: discarding metadata we cannot read must not also
+        // discard a record. Same guarantee as the foreign-metadata case above, reached by the other route.
+        assertThat(wm.getPm().getPartitionState(TP).getOffsetHighestSucceeded())
+                .as("discarding unreadable metadata must not mark the record at the committed offset as completed")
+                .isLessThan(COMMITTED_OFFSET);
+
+        // and specifically: the commit point stays exactly where it was. This is the regression - the branch used to
+        // resume from the committed offset itself, pushing the next commit to COMMITTED_OFFSET + 1 and silently
+        // dropping the record at COMMITTED_OFFSET.
+        assertThat(wm.getPm().getPartitionState(TP).getOffsetHighestSequentialSucceeded() + 1)
+                .as("IGNORE must resume from the committed offset, not past it")
+                .isEqualTo(COMMITTED_OFFSET);
     }
 }
