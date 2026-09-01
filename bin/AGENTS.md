@@ -68,6 +68,19 @@ changing the code it exercises, it is a tool, whatever it was written for.
 **Nothing enforces any of this** - no gate can tell an answered question from an open one - so it is
 a judgement made at merge, by whoever knows what the experiment found.
 
+**And the half that keeps it findable: an `exp-` script needs a row in
+[`docs/testing.md`](../docs/testing.md) -> "Experiment runners" BEFORE it merges** - the question it
+answers, and whether that question is still open. Without it the script is discoverable only by
+`ls bin/`, which is how six runners arrived referenced by no doc, no workflow and no other script,
+while a seventh would have been written rather than found. That table is also where a question is
+marked answered, so the same row that finds a live instrument is what retires a dead one.
+
+**A row is owed only where no mechanism sweeps the file.** `check-*` and `test-*` are globbed by
+`bin/check-all.sh`, so they are found by construction and naming them anywhere else is a copy that
+can go stale. The scripts that need an index are exactly the ones nothing globs: the experiment
+runners, and the handful of build helpers beside them. That is the test to apply before adding a
+name to any list - **does something already find this?**
+
 ## Scripts that guard other scripts
 
 `test-check-*.sh` files are self-tests for the corresponding `check-*.sh`, and CI runs them **before**

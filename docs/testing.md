@@ -334,6 +334,52 @@ disagree, because a tag the pom excludes and a wrapper does not runs in the GATI
 Calibration result, the obstacles, and the cost tables:
 [`docs/plans/2026-08-25-001-test-lincheck-poc-plan.md`](plans/2026-08-25-001-test-lincheck-poc-plan.md).
 
+## Experiment runners - instruments, not a lane
+
+Every section above describes a **lane**: a way of running tests that reports pass or fail. The
+scripts here are not a lane. They **drive** the chaos and performance lanes repeatedly and report a
+*measurement* - a rate, a trajectory, a classification of what caught a failure. None of them
+asserts anything, and none of them gates.
+
+**Reach for one when your question is empirical.** "Does this fail, and why" is a test. "How OFTEN
+does it fail, and does that move when I change X" is one of these, and running a test once cannot
+answer it.
+
+| Ask this | Run | Its question is |
+|---|---|---|
+| How often does `largeNumberOfInstances` fail, and how? | `bin/measure-large-instances-failure-rate.sh [n]` | **open** - unmeasured since the 2026-01 upstream report on confluentinc#857 |
+| Does that failure rate move with SCALE? | `bin/sweep-large-instances-scale.sh` | **open** - rate rising with scale points at the group coordinator, flat points at PC |
+| Does the `NO_PROGRESS` detector MISS real failures? | `bin/audit-stall-detector-silence.sh [n]` | **open, reopened 2026-08-31** - a detector that stays quiet on a real failure is worse than an absent one, because the suite goes green on its silence |
+| When the async stall fires, does the backlog DRAIN or stay FLAT? | `bin/hunt-async-stall-answer.sh [n]` | **open** - draining means a timing proxy, flat means a real wedge reproducible on demand |
+| Does that stall drain EVERY time, or was that once? | `bin/confirm-async-drain.sh` | **open** - the demotion rests on a single firing; a second confirms it |
+| All of the above, unattended, one tally | `bin/batch-857-experiments.sh` | a batch of whatever was outstanding when it was written - read its header before trusting its scope |
+
+The tracking note for that first row lives on the branch the runners came from and is not on master
+yet, so the row deliberately cites no path - a link into a file that only exists on another branch
+reads as a broken reference to everyone else. Grep `docs/inflight/` for `largenumberofinstances` once
+that work lands, and add the link then.
+<!-- file-refs: N/A - deliberately names no path, for the reason stated -->
+
+**Choosing between these and the lanes above:**
+
+- Replaying a known schedule to see a failure again -> `bin/chaos-test.sh` with `CHAOS_SEED`.
+- Running one scenario once while you change code -> the IT directly, or the chaos lane.
+- Asking how often, at what rate, or whether a number moves -> an experiment runner.
+
+The distinction that matters is that a rate needs N runs. A single run gives a pass or a fail, which
+is not a rate, and no lane in this repo aggregates results across runs.
+
+**They can be dispatched instead of run locally.** `.github/workflows/experiments.yml` offers each
+one as a `workflow_dispatch` choice on the high-CPU runner, which is where the expensive ones belong
+- a ten-iteration batch is a runner-hour, not a desk-hour. The `largeNumberOfInstances` rate also
+runs weekly on a schedule, alone, because its question is open and a rate nothing samples stays
+unmeasured. **Nothing here runs on push and nothing gates**; that workflow's header carries the
+reasoning, including why gating on a rate would need a threshold nobody has the spread to choose.
+
+**When a question in that table is ANSWERED, the row and the script both go**, and the method moves
+to [`docs/solutions/`](solutions/). [`bin/AGENTS.md`](../bin/AGENTS.md) owns that lifecycle; this
+table is the discovery half of it, and a row that outlives its script is worse than no row.
+
 ## Mutation-check every new assertion, not just the risky-looking ones
 
 Delete the guard an assertion claims to pin, run the test, confirm it fails, restore. An assertion
