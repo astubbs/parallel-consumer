@@ -45,3 +45,9 @@ them is the more interesting defect and should be chased first.
 
 Arrived with `66a9a35e0` (astubbs#381) by `git log` on the file, which is the last commit to touch
 the headroom code - not bisected, so treat that as where to start rather than as the cause.
+
+**astubbs#29's branch already fixes it, which is the cheap answer.** Merging
+`bugs/857-paused-consumption-multi-consumers-bug` into a branch carrying this failure takes the core
+unit suite from three failures to green (571 run, 0 failed). So this note's job is only to stop the
+next person diagnosing it from scratch on master, and it can be deleted when astubbs#29 lands - not
+resolved separately.

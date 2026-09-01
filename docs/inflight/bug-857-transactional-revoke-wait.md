@@ -4,44 +4,6 @@
 <!-- inflight-impact: stall -->
 <!-- inflight-labels: concurrency -->
 
-**Commit mode: `PERIODIC_TRANSACTIONAL_PRODUCER` only.** This is the discriminator - the defect below
-<!-- post-merge: checked -->
-and the AB-BA deadlock in astubbs#29 are in mutually exclusive modes and cannot be the same bug.
-
-## The defect - TWO unbounded waits, not one
-
-`AbstractParallelEoSStreamProcessor.onPartitionsRevoked` held the poll thread in **two** waits with
-<!-- post-merge: checked -->
-no deadline, on master, predating astubbs#29. Every earlier version of this note named only the
-first, which is the correction that matters most here:
-
-1. **The spin**, added by confluentinc#548:
-
-   ```java
-   while (isTransactionCommittingInProgress())
-       Thread.sleep(100); //wait for the transaction to finish committing
-   ```
-
-   The predicate is `producerTransactionLock.isWriteLocked()`, gated on
-   `options.isUsingTransactionCommitMode()`, so it runs in transactional mode only - and there it is
-   the *common* case, not a rare race: the control thread takes that write lock in
-   `maybeAcquireCommitLock()` before every commit.
-
-2. **The commit beneath it.** `commitOffsetsThatAreReady()` reaches
-   `ProducerManager#acquireCommitLock`, whose `writeLock.tryLock(commitLockAcquisitionTimeout)` waits
-   **five minutes** by default. **This is the one confluentinc#803 actually threw from** - its stack
-   trace is `TimeoutException: Timeout getting commit lock (which was set to PT5M)` raised *inside*
-   `onPartitionsRevoked`, and `grep -rn "Timeout getting commit lock"` finds exactly one throw site.
-   The reporter's timeline confirms it: rebalance at t=0, `max.poll.interval.ms` eviction at 180s,
-   the throw at 300s = `commitLockAcquisitionTimeout`.
-
-**Fixing only the spin would have left the user's report reproducible**, which is why the earlier
-plan of record - "delete the `KNOWN_BLOCKING_VIOLATIONS` entry and the rule goes green" - was not a
-sufficient acceptance criterion. See the ArchUnit gap below.
-
-Both run on the poll thread inside `poll()`, so both are bounded by nothing but
-`max.poll.interval.ms`. Overrunning it evicts the member.
-
 ## Why this is not astubbs#29's deadlock <!-- post-merge: checked -->
 
 The AB-BA cycle's second edge lives in `ConsumerOffsetCommitter`, which `BrokerPollSystem` constructs
@@ -84,7 +46,12 @@ while second instance starts"* - matches this mechanism exactly: second instance
 fires, poll thread spins here, `max.poll.interval.ms` is breached, the group reports *"group is
 already rebalancing"*, and the run ends on `commitLockAcquisitionTimeout`.
 
-It is the **only** issue on the upstream tracker ever labelled *verified bug*. It was re-triaged off
+It carries upstream's *verified bug* label. **Earlier versions of this note called it the ONLY such
+issue, which is false** - a couple of dozen upstream issues carry that label, and the claim
+propagated from here into a roadmap entry, a plan, several notes and a PR body before anyone ran
+`gh issue list -R confluentinc/parallel-consumer --state all --label "verified bug"`. The label
+still matters - a maintainer confirmed the report rather than merely triaging it - but it does not
+make this issue unique. It was re-triaged off
 <!-- post-merge: checked -->
 astubbs#29 and onto this block on 2026-08-18; its `pr-available` label was removed, because no open
 PR addresses it.
@@ -136,18 +103,26 @@ verdict stands: *"mode-conditional thread topology is the root hazard ... a fix 
 commits across modes, or unify who owns the consumer."* Declining removes the stall; it does not
 remove the split that produced it.
 
-## The ArchUnit acceptance criterion is not sufficient as written
+## The ArchUnit acceptance criterion - repaired, and now actually met
 
-`ArchitectureTest.rebalanceCallbacksMustNotBlock` exempts this callback in
-`KNOWN_BLOCKING_VIOLATIONS` with *"remove this entry when that lands"*. **Removing it is necessary
-but does not prove the fix**, for two independent reasons, and the rule lives on astubbs#29's branch
-so neither can be repaired from here:
+`ArchitectureTest.rebalanceCallbacksMustNotBlock` exempted this callback in
+`KNOWN_BLOCKING_VIOLATIONS` with *"remove this entry when that lands"*. **That entry is now deleted
+and the rule is green** - but removing it alone would have been a false pass, because the rule could
+not see the call that actually threw. Two defects were found and one is fixed:
 
-- **`Lock.tryLock(long, TimeUnit)` is not in `BLOCKING_CALLS`.** The rule's own message says
-  *"Decline (tryLock) rather than wait"*, treating tryLock as the cure - but a five-minute timed
-  acquire is waiting, and it is the call confluentinc#803 threw from. Timed acquires need adding.
-- **The transitive walk stops at the interface.** It resolves `call.getTarget().resolveMember()`,
-  and `committer` is declared as `OffsetCommitter`, so the walk never descends into
-  `ProducerManager#acquireCommitLock` at all.
-
-Until both are fixed, **the probe is this defect's acceptance test**, not the ArchUnit rule.
+- **FIXED: timed acquires were invisible.** `BLOCKING_CALLS` listed only unbounded primitives, and
+  the rule's own message - *"Decline (tryLock) rather than wait"* - reads as if `tryLock` were the
+  cure. A five-minute `tryLock(commitLockAcquisitionTimeout)` is waiting, and it is the call
+  confluentinc#803's stack trace threw from. The timed overloads of `Lock`, `ReentrantLock`, both
+  `ReentrantReadWriteLock` locks, `CountDownLatch.await`, `Future.get` and `BlockingQueue.poll` are
+  now denied; the no-arg `tryLock()`, which *is* the cure, is deliberately not.
+  **Verified by negative control**: restoring the five-minute acquire turns the rule red naming
+  `ProducerManager.tryAcquireCommitLockForRevocation()` as the path.
+- **STILL OPEN, and narrower than first thought: the walk stops at an interface.** It resolves
+  `call.getTarget().resolveMember()`, which yields the *declared* member - so a call through an
+  interface-typed field never descends into the implementation. `committer` is declared as
+  `OffsetCommitter`, so the walk cannot follow `committer.retrieveOffsetsAndCommit()` into
+  `ProducerManager`. This did **not** hide the defect above, because the revoke path now reaches
+  `ProducerManager` through a concrete reference and the negative control proves the rule sees it -
+  but the blind spot is real for any blocking call reachable only through an interface hop, and
+  nothing currently measures how much that hides.

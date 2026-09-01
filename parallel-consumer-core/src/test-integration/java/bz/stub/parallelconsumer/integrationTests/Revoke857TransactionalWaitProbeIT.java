@@ -42,8 +42,8 @@ import static org.awaitility.Awaitility.await;
  * MEASUREMENT PROBE for the unbounded revoke wait in
  * {@link ParallelConsumerOptions.CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER} - the defect behind
  * astubbs/parallel-consumer#44 (confluentinc#803, <i>"Transactional Producer instance gets timeout
- * getting commit lock while second instance starts"</i>), the only issue upstream ever labelled
- * <i>verified bug</i>.
+ * getting commit lock while second instance starts"</i>), which carries upstream's <i>verified bug</i>
+ * label - one of a couple of dozen that do, not the only one.
  * <p>
  * Built as an instrument to make the overrun observable before any bound was designed - on the defect
  * arm, against the unfixed code, it was <b>expected to fail</b>. The fix has since landed on this

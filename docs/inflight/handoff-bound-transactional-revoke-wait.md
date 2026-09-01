@@ -86,8 +86,8 @@ loop, and re-checked 2026-09-01:
 
 ## What is already known, so it is not rediscovered
 
-- **astubbs#44 (confluentinc#803) matches this mechanism exactly** and is the only issue upstream
-  ever labelled *verified bug*. It was re-triaged off astubbs#29 onto this defect on 2026-08-18 and
+- **astubbs#44 (confluentinc#803) matches this mechanism exactly** and carries upstream's
+  *verified bug* label - one of a couple of dozen that do, not the only one. It was re-triaged off astubbs#29 onto this defect on 2026-08-18 and
   its `pr-available` label removed. It is open.
 - **`RebalanceEoSDeadlockTest` failing is evidence for THIS defect, not for astubbs#29.** It runs
   `PERIODIC_TRANSACTIONAL_PRODUCER`, the mode in which the AB-BA cycle cannot close. The note carries
