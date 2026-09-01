@@ -20,10 +20,28 @@ Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutio
 |---|---|---|
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. Mechanism known and owned (astubbs#262), quarantined - see below |
 | `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 3 seen (2026-08-18, 2026-08-19, 2026-08-25) | Not from the original scan - each found while babysitting a branch carrying **no main Java**. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third sighting carries the failing batch contents and they point at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
+| `JStreamParallelEoSStreamProcessorTest.testConsumeAndProduce` and `.testFlatMapProduce` | 1 seen (2026-09-01) | Not from the original scan - found in a **local** core unit run while re-cutting astubbs#207. Both failed together on produced-record count (`Expected size: 1/2 but was: 0`), i.e. the stream carried no results. UNDIAGNOSED - see below |
 
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
 door, and for the same reason: two of that family turned out to be real product bugs, and the third
 was neither tight nor a stall but a test that could not force its own trigger.
+
+### `JStreamParallelEoSStreamProcessorTest` - both produce tests, empty stream, once
+
+Seen once, locally, in the middle of a full `parallel-consumer-core` unit run. `testConsumeAndProduce`
+and `testFlatMapProduce` failed in the same execution, both because the returned stream held nothing
+at the point the assertion ran.
+
+What is established, and it is only elimination: the run that failed carried an unrelated offsets
+change (the `astubbs#207` re-cut, which touches only the Kafka Streams `IGNORE` branch of
+`EncodedOffsetPair#getDecodedIncompletes`). The same full suite was then run once on unmodified
+master and twice with that change, all green, and this class passes in isolation on both sides. So
+the change is not implicated and the failure did not reproduce - which also means nothing here is
+diagnosed.
+
+The suspicion worth testing first, because both tests share it: the assertion reads the result stream
+without waiting for the produce to land, so it is an ordering question rather than a product one. That
+is a guess. **Classify before touching it** - the same rule as the rest of this ledger.
 
 ### `simpleBatchTest` - three modules, one shared helper, and a lead nobody has tested
 
