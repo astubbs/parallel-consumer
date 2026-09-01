@@ -31,6 +31,10 @@ import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 import java.util.stream.IntStream;
+import org.awaitility.core.ConditionTimeoutException;
+import java.time.Instant;
+import bz.stub.parallelconsumer.internal.utils.StringUtils;
+import bz.stub.parallelconsumer.internal.utils.ThroughputReport;
 
 import static bz.stub.parallelconsumer.internal.utils.GeneralTestUtils.time;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
@@ -191,11 +195,16 @@ public class LoadTest extends DbTest {
                 msgCount.getAndIncrement();
             });
 
-            // keep checking how many message's we've processed
-            await().atMost(ceilingFor(volume)).until(() -> {
-                // log.debug("msg count: {}", msgCount.get());
-                pb.stepTo(msgCount.get());
-                return msgCount.get() >= volume;
+            // From the start of the WAIT, not the method: setupTestData produces the fixture and is
+            // machine time, not product time.
+            ThroughputReport.reporting("LoadTest", volume, msgCount::get,
+                    () -> StringUtils.msg("volume={}", volume), () -> {
+                // keep checking how many message's we've processed
+                await().atMost(ceilingFor(volume)).until(() -> {
+                    // log.debug("msg count: {}", msgCount.get());
+                    pb.stepTo(msgCount.get());
+                    return msgCount.get() >= volume;
+                });
             });
         }
         async.close();
