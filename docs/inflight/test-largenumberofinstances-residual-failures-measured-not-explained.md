@@ -249,3 +249,43 @@ this test's failure rate on the current tree is **unknown, with one green observ
 way to get a real number is `bin/exp-measure-large-instances-failure-rate.sh` on the fixed tree - the
 same harness, so the two rates would be comparable, which is what makes it worth doing rather than
 waiting for CI to accumulate runs.
+
+## 2026-09-01, on CI, on the FIXED tree: the stall reproduces, and that answers the open question the wrong way
+
+Second run of the enabled capacity profiles on CI. `largeNumberOfInstances` **ERRORED at 154.6 s**,
+run `33506680281`, head `55edffaf4` - and the signature is the Linux failure's, line for line:
+
+```
+No progress ... [FLAT for 13s - it stopped rather than ran out of time | elapsed=152s
+                 | no consumer diagnostic supplied]
+ZOMBIE_MEMBER/REBALANCE_BLOCKED: group dwelling in PreparingRebalance for 15s (bound 15s)
+                 - a member is not answering the rebalance (protocol-unresponsive)
+peaks: rebalanceDwell=15584ms lagStagnation=27500ms
+```
+
+**THE CONTROL-LOOP FIX DOES NOT ADDRESS THIS FAILURE MODE.** That tree carries the supplier form, and
+the stall arrived anyway with the same detector verdict, the same probe violation and a comparable
+dwell. The reasoning that enabling these tests would put the hypothesis under test was right; the
+hypothesis lost.
+
+**A speculation recorded here on the same day is hereby weakened.** It was suggested that a control
+thread doing an O(shards) scan every pass was a candidate reason a live member answers a rebalance
+late - which is why the measured one-in-ten rate was said to describe the unfixed tree and not to
+transfer. The rate may still not transfer, but the *mechanism* does not survive: removing the scan did
+not remove the stall. Treat the throughput defect and this stall as **two separate problems** that
+happened to be found in the same week.
+
+**What the rate is now: unknown, with one pass and one failure on the fixed tree.** Two runs is not a
+rate and this note's whole subject is that a rate is what the question needs. It is recorded because
+CI logs expire and this is the first CI reproduction on the fixed tree.
+
+### The instrumentation gap bit again, exactly as predicted
+
+The verdict still ends `no consumer diagnostic supplied` - `ProgressTracker.withDiagnostic(...)` is
+still never called, so the run cannot say what PC believed it was doing. That is now the difference
+between a sighting and a diagnosis, and it is the cheapest item on this note's list.
+
+One thing this run adds that earlier ones did not: the frozen-partition dump shows **the whole
+assignment stagnant with comparable lag** (roughly 520-570 across the partitions listed, all stagnant
+27 s), rather than one partition or shard lagging. That is consistent with a group-wide block rather
+than a per-shard wedge, which narrows where to look next.

@@ -75,10 +75,12 @@ direction removed the obstacle, so the reasoning expired rather than being overr
 **All three capacity profiles were then re-enabled, same day, by operator decision.** The merge
 initially held `largeNumberOfInstances` disabled on the grounds that one failure in ten is not a rate
 a required check can carry. That was reversed once the ordering was checked: the ten-run measurement
-predates this fix, so the rate it produced is a rate for the *unfixed* tree. Whether it survives the
-fix is an open question, and the failure mode makes the connection plausible rather than idle - the
-failure was a rebalance stall with a member not answering, and a control thread scanning every shard
-every pass is a candidate reason a member answers late. Enabling them is how that gets tested.
+predates this fix, so the rate it produced is a rate for the *unfixed* tree. It was suggested that the
+two might be connected - a control thread scanning every shard every pass being a candidate reason a
+live member answers a rebalance late - and enabling the tests was how that got tested.
+**It was tested and it lost**: `largeNumberOfInstances` stalled on CI at `55edffaf4`, on the fixed
+tree, with the same FLAT verdict and the same ZOMBIE_MEMBER/REBALANCE_BLOCKED violation. This fix
+addresses the throughput shortfall and not that stall; they are two problems, not one.
 `docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md` owns it.
 
 Verify rather than trust, since both branches move:
