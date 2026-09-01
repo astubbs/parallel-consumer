@@ -1,7 +1,9 @@
 # The confluentinc#857 revoke path: four changes in one commit, and the order to take them
 
 **Date:** 2026-08-18
-**Status:** decomposition agreed; cluster 1 measured, clusters 2-4 undecided
+**Status:** CLOSED 2026-09-02. All four clusters resolved - see "What actually happened" at the
+end. The line this replaced said "clusters 2-4 undecided", which stopped being true on 2026-08-27
+and nothing updated it.
 **Subject:** PR astubbs/parallel-consumer#29, branch `bugs/857-paused-consumption-multi-consumers-bug`
 
 ## Why this document exists
@@ -346,3 +348,29 @@ astubbs/parallel-consumer#44 - the only issue upstream ever labelled a verified 
 record. Upstream carries the `verified bug` label on a couple of dozen issues; confluentinc#803
 is one of them, not the only one. Checked with `gh issue list -R confluentinc/parallel-consumer
 --state all --label "verified bug"`.]
+
+## What actually happened, 2026-09-02
+
+Every cluster was decided, and the record above stayed frozen at the moment before that started. The
+plan's own recommendation order was followed almost exactly, and in three cases the resolution went
+**further** than this document proposed - which is the part worth keeping.
+
+| Cluster | What this plan recommended | What landed |
+|---|---|---|
+| 1 - the deadlock fix | Ship it now; it is the only one with evidence | Is astubbs/parallel-consumer#29 itself, still open |
+| 2 - `ThreadConfinedConsumer` | Do not land as-is; last, and separately | astubbs/parallel-consumer#393, `951ae1e66` - confines the consumer to its owning thread and makes ownership a lifecycle |
+| 3 - the counter adjustment | Finish it or drop it; do not land this shape | astubbs/parallel-consumer#336, `3e668a448` - derives the load gate by conservation and pairs every count change with a real map mutation |
+| 4 - `pausedForThrottling` reset | Probably a regression; revert it | astubbs/parallel-consumer#376, `b2e6c190d` - removes the mirrored flag entirely and derives the pause from Kafka |
+
+**Clusters 3 and 4 were not merely finished or reverted - the mirrored state was deleted in both.**
+This plan framed them as "half a fix" and "probably a regression", which invited patching them. What
+happened instead was that each mirrored a fact something else already owned, and the fix was to stop
+mirroring: the load gate is now derived by conservation, and the pause is read from Kafka. That is the
+same shape twice, and it is a better outcome than this document imagined.
+
+**Cluster 1 is the survivor and it is still open**, which is the one thing the status line above got
+right for longer than the rest.
+
+**This document is now history.** It may not be rewritten to match today's code - the decomposition it
+argued is the reason those three PRs exist, and a reader arriving from any of them needs the reasoning
+as it stood. Only this section and the status line were added.
