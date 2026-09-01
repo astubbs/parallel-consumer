@@ -30,8 +30,10 @@ import static com.google.common.truth.Truth.assertThat;
  * it, and both are exercised here:
  * <ol>
  *     <li>Configuring {@link ParallelConsumerOptions#messageBufferSize} pins the load factor to a single value, so
- *     {@link DynamicLoadFactor#isMaxReached()} is true from startup and the line fired on <em>every</em> control loop
- *     pass, from the first one, for a system that was configured exactly as intended.</li>
+ *     {@link DynamicLoadFactor#isMaxReached()} is true from startup - and from the first pass on which the pool
+ *     queue is below target <em>and</em> the last work request was fulfilled, the line fired on every pass
+ *     thereafter, for a system that was configured exactly as intended. (Both conditions matter: that is why the
+ *     harness below has to set the fulfilled flag rather than just spin the check.)</li>
  *     <li>A dynamic factor that legitimately steps up to its cap then holds that state indefinitely, and the line was
  *     emitted unrate-limited for as long as it held.</li>
  * </ol>
@@ -116,6 +118,10 @@ class LoadFactorCeilingReportingTest {
         assertThat(atCeiling.isStaticFactor()).isFalse();
 
         var warnings = messagesAt(events, Level.WARN);
+        // Exactly one because the whole loop runs inside the limiter's window. That window is 30s and the loop is
+        // in-memory (a quarter of a second here), so a second warning does not mean the rate limiting broke - it
+        // means this JVM stalled for 30s mid-loop. Diagnose the stall; do not relax the bound, and do not open a
+        // seam onto the limiter to make the bound approximate.
         assertThat(warnings).hasSize(1);
         // reworded: a saturation signal, and it names what to change - it no longer reads as a failure
         assertThat(warnings.get(0)).contains("saturation signal");
@@ -157,6 +163,21 @@ class LoadFactorCeilingReportingTest {
         assertThat(fixed.getCurrentFactor()).isEqualTo(7);
     }
 
+    /**
+     * An initial factor above the maximum cannot step either, but it is a misconfiguration rather than a request - so
+     * it must not be classified as a deliberately fixed factor and quietened. Nothing validates the pair yet
+     * ({@code docs/refactoring.md}), which is exactly why this has to hold.
+     */
+    @Test
+    void invertedBoundsAreNotTreatedAsAFixedFactor() {
+        var inverted = new DynamicLoadFactor(DynamicLoadFactor.DEFAULT_MAX_LOADING_FACTOR * 2,
+                DynamicLoadFactor.DEFAULT_MAX_LOADING_FACTOR);
+
+        assertThat(inverted.isStaticFactor()).isFalse();
+        assertThat(inverted.isMaxReached()).isTrue();
+        assertThat(inverted.maybeStepUp()).isFalse();
+    }
+
     @Test
     void factorWithHeadroomIsNotStatic() {
         var dynamic = new DynamicLoadFactor(DynamicLoadFactor.DEFAULT_INITIAL_LOADING_FACTOR,
@@ -192,6 +213,7 @@ class LoadFactorCeilingReportingTest {
                 }
             } finally {
                 processorLogger.detachAppender(appender);
+                appender.stop();
                 processorLogger.setLevel(originalLevel);
             }
         }

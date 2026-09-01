@@ -39,9 +39,10 @@ queue target and the step-up rules are exactly as before.
 
 **There was a second half nobody had reported.** `PCModule#initDynamicLoadFactor()` builds
 `DynamicLoadFactor(n, n)` when `messageBufferSize` is set, so `isMaxReached()` held from
-construction and the WARN fired from the very first control-loop pass. Following the README's own
-PARTITION-ordering buffer-tuning advice therefore earned permanent log noise saying nothing was
-wrong.
+construction - no step-up ever had to happen first. From then on the WARN fired on every pass where
+the pool queue sat below target and the last work request had been fulfilled, which for a
+buffer-bound consumer is most of them. Following the README's own PARTITION-ordering buffer-tuning
+advice therefore earned permanent log noise saying nothing was wrong.
 
 Regression coverage is `LoadFactorCeilingReportingTest`, which drives 500 real
 `checkPipelinePressure()` passes and asserts on what reaches the log - 500 warnings before the fix in

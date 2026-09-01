@@ -64,7 +64,7 @@ public class DynamicLoadFactor {
      * finishes, theres at least one more entry for it in the queue.
      */
     @Getter
-    private int maxFactor;
+    private final int maxFactor;
 
     @Getter
     private int currentFactor;
@@ -79,7 +79,12 @@ public class DynamicLoadFactor {
      * which pins both bounds to the factor that yields the requested buffer size, and by explicitly configuring
      * {@link bz.stub.parallelconsumer.ParallelConsumerOptions#initialLoadFactor} equal to
      * {@link bz.stub.parallelconsumer.ParallelConsumerOptions#maximumLoadFactor}. In both cases the user asked for
-     * a fixed buffer, so saturation is the configuration working as requested - not a condition to report.
+     * a fixed buffer, so being at the ceiling says nothing the configuration did not already say.
+     * <p>
+     * Deliberately {@code ==} and not {@code >=}. An inverted pair - an initial factor <em>above</em> the maximum -
+     * also cannot step, but it is a typo rather than a request, and classifying it as fixed would silence the only
+     * report that would ever have told the user about it. Nothing validates the pair today;
+     * {@code docs/refactoring.md} tracks failing fast in {@code ParallelConsumerOptions#validate()} instead.
      */
     @Getter
     private final boolean staticFactor;
@@ -87,7 +92,7 @@ public class DynamicLoadFactor {
     public DynamicLoadFactor(int initial, int maximum) {
         this.currentFactor = initial;
         this.maxFactor = maximum;
-        this.staticFactor = initial >= maximum;
+        this.staticFactor = initial == maximum;
     }
 
     /**

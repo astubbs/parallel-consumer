@@ -555,7 +555,7 @@ entries:
     group: logging-ux
     summary: "\"Max loading factor steps reached\" WARN spammed every control loop pass"
     fork:
-      branches: [fix/155-load-factor-noise]
+      branches: [recut/201-load-factor-noise]
       prs: [201]
       fork_issue: 155
       status: pr-open

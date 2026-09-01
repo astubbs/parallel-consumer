@@ -1607,9 +1607,12 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * This is a saturation signal, not a failure - so it is reported accordingly, and never on every control loop
      * pass:
      * <ul>
-     *     <li>When the factor is <em>fixed</em> (see {@link DynamicLoadFactor#isStaticFactor()}) there is nothing to
-     *     report at all: the ceiling is the value the user configured, so being at it is the configuration doing
-     *     exactly what was asked. It goes to debug.</li>
+     *     <li>When the factor is <em>fixed</em> (see {@link DynamicLoadFactor#isStaticFactor()}) it goes to debug.
+     *     The state is real - the branch needs the last work request to have been <em>fulfilled</em>, so the buffer
+     *     the user pinned is genuinely what the queue is bounded by - but the ceiling is the number they wrote down,
+     *     and there is no step-up that failed. Reporting it at a level anyone runs at reinstates the noise this
+     *     exists to remove, for a configuration chosen on purpose. If that trade is ever revisited, the lever is a
+     *     rate-limited info through {@link #loadFactorAtCeilingLimiter}, not a return to unlimited warn.</li>
      *     <li>When the factor is dynamic, having exhausted the step-up range is worth knowing about - but the
      *     condition persists, so it is rate limited to once per
      *     {@value #LOAD_FACTOR_AT_CEILING_REPORT_RATE_SECONDS} seconds.</li>
@@ -1657,8 +1660,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         int queueSize = getNumberOfUserFunctionsQueued();
         int queueTarget = getPoolLoadTarget();
         boolean workAmountBelowTarget = queueSize <= queueTarget;
-        log.debug("isPoolQueueLow()? workAmountBelowTarget {} {} vs {};",
-                workAmountBelowTarget, queueSize, queueTarget);
+        // Guarded for the same reason as the ceiling report above, and it is the other instance of that defect on
+        // this pass: three arguments bind SLF4J's varargs overload, so an unguarded call allocates an Object[] and
+        // boxes every pass with debug off. checkPipelinePressure() calls this on every pass.
+        if (log.isDebugEnabled()) {
+            log.debug("isPoolQueueLow()? workAmountBelowTarget {} {} vs {};",
+                    workAmountBelowTarget, queueSize, queueTarget);
+        }
         return workAmountBelowTarget;
     }
 
