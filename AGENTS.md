@@ -72,6 +72,7 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 
 | Document | Read it when |
 |---|---|
+| [`docs/logging.md`](docs/logging.md) | Changing a logback file, adding a log stream, or wondering why a logging change had no effect - the two test profiles and how to prove which one loaded |
 | [`docs/testing.md`](docs/testing.md) | Writing or debugging tests: suite split, **why a run prints nothing and the flag that fixes it**, the ambient probe autopsy, the quarantine lane, the chaos suite, shared test utilities |
 | [`docs/ci.md`](docs/ci.md) | CI is red, or you are changing a workflow: what each workflow does, the self-hosted lanes, how to fetch a failed job's log |
 | [`docs/investigating.md`](docs/investigating.md) | Past the prior-art checks and into diagnosis: control arms, instrumentation traps, reporting rates |
@@ -82,7 +83,7 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | [`docs/releasing.md`](docs/releasing.md) | Cutting a release, or generating its changelog section |
 | [`docs/upstream.md`](docs/upstream.md) | Work that maps to upstream: the manifest, commit trailers, issue mirrors, the sweep |
 | [`docs/self-hosted-runner.md`](docs/self-hosted-runner.md) | Setting up or operating the self-hosted highcpu runner |
-| [`docs/agent-harness.md`](docs/agent-harness.md) | Adding a rule you need agents to follow *reliably* - which layers fire on their own, and which are merely available |
+| [`docs/agent-harness.md`](docs/agent-harness.md) | Adding a rule you need agents to follow *reliably*, **or making code teach an agent how to use it at the moment of use** - which layers fire on their own, and which are merely available |
 | [`docs/merge-checklist.md`](docs/merge-checklist.md) | Getting a PR ready to merge - what to offer the author, including the squash message and reorganising the commits |
 | [`bin/AGENTS.md`](bin/AGENTS.md) | Writing or changing a script in `bin/` - the shell conventions, including the ones no check enforces |
 | [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) | Adding, editing or retiring a note in `docs/inflight/` - what may live there, the tag vocabulary, and where a note's content goes when its work lands |
@@ -188,24 +189,35 @@ accidental is *which* repo answered. The same ambiguity bites a bare `#NNN` in p
 
 ## Before you investigate anything
 
-Do all six checks **before** forming a hypothesis, and say in your write-up what each returned -
-including "nothing". Prior art tells you the method that settled the last question of this shape,
+Do every check in this table **before** forming a hypothesis, and say in your write-up what each
+returned - including "nothing", and including the size of the corpus that "nothing" covered. Prior art tells you the method that settled the last question of this shape,
 and the traps that voided earlier experiments.
 
 | Check | Command |
 |---|---|
-| Prior investigations | `ls docs/plans/`, then grep them |
-| Solved problems | `grep -rl <mechanism> docs/solutions/` |
-| In-flight state | `ls docs/inflight/`, `grep -rl <mechanism> docs/inflight/` |
+| Plans, solutions and in-flight notes, **on every branch** | `node bin/prior-art.mjs <mechanism> [<mechanism>...]` |
 | Open PRs (collision check) | `gh pr list -R astubbs/parallel-consumer`, then `gh pr diff <n> -R astubbs/parallel-consumer --name-only` |
 | **Merged** PRs, by file | `gh pr list -R astubbs/parallel-consumer --state merged --limit 100 --json number,title,files --jq '.[] \| select(.files[]?.path \| test("<ClassName>")) \| "\(.number) \(.title)"'` |
 | Issues, `--state all` | `gh issue list -R astubbs/parallel-consumer --state all --limit 300` - fork issues *and* `upstream-mirror` ones; read the upstream original, not the mirror's summary |
+| **The javadoc of the thing you are about to run or change** | `grep -rn "Calibration status" --include=*.java .` - chaos scenarios record their prior experiments, seeds and verdicts in the class javadoc, nowhere else |
 
+- **`grep` and `find` read the working tree, and most of this repo's docs are not in it.** Roughly
+  two thirds of everything under `docs/` exists only on branches that have not merged, so a
+  working-tree search answers a narrower question than the table asks and returns a *false negative
+  carrying the authority of a completed check*. `bin/prior-art.mjs` searches every ref and flags each
+  hit that is missing from `origin/master`; its header explains the rest. Worked incident:
+  [`docs/solutions/workflow-issues/prior-art-lives-on-branches-2026-09-01.md`](docs/solutions/workflow-issues/prior-art-lives-on-branches-2026-09-01.md).
 - **The titles are already in your context**, injected at session start by
   `.claude/hooks/inject-recorded-knowledge.sh` - so "I did not know it existed" is not available as
-  an excuse, and the check costs one grep against a list you have been handed.
+  an excuse. **That index is branch-scoped too**, and says so along with the count it cannot show
+  you; it narrows the search, it does not complete it.
 - **Grep the mechanism, not the symptom.** The failing test's name is the weakest search term
   available. Search the class, the lock, the option, the exception, the log line.
+- **A test's own javadoc is prior art, and the six commands above will not find it.** The chaos
+  scenarios carry a `Calibration status` block naming the shapes already tried, the seeds, and what
+  each run established - including experiments that were run and are worth not repeating. Running
+  `ChaosRevokeUnderWorkIT`'s recovery diagnostic in August 2026 re-derived a result its own javadoc
+  already recorded from the 90s/45s shape. Read the class before you run it.
 - **`--state open` is a collision check, not a prior-art search.** The PR that already solved
   something in your file is, by definition, merged; the issue documenting it is usually closed.
   Searching only the open list produces false confidence, which is worse than not looking.
