@@ -15,7 +15,7 @@
 # bin/lib/source-patterns.mjs, which walks `git ls-files` instead - so it no longer inherits this
 # corpus's one-level scope limit, and this lib's remaining reach is the hazards gate alone.
 #
-# WHY THIS IS A LIB. the sigpipe check and check-shell-hazards.sh had this resolution
+# WHY THIS IS A LIB. The now-retired bin/check-shell-sigpipe.sh and check-shell-hazards.sh had this resolution
 # character-for-character duplicated, and it had ALREADY DRIFTED: sigpipe changed directory only when
 # given no argument, while hazards did it unconditionally, so an explicit RELATIVE scan directory
 # resolved against different roots in the two gates. Nothing would have caught that - both self-tests
