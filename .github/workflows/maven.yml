@@ -23,6 +23,10 @@ permissions:
   contents: read
   pull-requests: write
   checks: write
+  # The throughput check reads recent `perf baseline (master)` runs and downloads their artifacts to
+  # build its reference, which is a different workflow's runs - that needs actions: read. Without it
+  # the check cannot list them and correctly reports "cannot run" rather than inventing a baseline.
+  actions: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
@@ -89,6 +93,41 @@ jobs:
             name: "Performance Tests"
             cmd: "bin/performance-test.sh"
             timeout: 60
+          # Lincheck - scheduler-controlled concurrency testing over the state classes. It existed
+          # without running ANYWHERE: six test classes, a runner script, and no workflow referencing
+          # them, while every CI script passed -Dexcluded.groups=...,lincheck. Built in astubbs#347 and
+          # never wired up, which is the "a test that never runs is not a passing test" case AGENTS.md
+          # names - and nothing went red for a week to say so.
+          #
+          # GATING, and the argument has to be made about the arms this lane actually has. A Lincheck
+          # violation is a real finding rather than a timing wobble, but "the model checker explores
+          # interleavings deterministically" is not why - NO model-checking arm over a product class
+          # runs here at all. They are blocked on Lincheck 3.7 rewriting a Lombok
+          # @EqualsAndHashCode(callSuper = true) super.hashCode() into a recursing self-call, which
+          # LincheckSuperHashCodeProbeTest tracks and fires when it is fixed. What licenses gating is
+          # that the three arms asserting NO violation - RetryQueue, ShardManager, WorkManager - need
+          # no hit to pass, so their bounds are a straight cost with no rate to price, and a red is a
+          # statement about the code.
+          #
+          # THE RISK WORTH NAMING is the INVERTED arms, which still need Lincheck to FIND something:
+          # PartitionStateLincheckTest, and LincheckToolchainProbeTest, the control that says whether
+          # the toolchain is instrumenting anything. Those depend on a stress hit rate measured 3.4x
+          # apart across two machines (docs/inflight/test-lincheck-lane-open-items.md), priced on the
+          # machine that wrote them rather than a hosted runner. If this entry flakes, that is where to
+          # look - and the fix is NOT a retry: this repo removed surefire reruns because they hid three
+          # flakes. Demote to advisory before masking anything, and read
+          # docs/solutions/best-practices/reverting-half-a-fix-is-not-a-control-2026-09-01.md before
+          # concluding a quiet inverted arm means its bug is still there.
+          #
+          # 7m42s measured on ubuntu-latest (about 2m50s locally), nearly all of it
+          # WorkManagerLincheckTest, whose inverted arm cannot stop early and always pays its full
+          # bound. bin/lincheck-test.sh's header owns the five flags that each fail silently on their
+          # own.
+          - suite: lincheck
+            name: "Lincheck"
+            cmd: "bin/lincheck-test.sh"
+            timeout: 20
+
           # Chaos Pain Suite - the per-PR ambient tripwire. It ran on the self-hosted `highcpu` box
           # until 2026-08-26, on the premise that it needed many real cores to provoke anything.
           # Measured head-to-head on the SAME commit (d8beb162f), that premise did not survive:
@@ -145,6 +184,114 @@ jobs:
           name: chaos-suite-reports-${{ github.run_number }}
           path: '**/target/*-reports/*.xml'
           retention-days: 14
+
+      # Runs BEFORE the upload so a regression cannot cost us the evidence of it: `if: always()` on
+      # the upload below means the artifact lands either way, but ordering it after keeps the failing
+      # case's data on the run rather than depending on that flag staying correct.
+      # `continue-on-error` so the REPORT still posts when the check fails - a red verdict is the one
+      # somebody most needs to read, and a step that dies before writing its report hides exactly that.
+      # The job is still failed by the "Fail on throughput regression" step below.
+      - name: Throughput regression check
+        id: throughput
+        if: always() && matrix.suite == 'performance'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # CAPTURE THE EXIT CODE, because the check has a FOUR-value contract (0 pass, 1 regression,
+        # 2 cannot run, 3 nothing in scope) and `steps.*.outcome` collapses all of them to
+        # success/failure. Reading only `outcome` made the job announce "reported a regression" for a
+        # bootstrapping run that reported nothing of the sort.
+        run: |
+          set +e
+          node bin/check-throughput-regression.mjs
+          code=$?
+          set -e
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      # Posted as a comment rather than left in the job log, because a number nobody retrieves is a
+      # number nobody has. The duplication checks already comment here; this follows them.
+      - name: Post the throughput report
+        # SAME-REPOSITORY PRs ONLY. On a fork PR GitHub downgrades GITHUB_TOKEN to read-only, so the
+        # comment write 403s - and because this sits in the REQUIRED Performance Tests job, that failure
+        # would fail the check even when the lane and the verdict are both green. The report still lands
+        # as an artifact for fork PRs; only the comment is skipped.
+        if: always() && matrix.suite == 'performance' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs')
+            const path = 'target/throughput-report.md'
+            if (!fs.existsSync(path)) return
+            const body = fs.readFileSync(path, 'utf8')
+            const marker = '<!-- pc-throughput-report -->'
+            const { owner, repo } = context.repo
+            const issue_number = context.issue.number
+            // Update in place rather than appending on every push: a PR with fifteen throughput
+            // comments is a PR where nobody reads the throughput comment.
+            const existing = (await github.rest.issues.listComments({ owner, repo, issue_number }))
+              .data.find(c => c.body.includes(marker))
+            const payload = `${marker}\n${body}`
+            if (existing) await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: payload })
+            else await github.rest.issues.createComment({ owner, repo, issue_number, body: payload })
+
+      # Exit 1 is a regression. Exit 2 is the check being UNABLE to measure, which this repo treats as
+      # never-a-pass ("a skip is not a pass") - so it also fails, with its own message, because a lane
+      # that silently stops measuring is the failure mode the whole PR exists to remove. Exit 3
+      # (nothing in scope) and 0 pass.
+      # ADVISORY, NOT BLOCKING - deliberately, and this step is the record of why. The 0.50/0.70 bounds
+      # were calibrated against a normalised share, and re-measuring after review corrected the control
+      # set showed normalising ADDS noise on one machine: raw subject 13.4%, share 16.6-17.2%. Bounds
+      # derived from a quantity noisier than the raw measurement are not bounds anybody should be
+      # blocked on. The report still posts, so a red verdict is visible and arguable; it just does not
+      # fail the required check.
+      #
+      # FLIP IT BY DELETING `false &&` BELOW, once a fresh master-lane series confirms the bounds
+      # against the corrected control. That is one line, and it is the whole gate on the gate.
+      - name: Throughput verdict (advisory - see comment above)
+        if: always() && false && matrix.suite == 'performance' && steps.throughput.outputs.code == '1'
+        run: |
+          echo "The throughput check reported a regression - see the report comment on this PR." >&2
+          exit 1
+
+      - name: Fail when the throughput check could not run
+        if: always() && matrix.suite == 'performance' && steps.throughput.outputs.code == '2'
+        run: |
+          echo "The throughput check could not measure - see its output above. Not a pass." >&2
+          exit 1
+
+      # PERFORMANCE ONLY, and the retention is deliberately not the chaos lane's 14 days above.
+      # Those reports diagnose ONE failure and are read within days. These are the accumulation
+      # itself: docs/inflight/perf-throughput-regression-gate.md defers a throughput gate until
+      # somebody has seen the real spread, and until this step existed the only surviving copy of any
+      # number was the PC-THROUGHPUT lines inside the job log - which is exactly the artefact
+      # docs/solutions/workflow-issues/gh-run-view-log-truncation.md says truncates silently when read
+      # the obvious way. A short window here would defeat the purpose of collecting at all.
+      #
+      # THE GATE IS NO LONGER DEFERRED - this workflow now runs it, and a red verdict fails the required
+      # Performance Tests job. What remains open is retention: artifacts expire, so the reference is
+      # bounded by the number of recent master runs still holding one, and a long quiet period on master
+      # shrinks it. Storing a durable series was considered and declined - no data branch, no write grant
+      # (operator decision, 2026-09-01) - so the accumulating-artifact design is the open follow-up.
+      # Per-METHOD timings, which the job log does not carry - see the comment on the same step in
+      # perf-baseline.yml for why class granularity is the weaker instrument.
+      - name: Upload failsafe reports
+        if: always() && matrix.suite == 'performance'
+        uses: actions/upload-artifact@v7
+        with:
+          name: performance-failsafe-xml-${{ github.run_number }}
+          path: '**/target/failsafe-reports/*.xml'
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: Upload throughput summary
+        if: always() && matrix.suite == 'performance'
+        uses: actions/upload-artifact@v7
+        with:
+          name: performance-throughput-${{ github.run_number }}
+          path: '**/target/performance-throughput.txt'
+          retention-days: 90
+          if-no-files-found: warn
 
       - name: Upload coverage to Codecov
         if: always()

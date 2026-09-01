@@ -215,7 +215,7 @@ assert "13. a real review is unaffected by a wrong-token marker in a later comme
 $(comment "$RECENTLY" 'astubbs' "$FORGED_BODY")")"
 
 # The checker must not die of SIGPIPE when it stops reading early: bin/AGENTS.md, and the
-# reason bin/check-shell-sigpipe.sh exists.
+# reason the `sigpipe-into-grep-q` rule exists.
 big_tail=""
 for _ in $(seq 1 400); do
     big_tail="$big_tail
