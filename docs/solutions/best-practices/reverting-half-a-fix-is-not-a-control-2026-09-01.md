@@ -82,7 +82,34 @@ commit touching the module's main sources between the last hit and the first mis
 `git log <good>..<bad> -- <module>/src/main` away and worth stating in the write-up, because
 "the bisect landed on X" is a weaker claim than "X is the only candidate in the interval".
 
-### 4. Pin the constants before blaming the code, and prove the instrument still speaks
+### 4. Give each commit its own worktree - a shared `target/` will hand you a clean, wrong bisect
+
+This nearly reversed the result, and it fails silently in **both** directions.
+
+The first bisect checked out each commit in turn inside ONE worktree. Re-running the same commits in
+a second worktree - one that had been built at a different commit first - produced
+**0 fires out of 10 at a commit the first pass recorded as firing**. Same commit, same machine, same
+harness: only the `target/` it inherited differed. Maven's incremental compilation had left another
+commit's classes in place, so the harness was run against a tree that never existed.
+
+Nothing about that output says so. Both runs build, both pass their roster check, and both print a
+verdict in the harness's own words.
+
+**Fresh worktree per commit, removed after** - it is one command and it makes the class output
+impossible to share:
+
+```bash
+git worktree add --detach "$WT" "$commit"   # empty target/, guaranteed clean build
+( cd "$WT" && <run the harness> )
+git worktree remove --force "$WT"
+```
+
+Re-run that way, the bisect here reproduced exactly - 5/5 fires at each of the three commits before
+the fix, 0/5 at the fix - which is the version worth quoting, because the first pass's numbers were
+not reproducible even on the machine that took them. The related hazard for concurrent agents, where
+one root `-am` build wipes a sibling's output, is the same defect one layer out.
+
+### 5. Pin the constants before blaming the code, and prove the instrument still speaks
 
 Two cheap checks come first, and both were skipped for a day:
 
@@ -95,7 +122,7 @@ Two cheap checks come first, and both were skipped for a day:
   See [`a-stress-probe-is-an-instrument-you-built-not-a-test.md`](a-stress-probe-is-an-instrument-you-built-not-a-test.md):
   read the positive control first, or nothing else in the run is interpretable.
 
-### 5. A negative control deserves the scepticism a positive one gets
+### 6. A negative control deserves the scepticism a positive one gets
 
 `docs/investigating.md` owns the forward direction - **a fix that works is not evidence of the
 cause.** This is its mirror, and it is the one that reads as rigorous while being weaker:
@@ -125,6 +152,8 @@ originally found at, and 0 in 2,500,000 at ten times it.
 - **When a control comes back negative and the hypothesis still feels right** - that is the signal
   the control is wrong, not the hypothesis.
 - **Before repricing a bound or adding a retry** because a stress arm "stopped finding" something.
+- **Whenever a bisect reuses one working copy** - give each commit its own worktree, or the result
+  is a claim about a tree that never existed.
 
 ## Related
 

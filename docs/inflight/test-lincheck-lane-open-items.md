@@ -171,7 +171,13 @@ astubbs#336 removed the counterexample by admitting to the population before the
 outcome from the map rather than from the earlier read. Bisected, not assumed: the unchanged harness
 fires at astubbs#345, at confluentinc#905's hot-shard metric and at astubbs#373's claim
 compare-and-set, and misses at astubbs#336 - the sole commit touching core's main sources in that
-interval. **Three hand-written controls said otherwise and all three were wrong**, because each
+interval. Replicated with a **fresh worktree per commit**, which matters: the first pass reused one
+working copy, and a second worktree built at a different commit first reported 0 hits out of 10 at a
+commit that in fact fires 5 out of 5. A shared `target/` hands you a clean, wrong bisect and nothing
+in the output says so. **astubbs#336's own commit message claims the lane was green and "still
+finding the violation it is calibrated to find"**; run on that tree it is RED on this arm alone, and
+the message's own "adapted cherry-pick of `fa4d1cf251`" is the likely mechanism. Recorded, not
+explained away. **Three hand-written controls said otherwise and all three were wrong**, because each
 reverted one half of astubbs#336 onto today's tree and the defect was in neither half alone; the
 method that settles this class of question is in
 [`../solutions/best-practices/reverting-half-a-fix-is-not-a-control-2026-09-01.md`](../solutions/best-practices/reverting-half-a-fix-is-not-a-control-2026-09-01.md).

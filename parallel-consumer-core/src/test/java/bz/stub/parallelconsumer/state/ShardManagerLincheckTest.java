@@ -48,10 +48,24 @@ import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.K
  * <p>
  * <b>astubbs#336 removed it</b>, by admitting to the population before the put and reading the outcome from
  * the map rather than from the earlier read ("ADMIT FIRST, then let the map itself say what happened - never
- * the read above"). Bisected rather than assumed: this harness, unchanged, fires at astubbs#345, at
- * confluentinc#905's hot-shard metric and at astubbs#373's claim compare-and-set, and stops firing at
- * astubbs#336 - the sole commit touching core's main sources between the last hit and the first miss. So the
- * flip is this harness's assertion now, and astubbs#336 is what it regression-tests.
+ * the read above"). Bisected rather than assumed, with a FRESH worktree per commit so no two trees could
+ * share a {@code target/}: this harness, unchanged, fires 5 of 5 at astubbs#345, 5 of 5 at
+ * confluentinc#905's hot-shard metric and 5 of 5 at astubbs#373's claim compare-and-set, and misses 5 of 5
+ * at astubbs#336 - the sole commit touching core's main sources between the last hit and the first miss.
+ * So the flip is this harness's assertion now, and astubbs#336 is what it regression-tests.
+ * <p>
+ * <b>astubbs#336's own commit message says the opposite, and measurement wins.</b> Its verification
+ * paragraph reads "the Lincheck lane green - the latter still finding the violation it is calibrated to
+ * find". Run on that exact tree the lane is RED, on this arm alone and with the other five green. The
+ * likely mechanism is in the same message: astubbs#336 is an "adapted cherry-pick" of {@code fa4d1cf251}
+ * from another branch, so the lane it reports on is plausibly the pre-adaptation one. Recorded rather than
+ * explained away - if that line is ever shown to describe the merged tree, this flip is wrong.
+ * <p>
+ * <b>The miss is confirmed on a second machine.</b> Before the flip, this arm also found nothing on
+ * {@code ubuntu-latest} in CI - four cores against the 32 the rest of this evidence was taken on - while
+ * {@link LincheckToolchainProbeTest}'s stress arm fired on that same runner. That is what rules out the
+ * lane's known 3.4x cross-machine hit-rate variance as the explanation: a rate effect does not turn 15 of
+ * 15 hits into 0 across one commit on one box, and does not agree across two machines this far apart.
  * <p>
  * <b>Reverting HALF of astubbs#336 does not restore the counterexample, and three separate attempts proved
  * it.</b> Restoring the map's check-then-act alone leaves it green; restoring the counter's bare increment
