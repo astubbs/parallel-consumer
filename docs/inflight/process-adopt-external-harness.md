@@ -40,10 +40,18 @@ matrix and published pieces from Anthropic and Martin Fowler.
   `docs/inflight/` and `docs/refactoring.md`, "a filename carries no status", "deferred is a schedule
   and all non-deferred work happens first" - none of that ships with anyone's hooks. Adopting the
   tooling without them gets gates enforcing rules nobody agreed to, which is worse than no gates.
-- **The self-test density is unmatched** - every gate paired one-to-one with a self-test,
-  each verified red against a deliberately broken copy. The research found the *idea* advocated
-  elsewhere and one project genuinely eval-gated, but nobody requires it per gate. That discipline is
-  the thing worth keeping whatever the tooling underneath.
+- **~~The self-test density is unmatched~~ - CORRECTED 2026-09-01, and it was never true.**
+  `karanb192/claude-code-hooks` ships tests for every hook, run in CI across three Node versions,
+  plus a benchmark harness - so the claim is contradicted by the very project the survey above
+  named. The research literature asks for *more* than we do, too:
+  [GENESIS](https://arxiv.org/pdf/2605.27360) makes a negative control an **admission rule**, and
+  its version has three gates where ours has one - a checker must fail on the unsolved state, pass
+  on the reference solution, and fail again on a known-bad mutation.
+
+  What survives is narrower and worth keeping on its own merits: **every gate here is paired
+  one-to-one with a self-test, each verified red against a deliberately broken copy.** That is a
+  real discipline. It is not a differentiator, and treating it as one was how a comfortable claim
+  went three weeks unchecked.
 - **Migration is not free**, and the harness is what every agent session depends on. Doing it during
   a release run would churn the one thing that has to stay reliable.
 
