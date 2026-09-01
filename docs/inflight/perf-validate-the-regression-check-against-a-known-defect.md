@@ -102,3 +102,55 @@ Two caveats belong with the numbers, and both survive into whatever this becomes
   cannot separate it from a slow runner. It is not invisible to the available data: 90 days of runs are
   queryable and nothing reads them across runs yet. See
   `perf-a-queryable-history-instead-of-a-single-committed-baseline.md`.
+
+
+## RUN, 2026-09-01: the check fires - and the run exposed a weaker claim than expected
+
+<!-- post-merge: checked - both PRs are named by number and referred to in the past tense, so this
+     paragraph reads identically once either of them has merged or been closed -->
+Red/black executed in CI as astubbs/parallel-consumer#402 (defect injected, verbatim) against
+astubbs/parallel-consumer#401 (same tree, no defect). Both arms ran the real lane on hosted runners.
+
+| Arm | rate | records | machine index | ratio | verdict |
+|---|---|---|---|---|---|
+| red | 24,207 | 1,464,340 / 3,000,000 | 0.9241 | **0.336** | FAILED, exit 1 |
+| black | 62,970 | 3,000,000 / 3,000,000 | 0.9377 | **0.861** | OK |
+
+**The detector works end to end.** That was the open item and it is closed: the check ran in CI, on a
+genuinely regressed tree, and went red for the stated reason with the numbers shown.
+
+**The prediction was directionally right and numerically wrong**, which is why it was written down
+first. It said 0.407-0.605, the band every historical regression occupied. The actual was 0.336 -
+below the band, because the injected defect ran on a tree where nothing else masked it, whereas the
+historical instances were mixed in with other lane changes. Recorded rather than quietly rounded to
+"as predicted".
+
+### The uncomfortable finding: nothing here proves the check ADDS detection power
+
+The red arm struck the 60-second `GATING_CEILING` as well (1,464,340 of 3,000,000), so the pre-existing
+wall-clock assertion failed that run too. Checking the history, **every regression observed so far also
+breached the ceiling** - the 43,552, 44,992 and 43,629 runs all failed their lane on the deadline.
+
+So on the evidence to date the check has never caught something the ceiling would have missed. What it
+demonstrably adds is different and should be claimed as that and nothing more:
+
+- **A number instead of a binary.** The ceiling says "slower than the bound on this runner today"; the
+  ratio says how much, normalised, which is what makes a verdict readable.
+- **The other direction.** A healthy tree on a slow runner breaches the ceiling and reads as a
+  regression. The ratio is what separates those, and it is the failure that wasted weeks here.
+- **The band under the ceiling.** A regression that is real but still finishes inside 60s is invisible
+  to the deadline and visible to the ratio. Nothing has yet observed one, so this is the design intent
+  rather than a demonstrated catch.
+
+**What would demonstrate the added power** is an injected regression sized to slow the test without
+breaching the ceiling - roughly a 20-30% cut. That is a better next experiment than repeating this one.
+
+### More evidence that 0.70 cannot tighten
+
+<!-- post-merge: checked - names the PR that produced a measurement, in the past tense; the sentence
+     is about where a number came from and stays true after any merge -->
+The black arm scored 0.861 on a tree differing from the baseline run only by documentation and
+scripts. Together with the docs-only 0.778 already recorded, and an earlier run of the same branch at
+1.000 (astubbs/parallel-consumer#401), that is a spread of 0.778 to 1.000 on effectively identical
+code, from three separate runs. The floor is noise, not sensitivity, and a bound above about 0.72 would fail
+documentation changes.
