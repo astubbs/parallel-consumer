@@ -38,6 +38,28 @@ The narrower predecessor is `ci-issue-index-has-no-edges.md`, on branch
 client that makes the expansion unavoidable rather than reactive. **They must not both be built** -
 whichever lands first owns the edges, and the other becomes its consumer.
 
+## What of this has now landed
+
+**The cross-branch reader was built after all, in astubbs/parallel-consumer#400**, and the
+adopt-or-build argument this note said to have was had: Backlog.md ships the reader, but its schema
+carries status, milestones, dependencies and acceptance criteria - not a consequence ordering - so
+adopting it would have replaced the store and left the ordering, the gates and the injection layer
+to be kept anyway. `bin/inflight.mjs` now answers `note find`, `note drift` and `stranded` over one
+fan-out of every ref.
+
+Two of this note's decisions were settled by building it, and both are recorded in the code:
+
+- **"What drift means has to be defined before it can be detected."** It is *divergence*, not
+  difference. A branch that has not merged recently is different and gets more different every day;
+  for the fork's most-edited note that is 198 of 274 carrying refs, and reporting them buries the
+  answer. What is reported is content the baseline has never held, sized against the branch's
+  merge-base.
+- **"Cache on ref SHA, not on time."** Done, and sharpened: the whole corpus index is keyed on the
+  set of tip SHAs. The GitHub half is the one exception, because PR state moves without any ref
+  moving, and it is bounded rather than trusted.
+
+**The tunnel is still not built**, which is what this note is still open for.
+
 ## The decisions
 
 - **A CLI cannot force anything, and the proposal's word is "forcibly".** An agent can always call

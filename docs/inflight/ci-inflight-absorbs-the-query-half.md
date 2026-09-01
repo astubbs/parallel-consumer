@@ -1,0 +1,54 @@
+# The query half of the harness belongs in `inflight`, not in seven bash scripts
+
+<!-- inflight-type: task -->
+<!-- inflight-impact: ci -->
+
+**A hook or gate should decide POLICY. It should not know how to READ THE CORPUS.** Several do both
+today, in bash, each with its own copy of the reading. `bin/inflight.mjs` now owns the reading -
+[`ci-node-query-client.md`](ci-node-query-client.md) proposed it and the cross-branch half landed in
+astubbs/parallel-consumer#400 - so the migration is a subtraction from those scripts rather than
+new work.
+
+Surveyed 2026-09-01, on astubbs/parallel-consumer#400. Numbers are line counts, not estimates of
+what migrates: each script keeps its policy and loses only its reading.
+
+## What migrates, and why each one
+
+| Script | Lines | The query inside it |
+|---|---|---|
+| `.claude/hooks/inject-branch-context.sh` | 654 | a branch's commits, handoff notes, PR body and comments - `branchFacts()` already answers most of it |
+| `.claude/hooks/inject-recorded-knowledge.sh` | 437 | ~250 of them parse three tag axes and group by impact order. It **already runs a cross-ref `git grep`** to count branch-only documents - the prior-art fan-out, reimplemented in bash |
+| `.claude/hooks/check-merge-outstanding-work.sh` | 364 | reads notes and `gh` to decide whether background work is live |
+| `bin/check-branch-self-reference.sh` | 360 | "does a note mention THIS branch or PR" |
+| `.claude/hooks/remind-inflight-on-push.sh` | 239 | "what does this PR's own note still say is open" - `note find` plus a read |
+| `bin/check-inflight-tags.sh` | 169 | parses every note, then fails. Already shares `bin/lib/inflight-tags.sh` with the index - the split is right and is done in bash |
+| `bin/issue-index.sh` | 127 | GitHub to tree; the tunnel's first half, and it should share the tool's cache |
+
+**Start with the session index, because it gains a capability rather than just losing lines.** It is
+branch-scoped today and says so apologetically - *"this list is what the CURRENT BRANCH carries, and
+that is not all of it"*. Over the corpus index it can be **corpus-scoped**: `stranded` at session
+start would put the 42-note language-proxy cluster in front of an agent that currently cannot learn
+it exists.
+
+## What does NOT migrate
+
+Copyright, CVE, OSS Index, shell hazards, source patterns, the rename tooling, mutation and the build
+scripts. They are gates over the working tree and read no corpus. Leaving them alone is the point of
+the dividing line above.
+
+## The open decision
+
+**`.github/scripts/*.js` and `bin/*.mjs` are both Node and share nothing.** Four CI gates with
+one-to-one self-tests on one side, the tool on the other; `file-ref-gate.js` reads the whole tree and
+ratchets against `origin/master`, which is the same fan-out the tool now owns. Merging them means CI
+gates importing from `bin/lib/`, which couples the CI lane to local tooling. **Not yet** - decide it
+after the hook migrations have proved the libraries stable.
+
+Counting the bash this sits against: 23,666 lines under `bin/` and `.claude/hooks/`, against ~1,700
+in `bin/*.mjs` and 2,515 in `.github/scripts/` (self-tests included). Node is the default for new
+scripts by operator ruling; this is what the existing surface looks like.
+
+## Delete when
+
+Each row above has either migrated or been ruled out in writing, and the `.github/scripts` decision
+has been taken either way.
