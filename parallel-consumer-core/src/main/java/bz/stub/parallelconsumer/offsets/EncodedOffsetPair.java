@@ -162,7 +162,7 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
      *                 nothing on the IGNORE path
      */
     @SneakyThrows
-    private static HighestOffsetAndIncompletes handleUnreadableMetadata(long baseOffset,
+    static HighestOffsetAndIncompletes handleUnreadableMetadata(long baseOffset,
                                                                         InvalidOffsetMetadataHandlingPolicy errorPolicy,
                                                                         String problem,
                                                                         Supplier<? extends InternalException> toThrow,
@@ -176,6 +176,17 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
             return HighestOffsetAndIncompletes.of(baseOffset - 1);
         }
         throw toThrow.get();
+    }
+
+    /**
+     * The decoder's own description of what is wrong, unwrapped from its exception.
+     * <p>
+     * A {@link CorruptOffsetMetadataException} already carries a specific structural reason ("bitset declares N
+     * bits..."), which is worth more than the class name; anything else (a truncated buffer, a bad zstd frame) has
+     * only its type and message to offer.
+     */
+    private static String problemOf(Exception e) {
+        return e instanceof CorruptOffsetMetadataException ? e.getMessage() : e.toString();
     }
 
     /**
@@ -287,9 +298,12 @@ public final class EncodedOffsetPair implements Comparable<EncodedOffsetPair> {
             return handleUnreadableMetadata(baseOffset,
                     errorPolicy,
                     msg("the payload is not decodable as {}: {}", encoding.description(), e.getMessage()),
-                    () -> e instanceof CorruptOffsetMetadataException
-                            ? (CorruptOffsetMetadataException) e
-                            : new CorruptOffsetMetadataException(e.toString(), describeSource(tp, baseOffset)),
+                    // Always rebuild with describeSource: the decoders raise CorruptOffsetMetadataException through
+                    // its one-argument constructor, which records "source unknown". Passing that instance through
+                    // would discard the partition and base offset known only here - and under FAIL this exception
+                    // escapes the rebalance callback inside Kafka's generic wrapper, where its message is the
+                    // operator's only clue which assigned partition holds the bad metadata.
+                    () -> new CorruptOffsetMetadataException(problemOf(e), describeSource(tp, baseOffset)),
                     tp);
         }
     }

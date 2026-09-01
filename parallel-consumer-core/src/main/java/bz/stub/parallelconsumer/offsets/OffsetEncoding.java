@@ -7,7 +7,6 @@ package bz.stub.parallelconsumer.offsets;
 
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
-import lombok.SneakyThrows;
 import lombok.ToString;
 
 import java.util.Arrays;
@@ -82,21 +81,25 @@ public enum OffsetEncoding {
     /**
      * Resolves a magic byte to its encoding, or fails.
      * <p>
-     * Deliberately keeps its original signature - no {@code throws} clause - even though
-     * {@link UnknownOffsetMetadataMagicException} is checked. This method is {@code public}, and before this change it
-     * threw a bare unchecked {@code RuntimeException}, so declaring the checked exception would break source
-     * compatibility for any existing caller. {@code @SneakyThrows} is how the rest of this package already smuggles
-     * these (see {@link EncodedOffsetPair#unwrap} and {@link EncodedOffsetPair#getDecodedIncompletes}); the caller
-     * sees a strictly better exception than before, at the same signature.
+     * <b>Keeps the declared {@link OffsetDecodingError} contract deliberately.</b> An earlier revision of this change
+     * dropped the {@code throws} clause and sneaky-threw a checked {@link UnknownOffsetMetadataMagicException} instead,
+     * reasoning that the narrower signature was the source-compatible choice. That was backwards: this method already
+     * declared {@code OffsetDecodingError}, so removing it stopped existing {@code catch} clauses compiling, left
+     * already-compiled callers unable to see the replacement at runtime, and made the new type uncatchable because
+     * javac saw no declaration that it could be thrown.
+     * <p>
+     * The policy-aware path does not come through here - it uses {@link #maybeDecode} and lets
+     * {@link EncodedOffsetPair#decodeToIncompletes} apply
+     * {@link bz.stub.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy}. So this method
+     * staying exactly as it was costs the new behaviour nothing.
      *
-     * @throws UnknownOffsetMetadataMagicException if no encoding known to this build claims this magic byte
+     * @throws OffsetDecodingError if no encoding known to this build claims this magic byte
      * @see #maybeDecode for the policy-aware decode path, which production decoding uses instead
      */
-    @SneakyThrows
-    public static OffsetEncoding decode(byte magic) {
+    public static OffsetEncoding decode(byte magic) throws OffsetDecodingError {
         Optional<OffsetEncoding> encoding = maybeDecode(magic);
         if (!encoding.isPresent()) { // Optional#isEmpty is Java 11 - this module compiles against the Java 8 API
-            throw new UnknownOffsetMetadataMagicException(magic);
+            throw new OffsetDecodingError("Unexpected magic: " + magic, null);
         }
         return encoding.get();
     }

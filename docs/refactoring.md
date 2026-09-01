@@ -318,39 +318,9 @@ them, do not copy them back.
 - `maybe in those cases we should not create metadata at all`: possibly avoid creating offset
   metadata at all in some cases.
 
-### offsets/OffsetEncoding.java
-- `ByteArray` / `ByteArrayCompressed` are enum constants that claim two magic bytes
-  but have **no live encoder** (`OffsetSimultaneousEncoder` L209: commented out, "no
-  advantage over BitSet encoding") and **no decoder** in
-  `EncodedOffsetPair#getDecodedIncompletes` - they fall to its `default` branch. They
-  now fail as a typed `UnsupportedOffsetEncodingException` routed through
-  `invalidOffsetMetadataPolicy` rather than a bare `UnsupportedOperationException`, so
-  nothing is unsafe - but the constants should either gain decoders or be deleted.
-  Deleting them frees two magic bytes and is a **wire-format** decision, so it belongs
-  with the breaking-change queue, not an ad-hoc cleanup.
-
 ### offsets/OffsetDecodingError.java
 - `TODO should extend java.lang.Error`: should it extend `java.lang.Error`?
   (exception-hierarchy design)
-
-### offsets/OffsetRunLength.java
-- **A structurally valid but implausibly large run length is accepted.** A `RunLengthV2` entry of
-  `Integer.MAX_VALUE` moves the highest-seen offset ~2e9 forward, marking that range as already
-  succeeded, so those records are never processed. The decode-time checks added in astubbs#207 reject
-  only what the payload itself proves wrong, and a long run of completed offsets is exactly what RLE
-  is for - so bounding this means picking a plausibility ceiling, which is a product decision. Detail
-  in `docs/inflight/pr-offset-encoding-policy.md`.
-
-### offsets/EncodedOffsetPair.java
-- **`invalidOffsetMetadataPolicy(FAIL)` stops the consumer by escaping Kafka's rebalance callback.**
-  `handleUnreadableMetadata` throws an `EncodingNotSupportedException` (a checked `InternalException`,
-  smuggled out with `@SneakyThrows`), which is not an `OffsetDecodingError` and so is not caught by
-  `loadPartitionStateForAssignment`. It propagates out of `onPartitionsAssigned`, and Kafka wraps it
-  as `User rebalance callback throws an error` with the real cause nested. Stopping is what `FAIL`
-  promises, but that opaque surfacing is the failure astubbs#118 was filed about. A deliberate stop
-  should go through PC's own fatal-error path, naming the partition, the magic byte and the option
-  that caused it. Not fixed with the policy work in astubbs#207 because it reaches beyond the offsets
-  package; recorded in `docs/inflight/pr-offset-encoding-policy.md`.
 
 ### state/ProcessingShard.java
 

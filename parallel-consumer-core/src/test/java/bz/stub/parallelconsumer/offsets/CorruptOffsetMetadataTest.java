@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.offsets;
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy;
 import lombok.extern.slf4j.Slf4j;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -80,7 +81,13 @@ class CorruptOffsetMetadataTest {
                 Arguments.of("RunLengthV2, negative run length",
                         payload(OffsetEncoding.RunLengthV2, 0xFF, 0xFF, 0xFF, 0xFF)),
                 Arguments.of("RunLength, body is not a whole number of 2-byte entries",
-                        payload(OffsetEncoding.RunLength, 0, 5, 7))
+                        payload(OffsetEncoding.RunLength, 0, 5, 7)),
+                // Passes the divisibility check (0 % 2 == 0), so it needs its own guard. Left unchecked at committed
+                // offset 0 it decoded to highestSeenOffset == 0, i.e. "record 0 already succeeded".
+                Arguments.of("RunLength, magic byte and no entries at all",
+                        payload(OffsetEncoding.RunLength)),
+                Arguments.of("RunLengthV2, magic byte and no entries at all",
+                        payload(OffsetEncoding.RunLengthV2))
         );
     }
 
@@ -104,6 +111,30 @@ class CorruptOffsetMetadataTest {
         assertThatThrownBy(() -> EncodedOffsetPair.decodeToIncompletes(input, BASE_OFFSET,
                 InvalidOffsetMetadataHandlingPolicy.FAIL, null))
                 .as("FAIL must not silently accept a payload this build could not have written")
+                .isInstanceOf(CorruptOffsetMetadataException.class);
+    }
+
+    /**
+     * Metadata that is not even base64 never reaches a decoder, so it enters through
+     * {@link OffsetMapCodecManager#deserialiseIncompleteOffsetMapFromBase64(long, String,
+     * InvalidOffsetMetadataHandlingPolicy)} rather than {@link EncodedOffsetPair#decodeToIncompletes}. It used to raise
+     * {@link OffsetDecodingError}, which {@code loadPartitionStateForAssignment} catches unconditionally - so a
+     * deployment that chose {@code FAIL} dropped the offset map and replayed anyway.
+     */
+    @Test
+    void ignorePolicyDiscardsMetadataThatIsNotEvenBase64() throws Exception {
+        var result = OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromBase64(
+                BASE_OFFSET, "not-valid-base64!!", InvalidOffsetMetadataHandlingPolicy.IGNORE);
+
+        assertThat(result.getHighestSeenOffset()).hasValue(METADATA_TREATED_AS_ABSENT);
+        assertThat(result.getIncompleteOffsets()).isEmpty();
+    }
+
+    @Test
+    void failPolicyStopsOnMetadataThatIsNotEvenBase64() {
+        assertThatThrownBy(() -> OffsetMapCodecManager.deserialiseIncompleteOffsetMapFromBase64(
+                BASE_OFFSET, "not-valid-base64!!", InvalidOffsetMetadataHandlingPolicy.FAIL))
+                .as("FAIL must stop rather than discard metadata it cannot even base64-decode")
                 .isInstanceOf(CorruptOffsetMetadataException.class);
     }
 }

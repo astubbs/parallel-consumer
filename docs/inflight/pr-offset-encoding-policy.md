@@ -146,23 +146,15 @@ it are folded in:
 
 ## Left open
 
-- `ByteArray` / `ByteArrayCompressed` remain encoder-less and decoder-less enum constants. They now
-  fail cleanly rather than with an `UnsupportedOperationException`, but whether to implement or
-  delete them is a wire-format decision - queued in `docs/refactoring.md`
-  (*offsets/OffsetEncoding.java*), not here.
-- **`FAIL` stops the consumer by letting a checked exception escape Kafka's rebalance callback**,
-  which surfaces as a generic `KafkaException: User rebalance callback throws an error` with the
-  real cause nested. That opaque failure is what astubbs#118 was filed about; it is now opt-in
-  rather than the default, but a deliberate stop should still go through PC's own fatal-error path
-  with a message naming the partition, the magic byte and the option that caused it. Queued in
-  `docs/refactoring.md`, not fixed here - it reaches beyond the offsets package.
-- **A run length that is structurally valid but implausibly large is still accepted.** A `RunLengthV2`
-  entry of `Integer.MAX_VALUE` moves the highest-seen offset about two billion forward, which marks
-  that whole range as already succeeded. Unlike the shapes now rejected, nothing in the payload
-  proves it wrong - a long stretch of completed offsets is what run-length encoding is *for*, and the
-  decoder has no partition end offset to check it against. Capping it means choosing a plausibility
-  ceiling, which is a product decision rather than a correctness one, so it is recorded rather than
-  guessed at. Queued in `docs/refactoring.md`.
+Each of these outlived this PR and now has its own note, so nothing is restated here:
+
+- [`core-bytearray-encodings-have-no-codec.md`](core-bytearray-encodings-have-no-codec.md) - the two
+  encoder-less, decoder-less `OffsetEncoding` constants, and the wire-format decision about them.
+- [`bug-run-length-plausibility-ceiling.md`](bug-run-length-plausibility-ceiling.md) - a structurally
+  valid but implausibly large run length, which nothing in the payload proves wrong.
+- [`core-fail-policy-escapes-the-rebalance-callback.md`](core-fail-policy-escapes-the-rebalance-callback.md)
+  - `FAIL` stopping via Kafka's generic callback wrapper rather than PC's own fatal path.
+
 - **Back-links to add when astubbs#207 merges** (none existed when this note was written, in either
   direction):
   astubbs#207 -> astubbs#118 / astubbs#217 / confluentinc#326; astubbs#118 -> astubbs#207;

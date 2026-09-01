@@ -90,6 +90,14 @@ public class OffsetRunLength {
             case v1 -> Short.BYTES;
             case v2 -> Integer.BYTES;
         };
+        if (in.remaining() == 0) {
+            // RunLengthEncoder.serialise() calls addTail() before writing, so a payload it produced always carries at
+            // least one entry. An empty body therefore cannot be ours - and left unchecked it is worse than a partial
+            // one: the decode loop never runs, so at committed offset 0 this returns highestSeenOffset == 0, which
+            // PartitionState#isRecordPreviouslyCompleted reads as "record 0 already succeeded" and skips it.
+            throw new CorruptOffsetMetadataException(msg(
+                    "{} payload carries a magic byte and no run-length entries at all", encoding.description()));
+        }
         if (in.remaining() % elementBytes != 0) {
             throw new CorruptOffsetMetadataException(msg(
                     "{} run-length body is {} byte(s), which is not a whole number of {}-byte entries",

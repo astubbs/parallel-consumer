@@ -219,6 +219,22 @@ public class OffsetMapCodecManager<K, V> {
     }
 
     /**
+     * Decodes an offset payload under an explicit policy, without a partition to name in diagnostics.
+     * <p>
+     * Retained at its original three-argument shape: this is public API, and an earlier revision of this change
+     * replaced it with the four-argument form below rather than adding to it. That broke already-compiled callers
+     * with {@code NoSuchMethodError} and forced source callers to pass a {@link TopicPartition} they had no use for.
+     * The default-policy change this PR makes never required removing it.
+     *
+     * @see #deserialiseIncompleteOffsetMapFromBase64(long, String, InvalidOffsetMetadataHandlingPolicy, TopicPartition)
+     */
+    public static HighestOffsetAndIncompletes deserialiseIncompleteOffsetMapFromBase64(long committedOffsetForPartition,
+                                                                                       String base64EncodedOffsetPayload,
+                                                                                       InvalidOffsetMetadataHandlingPolicy errorPolicy) throws OffsetDecodingError {
+        return deserialiseIncompleteOffsetMapFromBase64(committedOffsetForPartition, base64EncodedOffsetPayload, errorPolicy, null);
+    }
+
+    /**
      * Decodes the base64 offset payload committed against a partition, into the highest offset seen and the set of
      * incomplete offsets below it.
      *
@@ -242,7 +258,17 @@ public class OffsetMapCodecManager<K, V> {
         try {
             decodedBytes = OffsetSimpleSerialisation.decodeBase64(base64EncodedOffsetPayload);
         } catch (IllegalArgumentException a) {
-            throw new OffsetDecodingError(msg("Error decoding offset metadata, input was: {}", base64EncodedOffsetPayload), a);
+            // Metadata that is not even base64 is unreadable in exactly the sense the policy governs, so it goes
+            // through the same handler as every other case. It used to throw OffsetDecodingError, which
+            // loadPartitionStateForAssignment catches unconditionally - so a deployment that chose FAIL silently
+            // dropped the offset map and replayed completed records instead of stopping. Arbitrary bytes left by
+            // another framework take this path readily, which made it the widest hole in the policy's coverage.
+            return EncodedOffsetPair.handleUnreadableMetadata(committedOffsetForPartition,
+                    errorPolicy,
+                    msg("the metadata is not valid base64"),
+                    () -> new CorruptOffsetMetadataException("metadata is not valid base64",
+                            EncodedOffsetPair.describeSource(tp, committedOffsetForPartition)),
+                    tp);
         }
         return decodeCompressedOffsets(committedOffsetForPartition, decodedBytes, errorPolicy, tp);
     }
