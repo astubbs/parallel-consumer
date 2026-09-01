@@ -12,7 +12,8 @@
 #        2.  `v0.5.2.2`-style headings and `0.5.2.2` arguments name the same release
 #        3.  a heading suffix such as `(unreleased)` still matches (and warns) - this is
 #            the exact bug from astubbs#197: release.yml compared the heading to the literal
-#            string `== 0.6.0.0` and matched nothing
+#            string `== 0.6.0.0` and matched nothing - and `--strict` makes it fatal, which
+#            is what a real release passes and a rehearsal does not
 #        4.  a version prefix does NOT match a longer version (0.6.0.1 vs 0.6.0.10)
 #        5.  a missing section is exit 2, not empty output
 #        6.  a present-but-empty section is exit 2 - INCLUDING one that is non-empty but
@@ -39,6 +40,23 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 RENDERER="$HERE/release-notes.py"
 REAL_CHANGELOG="$(dirname "$HERE")/CHANGELOG.adoc"
 
+# No interpreter is CANNOT RUN (exit 2), never FAIL. bin/check-all.sh and repo-hygiene.yml's
+# macOS lane both distinguish the two, and "a suite that never ran, reported as a suite that ran
+# and found a defect" is the attribution failure they exist to prevent. Python 3 specifically:
+# the renderer's `print(..., file=...)` is a syntax error under a `python` that is Python 2.
+PY=""
+for c in python3 python; do
+  if command -v "$c" >/dev/null 2>&1 &&
+     "$c" -c 'import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)' >/dev/null 2>&1; then
+    PY="$c"
+    break
+  fi
+done
+if [ -z "$PY" ]; then
+  echo "test-release-notes: no working Python 3 on PATH - CANNOT RUN" >&2
+  exit 2
+fi
+
 failures=0
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -54,9 +72,13 @@ assert() { # <description> <expected> <actual>
     fi
 }
 
-# Writes $1 to a changelog file and echoes its path.
+# Writes $1 to a changelog file and echoes its path. mktemp, not $RANDOM: every call here is
+# inside a `$(...)`, and bash before 5.1 does not reseed $RANDOM in a subshell - so on the
+# macOS 3.2 lane every fixture would land on one path and silently overwrite the last, while
+# fixtures written early are still referenced by asserts near the end of the file.
 changelog() { # <text>
-    local path="$tmp/changelog-$RANDOM.adoc"
+    local path
+    path="$(mktemp "$tmp/changelog-XXXXXX.adoc")"
     printf '%s\n' "$1" > "$path"
     echo "$path"
 }
@@ -64,13 +86,13 @@ changelog() { # <text>
 # Echoes the renderer's exit code, discarding its output.
 render_status() { # <changelog-path> <version> [extra args...]
     local ec=0
-    python3 "$RENDERER" "${@:2}" --changelog "$1" >/dev/null 2>&1 || ec=$?
+    "$PY" "$RENDERER" "${@:2}" --changelog "$1" >/dev/null 2>&1 || ec=$?
     echo "$ec"
 }
 
 # Echoes the renderer's stdout.
 render() { # <changelog-path> <version> [extra args...]
-    python3 "$RENDERER" "${@:2}" --changelog "$1" 2>/dev/null
+    "$PY" "$RENDERER" "${@:2}" --changelog "$1" 2>/dev/null
 }
 
 # --- A. contract ------------------------------------------------------------------------
@@ -104,9 +126,9 @@ Body.')
 assert "a heading suffix still matches (astubbs#197 regression)" \
     "Body." "$(render "$SUFFIXED" 0.6.0.0)"
 assert "...and warns about the suffix" \
-    "1" "$(python3 "$RENDERER" 0.6.0.0 --changelog "$SUFFIXED" 2>&1 >/dev/null | grep -c "unreleased")"
+    "1" "$("$PY" "$RENDERER" 0.6.0.0 --changelog "$SUFFIXED" 2>&1 >/dev/null | grep -c "unreleased")"
 # A rehearsal tolerates the suffix; a real release must not tag a section still labelled
-# unreleased, so --strict promotes the warning to a refusal with its own exit code.
+# unreleased, and release.yml passes --strict whenever dryRun is false.
 assert "--strict makes an unfrozen heading fatal" \
     4 "$(render_status "$SUFFIXED" 0.6.0.0 --strict)"
 assert "...and prints no notes when it does" \
@@ -255,13 +277,17 @@ assert "link macros, with relative targets absolutised at the ref" \
 
 # --- B. the real changelog --------------------------------------------------------------
 
+# One invocation per section, keeping its stderr rather than throwing it away and re-running to
+# get it back. render_status/render cannot be reused here: the first discards the diagnostics this
+# loop exists to print, the second discards them and the exit code.
 real_failures=0
 while IFS= read -r version; do
-    status=$(render_status "$REAL_CHANGELOG" "$version")
+    status=0
+    "$PY" "$RENDERER" "$version" --changelog "$REAL_CHANGELOG" \
+        >/dev/null 2>"$tmp/real-section-stderr.txt" || status=$?
     if [ "$status" != "0" ]; then
         echo "FAIL: CHANGELOG.adoc section '$version' does not render (exit $status):"
-        python3 "$RENDERER" "$version" --changelog "$REAL_CHANGELOG" >/dev/null 2>&1
-        python3 "$RENDERER" "$version" --changelog "$REAL_CHANGELOG" 2>&1 >/dev/null | sed 's/^/        /'
+        sed 's/^/        /' "$tmp/real-section-stderr.txt"
         real_failures=$((real_failures + 1))
     fi
 done < <(grep -oE '^== v?[0-9][0-9.]*' "$REAL_CHANGELOG" | sed 's/^== //')

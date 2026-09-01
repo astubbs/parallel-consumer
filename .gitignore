@@ -139,3 +139,7 @@ jcstress-results-*.bin.gz
 # Error Prone dumps the failing javac invocation beside the module when a check crashes, rather
 # than under target/, so a crash leaves an untracked file the next `git add -A` would commit
 javac.*.args
+
+# CPython writes bytecode beside the source when a module in bin/ or scripts/ is imported rather
+# than run - a review or a self-test doing so leaves an untracked directory `git add -A` would commit
+__pycache__/
