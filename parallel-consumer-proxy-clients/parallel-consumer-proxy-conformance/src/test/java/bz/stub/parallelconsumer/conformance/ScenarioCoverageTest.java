@@ -27,7 +27,7 @@ class ScenarioCoverageTest {
     /**
      * Harness scenarios this suite deliberately does not drive yet. Empty today: all four of the harness's
      * live scenarios have a runner behaviour. The named-but-not-yet-served scenarios in
-     * {@code parallel-consumer-proxy/docs/client-authoring-guide.md} are NOT here, because the harness does
+     * {@code parallel-consumer-proxy-protocol/docs/client-authoring-guide.md} are NOT here, because the harness does
      * not offer them yet either - they arrive together with the engine units that make them answerable.
      */
     private static final List<String> DELIBERATELY_NOT_DRIVEN = List.of();

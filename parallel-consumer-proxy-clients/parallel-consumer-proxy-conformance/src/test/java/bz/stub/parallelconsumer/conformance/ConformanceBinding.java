@@ -3,7 +3,7 @@ package bz.stub.parallelconsumer.conformance;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.proxy.harness.ProxyHarness;
+import bz.stub.parallelconsumer.proxy.harness.ConformanceHarness;
 
 /**
  * One thing a scenario can be run against: the engine driven directly by a Java function, or a foreign
@@ -39,7 +39,7 @@ public interface ConformanceBinding {
      * Runs the scenario's prescription against a started harness, and returns the run - which stays open
      * until the assertions have been made.
      */
-    Run execute(ProxyHarness harness, ConformanceScenario scenario);
+    Run execute(ConformanceHarness harness, ConformanceScenario scenario);
 
     /**
      * One binding's execution of one scenario, open for as long as the assertions need it.

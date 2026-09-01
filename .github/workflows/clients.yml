@@ -43,6 +43,13 @@
 # fails loudly at setup, per the plan's pinnability check (ASM8), and the wave that
 # starts a module owns bumping its pins from then on. Nothing here uses
 # pull_request_target, and nothing here may ever pair it with a mutable ref.
+#
+# EVERY ROW SETS PC_FOREIGN_CLIENTS_STRICT, and that is the half of the design that keeps
+# the other half honest. bin/foreign-client-step.sh skips a module whose toolchain is
+# absent, because absence is the normal state of a developer's machine - but on a row that
+# has just installed the toolchain itself, absence means the setup step did not do what it
+# claimed, and a green skip would be
+# docs/solutions/workflow-issues/a-check-that-reports-success-without-having-run.md again.
 
 name: Clients
 
@@ -57,6 +64,10 @@ permissions:
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
+
+env:
+  # See the header: a row provisions its own toolchain, so an absent one is a provisioning bug.
+  PC_FOREIGN_CLIENTS_STRICT: '1'
 
 jobs:
 
@@ -399,11 +410,17 @@ jobs:
         if: steps.gate.outputs.deferred == 'false' && matrix.language == 'python'
         with:
           python-version: ${{ matrix.toolchain }}
+      # `--component clippy` is NOT optional decoration on a minimal profile: this module's build
+      # command IS `cargo clippy`, and a minimal toolchain ships rustc and cargo and nothing else,
+      # so the row died with "'cargo-clippy' is not installed for the toolchain" before the crate
+      # was ever compiled. The version print is what stops a silent no-op setup looking like a
+      # working one.
       - name: Set up Rust toolchain (rustup, preinstalled on the runner image)
         if: steps.gate.outputs.deferred == 'false' && matrix.language == 'rust'
         run: |
           rustup toolchain install ${{ matrix.toolchain }} --profile minimal --component clippy
           rustup default ${{ matrix.toolchain }}
+          cargo clippy --version
       - uses: actions/setup-dotnet@v6
         if: steps.gate.outputs.deferred == 'false' && matrix.language == 'dotnet'
         with:

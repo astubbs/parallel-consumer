@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+#
+# Copyright (C) 2026 Antony Stubbs and contributors
+#
+
+# Run the Lincheck lane - scheduler-controlled concurrency testing over parallel-consumer-core's state
+# classes. Non-gating and opt-in, the same shape as bin/chaos-test.sh.
+#
+# FIVE flags have to line up, which is why this script exists rather than an mvnw line in a doc - and
+# every one of them fails SILENTLY on its own:
+#
+#   1. -Dincluded.groups=lincheck AND -Dexcluded.groups= . The `lincheck` tag is in the pom's default
+#      excluded.groups, and in JUnit Platform exclusion beats inclusion - so the include ALONE selects
+#      nothing and the run exits BUILD SUCCESS having tested zero classes. Same trap the performance
+#      lane documents in the root pom.
+#   2. -Plincheck, which supplies the --add-opens/--add-exports the MODEL CHECKING strategy needs. Miss
+#      it and model checking dies with InaccessibleObjectException while the stress tests still pass,
+#      so a partial red looks like a flake rather than a missing flag.
+#   3. -Dpc.log.level=info - the interleaving traces are logged at INFO and logback-test.xml
+#      defaults the harness to warn, so without -Dpc.log.level=info a FOUND violation prints no trace.
+#   4. -Dparallel-tests=false . Lincheck installs a JVM-WIDE instrumentation agent and drives the
+#      scheduler of the fork it runs in; two Lincheck classes running concurrently in one JVM (which is
+#      what this module's JUnit thread parallelism does by default) share that agent. Serial execution
+#      is the only configuration whose results mean anything.
+#   5. -Djacoco.skip=true . JaCoCo's probes are ordinary field writes to the model checker, so an
+#      instrumented run interleaves and PRINTS them: every trace line is padded with $jacocoInit and
+#      RuntimeData.getProbes frames, burying the three lines that matter. Coverage of a lane that
+#      deliberately re-runs four operations a few thousand times is worthless anyway.
+#
+# Env (data, not code - workflow inputs must pass through env, never ${{ }} into scripts):
+#   LINCHECK_TEST - optional -Dtest= filter (e.g. ShardManagerLincheckTest); empty = the whole lane
+#
+# Runtime at the committed bounds is about 2m30s for the whole lane (2m32s-2m37s measured, build
+# included), and roughly two minutes of that is WorkManagerLincheckTest alone: an INVERTED arm cannot
+# stop at a first violation, so it always pays its whole bound, where a designed-red one stops as
+# soon as it hits. The lane was 26-29s while that arm was designed-red. It also grows superlinearly
+# with threads/actorsPerThread - the bounds are stated in each test method rather than here, and
+# docs/plans/2026-08-25-001-test-lincheck-poc-plan.md records what each one cost.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+# Note the `+` expansion: under `set -u`, bash 3.2 (which is what macOS ships) treats "${arr[@]}" on an
+# EMPTY array as an unbound variable and aborts. The lane then exits 1 having run nothing.
+TEST_ARG=()
+if [ -n "${LINCHECK_TEST:-}" ]; then
+    TEST_ARG=(-Dtest="${LINCHECK_TEST}" -Dsurefire.failIfNoSpecifiedTests=false)
+fi
+
+# Delete last run's reports BEFORE this one, so the count below can only be non-zero if THIS run
+# selected classes. Without it the guard reads stale files and a lane that selected nothing scores a
+# healthy count - the very false green the guard exists to catch. `clean` would do it too, at the cost
+# of rebuilding -am every time; deleting just these reports keeps the lane incremental.
+find parallel-consumer-core -path '*/surefire-reports/TEST-*Lincheck*.xml' -delete
+
+start=$(date +%s)
+
+set +e
+./mvnw -Plincheck -pl parallel-consumer-core -am test \
+    -Dincluded.groups=lincheck \
+    -Dexcluded.groups= \
+    -Dpc.log.level=info \
+    -Dparallel-tests=false \
+    -Djacoco.skip=true \
+    -DskipITs \
+    ${TEST_ARG[@]+"${TEST_ARG[@]}"}
+status=$?
+set -e
+
+total=$(( $(date +%s) - start ))
+
+# A lane that selected nothing must say so rather than impersonating a green run - the same failure
+# mode the chaos lane guards against, and the one the mutation lane shipped with. Counts only reports
+# this run wrote, because the stale ones were deleted above.
+selected=$(find parallel-consumer-core -path '*/surefire-reports/TEST-*Lincheck*.xml' | wc -l | tr -d ' ')
+
+printf '\n## Lincheck lane\n\n'
+printf 'Wall-clock: **%dm %02ds** (build included)\n\n' $((total / 60)) $((total % 60))
+if [ "$selected" -eq 0 ]; then
+    printf 'ZERO Lincheck classes ran - this measured NOTHING. Check the group filters above.\n'
+    exit 1
+fi
+
+# Zero is the loud failure; a SHORT count is the quiet one. If a rename, a dropped `@Tag`, or a
+# surefire include pattern stops selecting three of the five harnesses, the check above still passes
+# and the summary still prints a healthy-looking number - which is the same false green one step in.
+# So assert the exact roster, not just non-emptiness. Adding a harness deliberately fails this until
+# the number is updated: that friction IS the check, because a harness the lane silently stops
+# running is indistinguishable from one that never existed. Skipped when LINCHECK_TEST selects a
+# single class, where a short count is the whole point.
+#
+# WHY THE NUMBER IS PINNED BY HAND rather than derived from `grep -rl '@Tag("lincheck")'` at run time,
+# which is the obvious way to remove the human step: deriving it makes the guard BLIND to a dropped
+# tag, because the same missing tag that drops the class from the run also drops it from the
+# expectation, and the two cancel to a green. A derived count could only ever catch the include
+# pattern, never the roster - so the hand-maintained number is not a compromise here, it is the only
+# version that can fail.
+EXPECTED_LINCHECK_CLASSES=6
+if [ -z "${LINCHECK_TEST:-}" ] && [ "$selected" -ne "$EXPECTED_LINCHECK_CLASSES" ]; then
+    printf 'Lincheck report files: %s, EXPECTED %s.\n' "$selected" "$EXPECTED_LINCHECK_CLASSES"
+    printf 'The lane selected the wrong roster. Either a harness stopped being selected (a rename, a\n'
+    printf 'lost @Tag, a surefire include pattern) or one was added without updating\n'
+    printf 'EXPECTED_LINCHECK_CLASSES in this script. Both are real; neither is a pass.\n'
+    exit 1
+fi
+printf 'Lincheck report files: %s\n' "$selected"
+
+exit $status

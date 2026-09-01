@@ -46,7 +46,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .into());
     }
 
-    if std::env::var_os("PROTOC").is_none() {
+    // THE MAVEN COPY IS THE LAST RESORT, AND THE ORDER IS LOAD-BEARING - the header above states
+    // it ($PROTOC, then PATH, then the Maven repository) and this block used to invert it, filling
+    // in $PROTOC from the Maven repository whenever the caller had not set it. That preferred a
+    // BARE BINARY over a real protoc distribution, and a bare binary has no sibling `include/`, so
+    // every build on a machine that had built the protocol module failed on
+    // `google/protobuf/duration.proto: File not found` - which reads as a broken schema rather than
+    // as the wrong protoc having been chosen. CI never saw it: its rows set $PROTOC explicitly.
+    if std::env::var_os("PROTOC").is_none() && resolved_protoc().is_none() {
         if let Some(protoc) = protoc_from_maven_repository() {
             // SAFETY-equivalent note for a build script: this is a single-threaded main() before
             // any codegen runs, and it only fills in what the user did not set.
@@ -140,8 +147,14 @@ fn resolved_protoc() -> Option<PathBuf> {
 }
 
 /// The `protoc` executable the protocol module's Maven build downloads, if this platform's copy is
-/// there. Returns the newest match, mirroring what the Go client's generation script does with the
-/// same directory - the two languages resolve the same fallback the same way.
+/// there AND can be run. Returns the newest match, mirroring what the Go client's generation script
+/// does with the same directory - the two languages resolve the same fallback the same way.
+///
+/// **The executable bit is checked, and that is a fix rather than belt-and-braces.** Maven writes
+/// the downloaded artifact 0644, so a copy of it can be present and unusable; picking one up died
+/// with `Permission denied (os error 13)` naming a path inside `~/.m2`, which reads as a broken
+/// crate rather than as an unusable fallback. The caller only reaches here when nothing better
+/// exists - see the ordering note in `main`.
 fn protoc_from_maven_repository() -> Option<PathBuf> {
     let classifier = match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => "linux-x86_64",
@@ -182,12 +195,12 @@ fn protoc_from_maven_repository() -> Option<PathBuf> {
 /// Non-unix targets have no mode bits to consult, and this fallback is unreachable there anyway -
 /// the classifier match above returns `None` for every non-Linux, non-macOS platform.
 #[cfg(unix)]
-fn is_executable(candidate: &std::path::Path) -> bool {
+fn is_executable(candidate: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(candidate).is_ok_and(|meta| meta.permissions().mode() & 0o111 != 0)
 }
 
 #[cfg(not(unix))]
-fn is_executable(_candidate: &std::path::Path) -> bool {
+fn is_executable(_candidate: &Path) -> bool {
     true
 }

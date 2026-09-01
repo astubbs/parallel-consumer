@@ -53,7 +53,7 @@ reasoning**; what a later Java wave needs to know is the shape and what it const
   delivery, an exit status as the verdict - and the control arm, `java-direct` and `java-grpc` all
   execute it. Do not add a per-transport branch to it; a binding that could take a shortcut there
   would be conforming to a contract nobody else implements.
-- **The harness grew a third lane for `java-direct`, `ProxyHarness.startEmbeddedClient`.** Its other
+- **The harness grew a third lane for `java-direct`, `ConformanceHarness.startEmbeddedClient`.** Its other
   two lanes both own the engine; a client that constructs Parallel Consumer for itself fits neither,
   and what it needs is the mock consumer whose commit history the assertions read. A test that built
   its own mocks instead would be asserting about a fixture the harness cannot see, so every scenario

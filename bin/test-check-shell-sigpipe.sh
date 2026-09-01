@@ -14,11 +14,14 @@
 #    6. the violation appears only in a COMMENT                  -> pass (0)
 #    7. same pipe, but the script has no `pipefail`              -> pass (0)
 #    8. herestring instead of a pipe - the prescribed fix        -> pass (0)
+#    8b. `|| grep -q ... <<<` - a logical OR, NOT a pipe          -> pass (0)
+#    8c. a real pipe with an `||` earlier on the line             -> FAIL (1)
 #    9. `| grep query` - a bare word, no q-bearing FLAG          -> pass (0)
 #   10. the guard skips itself, matched on BASENAME not path     -> pass (0)
 #   11. the guard skips its OWN self-test, same reason           -> pass (0)
 #   12. the NO-ARG form CI runs exits clean on the real tree     -> pass (0)
 #   13. ...and its default scan set names .claude/hooks          -> pass (0)
+#   14. ...and both lib/ directories, which `ls */*.sh` does not reach -> pass (0)
 #
 # Cases 4 and 5 are the ones worth keeping: the first version of the guard matched
 # `grep -[a-zA-Z]*q`, which a space defeats, so `grep -v -q` slipped through. Case 9 guards the
@@ -82,6 +85,18 @@ assert "same pipe but no pipefail in the script" 0 \
 assert "herestring instead of a pipe (the prescribed fix)" 0 \
     "$(run_guard 'if grep -qE "foo" <<<"$x"; then :; fi')"
 
+# `||` IS NOT A PIPE. The guard used to flag this, because the second `|` of `||` sits immediately
+# before ` grep -q` - so it fired on a line that already used the herestring it prescribes, and the
+# only way to go green was to rewrite correct code. A guard that fails on the fix it recommends is
+# worse than no guard. Found when it went red on a herestring added in the same PR.
+assert "logical OR before a herestring is not a pipe" 0 \
+    "$(run_guard 'if [ -z "$w" ] || grep -qF "$w" <<<"$out"; then :; fi')"
+
+# The other direction, so the fix above cannot be over-applied into blindness: a real pipe still
+# fails even when an `||` appears earlier on the same line.
+assert "a real pipe still fails when an || precedes it" 1 \
+    "$(run_guard 'if [ -z "$w" ] || printf "%s" "$x" | grep -qF "foo"; then :; fi')"
+
 assert "bare word containing q, not a flag" 0 \
     "$(run_guard 'printf "%s" "$x" | grep query')"
 
@@ -110,6 +125,20 @@ case "$no_arg_out" in
     *)                 got="hooks_not_in_scan_set" ;;
 esac
 assert "the default scan set includes .claude/hooks" scans_hooks "$got"
+
+# ...AND THE `lib/` DIRECTORIES. `ls "$d"/*.sh` does not recurse, so the shared helpers under
+# bin/lib/ and .claude/hooks/lib/ were unscanned - the worst place for this bug, since every caller
+# inherits it. Pinned the same way: dropping either from the default set changes the report line.
+case "$no_arg_out" in
+    *"bin/lib"*) got=scans_bin_lib ;;
+    *)           got="bin_lib_not_in_scan_set" ;;
+esac
+assert "the default scan set includes bin/lib" scans_bin_lib "$got"
+case "$no_arg_out" in
+    *".claude/hooks/lib"*) got=scans_hook_lib ;;
+    *)                     got="hook_lib_not_in_scan_set" ;;
+esac
+assert "the default scan set includes .claude/hooks/lib" scans_hook_lib "$got"
 
 echo
 if [ "$failures" -eq 0 ]; then

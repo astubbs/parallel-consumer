@@ -154,4 +154,28 @@
              <dependencies>; re-declaring them here would only duplicate that. -->
     </dependencies>
 
+    <build>
+        <plugins>
+            <!--
+                The SpotBugs gate is bound in the Java client aggregator's pom for every module
+                beneath it; this only points it at THIS module's exclusion filter, whose entries
+                carry their own reasoning. ${project.basedir} rather than a shared path in the
+                parent: a relative excludeFilterFile resolves against the module being built, so a
+                filter declared once in the parent would be looked for inside each child anyway.
+
+                This module needs one because a demo is a program whose OUTPUT is its product - it
+                logs pre-rendered tables and renders rows it does not own - and fb-contrib's style
+                rules read that as three separate smells. Each dismissal names the class and the
+                pattern, with the reason at the entry.
+            -->
+            <plugin>
+                <groupId>com.github.spotbugs</groupId>
+                <artifactId>spotbugs-maven-plugin</artifactId>
+                <configuration>
+                    <excludeFilterFile>${project.basedir}/spotbugs-exclude.xml</excludeFilterFile>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
 </project>

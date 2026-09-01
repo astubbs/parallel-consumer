@@ -30,7 +30,7 @@ import java.util.concurrent.CompletionStage;
  * same {@code LongPollingMockConsumer} pattern the engine-side harness uses, from core's test-jar) so the
  * whole run stays in the surefire lane.
  * <p>
- * <b>Deliberately no {@code ProxyHarness} here:</b> the proxy test-jar drags protobuf and gRPC, and this
+ * <b>Deliberately no {@code ConformanceHarness} here:</b> the proxy test-jar drags protobuf and gRPC, and this
  * module's {@code bannedDependencies} rule (AE26) forbids both anywhere on its classpath - the ban is the
  * proof that nothing transport-shaped leaked into the shared API, so the fixture rebuilds the small mock
  * arrangement from core's own pieces instead of importing the harness.

@@ -52,7 +52,7 @@
             selects the protoc binary below, and .github/workflows/clients.yml reads it out of THIS
             pom by path to provision protoc for the Rust row. Bump the pair together.
         -->
-        <protobuf.version>3.25.5</protobuf.version>
+        <protobuf.version>3.25.8</protobuf.version>
 
         <!--
             Which protoc compiles the schema. The default downloads the platform binary for
@@ -66,6 +66,16 @@
         -->
         <proxy.protoc>${protobuf.version}</proxy.protoc>
     </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>com.google.errorprone</groupId>
+                <artifactId>error_prone_annotations</artifactId>
+                <version>2.47.0</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <dependency>

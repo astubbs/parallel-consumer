@@ -947,9 +947,12 @@ Landed at `f3274c9e2`, one commit deliberately. Do not re-run. Fifteen new modul
 - **Requirements:** R22's mechanism, R13. Governed by KTD23, KTD33, KTD4, KTD5.
 - **Dependencies:** U19.
 - **Files:**
-  - `parallel-consumer-proxy/src/test/java/bz/stub/parallelconsumer/proxy/harness/ProxyHarness.java`
+  - `parallel-consumer-proxy/src/test/java/bz/stub/parallelconsumer/proxy/harness/ConformanceHarness.java`
+    (written as `ProxyHarness.java`; renamed in place when astubbs/parallel-consumer#387's
+    `ConformanceHarness` and this class were reconciled back into one - address repaired per
+    `docs/citations.md`, the claims below untouched)
   - `.../harness/HarnessScenario.java`
-  - `parallel-consumer-proxy/src/test/java/bz/stub/parallelconsumer/proxy/harness/ProxyHarnessTest.java`
+  - `parallel-consumer-proxy/src/test/java/bz/stub/parallelconsumer/proxy/harness/ConformanceHarnessTest.java`
   - `parallel-consumer-proxy/src/test/java/bz/stub/parallelconsumer/proxy/testmode/TestModeMain.java`
 - **Approach:**
   1. Build this as a **reusable shared fixture, not inline setup inside a Java test.** That is the whole point: the harness lives on the JVM engine side and knows nothing about the client's language, so one harness drives ten clients and each language's first test reduces to "connect, process a record, report".
@@ -1097,8 +1100,8 @@ Landed at `f3274c9e2`, one commit deliberately. Do not re-run. Fifteen new modul
 - **Dependencies:** U29.
 - **Files:**
   - `parallel-consumer-proxy-protocol/src/main/proto/parallelconsumer/proxy/v1/proxy.proto` (completed, then frozen)
-  - `parallel-consumer-proxy/docs/protocol-specification.md`
-  - `parallel-consumer-proxy/docs/client-authoring-guide.md`
+  - `parallel-consumer-proxy-protocol/docs/protocol-specification.md`
+  - `parallel-consumer-proxy-protocol/docs/client-authoring-guide.md`
   - `parallel-consumer-proxy-protocol/buf.yaml`
 - **Approach:**
   1. Complete the message set on the evidence the spike produced: the wave form of dispatch, the reconnect manifest, heartbeats and the lease, worker-death reports, terminal outcomes, the `RELEASED` report outcome of KTD39, the executor count in `Configured`, and shutdown. Each one is now being added to a message set that has actually carried a record end to end. `SetExecutorCount` is defined here and **declared unused** - it exists so a dynamic count stays an additive change under R38, and KTD38 says why it is not sent.
@@ -1123,7 +1126,7 @@ Landed at `f3274c9e2`, one commit deliberately. Do not re-run. Fifteen new modul
 - **Goal:** Find the ambiguities in the parts the spike never exercised, cheaply, before anything durable is built on them.
 - **Requirements:** R54, R13. Governed by KTD21, KTD29.
 - **Dependencies:** U18.
-- **Files:** none that survive. Work in a scratch directory outside the repo; the only commit this unit produces edits `parallel-consumer-proxy/docs/protocol-specification.md` and `client-authoring-guide.md`.
+- **Files:** none that survive. Work in a scratch directory outside the repo; the only commit this unit produces edits `parallel-consumer-proxy-protocol/docs/protocol-specification.md` and `client-authoring-guide.md`.
 - **Approach:**
   1. Exercise what U29 deliberately excluded: waves, failure and retry, worker death, the reconnect manifest, the lease, terminal outcomes, the dispatch queue at depth, and shutdown including the `RELEASED` path. Those are the parts the specification describes but nothing has yet read back. There is no executor-count change to probe - the count is fixed at connect time per KTD38 - but do probe whether the specification says so clearly enough that a stranger does not build a listener for one.
   2. **Do not read the proxy's source.** The probe's whole value is failing where the specification is unclear, and reading the source destroys that instrument.
@@ -1191,7 +1194,7 @@ Landed at `f3274c9e2`, one commit deliberately. Do not re-run. Fifteen new modul
   - `...-client-java-grpc/src/test/java/.../GrpcConformanceTest.java`
   - `...-client-java-grpc/README.md`
   - `docs/data/module-maturity.d/parallel-consumer-proxy-client-java-grpc.yaml`, `docs/data/testing-evidence.d/parallel-consumer-proxy-client-java-grpc.yaml`, `docs/features/`
-  - `parallel-consumer-proxy/docs/client-authoring-guide.md`
+  - `parallel-consumer-proxy-protocol/docs/client-authoring-guide.md`
 - **Approach:**
   1. Implement the transport interface over the frozen protocol: spawn the proxy, hold the one stream, fan out to workers, echo the epoch verbatim, report per record.
   2. Work from U18's specification as repaired by U26, not from the proxy's source. The team knows Java best, so a residual ambiguity surfaces here without language unfamiliarity as a confound.
@@ -1216,7 +1219,7 @@ Landed at `f3274c9e2`, one commit deliberately. Do not re-run. Fifteen new modul
 - **Dependencies:** U21, U25, U8, U9, U10. The engine units are named explicitly rather than left to reach here through U20, because this is the gate nine agents inherit: signing off a reference against an engine that cannot answer every frozen message makes each of those nine agents' red jobs ambiguous between "my client is wrong" and "the engine has not built that yet".
 - **Files:**
   - `docs/inflight/branch-language-proxy.md`
-  - `parallel-consumer-proxy/docs/client-authoring-guide.md`
+  - `parallel-consumer-proxy-protocol/docs/client-authoring-guide.md`
 - **Approach:**
   1. Confirm each condition and record it: **the engine answers every message in the frozen schema, with U8, U9 and U10 landed**; the conformance suite passes identically against both transports; `ce-code-review` over all three Java client modules is clean; the reference's public surface has passed an idiomatic-API review in Java's own terms, per R71, so the shape nine languages mirror was reviewed as a surface and not only as an implementation; every question U26 and U25 raised is resolved into the specification or the guide; and the guide describes the reference shape well enough that an author who has not seen the Java can follow it.
   2. If any condition fails, fix it and re-run rather than proceeding with a caveat. A caveat here is copied nine times along with everything else.
@@ -1331,7 +1334,7 @@ Landed at `f3274c9e2`, one commit deliberately. Do not re-run. Fifteen new modul
 - **Dependencies:** U11, U22.
 - **Files:**
   - `parallel-consumer-proxy/src/test-integration/java/bz/stub/parallelconsumer/proxy/integrationTests/CrossLanguageConformanceIT.java`
-  - `parallel-consumer-proxy/docs/client-authoring-guide.md`
+  - `parallel-consumer-proxy-protocol/docs/client-authoring-guide.md`
 - **Approach:**
   1. Drive every client through U31's harness scenarios from one place and compare. The scenario set already exists - it is the harness's, named as product behaviours - so this unit is comparison rather than authoring.
   2. A scenario passing in ten languages and failing in one is that client's bug; failing everywhere is a protocol or specification defect.

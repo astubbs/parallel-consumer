@@ -6,7 +6,7 @@ package bz.stub.parallelconsumer.offsets;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
-import bz.stub.parallelconsumer.internal.InternalRuntimeException;
+import bz.stub.parallelconsumer.internal.PCInternalRuntimeException;
 import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
@@ -151,7 +151,7 @@ public class OffsetMapCodecManager<K, V> {
             }
             attempts++;
             if (attempts > 10) // shouldn't need more than 1 ever
-                throw new InternalRuntimeException("Failed to get partition assignment - continuously woken up.", lastWakeupException);
+                throw new PCInternalRuntimeException("Failed to get partition assignment - continuously woken up.", lastWakeupException);
         }
 
         var partitionStates = new HashMap<TopicPartition, PartitionState<K, V>>();
@@ -258,8 +258,12 @@ public class OffsetMapCodecManager<K, V> {
      * Can remove string encoding in favour of the boolean array for the `BitSet` if that's how things settle.
      */
     byte[] encodeOffsetsCompressed(long baseOffsetForPartition, PartitionState<K, V> partitionState) throws NoEncodingPossibleException {
-        var incompleteOffsets = partitionState.getIncompleteOffsetsBelowHighestSucceeded();
+        // Sample the high-water mark ONCE and derive both the incomplete-offsets snapshot and the encoder's range
+        // top from that single sample, so the two cannot disagree by construction. Two separate reads here raced
+        // concurrent completions into silent record loss - the full mechanism is on
+        // PartitionState#getIncompleteOffsetsBelow; guarded by OffsetEncoderWidenedRangeRaceTest.
         long highestSucceeded = partitionState.getOffsetHighestSucceeded();
+        var incompleteOffsets = partitionState.getIncompleteOffsetsBelow(highestSucceeded);
         if (log.isDebugEnabled()) {
             log.debug("Encoding partition {}, highest succeeded {}, incomplete offsets to encode {}",
                     partitionState.getTp(),
@@ -273,7 +277,7 @@ public class OffsetMapCodecManager<K, V> {
             simultaneousEncoder = new OffsetSimultaneousEncoder(baseOffsetForPartition, highestSucceeded, incompleteOffsets);
             offsetEncodingTimer.recordCallable(simultaneousEncoder::invoke);
         } catch (Exception e) {
-            throw new InternalRuntimeException("Error encoding offsets", e);
+            throw new PCInternalRuntimeException("Error encoding offsets", e);
         }
 
         //

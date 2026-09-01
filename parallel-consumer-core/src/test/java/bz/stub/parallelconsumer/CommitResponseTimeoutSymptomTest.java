@@ -34,7 +34,7 @@ import static com.google.common.truth.Truth.assertThat;
 import static pl.tlinkowski.unij.api.UniLists.of;
 
 /**
- * "{@code InternalRuntimeException: Timeout waiting for commit response}" as users actually meet it -
+ * "{@code PCInternalRuntimeException: Timeout waiting for commit response}" as users actually meet it -
  * astubbs#177, confluentinc#833: a consumer that runs for a while under a high failure rate across many keys and
  * then exits with that message.
  * <p>

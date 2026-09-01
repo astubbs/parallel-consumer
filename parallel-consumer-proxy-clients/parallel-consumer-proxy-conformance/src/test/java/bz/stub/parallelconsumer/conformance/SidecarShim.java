@@ -14,7 +14,7 @@ import java.nio.file.attribute.PosixFilePermissions;
  * <p>
  * <b>Why the engine has to be in THIS process.</b> The suite's assertions are about engine state - the
  * committed offset, the produced records - and the only way to read that state without inventing a
- * results protocol is to hold the {@code ProxyHarness} in the asserting JVM. So the harness binds its
+ * results protocol is to hold the {@code ConformanceHarness} in the asserting JVM. So the harness binds its
  * gRPC server here, on an ephemeral loopback port, and the runner has to reach that port.
  * <p>
  * <b>Why a shim rather than a {@code --port} flag.</b> The client libraries' one entry point spawns a

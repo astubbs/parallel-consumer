@@ -5,7 +5,6 @@ package bz.stub.parallelconsumer.proxy.engine;
 
 import bz.stub.parallelconsumer.PollContextInternal;
 import bz.stub.parallelconsumer.state.WorkContainer;
-import com.github.bsideup.jabel.Desugar;
 import lombok.extern.slf4j.Slf4j;
 
 import java.time.Instant;
@@ -57,11 +56,38 @@ class InFlightRegistry {
      *                      session's own deadline rather than this one, so no entry is ever rewritten -
      *                      {@link LivenessLease#hasExpired} compares against the later of the two
      */
-    @Desugar
-    record InFlight(WorkContainer<byte[], byte[]> wc,
-                    PollContextInternal<byte[], byte[]> context,
-                    long capturedEpoch,
-                    Instant leaseDeadline) {
+    public static final class InFlight {
+
+        private final WorkContainer<byte[], byte[]> wc;
+
+        private final PollContextInternal<byte[], byte[]> context;
+
+        private final long capturedEpoch;
+
+        private final Instant leaseDeadline;
+
+        public InFlight(WorkContainer<byte[], byte[]> wc, PollContextInternal<byte[], byte[]> context, long capturedEpoch, Instant leaseDeadline) {
+            this.wc = wc;
+            this.context = context;
+            this.capturedEpoch = capturedEpoch;
+            this.leaseDeadline = leaseDeadline;
+        }
+
+        public WorkContainer<byte[], byte[]> wc() {
+            return wc;
+        }
+
+        public PollContextInternal<byte[], byte[]> context() {
+            return context;
+        }
+
+        public long capturedEpoch() {
+            return capturedEpoch;
+        }
+
+        public Instant leaseDeadline() {
+            return leaseDeadline;
+        }
     }
 
     /**

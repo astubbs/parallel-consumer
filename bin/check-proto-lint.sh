@@ -3,8 +3,9 @@
 # Copyright (C) 2026 Antony Stubbs and contributors
 #
 
-# Static analysis for the proxy protocol schema itself (astubbs#242; the per-language policy is in
-# docs/client-static-analysis.md).
+# Static analysis for the proxy protocol schema itself (astubbs#242). The per-language static-analysis
+# policy for the generated clients is a separate document, and it now sits beside the clients it
+# governs: docs/client-static-analysis.md.
 #
 # WHY THE .PROTO IS A STATIC-ANALYSIS TARGET IN ITS OWN RIGHT: it is the one artifact every client
 # is generated FROM. A defect here is not one language's bug, it is eleven - and it arrives in each
@@ -23,7 +24,8 @@
 # The schema lints clean today, and that is exactly why this gate exists: the freeze wave achieved
 # it and nothing held it. A clean state nobody checks is a clean state with a date on it.
 #
-# Severity policy: any lint finding fails. There is no warn tier - see the doc.
+# Severity policy: any lint finding fails. There is no warn tier, deliberately - a warn tier on the one
+# artifact eleven languages are generated from is a finding nobody reads until it is in eleven languages.
 #
 # Requires buf (https://buf.build). CI installs it via bufbuild/buf-action; locally it is a managed
 # toolchain (mise). This script never downloads anything: the module has no BSR dependencies, so

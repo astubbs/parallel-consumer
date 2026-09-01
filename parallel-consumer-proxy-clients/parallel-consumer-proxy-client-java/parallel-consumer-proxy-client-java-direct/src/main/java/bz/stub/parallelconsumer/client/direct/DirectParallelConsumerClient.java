@@ -231,7 +231,7 @@ public class DirectParallelConsumerClient implements ParallelConsumerClient, Con
         // first failure (WorkContainer's field has no initializer); the wire transport's serializer meets the
         // same quirk and normalises identically
         Optional<Throwable> lastFailureReason =
-                Optional.ofNullable(recordContext.getLastFailureReason()).flatMap(reason -> reason);
+                Optional.ofNullable(recordContext.getLastFailureReason()).flatMap(Function.identity());
         return new InboundRecord(
                 recordContext.topic(),
                 recordContext.partition(),
@@ -257,7 +257,7 @@ public class DirectParallelConsumerClient implements ParallelConsumerClient, Con
         return cause.getMessage() != null ? cause.getMessage() : cause.toString();
     }
 
-    private static List<ProducerRecord<byte[], byte[]>> toProducerRecords(List<OutboundRecord> produce) {
+    private static List<ProducerRecord<byte[], byte[]>> toProducerRecords(Collection<OutboundRecord> produce) {
         var records = new ArrayList<ProducerRecord<byte[], byte[]>>(produce.size());
         for (OutboundRecord outbound : produce) {
             records.add(new ProducerRecord<>(outbound.topic(), outbound.key(), outbound.value()));
