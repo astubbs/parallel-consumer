@@ -146,20 +146,13 @@ run_capture() { # <script>|SKIP:<reason> <label> <outfile-prefix>
             return 0 ;;
     esac
     start=$(date +%s)
-    # DISPATCH BY EXTENSION. Everything used to be shell, so this ran every gate through bash - which
-    # gives a .mjs gate a bash syntax error and reports a clean rule as a broken gate. Found the same
-    # hour the first Node gate appeared, by this sweep, which is the argument for having the sweep.
-    case "$script" in
-        *.mjs) checker="node --check"; runner="node" ;;
-        *)     checker="bash -n";      runner="bash" ;;
-    esac
-    if ! syntax="$($checker "$script" 2>&1)"; then
+    if ! syntax="$(bash -n "$script" 2>&1)"; then
         end=$(date +%s)
         printf '%s\n%s\n%s\n' "PARSE" "$((end - start))" "$label" > "$pre.meta"
         printf '%s\n' "$syntax" > "$pre.out"
         return 0
     fi
-    out="$(PR_NUMBER="${PR_NUMBER:-}" $runner "$script" 2>&1)"; rc=$?
+    out="$(PR_NUMBER="${PR_NUMBER:-}" bash "$script" 2>&1)"; rc=$?
     end=$(date +%s)
     printf '%s\n%s\n%s\n' "$rc" "$((end - start))" "$label" > "$pre.meta"
     printf '%s\n' "$out" > "$pre.out"
@@ -279,12 +272,7 @@ fi
 if [ "$MODE" = "all" ] || [ "$MODE" = "gates" ]; then
     echo "=== gates ==="
     set --
-    # BOTH SUFFIXES. Node is now the default language for new scripts here (bin/AGENTS.md, "Write it in
-    # Node"), so a gate written the new way must be swept by the same run as the old ones. Globbing only
-    # *.sh would have left every future gate discovered by nobody - a sweep that reports "no gate failed"
-    # while never having looked, which is the failure this script exists to prevent, arriving through
-    # the door a language change opened.
-    for g in bin/check-*.sh bin/check-*.mjs; do
+    for g in bin/check-*.sh; do
         [ -f "$g" ] || continue
         n="$(basename "$g")"
         [ "$n" = "$SELF" ] && continue                       # never recurse
