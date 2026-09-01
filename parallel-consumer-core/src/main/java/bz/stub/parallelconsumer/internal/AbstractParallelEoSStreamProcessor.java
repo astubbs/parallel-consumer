@@ -354,6 +354,19 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     private Duration drainTimeout;
 
+    /**
+     * The engine-side bound on a {@link DrainingCloseable.DrainingMode#DRAIN} close: stamped at
+     * {@link #transitionToDraining()} as now-plus-{@link #drainTimeout}, consumed by {@link #drain()}. Without it
+     * the drain loop had no exit for a backlog that can never become eligible (e.g. a navigator resource
+     * registered at rate 0, the documented shut valve) - {@link #waitForClose(Duration)} only rethrows its own
+     * timeout on the caller's thread, it never transitions the engine, so a wedged drain kept its navigator
+     * membership (and its share of the shared resource) forever via {@link #tickNavigatorQuantumRead()}'s
+     * DRAINING gate.
+     */
+    // volatile: written on the closing caller's thread in transitionToDraining, read by the control thread in
+    // drain() - the failureReason discipline. Null until a DRAIN close starts; never reset (close is terminal).
+    private volatile Instant drainDeadline;
+
     private PCMetrics pcMetrics;
 
     /**
@@ -1079,6 +1092,20 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         } else {
             log.info("Signaling to close...");
 
+            // navigator membership ends at the CLOSING transition, not here at close entry (the plan's
+            // R16/KTD10, revised): leave() expires the member's live credits immediately and a left member
+            // never re-mints, so a close-entry leave starved a DRAIN of its credit supply - a
+            // resource-deferred backlog could then never drain and close stalled until timeout. Instead
+            // transitionToClosing() calls leaveNavigatorOnClosingTransition(), which both routes below reach
+            // exactly once (CAS-guarded): DONT_DRAIN transitions immediately, DRAIN transitions when the
+            // shards have emptied - the drain tail keeps reading quanta (see tickNavigatorQuantumRead's
+            // DRAINING gate) so deferred records still earn credits while draining. That tail is bounded
+            // engine-side by drainDeadline (see drain()): a backlog that can never drain otherwise loops
+            // forever, still renewing its lease and holding its resource share. A close() the control
+            // loop initiates from its interrupt/error paths goes straight to doClose without transitioning
+            // through here; the membership lease TTL is exactly the backstop for that - a control loop that
+            // stopped reading quanta lapses.
+
             switch (drainMode) {
                 case DRAIN -> {
                     log.info("Will wait for all in flight to complete before");
@@ -1117,7 +1144,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         log.info("Waiting on closed state...");
         while (!state.equals(CLOSED)) {
             try {
-                Future<Boolean> booleanFuture = this.controlThreadFuture.get();
+                // Guarded like close()'s own read below: supervisorLoop sets state=RUNNING and then runs
+                // user-suppliable startup code (the navigator join) BEFORE submitting the control task, so a
+                // startup failure strands state at RUNNING with no future to wait on - surface that as the
+                // startup failure it is, not as a bare NoSuchElementException none of the catches below name.
+                Future<Boolean> booleanFuture = this.controlThreadFuture.orElseThrow(() ->
+                        new IllegalStateException("Control loop was never started - startup failed before the "
+                                + "control task was submitted (see the exception thrown from the poll* call)"));
                 log.debug("Blocking on control future, for duration {} seconds", toSeconds(timeout));
                 boolean signaled = booleanFuture.get(toSeconds(timeout), SECONDS);
                 if (!signaled)
@@ -1269,6 +1302,9 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     void transitionToDraining() {
         log.debug("Transitioning to draining...");
+        // Deadline BEFORE the state write, so a control pass that observes DRAINING has the bound available;
+        // drain() null-checks anyway, and a single unbounded pass in that window is harmless.
+        this.drainDeadline = module.clock().instant().plus(drainTimeout);
         this.state = State.DRAINING;
         // R11 edge action: state is set FIRST, so a tick arriving after this line is already gated out of
         // re-narrowing; a tick that read RUNNING just before it is the race the innerDoClose backstop covers.
@@ -1352,6 +1388,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             state = RUNNING;
         }
 
+        // navigator membership begins at the running transition (the plan's R16) - a constructed-but-unstarted
+        // instance must not dilute running members' shares, so the join is here rather than in the constructor
+        joinNavigatorOnRunning();
+
         // broker poll subsystem
         brokerPollSubsystem.start(options.getManagedExecutorService());
 
@@ -1431,6 +1471,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             // offsets will be committed when the consumer has its partitions revoked
             commitOffsetsReportingPollerDeath();
         }
+
+        // The navigator's quantum pull comes BEFORE this pass distributes work, not beside the admission tick
+        // below where U3 first placed it. The order is load-bearing: the resource wakeup unblocks the mailbox
+        // drain above exactly at the quantum boundary, so a tick placed after distribution mints the new
+        // quantum's credit only after eligibility was evaluated against the expired old lease - every wake
+        // re-defers to the NEXT boundary and the fresh credit expires unspent, which starved both tagged
+        // instances to a single firing in NavigatorRateShareTest (the wall-clock lane; the virtual-clock lane
+        // drives the hooks directly and cannot see in-pass ordering).
+        tickNavigatorQuantumRead();
 
         // distribute more work - or, under direct pull, tell the workers there may be some and let them take it
         // themselves. The mailbox drain above is where new records are registered and where returned records become
@@ -1588,6 +1637,76 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         }
         if (targetAfter > targetBefore) {
             maybeWakeupPoller();
+        }
+    }
+
+    /**
+     * THE navigator's per-pass quantum pull (the plan's KTD4), one mutating allocator touch per
+     * {@link #controlLoop} pass, BEFORE that pass distributes work (see the call site's comment for why the
+     * order is load-bearing): it renews this instance's membership lease and materialises the current
+     * quantum's share into local credits - which is what keeps the claim-path eligibility read pure (KTD1),
+     * and what keeps an idle-but-live instance a member (R17: the control loop ticks regardless of demand, so
+     * only a STOPPED control loop lets the lease TTL fire).
+     * <p>
+     * Gated to {@link State#RUNNING}, {@link State#PAUSED} and {@link State#DRAINING}: a paused instance is
+     * alive and keeps its share (pause is a credit no-op, KTD10), and a DRAINING instance is still
+     * dispatching its backlog - membership only leaves at the CLOSING transition
+     * ({@link #leaveNavigatorOnClosingTransition()}), so the drain tail keeps earning credits and a
+     * resource-deferred backlog can actually drain rather than stalling close(DRAIN) until timeout. CLOSING
+     * follows the leave - the membership has already left, and a post-leave lease renewal, though harmless to
+     * the division (the leave event wins from the next quantum), would be noise in the allocator's records.
+     * <p>
+     * Untagged instances (R3): one inert-participant check, nothing else.
+     */
+    void tickNavigatorQuantumRead() {
+        if (state != RUNNING && state != PAUSED && state != State.DRAINING) {
+            return;
+        }
+        var navigator = module.navigatorParticipant();
+        if (navigator.isActive()) {
+            navigator.readQuantum(module.clock().instant());
+        }
+    }
+
+    /**
+     * Navigator membership join, called once at the running transition in {@link #supervisorLoop} (the plan's
+     * R16 lifecycle anchor). Package-private so the per-call contract is testable without driving a real
+     * control loop - the {@link #tickAdmissionController()} pattern.
+     */
+    void joinNavigatorOnRunning() {
+        var navigator = module.navigatorParticipant();
+        if (navigator.isActive()) {
+            navigator.join(module.clock().instant());
+        }
+    }
+
+    /**
+     * Guarantees {@link #leaveNavigatorOnClosingTransition()} fires the allocator leave at most ONCE per
+     * instance, whichever thread reaches a CLOSING transition first - the caller's thread via
+     * {@link #close(DrainingMode)}, or the control thread at drain-complete or on the worker-pool-death path.
+     * Final reference to a self-guarding type, so no {@code @GuardedBy} to name (the
+     * {@link #admissionWindowPoisonedByPause} shape). Never reset: close is terminal for an instance.
+     */
+    private final AtomicBoolean navigatorLeaveSent = new AtomicBoolean(false);
+
+    /**
+     * Navigator membership leave, called from {@link #transitionToClosing()} (the plan's R16, revised): the
+     * share is dropped at the next quantum without waiting for the lease TTL (AE2), but only once the engine
+     * is genuinely CLOSING - a DRAIN keeps its membership (and so its credit supply, via
+     * {@link #tickNavigatorQuantumRead()}) for the whole drain tail, because {@code leave()} expires live
+     * credits immediately and a left member never re-mints, so leaving at close ENTRY starved a
+     * resource-deferred backlog of the credits it needed to ever drain. CAS-guarded
+     * ({@link #navigatorLeaveSent}) so every route into CLOSING - both close() modes, drain-complete, the
+     * worker-pool-death self-close - produces exactly one allocator leave. Package-private for the same
+     * direct-testability reason as {@link #joinNavigatorOnRunning()}.
+     */
+    void leaveNavigatorOnClosingTransition() {
+        if (!navigatorLeaveSent.compareAndSet(false, true)) {
+            return;
+        }
+        var navigator = module.navigatorParticipant();
+        if (navigator.isActive()) {
+            navigator.leave(module.clock().instant());
         }
     }
 
@@ -2115,10 +2234,29 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         return workAmountBelowTarget;
     }
 
+    /**
+     * One DRAINING pass of the control loop: transitions to CLOSING when the shards have emptied, OR when the
+     * {@link #drainDeadline} (stamped at {@link #transitionToDraining()} from the same {@code drainTimeout} the
+     * caller-side {@link #waitForClose(Duration)} budget uses) has passed with records still waiting. The bound
+     * is engine-side deliberately: waitForClose can only throw on the caller's thread, never transition the
+     * engine, so without this a drain wedged behind never-eligible work (e.g. a rate-0 navigator resource)
+     * looped here forever - and the DRAINING gate in {@link #tickNavigatorQuantumRead()} kept renewing the
+     * membership lease, so neither the explicit leave nor the lease TTL could ever release its resource share.
+     */
     private void drain() {
         log.debug("Signaling to drain...");
         brokerPollSubsystem.drain();
         if (!isRecordsAwaitingProcessing()) {
+            transitionToClosing();
+        } else if (drainDeadline != null && !module.clock().instant().isBefore(drainDeadline)) {
+            // Records that never drained stay uncommitted and are redelivered to the group after rebalance -
+            // the same consequence as a DONT_DRAIN close's undispatched backlog or a worker-pool-death close.
+            // Richer semantics for a breached drain (e.g. a configurable action) is an OPEN product decision;
+            // this bound only guarantees the close, and the resource-share release, actually happen.
+            log.warn("Drain timeout ({}) breached at deadline {} with records still awaiting processing - " +
+                            "closing anyway; the undrained backlog remains uncommitted and will be redelivered " +
+                            "after rebalance. In flight work still gets the shutdown timeout to complete.",
+                    drainTimeout, drainDeadline);
             transitionToClosing();
         } else {
             log.debug("Records still waiting processing, won't transition to closing.");
@@ -2127,6 +2265,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     private void transitionToClosing() {
         log.debug("Transitioning to closing...");
+        // BEFORE the state write, mirroring transitionToDraining's edge-action ordering: a quantum tick that
+        // reads the pre-CLOSING state just after the leave is harmless (a post-leave renewal changes no
+        // division - the leave event wins from the next quantum), where the reverse order would let a tick
+        // renew a membership the allocator should already be retiring.
+        leaveNavigatorOnClosingTransition();
         if (state == State.UNUSED) {
             state = CLOSED;
         } else {
@@ -2202,10 +2345,48 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Package-private with no {@code get} prefix (Truth-generator constraint, see
      * {@link #userFunctionTaskAccounting()}) so the KTD7 bound is testable without a control loop.
      *
-     * @return either the duration until next commit, or next work retry
+     * @return either the duration until next commit, or next work retry - additionally bounded, on a
+     *         resource-tagged instance with work waiting, by the earliest next-credit time
+     *         ({@link #boundByResourceNextCredit})
      * @see ParallelConsumerOptions#getTargetAmountOfRecordsInFlight()
      */
     Duration timeToBlockFor() {
+        return boundByResourceNextCredit(timeToBlockForIgnoringResources());
+    }
+
+    /**
+     * The navigator's wakeup term (the plan's KTD5), deliberately its OWN branch rather than a tenant of the
+     * retry branch above: a resource-deferred pass has no failed-retry work, so the retry branch's guards never
+     * admit it, and that branch's {@code getDefaultMessageRetryDelay()} floor would swallow a sub-second
+     * next-credit time. This bound has no floor - a credit due in 200ms caps the block at 200ms.
+     * <p>
+     * Soft and resource-keyed, per KTD5: no per-record queue is consulted - when this instance is tagged and
+     * ANY work is waiting in the shards, the block time is capped by the earliest next-credit time over the
+     * resources currently blocking. That fires on some passes where the waiting work was not resource-deferred
+     * at all (a retry-parked record, an ordered shard blocked by flight), costing one early wake per quantum at
+     * worst; the alternative - tracking which records deferred for which reason this pass - is exactly the
+     * per-record state KTD5 forbids. Untagged instances return the base time untouched via one inert check (R3).
+     */
+    private Duration boundByResourceNextCredit(Duration base) {
+        var navigator = module.navigatorParticipant();
+        if (!navigator.isActive() || wm.getNumberOfWorkQueuedInShardsAwaitingSelection() <= 0) {
+            return base;
+        }
+        Instant now = module.clock().instant();
+        Optional<Instant> earliestNextCredit = navigator.earliestBlockedResourceNextCreditAt(now);
+        if (!earliestNextCredit.isPresent()) {
+            // nothing is blocking (or a blocking resource mints nothing, in which case there is no time to
+            // wake for) - the base arithmetic stands
+            return base;
+        }
+        Duration untilCredit = Duration.between(now, earliestNextCredit.get());
+        if (untilCredit.isNegative()) {
+            untilCredit = Duration.ZERO;
+        }
+        return untilCredit.compareTo(base) < 0 ? untilCredit : base;
+    }
+
+    private Duration timeToBlockForIgnoringResources() {
         // if less than target work already in flight, don't sleep longer than the next retry time for failed work, if it exists - so that we can wake up and maybe retry the failed work
         if (!wm.isWorkInFlightMeetingTarget()) {
             // though check if we have work awaiting retry
@@ -2383,7 +2564,9 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
         handleStaleWork(staleWorkContainers);
 
-        final PollContextInternal<K, V> context = new PollContextInternal<>(activeWorkContainers);
+        // U5: the module's NARROW navigator view rides into the context, so the user function can read the
+        // observed state (R18) - never the module itself
+        final PollContextInternal<K, V> context = new PollContextInternal<>(activeWorkContainers, module.navigatorView());
 
         try {
             if (!activeWorkContainers.isEmpty()) {
@@ -2417,7 +2600,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * @param workContainerBatch
      */
     protected void handleStaleWork(final List<WorkContainer<K, V>> staleWorkContainers) {
-        final PollContextInternal<K, V> internalContext = new PollContextInternal<>(staleWorkContainers);
+        final PollContextInternal<K, V> internalContext = new PollContextInternal<>(staleWorkContainers, module.navigatorView());
         try {
             if (!staleWorkContainers.isEmpty()) {
                 // when epoch's change, we can't remove them from the executor pool queue, so we just have to skip them when we find them

@@ -5,9 +5,9 @@ package bz.stub.parallelconsumer;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.navigator.NavigatorView;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import lombok.AccessLevel;
-import lombok.AllArgsConstructor;
 import lombok.EqualsAndHashCode;
 import lombok.ToString;
 import lombok.experimental.FieldDefaults;
@@ -37,7 +37,6 @@ import static bz.stub.parallelconsumer.internal.Documentation.getLinkHtmlToDocSe
  * IllegalArgumentException}, as it's not valid to have batches of messages and yet tread the batch input as a single
  * record.
  */
-@AllArgsConstructor
 @FieldDefaults(makeFinal = true, level = AccessLevel.PRIVATE)
 @ToString
 @EqualsAndHashCode
@@ -45,12 +44,37 @@ public class PollContext<K, V> implements Iterable<RecordContext<K, V>> {
 
     protected Map<TopicPartition, Set<RecordContextInternal<K, V>>> records = new HashMap<>();
 
+    /**
+     * The navigator's observed-state surface for this instance (U5, R18) - see {@link #getNavigatorView()}.
+     * Excluded from equality and printing: it is a per-instance engine handle, not part of what this batch of
+     * records IS, and two contexts over the same records must stay equal whichever instance built them.
+     */
+    @ToString.Exclude
+    @EqualsAndHashCode.Exclude
+    protected NavigatorView navigatorView;
+
     PollContext(List<WorkContainer<K, V>> workContainers) {
+        this(workContainers, NavigatorView.inert());
+    }
+
+    PollContext(List<WorkContainer<K, V>> workContainers, NavigatorView navigatorView) {
+        this.navigatorView = navigatorView;
         for (var wc : workContainers) {
             TopicPartition topicPartition = wc.getTopicPartition();
             var recordSet = records.computeIfAbsent(topicPartition, ignore -> new HashSet<>());
             recordSet.add(new RecordContextInternal<>(wc));
         }
+    }
+
+    /**
+     * The navigator's observed-state surface (R18): how many records are currently resource-ineligible per
+     * ordering shard, which resources are blocking and their {@code availableAt}, and the available rate per
+     * resource (instance-local and global). This is what the test harness asserts against and the later web GUI
+     * reads. Reading it is side-effect-free by contract, and it never returns null - an instance with no
+     * navigator answers every query with the empty/unconstrained shape (AE6).
+     */
+    public NavigatorView getNavigatorView() {
+        return navigatorView;
     }
 
     /**

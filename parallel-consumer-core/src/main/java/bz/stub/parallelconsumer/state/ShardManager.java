@@ -12,6 +12,7 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
 import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.internal.BrokerPollSystem;
 import bz.stub.parallelconsumer.internal.PCModule;
+import bz.stub.parallelconsumer.internal.RateLimiter;
 import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import io.micrometer.core.instrument.Gauge;
@@ -88,6 +89,23 @@ public class ShardManager<K, V> {
      */
     @Getter
     private final DispatchScanMeter dispatchScanMeter = new DispatchScanMeter();
+
+    /**
+     * How often the navigator's steady-state "resource deferral continues" line may re-fire, engine-wide. Same
+     * interval as {@code AdmissionController}'s own constraint report, for one greppable cadence across both
+     * subsystems' steady-state narration.
+     */
+    private static final int NAVIGATOR_CONSTRAINT_REPORT_INTERVAL_SECONDS = 5;
+
+    /**
+     * ONE steady-state limiter per engine, shared into every {@link ProcessingShard} this manager creates -
+     * matching {@code AdmissionController}'s one-per-engine {@code constraintReportLimiter}. A per-shard limiter
+     * multiplied the INFO cadence by the number of blocked shards (under KEY ordering every blocked shard logged
+     * its own line per interval); the line each shard logs still names that shard's key.
+     */
+    @Getter(AccessLevel.PACKAGE) // visible for testing
+    private final RateLimiter navigatorConstraintReportLimiter =
+            new RateLimiter(NAVIGATOR_CONSTRAINT_REPORT_INTERVAL_SECONDS);
 
     /**
      * View of {@link WorkContainer}s that need retrying sorted by retryDue.
@@ -297,7 +315,8 @@ public class ShardManager<K, V> {
 
         // don't need to synchronise on /adding/ elements, as the iterator would just stop early
         var shard = processingShards.computeIfAbsent(shardKey,
-                ignore -> new ProcessingShard<>(shardKey, options, wm.getPm(), recordPopulation, dispatchScanMeter));
+                ignore -> new ProcessingShard<>(shardKey, options, wm.getPm(), recordPopulation, dispatchScanMeter, module,
+                        navigatorConstraintReportLimiter));
         shard.addWorkContainer(wc);
     }
 

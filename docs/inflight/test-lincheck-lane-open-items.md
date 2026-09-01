@@ -169,13 +169,6 @@ The other two harnesses inherit the same caveat: `ShardManagerLincheckTest` and
 `PartitionStateLincheckTest` hit 8 of 8 at a tenth of their committed bounds, but on the fast machine
 only.
 
-## Nothing runs the lane, so the tripwire it promises cannot fire
-
-`bin/lincheck-test.sh` is excluded from every gating suite by design, and no workflow invokes it. The
-ASM instrumentation tripwire - the control that exists because a broken transformer once reported a
-clean pass against code that cannot survive two threads - therefore never runs. Three reviewers
-converged on this independently.
-
 ## The red control has drifted from a standard that landed after it
 
 `LincheckToolchainProbeTest` was calibrated before `18a61321b`, which now requires every red control

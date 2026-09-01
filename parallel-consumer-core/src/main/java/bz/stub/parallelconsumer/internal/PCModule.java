@@ -6,6 +6,11 @@ package bz.stub.parallelconsumer.internal;
  */
 
 import bz.stub.parallelconsumer.internal.admission.AdmissionController;
+import bz.stub.parallelconsumer.internal.utils.SupplierUtils;
+import bz.stub.parallelconsumer.internal.navigator.NavigatorParticipant;
+import bz.stub.parallelconsumer.internal.navigator.ParticipantBackedNavigatorView;
+import bz.stub.parallelconsumer.navigator.NavigatorView;
+import bz.stub.parallelconsumer.navigator.ResourceAllocator;
 import bz.stub.parallelconsumer.internal.utils.TimeUtils;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
@@ -16,6 +21,9 @@ import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.producer.Producer;
 
 import java.time.Clock;
+import java.util.List;
+import java.util.Optional;
+import java.util.function.Supplier;
 
 /**
  * Minimum dependency injection system, modled on how Dagger works.
@@ -184,6 +192,85 @@ public class PCModule<K, V> {
      */
     private AdmissionController initAdmissionController() {
         return new AdmissionController(options(), clock(), pcMetrics());
+    }
+
+    /**
+     * The navigator's allocator handle (KD2, KTD3): the application-supplied {@link ResourceAllocator}, wrapped
+     * so an untagged instance (no allocator configured, {@link ParallelConsumerOptions#getResourceTags()} empty)
+     * reads a plain {@link Optional#empty()} rather than every future caller null-checking
+     * {@link ParallelConsumerOptions#getResourceAllocator()} itself.
+     * <p>
+     * The three navigator accessors memoise through {@link SupplierUtils#memoize} rather than this class's
+     * older {@code synchronized}-accessor shape: they are reached at runtime from more than one thread - every
+     * {@code WorkContainer} construction (once per inbound record), the control thread's per-pass quantum read,
+     * and the lifecycle hooks - so the post-initialisation fast path must be a lock-free read, not a monitor
+     * acquisition per record. The utility serialises only the one-time construction and publishes safely.
+     */
+    private final Supplier<Optional<ResourceAllocator>> resourceAllocator =
+            SupplierUtils.memoize(() -> Optional.ofNullable(options().getResourceAllocator()));
+
+    public Optional<ResourceAllocator> resourceAllocator() {
+        return resourceAllocator.get();
+    }
+
+    /**
+     * This instance's navigator membership (U3's engine seam): member id, tagged resources and allocator handle
+     * resolved ONCE per instance - {@link NavigatorParticipant#inert()} when the instance tags nothing, which is
+     * R3's zero-cost path (callers check {@link NavigatorParticipant#isActive()} and go no further). Memoised
+     * lock-free after first touch - see {@link #resourceAllocator}'s note; hot callers additionally hold the
+     * returned reference in a final field rather than re-calling per record ({@code WorkContainer}'s field).
+     * <p>
+     * The member id is the SAME identity {@link PCMetrics} publishes as the {@code pcinstance} meter tag (and
+     * {@code AbstractParallelEoSStreamProcessor} derives its log id from): a user-supplied
+     * {@link ParallelConsumerOptions#getPcInstanceTag()} verbatim, or the generated UUID - so an allocator-side
+     * membership view, a metric and a log line all name the instance the same way.
+     */
+    private final Supplier<NavigatorParticipant> navigatorParticipant = SupplierUtils.memoize(() -> {
+        List<String> resourceTags = options().getResourceTags();
+        Optional<ResourceAllocator> allocator = resourceAllocator();
+        boolean tagged = allocator.isPresent() && resourceTags != null && !resourceTags.isEmpty();
+        NavigatorParticipant participant = tagged
+                ? NavigatorParticipant.activeMember(allocator.get(), resourceTags,
+                pcMetrics().getInstanceTag().getValue())
+                : NavigatorParticipant.inert();
+        // U4: registers the pc.navigator.* meters once, immediately after construction - a no-op for the
+        // inert (untagged) shape, mirroring AdmissionController#initMetrics's mode-gated pattern (R3).
+        participant.initMetrics(pcMetrics(), clock());
+        return participant;
+    });
+
+    public NavigatorParticipant navigatorParticipant() {
+        return navigatorParticipant.get();
+    }
+
+    /**
+     * The navigator's observed-state surface (U5, R18): {@link #navigatorParticipant()} bound to the module
+     * clock as a {@link NavigatorView}, resolved ONCE and handed to every {@code PollContextInternal} at its
+     * construction sites - the processor exposes this NARROW view to user code, never the module itself.
+     * Side-effect-free to read, by that interface's contract (AE6). Memoised lock-free after first touch - see
+     * {@link #resourceAllocator}'s note.
+     */
+    private final Supplier<NavigatorView> navigatorView =
+            SupplierUtils.memoize(() -> ParticipantBackedNavigatorView.of(navigatorParticipant(), clock()));
+
+    public NavigatorView navigatorView() {
+        return navigatorView.get();
+    }
+
+    /**
+     * Whether admission SLOTS are the binding constraint RIGHT NOW (pure read, U4/KTD6's slots-constrained
+     * marker) - the fact {@code NavigatorDecisionReason#RESOURCE_AND_SLOTS_BLOCKED} names alongside a resource
+     * block. Mirrors {@link #admissionTargetSlots()}'s own state-derivation exactly, so the two seams can never
+     * disagree about what "binding" means: active enforcement, and every admission-target slot already occupied
+     * by an active user-function task. False whenever adaptive enforcement is inactive or no processor is
+     * attached yet (bare-module test envs) - matching {@link #admissionTargetSlots()}'s own fallback.
+     */
+    public boolean isAdmissionSlotsCurrentlyBinding() {
+        AbstractParallelEoSStreamProcessor<K, V> processor = parallelEoSStreamProcessor;
+        if (processor == null || !processor.adaptiveEnforcementActive()) {
+            return false;
+        }
+        return processor.userFunctionTaskAccounting().getActive() >= admissionTargetSlots();
     }
 
     /**

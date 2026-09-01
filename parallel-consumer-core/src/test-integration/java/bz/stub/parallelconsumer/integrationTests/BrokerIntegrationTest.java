@@ -303,4 +303,39 @@ public abstract class BrokerIntegrationTest<K, V> {
         }
     }
 
+    /**
+     * Waits until the current consumer group reports exactly {@code expectedMembers}, each owning exactly one
+     * partition. Multi-instance tests produce their backlog only AFTER this settles: a transient owner of
+     * another instance's eventual partition would drain or throttle records the settled owner's measurement
+     * depends on, so stabilising first removes that race instead of tolerating it.
+     */
+    protected void awaitGroupStableWithOnePartitionEach(int expectedMembers) {
+        Awaitility.await().atMost(Duration.ofSeconds(90)).untilAsserted(() -> {
+            var description = describeGroup();
+            assertThat(description.members()).hasSize(expectedMembers);
+            assertThat(description.members()).allSatisfy(member ->
+                    assertThat(member.assignment().topicPartitions()).hasSize(1));
+        });
+        log.info("Consumer group {} stable: {} members, one partition each", getKcu().getGroupId(),
+                expectedMembers);
+    }
+
+    @SneakyThrows
+    protected org.apache.kafka.clients.admin.ConsumerGroupDescription describeGroup() {
+        String groupId = getKcu().getGroupId();
+        return getKcu().getAdmin()
+                .describeConsumerGroups(java.util.Collections.singleton(groupId))
+                .all().get()
+                .get(groupId);
+    }
+
+    /**
+     * Count of hook-recorded firings in {@code [start, end)} - the anchored-window measurement primitive
+     * shared by the navigator test and demo. Insertion order is irrelevant, only the timestamps count.
+     */
+    protected static long countIn(java.util.concurrent.ConcurrentLinkedQueue<java.time.Instant> firings,
+                                  java.time.Instant start, java.time.Instant end) {
+        return firings.stream().filter(firing -> !firing.isBefore(start) && firing.isBefore(end)).count();
+    }
+
 }

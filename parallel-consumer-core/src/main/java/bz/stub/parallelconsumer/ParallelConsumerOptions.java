@@ -7,6 +7,8 @@ package bz.stub.parallelconsumer;
 
 import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.internal.DynamicLoadFactor;
+import bz.stub.parallelconsumer.navigator.ResourceAllocator;
+import bz.stub.parallelconsumer.navigator.ResourceContract;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tag;
@@ -23,12 +25,17 @@ import org.apache.kafka.common.annotation.InterfaceStability;
 
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.function.Function;
 
+import static bz.stub.parallelconsumer.internal.utils.StringUtils.isBlank;
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
 import static java.time.Duration.ofMillis;
@@ -537,6 +544,51 @@ public class ParallelConsumerOptions<K, V> {
      */
     private final int adaptiveConcurrencyInitialTarget;
 
+    /**
+     * <b>EXPERIMENTAL</b> - the navigator subsystem is under active development; this surface may change in a
+     * minor release.
+     * <p>
+     * <b>What it is for.</b> Names the shared, rate-limited resources this instance's function requires (R2) -
+     * for example an external API this function and others share a rate budget with. Nothing is declared inside
+     * the function body; the requirement rides the instance's construction-time registration alongside today's
+     * one-function-per-instance API (KD11).
+     * <p>
+     * <b>What it does not do.</b> Tagging a name here does not register it - {@link #resourceAllocator}'s
+     * {@link ResourceAllocator#register} does that, as a separate act, before any instance tagging the name is
+     * built (KD5). A function that tags no resources is untouched by the navigator: admission behaves exactly as
+     * it does today (R3) - the empty default below is that untouched path.
+     * <p>
+     * Every tagged name must already be registered with the supplied {@link #resourceAllocator}, and
+     * {@link #resourceAllocator} itself must be supplied whenever this is non-empty - both checked at
+     * {@link #validate()}, failing fast and naming the problem rather than failing silently or deep in the
+     * engine (R4, R19).
+     *
+     * @see #resourceAllocator
+     * @see #validate()
+     */
+    @Builder.Default
+    private final List<String> resourceTags = Collections.emptyList();
+
+    /**
+     * <b>EXPERIMENTAL</b> - see {@link #resourceTags}.
+     * <p>
+     * <b>What it is for.</b> The shared allocator that grants credit against every resource named in
+     * {@link #resourceTags} (R5). Application-supplied, following the {@link #meterRegistry} precedent: the
+     * application constructs ONE allocator and passes the SAME instance into every PC instance's builder, so
+     * capacity is actually shared rather than each instance getting its own unconstrained copy (KTD3).
+     * <p>
+     * Resources are registered against this allocator (via {@link ResourceAllocator#register}) separately from,
+     * and before, any instance's construction (KD5) - this field only supplies the already-populated registry an
+     * instance's tags are validated against.
+     * <p>
+     * Left unset (the default), no navigator behaviour is possible: {@link #resourceTags} must then be empty, or
+     * {@link #validate()} fails naming the missing allocator (R19).
+     *
+     * @see #resourceTags
+     * @see #validate()
+     */
+    private final ResourceAllocator resourceAllocator;
+
     public static final Duration DEFAULT_STATIC_RETRY_DELAY = Duration.ofSeconds(1);
 
     // Default backoff for SaslAuthenticationException retry durion ConsumerManager.commitSync and ConsumerManager.poll.
@@ -688,6 +740,7 @@ public class ParallelConsumerOptions<K, V> {
         transactionsValidation();
         virtualThreadsValidation();
         adaptiveConcurrencyValidation();
+        navigatorValidation();
     }
 
     /**
@@ -756,6 +809,63 @@ public class ParallelConsumerOptions<K, V> {
                             "on its first pass, so the seed as written can never take effect",
                     Fields.adaptiveConcurrencyInitialTarget, adaptiveConcurrencyInitialTarget,
                     Fields.maxConcurrency, maxConcurrency));
+        }
+    }
+
+    /**
+     * R3's untouched path falls straight out of the guard below: an instance with no {@link #resourceTags} never
+     * reaches the allocator at all, so admission behaves exactly as it does today. Otherwise enforces R4 and
+     * R19's remaining fail-fast checks (a policy collision on re-registration lives on
+     * {@link ResourceAllocator#register}, not here, since it fires at registration time rather than at an
+     * instance's {@code validate()}), plus two hardening checks against a malformed tag list itself:
+     * <ol>
+     *     <li>{@link #resourceTags} non-empty but {@link #resourceAllocator} unset - a tag with nowhere to
+     *     resolve credit from is a configuration error, not a silent no-op.</li>
+     *     <li>a null or blank entry in {@link #resourceTags} - it cannot be looked up, so it must fail here
+     *     with a named error rather than bare inside the allocator's map.</li>
+     *     <li>a duplicate entry in {@link #resourceTags} - each entry spends a credit independently, so a
+     *     repeated tag would silently halve this instance's effective rate against that resource.</li>
+     *     <li>a tag naming a resource the supplied {@link #resourceAllocator} has no {@link ResourceContract}
+     *     registered for - a typo must not silently mint an unconstrained resource (KD5), so it fails here,
+     *     naming the unknown resource, rather than deep in the engine on first dispatch.</li>
+     * </ol>
+     */
+    private void navigatorValidation() {
+        List<String> tags = resourceTags == null ? Collections.emptyList() : resourceTags;
+        if (tags.isEmpty()) {
+            return;
+        }
+        if (resourceAllocator == null) {
+            throw new IllegalArgumentException(msg(
+                    "{} names {} resource(s) ({}) but no {} was supplied - tag a resource only when you also " +
+                            "supply the shared allocator that grants its credits (the {} precedent: construct " +
+                            "one and pass the same instance to every instance's builder).",
+                    Fields.resourceTags, tags.size(), tags, Fields.resourceAllocator, Fields.meterRegistry));
+        }
+        for (String resourceName : tags) {
+            if (isBlank(resourceName)) {
+                throw new IllegalArgumentException(msg(
+                        "{} contains a null/blank tag ({}) - every entry must name a real resource, since a " +
+                                "missing name cannot be looked up in the supplied {} and would fail unhelpfully " +
+                                "deep in the allocator instead of here.",
+                        Fields.resourceTags, tags, Fields.resourceAllocator));
+            }
+        }
+        Set<String> distinctTags = new HashSet<>(tags);
+        if (distinctTags.size() != tags.size()) {
+            throw new IllegalArgumentException(msg(
+                    "{} contains a duplicate tag ({}) - each entry spends a credit independently, so repeating a " +
+                            "tag silently halves this instance's effective rate against that resource; list each " +
+                            "resource once.",
+                    Fields.resourceTags, tags));
+        }
+        for (String resourceName : tags) {
+            if (!resourceAllocator.lookup(resourceName).isPresent()) {
+                throw new IllegalArgumentException(msg(
+                        "{} tags resource '{}', but no resource of that name is registered with the supplied " +
+                                "{} - register it (with its policy) before building an instance that tags it.",
+                        Fields.resourceTags, resourceName, Fields.resourceAllocator));
+            }
         }
     }
 

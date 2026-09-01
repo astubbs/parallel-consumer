@@ -255,7 +255,12 @@ is why the chaos job summary prints the peak rather than a verdict - read it as 
   historical drain-zombie defect (RED on pre-fix compositions, GREEN on fixed; thresholds sit in
   measured gaps). **Never loosen a probe to go green** - tune the workload or conductor instead.
 
-## Lincheck lane (`@Tag("lincheck")`) - scheduler-controlled concurrency testing, never gates
+## Lincheck lane (`@Tag("lincheck")`) - scheduler-controlled concurrency testing
+
+Since astubbs#392 the lane gates: it runs as a tail step of the `Unit Tests` row in `maven.yml`
+(~40s for the whole lane, so it rides the existing check rather than owning one). It remains a
+separate maven invocation because Lincheck's JVM-wide instrumentation agent needs serial execution -
+`bin/lincheck-test.sh`'s header owns the five flags and why each fails silently alone.
 
 Lincheck declares a class's operations and explores thread interleavings against a sequential
 specification. It is the only tool class here that finds torn reads **nobody has named yet** - the

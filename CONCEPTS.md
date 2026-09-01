@@ -210,6 +210,11 @@ any other instrument.
 The verification that a new or extended test fails against the code as it was before the fix it
 guards — a regression test that has never failed proves nothing.
 
+The proof requires a deliberately mismatched pair: old code, new tests. Any procedure that reverts
+both together produces a matched pair and a vacuous pass, so a red-proof that does not go red is
+first evidence against the method, not for the code. The same demand applied to an analyser rather
+than a test is what catches inert configuration.
+
 **Priced bound**
 A scenario, iteration or repetition budget on a probabilistic probe that was derived from a measured
 per-attempt hit rate, rather than chosen because the probe passed at it. The distinction is the whole
@@ -228,10 +233,14 @@ enough for the miss fraction to estimate the per-attempt hit rate. It is the che
 bound: runs at the intended budget almost never miss and so carry almost no information, while the
 rate recovered from starved runs prices every candidate budget at once.
 
-The proof requires a deliberately mismatched pair: old code, new tests. Any procedure that reverts
-both together produces a matched pair and a vacuous pass, so a red-proof that does not go red is
-first evidence against the method, not for the code. The same demand applied to an analyser rather
-than a test is what catches inert configuration.
+**Lane**
+A test or analysis suite selected by its own tag and run through its own entry point, deliberately
+outside the default suites so its cost, cadence and verdict can differ from theirs. A lane is
+defined as much by where it runs as by what it contains: one that no pipeline invokes verifies
+nothing however sound its checks, and its internal guards and calibrations drift unnoticed, because
+only execution exercises them. An execution path on every change is therefore part of a lane being
+finished, not a follow-up. Distinct from inert configuration, where the run happens and the settings
+never reach it — in an unwired lane the settings are right and the run never happens.
 
 **Inert configuration**
 Analysis or build settings that are present in the source, syntactically valid, and never reach the
@@ -305,3 +314,16 @@ books, and here is the list you are expected to shorten".
   confusion.** It is told apart by asking whether what the test actually saw is *also correct*: the
   other three all mean the expected thing did not happen, while a tick-path assertion means something
   equally valid happened instead.
+
+**Navigator**
+The subsystem that shares named, rate-limited resources between processing instances. A resource is
+registered with a policy (rate plus burst); a function's registration tags the resources it needs;
+the navigator delegates renewable pieces of the resource's capacity to instances, which spend them
+locally at admission. It is a subsystem name, not a module: the promise it makes is soft - a
+cooperative, best-effort bound with declared overshoot, not a hard semaphore.
+
+**Credit**
+The navigator's unit of delegated capacity: permission for one execution against a named resource,
+minted per quantum (the fixed time slice a grant covers), spent locally at the moment a record is
+claimed for dispatch, and expiring unspent at the quantum's end. Death of a holder loses its
+credits; nothing re-mints an issued quantum - so failure wastes capacity but never creates it.

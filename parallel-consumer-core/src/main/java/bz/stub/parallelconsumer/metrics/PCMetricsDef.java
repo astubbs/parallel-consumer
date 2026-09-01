@@ -8,6 +8,7 @@ package bz.stub.parallelconsumer.metrics;
 import bz.stub.parallelconsumer.ParallelConsumer;
 import bz.stub.parallelconsumer.internal.State;
 import bz.stub.parallelconsumer.internal.admission.AdmissionDecisionReason;
+import bz.stub.parallelconsumer.internal.navigator.NavigatorDecisionReason;
 import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.Tags;
 import lombok.Getter;
@@ -30,6 +31,15 @@ public enum PCMetricsDef {
     ADMISSION_WOULD_BE_TARGET("admission.would.be.target", "Adaptive concurrency - the target the controller WOULD publish in slots. The whole product of adaptiveConcurrencyMode=OBSERVE, where it moves while the live target stays static; under ENFORCE it equals the live target", PCMetricsSubsystem.PROCESSOR, GAUGE),
     ADMISSION_CONSTRAINT("admission.constraint", "Adaptive concurrency - which constraint bound the most recent closed sample window, reported as number with following mapping - " + AdmissionDecisionReason.getReasonToValueListing(), PCMetricsSubsystem.PROCESSOR, GAUGE),
     ADMISSION_MOVEMENTS("admission.movements", "Adaptive concurrency - number of times the admission target actually changed value. A window that closes on a hold, or on a clamp landing on the same slot count, does not count", PCMetricsSubsystem.PROCESSOR, COUNTER),
+
+    NAVIGATOR_DEFERRED_RECORDS("navigator.deferred.records", "Navigator (U4) - number of records currently resource-deferred for this instance's navigator participant (no spendable credit against at least one tagged resource). Zero, and never registered, for an untagged instance", PCMetricsSubsystem.NAVIGATOR, GAUGE),
+    NAVIGATOR_DEFERRAL_REASON("navigator.deferral.reason", "Navigator (U4) - which reason bound the MOST RECENT resource deferral, reported as a number with following mapping - " + NavigatorDecisionReason.getReasonToValueListing(), PCMetricsSubsystem.NAVIGATOR, GAUGE),
+    NAVIGATOR_DEFERRAL_EPISODES("navigator.deferral.episodes", "Navigator (U4) - count of deferral EPISODES by reason (hand-assigned values, never reused - see NavigatorDecisionReason), one increment per transition into resource-deferred, never per re-evaluation pass", PCMetricsSubsystem.NAVIGATOR, COUNTER, tag("reason", "SINGLE_RESOURCE_BLOCKED|MULTI_RESOURCE_BLOCKED|RESOURCE_AND_SLOTS_BLOCKED")),
+    NAVIGATOR_CREDITS_SPENT("navigator.credits.spent", "Navigator (U4) - cumulative credits spent against this tagged resource (KTD2's conservation ledger), including debits that landed as overdraft. Monotonic, read live from the allocator", PCMetricsSubsystem.NAVIGATOR, GAUGE, tag("resource", "resourceName")),
+    NAVIGATOR_CREDITS_OVERDRAFT("navigator.credits.overdraft", "Navigator (U4, KTD2) - cumulative debits taken against this tagged resource when no live credit remained (KTD1's always-succeeds rule, KD10). The resource's declared burst BUDGETS this overshoot per quantum (R8) rather than bounding it - within-burst overdraft is the expected racing debit; debits beyond the budget are never refused, and are surfaced by navigator.credits.overdraft.beyond.burst", PCMetricsSubsystem.NAVIGATOR, GAUGE, tag("resource", "resourceName")),
+    NAVIGATOR_CREDITS_OVERDRAFT_BEYOND_BURST("navigator.credits.overdraft.beyond.burst", "Navigator (U4, R8) - cumulative overdraft debits taken after their quantum's overdraft had already consumed this tagged resource's declared burst budget. The single-threaded selection engine keeps debits within budget structurally, so nonzero means concurrent direct-pull claimers are outrunning the declared policy. Monotonic, never clamped; every such debit still succeeded and still counts in navigator.credits.overdraft", PCMetricsSubsystem.NAVIGATOR, GAUGE, tag("resource", "resourceName")),
+    NAVIGATOR_NEXT_CREDIT_AT("navigator.next.credit.at", "Navigator (U4) - this tagged resource's next quantum boundary, epoch seconds - when new credit next mints, independent of membership (R18's global rate view). -1 when the resource's policy mints nothing", PCMetricsSubsystem.NAVIGATOR, GAUGE, tag("resource", "resourceName")),
+    NAVIGATOR_ALLOCATOR_FAILURES("navigator.allocator.failures", "Navigator - number of ResourceAllocator calls that threw. The allocator is user-supplied, so the participant degrades soft on each failure instead of crashing: eligibility reads report blocked, view reads report their empty/zero shapes, mutating calls are skipped. Monotonic; nonzero means the allocator is failing, not the instance", PCMetricsSubsystem.NAVIGATOR, GAUGE),
 
     INFLIGHT_RECORDS("inflight.records", "Total number of records currently being processed or waiting for retry", PCMetricsSubsystem.WORK_MANAGER, GAUGE),
     WAITING_RECORDS("waiting.records", "Total number of records waiting to be selected for processing", PCMetricsSubsystem.WORK_MANAGER, GAUGE),
@@ -193,7 +203,8 @@ public enum PCMetricsDef {
         SHARD_MANAGER("shardmanager"),
         WORK_MANAGER("workmanager"),
         BROKER_POLLER("poller"),
-        OFFSET_ENCODER("offsetencoder");
+        OFFSET_ENCODER("offsetencoder"),
+        NAVIGATOR("navigator");
 
         private final String subsystemTag;
 

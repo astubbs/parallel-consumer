@@ -8,6 +8,7 @@ package bz.stub.parallelconsumer.state;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
+import bz.stub.parallelconsumer.internal.RateLimiter;
 import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
@@ -68,7 +69,7 @@ class ShardManagerTest {
         ConsumerRecord<String, String> consumerRecord = new ConsumerRecord<>(topic, partition, 1, null, "test1");
 
         Map<ShardKey, ProcessingShard<String, String>> processingShards = new ConcurrentHashMap<>();
-        processingShards.put(ShardKey.ofKey(consumerRecord), new ProcessingShard<>(ShardKey.ofKey(consumerRecord), module.options(), wm.getPm(), sm.getRecordPopulation(), sm.getDispatchScanMeter()));
+        processingShards.put(ShardKey.ofKey(consumerRecord), new ProcessingShard<>(ShardKey.ofKey(consumerRecord), module.options(), wm.getPm(), sm.getRecordPopulation(), sm.getDispatchScanMeter(), module, sm.getNavigatorConstraintReportLimiter()));
         sm.setProcessingShards(processingShards);
         incompleteOffsets.put(1L, Optional.of(consumerRecord));
         state.setIncompleteOffsets(incompleteOffsets);
@@ -93,7 +94,8 @@ class ShardManagerTest {
         var consumerRecord = new ConsumerRecord<>(topic, partition, 4L, "a-key", "a-value");
 
         var population = new RecordPopulation();
-        var shard = new ProcessingShard<>(ShardKey.ofTopicPartition(consumerRecord), module.options(), wm.getPm(), population, new DispatchScanMeter());
+        var shard = new ProcessingShard<>(ShardKey.ofTopicPartition(consumerRecord), module.options(), wm.getPm(), population, new DispatchScanMeter(), module,
+                new RateLimiter(5));
         shard.addWorkContainer(new WorkContainer<>(wm.getPm().getEpochOfPartition(tp), consumerRecord, module));
 
         assertThat(population.getInSystem()).isEqualTo(1L);

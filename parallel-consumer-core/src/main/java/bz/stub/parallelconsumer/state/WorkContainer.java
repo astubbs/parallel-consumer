@@ -9,6 +9,7 @@ import bz.stub.parallelconsumer.PollContextInternal;
 import bz.stub.parallelconsumer.RecordContext;
 import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.internal.ProducerManager;
+import bz.stub.parallelconsumer.internal.navigator.NavigatorParticipant;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NonNull;
@@ -25,6 +26,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.LongAdder;
 
@@ -154,6 +156,31 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      */
     @NonNull
     private final PCModule<K, V> module;
+
+    /**
+     * This instance's navigator membership, resolved ONCE per instance by the module and held here as a final
+     * field so the claim path reads it without re-entering the module's synchronised accessor per record (R3's
+     * zero-cost untagged path: for an untagged instance this is the inert participant, and
+     * {@link NavigatorParticipant#isActive()} is the only navigator touch a record ever makes).
+     * <p>
+     * Final and immutable, so it needs no {@code @GuardedBy}: it is written before this container is published
+     * into a shard's entry map, the same publication edge {@link #shardOccupancy}'s javadoc describes, and the
+     * participant's own counters are final references to internally-thread-safe types (KTD11) - all
+     * synchronisation lives inside the allocator or those types themselves, never here.
+     */
+    private final NavigatorParticipant navigator;
+
+    /**
+     * U4's per-record attribution dedup marker: true while this record's CURRENT resource-deferral episode has
+     * already been attributed (its defer-moment log line emitted, its episode counted). CAS-guarded rather than
+     * a plain boolean because the direct-pull engine can have several workers observe the SAME record's refusal
+     * concurrently (the shard-walk refusal branch's own precedent - see {@code ProcessingShard}'s javadoc on
+     * concurrent claimers): only the CAS winner may log or count the transition. Cleared the moment the record
+     * next dispatches ({@link #onQueueingForExecution()}) or otherwise leaves the shard while still deferred
+     * (revocation, a stale sweep - {@code ProcessingShard}'s retirement paths), so the NEXT deferral episode
+     * starts fresh. Needs no {@code @GuardedBy}: {@link AtomicBoolean} is self-guarding.
+     */
+    private final AtomicBoolean resourceDeferralAttributed = new AtomicBoolean(false);
 
     /**
      * Assignment generation this record comes from. Used for fencing messages after partition loss, for work lingering
@@ -287,6 +314,11 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
         this.cr = cr;
         this.workType = workType;
         this.module = module;
+        // A Mockito-mocked module (a documented bare-module test seam) answers null from an unstubbed
+        // accessor; a module with no navigator configured answers the inert participant. Both MEAN the same
+        // thing - no navigator here - so both get the inert shape rather than a latent NPE in the claim path.
+        NavigatorParticipant participant = module.navigatorParticipant();
+        this.navigator = participant != null ? participant : NavigatorParticipant.inert();
         this.arrivedAt = module.clock().instant();
     }
 
@@ -419,6 +451,11 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      * delay the abandonment never earned. The abandon marker is deliberately NOT reset - it is keyed by delivery,
      * so a stale one identifies itself.
      *
+     * <p>
+     * On a tagged instance the decision also carries the navigator's resource term, and a WON claim debits one
+     * credit per tagged resource as its final act - see {@link #isClaimableFrom} for the term and the body for
+     * the debit's placement. A refused or lost claim spends nothing.
+     *
      * @return {@code true} if this caller won the claim; {@code false} if the record was not claimable, or another
      *         caller moved it first, in which case this caller must not process it. Only ever {@code false} under
      *         the direct-pull engine, where two workers can scan the same shard at the same time.
@@ -437,6 +474,21 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
         deliveryCount++;
         timeTakenAsWorkMs = of(System.currentTimeMillis());
         chargeShardInFlight();
+        // The navigator debit (KTD1): one credit per tagged resource, immediately after the claim CAS won and as
+        // the final act before hand-off - so a record that lost the race above spent NOTHING, and dispatch is
+        // certain by the time anything is consumed (KD10's spend-last rule). The spend always succeeds: a credit
+        // gone since the eligibility read lands as overdraft in the allocator, never a refusal here.
+        if (navigator.isActive()) {
+            navigator.spendOneCreditPerTag(module.clock().instant());
+            // U4: a dispatch ends any open deferral episode - the CAS-guarded clear keeps the count decrement
+            // exactly-once, whichever thread's claim wins the race against a concurrent attribution read.
+            if (clearResourceDeferralAttributionIfSet()) {
+                // U5: derived exactly as ShardManager#computeShardKey derives the shard's own key, so the
+                // per-shard breakdown decrements the same entry the episode's start incremented. Computed only
+                // on this transition (a formerly-deferred record's dispatch), never on the ordinary claim path.
+                navigator.onDeferralEpisodeEnded(ShardKey.of(this, module.options().getOrdering()));
+            }
+        }
         return true;
     }
 
@@ -444,9 +496,36 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      * The claim decision, over one observed state. Read the state FIRST and the delay second: the state read is
      * the volatile one, so its acquire semantics make the retry deadline written by the previous holder visible.
      * Doing it the other way round would open a second, independent hole.
+     * <p>
+     * The resource term (the navigator's KTD1) joins the same single evaluation, last and PURE: for a tagged
+     * instance the record is claimable only while every tagged resource holds a spendable credit, read from the
+     * allocator without mutating anything - the spend happens only after the compare-and-set wins, in
+     * {@link #onQueueingForExecution()}. Like the retry delay, this term is safe outside the atomic, but for the
+     * opposite reason: the CAS compares execution state, not credit, so a credit spent between this evaluation
+     * and the CAS does not fail the claim - it is absorbed by the post-claim debit's always-succeeds overdraft
+     * rule instead (KD10), which R8's burst term budgets. There is deliberately NO re-check-and-unclaim: that
+     * would be the two-step defect this method's caller exists to prevent, rebuilt in the other direction. For
+     * an untagged instance {@link NavigatorParticipant#isActive()} is false and this term costs one final field
+     * read (R3).
      */
     private boolean isClaimableFrom(ExecutionState observed) {
+        return isNonResourceClaimable(observed) && hasResourceCreditIfTagged();
+    }
+
+    /** The claim's NON-resource terms over one observed state - the single source both claim and attribution read. */
+    private boolean isNonResourceClaimable(ExecutionState observed) {
         return observed.isClaimable() && isDelayPassed();
+    }
+
+    /**
+     * The claim's resource-eligibility term (KTD1): pure, and evaluated only for tagged instances. Blocked means
+     * a tagged resource has no live lease OR a live lease with zero credits left.
+     */
+    private boolean hasResourceCreditIfTagged() {
+        if (!navigator.isActive()) {
+            return true;
+        }
+        return navigator.hasSpendableCreditForAllTags(module.clock().instant());
     }
 
     private void chargeShardInFlight() {
@@ -618,6 +697,67 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      */
     public boolean isAvailableToTakeAsWork() {
         return isClaimableFrom(state.get());
+    }
+
+    /**
+     * When this record's resource deferral lifts, if it is resource-deferred right now: the LATEST next-credit
+     * time over the tagged resources currently holding no spendable credit for this instance (R7 - a record
+     * needing several resources runs only when the last of them has credit). Empty when the instance is
+     * untagged, when every tagged resource has credit, or when a blocking resource's policy mints nothing.
+     * <p>
+     * A PURE read (the plan's KTD1): it never mutates allocator or record state, so it is safe from any thread
+     * and any cadence - this is the query the defer-moment attribution (U4) and the context view (U5) read, and
+     * what tests assert the {@code availableAt} contract against. A projection, not a promise: membership can
+     * change before the credit arrives (KD10's best-effort framing).
+     */
+    public Optional<Instant> resourceAvailableAt() {
+        if (!navigator.isActive()) {
+            return Optional.empty();
+        }
+        return navigator.availableAt(module.clock().instant());
+    }
+
+    /**
+     * The claim decision's NON-resource terms, over one observed state: whether this record would be claimable
+     * but for resource credits - not in flight, no success verdict ({@link ExecutionState#isClaimable()}), and
+     * its retry delay passed. Delegates to the same {@link #isNonResourceClaimable(ExecutionState)} term the
+     * claim itself evaluates, so U4's attribution gate cannot drift into an approximation of the claim it
+     * explains. Pure, and package-private - only {@code ProcessingShard}'s attribution site reads it.
+     */
+    boolean isEligibleButForResourceCredit() {
+        return isNonResourceClaimable(state.get());
+    }
+
+    /**
+     * U4's dedup marker read: true while this record's current resource-deferral episode has already been
+     * attributed. Package-private - only {@code ProcessingShard}'s attribution site reads it.
+     */
+    boolean isResourceDeferralAttributed() {
+        return resourceDeferralAttributed.get();
+    }
+
+    /**
+     * Marks a NEW deferral episode as attributed (U4) - CAS false-&gt;true, so only the caller that wins the
+     * race may log the defer-moment line or count the episode.
+     *
+     * @return true only on the transition (this caller won); false when another caller already attributed the
+     *         SAME episode (the direct-pull engine's concurrent-claimers case) or the marker was already set
+     */
+    boolean markResourceDeferralAttributedIfNew() {
+        return resourceDeferralAttributed.compareAndSet(false, true);
+    }
+
+    /**
+     * Clears the dedup marker without decrementing the navigator's deferred-count gauge (U4) - the caller
+     * ({@code ProcessingShard}'s retirement paths) owns pairing the clear with
+     * {@code NavigatorParticipant#onDeferralEpisodeEnded()} when the marker WAS set, since only the caller knows
+     * whether an episode was genuinely open.
+     *
+     * @return true when an episode was open (the marker was set before this call), so the caller must also
+     *         call {@code onDeferralEpisodeEnded()}; false when there was nothing to close
+     */
+    boolean clearResourceDeferralAttributionIfSet() {
+        return resourceDeferralAttributed.compareAndSet(true, false);
     }
 
     /**

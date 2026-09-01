@@ -83,6 +83,7 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | [`docs/upstream.md`](docs/upstream.md) | Work that maps to upstream: the manifest, commit trailers, issue mirrors, the sweep |
 | [`docs/self-hosted-runner.md`](docs/self-hosted-runner.md) | Setting up or operating the self-hosted highcpu runner |
 | [`docs/agent-harness.md`](docs/agent-harness.md) | Adding a rule you need agents to follow *reliably* - which layers fire on their own, and which are merely available |
+| [`docs/demos.md`](docs/demos.md) | Building or changing a demo: what a demo is here, the off-by-default gate, the `bin/demo-*.sh` wrapper, the stdout-not-logger output discipline, the asserted-twin rule, the simulated-work rule |
 | [`docs/merge-checklist.md`](docs/merge-checklist.md) | Getting a PR ready to merge - what to offer the author, including the squash message and reorganising the commits |
 | [`bin/AGENTS.md`](bin/AGENTS.md) | Writing or changing a script in `bin/` - the shell conventions, including the ones no check enforces |
 | [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) | Adding or editing a note in `docs/inflight/` - what may live there, and when to delete it |
@@ -109,6 +110,7 @@ a file in it is touched, rather than waiting to be opened.
 | **`docs/quarantined-tests.md`** | CI-enforced registry of quarantined tests and, when one exists, their owning fix PR (unowned entries are legal, flagged advisory) | Tests that merely flake - quarantine requires evidence: a diagnosis, or a recorded sighting ledger proving it is master-state |
 | **`docs/test-hardening/`** | Dated audits of tests that do not run, do not assert, or were never written - per-test evidence and the commit that disabled each one | A live or generated registry - each audit is point-in-time; triage goes in `refactoring.md` |
 | **`CONCEPTS.md`** (repo root) | Shared domain vocabulary whose meaning here is project-specific (produce/commit lock pair, *dirty*, shard, in-flight work). Entries stand alone - no file paths, class names or current config values | A spec, an architecture doc, or general programming vocabulary |
+| **`SOUND_BITES.md`** (repo root) | Compressed product intent: the one-line formulations reused across docs, talks and agent prompts, each carrying a design decision | Prose explanations or feature lists - anything needing more than a sentence belongs to the doc that owns the topic |
 | **`docs/solutions/`** | Write-ups of problems already **solved**, by category, with YAML frontmatter (`module`, `tags`, `problem_type`) for searching | Open problems |
 | **`docs/plans/`** | Dated plan and investigation documents for one piece of work | Durable reference - a plan goes stale once its work lands |
 | **`src/docs/development/upstream-map.yaml`** | **Source of truth** for fork↔upstream mapping: fork branch/PR → upstream **PR**, with status; plus a cache of *frozen* upstream **issue** facts | Editorial opinion, and the live state of an upstream issue - that belongs to its fork mirror |
