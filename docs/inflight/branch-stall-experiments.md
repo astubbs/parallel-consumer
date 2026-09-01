@@ -12,5 +12,7 @@ One result still matters: **the stall-fix stack composes cleanly with astubbs#29
 <!-- post-merge: checked -->
 zero conflicts), which is what made astubbs#29's rebase tractable. That result belongs with the deadlock
 <!-- post-merge: checked -->
-fix's own record - `pr-29-857-deadlock-and-what-the-measuring-taught.md` while astubbs#29 is open, and its
-solutions write-up once it lands - after which all three branches can go.
+fix's own record. astubbs/parallel-consumer#29 has since landed, so that is now its solutions
+write-up - `../solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md`
+- and the in-flight note it used to point at was deleted with the merge, as that note's own header
+required. After this, all three branches can go.
