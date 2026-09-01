@@ -33,10 +33,30 @@ SUMMARY="$ROOT/target/performance-throughput.txt"
 # and `set -e` would otherwise exit before it is printed. The maven status is preserved and
 # re-raised at the end, so the lane still fails when the suite fails.
 rc=0
+# -DreuseForks=false gives every performance class its OWN JVM.
+#
+# WHY: failsafe declares no reuseForks, so it silently took the default of TRUE - every class in this
+# lane shared one VM. Nobody chose that for a lane whose whole output is a throughput number. When
+# MultiInstanceRebalanceTest's capacity profiles joined the lane, the throughput test that runs after
+# them fell from ~71,000 records/second to 39,684-44,992 on CI across three runs, and it read as a 45%
+# product regression on the branch that added them. It is not one: the same test on the same tree,
+# alone, returns 73,722.
+#
+# THE FLAG NAME IS THE TRAP. The user property is `reuseForks`, NOT `failsafe.reuseForks` - checked
+# with `mvnw help:describe -Dplugin=...maven-failsafe-plugin:<v> -Dgoal=integration-test -Ddetail`,
+# which prints "User property: reuseForks". The qualified guess is accepted and silently does
+# nothing, the same shape as -DforkCount vs -Dsurefire.forkCount that this repo's pom already warns
+# about. It binds to failsafe precisely because failsafe has no explicit <reuseForks>; surefire's
+# explicit true in the root pom still wins for unit tests, which this lane skips anyway.
+#
+# NOT VERIFIABLE LOCALLY. The full lane on a development machine already passes at 72,498 - there is
+# enough headroom to absorb the carryover a GitHub runner cannot. So this lane is the instrument, and
+# CI is the only place the change can be judged.
 ./mvnw --batch-mode \
   -Pci \
   clean verify \
   -DskipUTs=true \
+  -DreuseForks=false \
   -Dincluded.groups=performance \
   -Dexcluded.groups= \
   "$@" 2>&1 | tee "$LOG" || rc=${PIPESTATUS[0]}
