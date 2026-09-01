@@ -60,7 +60,7 @@ the prompt to add a working one.
 | `bin/check-copyright-headers.sh` | Exits 0 with a warning when there is no fork point (shallow clone) | `COPYRIGHT_CHECK_REQUIRE_FORK_POINT: "1"` in CI |
 | Maven's own model validation | Degrades a plugin declared without a version to a `[WARNING]` that scrolls past in a long log | `requirePluginVersions` enforcer rule (astubbs/parallel-consumer#259) |
 | GitHub's managed *Automatic Dependency Submission (Maven)* | Failed on every run it ever made, `master` included - repo-wide, not any one PR's doing - and went unnoticed because it is not a required check | Turned back off, with the re-enable trigger written down |
-| `bin/lincheck-test.sh`'s did-anything-run guard | Counted surefire reports left in `target/` by **any previous run**, so a lane that selected zero classes scored a healthy count. A nonexistent test class "passed" | Reports deleted before the run, and the count asserted against the exact expected roster (astubbs#347) |
+| `bin/lincheck-test.sh`'s did-anything-run guard | Counted surefire reports left in `target/` by **any previous run**, so a lane that selected zero classes scored a healthy count. A nonexistent test class "passed" | Reports deleted before the run, and the count asserted against the exact expected roster (astubbs#347) - which then itself sat stale through two roster additions, because no CI ran the lane; the sequel is [`a-lane-nothing-runs-cannot-catch-its-own-guard-drifting.md`](a-lane-nothing-runs-cannot-catch-its-own-guard-drifting.md) (wired in by astubbs/parallel-consumer#392) |
 
 The first six fail open. The last fails closed and was ignored anyway, which is the same outcome by a
 different route: **a check nobody gates on is a check nobody reads.**
@@ -233,6 +233,12 @@ Two fixes, and the second is the one usually skipped:
   number, which is this same class one step in. Pinning the roster means adding a harness fails until
   the expected number is updated; that friction is the check, because a harness the lane silently
   stopped running is indistinguishable from one that never existed.
+
+  The friction only bites when something *executes* the guard. This lane shipped the pinned count
+  and then nothing invoked the script for its entire opt-in life, so the count sat wrong through two
+  harness additions and the fix above was never once evaluated - the sequel incident, with the
+  execution-cadence rule it adds, is
+  [`a-lane-nothing-runs-cannot-catch-its-own-guard-drifting.md`](a-lane-nothing-runs-cannot-catch-its-own-guard-drifting.md).
 
 The generalisation worth carrying: **a guard reading a location it does not own needs to establish
 provenance, not just presence.** `bin/check-review-posted.sh` gets this right by construction - it
