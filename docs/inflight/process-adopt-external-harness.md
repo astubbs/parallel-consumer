@@ -63,3 +63,8 @@ while.
 
 [`process-quarantine-lane-foss.md`](process-quarantine-lane-foss.md) is the same question about one
 gate and should be decided together with this, not separately.
+
+**The evidence is not deferred with the decision.**
+[`process-beads-evaluation.md`](process-beads-evaluation.md) runs Beads against this repo's actual
+corpus and records what it replaces; the verdict comes back HERE, and this note stays the only place
+the decision is stated.
