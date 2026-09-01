@@ -106,8 +106,21 @@ try {
     '--branch', 'master', '--limit', String(REFERENCE_RUNS),
     '--json', 'databaseId,headSha', '--jq', '.[] | [.databaseId, .headSha] | @tsv'])
     .split('\n').filter(Boolean).map(l => l.split('\t'))
-} catch {
-  console.error('check-throughput-regression: could not list master baseline runs (gh unavailable or unauthenticated).')
+} catch (e) {
+  // BOOTSTRAPPING IS NOT A FAILURE, and the first version could not tell the two apart. `gh run list
+  // --workflow` resolves the workflow FILE against the DEFAULT BRANCH, so while perf-baseline.yml
+  // exists only on this branch the call 404s - and a blanket catch reported that as "gh unavailable
+  // or unauthenticated", exited 2 (cannot run), and failed the lane. The PR that introduces the
+  // workflow therefore always failed its own check, blaming the wrong thing.
+  const err = `${e?.stderr ?? ''}${e?.stdout ?? ''}${e?.message ?? ''}`
+  if (/404|could not find any workflows|not found/i.test(err)) {
+    console.log('check-throughput-regression: perf-baseline.yml is not on the default branch yet, so there')
+    console.log('  are no master runs to compare against. This is the bootstrapping state - it resolves')
+    console.log('  once this workflow lands on master and runs once. Not a fault.')
+    process.exit(NOTHING_IN_SCOPE)
+  }
+  console.error('check-throughput-regression: could not list master baseline runs.')
+  console.error(`  ${err.trim().split('\n')[0]}`)
   process.exit(CANNOT)
 }
 if (runs.length === 0) {

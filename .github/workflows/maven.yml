@@ -162,7 +162,17 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node bin/check-throughput-regression.mjs
+        # CAPTURE THE EXIT CODE, because the check has a FOUR-value contract (0 pass, 1 regression,
+        # 2 cannot run, 3 nothing in scope) and `steps.*.outcome` collapses all of them to
+        # success/failure. Reading only `outcome` made the job announce "reported a regression" for a
+        # bootstrapping run that reported nothing of the sort.
+        run: |
+          set +e
+          node bin/check-throughput-regression.mjs
+          code=$?
+          set -e
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
 
       # Posted as a comment rather than left in the job log, because a number nobody retrieves is a
       # number nobody has. The duplication checks already comment here; this follows them.
@@ -186,10 +196,20 @@ jobs:
             if (existing) await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: payload })
             else await github.rest.issues.createComment({ owner, repo, issue_number, body: payload })
 
+      # Exit 1 is a regression. Exit 2 is the check being UNABLE to measure, which this repo treats as
+      # never-a-pass ("a skip is not a pass") - so it also fails, with its own message, because a lane
+      # that silently stops measuring is the failure mode the whole PR exists to remove. Exit 3
+      # (nothing in scope) and 0 pass.
       - name: Fail on throughput regression
-        if: always() && matrix.suite == 'performance' && steps.throughput.outcome == 'failure'
+        if: always() && matrix.suite == 'performance' && steps.throughput.outputs.code == '1'
         run: |
           echo "The throughput check reported a regression - see the report comment on this PR." >&2
+          exit 1
+
+      - name: Fail when the throughput check could not run
+        if: always() && matrix.suite == 'performance' && steps.throughput.outputs.code == '2'
+        run: |
+          echo "The throughput check could not measure - see its output above. Not a pass." >&2
           exit 1
 
       # PERFORMANCE ONLY, and the retention is deliberately not the chaos lane's 14 days above.
