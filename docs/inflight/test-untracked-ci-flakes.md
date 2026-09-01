@@ -16,6 +16,18 @@ written up in
 [`back-pressure-freezes-the-frontier-the-test-asserted-2026-08-24.md`](../solutions/test-flakiness/back-pressure-freezes-the-frontier-the-test-asserted-2026-08-24.md).
 Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutions/).
 
+### The key-order point check again, on the incremental review-fix wave's full run, 2026-09-01
+
+<!-- post-merge: checked-begin -->
+A full core unit run on `feats/hasten-micro-mvp` (the incremental review-fix wave: drain deadline,
+spend-failure latch, burst monotonic reset) failed once: `processInKeyOrder(CommitMode)[1]` at
+`[sanity check input data]` - actual 0 against expected 9, the symptom this ledger owns. Class
+re-run green on the same build (58/58); the other 887 tests of the run were green. The wave is
+non-suspect for the recorded reason: the failing assertion is the harness's own mock-poll feed,
+and this test's instance is untagged so the navigator (latch included) is inert there. Filed for
+rate: one failure in this session's several full-run starts.
+<!-- post-merge: checked-end -->
+
 ### The key-order point check again, on the navigator U3 selection-path full run, 2026-09-01
 
 <!-- post-merge: checked-begin -->

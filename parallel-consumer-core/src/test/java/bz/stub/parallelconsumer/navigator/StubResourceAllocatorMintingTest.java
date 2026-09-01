@@ -69,6 +69,16 @@ class StubResourceAllocatorMintingTest {
         allocator.spend(memberId, API_X, now());
     }
 
+    /**
+     * Drives {@code spend} against an EXPLICIT observation instant rather than the clock's current reading -
+     * simulating a straggler whose instant was captured earlier (outside {@code stateLock}, per
+     * {@code WorkContainer.onQueueingForExecution}) but only reaches the allocator after the clock, and the
+     * quantum index, has already moved on.
+     */
+    private void spendAt(String memberId, Instant at) {
+        allocator.spend(memberId, API_X, at);
+    }
+
     private int credits(String memberId) {
         return allocator.currentLease(memberId, API_X, now())
                 .map(CapacityLease::getAvailableCredits)
@@ -552,6 +562,49 @@ class StubResourceAllocatorMintingTest {
         ConservationLedger snapshot = ledger();
         assertThat(snapshot.getOverdraft()).isEqualTo(4);
         assertThat(snapshot.getOverdraftBeyondBurst()).isEqualTo(0);
+        assertIdentityCloses();
+    }
+
+    /**
+     * Covers R8/KTD1 against the out-of-order-instants hazard {@code trackOverdraftAgainstBurstBudget}'s javadoc
+     * names: the observation instant behind a spend is read outside {@code stateLock} and the call is
+     * concurrently reachable, so a straggler carrying an OLDER quantum's instant can reach the allocator AFTER a
+     * later quantum's overdraft is already underway. The budget must not reset on that arrival - it must fold
+     * the straggler into the CURRENT quantum's cumulative count, exactly like the allocator's membership-lease
+     * renewal monotonically merges against the identical hazard. A bare {@code !=} reset (the bug shape) would
+     * zero the current quantum's count back down, undercounting beyond-burst and silently re-arming the
+     * once-per-quantum warn.
+     */
+    @Test
+    void outOfOrderStragglerSpendDoesNotResetTheCurrentQuantumsBurstBudget() {
+        join("a");
+        nextQuantum(); // quantum index 1 ("N") - membership effective from here on
+        Instant staleQuantumNInstant = now(); // captured now, delivered to the allocator only later
+
+        nextQuantum(); // quantum index 2 ("N+1") - the CURRENT budget from here on
+        spend("a");
+        spend("a"); // two genuine overdrafts in quantum 2 - exactly the burst budget, not yet beyond it
+
+        // the straggler: its instant belongs to quantum 1, but it arrives after quantum 2's budget is live
+        spendAt("a", staleQuantumNInstant);
+
+        ConservationLedger afterStraggler = ledger();
+        assertThat(afterStraggler.getOverdraft()).isEqualTo(3); // every debit still succeeds (KTD1)
+        assertWithMessage("the straggler's older-quantum instant must fold into quantum 2's ALREADY-LIVE budget, "
+                        + "not reset it - it is the 3rd cumulative overdraft, one beyond the burst of 2")
+                .that(afterStraggler.getOverdraftBeyondBurst())
+                .isEqualTo(1);
+
+        // further genuine quantum-2 debits must keep accumulating against the SAME budget - a resetting bug
+        // would have regressed overdraftBudgetQuantumIndex to 1, making these look like a fresh quantum again
+        spend("a");
+        spend("a");
+
+        ConservationLedger snapshot = ledger();
+        assertThat(snapshot.getOverdraft()).isEqualTo(5);
+        assertWithMessage("the straggler must not have re-armed a fresh within-budget allowance for quantum 2")
+                .that(snapshot.getOverdraftBeyondBurst())
+                .isEqualTo(3);
         assertIdentityCloses();
     }
 

@@ -215,4 +215,81 @@ class NavigatorEngineLifecycleTest {
         assertWithMessage("membership must leave exactly once, at the drain-complete CLOSING transition")
                 .that(leaveCalls.get()).isEqualTo(1);
     }
+
+    /**
+     * The engine-side DRAIN bound: a backlog that can NEVER drain - here a rate-0 resource, the documented
+     * shut valve, so no credit ever mints for anyone - must not wedge close(DRAIN) forever. Before the bound,
+     * drain() had no exit but an empty shard, waitForClose could only throw on the caller's thread (never
+     * transitioning the engine), and the DRAINING gate in tickNavigatorQuantumRead kept renewing the lease -
+     * so neither the explicit leave nor the lease TTL could ever release the wedged instance's resource
+     * share. Now the drainDeadline (stamped from {@code drainTimeout} on the shared virtual clock) passes,
+     * drain() warns and transitions to CLOSING anyway, and the membership leaves exactly once. The record
+     * itself is never invoked - undrained means uncommitted, redelivered after rebalance.
+     */
+    @Test
+    void closeWithDrainIsBoundedWhenTheBacklogCanNeverDrain() {
+        var leaveCalls = new AtomicInteger();
+        var countingAllocator = new StubResourceAllocator(clock) {
+            @Override
+            public void leave(String memberId, Instant now) {
+                leaveCalls.incrementAndGet();
+                super.leave(memberId, now);
+            }
+        };
+        countingAllocator.register(new ResourceContract(API_X, 0.0, 1, QUANTUM));
+        mockConsumer = new MockConsumer<>(OffsetResetStrategy.EARLIEST);
+        var options = ParallelConsumerOptions.<String, String>builder()
+                .consumer(mockConsumer)
+                .ordering(ParallelConsumerOptions.ProcessingOrder.UNORDERED)
+                .pcInstanceTag(MEMBER)
+                .resourceTags(UniLists.of(API_X))
+                .resourceAllocator(countingAllocator)
+                .drainTimeout(Duration.ofSeconds(2))
+                .build();
+        var module = new PCModuleTestEnv(options, clock);
+        pc = new ParallelEoSStreamProcessor<>(options, module);
+
+        pc.subscribe(UniLists.of(TOPIC));
+        mockConsumer.updateBeginningOffsets(Collections.singletonMap(tp, 0L));
+        mockConsumer.rebalance(Collections.singletonList(tp));
+        pc.onPartitionsAssigned(UniLists.of(tp));
+
+        pc.poll(context -> invocations.incrementAndGet());
+        mockConsumer.addRecord(new ConsumerRecord<>(TOPIC, 0, 0, "key-0", "value-0"));
+
+        // the shut valve: quanta pass and the record stays genuinely undispatchable - zero rate, zero credits
+        clock.add(QUANTUM);
+        Awaitility.await("rate 0 must never dispatch")
+                .during(Duration.ofMillis(500)).atMost(Duration.ofSeconds(10))
+                .until(() -> invocations.get() == 0);
+
+        // the ticker walks the SHARED virtual clock past the drainDeadline while close(DRAIN) blocks; the
+        // caller-side waitForClose budget (drainTimeout + shutdownTimeout + grace, WALL time) stays untouched,
+        // so a completed close here can only mean the ENGINE cut the drain short at its deadline
+        var ticker = new Thread(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException e) {
+                    return;
+                }
+                clock.add(QUANTUM);
+            }
+        }, "virtual-clock-ticker");
+        ticker.start();
+        try {
+            pc.close(Duration.ofSeconds(10), DrainingCloseable.DrainingMode.DRAIN);
+        } finally {
+            ticker.interrupt();
+        }
+
+        assertWithMessage("the wedged record must never have been invoked - it redelivers after rebalance")
+                .that(invocations.get()).isEqualTo(0);
+        // the allocator hearing the leave IS the share-release proof: localRatePerSecond cannot distinguish
+        // "left" from "rate-0 member" (a zero share reads 0.0 either way), so it would assert nothing here
+        assertWithMessage("membership must leave exactly once, at the deadline-forced CLOSING transition")
+                .that(leaveCalls.get()).isEqualTo(1);
+        assertWithMessage("the engine must have genuinely reached CLOSED, not merely returned")
+                .that(pc.isClosedOrFailed()).isTrue();
+    }
 }

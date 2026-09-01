@@ -169,13 +169,6 @@ The other two harnesses inherit the same caveat: `ShardManagerLincheckTest` and
 `PartitionStateLincheckTest` hit 8 of 8 at a tenth of their committed bounds, but on the fast machine
 only.
 
-## ~~Nothing runs the lane~~ - RESOLVED by astubbs/parallel-consumer#392
-
-The lane now runs on every PR as a tail step of the `Unit Tests` row in `maven.yml`
-(`docs/testing.md`'s Lincheck section owns the wiring statement). The first wired run caught the
-roster guard already stale - the incident and its lesson are recorded in
-`docs/solutions/workflow-issues/a-lane-nothing-runs-cannot-catch-its-own-guard-drifting.md`.
-
 ## The red control has drifted from a standard that landed after it
 
 `LincheckToolchainProbeTest` was calibrated before `18a61321b`, which now requires every red control

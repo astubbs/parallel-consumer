@@ -354,6 +354,19 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     private Duration drainTimeout;
 
+    /**
+     * The engine-side bound on a {@link DrainingCloseable.DrainingMode#DRAIN} close: stamped at
+     * {@link #transitionToDraining()} as now-plus-{@link #drainTimeout}, consumed by {@link #drain()}. Without it
+     * the drain loop had no exit for a backlog that can never become eligible (e.g. a navigator resource
+     * registered at rate 0, the documented shut valve) - {@link #waitForClose(Duration)} only rethrows its own
+     * timeout on the caller's thread, it never transitions the engine, so a wedged drain kept its navigator
+     * membership (and its share of the shared resource) forever via {@link #tickNavigatorQuantumRead()}'s
+     * DRAINING gate.
+     */
+    // volatile: written on the closing caller's thread in transitionToDraining, read by the control thread in
+    // drain() - the failureReason discipline. Null until a DRAIN close starts; never reset (close is terminal).
+    private volatile Instant drainDeadline;
+
     private PCMetrics pcMetrics;
 
     /**
@@ -1086,7 +1099,9 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             // transitionToClosing() calls leaveNavigatorOnClosingTransition(), which both routes below reach
             // exactly once (CAS-guarded): DONT_DRAIN transitions immediately, DRAIN transitions when the
             // shards have emptied - the drain tail keeps reading quanta (see tickNavigatorQuantumRead's
-            // DRAINING gate) so deferred records still earn credits while draining. A close() the control
+            // DRAINING gate) so deferred records still earn credits while draining. That tail is bounded
+            // engine-side by drainDeadline (see drain()): a backlog that can never drain otherwise loops
+            // forever, still renewing its lease and holding its resource share. A close() the control
             // loop initiates from its interrupt/error paths goes straight to doClose without transitioning
             // through here; the membership lease TTL is exactly the backstop for that - a control loop that
             // stopped reading quanta lapses.
@@ -1287,6 +1302,9 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     void transitionToDraining() {
         log.debug("Transitioning to draining...");
+        // Deadline BEFORE the state write, so a control pass that observes DRAINING has the bound available;
+        // drain() null-checks anyway, and a single unbounded pass in that window is harmless.
+        this.drainDeadline = module.clock().instant().plus(drainTimeout);
         this.state = State.DRAINING;
         // R11 edge action: state is set FIRST, so a tick arriving after this line is already gated out of
         // re-narrowing; a tick that read RUNNING just before it is the race the innerDoClose backstop covers.
@@ -2216,10 +2234,29 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         return workAmountBelowTarget;
     }
 
+    /**
+     * One DRAINING pass of the control loop: transitions to CLOSING when the shards have emptied, OR when the
+     * {@link #drainDeadline} (stamped at {@link #transitionToDraining()} from the same {@code drainTimeout} the
+     * caller-side {@link #waitForClose(Duration)} budget uses) has passed with records still waiting. The bound
+     * is engine-side deliberately: waitForClose can only throw on the caller's thread, never transition the
+     * engine, so without this a drain wedged behind never-eligible work (e.g. a rate-0 navigator resource)
+     * looped here forever - and the DRAINING gate in {@link #tickNavigatorQuantumRead()} kept renewing the
+     * membership lease, so neither the explicit leave nor the lease TTL could ever release its resource share.
+     */
     private void drain() {
         log.debug("Signaling to drain...");
         brokerPollSubsystem.drain();
         if (!isRecordsAwaitingProcessing()) {
+            transitionToClosing();
+        } else if (drainDeadline != null && !module.clock().instant().isBefore(drainDeadline)) {
+            // Records that never drained stay uncommitted and are redelivered to the group after rebalance -
+            // the same consequence as a DONT_DRAIN close's undispatched backlog or a worker-pool-death close.
+            // Richer semantics for a breached drain (e.g. a configurable action) is an OPEN product decision;
+            // this bound only guarantees the close, and the resource-share release, actually happen.
+            log.warn("Drain timeout ({}) breached at deadline {} with records still awaiting processing - " +
+                            "closing anyway; the undrained backlog remains uncommitted and will be redelivered " +
+                            "after rebalance. In flight work still gets the shutdown timeout to complete.",
+                    drainTimeout, drainDeadline);
             transitionToClosing();
         } else {
             log.debug("Records still waiting processing, won't transition to closing.");

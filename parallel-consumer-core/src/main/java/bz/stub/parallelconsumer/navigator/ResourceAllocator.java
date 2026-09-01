@@ -32,6 +32,20 @@ import java.util.Optional;
  * Every {@code now} is an observation instant on the ONE canonical clock the allocator and its members share
  * (KTD4) - in production the allocator's own construction-time UTC clock (implementations offer no-argument
  * overloads that read it), in the virtual-clock lane the shared {@code MutableClock}.
+ * <p>
+ * <b>Thread safety.</b> One instance is shared across every PC instance that tags it (KTD3's construct-once,
+ * pass-everywhere seam), so an implementation is called concurrently from threads it does not control: each
+ * tagged instance's controller thread ({@link #readQuantum}, the eligibility reads per claim evaluation), the
+ * direct-pull engine's worker threads ({@link #spend}), and the metrics scrape thread
+ * ({@link #conservationLedger}, {@link #nextCreditAt}). Implementations MUST be internally thread-safe -
+ * {@link StubResourceAllocator}'s reference approach is every mutable field guarded by one monitor (KTD11).
+ * <p>
+ * <b>Exception posture.</b> The engine guards every call into this interface: a {@link RuntimeException} is
+ * caught, counted, rate-limited-logged, and degrades this instance fail-safe toward blocked (eligibility reads
+ * as blocked, view reads as their empty/zero shape, mutating calls skipped) rather than propagated into the
+ * control loop or the consumer's own error handling. An implementation should still not rely on throwing as a
+ * normal signalling mechanism - the fail-safe degradation is a throttle on the failing instance, not a
+ * substitute for a return value.
  */
 public interface ResourceAllocator {
 
@@ -88,14 +102,17 @@ public interface ResourceAllocator {
 
     /**
      * Mutating - the post-claim debit (KTD1), called immediately after a claim CAS win, once per tagged
-     * resource. <b>Always succeeds</b>: normally it decrements the member's live credit; when no live credit
-     * remains (the quantum rolled between the eligibility read and this call, or a concurrent claimer spent
-     * it) the debit lands as OVERDRAFT - a monotonic counter, never negative bookkeeping, never a refund,
-     * never re-minting (KD10). R8's burst term BUDGETS exactly this overshoot - it never caps it: within-burst
-     * overdraft is the expected racing debit, and a debit pushing a quantum's overdraft beyond the budget still
-     * succeeds, surfaced on {@link ConservationLedger#getOverdraftBeyondBurst()} instead of refused. The
-     * single-threaded selection engine keeps debits within budget structurally; concurrent direct-pull
-     * claimers are why the monitor exists.
+     * resource. <b>Always succeeds for a registered {@code resourceName}</b>: normally it decrements the
+     * member's live credit; when no live credit remains (the quantum rolled between the eligibility read and
+     * this call, or a concurrent claimer spent it) the debit lands as OVERDRAFT - a monotonic counter, never
+     * negative bookkeeping, never a refund, never re-minting (KD10). R8's burst term BUDGETS exactly this
+     * overshoot - it never caps it: within-burst overdraft is the expected racing debit, and a debit pushing a
+     * quantum's overdraft beyond the budget still succeeds, surfaced on
+     * {@link ConservationLedger#getOverdraftBeyondBurst()} instead of refused. The single-threaded selection
+     * engine keeps debits within budget structurally; concurrent direct-pull claimers are why the monitor
+     * exists.
+     *
+     * @throws IllegalArgumentException {@code resourceName} is not registered
      */
     void spend(String memberId, String resourceName, Instant now);
 

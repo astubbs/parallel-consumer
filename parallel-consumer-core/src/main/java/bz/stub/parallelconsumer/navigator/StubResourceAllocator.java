@@ -306,15 +306,27 @@ public class StubResourceAllocator implements ResourceAllocator {
      * WARNs. The single-threaded selection engine keeps debits within budget structurally, so a nonzero count
      * means concurrent direct-pull claimers - or a caller outside the engine's discipline - are outrunning the
      * declared policy.
+     *
+     * <p>The reset is monotonic, mirroring {@link #renewLease}'s merge against the identical hazard: the
+     * observation instant behind {@code quantumIndex} is read in {@code WorkContainer.onQueueingForExecution}
+     * outside {@code stateLock}, and that call is concurrently reachable under the direct-pull engine, so two
+     * spends can reach this method with their timestamps - and therefore their quantum indices - inverted. A
+     * bare {@code !=} reset would let a straggler carrying an OLDER quantum's index zero the CURRENT quantum's
+     * cumulative overdraft, undercounting beyond-burst and re-arming the once-per-quantum warn. So the budget
+     * only ever advances forward: {@code quantumIndex > overdraftBudgetQuantumIndex} rolls to a fresh budget;
+     * anything else - the same quantum accumulating further, or an out-of-order straggler from an earlier one -
+     * folds into whatever budget is already current, without moving the index backward.
      */
     @GuardedBy("stateLock")
     private void trackOverdraftAgainstBurstBudget(Counters resourceCounters, ResourceContract contract,
                                                   long quantumIndex) {
-        if (resourceCounters.overdraftBudgetQuantumIndex != quantumIndex) {
-            // the quantum rolled since the last overdraft landed - a fresh budget, reset lazily like expiry
+        if (quantumIndex > resourceCounters.overdraftBudgetQuantumIndex) {
+            // a genuine advance - the quantum rolled since the last overdraft landed, so a fresh budget starts
             resourceCounters.overdraftBudgetQuantumIndex = quantumIndex;
             resourceCounters.overdraftInQuantum = 0;
         }
+        // quantumIndex <= overdraftBudgetQuantumIndex: either this quantum's own accumulation, or a
+        // straggler's older index - both fold into the CURRENT budget rather than resetting it
         resourceCounters.overdraftInQuantum++;
         if (resourceCounters.overdraftInQuantum > contract.getBurst()) {
             resourceCounters.overdraftBeyondBurst.add(1);
@@ -632,7 +644,11 @@ public class StubResourceAllocator implements ResourceAllocator {
          */
         private final LongAdder overdraftBeyondBurst = new LongAdder();
 
-        /** Which quantum {@link #overdraftInQuantum} counts - reset lazily when an overdraft lands later. */
+        /**
+         * Which quantum {@link #overdraftInQuantum} counts - advances monotonically, never backward, so an
+         * out-of-order straggler (see {@link StubResourceAllocator#trackOverdraftAgainstBurstBudget}) cannot
+         * zero the current quantum's count.
+         */
         private long overdraftBudgetQuantumIndex = Long.MIN_VALUE;
 
         /** The current quantum's cumulative overdraft - the burst budget's consumption, NOT monotonic. */

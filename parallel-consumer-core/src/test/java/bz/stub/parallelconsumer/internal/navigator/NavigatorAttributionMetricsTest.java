@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.internal.navigator;
  */
 
 import bz.stub.parallelconsumer.navigator.ConservationLedger;
+import bz.stub.parallelconsumer.navigator.ResourceAllocator;
 import bz.stub.parallelconsumer.navigator.ResourceContract;
 import bz.stub.parallelconsumer.navigator.ResourceDeferral;
 import bz.stub.parallelconsumer.navigator.StubResourceAllocator;
@@ -15,6 +16,7 @@ import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.threeten.extra.MutableClock;
 import pl.tlinkowski.unij.api.UniLists;
 
@@ -23,6 +25,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 
 /**
  * The navigator's {@code pc.navigator.*} meters (U4): the deferred-count and latest-reason gauges, one episode
@@ -190,6 +193,44 @@ class NavigatorAttributionMetricsTest {
         assertThat(registry.find(PCMetricsDef.NAVIGATOR_CREDITS_SPENT.getName()).gauges()).hasSize(2);
         assertWithResourceTag(PCMetricsDef.NAVIGATOR_CREDITS_SPENT, API_A, 0.0);
         assertWithResourceTag(PCMetricsDef.NAVIGATOR_CREDITS_SPENT, API_B, 0.0);
+    }
+
+    // ------------------------------------------------------------------
+    // The scrape-thread half of the fail-safe posture: throwing allocator degrades the gauge, never the scrape
+    // ------------------------------------------------------------------
+
+    /**
+     * The per-resource gauges read the user-supplied allocator LIVE from the metrics scrape thread, so a
+     * throwing allocator must degrade each gauge to its documented fallback (0, or -1 for next-credit-at)
+     * rather than fail the scrape - {@code guardedGaugeRead}'s catch branch. And every guarded read that hits
+     * that catch lands on the allocator-failures gauge, which reads the monotonic counter live.
+     */
+    @Test
+    void aThrowingAllocatorDegradesEachGaugeToItsFallbackAndTheFailuresGaugeCountsLive() {
+        ResourceAllocator throwing = Mockito.mock(ResourceAllocator.class);
+        IllegalStateException boom = new IllegalStateException("user allocator failure at scrape time");
+        Mockito.when(throwing.conservationLedger(Mockito.anyString(), Mockito.any())).thenThrow(boom);
+        Mockito.when(throwing.nextCreditAt(Mockito.anyString(), Mockito.any())).thenThrow(boom);
+        var participant = NavigatorParticipant.activeMember(throwing, UniLists.of(API_A), MEMBER);
+        pcMetrics = new PCMetrics(registry, UniLists.of(), "navigator-metrics-test");
+        participant.initMetrics(pcMetrics, clock);
+
+        assertWithMessage("registration alone touches nothing - no failure before the first scrape")
+                .that(gauge(PCMetricsDef.NAVIGATOR_ALLOCATOR_FAILURES)).isEqualTo(0.0);
+
+        // each per-resource gauge scrape reads its documented fallback shape, and none of them throw
+        assertWithResourceTag(PCMetricsDef.NAVIGATOR_CREDITS_SPENT, API_A, 0.0);
+        assertWithResourceTag(PCMetricsDef.NAVIGATOR_CREDITS_OVERDRAFT, API_A, 0.0);
+        assertWithResourceTag(PCMetricsDef.NAVIGATOR_CREDITS_OVERDRAFT_BEYOND_BURST, API_A, 0.0);
+        assertWithResourceTag(PCMetricsDef.NAVIGATOR_NEXT_CREDIT_AT, API_A, -1.0);
+
+        assertWithMessage("four guarded scrapes hit the catch - the failures gauge reads the counter LIVE")
+                .that(gauge(PCMetricsDef.NAVIGATOR_ALLOCATOR_FAILURES)).isEqualTo(4.0);
+
+        // and it keeps counting: one more scrape through the catch moves it again
+        assertWithResourceTag(PCMetricsDef.NAVIGATOR_CREDITS_SPENT, API_A, 0.0);
+        assertWithMessage("a later scrape that hits the catch increments the same live gauge")
+                .that(gauge(PCMetricsDef.NAVIGATOR_ALLOCATOR_FAILURES)).isEqualTo(5.0);
     }
 
     // --- helpers ---

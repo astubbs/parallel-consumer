@@ -25,6 +25,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
@@ -66,9 +67,13 @@ import java.util.function.DoubleSupplier;
  * interaction here is guarded: a {@link RuntimeException} from it degrades this instance rather than killing it
  * (the control task's own boundary would otherwise close the whole consumer). Eligibility reads treat the
  * resource as BLOCKED with no known next credit - a deferral, never a free pass - view reads return their
- * empty/zero shapes, and mutating calls are skipped. Each failure is counted monotonically
- * ({@link #allocatorFailureCount()}, the {@code pc.navigator.allocator.failures} gauge) and logged rate-limited
- * under {@link #LOG_PREFIX} via {@link #recordAllocatorFailure}.
+ * empty/zero shapes, and mutating calls are skipped. A skipped SPEND additionally latches its tag blocked
+ * ({@link #spendFailedTags}): the undebited lease still reads as spendable credit, so without the latch a
+ * spend-only failure would be the one fail-OPEN hole in this posture - the instance would dispatch unthrottled
+ * against a rate it never pays for. The latch clears on the next successful mutating call (that tag's spend, or
+ * the per-pass {@link #readQuantum}), so a recovered allocator resumes normal flow. Each failure is counted
+ * monotonically ({@link #allocatorFailureCount()}, the {@code pc.navigator.allocator.failures} gauge) and
+ * logged rate-limited under {@link #LOG_PREFIX} via {@link #recordAllocatorFailure}.
  *
  * @author Antony Stubbs
  */
@@ -147,6 +152,28 @@ public final class NavigatorParticipant {
      * {@link #allocatorFailureCount} it accompanies is the exact record.
      */
     private final RateLimiter allocatorFailureLogLimiter = new RateLimiter(ALLOCATOR_FAILURE_LOG_INTERVAL_SECONDS);
+
+    /**
+     * Tags whose most recent {@link #spendOneCreditPerTag debit} THREW - the latch that keeps the fail-safe
+     * posture honest for the one failure shape that is otherwise fail-OPEN. Every other allocator failure
+     * already degrades toward blocked on its own: a throwing {@link #isBlocked eligibility read} reports
+     * blocked directly, and a failed {@link #readQuantum} (or {@link #join}) simply never materialises
+     * credits, so the lease expires by TTL and eligibility follows. A failed SPEND is different: eligibility
+     * reads {@code currentLease}, which stays healthy while the failed debit leaves {@code availableCredits}
+     * undecremented - so without this latch the instance would dispatch unthrottled forever. While a tag is
+     * latched, {@link #isBlocked} reports it blocked with no known next credit, without consulting the
+     * allocator; the latch clears on the next SUCCESSFUL mutating interaction (that tag's own spend
+     * completing, or the per-pass {@link #readQuantum} completing - the recovery probe, since a latched tag
+     * blocks the very claims that would spend again). {@link #leave} deliberately does not clear it - it is
+     * the shutdown transition, after which eligibility no longer matters.
+     * <p>
+     * Concurrency: written from the spend seam (the controller thread, and the direct-pull engine's worker
+     * threads) and read from the controller's eligibility path - a final reference to a self-guarding type
+     * ({@link ConcurrentHashMap#newKeySet()}), the same no-{@code @GuardedBy} shape as its counter siblings
+     * (KTD11). The healthy path stays allocation-free: readers and clearers check {@link Set#isEmpty()}
+     * first, and an empty set is the permanent state of a never-failing allocator (and of {@link #inert()}).
+     */
+    private final Set<String> spendFailedTags = ConcurrentHashMap.newKeySet();
 
     private NavigatorParticipant(ResourceAllocator allocator, List<String> resourceTags, String memberId) {
         this.allocator = allocator;
@@ -462,7 +489,9 @@ public final class NavigatorParticipant {
     /**
      * The post-claim debit (KTD1): one credit from EVERY tagged resource, called immediately after the claim
      * CAS wins and never on a lost race. Always succeeds - a credit gone between the eligibility read and this
-     * call lands as overdraft in the allocator (KD10); no rollback, no refund.
+     * call lands as overdraft in the allocator (KD10); no rollback, no refund. A debit that THROWS latches its
+     * tag blocked ({@link #spendFailedTags}) - the undebited lease would otherwise read as spendable credit
+     * forever, a fail-OPEN free pass - and a debit that succeeds clears its tag's latch.
      */
     public void spendOneCreditPerTag(Instant now) {
         if (!isActive()) {
@@ -471,9 +500,13 @@ public final class NavigatorParticipant {
         for (String tag : resourceTags) {
             try {
                 allocator.spend(memberId, tag, now);
+                if (!spendFailedTags.isEmpty()) {
+                    spendFailedTags.remove(tag); // a successful debit is the mutating recovery for its own tag
+                }
             } catch (RuntimeException e) {
                 // per tag, so one failing resource never skips a healthy resource's debit (its ledger stays honest)
                 recordAllocatorFailure(e);
+                spendFailedTags.add(tag); // fail SAFE: an undebited tag reads blocked, never a free pass
             }
         }
     }
@@ -507,11 +540,20 @@ public final class NavigatorParticipant {
     /**
      * THE per-pass quantum pull (KTD4): renews the membership lease and materialises this quantum's share.
      * The engine calls this once per control-loop pass, beside the admission tick. No-op when inert.
+     * <p>
+     * Completing WITHOUT throwing clears the whole spend-failure latch ({@link #spendFailedTags}): a latched
+     * tag blocks the claims that would spend again, so this per-pass call is the mutating interaction a
+     * recovered allocator proves itself on - eligibility then resumes reading the (healthy) lease normally.
+     * A readQuantum that itself throws needs no latch of its own: no credits materialise, the lease expires
+     * by TTL, and eligibility degrades to blocked on its own (fail-safe already).
      */
     public void readQuantum(Instant now) {
         if (isActive()) {
             try {
                 allocator.readQuantum(memberId, now);
+                if (!spendFailedTags.isEmpty()) {
+                    spendFailedTags.clear();
+                }
             } catch (RuntimeException e) {
                 recordAllocatorFailure(e);
             }
@@ -521,9 +563,14 @@ public final class NavigatorParticipant {
     /**
      * Blocked = no live lease, or a live lease with zero credits left (KTD1's eligibility definition) - or an
      * allocator that THREW: an unreadable resource fails safe as blocked (a deferral, never a free pass, and
-     * never a crash on the per-claim hot path).
+     * never a crash on the per-claim hot path). A tag latched by a failed spend ({@link #spendFailedTags}) is
+     * blocked without consulting the allocator at all - its lease reads healthy precisely because the debit
+     * never landed, so the lease is the one read that must NOT be believed.
      */
     private boolean isBlocked(String tag, Instant now) {
+        if (!spendFailedTags.isEmpty() && spendFailedTags.contains(tag)) {
+            return true; // latched fail-safe: blocked, with no known next credit, until a mutating call succeeds
+        }
         Optional<CapacityLease> lease;
         try {
             lease = allocator.currentLease(memberId, tag, now);

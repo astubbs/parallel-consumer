@@ -4,6 +4,7 @@ package bz.stub.parallelconsumer.internal.navigator;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.navigator.CapacityLease;
 import bz.stub.parallelconsumer.navigator.ConservationLedger;
 import bz.stub.parallelconsumer.navigator.ResourceAllocator;
 import bz.stub.parallelconsumer.navigator.ResourceContract;
@@ -15,6 +16,7 @@ import pl.tlinkowski.unij.api.UniLists;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Optional;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
@@ -252,5 +254,45 @@ class NavigatorParticipantTest {
         participant.leave(now());
         participant.readQuantum(now());
         assertThat(participant.allocatorFailureCount()).isEqualTo(beforeSpend + 4);
+    }
+
+    /**
+     * The spend-failure latch: an allocator that throws ONLY from {@code spend()} is the one failure shape the
+     * everything-throws test above cannot see, and without the latch it is fail-OPEN - eligibility reads
+     * {@code currentLease}, which stays healthy because the failed debit never decremented it, so the instance
+     * would dispatch unthrottled against a rate it never pays for. After a failed debit the tag must read
+     * BLOCKED with no known next credit, without believing the lease; the next SUCCESSFUL mutating call - here
+     * the per-pass {@code readQuantum}, since a latched tag blocks the very claims that would spend again -
+     * clears the latch so a recovered allocator resumes normal flow.
+     */
+    @Test
+    void aSpendOnlyThrowingAllocatorLatchesTheTagBlockedUntilAMutatingCallSucceeds() {
+        ResourceAllocator spendThrows = Mockito.mock(ResourceAllocator.class);
+        var healthyLease = new CapacityLease(API_A, 0, 1, now().plusSeconds(1));
+        Mockito.when(spendThrows.currentLease(Mockito.anyString(), Mockito.anyString(), Mockito.any()))
+                .thenReturn(Optional.of(healthyLease));
+        Mockito.doThrow(new IllegalStateException("user allocator fails only its spend seam"))
+                .when(spendThrows).spend(Mockito.anyString(), Mockito.anyString(), Mockito.any());
+        var participant = NavigatorParticipant.activeMember(spendThrows, UniLists.of(API_A), MEMBER);
+
+        assertWithMessage("healthy lease with credit: eligible before anything fails")
+                .that(participant.hasSpendableCreditForAllTags(now())).isTrue();
+
+        participant.spendOneCreditPerTag(now()); // the debit throws - swallowed, counted, and LATCHED
+
+        assertWithMessage("the failed spend is counted")
+                .that(participant.allocatorFailureCount()).isEqualTo(1);
+        assertWithMessage("the free pass must close: the lease still reads healthy, but the debit never landed, "
+                + "so the tag is blocked until a mutating call succeeds - never dispatched unthrottled")
+                .that(participant.hasSpendableCreditForAllTags(now())).isFalse();
+        assertWithMessage("the latched deferral is attributable, like any other blocked resource")
+                .that(participant.blockingResourceDeferrals(now())).hasSize(1);
+
+        // recovery: the per-pass quantum pull succeeds (the mock's readQuantum is a healthy no-op) - unlatched
+        participant.readQuantum(now());
+        assertWithMessage("a recovered allocator resumes normal flow after its next successful mutating call")
+                .that(participant.hasSpendableCreditForAllTags(now())).isTrue();
+        assertWithMessage("recovery clears the latch, never the monotonic failure record")
+                .that(participant.allocatorFailureCount()).isEqualTo(1);
     }
 }
