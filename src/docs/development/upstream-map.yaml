@@ -535,7 +535,7 @@ entries:
   - id: upstream-pr-log-noise
     group: logging-ux
     summary: Trim noisy user-function / RemovedPartitionState logging
-    fork: {branches: [], prs: [], fork_issues: [238], status: none}
+    fork: {branches: [fix/log-verbosity-batch], prs: [203], fork_issues: [169, 170, 238], status: pr-open}
     upstream: {repo: confluentinc/parallel-consumer, issues: [640, 57], prs: [918, 919], related: [629, 631], status: mixed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
@@ -549,6 +549,13 @@ entries:
       refactor #57 was waiting on (PartitionMonitor -> PartitionStateManager) has
       since happened, so its precondition is satisfied. Upstream status now `mixed`:
       #640 open, #57 closed-by-sweep.
+      2026-08-05: the two named lines are fixed on the fork (mirrors astubbs#169 /
+      astubbs#170) by branch fix/log-verbosity-batch, open as astubbs#203 -- written
+      independently of #918/#919, which are unmerged upstream and predate this fork's
+      internals. Both lines now carry a bounded summary
+      (bz.stub.parallelconsumer.internal.utils.RecordBatchSummary) with the full object
+      left at DEBUG. The wider #57 umbrella (the ~224 debug/trace call sites) is
+      untouched, so this entry stays open after astubbs#203 lands.
 
 
   # ---------------------------------------------------------------------------
