@@ -296,3 +296,53 @@ this whole harness exists to remove.** Composing at the git layer means merging 
 
 So the answer is *yes at the Claude layer, no at the git layer, and the Claude layer costs blast
 radius and context*. That is worth knowing before anyone treats stacking as free.
+
+---
+
+## 10. In-tree trackers: the question §8 answered too quickly
+
+**Asked 2026-09-01:** is there a git-backed tracker that keeps state in the *working tree*, travelling
+with the branch, rather than in a detached ref or a side database? §8 named Backlog.md and moved on,
+describing it as this directory "with a UI bolted on". That undersold it, and the detail that was
+skipped is the one that matters.
+
+| Project | Where state lives | Travels with the branch? |
+|---|---|---|
+| **Backlog.md** | Markdown files under a project-local `backlog` folder, committed | **Yes** |
+| `dspinellis/git-issue` | A `.issues` directory - but its own docs say to gitignore it when coexisting with another git project | Effectively no |
+| ticgit | A separate `ticgit` branch | No |
+| git-bug | Git objects in their own refs | No |
+| Beads (generation 2) | Embedded Dolt, synced through `refs/dolt/data` | No |
+| Claude Code Tasks | `~/.claude/tasks/<id>/` | No - outside the repo entirely |
+| OpenClaw | `~/.openclaw/workspace/` | No - outside the repo entirely |
+
+**So the answer is yes, and there is exactly one: Backlog.md.** TypeScript, MIT, ~6.6k stars, actively
+maintained.
+
+### It also already does the cross-branch part
+
+Backlog.md ships `checkActiveBranches`, `remoteOperations` and `activeBranchDays` - configuration for
+**reconciling task state across branches and optionally checking remote branches for newer states**.
+That is cross-branch drift detection, in a shipping tool.
+
+This corrects the sharpest claim made earlier in this investigation. §8 concluded that the
+distinctive axis is *state beside the code rather than beside the agent*, and that remains true of
+Beads, Tasks and OpenClaw - but it is **not** unique to us, because Backlog.md sits on the same axis
+and has gone further along it. The claim should have been checked against the one candidate on our
+own side of the line, and was not: the survey confirmed what the *other* architectures could not do
+and never asked what the neighbouring one already does.
+
+### What survives, and it is narrower and more specific
+
+- **The GitHub tunnel.** No tracker surveyed integrates with GitHub Issues, Backlog.md included. The
+  two that bridge - `git-bug` and `dspinellis/git-issue` - import GitHub into a *parallel* tracker
+  rather than making GitHub's own graph queryable from the repo. Our `bin/issue-index.sh`, the
+  `upstream-mirror` pairing and `.claude/hooks/inject-branch-context.sh` are on ground nobody else
+  occupies.
+- **The consequence vocabulary.** Backlog.md carries status, milestones, dependencies and acceptance
+  criteria - a project-management schema. Not a taxonomy of what it costs you to not know something.
+- **The injection layer and the gates.** Backlog.md is a tracker with a Kanban board; it is not wired
+  into agent lifecycle events, and it does not enforce a repository's conventions.
+
+**The practical consequence for `ci-node-query-client.md`:** build the tunnel, and treat the
+cross-branch reader as an adopt-or-justify decision rather than as the novel part.
