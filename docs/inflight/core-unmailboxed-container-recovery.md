@@ -37,11 +37,15 @@ went, the question this note holds is unchanged, because none of the three can b
 <!-- post-merge: checked-end -->
 
 1. **Leave it and state the bound in the comment.** `addToMailbox` is PC's own code, so a throw means
-   something is already badly wrong. **Note this is not merely a queue add**: `onPostAddToMailBox`
-   releases the produce lock in transactional mode, and `ProducerManager`'s `ensureProduceStarted`
-   throws when the hold count is below one - see
-   [`bug-producing-lock-double-release.md`](bug-producing-lock-double-release.md), which is an open
-   question about that same invariant.
+   something is already badly wrong. **The bound got tighter after this note was written, and that
+   weakens this option rather than strengthening it.** It used to be more than a queue add:
+   `onPostAddToMailBox` released the produce lock in transactional mode and `ProducerManager`'s
+   <!-- post-merge: checked -->
+   `ensureProduceStarted` threw when the hold count was below one. astubbs#257 fixed that double
+   release, deleted the method and made `cleanUpContext` the single release point, so core's
+   `addToMailbox` is now a queue add and nothing else. PC therefore no longer has a *named* reachable
+   throw here - which means "state the bound in the comment" now has almost nothing to state, and the
+   comment cannot point a reader at a real route the way it could when this option was written.
 2. **Route the failure to the control thread's own failure path**, so an un-mailboxed record surfaces
    as a PC failure rather than a silent stall. A new escalation path in core and all three engines.
 3. **Mark the container so a sweep recovers it** - which presupposes the sweep this note is asking

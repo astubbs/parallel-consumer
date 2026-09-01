@@ -16,6 +16,7 @@ baseline for comparison is 15/20 runs fully clean, zero stall-class failures.
 | `DbTest` | 2/20 | postgres container start under contention |
 | `KafkaSanityTests`, `TransactionMarkersTest` | singles | residual, uncategorised |
 | `PartitionStateCommittedOffsetIT.committedOffsetRemoved[3] none` | 1 sighting (2026-08-05) | `RebalanceInProgressException` out of the test's own setup |
+| `ParallelEoSStreamProcessorTest.inFlightMessagesCommittedIfProcessedDuringShutdown[1]` | 1/15 (2026-08-07) | `assertCommits(of(1))`, "1 record completed during shutdown", in the transactional arm |
 | `PartitionStateCommittedOffsetIT.committedOffsetRemoved[2] earliest` | 1 sighting (2026-08-25, astubbs#353, [job 97859037375](https://github.com/astubbs/parallel-consumer/actions/runs/32865269364/job/97859037375)) | `checkHowManyRecordsWithKeyPresent` expected 2 got 1 - the `[1] latest` assertion signature (solved 2026-08-05 as a nudge race) appearing on the `earliest` parameter; `probe clean` autopsy (test-side, not consumer-group progress), on a branch with no Java <!-- post-merge: checked --> |
 | `PartitionStateCommittedOffsetIT.committedOffsetRemoved[1] latest` | 1 sighting (2026-09-01, astubbs#207, [job 99717308477](https://github.com/astubbs/parallel-consumer/actions/runs/33462670308/job/99717308477)) | `checkHowManyRecordsWithKeyPresent` expected 2 got 1, `probe clean`. **The parameter the 2026-08-05 nudge-race fix targeted, with that fix in the tree** - so this is a recurrence, not a new member. Green 7/7 locally on the same commit when the class ran scoped; CI runs `forkCount=4` <!-- post-merge: checked --> |
 | `TransactionTimeoutsTest.commitTimeout[2]` | 1 sighting (2026-08-06, astubbs#204) | incompletes `[8]` where the parameter pins `[8, 12]` |
@@ -33,6 +34,18 @@ on CI at `forkCount=4` with a clean probe. So the discriminator is contention, n
 offset *decoding*, and this test removes the committed offset entirely, so there is no metadata for its paths to reach.
 Not diagnosed further; recorded so the next sighting has two data points on the same parameter rather than one.
 <!-- post-merge: checked-end -->
+
+**On `inFlightMessagesCommittedIfProcessedDuringShutdown[1]` - read the parameter index before
+deciding it is unrelated.** `[1]` is
+`PERIODIC_TRANSACTIONAL_PRODUCER`, not the consumer-commit arm, so it lands on whatever transactional
+change is in flight and looks like a regression. It was seen once, in a full-suite run on
+astubbs/parallel-consumer's produce-lock double-release branch, and did not reproduce: 6/6 in
+isolation, 1 failure in 15 runs on that branch overall, and 0/4 on unmodified `master` in a
+same-magnitude sequential control. Zero-in-four cannot rule out a ~7% flake, so the control shows only
+that there is no *elevated* rate - it is not a clean bill of health for `master`, and nobody should
+cite it as one. The branch was cleared on mechanism instead: the test uses `poll()`, which never
+reaches `processAndProduceResults`, so no produce lock is ever set on its contexts and both the old and
+new release paths are no-ops for it.
 
 **A third member has now left the family, and it left by being reclassified rather than fixed-as-tight.**
 `TransactionTimeoutsTest.commitTimeout[1]` failed once on CI (2026-08-07,
