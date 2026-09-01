@@ -3,6 +3,10 @@
 <!-- inflight-type: task -->
 <!-- inflight-impact: coordination -->
 
+**Update 2026-09-01: the primary evidence arrived from history instead, and the check now FAILS on
+this defect rather than warning. What is left below is a confirmation, not the experiment that
+settles it - see the last section.**
+
 **A detector that has never fired is not a working detector.** `bin/check-throughput-regression.sh`
 was reasoned into existence from a regression that was diagnosed by hand; nothing has yet confirmed it
 would have caught that regression, or that it stays quiet on a clean tree. Both halves need showing,
@@ -59,3 +63,37 @@ That the check catches regressions in general. It catches one that hits the thro
 than its neighbours, which is the shape this defect has; a regression that slows everything equally is
 invisible to within-run normalisation by construction, and no run of this experiment will say
 otherwise. That limitation is in the script's header and belongs in whatever conclusion this reaches.
+
+
+## Update, same day: history answered it before the experiment could
+
+The threshold no longer needs this experiment to be chosen, because the spread was already recorded -
+in CI logs nobody had mined. `bin/perf-backfill.sh` recovered every performance run inside GitHub's
+log-retention window and computed the normalised ratio for each. Twelve carried a rate and they
+separate with a gap and no observation inside it: every regressed run scored between 0.407 and 0.605,
+every healthy one 0.778 or above.
+
+So `FAIL_BELOW` is 0.70, derived rather than guessed, and the defect this note is about scores 0.578 -
+**it fails the lane** rather than warning, which is what was wanted and what the earlier draft of this
+note could not justify. `bin/test-check-throughput-regression.sh` pins those real observations as
+cases, so the thresholds cannot drift away from the evidence they came from without a red test.
+
+**Independently, astubbs/parallel-consumer#29 ran the control arm** and reached the same mechanism from
+the other direction: 43,552 rec/s failing at `b42ab61d7`, 76,950 passing at `92c5d5b70`, one main-code
+term changed, neighbour classes within 1-3%, and the lane composition confound moved the wrong way and
+it still improved.
+
+### What is still worth running, and what it is now for
+
+The red/black arm is now a **confirmation of the detector**, not the source of the threshold - a
+different and lesser job, but not a pointless one: nothing has yet observed this check fire in CI on a
+tree that is actually regressed. Everything above is the check applied to recovered numbers, which is
+one step short of watching it go red on a real run.
+
+Two caveats belong with the numbers, and both survive into whatever this becomes:
+
+- **Eight of the twelve observations are the same branch and the same defect**, so the regressed group
+  is one phenomenon sampled eight times rather than eight independent regressions. The gap is real; its
+  width is less established than twelve points suggests.
+- **A regression that slows everything equally is still invisible**, because within-run normalisation
+  cannot separate that from a slow runner. No run of this experiment will say otherwise.
