@@ -72,7 +72,7 @@ quarantined_audit() {
 #     Control arm, same fixture, one term changed: `set -euo pipefail` printed nothing and exited 1;
 #     `set -uo pipefail` printed the full DRIFT line and exited 1.
 #   - THE `break` IS AN EARLY-EXITING PIPE READER, the EPIPE-into-`pipefail` hazard
-#     bin/check-shell-sigpipe.sh polices for `grep -q`. It needs more than one pipe buffer of
+#     `sigpipe-into-grep-q` polices for `grep -q`. It needs more than one pipe buffer of
 #     pending input to bite, so it hides until the annotated-file list grows.
 #
 # So: no pipeline (a herestring), and an `if` rather than a `&&` list, because an `if` whose
