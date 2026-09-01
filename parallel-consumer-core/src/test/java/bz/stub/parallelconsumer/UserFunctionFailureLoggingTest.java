@@ -32,6 +32,12 @@ import static org.awaitility.Awaitility.await;
  * flood them with DEBUG logging (which perturbs the timing-sensitive close/shutdown tests). Lines are additionally
  * matched on this test's unique topic name, so a future change to the parallel config cannot silently make it read
  * someone else's log.
+ * <p>
+ * That annotation is measured, not precautionary, and the observation is recorded here because it is the only place a
+ * future reader meets it: without it, {@code ParallelEoSStreamProcessorTest}'s
+ * {@code closeAfterSingleMessageShouldBeEventBasedFast} and
+ * {@code queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown} failed. If either of those two goes
+ * intermittent again, an unisolated log capture somewhere is the first thing to suspect.
  *
  * @author Antony Stubbs
  */
