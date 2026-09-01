@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: coordination -->
+<!-- post-merge: exempt-file - this is astubbs#202's own PR note; the merge deletes it. -->
 
 
 Only what a reviewer or the next session cannot get from `gh pr view 202 -R astubbs/parallel-consumer`
