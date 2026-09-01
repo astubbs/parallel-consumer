@@ -19,7 +19,7 @@ import org.apache.kafka.clients.consumer.CommitFailedException;
  * {@code onOffsetCommitSuccess()} and marked the offsets clean. Nothing was ever going to re-commit
  * them, because as far as PC was concerned they already had been.
  * <p>
- * So the failure mode is the opposite shape to #100's: no exception, no dead thread, no stall - just
+ * So the failure mode is the opposite shape to astubbs#100's: no exception, no dead thread, no stall - just
  * offsets quietly recorded at a position the broker never accepted. Whoever ends up owning those
  * partitions resumes from the broker's older offset, and the records in between are re-delivered
  * having already been marked done. Handling it beside the rebalance case in

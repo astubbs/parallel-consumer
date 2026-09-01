@@ -7,6 +7,7 @@ package bz.stub.parallelconsumer;
 
 import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.internal.DynamicLoadFactor;
+import bz.stub.parallelconsumer.internal.MdcPropagation;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tag;
@@ -312,14 +313,14 @@ public class ParallelConsumerOptions<K, V> {
      * A note on quotas - if your quota is expressed as maximum concurrent calls, this works well. If it's limited in
      * total requests / sec, this may still overload the system. See towards the distributed rate limiting feature for
      * this to be properly addressed: https://github.com/confluentinc/parallel-consumer/issues/24 Add distributed rate
-     * limiting support #24.
+     * limiting support confluentinc#24.
      * <p>
      * In the core module, this sets the number of threads to use in the core's thread pool.
      * <p>
      * It's recommended to set this quite high, much higher than core count, as it's expected that these threads will
      * spend most of their time blocked waiting for IO. For automatic setting of this variable, look out for issue
      * https://github.com/confluentinc/parallel-consumer/issues/21 Dynamic concurrency control with flow control or tcp
-     * congestion control theory #21.
+     * congestion control theory confluentinc#21.
      */
     @Builder.Default
     private final int maxConcurrency = DEFAULT_MAX_CONCURRENCY;
@@ -332,29 +333,40 @@ public class ParallelConsumerOptions<K, V> {
     public static final Duration SASL_AUTHENTICATION_EXCEPTION_RETRY_BACKOFF = Duration.ofSeconds(5);
 
     /**
-     * Error handling strategy to use when invalid offsets metadata is encountered. This could happen accidentally or
-     * deliberately if the user attempts to reuse an existing consumer group id.
+     * Error handling strategy to use when PC is assigned a partition whose committed offset metadata this build cannot
+     * read - a consumer group previously owned by Kafka Streams, by another framework, by operator tooling, or written
+     * by a <em>newer</em> PC using an encoding that did not exist when this version was built.
+     * <p>
+     * The policy governs <em>every</em> such case uniformly. It previously governed only bytes PC could positively
+     * identify as Kafka Streams'; anything else bypassed it, which is what made the option unreachable for the
+     * forward-compatibility case it exists to handle (astubbs#197, release-ledger item 5).
      */
     public enum InvalidOffsetMetadataHandlingPolicy {
         /**
-         * Fails and shuts down the application. This is the default.
+         * Fail and shut down rather than silently discard the offset map. Dropping the map replays records that were
+         * completed but not yet committed, so this is the choice for a deployment that would rather stop than
+         * reprocess. Opt in: it is no longer the default - see {@link #invalidOffsetMetadataPolicy}.
          */
         FAIL,
         /**
-         * Ignore the error, logs a warning message and continue processing from the last committed offset.
+         * Log a warning, discard the unreadable metadata and resume from the last committed offset. The default.
          */
         IGNORE
     }
 
     /**
-     * Controls the error handling behaviour to use when invalid offsets metadata from a pre-existing consumer group is
-     * encountered. A potential scenario where this could occur is when a consumer group id from a Kafka Streams
-     * application is accidentally reused.
+     * Controls what happens when PC is assigned a partition whose committed offset metadata it cannot read. See
+     * {@link InvalidOffsetMetadataHandlingPolicy}.
      * <p>
-     * Default is {@link InvalidOffsetMetadataHandlingPolicy#FAIL}
+     * <b>Default is {@link InvalidOffsetMetadataHandlingPolicy#IGNORE}, changed from {@code FAIL}.</b> Pointing PC at a
+     * consumer group that already has metadata in it is the first thing anyone adopting PC does, and dying during the
+     * rebalance callback is the reported failure of astubbs#118 / confluentinc#326. That was previously survivable only
+     * because undecodable metadata bypassed this option entirely; now that the option genuinely governs every
+     * unreadable path, leaving the default at {@code FAIL} would make that report's exact scenario fatal again for
+     * anyone who configures nothing. {@code FAIL} remains available and now means what it says.
      */
     @Builder.Default
-    private final InvalidOffsetMetadataHandlingPolicy invalidOffsetMetadataPolicy = InvalidOffsetMetadataHandlingPolicy.FAIL;
+    private final InvalidOffsetMetadataHandlingPolicy invalidOffsetMetadataPolicy = InvalidOffsetMetadataHandlingPolicy.IGNORE;
     /**
      * When a message fails, how long the system should wait before trying that message again. Note that this will not
      * be exact, and is just a target.
@@ -571,4 +583,27 @@ public class ParallelConsumerOptions<K, V> {
      */
     @Builder.Default
     public final boolean ignoreReflectiveAccessExceptionsForAutoCommitDisabledCheck = false;
+
+    /**
+     * Whether the SLF4J {@link org.slf4j.MDC} (Mapped Diagnostic Context) of the thread that starts Parallel Consumer
+     * is carried into the threads that run your function - the worker pool, and the Vert.x / Reactor / Mutiny engines.
+     * On by default.
+     * <p>
+     * With this on, diagnostic context you have already established - a {@code trace_id}, a {@code request_id}, a
+     * tenant - is visible in the logs your function writes, and in Parallel Consumer's own log lines. The context is
+     * snapshotted once, when you call {@code poll*}, so put what you want propagated into the MDC before then; a
+     * request-scoped value set at that moment will be pinned to the consumer for its whole life, which is unlikely to
+     * be what you want.
+     * <p>
+     * Parallel Consumer's own keys take precedence on a collision: {@code pcId}
+     * ({@link AbstractParallelEoSStreamProcessor#MDC_INSTANCE_ID}) and {@code offset} are applied after yours.
+     * <p>
+     * Switching this off restores the pre-0.6.0.1 behaviour exactly: no context crosses into the worker pool, and
+     * anything your function puts into the MDC is left on the pooled thread for the next, unrelated, record to
+     * inherit.
+     *
+     * @see MdcPropagation
+     */
+    @Builder.Default
+    private final boolean propagateMdc = true;
 }

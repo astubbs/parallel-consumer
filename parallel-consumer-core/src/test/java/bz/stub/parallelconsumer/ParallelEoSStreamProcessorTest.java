@@ -14,17 +14,18 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.*;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.InvalidPidMappingException;
 import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.serialization.Serdes;
 import org.assertj.core.api.Assertions;
 import org.assertj.core.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentMatchers;
 import org.mockito.Mockito;
 import org.mockito.MockitoAnnotations;
@@ -36,7 +37,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static bz.stub.parallelconsumer.internal.utils.GeneralTestUtils.time;
@@ -49,7 +52,9 @@ import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.K
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
 import static java.time.Duration.ofSeconds;
 import static java.util.concurrent.TimeUnit.MINUTES;
+import static com.google.common.truth.Truth.assertWithMessage;
 import static org.assertj.core.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
@@ -72,6 +77,39 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
     @BeforeEach()
     public void setupData() {
         primeFirstRecord();
+    }
+
+    /**
+     * Waits until one partition's committed offset frontier - the highest offset committed for it, i.e. where
+     * consumption would resume - reaches exactly {@code expected}.
+     * <p>
+     * Asserted instead of the exact set of that partition's commits because which intermediate offsets appear
+     * depends on where the wall-clock commit ticks fall relative to work completing, not on anything the test is
+     * about. A slow runner legitimately shows partition 0 at {@code [1, 3]} where a fast one shows {@code [3]},
+     * because 1 means "record 0 done, resume at 1" - correct, and nothing to do with ordering. This is the same
+     * trap {@code astubbs#260} fixed by collapsing repeat commits inside {@code assertCommits}, in a different
+     * shape: there the repeat, here an extra intermediate step on the way to the same frontier.
+     * <p>
+     * The frontier is the invariant worth guarding, and it is a real one: it can only move when work completes
+     * contiguously, so a partition that advanced past in-flight work would fail this - which is exactly what
+     * {@link #processInKeyOrder} exists to catch.
+     */
+    private void awaitFrontier(int partition, long expected) {
+        var tp = new TopicPartition(INPUT_TOPIC, partition);
+        await().timeout(defaultTimeout)
+                .untilAsserted(() -> assertThat(highestCommitFor(tp))
+                        .as("committed offset frontier for partition %s", partition)
+                        .hasValue(expected));
+    }
+
+    private Optional<Long> highestCommitFor(TopicPartition tp) {
+        return getCommitHistory().stream()
+                .map(groupHistory -> groupHistory.get(CONSUMER_GROUP_ID))
+                .filter(Objects::nonNull)
+                .map(partitionCommits -> partitionCommits.get(tp))
+                .filter(Objects::nonNull)
+                .map(OffsetAndMetadata::offset)
+                .max(Comparator.naturalOrder());
     }
 
     @ParameterizedTest()
@@ -235,7 +273,10 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         // wall-clock, not by cycle count. Nothing guaranteed a commit had happened before the latch was
         // released, after which v1 completes (it sleeps 100ms) and the next commit covers offset 2 - so
         // offset 1 was never committed on its own and the set-wise assertion saw only [2, 2]. Waiting on
-        // the commit itself makes the precondition explicit instead of probable. See docs/inflight.md.
+        // the commit itself makes the precondition explicit instead of probable. Full triage in
+        // astubbs#101, which diagnosed and fixed this; the ledger entry it came from was in
+        // docs/inflight.md, the single file that became docs/inflight/ and was deleted in 0de96fc
+        // (git show 0de96fc^:docs/inflight.md, grep this test's name).
         awaitForCommit(1);
 
         latch.countDown();
@@ -245,6 +286,70 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         assertCommits(of(1, 2), "primed record and first key=0 record completed only, followup key 0 records skipped");
         assertCommits().encodedIncomplete(2); //first blocked/skipped key 0 record (value v2).
         assertThat(interrupted).isFalse();
+    }
+
+    /**
+     * Deterministic version of the race that made
+     * {@link #queuedMessagesNotProcessedOrCommittedIfSubmittedDuringShutdown(CommitMode)} flake.
+     * <p>
+     * Under KEY ordering the key="1" record sits on a shard independent of the blocked key="0" shard, so it
+     * completes while v1 is still latched. Its completion marks the partition dirty, but cannot advance the
+     * committable offset - {@link bz.stub.parallelconsumer.state.PartitionState#getOffsetToCommit()} is
+     * the highest <em>sequentially</em> succeeded offset plus one, and offset 1 is still in flight. PC
+     * therefore commits base offset 1 a second time, carrying updated incomplete-offset encoding.
+     * <p>
+     * That repeat is correct behaviour - it persists the key="1" completion so a crash does not reprocess it
+     * - so every commit mode must tolerate it. Holding the key="1" record until after the first commit has
+     * landed forces the repeat every run, instead of leaving it to where the wall-clock commit ticks fall.
+     */
+    @ParameterizedTest()
+    @EnumSource(CommitMode.class)
+    @SneakyThrows
+    public void repeatCommitOfSameBaseOffsetToleratedWhenIndependentKeyCompletesDuringBlock(CommitMode commitMode) {
+        CountDownLatch blockedKeyLatch = new CountDownLatch(1);
+        CountDownLatch independentKeyLatch = new CountDownLatch(1);
+        setupParallelConsumerInstance(getBaseOptionsKeyOrdered(commitMode, Duration.ofSeconds(1), Duration.ofMillis(100)));
+
+        primeFirstRecord();
+
+        consumerSpy.addRecord(ktu.makeRecord("0", "v1"));
+        consumerSpy.addRecord(ktu.makeRecord("0", "v2"));
+        consumerSpy.addRecord(ktu.makeRecord("1", "v3"));
+        AtomicBoolean gotK0 = new AtomicBoolean(false);
+        parallelConsumer.poll((record) -> {
+            String value = record.getSingleConsumerRecord().value();
+            if (value.equals("v1")) {
+                gotK0.set(true);
+                awaitLatch(blockedKeyLatch);
+            } else if (value.equals("v3")) {
+                awaitLatch(independentKeyLatch);
+            }
+        });
+        awaitUntilTrue(gotK0::get);
+
+        // the primed record's commit lands first, encoding only itself
+        awaitForCommit(1);
+        int commitsBeforeIndependentKey = getCommitHistoryFlattened().size();
+
+        // only now let the independent shard finish, so its completion cannot be folded into that commit
+        independentKeyLatch.countDown();
+        awaitForCommittedOffsetCount(commitsBeforeIndependentKey + 1);
+
+        // v1 is still blocked, so the second commit cannot have advanced the base offset - it must be a
+        // repeat of offset 1 carrying new encoding. Assert the repeat is really there: without this the test
+        // would still pass if the scenario stopped reproducing, and would then be guarding nothing.
+        assertThat(getCommitHistoryFlattened())
+                .as("the scenario under test must actually produce a repeat commit of base offset 1")
+                .filteredOn(committed -> committed == 1)
+                .hasSizeGreaterThanOrEqualTo(2);
+
+        // Asserted before the latch is released, so the shutdown sequence cannot add commits and blur what is
+        // being checked. This is the assertion that fails without the repeat-tolerance in the commit helper.
+        assertCommits(of(1), "base offset 1 committed twice: once for the primed record, once carrying the "
+                + "key=1 completion, which cannot advance the base offset while v1 is in flight");
+
+        blockedKeyLatch.countDown();
+        parallelConsumer.close();
     }
 
     /**
@@ -366,7 +471,6 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
                 assertCommits(of(2), "Only one of the two offsets committed, as they were coalesced for efficiency"));
     }
 
-    @Disabled
     @ParameterizedTest()
     @EnumSource(CommitMode.class)
     void offsetsAreNeverCommittedForMessagesStillInFlightLong(CommitMode commitMode) {
@@ -402,8 +506,10 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
 
         awaitForSomeLoopCycles(1);
 
-        // make sure no offsets are committed
-        verify(producerSpy, after(verificationWaitDelay).never()).commitTransaction();
+        // Nothing may be committed beyond the base offset: 0 is still in flight, so 1 completing cannot
+        // advance the contiguous frontier. assertCommits trims the genesis commit, so "no progress" is the
+        // empty set - PC re-committing the base offset is not progress and is expected.
+        assertCommits(of(), "1 completed but 0 is still in flight, so the frontier cannot move");
 
         // finish 2
         releaseAndWait(locks, 2);
@@ -411,40 +517,36 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         //
         awaitForSomeLoopCycles(1);
 
-        // make sure no offsets are committed
-        verify(producerSpy, after(verificationWaitDelay).never()).commitTransaction();
+        // still blocked by 0
+        assertCommits(of(), "2 completed too, but 0 still blocks the frontier");
 
         // finish 0
         releaseAndWait(locks, 0);
         awaitForOneLoopCycle();
 
-        // make sure offset 2, not 0 or 1 is committed
-        verify(producerSpy, after(verificationWaitDelay).times(1)).commitTransaction();
-        var maps = producerSpy.consumerGroupOffsetsHistory();
-        assertThat(maps).hasSize(1);
-        OffsetAndMetadata offsets = maps.get(0).get(CONSUMER_GROUP_ID).get(toTopicPartition(firstRecord));
-        assertThat(offsets.offset()).isEqualTo(2);
+        // 0, 1 and 2 are now contiguously complete, so the frontier jumps straight to 3 - the next offset to
+        // consume. It is 3 and not 2 because a committed offset is exclusive: it names where to resume, not
+        // the last record done.
+        //
+        // Asserted as the FRONTIER, not as the whole commit history, for the same reason processInKeyOrder is -
+        // and this test is where that reason was proven twice. Every record here is on partition 0, and which
+        // intermediate offsets the commit ticks happen to capture on the way to a frontier is timing, not
+        // behaviour: releasing 4 and 5 together does not guarantee they coalesce into one advance, and
+        // completing 0 does not guarantee 1 and 2 are drained before the next tick. MEASURED on this branch -
+        // the exact-history form failed 3 of 10 runs, as [1, 3] where [3] was expected and [3, 4, 5, 6] where
+        // [3, 4, 6] was, in two different commit modes. Both are correct PC behaviour.
+        awaitFrontier(0, 3);
 
         // finish 3
         releaseAndWait(locks, 3);
 
-        // 3 committed
-        verify(producerSpy, after(verificationWaitDelay).times(2)).commitTransaction();
-        maps = producerSpy.consumerGroupOffsetsHistory();
-        assertThat(maps).hasSize(2);
-        offsets = maps.get(1).get(CONSUMER_GROUP_ID).get(toTopicPartition(firstRecord));
-        assertThat(offsets.offset()).isEqualTo(3);
+        awaitFrontier(0, 4);
 
         // finish 4,5
         releaseAndWait(locks, of(4, 5));
 
-        // 5 committed
-        verify(producerSpy, after(verificationWaitDelay).atLeast(3)).commitTransaction();
-        maps = producerSpy.consumerGroupOffsetsHistory();
-        assertThat(maps).hasSizeGreaterThanOrEqualTo(3);
-        offsets = maps.get(2).get(CONSUMER_GROUP_ID).get(toTopicPartition(firstRecord));
-        assertThat(offsets.offset()).isEqualTo(5);
-        assertCommits(of(2, 3, 5));
+        // both complete, so the frontier ends at 6 - whether that took one commit or two is not this test's
+        awaitFrontier(0, 6);
 
         // close
         parallelConsumer.close();
@@ -532,6 +634,274 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
                 assertCommitLists(of(of(2), of(2, 3, 4))));
     }
 
+    /**
+     * A callback throwing an exception whose cause chain is a cycle must still shut the consumer down.
+     *
+     * <p>The failure path reads the cause chain to name the root cause in its message. Walking that chain by
+     * following {@code getCause} terminates for every chain a program means to build - but not for every chain it
+     * can build. {@code initCause} refuses self-causation, so {@code A -> A} is impossible and a
+     * self-reference check looks sufficient; {@code A -> B -> A} is not impossible, and defeats it.
+     *
+     * <p>What makes that worth a test rather than a code comment is where the walk happens: in the control loop's
+     * catch block, before {@code doClose}. A spin there is not a missing log line - the consumer never reaches
+     * shutdown and {@code closeDrainFirst} never returns, so the symptom is a hang, which is the one failure mode
+     * that cannot be diagnosed from a stack trace after the fact.
+     *
+     * <p>The timeout is the assertion. If the walk regresses this does not fail with a message, it hangs, and only
+     * the deadline distinguishes it from a slow test.
+     */
+    @Test
+    @Timeout(value = 30, unit = java.util.concurrent.TimeUnit.SECONDS)
+    void controlLoopSurvivesACyclicCauseChain() {
+        var head = new FakeRuntimeException("cycle head");
+        var tail = new RuntimeException("cycle tail", head);
+        head.initCause(tail); // head -> tail -> head, which no self-reference check catches
+
+        parallelConsumer.addLoopEndCallBack(() -> {
+            throw head;
+        });
+
+        parallelConsumer.poll(context -> log.debug("Processing {}", context.getSingleRecord().offset()));
+
+        // the outcome that matters is that this returns at all
+        var thrown = assertThrows(Exception.class, () -> parallelConsumer.closeDrainFirst(ofSeconds(defaultTimeoutSeconds)));
+
+        // asserted on the MESSAGE, not the throwable: both Truth and AssertJ walk the cause chain to render a
+        // throwable when an assertion fails (Truth via StackTraceCleaner, AssertJ via printStackTrace), so handing
+        // either one a deliberately hostile throwable replaces the assertion failure with the hostile exception -
+        // measured, not assumed. The message string is captured safely above and is what the test is about anyway.
+        assertWithMessage("the failure is reported rather than spun on")
+                .that(thrown.getMessage()).containsMatch("Error.*poll.*thread");
+    }
+
+    /**
+     * When rendering the failure fails, the reported failure must still be the ORIGINAL one.
+     *
+     * <p>The catch block hands the user's throwable to the logger, whose binding is also the user's, and both
+     * {@code getMessage} and {@code getCause} are overridable - so rendering it runs code that can throw. Guarding
+     * that with {@code finally} alone shuts down correctly but lets the logger's exception propagate in place of the
+     * assigned {@code failureReason}, so {@code closeDrainFirst} reports "the logger blew up" instead of what
+     * actually killed the consumer. The diagnosis is the whole point of this handler.
+     */
+    @Test
+    @Timeout(value = 30, unit = java.util.concurrent.TimeUnit.SECONDS)
+    void aFailureThatCannotBeLoggedIsStillReportedAsItself() {
+        var unloggable = new FakeRuntimeException("the failure that actually happened") {
+            @Override
+            public synchronized Throwable getCause() {
+                throw new UnsupportedOperationException("rendering me fails");
+            }
+        };
+
+        parallelConsumer.addLoopEndCallBack(() -> {
+            throw unloggable;
+        });
+
+        parallelConsumer.poll(context -> log.debug("Processing {}", context.getSingleRecord().offset()));
+
+        var thrown = assertThrows(Exception.class, () -> parallelConsumer.closeDrainFirst(ofSeconds(defaultTimeoutSeconds)));
+
+        // the message, not the throwable - see the note in controlLoopSurvivesACyclicCauseChain. It matters more
+        // here: this test's input is hostile by construction, so asserting on the throwable made a failure of THIS
+        // test surface as "UnsupportedOperationException: rendering me fails" with no sign of what was expected.
+        var message = thrown.getMessage();
+        assertWithMessage("the original failure, not whatever failed while trying to render it")
+                .that(message).containsMatch("Error.*poll.*thread");
+        assertWithMessage("the original failure, not whatever failed while trying to render it")
+                .that(message).contains("the failure that actually happened");
+    }
+
+    /**
+     * A user failure whose RENDERING throws must still be returned to the mailbox.
+     *
+     * <p>The highest-traffic render of a user-supplied throwable in the library: every user function failure passes
+     * through {@code runUserFunction}'s catch. It logged before marking the batch failed and re-mailboxing it, so a
+     * throwable whose {@code getCause} throws took the log call down and skipped the bookkeeping - the records stayed
+     * in flight forever. Silent, because logging is the thing that failed, and invisible to the future because the
+     * escape lands in the worker task nobody reads.
+     *
+     * <p>Retry is the observable proxy for "the failure was recorded": a container only comes back if
+     * {@code onUserFunctionFailure} and {@code addToMailbox} both ran.
+     *
+     * <p><b>A plain {@link RuntimeException}, deliberately not {@code FakeRuntimeException}.</b> That extends
+     * {@link PCRetriableException}, so it takes the {@code log.debug} branch - which is disabled at the suite's INFO
+     * level and therefore never renders the throwable at all. A hostile-rendering test built on it passes against
+     * the unfixed code while exercising nothing.
+     */
+    @Test
+    @Timeout(value = 30, unit = java.util.concurrent.TimeUnit.SECONDS)
+    void aUserFailureThatCannotBeLoggedIsStillReturnedToTheMailbox() {
+        var attempts = new AtomicInteger();
+
+        parallelConsumer.poll(context -> {
+            attempts.incrementAndGet();
+            throw new RuntimeException("hostile user failure") {
+                @Override
+                public synchronized Throwable getCause() {
+                    throw new UnsupportedOperationException("rendering me fails");
+                }
+            };
+        });
+
+        await().atMost(ofSeconds(20))
+                .untilAsserted(() -> assertWithMessage("record redelivered, so the failure was recorded before the render")
+                        .that(attempts.get()).isAtLeast(2));
+    }
+
+    /**
+     * A user-supplied {@code retryDelayProvider} that throws must not strand the record it is asked about.
+     *
+     * <p>{@code onUserFunctionFailure} calls {@code updateFailureHistory}, which asks
+     * {@code getRetryDelayConfig}, which calls the user's {@code retryDelayProvider} <b>unguarded</b>. That is user
+     * code running inside the failure bookkeeping, so it can throw - and it used to abort the whole batch loop,
+     * leaving every container after it with no {@code addToMailbox} and therefore in flight forever.
+     *
+     * <p>The same permanent stall the batch is being mailboxed to avoid, reached through a different door.
+     */
+    @Test
+    @Timeout(value = 30, unit = java.util.concurrent.TimeUnit.SECONDS)
+    void aThrowingRetryDelayProviderStillReturnsTheRecordToTheMailbox() {
+        var attempts = new AtomicInteger();
+        setupParallelConsumerInstance(ParallelConsumerOptions.<String, String>builder()
+                .consumer(consumerSpy)
+                .producer(producerSpy)
+                .retryDelayProvider(ignored -> {
+                    throw new FakeRuntimeException("your retry delay provider is broken");
+                })
+                .build());
+        primeFirstRecord(); // setupParallelConsumerInstance builds new clients, so the primed record is gone
+
+        parallelConsumer.poll(context -> {
+            attempts.incrementAndGet();
+            throw new RuntimeException("ordinary user failure");
+        });
+
+        await().atMost(ofSeconds(20))
+                .untilAsserted(() -> assertWithMessage("redelivered, so the container was mailboxed despite the "
+                        + "provider throwing").that(attempts.get()).isAtLeast(2));
+    }
+
+    /**
+     * A provider that RETURNS something unusable is worse than one that throws, so it gets its own coverage.
+     *
+     * <p>A throwing provider is caught. A provider that returns {@code null}, a negative delay, or one so large
+     * that {@code Instant.plus} overflows fails <em>after</em> that guard, in the arithmetic. The container
+     * survives - but {@code retryDueAt} is left unset, and unset reads as {@link java.time.Instant#MIN}, meaning
+     * "due now". The record is then retried immediately and forever, with no backoff and no warning: a hot loop
+     * against exactly the thing the user wrote a provider to back off from.
+     *
+     * <p>Asserted as an interval rather than a count: "it was retried" passes in the broken case too, because the
+     * broken case retries constantly. The distinguishing signal is that the retries are SPACED.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"null", "negative", "overflow"})
+    @Timeout(value = 60, unit = java.util.concurrent.TimeUnit.SECONDS)
+    void aRetryDelayProviderReturningRubbishStillBacksOff(String shape) {
+        var attemptTimes = new ConcurrentLinkedQueue<Long>();
+        setupParallelConsumerInstance(ParallelConsumerOptions.<String, String>builder()
+                .consumer(consumerSpy)
+                .producer(producerSpy)
+                .defaultMessageRetryDelay(ofSeconds(1))
+                .retryDelayProvider(ignored -> {
+                    switch (shape) {
+                        case "null":
+                            return null;
+                        case "negative":
+                            return ofSeconds(-5);
+                        default:
+                            return Duration.ofSeconds(Long.MAX_VALUE / 2); // Instant.plus cannot represent this
+                    }
+                })
+                .build());
+        primeFirstRecord();
+
+        parallelConsumer.poll(context -> {
+            attemptTimes.add(System.currentTimeMillis());
+            throw new RuntimeException("ordinary user failure");
+        });
+
+        await().atMost(ofSeconds(30)).until(() -> attemptTimes.size() >= 3);
+
+        var times = new ArrayList<>(attemptTimes);
+        long shortestGap = Long.MAX_VALUE;
+        for (int i = 1; i < times.size(); i++) {
+            shortestGap = Math.min(shortestGap, times.get(i) - times.get(i - 1));
+        }
+        assertWithMessage("retries are spaced by the fallback delay, not hot-looping (shape: %s)", shape)
+                .that(shortestGap).isAtLeast(500L);
+    }
+
+    /**
+     * One record's bookkeeping failing must not strand the rest of its batch.
+     *
+     * <p>{@code onUserFunctionFailure} runs user code - the {@code retryDelayProvider}, via
+     * {@code updateFailureHistory} - so in a batch of N, record 2 throwing used to abort the whole loop: records 3
+     * onward never reached {@code addToMailbox} and stayed in flight forever. Each iteration is now independent.
+     *
+     * <p>The provider throws for exactly ONE offset, so a passing run means the containers on either side of it
+     * were still processed. Asserting every record comes back - not merely that some did - is what makes the
+     * middle position meaningful.
+     *
+     * <p><b>This test does NOT discriminate the per-container guard, and that is worth knowing.</b> Ablated three
+     * ways - loop guard reverted, {@code WorkContainer.onUserFunctionFailure}'s {@code finally} reverted, and both
+     * reverted - it passes every time. So redelivery here does not depend on either: the mailbox is a
+     * notification channel, not the only route back, and something downstream recovers the container regardless.
+     *
+     * <p>That contradicts the premise both the review round and this PR's own commit messages argued from -
+     * "records stay in flight forever". <b>Unproven</b> for the batch loop. What IS proven, by tests that fail
+     * when reverted, is narrower: the {@code runUserFunction} reorder (a throwing render skipped the bookkeeping),
+     * and the {@code retryDelayProvider} return-value validation (a hot retry loop with no backoff).
+     *
+     * <p>The loop guards were kept anyway - cheap, correct, and consistent across four engines - but they are
+     * defence-in-depth rather than a demonstrated fix, and this javadoc says so rather than letting a green test
+     * imply otherwise. What this test genuinely pins is the batch-wide CONTRACT: whatever layer delivers it, one
+     * record's bookkeeping failing must never cost its neighbours.
+     */
+    @Test
+    @Timeout(value = 60, unit = java.util.concurrent.TimeUnit.SECONDS)
+    void oneRecordsBookkeepingFailingDoesNotStrandTheRestOfTheBatch() {
+        final long poisonOffset = 1L;
+        var seen = ConcurrentHashMap.<Long>newKeySet();
+        var redelivered = ConcurrentHashMap.<Long>newKeySet();
+        var poisonFired = new AtomicInteger();
+
+        setupParallelConsumerInstance(ParallelConsumerOptions.<String, String>builder()
+                .consumer(consumerSpy)
+                .producer(producerSpy)
+                .ordering(UNORDERED)
+                .batchSize(3)
+                .retryDelayProvider(rc -> {
+                    if (rc.getRecordId().getOffset() == poisonOffset) {
+                        poisonFired.incrementAndGet();
+                        throw new FakeRuntimeException("provider broken for offset " + poisonOffset);
+                    }
+                    return ofSeconds(1);
+                })
+                .build());
+
+        consumerSpy.addRecord(ktu.makeRecord("k0", "v0"));
+        consumerSpy.addRecord(ktu.makeRecord("k1", "v1"));
+        consumerSpy.addRecord(ktu.makeRecord("k2", "v2"));
+
+        parallelConsumer.poll(context -> {
+            context.getConsumerRecordsFlattened().forEach(cr -> {
+                if (!seen.add(cr.offset())) {
+                    redelivered.add(cr.offset());
+                }
+            });
+            throw new RuntimeException("whole batch fails");
+        });
+
+        await().atMost(ofSeconds(40))
+                .untilAsserted(() -> assertWithMessage("every record in the batch comes back, including the ones "
+                        + "after the offset whose bookkeeping threw")
+                        .that(redelivered).containsAtLeast(0L, 1L, 2L));
+
+        assertWithMessage("the scenario actually happened - the poison provider fired. Without this the assertion "
+                + "above could pass while never exercising a bookkeeping failure at all")
+                .that(poisonFired.get()).isAtLeast(1);
+    }
+
     @ParameterizedTest
     @EnumSource(CommitMode.class)
     void controlFlowException(CommitMode commitMode) {
@@ -555,6 +925,107 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         assertThatThrownBy(() -> {
             parallelConsumer.closeDrainFirst(ofSeconds(10));
         }).hasMessageContainingAll("Error", "poll", "thread", "fake control");
+    }
+
+    /**
+     * Registering a loop-end callback from a thread other than the control thread must not stop the consumer.
+     * <p>
+     * {@link AbstractParallelEoSStreamProcessor#addLoopEndCallBack} is public and documents no threading restriction,
+     * yet the control loop iterates that same list every cycle. A registration landing mid-iteration therefore breaks
+     * the iteration, and the failure escapes the control loop and takes the consumer down with it.
+     * <p>
+     * How the race is made deterministic, and why the assertion is on the outcome rather than the exception type, is
+     * documented on {@link #assertRegisteringFromAnotherThreadDoesNotStopTheConsumer}.
+     *
+     * @see <a href="https://github.com/astubbs/parallel-consumer/issues/252">astubbs#252 - the same defect class in
+     *         PartitionStateManager, where a plain HashMap of partition state was streamed while another thread
+     *         mutated it. Fixed there by making the collection concurrent; this field was missed.</a>
+     */
+    @Test
+    @SneakyThrows
+    void loopEndCallBackCanBeRegisteredFromAnotherThread() {
+        assertRegisteringFromAnotherThreadDoesNotStopTheConsumer(
+                "off-control-thread-registrar",
+                parallelConsumer::addLoopEndCallBack);
+    }
+
+    /**
+     * Shared harness for the two registration races - the subsystems differ, the race and the outcome that matters do
+     * not.
+     * <p>
+     * The latches make the race deterministic rather than hoping to land inside a window a few instructions wide: the
+     * first callback parks the iterating thread mid-iteration until the off-thread registration has provably landed.
+     * <p>
+     * <b>The assertion is on the observable outcome - the consumer keeps running and closes cleanly - not on the
+     * exception type.</b> What a user reports is "it stopped after a while"; a change that swapped one exception for
+     * another would still be that bug, and this test would still fail, which is the point.
+     *
+     * @param registrarThreadName names the registering thread, so a thread dump taken during a hang says which race it
+     *                            was - the stack of the parked control thread does not
+     * @param register            registers the given body with the subsystem under test, adapting it to whatever
+     *                            listener type that subsystem takes. Called twice: once for the callback that parks
+     *                            the iterating thread, then again off that thread while the iteration is held open
+     */
+    @SneakyThrows
+    private void assertRegisteringFromAnotherThreadDoesNotStopTheConsumer(String registrarThreadName,
+                                                                         Consumer<Runnable> register) {
+        var iterationIsInProgress = new CountDownLatch(1);
+        var registrationLanded = new CountDownLatch(1);
+        var parkedOnce = new AtomicBoolean(false);
+
+        register.accept(() -> {
+            if (parkedOnce.compareAndSet(false, true)) {
+                iterationIsInProgress.countDown();
+                awaitLatch(registrationLanded);
+            }
+        });
+
+        var registrar = new Thread(() -> {
+            awaitLatch(iterationIsInProgress);
+            register.accept(() -> log.trace("Registered off the iterating thread"));
+            registrationLanded.countDown();
+        }, registrarThreadName);
+        registrar.start();
+
+        parallelConsumer.poll(context -> log.debug("Processing {}", context.getSingleRecord().offset()));
+
+        // the registrar's last act is to count this down, so awaiting it is awaiting the thread - and it fails with
+        // the latch's remaining count rather than a bare "expected 0 but was 1"
+        awaitLatch(registrationLanded);
+
+        // the outcome that matters: the loop kept turning after the concurrent registration, rather than dying on it.
+        // failFast rather than awaitForOneLoopCycle(), because that helper only consults isClosedOrFailed AFTER its
+        // full 30s await - so the regression this test exists to catch would report a latch timeout, naming neither
+        // the consumer nor the exception, and taking 30s per test to say it
+        var loopsBefore = loopCountRef.get();
+        await().timeout(defaultTimeout)
+                .failFast("consumer stopped - the concurrent registration took the control loop down",
+                        () -> parallelConsumer.isClosedOrFailed())
+                .until(() -> loopCountRef.get() > loopsBefore);
+
+        parallelConsumer.closeDrainFirst(ofSeconds(defaultTimeoutSeconds));
+    }
+
+    /**
+     * The same defect class as {@link #loopEndCallBackCanBeRegisteredFromAnotherThread()}, one subsystem over.
+     * <p>
+     * {@link bz.stub.parallelconsumer.state.WorkManager#addSuccessfulWorkListener
+     * WorkManager.addSuccessfulWorkListener} can be called from any thread, while
+     * {@code WorkManager.onSuccessResult} iterates the listeners on the control thread. Plain-list iteration breaks
+     * when a registration lands mid-notify.
+     * <p>
+     * Registration is a real method rather than a {@code @Getter}-exposed list, so a search for the field finds its
+     * writers. A handed-out collection is mutated through the accessor's name, not the field's, which leaves the
+     * field reading as dead code to exactly the sweep that looks for this defect class.
+     */
+    @Test
+    @SneakyThrows
+    void successfulWorkListenerCanBeRegisteredFromAnotherThread() {
+        var wm = parallelConsumer.getWm();
+
+        assertRegisteringFromAnotherThreadDoesNotStopTheConsumer(
+                "off-thread-success-listener-registrar",
+                parkTheNotifyingThread -> wm.addSuccessfulWorkListener(work -> parkTheNotifyingThread.run()));
     }
 
     @ParameterizedTest()
@@ -593,7 +1064,6 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
     @ParameterizedTest()
     @EnumSource(CommitMode.class)
     @SneakyThrows
-    @Disabled
     public void processInKeyOrder(CommitMode commitMode) {
         setupParallelConsumerInstance(ParallelConsumerOptions.builder()
                 .commitMode(commitMode)
@@ -681,31 +1151,47 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
                 .as("blocked by 0 (1 shouldn't be run until 0 is complete, due to key order processing)")
                 .isFalse();
 
-        // make sure no offsets are committed
-        assertCommits(of());
+        // No "nothing is committed yet" check here. Record 8 is unlocked at test start and completes at once,
+        // marking partition 1 dirty, so whether its bootstrap commit at 4 has landed by this line is a race with
+        // the 100ms commit tick - and the awaited per-partition assertion below expects that very commit to
+        // exist. Asserting its absence here would be asserting how fast the tick was.
 
         // finish 2 process clear, but commit blocked by 0
         log.debug("Unlocking 2...");
         msg2Lock.countDown();
-        awaitForSomeLoopCycles(2);
-        assertThat(processedState.get(2)).isTrue();
+        // Awaited, not point-checked: processedState is written by the worker thread after it wakes from the
+        // latch, and the control loop can turn twice before that worker is scheduled. Same pattern as records
+        // 5 and 6 below. MEASURED - the point check failed 1 of 10 runs under PERIODIC_CONSUMER_ASYNCHRONOUS.
+        awaitUntilTrue(() -> processedState.get(2));
+        assertThat(processedState.get(2)).as("2 is not blocked by 0 - different key").isTrue();
 
 
-        // still nothing - 0 blocks 1 and 2 (partition 0)
-        verify(producerSpy, after(verificationWaitDelay).never()).commitTransaction(); // todo remove all wait nevers in favour of triggers as it slows down test
+        // Still nothing has advanced on partition 0 - 0 is in flight and blocks its key. Partition 1 has by now
+        // emitted its bootstrap commit at 4, which is ITS base offset (record creation uses a global offset
+        // counter, so partition 1's records start at 4) - a starting point, not progress. Asserted per-partition
+        // from here on, because the flattened assertCommits only trims a genesis of 0 and so would read
+        // partition 1's 4 as if it were progress.
         awaitForOneLoopCycle();
-        assertCommits(of());
+        await().timeout(defaultTimeout).untilAsserted(() -> assertCommitLists(of(of(), of(4))));
 
         // finish 0 - releases pending (1,2)
         log.debug("Unlocking 0...");
         msg0Lock.countDown();
 
-        // 0 gets comitted by itself
-        awaitForCommitExact(0, 0);
-
-        // make sure offset 0 is committed. 1 is now free to be processed (same key as 0), which as 2 was processed previously, frees up offset 2 to commit
-        awaitForCommitExact(0, 2);
-        assertCommits(of(0, 2));
+        // On partition 0, offsets 0 and 1 are both key-0 (primeFirstRecord / sendSecondRecord), so 1 was blocked
+        // by 0; offset 2 is key-1 and so completed independently when it was unlocked. Completing 0 therefore
+        // frees 1, and with 2 already done the whole run 0-2 becomes contiguous - partition 0 resumes at 3, not
+        // at 2, because a committed offset says where to resume, not which record was last done.
+        //
+        // From here the assertions are on the FRONTIER (highest committed offset per partition), not on the exact
+        // set of commits. Which intermediate offsets appear depends on where the wall-clock commit ticks fall
+        // relative to work completing: a slow runner legitimately shows partition 0 at [1, 3] where a fast one
+        // shows [3], because 1 means "record 0 done, resume at 1". That is correct behaviour and nothing to do
+        // with ordering, so asserting the exact set asserts tick timing - the same trap astubbs#260 fixed by
+        // collapsing repeat commits inside assertCommits. MEASURED: this test passed locally and failed in CI
+        // on exactly that difference.
+        awaitFrontier(0, 3);
+        awaitFrontier(1, 4);
 
         // unlock 3 - should get committed
         log.debug("Unlocking 3...");
@@ -717,8 +1203,9 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         awaitUntilTrue(() -> processedState.get(5));
         assertThat(processedState.get(5)).as("5 should processed").isTrue();
 
-        awaitForCommitExact(0, 3);
-        assertCommits(of(0, 2, 3));
+        // partition 0 advances to 4; partition 1 cannot move while 4 is in flight, even though 5 and 6 are done
+        awaitFrontier(0, 4);
+        awaitFrontier(1, 4);
 
         // unlock 4 - clears 5 for offset commit - 7 not processed yet (5,6,7 same key), 8 was never locked
         log.debug("Unlocking 4...");
@@ -728,18 +1215,22 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         awaitUntilTrue(() -> processedState.get(6));
         assertThat(processedState.get(6)).as("6 should processed").isTrue();
 
-        // 5 and 6 finished, same key, coalesced commit to 6
+        // THE INVARIANT THIS TEST EXISTS FOR: partition 1 would not advance past its base offset 4 while key-2's
+        // record 4 was in flight, even though 5, 6 and 8 had completed. Now that 4 is done it jumps to 7 - not to
+        // 9 - because 8 is complete but not contiguous, so it cannot be resumed past.
         awaitForSomeLoopCycles(1);
-        awaitForCommitExact(1, 6);
-        assertCommits(of(0, 2, 3, 6));
+        awaitFrontier(0, 4);
+        awaitFrontier(1, 7);
 
         // unlock 7 (same key as 6), unblocks 8 for commit
         assertThat(processedState.get(7)).isFalse();
         assertThat(processedState.get(8)).isTrue();
         //
         releaseAndWait(locks, 7);
-        awaitForCommitExact(1, 8);
-        assertCommits(of(0, 2, 3, 6, 8));
+
+        // 7 completing makes 7 and 8 contiguous, so partition 1 finally resumes at 9
+        awaitFrontier(0, 4);
+        awaitFrontier(1, 9);
     }
 
     /**
@@ -1032,10 +1523,53 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
     }
 
     /**
+     * The produce half of {@link #produceMessageFlow}: the user function succeeds, and the produce that follows it
+     * fails. Nothing covered this before - the audit records it as a path that exists, is reachable, and has no
+     * test - so a regression that swallowed a produce failure and committed anyway would have gone unnoticed.
+     * <p>
+     * What is asserted is the consequence, not the throw: the offset does <b>not</b> advance, and the record is
+     * retried. A produce failure is not a delivered result, so the work is not done.
+     * <p>
+     * No producer-callback-thread variant here. That asymmetry is owned by open astubbs#261, and it is
+     * unreachable in this harness anyway: the base class gives every test one auto-completing {@code MockProducer}
+     * that invokes callbacks on the calling thread, so there is no I/O thread to raise from.
+     */
+    @ParameterizedTest()
+    @EnumSource(CommitMode.class)
+    void userSucceedsButProduceToBrokerFails(CommitMode commitMode) {
+        setupParallelConsumerInstance(commitMode);
+
+        var userFunctionRan = new AtomicInteger();
+
+        // fail every produce, so the record can never complete
+        doThrow(new FakeRuntimeException("Fake produce failure"))
+                .when(producerSpy).send(any(ProducerRecord.class), any());
+
+        parallelConsumer.pollAndProduce((ignore) -> {
+            userFunctionRan.incrementAndGet();
+            return new ProducerRecord<>("Hello", "there");
+        });
+
+        // the user function is retried, which is only possible if the produce failure failed the work
+        await().untilAsserted(() ->
+                assertThat(userFunctionRan.get())
+                        .as("user function retried after the produce failed")
+                        .isGreaterThan(1));
+
+        parallelConsumer.requestCommitAsap();
+        awaitForSomeLoopCycles(2);
+
+        // and the offset never advances - the record is not done just because the user function returned
+        assertCommits(of(), "a failed produce must not commit the record's offset");
+
+        parallelConsumer.close();
+    }
+
+    /**
      * Explicit check for situation where thread size is much larger than key set size.
      * <p>
      * See <a href="https://github.com/confluentinc/parallel-consumer/issues/433">Different computational results
-     * obtained with different max concurrency configurations for the same parallel consumer #433</a>
+     * obtained with different max concurrency configurations for the same parallel consumer confluentinc#433</a>
      */
     @Test
     void lessKeysThanThreads() {

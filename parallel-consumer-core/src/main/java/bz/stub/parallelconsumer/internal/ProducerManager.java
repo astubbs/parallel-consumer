@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.ConcurrentModificationException;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -70,6 +71,35 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
     @Getter
     private ReentrantReadWriteLock producerTransactionLock;
 
+    /**
+     * Installed on every send. Built once, because whether this manager uses transactions is already decided before
+     * it exists: {@link ProducerWrapper#isConfiguredForTransactions()} reads a {@code final} field the wrapper
+     * resolves in its own constructor, so the value cannot change afterwards - the mode decision does not belong in a
+     * branch evaluated per completion. ({@link #initProducer()} only enforces that the flag agrees with the
+     * configured {@link ParallelConsumerOptions.CommitMode}; it does not determine it.)
+     * <p>
+     * Throwing from a producer callback is only safe when NOT using transactions. The comment here used to say exactly
+     * that, while installing a throwing callback unconditionally, transactional mode included.
+     * <p>
+     * {@code KafkaProducer#doSend} invokes this callback from inside its own {@code catch (ApiException)} handler, and
+     * only <em>afterwards</em> calls {@code transactionManager.maybeTransitionToErrorState(e)}. A throw escapes before
+     * that runs, so a terminally failed send never moves the transaction into an abortable state. The records already
+     * accepted stay in it, the next commit succeeds, and a {@code read_committed} consumer sees a PARTIAL result set
+     * for one source offset - exactly what the all-or-none guarantee denies. Observed as "poison-key-0 has 2 of 5" by
+     * {@code TransactionalPartialResultSetIT}.
+     * <p>
+     * Not throwing costs nothing that was load-bearing: the failure still reaches the work container either way,
+     * because {@code processAndProduceResults} waits on each returned {@link Future} and an exceptionally-completed
+     * send fails the record for retry. Note the throw was only ever observable on that synchronous pre-accumulator
+     * path in the first place - when a send fails asynchronously, Kafka's own {@code ProducerBatch} catches and logs
+     * whatever a callback throws, so it was already inert there in both modes.
+     */
+    // TODO(refactor): PCInternalRuntimeException misnames a failed send; throw a specific subclass and rename `exception` to `sendFailure`
+    //  The whole summary must stay on the TODO line itself: bin/todo-index.sh indexes only that physical
+    //  line, so anything wrapped onto a continuation is dropped from docs/todo-index.md.
+    //  Detail, including why the subclass alone is not enough: docs/refactoring.md, internal/ProducerManager.java.
+    private final Callback sendCallback;
+
     public ProducerManager(ProducerWrapper<K, V> newProducer,
                            ConsumerManager<K, V> newConsumer,
                            WorkManager<K, V> wm,
@@ -77,6 +107,16 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
         super(newConsumer, wm);
         this.producerWrapper = newProducer;
         this.options = options;
+
+        boolean usingTransactions = producerWrapper.isConfiguredForTransactions();
+        this.sendCallback = (RecordMetadata metadata, Exception exception) -> {
+            if (exception != null) {
+                log.error("Error producing result message", exception);
+                if (!usingTransactions) {
+                    throw new PCInternalRuntimeException("Error producing result message", exception);
+                }
+            }
+        };
 
         initProducer();
     }
@@ -108,7 +148,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
      * Produce a message back to the broker.
      * <p>
      * Implementation uses the blocking API, by blocking on produce ack results (in batches when the flatMap version of
-     * producing a list of records is used). Performance upgrade in later versions (#356). This is of course not an
+     * producing a list of records is used). Performance upgrade in later versions (confluentinc#356). This is of course not an
      * issue for the more common use case of PC where messages aren't produced
      * ({@link ParallelEoSStreamProcessor#poll}), and the {@code produce ack block} is still multi-threaded after all.
      * <p>
@@ -122,18 +162,10 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
         ensureProduceStarted();
         lazyMaybeBeginTransaction();
 
-        // only needed if not using tx
-        Callback callback = (RecordMetadata metadata, Exception exception) -> {
-            if (exception != null) {
-                log.error("Error producing result message", exception);
-                throw new InternalRuntimeException("Error producing result message", exception);
-            }
-        };
-
         List<ParallelConsumer.Tuple<ProducerRecord<K, V>, Future<RecordMetadata>>> futures = new ArrayList<>(outMsgs.size());
         for (ProducerRecord<K, V> rec : outMsgs) {
             log.trace("Producing {}", rec);
-            var future = producerWrapper.send(rec, callback);
+            var future = producerWrapper.send(rec, sendCallback);
             futures.add(ParallelConsumer.Tuple.pairOf(rec, future));
         }
         return futures;
@@ -179,7 +211,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
         try {
             lockAcquired = readLock.tryLock(produceLockTimeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
-            throw new InternalRuntimeException("Interrupted while waiting to get produce lock (timeout was set to {})", e, produceLockTimeout);
+            throw new PCInternalRuntimeException("Interrupted while waiting to get produce lock (timeout was set to {})", e, produceLockTimeout);
         }
 
         if (lockAcquired) {
@@ -245,7 +277,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
         } catch (ProducerFencedException e) {
             // todo consider wrapping all client calls with a catch and new exception in the ProducerWrapper, so can get stack traces
             //  see APIException#fillInStackTrace
-            throw new InternalRuntimeException(e);
+            throw new PCInternalRuntimeException(e);
         }
 
         // see {@link KafkaProducer#commit} this can be interrupted and is safe to retry
@@ -257,7 +289,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
             if (retryCount > arbitrarilyChosenLimitForArbitraryErrorSituation) {
                 String msg = msg("Retired too many times ({} > limit of {}), giving up. See error above.", retryCount, arbitrarilyChosenLimitForArbitraryErrorSituation);
                 log.error(msg, lastErrorSavedForRethrow);
-                throw new InternalRuntimeException(msg, lastErrorSavedForRethrow);
+                throw new PCInternalRuntimeException(msg, lastErrorSavedForRethrow);
             }
             try {
                 if (producerWrapper.isMockProducer()) {
@@ -270,7 +302,13 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
                             // try wait again
                             commitTransaction();
                         }
-                        boolean transactionModeIsReady = lastErrorSavedForRethrow == null || !lastErrorSavedForRethrow.getMessage().contains("Invalid transition attempted from state READY to state COMMITTING_TRANSACTION");
+                        // getMessage() is nullable, and this runs while already handling an error - an exception with
+                        // no message (an NPE from the producer, say) turned the recovery path into a second failure.
+                        // The null-check above guards the reference, not the message.
+                        String lastErrorMessage = lastErrorSavedForRethrow == null
+                                ? ""
+                                : Objects.toString(lastErrorSavedForRethrow.getMessage(), "");
+                        boolean transactionModeIsReady = !lastErrorMessage.contains("Invalid transition attempted from state READY to state COMMITTING_TRANSACTION");
                         if (transactionModeIsReady) {
                             // try again
                             log.error("Transaction was already in READY state - tx completed between interrupt and retry");
@@ -439,7 +477,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
      */
     private void ensureProduceStarted() {
         if (options.isUsingTransactionCommitMode() && producerTransactionLock.getReadHoldCount() < 1) {
-            throw new InternalRuntimeException("Need to call #beginProducing first");
+            throw new ProduceLockNotHeldException("Need to call #beginProducing first");
         }
     }
 

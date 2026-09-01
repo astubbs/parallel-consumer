@@ -53,6 +53,10 @@ import java.util.function.Supplier;
  * {@link #stop()}, so callers see a quiesced fleet - no drainer races the test's settle/teardown
  * close. The conductor keeps its own authoritative per-instance state machine and never calls
  * {@code toggle()}, so the managed {@code started} flag (which only gates toggle) stays out of play.
+ * Because {@code stopAsync()} returns before the close completes, the conductor can mark an instance
+ * STOPPED and redraw a RESTART while the previous restart is still queued; {@code start()} refuses
+ * that second submission and the conductor leaves the instance STOPPED rather than recording a
+ * disturbance that never happened.
  */
 @Slf4j
 public class ChaosConductor {
@@ -292,6 +296,12 @@ public class ChaosConductor {
         ManagedPCInstance victim = pickInState(InstanceState.RUNNING, targetRoll);
         if (victim == null) return false;
         states.put(victim.getInstanceId(), InstanceState.DRAINING);
+        // A drain is a stop, so it must set the same flag the other stops do. This path closes the
+        // PC itself below rather than going through stopAsync(), so without this the queued-start
+        // abort in ManagedPCInstance.run() would be inert for STOP_DRAIN - the most frequently drawn
+        // stop in the default profile - and a start queued behind this drain would bring up a PC the
+        // conductor has already marked STOPPED.
+        victim.markStopRequested();
         disturbanceCount.incrementAndGet();
         record("STOP_DRAIN", victim.getInstanceId());
         observer.onAction(victim.getInstanceId(), ChaosAction.STOP_DRAIN);
@@ -314,7 +324,19 @@ public class ChaosConductor {
         return true; // candidate for join-after-drain bias
     }
 
-    private void doStopNoDrain(int targetRoll) {
+    /**
+     * The conductor's own state for an instance. Package-private: a test asserting a refused restart
+     * leaves the instance redrawable has to be able to see this, and {@code states} is otherwise
+     * private with no accessor.
+     */
+    InstanceState stateOf(int instanceId) {
+        return states.get(instanceId);
+    }
+
+    // doStopNoDrain and doRestart are package-private rather than private so ChaosConductorRestartRefusalIT
+    // can drive them directly. loop() picks actions from a seeded RNG on its own thread, so reaching a
+    // specific action from a test any other way means racing the draw sequence.
+    void doStopNoDrain(int targetRoll) {
         ManagedPCInstance victim = pickInState(InstanceState.RUNNING, targetRoll);
         if (victim == null) return;
         states.put(victim.getInstanceId(), InstanceState.STOPPED);
@@ -324,12 +346,17 @@ public class ChaosConductor {
         victim.stopAsync();
     }
 
-    private void doRestart(int targetRoll) {
+    void doRestart(int targetRoll) {
         ManagedPCInstance target = pickInState(InstanceState.STOPPED, targetRoll);
         if (target == null) return;
         // start() first: it can throw (the unexpected-failure-cause canary), in which case the
         // instance must stay STOPPED and untargetable rather than lying as RUNNING
-        target.start(pcExecutor);
+        if (!target.start(pcExecutor)) {
+            // an earlier restart is still queued behind its close-wait - leave it STOPPED and
+            // redrawable rather than double-submitting it (see ManagedPCInstance#startInFlight)
+            log.debug("[chaos] RESTART of instance {} refused - start still in flight", target.getInstanceId());
+            return;
+        }
         states.put(target.getInstanceId(), InstanceState.RUNNING);
         disturbanceCount.incrementAndGet();
         record("RESTART", target.getInstanceId());

@@ -69,7 +69,7 @@ public class KafkaClientUtils implements AutoCloseable {
      * Gives every PC built here a unique id so its threads ({@code pc-control-PCn}, {@code pc-broker-poll-PCn})
      * and the {@code pcId} MDC are attributable to one instance in the logs. Without it, concurrent PC
      * instances all log under the same generic thread names and are impossible to tell apart - which made
-     * the #857 silent-stall investigation much harder than it needed to be.
+     * the confluentinc#857 silent-stall investigation much harder than it needed to be.
      */
     private static final AtomicInteger PC_INSTANCE_COUNTER = new AtomicInteger();
 
@@ -256,7 +256,20 @@ public class KafkaClientUtils implements AutoCloseable {
         return createNewProducer(ProducerMode.matching(commitMode));
     }
 
+    /**
+     * As {@link #createNewProducer(CommitMode)}, but lets the caller pin producer config this helper would otherwise
+     * leave at the client default. A test whose behaviour depends on a specific value should pin it here rather than
+     * inherit it, so the dependency lives in the test instead of in a comment.
+     */
+    public KafkaProducer<String, String> createNewProducer(CommitMode commitMode, Properties overrides) {
+        return createNewProducer(ProducerMode.matching(commitMode), overrides);
+    }
+
     public <K, V> KafkaProducer<K, V> createNewProducer(ProducerMode mode) {
+        return createNewProducer(mode, new Properties());
+    }
+
+    public <K, V> KafkaProducer<K, V> createNewProducer(ProducerMode mode, Properties overrides) {
         Properties properties = setupProducerProps();
 
         var txProps = new Properties();
@@ -271,6 +284,9 @@ public class KafkaClientUtils implements AutoCloseable {
             txProps.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, this.getClass().getSimpleName() + ":" + nextInt()); // required for tx
             txProps.put(ProducerConfig.TRANSACTION_TIMEOUT_CONFIG, (int) ofSeconds(10).toMillis()); // speed things up
         }
+
+        // last, so a caller can pin anything this helper set above
+        txProps.putAll(overrides);
 
         KafkaProducer<K, V> kvKafkaProducer = new KafkaProducer<>(txProps);
 
@@ -385,6 +401,48 @@ public class KafkaClientUtils implements AutoCloseable {
         }
         assertThat(sends).hasSize(Math.toIntExact(numberToSend));
         return expectedKeys;
+    }
+
+    /**
+     * Produces one record per broker offset in {@code [fromInclusive, toExclusive)}, keyed so the key NAMES the offset
+     * the record lands on: {@code "k-<offset>"}. A test tracking keys can then name the LOST offset from a missing
+     * key, which is what makes a "a record went missing" failure diagnosable instead of merely red.
+     * <p>
+     * Distinct from {@link #produceMessages(String, long, String, long)}, whose key sequence restarts at 0 on every
+     * call - so a second batch reuses the first batch's keys, and no prefix choice restores the offset
+     * correspondence once more than one batch has been produced to the same topic.
+     * <p>
+     * The correspondence is ASSERTED rather than assumed: every send's {@link RecordMetadata#offset()} must equal the
+     * offset its key names. That makes the caller's contract - a SINGLE-partition topic whose end offset is
+     * {@code fromInclusive} - fail here, loudly, rather than downstream as a confusing missing-record assertion.
+     *
+     * @return the keys produced, in offset order
+     */
+    public List<String> produceOffsetKeyedRange(String topicName, long fromInclusive, long toExclusive)
+            throws InterruptedException, ExecutionException {
+        log.info("Producing offsets [{}..{}) to {}", fromInclusive, toExclusive, topicName);
+        final List<String> keys = new ArrayList<>();
+        List<Future<RecordMetadata>> sends = new ArrayList<>();
+        try (Producer<String, String> kafkaProducer = createNewProducer(NOT_TRANSACTIONAL)) {
+            for (long offset = fromInclusive; offset < toExclusive; offset++) {
+                String key = "k-" + offset;
+                keys.add(key);
+                sends.add(kafkaProducer.send(new ProducerRecord<>(topicName, key, "v-" + offset)));
+            }
+            log.debug("Finished sending offset-keyed test data");
+        }
+        // make sure we finish sending before the next stage, and that each record really landed where its key says
+        long expectedOffset = fromInclusive;
+        for (Future<RecordMetadata> send : sends) {
+            RecordMetadata metadata = send.get();
+            assertThat(metadata.offset())
+                    .describedAs("key k-%s must name the offset it landed on - offset-keyed produce needs a "
+                            + "single-partition topic whose end offset is the start of the requested range",
+                            expectedOffset)
+                    .isEqualTo(expectedOffset);
+            expectedOffset++;
+        }
+        return keys;
     }
 
     public List<String> produceMessagesWithThrowHeader(String topicName, long numberToSend) throws InterruptedException, ExecutionException {

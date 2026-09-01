@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Antony Stubbs and contributors
+
 // Unit tests for changelog-ref-gate.js, run by the PR Checklist job before the gate itself.
 // Plain node, no dependencies, no runner: `node .github/scripts/changelog-ref-gate.test.js`.
 // Exits non-zero on the first sign of trouble, so a broken gate fails CI loudly.
@@ -70,8 +72,10 @@ test("an upstream issue link counts", () =>
 test("a PULL link does not count - a PR is not an issue", () =>
   assert.strictEqual(citesIssue("* Entry (https://github.com/astubbs/parallel-consumer/pull/104[#104])"), false));
 
+// The number is deliberately fake and above the issue-ref gate's 1000 threshold: this fixture must
+// stay *unqualified* to test what it tests, and a real-looking low number would trip that gate.
 test("a bare #NN does not count - issues and PRs share one number sequence", () =>
-  assert.strictEqual(citesIssue("* Entry (#104)"), false));
+  assert.strictEqual(citesIssue("* Entry (#999104)"), false));
 
 console.log("\nsectionOf - read from the changelog, not the diff");
 

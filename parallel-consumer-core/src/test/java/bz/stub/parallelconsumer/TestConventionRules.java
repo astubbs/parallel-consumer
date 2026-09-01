@@ -16,6 +16,7 @@ import java.util.Arrays;
 import java.util.List;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.methods;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 
 /**
@@ -43,6 +44,13 @@ public class TestConventionRules {
     static final ArchRule integration_tests_must_live_in_an_integrationTest_package =
             noClasses()
                     .that().resideOutsideOfPackages("..integrationTest..", "..integrationTests..")
+                    // The Testcontainers SUPPORT package holds no tests - one log-filtering consumer that
+                    // integration tests hand to a container - so it cannot inflate the surefire suite, which
+                    // is the only thing this rule is protecting. It became visible here because the package
+                    // rename moved it into bz.stub.parallelconsumer.internal.testcontainers; its former home
+                    // was outside the analysed namespace entirely. Nothing about the class changed; the set
+                    // of classes the rule can see did.
+                    .and().resideOutsideOfPackages("..internal.testcontainers..")
                     .should().beAssignableTo("bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest")
                     .orShould().dependOnClassesThat().resideInAnyPackage("org.testcontainers.containers..", "org.testcontainers.junit..")
                     .because("integration tests (extend BrokerIntegrationTest or use Testcontainers) must live in "
@@ -105,7 +113,7 @@ public class TestConventionRules {
      * {@code Test*.java}, {@code *Test.java}, {@code *Tests.java}, {@code *TestCase.java}. A test class named
      * anything else is never run - and, worse, never reported as missing: the suite is simply green without it.
      * That is exactly how {@code MockConsumerTestWith{CommitTimeout,SaslAuthentication}Exception} and
-     * {@code MockConsumerTestWithEarlyClose} sat dormant, and how a regression test added in PR #100 would have
+     * {@code MockConsumerTestWithEarlyClose} sat dormant, and how a regression test added in PR astubbs#100 would have
      * been a permanent no-op had this rule existed to catch it (it was renamed instead).
      * <p>
      * Exempt: {@code @Nested} classes (JUnit finds them via their enclosing class, so the patterns do not
@@ -136,6 +144,33 @@ public class TestConventionRules {
                     // integrationTests packages (exempted above, since failsafe selects those by package), so
                     // this rule evaluates against an empty set there. That is a pass, not a violation -
                     // without this, ArchUnit's verifyNoEmptyShouldIfEnabled fails those modules.
+                    .allowEmptyShould(true);
+
+    /**
+     * A single-character method name tells a reader nothing, and it is nearly always a fixture builder -
+     * the identifier a test file repeats more than any other. The codebase had exactly ONE
+     * ({@code d(...)} in {@code KeyOrderLedgerIT}, since renamed to {@code delivery(...)}), so this rule
+     * costs nothing and forecloses the whole class.
+     *
+     * <p>It is here rather than in a {@code bin/check-*.sh} gate because ArchUnit already runs in every
+     * module's normal test suite - no new script, no new CI job, and the failure arrives at the
+     * developer who wrote it. SpotBugs was the other candidate and is the wrong tool: it detects bugs,
+     * not naming.
+     *
+     * <p>Worth recording WHY a rule this trivial is worth having. That {@code d(...)} survived three
+     * Claude review rounds and a Fable simplify-and-review pass whose maintainability reviewer returned
+     * findings on that exact file. It was found by a human, reading. Naming is precisely the class of
+     * defect automated review is weakest at - and precisely the class a cheap mechanical rule catches
+     * perfectly.
+     */
+    @ArchTest
+    static final ArchRule test_methods_must_have_names_longer_than_one_character =
+            methods()
+                    .should().haveNameNotMatching("^.$")
+                    .because("a one-character method name says nothing, and the identifier a fixture "
+                            + "builder is called by is the most-read name in a test file")
+                    // Modules whose tests live only in integrationTests packages import no classes here,
+                    // so the rule evaluates against an empty set - a pass, not a violation.
                     .allowEmptyShould(true);
 
 }

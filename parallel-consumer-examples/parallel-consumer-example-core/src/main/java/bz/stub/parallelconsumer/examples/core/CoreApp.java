@@ -123,7 +123,9 @@ public class CoreApp {
 
     void customRetryDelay() {
         // tag::customRetryDelay[]
-        final double multiplier = 0.5;
+        // Exponential backoff: the multiplier must be > 1 so the delay GROWS with each failed
+        // attempt. Here: 1s, 2s, 4s, 8s ...
+        final double multiplier = 2;
         final int baseDelaySecond = 1;
 
         ParallelConsumerOptions.<String, String>builder()

@@ -1,0 +1,46 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Result models for void, produce and streaming flows
+category: processing
+module: parallel-consumer-core
+maturity: production-use
+availability:
+  status: published
+  since: 0.1.0
+  evidence:
+    tag: 0.1.0
+    path: README.adoc
+    basis: The first tagged release already ships the produce flow on ParallelStreamProcessor and streaming results on JStreamParallelStreamProcessor, and the README documents both under Result Models.
+  milestones:
+    - release: 0.2.0.0
+      basis: The Producer became optional and the produce flow split into pollAndProduce (one record) and pollAndProduceMany (zero or many).
+    - release: 0.5.0.0
+      basis: All of these user functions take a PollContext instead of a ConsumerRecord.
+summary: Choose what a processing invocation hands back - nothing, produced records to Kafka, or a stream of produce results to client code.
+use_this_when:
+  - Processing is complete when your function returns and only offsets need committing.
+  - Processing produces records back to Kafka and you want the publish metadata, by callback or as a stream.
+setup:
+  apis:
+    - ParallelStreamProcessor.poll - void; completion is the user function returning.
+    - ParallelStreamProcessor.pollAndProduce - the function returns one ProducerRecord, with an optional ConsumeProduceResult callback.
+    - ParallelStreamProcessor.pollAndProduceMany - the function returns a List of ProducerRecord, with an optional ConsumeProduceResult callback.
+    - JStreamParallelStreamProcessor.pollProduceAndStream - returns a java.util.stream.Stream of ConsumeProduceResult instead of taking a callback.
+  result_type: ParallelStreamProcessor.ConsumeProduceResult carries the input PollContext, the produced ProducerRecord and its RecordMetadata.
+  producer_required: The produce and streaming flows need a Producer in the options; poll does not.
+opt_in:
+  mechanism: Create the processor for the flow you want - ParallelStreamProcessor.createEosStreamProcessor, or JStreamParallelStreamProcessor.createJStreamEosStreamProcessor for streamed results.
+  isolated_from_stable_modules: false
+boundaries:
+  - The callback and the stream both fire after Kafka acknowledges the produced record, which is not the same event as the source offset being committed; see commit-modes.yaml and bulk-kafka-transactions.yaml.
+  - Deprecation of both JStream processors is proposed in astubbs#116, on the grounds that the API cannot bound its own memory. That PR is open and no @Deprecated marker is on the source yet. Prefer the callback-based produce flows for new code. The memory defect itself is astubbs#122, which is open.
+  - The input side of the callback, including batch access, is PollContext; see poll-context.yaml.
+references:
+  - label: Produce-flow API
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelStreamProcessor.java
+  - label: Streaming-results API
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/JStreamParallelStreamProcessor.java
+  - label: JStream deprecation and its reasoning
+    url: https://github.com/astubbs/parallel-consumer/pull/116

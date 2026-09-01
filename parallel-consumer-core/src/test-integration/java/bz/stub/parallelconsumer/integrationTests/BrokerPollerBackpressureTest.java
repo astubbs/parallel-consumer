@@ -45,7 +45,7 @@ public class BrokerPollerBackpressureTest extends BrokerIntegrationTest<String, 
     }
 
     /**
-     * Verifies that records blocked in-flight count toward broker-poll backpressure (upstream #836): with every
+     * Verifies that records blocked in-flight count toward broker-poll backpressure (confluentinc#836): with every
      * worker latch-blocked, PC takes exactly {@link #MESSAGE_BUFFER_SIZE} records out of the shards (the static
      * load-factor cap) and pauses polling - even though the 50 records left in the shards are, on their own, far
      * below the pause threshold. Only the blocked in-flight records being counted makes the pause fire.
@@ -79,7 +79,7 @@ public class BrokerPollerBackpressureTest extends BrokerIntegrationTest<String, 
             assertThat(pc.getWm().getNumberOfWorkQueuedInShardsAwaitingSelection()).isEqualTo(MESSAGE_COUNT - MESSAGE_BUFFER_SIZE);
         });
         // poll must pause: the 50 records in shards alone are below the threshold - only in-flight counting in
-        // (upstream #836) trips it
+        // (confluentinc#836) trips it
         await().atMost(Duration.ofSeconds(30)).pollInterval(Duration.ofMillis(20)).untilAsserted(() -> assertThat(pc.getPausedPartitionSize()).isEqualTo(1));
         //give it a second to make sure it does not get resumed again
         ThreadUtils.sleepQuietly(1000);

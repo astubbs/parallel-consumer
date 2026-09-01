@@ -35,6 +35,7 @@ import org.junit.jupiter.api.Test;
 import org.junitpioneer.jupiter.cartesian.ArgumentSets;
 import org.junitpioneer.jupiter.cartesian.CartesianTest;
 
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -51,7 +52,7 @@ import static org.awaitility.Awaitility.waitAtMost;
 import static pl.tlinkowski.unij.api.UniLists.of;
 
 /**
- * Originally created to reproduce bug #25 https://github.com/confluentinc/parallel-consumer/issues/25 which was a known
+ * Originally created to reproduce bug confluentinc#25 https://github.com/confluentinc/parallel-consumer/issues/25 which was a known
  * issue with multi-threaded use of the {@link KafkaProducer}.
  * <p>
  * After fixing multi threading issues, using Producer transactions was made optional, and this test grew to uncover
@@ -120,6 +121,46 @@ class TransactionAndCommitModeTest extends BrokerIntegrationTest<String, String>
         runTest(maxPoll, commitMode, order, expectedMessageCount);
     }
 
+    /**
+     * The concurrency this test runs at. 64 is the gating value, and it was an <em>increase</em> for
+     * stability, not a reduction.
+     * <p>
+     * The ladder around it - {@code 2}, {@code 100}, {@code 1000} - arrived already commented in
+     * {@code 2b0ab66b} (2020-11-27) beside the live {@code numThreads = 16}, and was deleted in
+     * {@code e67d8b89}. None of those values was ever live, so the ladder was the only record of the
+     * concurrencies anyone had run this matrix at. Reach them without editing the file:
+     *
+     * <pre>./mvnw verify -Pci -Dtransactions.concurrency=2</pre>
+     *
+     * The low rung is the interesting one: it is where an ordering assumption that high concurrency
+     * was papering over would show up.
+     */
+    private static int concurrency() {
+        return Integer.getInteger("transactions.concurrency", GATING_CONCURRENCY);
+    }
+
+    static final int GATING_CONCURRENCY = 64;
+
+    /**
+     * Scales the shared {@link bz.stub.parallelconsumer.AbstractParallelEoSStreamProcessorTestBase#defaultTimeout}
+     * by how far below the gating concurrency this run is, because the same message count takes
+     * proportionally longer with fewer threads. Without this the ladder's low rungs would be
+     * selectable but guaranteed to time out - reachable in name only.
+     * <p>
+     * At the gating concurrency the multiplier is exactly one, so the default run's deadline is
+     * unchanged. Raising concurrency never shortens it.
+     */
+    private static Duration timeoutFor(int threads) {
+        // Scaling is CompletionCeiling's job, not this file's: the units are gating-concurrency's worth of work
+        // spread over `threads`, so fewer threads scales the deadline up, and more floors it at the baseline -
+        // the same "raising concurrency never shortens it" guarantee, for free.
+        //
+        // Doing it by hand truncated, and worst exactly where the ladder is meant to be used: at 40 threads
+        // `GATING_CONCURRENCY / threads` is 64/40 = *1* in integer division, so that rung got no scaling at all
+        // against a true ratio of 1.6 - a 30s deadline where 48s was owed (defaultTimeout is 30s, not 60).
+        return completionCeiling(GATING_CONCURRENCY, threads, defaultTimeout);
+    }
+
     @SneakyThrows
     private void runTest(int maxPoll, CommitMode commitMode, ProcessingOrder order, int expectedCount) {
         String inputName = setupTopic(this.getClass().getSimpleName() + "-input-" + RandomUtils.nextInt());
@@ -162,16 +203,12 @@ class TransactionAndCommitModeTest extends BrokerIntegrationTest<String, String>
         KafkaConsumer<String, String> newConsumer = getKcu().createNewConsumer(true, consumerProps);
 
         // increased PC concurrency - improves test stability and performance.
-        int numThreads = 64;
-//        int numThreads = 1000;
+        int numThreads = concurrency();
         var pc = new ParallelEoSStreamProcessor<String, String>(ParallelConsumerOptions.<String, String>builder()
                 .ordering(order)
                 .consumer(newConsumer)
                 .producer(newProducer)
                 .commitMode(commitMode)
-//                .numberOfThreads(1000)
-//                .numberOfThreads(100)
-//                .numberOfThreads(2)
                 .maxConcurrency(numThreads)
                 .build());
         pc.subscribe(of(inputName));
@@ -207,21 +244,15 @@ class TransactionAndCommitModeTest extends BrokerIntegrationTest<String, String>
         // wait for all pre-produced messages to be processed and produced
         Assertions.useRepresentation(new TrimListRepresentation());
 
-        // todo rounds should be 1? progress should always be made
-        int roundsAllowed = 10;
-//        roundsAllowed = 200;
-//        if (commitMode.equals(CONSUMER_SYNC)) {
-//            roundsAllowed = 3; // sync consumer commits can take time // fails
-////            roundsAllowed = 5; // sync consumer commits can take time // fails
-////            roundsAllowed = 10; // sync consumer commits can take time // fails
-////            roundsAllowed = 12; // sync consumer commits can take time // // works with no logging
-//        }
-
-        ProgressTracker progressTracker = new ProgressTracker(processedCount, null, defaultTimeout);
+        // Rounds are deliberately not used here: ProgressTracker rejects being given both a round
+        // count and a timeout, and this test tracks by duration. The open question of whether any
+        // round without progress should be tolerated is recorded in docs/refactoring.md.
+        Duration deadline = timeoutFor(numThreads);
+        ProgressTracker progressTracker = new ProgressTracker(processedCount, null, deadline);
         var failureMessage = msg("All keys sent to input-topic should be processed and produced, within time (expected: {} commit: {} order: {} max poll: {})",
                 expectedMessageCount, commitMode, order, maxPoll);
         try {
-            waitAtMost(defaultTimeout)
+            waitAtMost(deadline)
                     // dynamic reason support still waiting
                     // https://github.com/awaitility/awaitility/pull/193#issuecomment-873116199
                     // https://github.com/confluentinc/parallel-consumer/issues/199

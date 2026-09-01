@@ -4,7 +4,7 @@ package bz.stub.parallelconsumer.internal.utils;
  * Copyright (C) 2020-2022 Confluent, Inc.
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
-import bz.stub.parallelconsumer.internal.InternalRuntimeException;
+import bz.stub.parallelconsumer.internal.PCInternalRuntimeException;
 import lombok.Getter;
 
 import java.time.Duration;
@@ -113,7 +113,7 @@ public class ProgressTracker {
     }
 
     public Exception constructError(String messageToAppend) {
-        return new InternalRuntimeException(msg("No progress beyond {} records after {} rounds. {}",
+        return new PCInternalRuntimeException(msg("No progress beyond {} records after {} rounds. {}",
                 processedCount, rounds, messageToAppend));
     }
 }

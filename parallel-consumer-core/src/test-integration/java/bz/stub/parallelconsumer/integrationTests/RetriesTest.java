@@ -60,7 +60,7 @@ public class RetriesTest extends BrokerIntegrationTest<String, String> {
         await().atMost(Duration.ofSeconds(10)).pollInterval(Duration.ofMillis(100)).until(count::get, is(equalTo(2000))); //wait for all successful messages to complete
         AtomicBoolean failed = new AtomicBoolean(false);
         AtomicBoolean checking = new AtomicBoolean(true);
-        new Thread(() -> {
+        Thread sampler = new Thread(() -> {
             try {
                 while (checking.get()) {
                     long countAwaiting = pc.getWm().getSm().getNumberOfWorkQueuedInShardsAwaitingSelection();
@@ -74,12 +74,22 @@ public class RetriesTest extends BrokerIntegrationTest<String, String> {
             } finally {
                 latch.countDown();
             }
-        }).start();
-        ThreadUtils.sleepQuietly(3000);
-        throwOnHeader.set(false);
-        ThreadUtils.sleepQuietly(2000);
-        checking.set(false);
-        latch.await();
+        }, "retry-queue-depth-sampler");
+        // daemon + the finally below: the sampler must not outlive the test. If the await times out, an
+        // un-stopped sampler keeps asserting against a closed PC and reports its failure against whichever
+        // test runs next in this JVM.
+        sampler.setDaemon(true);
+        sampler.start();
+        try {
+            ThreadUtils.sleepQuietly(3000); // soak the retry loop, so the sampler above gets many chances to catch a violation
+            throwOnHeader.set(false);
+            // keep sampling until the previously failing half has actually drained - the real end of the retry
+            // loop, rather than a fixed wait in which we hope it drained
+            await().atMost(Duration.ofSeconds(60)).pollInterval(Duration.ofMillis(100)).until(count::get, is(equalTo(4000)));
+        } finally {
+            checking.set(false);
+            latch.await();
+        }
         assertThat(failed.get()).isFalse();
     }
 }

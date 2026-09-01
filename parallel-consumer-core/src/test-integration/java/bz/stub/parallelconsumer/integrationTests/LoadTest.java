@@ -19,10 +19,12 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.assertj.core.util.Lists;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import pl.tlinkowski.unij.api.UniLists;
 
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -43,23 +45,69 @@ import static org.awaitility.Awaitility.await;
 @Slf4j
 public class LoadTest extends DbTest {
 
-    //    static int total = 8_000_0;
-//    static int total = 4_000_00;
-//    static int total = 4_000_0;
-    static int total = 4_000;
-//    static int total = 8;
+    /**
+     * The gating volume. Untagged, so this runs in the gating integration lane, and it is a listed
+     * member of the load-tightness flake family at exactly this volume
+     * (docs/inflight/test-load-tightness-flakes.md). Classify before raising it - that family is
+     * where the confluentinc#857 deadlock was hiding.
+     */
+    static final int GATING_TOTAL = 4_000;
+
+    /**
+     * The range this test was actually run at by hand. Authored in {@code af1fa5de} (2020-06-17) as
+     * four commented-out alternatives beside the live value, and deleted in {@code e67d8b89} on the
+     * grounds that they were dead - but none of them was ever live, so the ladder was the only
+     * record of which volumes anyone had exercised. Reachable now without editing the file:
+     *
+     * <pre>./mvnw verify -Pci -Dload.total=400000</pre>
+     *
+     * Run that top rung outside the CI lanes, or raise their job timeout first. The deadline is derived, so
+     * {@code ceilingFor(400_000)} scales the gating 60s by 100 to <b>100 minutes</b>, while both lanes that
+     * run this suite cap at 60 - {@code maven.yml}'s performance leg and {@code pr-highcpu-fast-feedback.yml}.
+     * Inside either, a genuinely hung run - the exact failure the deadline exists to catch - is killed by the
+     * runner 40 minutes before the ceiling fires, turning a diagnostic {@code ConditionTimeoutException} into
+     * an ambiguous cancelled job.
+     * <p>
+     * The same commit also parked {@code 8}, which is not a volume rung at all - it is the
+     * fast-iteration setting for working on this harness itself, and it was deleted as though it
+     * were one of the volumes. It is {@code -Dload.total=8}, and it works now: as parked it could
+     * never have run, because the key range is derived as {@code volume / 100} and eight records
+     * gave zero keys. {@link #setupTestData} floors that at one.
+     * <p>
+     * Property convention is {@code <concern>.<knob>}, matching the existing {@code chaos.seed} and
+     * {@code ambient.probe}.
+     */
+    static final int[] RECOVERED_VOLUMES = {40_000, 80_000, 400_000};
+
+    /**
+     * The volume the high-volume case runs at when the performance lane selects it. The smallest
+     * recovered rung, so the lane gets a genuine high-volume run without a multi-hour default.
+     */
+    static final int HIGH_VOLUME_TOTAL = RECOVERED_VOLUMES[0];
+
+    static int total = Integer.getInteger("load.total", GATING_TOTAL);
+
+    /** The deadline the gating volume has always had. */
+    private static final Duration GATING_CEILING = ofSeconds(60);
+
+    private static Duration ceilingFor(int volume) {
+        return completionCeiling(volume, GATING_TOTAL, GATING_CEILING);
+    }
 
     @SneakyThrows
-    public void setupTestData() {
+    public void setupTestData(int volume) {
         setupTopic();
 
-        publishMessages(total / 100, total, topic);
+        // One key per hundred records, but never zero. Below 100 records the original `volume / 100`
+        // produced an empty key list and publishMessages threw IndexOutOfBounds on the first send -
+        // which is why the parked `8` could not have run as written, in af1fa5de or since.
+        publishMessages(Math.max(1, volume / 100), volume, topic);
     }
 
     @SneakyThrows
     @Test
     void timedNormalKafkaConsumerTest() {
-        setupTestData();
+        setupTestData(total);
 
         // subscribe in advance, it can be a few seconds
         getKcu().getConsumer().subscribe(UniLists.of(topic));
@@ -70,7 +118,49 @@ public class LoadTest extends DbTest {
     @SneakyThrows
     @Test
     void asyncConsumeAndProcess() {
-        setupTestData();
+        asyncConsumeAndProcess(total);
+    }
+
+    /**
+     * The same scenario at one of the {@link #RECOVERED_VOLUMES}. Tagged, so the gating lane never
+     * runs it and the default excluded groups keep it out; reach the top of the recovered range by
+     * adding {@code -Dload.total=400000}.
+     * <p>
+     * The tag is not opt-in, though: {@code bin/performance-test.sh} passes
+     * {@code -Dincluded.groups=performance}, and that script is the "Performance Tests" leg of
+     * {@code maven.yml} - a required check on every PR - so this case runs automatically there at
+     * {@link #HIGH_VOLUME_TOTAL}, ten times the gating volume, with no retry. {@code LoadTest} is a
+     * listed member of the load-tightness flake family at the gating volume
+     * (docs/inflight/test-load-tightness-flakes.md, 1/20, undiagnosed).
+     * <p>
+     * <b>Measured before leaving it automatic</b>, per the {@code AGENTS.md} rule to separate
+     * test-infra contention from a genuine concurrency bug rather than tuning a deadline: given an
+     * uncontended broker, this case ran 5/5 green at 40,000, each in ~52s against its derived
+     * ceiling of 600s. So the code is not the problem at this volume, and it is nowhere near the
+     * deadline - by that rule, failures in this family are contention.
+     * <p>
+     * Which leaves what the measurement could not clear: the performance lane does <em>not</em> give it a
+     * JVM of its own. Failsafe declares no {@code forkCount}, so all four {@code @Tag("performance")}
+     * classes run in one fork, sharing one heap and the static {@code BrokerIntegrationTest.kafkaContainer} -
+     * and, because this class extends {@code DbTest}, a Postgres container that none of its tests use.
+     * <p>
+     * They run <em>sequentially</em> in that fork, not concurrently: {@code -Pci} sets
+     * {@code parallel-tests=false}, and failsafe's {@code <parallel>} element is not read by the JUnit
+     * Platform provider at all. So if this case flakes, reach for heap accumulated across the four classes
+     * under {@code reuseForks}, container start-up, or the lane's 60-minute cap - <b>not</b> for broker
+     * contention between concurrent tests, which cannot occur here. The gating integration lane forks
+     * ({@code -DforkCount=4 -DreuseForks=true}) and would give each class its own broker; this lane does not.
+     */
+    @SneakyThrows
+    @Test
+    @Tag("performance")
+    void asyncConsumeAndProcessAtVolume() {
+        asyncConsumeAndProcess(Integer.getInteger("load.total", HIGH_VOLUME_TOTAL));
+    }
+
+    @SneakyThrows
+    private void asyncConsumeAndProcess(int volume) {
+        setupTestData(volume);
 
         KafkaConsumer<String, String> newConsumer = getKcu().createNewConsumer();
         //
@@ -88,7 +178,7 @@ public class LoadTest extends DbTest {
 
         AtomicInteger msgCount = new AtomicInteger(0);
 
-        ProgressBar pb = ProgressBarUtils.getNewMessagesBar(log, total);
+        ProgressBar pb = ProgressBarUtils.getNewMessagesBar(log, volume);
 
         try (pb) {
             async.poll(r -> {
@@ -102,10 +192,10 @@ public class LoadTest extends DbTest {
             });
 
             // keep checking how many message's we've processed
-            await().atMost(ofSeconds(60)).until(() -> {
+            await().atMost(ceilingFor(volume)).until(() -> {
                 // log.debug("msg count: {}", msgCount.get());
                 pb.stepTo(msgCount.get());
-                return msgCount.get() >= total;
+                return msgCount.get() >= volume;
             });
         }
         async.close();
@@ -151,7 +241,7 @@ public class LoadTest extends DbTest {
             });
 
             try (pb) {
-                await().atMost(ofSeconds(60)).untilAsserted(() -> {
+                await().atMost(ceilingFor(total)).untilAsserted(() -> {
                     assertThat(count).hasValue(total);
                 });
             }

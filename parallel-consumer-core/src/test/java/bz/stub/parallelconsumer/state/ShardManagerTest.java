@@ -5,7 +5,6 @@ package bz.stub.parallelconsumer.state;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.internal.utils.ThreadUtils;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
@@ -29,6 +28,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 import static org.mockito.Mockito.*;
 import static org.mockito.Mockito.when;
 
@@ -68,12 +68,48 @@ class ShardManagerTest {
         ConsumerRecord<String, String> consumerRecord = new ConsumerRecord<>(topic, partition, 1, null, "test1");
 
         Map<ShardKey, ProcessingShard<String, String>> processingShards = new ConcurrentHashMap<>();
-        processingShards.put(ShardKey.ofKey(consumerRecord), new ProcessingShard<>(ShardKey.ofKey(consumerRecord), module.options(), wm.getPm()));
+        processingShards.put(ShardKey.ofKey(consumerRecord), new ProcessingShard<>(ShardKey.ofKey(consumerRecord), module.options(), wm.getPm(), sm.getRecordPopulation()));
         sm.setProcessingShards(processingShards);
         incompleteOffsets.put(1L, Optional.of(consumerRecord));
         state.setIncompleteOffsets(incompleteOffsets);
         state.onPartitionsRemoved(sm);
         assertThat(sm.getShard(ShardKey.ofKey(consumerRecord))).isEmpty();
+    }
+
+    /**
+     * {@link ProcessingShard#getWorkIfAvailable} carries its own stale-container sweep, for a container that went
+     * stale without either epoch-change sweep having reached it. That only happens in a race, so it is driven
+     * here directly rather than through {@link WorkManager}: the shard is deliberately not registered with a
+     * {@link ShardManager}, which is what
+     * {@link ShardManager#removeStaleContainers()} iterates.
+     * <p>
+     * It has to retire the record like every other departure. {@link RecordPopulation} has no clamp and nothing
+     * reconciles it against the shards, so a removal path that forgets to retire leaks silently and throttles
+     * record intake for the life of the consumer.
+     */
+    @Test
+    void theInlineStaleSweepRetiresTheRecordItRemoves() {
+        PCModuleTestEnv module = mu.getModule();
+        var consumerRecord = new ConsumerRecord<>(topic, partition, 4L, "a-key", "a-value");
+
+        var population = new RecordPopulation();
+        var shard = new ProcessingShard<>(ShardKey.ofTopicPartition(consumerRecord), module.options(), wm.getPm(), population);
+        shard.addWorkContainer(new WorkContainer<>(wm.getPm().getEpochOfPartition(tp), consumerRecord, module));
+
+        assertThat(population.getInSystem()).isEqualTo(1L);
+
+        // the partition goes away, so what the shard is still holding is now stale
+        wm.onPartitionsRevoked(UniLists.of(tp));
+
+        var taken = shard.getWorkIfAvailable(10, new RetryQueue());
+
+        assertThat(taken).isEmpty();
+        assertWithMessage("the stale container was swept out of the shard")
+                .that(shard.getCountOfWorkTracked()).isEqualTo(0L);
+        assertWithMessage("and retired, so the conservation figure agrees with the empty shard")
+                .that(population.getInSystem()).isEqualTo(0L);
+        assertWithMessage("the available counter lands on exactly zero without needing a clamp")
+                .that(shard.getCountOfWorkAwaitingSelection()).isEqualTo(0L);
     }
 
     @Test
@@ -156,30 +192,28 @@ class ShardManagerTest {
 
             WorkContainer<String, String> w0 = new WorkContainer<>(
                     1, new ConsumerRecord<>(topic, partition, 0, "key0", "value0"), mockPcModule);
-            ((MutableClock) mockPcModule.clock()).setInstant(Instant.now());
             w0.onUserFunctionFailure(new RuntimeException("test1"));
             retryQueue.add(w0);
 
             WorkContainer<String, String> w1 = new WorkContainer<>(
                     1, new ConsumerRecord<>(topic, partition, 1, "key1", "value0"), mockPcModule);
-            ThreadUtils.sleepQuietly(10);
-            ((MutableClock) mockPcModule.clock()).setInstant(Instant.now());
+            // the retry ordering is keyed off the retry-due time, which the container reads from the
+            // (mock) clock - so advance the clock directly instead of sleeping to make wall time move it
+            clock.add(10, ChronoUnit.MILLIS);
             w1.onUserFunctionFailure(new RuntimeException("test2"));
             retryQueue.add(w1);
 
             WorkContainer<String, String> w2 = new WorkContainer<>(
                     1, new ConsumerRecord<>(topic, partition, 2, "key2", "value0"), mockPcModule);
-            ThreadUtils.sleepQuietly(10);
-            ((MutableClock) mockPcModule.clock()).setInstant(Instant.now());
+            clock.add(10, ChronoUnit.MILLIS);
             w2.onUserFunctionFailure(new RuntimeException("test3"));
             retryQueue.add(w2);
 
-            ThreadUtils.sleepQuietly(10);
-            ((MutableClock) mockPcModule.clock()).setInstant(Instant.now());
+            clock.add(10, ChronoUnit.MILLIS);
             w0.onUserFunctionFailure(new RuntimeException("a"));
             int tries = 0;
             while (retryQueue.size() < 4 && tries < 100) {
-                ((MutableClock) mockPcModule.clock()).setInstant(Instant.now());
+                clock.add(1, ChronoUnit.MILLIS);
                 w0.onUserFunctionFailure(new RuntimeException("a"));
                 retryQueue.add(w0);
                 tries++;
