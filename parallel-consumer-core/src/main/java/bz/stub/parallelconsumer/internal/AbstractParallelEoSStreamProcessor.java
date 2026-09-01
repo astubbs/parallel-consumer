@@ -1593,6 +1593,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         if (isPoolQueueLow() && lastWorkRequestWasFulfilled) {
             boolean steppedUp = dynamicExtraLoadFactor.maybeStepUp();
             if (steppedUp) {
+                // Deliberately NOT isDebugEnabled()-guarded, unlike the two sites below. Those allocate on every
+                // control loop pass; this one only fires when a step actually happened, which
+                // DynamicLoadFactor#couldStep() bounds by the cool-down and the factor's own ceiling - tens of times
+                // over a process's life, not thousands a minute. Guarding it would spend the pattern's signal ("this
+                // line is on a hot path") on a line that is not.
                 log.debug("isPoolQueueLow(): Executor pool queue is not loaded with enough work (queue: {} vs target: {}), stepped up loading factor to {}",
                         getNumberOfUserFunctionsQueued(), getPoolLoadTarget(), dynamicExtraLoadFactor.getCurrentFactor());
             } else if (dynamicExtraLoadFactor.isMaxReached()) {
