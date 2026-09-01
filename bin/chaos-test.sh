@@ -16,6 +16,11 @@
 
 set -euo pipefail
 
+# Where the failsafe reports are and what to do about reps overwriting each other - shared with the
+# experiment runners, which met the same hazard independently and answer it with the other policy.
+# shellcheck source=bin/lib/chaos-reports-common.sh
+. "${BASH_SOURCE[0]%/*}/lib/chaos-reports-common.sh"
+
 # Must byte-match the WARN line ProgressProbe.observe() emits - grep it there before editing.
 readonly OBSERVATION_MARKER="OBSERVATION (does not fail the run)"
 
@@ -31,7 +36,8 @@ summary() {
     echo ""
     printf 'Total chaos wall-clock: **%dm %02ds** (build included)\n\n' $((total / 60)) $((total % 60))
     local tests
-    tests=$(find . -path '*failsafe-reports/TEST-*.xml' | wc -l | tr -d ' ')
+    # All reports, live and archived - the summary must count every rep, not just the last.
+    tests=$(chaos_all_report_paths | tr -cd '\0' | wc -c | tr -d ' ')
     if [ "$tests" -eq 0 ]; then
         echo "### ZERO chaos tests selected - this run measured NOTHING"
         echo ""
@@ -46,13 +52,13 @@ summary() {
         # from meaning "nobody reads it" - the peak is the number a timing regression moves.
         # Every read here uses a whole-file `grep` with no early-exiting reader downstream: `| head`
         # would close the pipe and pipefail would promote the writer's EPIPE to a failure, which
-        # bin/AGENTS.md bans and bin/check-shell-sigpipe.sh enforces.
+        # bin/AGENTS.md bans and the `sigpipe-into-grep-q` rule enforces.
         # One pass over the reports, feeding the loop by process substitution rather than a pipe:
         # `find | while` runs the loop in a SUBSHELL, so per-file counts cannot accumulate and a
         # second full scan was needed to answer "did anything observe?". These XMLs embed captured
         # stdout and reach hundreds of MB, so the extra scan was not free. Same shape as
         # bin/quarantine-lane-report.sh. No early-exiting reader is introduced, so the
-        # check-shell-sigpipe.sh ban is not implicated.
+        # `sigpipe-into-grep-q` ban is not implicated.
         local any_observations=0
         echo "| Test class | Time | Lag stagnation peak | Class 2 observations |"
         echo "|---|---|---|---|"
@@ -73,7 +79,7 @@ summary() {
             # observed whatever it observed.
             if [ "$obs" -gt 0 ]; then any_observations=$((any_observations + 1)); fi
             if [ -n "$n" ]; then echo "| $n | ${t}s | ${peak_ms:-n/a}${peak_ms:+ms} | ${obs} |"; fi
-        done < <(find . -path '*failsafe-reports/TEST-*.xml' -print0)
+        done < <(chaos_all_report_paths)
         if [ "$any_observations" -gt 0 ]; then
             echo ""
             echo "### Class 2 observations fired in ${any_observations} scenario(s) - this did NOT fail the run"
@@ -112,28 +118,16 @@ trap emit_summaries EXIT
 # With CHAOS_REPS > 1 every rep writes the SAME TEST-<class>.xml filenames, so the end-of-run scan
 # would describe only the LAST rep: an observation or a higher peak seen in rep 1 vanishes if the
 # final rep happens to be quiet, and the summary then under-reports a hunt that did find something.
-# That is the exact silent-under-reporting shape this summary exists to prevent, so archive each
-# finished rep before the next overwrites it. Caught in review on astubbs/parallel-consumer#354.
+# That is the exact silent-under-reporting shape this summary exists to prevent. Caught in review on
+# astubbs/parallel-consumer#354.
 #
-# `rep<N>-failsafe-reports`, beside the live directory, is chosen so BOTH readers still see it: this
-# script's own `*failsafe-reports/TEST-*.xml` scans (note: no leading slash, so the prefixed name
-# matches), and the workflow's artifact glob `**/target/*-reports/*.xml`, which requires the
-# directory to sit directly under `target/` and to end in `-reports`. Nesting it deeper would keep
-# the first reader and silently lose the artifacts.
-archive_finished_rep() {
-    local n="$1" f dir dest
-    while IFS= read -r -d '' f; do
-        dir=$(dirname "$f")
-        dest="${dir%/failsafe-reports}/rep${n}-failsafe-reports"
-        mkdir -p "$dest"
-        mv "$f" "$dest/"
-    # Scoped to the LIVE directory, never `*failsafe-reports`, or each rep would re-archive every
-    # earlier rep's files and renumber them under the newest rep.
-    done < <(find . -path '*/failsafe-reports/TEST-*.xml' -print0)
-}
+# chaos_archive_rep (bin/lib/chaos-reports-common.sh) is the KEEP policy - this script's reports are
+# still going to be read, by the summary below and by the workflow's artifact upload. The experiment
+# runners use the DELETE policy from the same file for the opposite reason. Both are documented
+# there, together, so a third caller picks one rather than meeting the hazard a third time.
 
 for i in $(seq 1 "$REPS"); do
-    if [ "$i" -gt 1 ]; then archive_finished_rep "$((i - 1))"; fi
+    if [ "$i" -gt 1 ]; then chaos_archive_rep "$((i - 1))"; fi
     echo "=== chaos rep $i/$REPS ==="
     time ./mvnw --batch-mode -Pci -pl parallel-consumer-core -am verify \
         -DskipUTs=true \

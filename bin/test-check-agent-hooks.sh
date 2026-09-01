@@ -46,6 +46,13 @@ assert() { # <description> <expected> <actual>
     fi
 }
 
+# The `--head` value a stubbed `gh` was asked about, read from that stub's argv log. Awk rather
+# than `grep -o ... | head -1`, which is the early-exiting-reader pipeline shape bin/AGENTS.md
+# warns about - and this suite runs under pipefail.
+stub_head_arg() { # <argv-log>
+    awk '{for (i = 1; i < NF; i++) if ($i == "--head") { print $(i+1); exit }}' "$1"
+}
+
 # ---------------------------------------------------------------------------------------------
 # check-squash-subject.sh
 #
@@ -390,6 +397,141 @@ git status')"
 # operator before the brace, so the name consumed the position and the body went unseen.
 assert "a commit inside a function-keyword body is still gated" 2 \
     "$(gate_rc "$red" 'function deploy { git commit -m x; }; deploy')"
+
+# --- WHICH WORKING TREE IT GATES -----------------------------------------------------------------
+#
+# The gate script and its working directory both came from `$CLAUDE_PROJECT_DIR`, which names the
+# SESSION's project root. A SUBAGENT has its own working directory while that variable still points
+# at the session's most recent worktree - and a subagent's `git commit ...` is bare, so it matches
+# the registration and arrives here. Observed 2026-08-31: a subagent committing in
+# `.claude/worktrees/proxy-server-shell` was gated against `.claude/worktrees/bench-harness`, failing
+# check-file-refs.sh on citations to files that do not exist on its branch while its own tree ran the
+# same gate at exit 0, and five commits went through with --no-verify.
+#
+# THE WORSE HALF LEAVES NO TRACE, and gets its own case below: the misresolution can fail OPEN, a red
+# tree passing because the session's tree is green. Nobody investigates a commit that was allowed.
+#
+# REAL GIT REPOS, unlike `make_project` above, because the resolution now climbs to the repository
+# root - and the assertions are on the gate's own LABEL rather than on paths, since `mktemp -d` under
+# `/var` and `git rev-parse --show-toplevel` under `/private/var` name the same directory differently
+# on macOS.
+make_worktree() { # <label> <gate-exit-code> -> a git repo whose stub gate announces itself
+    local dir="$TMP/wt-$1-$RANDOM$RANDOM"
+    mkdir -p "$dir/.githooks" "$dir/nested/deeper"
+    ( cd "$dir" && git init -q . )
+    printf '#!/bin/sh\necho "GATE OF %s SPOKE in $(basename "$PWD")"\nexit %s\n' "$1" "$2" > "$dir/.githooks/pre-commit"
+    chmod +x "$dir/.githooks/pre-commit"
+    echo "$dir"
+}
+wt_fire() { # <CLAUDE_PROJECT_DIR> <payload-cwd|-> <command> -> "<exit>|<stderr>"
+    local payload out rc=0
+    payload=$(python3 -c '
+import json, sys
+d = {"tool_name": "Bash", "tool_input": {"command": sys.argv[1]}}
+if sys.argv[2] != "-":
+    d["cwd"] = sys.argv[2]
+print(json.dumps(d))' "$3" "$2")
+    out=$(printf '%s' "$payload" | CLAUDE_PROJECT_DIR="$1" "$HOOKS/pre-commit-gate.sh" 2>&1 >/dev/null) || rc=$?
+    printf '%s|%s' "$rc" "$(printf '%s' "$out" | tr '\n' ' ')"
+}
+
+session_green=$(make_worktree session-green 0)
+commit_red=$(make_worktree commit-red 1)
+session_red=$(make_worktree session-red 1)
+commit_green=$(make_worktree commit-green 0)
+
+# 1. THE INCIDENT. The commit runs in a worktree whose gate is red; the session's is green.
+wt_out=$(wt_fire "$session_green" "$commit_red" 'git commit -m "in the other worktree"')
+assert "a commit is gated by the tree it runs in, not the session's" 2 "${wt_out%%|*}"
+case "$wt_out" in
+    *"GATE OF commit-red"*) got=ran_the_commits_gate ;;
+    *"GATE OF session-green"*) got=ran_the_sessions_gate ;;
+    *) got="neither: ${wt_out#*|}" ;;
+esac
+assert "...and it is the commit's OWN gate script that ran" ran_the_commits_gate "$got"
+case "${wt_out#*|}" in *"in wt-commit-red"*) got=ran_there ;; *) got="wrong cwd: ${wt_out#*|}" ;; esac
+assert "...run WITH that tree as its working directory" ran_there "$got"
+
+# 2. THE SILENT HALF, which is the one nobody would have found: a red tree allowed because the
+# SESSION's tree is green. Exit 0 here is the fix; the pre-fix hook blocked on the session's gate.
+wt_out=$(wt_fire "$session_red" "$commit_green" 'git commit -m "clean tree"')
+assert "a clean tree is not blocked by the session's red one" 0 "${wt_out%%|*}"
+case "${wt_out#*|}" in *"GATE OF session-red"*) got=ran_the_sessions_gate ;; *) got=left_it_alone ;; esac
+assert "...and the session's gate was not consulted at all" left_it_alone "$got"
+
+# 3. `git -C <path> commit` names its own repository, and is the strongest signal there is.
+wt_out=$(wt_fire "$session_green" - "git -C $commit_red commit -m x")
+assert "git -C names the tree to gate" 2 "${wt_out%%|*}"
+case "$wt_out" in *"GATE OF commit-red"*) got=followed_dash_c ;; *) got="ignored it: ${wt_out#*|}" ;; esac
+assert "...even with no cwd in the payload" followed_dash_c "$got"
+
+# 3b. THE LEADING-CD TIER, previously untested end to end (review round on
+# astubbs/parallel-consumer#382): a leading `cd <path> &&` is the command saying where it runs, and
+# outranks the payload cwd.
+wt_out=$(wt_fire "$session_green" "$commit_green" "cd $commit_red && git commit -m x")
+assert "a leading cd names the tree to gate" 2 "${wt_out%%|*}"
+case "$wt_out" in *"GATE OF commit-red"*) got=followed_the_cd ;; *) got="ignored it: ${wt_out#*|}" ;; esac
+assert "...over the payload cwd" followed_the_cd "$got"
+
+# 3c. TWO command-position cds are AMBIGUOUS - the commit may run in either - so the gate must fall
+# back to the payload cwd rather than trusting the FIRST cd. Pre-fix, this gated wt-commit-green
+# (the first cd) and let the red tree pass.
+wt_out=$(wt_fire "$session_green" "$commit_red" "cd $commit_green && echo x && cd $commit_red && git commit -m x")
+assert "two cds fall back to the payload cwd" 2 "${wt_out%%|*}"
+case "$wt_out" in *"GATE OF commit-red"*) got=gated_the_payload_cwd ;; *) got="gated the first cd: ${wt_out#*|}" ;; esac
+assert "...which is the red tree the commit actually runs in" gated_the_payload_cwd "$got"
+
+# 3d. A RELATIVE cd or -C is relative to the PAYLOAD cwd, never to the hook process - same-named
+# subdirectories exist in every worktree, so the wrong resolution succeeds on the wrong tree.
+mkdir -p "$commit_green/redsub/.githooks"
+( cd "$commit_green/redsub" && git init -q . )
+printf '#!/bin/sh\necho "GATE OF redsub SPOKE"\nexit 1\n' > "$commit_green/redsub/.githooks/pre-commit"
+chmod +x "$commit_green/redsub/.githooks/pre-commit"
+wt_out=$(wt_fire "$session_green" "$commit_green" 'cd redsub && git commit -m x')
+assert "a relative cd resolves against the payload cwd" 2 "${wt_out%%|*}"
+case "$wt_out" in *"GATE OF redsub"*) got=resolved_relative ;; *) got="missed it: ${wt_out#*|}" ;; esac
+assert "...and runs the resolved tree's own gate" resolved_relative "$got"
+wt_out=$(wt_fire "$session_green" "$commit_green" 'git -C redsub commit -m x')
+assert "a relative git -C resolves against the payload cwd" 2 "${wt_out%%|*}"
+
+# 3e. REPEATED -C values COMPOSE: `git -C sub -C .. commit` runs in the ORIGINAL repository, so the
+# red gate must fire. Keeping only the last token resolved `..` against the payload cwd - the
+# parent, which has no gate - and the commit passed unchecked (Codex review on
+# astubbs/parallel-consumer#382).
+mkdir -p "$commit_red/sub"
+wt_out=$(wt_fire "$session_green" "$commit_red" 'git -C sub -C .. commit -m x')
+assert "repeated -C paths compose instead of last-wins" 2 "${wt_out%%|*}"
+case "$wt_out" in *"GATE OF commit-red"*) got=composed_the_chain ;; *) got="escaped to the parent: ${wt_out#*|}" ;; esac
+assert "...and the composed chain lands back in the red tree" composed_the_chain "$got"
+
+# 3f. `cd /x & git commit` backgrounds the cd - the commit stays in the payload cwd, so trusting
+# the prefix would run the green tree's gate over the red tree the commit actually lands in.
+wt_out=$(wt_fire "$session_green" "$commit_red" "cd $commit_green & git commit -m x")
+assert "a backgrounded cd does not relocate the gate" 2 "${wt_out%%|*}"
+case "$wt_out" in *"GATE OF commit-red"*) got=gated_the_real_tree ;; *) got="trusted the subshell cd: ${wt_out#*|}" ;; esac
+assert "...and the red tree's own gate is the one that ran" gated_the_real_tree "$got"
+
+# 4. A COMMIT FROM A SUBDIRECTORY has to climb: the gate lives at the checkout root, and stopping at
+# the literal directory would find no gate and fail open - a silent skip, not a visible error.
+wt_out=$(wt_fire "$session_green" "$commit_red/nested/deeper" 'git commit -m "from a subdir"')
+assert "a commit from a subdirectory climbs to the repository root" 2 "${wt_out%%|*}"
+
+# 5. THE FALLBACK IS A DECISION, not an accident: with nothing in the payload saying where the
+# command runs, `$CLAUDE_PROJECT_DIR` is still the best available answer and is still used. All the
+# cases above this section rely on it, so this pins it explicitly alongside its replacements.
+wt_out=$(wt_fire "$commit_red" - 'git commit -m "no cwd in the payload"')
+assert "with nothing else to go on it falls back to the project dir" 2 "${wt_out%%|*}"
+case "$wt_out" in *"GATE OF commit-red"*) got=used_the_fallback ;; *) got="${wt_out#*|}" ;; esac
+assert "...and says so rather than skipping" used_the_fallback "$got"
+case "$wt_out" in *"did not say where it runs"*) got=labelled ;; *) got=unlabelled ;; esac
+assert "...labelled as the session's root in the refusal" labelled "$got"
+
+# 6. A BYPASS IS STILL A BYPASS wherever the commit runs - the escape hatch must not have been
+# narrowed to the session's tree by any of the above.
+wt_out=$(wt_fire "$session_green" "$commit_red" 'git commit --no-verify -m "I have a reason"')
+assert "--no-verify bypasses the OTHER tree's red gate too" 0 "${wt_out%%|*}"
+
+rm -rf "$session_green" "$commit_red" "$session_red" "$commit_green"
 
 # ---------------------------------------------------------------------------------------------
 # inject-merge-checklist.sh
@@ -1545,6 +1687,17 @@ for form in 'git add -A&&git commit -m x&&git push' 'git push;echo done' 'git pu
     assert "reminds with unspaced/semicolon operators: $form" reminded "$got"
 done
 
+# A COMMAND AFTER THE PUSH. `git push && git status` tokenises to the invocation lines
+# `push`,`status`, and the first single-tokeniser-spawn refactor matched a bare `push` line only at
+# the start or end of the whole list - so the commonest compound push of all went silent. Found
+# three times over by review on astubbs/parallel-consumer#382; these pin the per-line match, and
+# the `\n` form pins the lexer treating a line break as a command boundary.
+for form in 'git push && git status' 'git commit -m x && git push && git tag y' 'git push\ngit status'; do
+    out="$(push_fire "$form")"
+    case "$out" in *PUSH_OPEN_ITEM*) got=reminded ;; *) got=silent ;; esac
+    assert "reminds on a push FOLLOWED by another command: $form" reminded "$got"
+done
+
 # ...and the matching negative control the review asked for: a CHAIN of git calls with no push in it
 # must stay silent. The positive chained cases above cannot show that on their own.
 for form in 'git add -A && git commit -m x' 'git fetch origin&&git status'; do
@@ -1571,6 +1724,58 @@ assert "a commit message mentioning push does not fire" silent "$got"
 out="$(push_fire 'npm push')"
 [ -z "$out" ] && got=silent || got=fired
 assert "a non-git binary does not fire" silent "$got"
+
+# WHICH BRANCH IT IS REMINDING ABOUT. Same defect as the history-rewrite guard's, in the hook whose
+# entire output is a claim about a named PR: `git push origin other-branch` from this directory used
+# to look up THIS branch's PR and quote its inflight note, opening with "You are pushing to
+# astubbs/parallel-consumer#N" - a flat statement about a branch the command does not touch. The stub
+# above answers 90003 whatever it is asked, so the observable is the argv, as it is for the sibling.
+push_log_stub="$(mktemp -d)"
+cat > "$push_log_stub/gh" <<GH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$push_log_stub/argv.log"
+echo 90003
+GH
+chmod +x "$push_log_stub/gh"
+push_fire_logged() { # <command> -> stdout of the hook
+    rm -f "$PUSH_TMPDIR"/pc-push-reminder-* 2>/dev/null
+    : > "$push_log_stub/argv.log"
+    printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$1" \
+        | PATH="$push_log_stub:$PATH" TMPDIR="$PUSH_TMPDIR" bash "$PUSH_HOOK" 2>/dev/null
+}
+push_head() { stub_head_arg "$push_log_stub/argv.log"; }
+
+push_fire_logged 'git push origin feats/somewhere-else' >/dev/null
+assert "the reminder looks up the branch the push names" feats/somewhere-else "$(push_head)"
+[ "$(push_head)" = "selftest/push-fixture" ] && got=the_pre_fix_answer || got=not_the_cwd_branch
+assert "and not the branch this directory is on" not_the_cwd_branch "$got"
+
+# A bare push has no refspec, so the directory is all there is - and the reminder must say the branch
+# was inferred rather than asserting it.
+out="$(push_fire_logged 'git push')"
+assert "a bare push falls back to this directory's branch" selftest/push-fixture "$(push_head)"
+case "$out" in *"names no branch"*) got=says_it_inferred ;; *) got=presented_as_fact ;; esac
+assert "and the reminder says the branch was inferred" says_it_inferred "$got"
+case "$out" in *'"deny"'*) got=blocked ;; *) got=advisory ;; esac
+assert "the caveat did not turn the reminder into a deny" advisory "$got"
+
+# VALUE-TAKING PUSH OPTIONS. Dropping only the flag leaves its value where the repository should
+# be, shifting every positional: `-o ci.skip` would read `ci.skip` as the repo and `origin` as the
+# refspec. `--recurse-submodules` was the one missing from the skip list (cross-model review,
+# astubbs/parallel-consumer#382).
+push_fire_logged 'git push -o ci.skip origin feats/somewhere-else' >/dev/null
+assert "a value-taking push option does not shift the refspec" feats/somewhere-else "$(push_head)"
+push_fire_logged 'git push --recurse-submodules on-demand origin feats/somewhere-else' >/dev/null
+assert "--recurse-submodules value is not read as the repository" feats/somewhere-else "$(push_head)"
+
+# AN UNEXPANDED SHELL VARIABLE is source text, not a branch: the shell would expand it before git
+# ever saw it, so asserting anything about the literal is a confident wrong answer. Fall back to
+# the directory and say the branch was inferred.
+out="$(push_fire_logged 'git push origin $SOMEBRANCH')"
+assert "an unexpanded \$VAR refspec falls back to the directory branch" selftest/push-fixture "$(push_head)"
+case "$out" in *"names no branch"*) got=says_it_inferred ;; *) got=presented_as_fact ;; esac
+assert "and the \$VAR fallback says the branch was inferred" says_it_inferred "$got"
+rm -rf "$push_log_stub"
 
 # THROTTLED, or a push loop repeats the whole note and teaches the reader to skip it.
 printf '{"tool_name":"Bash","tool_input":{"command":"git push"}}' | PATH="$push_stub:$PATH" TMPDIR="$PUSH_TMPDIR" bash "$PUSH_HOOK" >/dev/null 2>&1
@@ -1681,6 +1886,47 @@ assert "the same base tip is not reported twice" throttled "$got"
 drift_moved="$(drift_ctx "$(drift_fire)")"
 case "$drift_moved" in *MASTER-SUBJECT-TWO*) got=reported_again ;; *) got="stayed quiet" ;; esac
 assert "a base ref that moved is reported again at once" reported_again "$got"
+
+# THE PUSH REFSPEC NAMES THE BRANCH, and the measurement must describe the SAME branch as the name
+# (astubbs/parallel-consumer#382). Two halves: pushing the base branch itself by refspec must be
+# silent even from a drifted worktree - the pre-fix hook read HEAD and would have reported this
+# worktree's drift against a push that never touched it - and pushing a named side branch must be
+# measured by that branch's own ref, so the session worktree's overlap cannot leak into its report.
+( cd "$drift_repo" && git branch -q sidework "$(git merge-base basefix feature)" )
+drift_refspec_tmp="$(mktemp -d)"
+out="$(printf '{"tool_name":"Bash","tool_input":{"command":"git push origin basefix"}}' |
+    env TMPDIR="$drift_refspec_tmp" MASTER_DRIFT_REF=basefix MASTER_DRIFT_FETCH_FLOOR_SECONDS=0 bash "$DRIFT_HOOK" 2>/dev/null)"
+[ -z "$out" ] && got=silent || got="reported the session's drift"
+assert "pushing the base branch BY REFSPEC is silent even from a drifted worktree" silent "$got"
+drift_side_tmp="$(mktemp -d)"
+out="$(printf '{"tool_name":"Bash","tool_input":{"command":"git push origin sidework"}}' |
+    env TMPDIR="$drift_side_tmp" MASTER_DRIFT_REF=basefix MASTER_DRIFT_FETCH_FLOOR_SECONDS=0 bash "$DRIFT_HOOK" 2>/dev/null)"
+drift_side_report="$(drift_ctx "$out")"
+case "$drift_side_report" in *MASTER-SUBJECT-ONE*) got=measured_sidework ;; *) got="no report" ;; esac
+assert "a refspec-named branch is measured by its own local ref" measured_sidework "$got"
+case "$drift_side_report" in *"BOTH sides"*) got="leaked the worktree's overlap" ;; *) got=no_false_overlap ;; esac
+assert "and the session worktree's overlap is not attributed to it" no_false_overlap "$got"
+
+# `git push origin src:dst` PUBLISHES src - dst is only the remote label. Measuring dst read a
+# same-named local branch that was not being pushed, or went silent when none existed (Codex
+# review, astubbs/parallel-consumer#382). sidework:renamed must measure sidework's own drift.
+drift_srcdst_tmp="$(mktemp -d)"
+out="$(printf '{"tool_name":"Bash","tool_input":{"command":"git push origin sidework:renamed"}}' |
+    env TMPDIR="$drift_srcdst_tmp" MASTER_DRIFT_REF=basefix MASTER_DRIFT_FETCH_FLOOR_SECONDS=0 bash "$DRIFT_HOOK" 2>/dev/null)"
+drift_srcdst_report="$(drift_ctx "$out")"
+case "$drift_srcdst_report" in *MASTER-SUBJECT-ONE*) got=measured_the_src ;; *) got="no report" ;; esac
+assert "a src:dst push is measured on its SOURCE branch" measured_the_src "$got"
+
+# THE REPOSITORY COMES FROM THE PAYLOAD CWD: a hook process running somewhere else entirely (a
+# subagent) must still measure the repository the command runs in. Pre-fix, rev-parse in the
+# hook's own directory found no repo and the reminder silently vanished.
+drift_cwd_tmp="$(mktemp -d)"
+out="$( (cd "$drift_cwd_tmp" && printf '{"tool_name":"Bash","cwd":"%s","tool_input":{"command":"git push"}}' "$drift_repo" |
+    env TMPDIR="$drift_cwd_tmp" MASTER_DRIFT_REF=basefix MASTER_DRIFT_FETCH_FLOOR_SECONDS=0 bash "$DRIFT_HOOK" 2>/dev/null) )"
+drift_cwd_report="$(drift_ctx "$out")"
+case "$drift_cwd_report" in *MASTER-SUBJECT-*) got=found_the_repo ;; *) got="stayed silent" ;; esac
+assert "the drift repo is derived from the payload cwd, not the hook's" found_the_repo "$got"
+rm -rf "$drift_refspec_tmp" "$drift_side_tmp" "$drift_srcdst_tmp" "$drift_cwd_tmp"
 
 # UNCOMMITTED WORK COUNTS AS THIS BRANCH'S, which the hook states as a deliberate choice: a file you
 # are editing right now is the one you most want to hear about. `untouched.txt` is in neither side's
@@ -1831,6 +2077,181 @@ assert "a PR with nothing outstanding still states the risk" states_the_risk "$g
 hist_out="$(hist 'git push --force origin main')"
 case "$hist_out" in *"LAST step before a merge"*) got=explains ;; *) got=bare_refusal ;; esac
 assert "the refusal says when a rewrite IS allowed" explains "$got"
+
+# --- WHICH BRANCH THE REFUSAL IS ABOUT -------------------------------------------------------
+#
+# A hook does NOT run in the directory its guarded command runs in, and this repository keeps many
+# worktrees checked out at once - so `git rev-parse --abbrev-ref HEAD` in the hook process answers
+# about whichever branch the SESSION sits on. Twice on 2026-08-31 that made this hook's most
+# confident sentence describe an unrelated branch: a force-push of `feats/proxy-verdict-free-return`
+# (open PR astubbs/parallel-consumer#295, with review history) and a `git commit --amend` inside the
+# `feats/ks-streams-fork-machinery` worktree were both reported against
+# `docs/god-branch-decomposition-plan`, the plan worktree that session occupied.
+#
+# THE OBSERVABLE IS THE ARGV gh WAS HANDED, not the message - a lookup for the wrong branch succeeds
+# and reads exactly like a correct one, which is what let this run for as long as it did. Same
+# technique as case 3 of the lookup section below, for the same reason.
+#
+# EACH CASE ASSERTS BOTH HALVES: the branch asked about is the one the command names, AND it is not
+# the branch the working directory is on. The second half is the negative control - it is precisely
+# the pre-fix answer, so a fixture that stopped reaching the defect (both names collapsing to one)
+# fails rather than passing vacuously.
+hb_prev_cwd="$PWD"
+hb_cwd_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+hb_stub="$(mktemp -d)"
+cat > "$hb_stub/gh" <<GH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$hb_stub/argv.log"
+case "\$*" in
+    *"pr list"*)   echo 90007 ;;
+    *"/comments"*) echo 0 ;;
+    *"run list"*)  echo 0 ;;
+esac
+GH
+chmod +x "$hb_stub/gh"
+
+# A SECOND WORKTREE, standing in for the one the session is not sitting in. Hosted `origin` because
+# both the slug derivation and the refusal depend on it - see the push fixture's own note.
+hb_other="$(mktemp -d)"
+(
+  cd "$hb_other" || exit 1
+  git init -q .
+  git checkout -q -b selftest/other-worktree 2>/dev/null || git branch -q -m selftest/other-worktree
+  git remote add origin https://github.com/astubbs/parallel-consumer.git
+  : > .keep
+  git add .keep
+  git -c user.email=selftest@example.invalid -c user.name=selftest commit -qm "fixture"
+)
+
+hb_fire() { # <command> [payload-cwd | "-" to omit the cwd field] -> stdout of the hook
+    : > "$hb_stub/argv.log"
+    if [ "${2:-}" = "-" ]; then
+        printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$1" \
+            | PATH="$hb_stub:$PATH" bash "$HIST_HOOK" 2>/dev/null
+    else
+        printf '{"tool_name":"Bash","cwd":"%s","tool_input":{"command":"%s"}}' "${2:-$PWD}" "$1" \
+            | PATH="$hb_stub:$PATH" bash "$HIST_HOOK" 2>/dev/null
+    fi
+}
+hb_head() { stub_head_arg "$hb_stub/argv.log"; }
+
+hb_out="$(hb_fire 'git push --force origin feats/elsewhere')"
+assert "a force-push names the branch its refspec names" feats/elsewhere "$(hb_head)"
+[ "$(hb_head)" = "$hb_cwd_branch" ] && got=the_pre_fix_answer || got=not_the_cwd_branch
+assert "and not the branch this directory happens to be on" not_the_cwd_branch "$got"
+[ -n "$hb_out" ] && got=DENY || got=ALLOW
+assert "naming the branch from the command still REFUSES" DENY "$got"
+
+# THE PR HEAD IS THE DESTINATION of a `src:dst` refspec, not the source - `dst` is what a pull
+# request has as its head branch.
+hb_fire 'git push --force origin HEAD:feats/destination' >/dev/null
+assert "a src:dst refspec is read at its destination" feats/destination "$(hb_head)"
+hb_fire 'git push origin --delete doomed-branch' >/dev/null
+assert "a remote branch deletion names the branch being deleted" doomed-branch "$(hb_head)"
+
+# NO REFSPEC IS A REAL ANSWER: the working directory is all there is, and the refusal has to say so
+# rather than presenting a guess as a measurement.
+hb_out="$(hb_fire 'git push -f')"
+assert "a push with no refspec falls back to this directory" "$hb_cwd_branch" "$(hb_head)"
+case "$hb_out" in *"DOES NOT NAME A BRANCH"*) got=says_it_guessed ;; *) got=presented_as_fact ;; esac
+assert "and the refusal says the branch was not named by the command" says_it_guessed "$got"
+
+# THE AMEND CASE, which is the second half of the 2026-08-31 incident: a non-push rewrite has no
+# refspec to read, so the only improvement available is to look in the right DIRECTORY and to say
+# which one. A leading `cd <path> &&` is the command saying where it runs, and outranks everything.
+hb_fire "cd $hb_other && git commit --amend --no-edit" >/dev/null
+assert "an amend behind a cd prefix is looked up in THAT worktree" selftest/other-worktree "$(hb_head)"
+[ "$(hb_head)" = "$hb_cwd_branch" ] && got=the_pre_fix_answer || got=not_the_cwd_branch
+assert "and not in the directory the hook itself runs in" not_the_cwd_branch "$got"
+
+# ...and with no `cd`, the tool call's own `cwd` from the payload, which is the field the pre-fix
+# hook ignored entirely in favour of its own process directory.
+hb_out="$(hb_fire 'git commit --amend --no-edit' "$hb_other")"
+assert "an amend is looked up in the tool call's own directory" selftest/other-worktree "$(hb_head)"
+case "$hb_out" in *"$hb_other"*) got=names_the_directory ;; *) got=unattributed ;; esac
+assert "the refusal names the directory it derived the branch from" names_the_directory "$got"
+
+# THE REVIEW ROUND ON astubbs/parallel-consumer#382, pinned. Each of these was a way for this
+# refusing guard to answer about the wrong thing - or not answer at all - found by fresh reviewers
+# and an independent cross-model pass after the first fix landed.
+
+# `git -C <path>` used to put the path where the subcommand should be, so the guard matched NOTHING
+# and a force-push sailed through in silence - a total bypass of the thing this hook refuses.
+hb_out="$(hb_fire "git -C $hb_other push --force origin feats/elsewhere")"
+[ -n "$hb_out" ] && got=DENY || got=ALLOW
+assert "git -C <path> push --force is not a silent bypass" DENY "$got"
+assert "and its refspec still names the branch" feats/elsewhere "$(hb_head)"
+hb_out="$(hb_fire "git -C $hb_other commit --amend --no-edit")"
+assert "git -C relocates the amend lookup to THAT worktree" selftest/other-worktree "$(hb_head)"
+
+# A NEWLINE is a command boundary, not whitespace: `git push -f<newline>git log -1` used to swallow
+# the next command as push arguments and name `log` as the branch - a confident wrong answer where
+# the honest one is the labelled fallback.
+hb_out="$(hb_fire 'git push -f\ngit log -1')"
+assert "a newline-separated payload does not donate a fake branch" "$hb_cwd_branch" "$(hb_head)"
+case "$hb_out" in *"DOES NOT NAME A BRANCH"*) got=says_it_guessed ;; *) got=presented_as_fact ;; esac
+assert "and that fallback says the branch was not named" says_it_guessed "$got"
+hb_fire 'git push --force origin feats/real\ngit log' >/dev/null
+assert "a real refspec before a newline still wins" feats/real "$(hb_head)"
+
+# UNSPACED OPERATORS stay operators: `feature&&git` is not a branch name.
+hb_fire 'git push --force origin feats/spliced&&git status' >/dev/null
+assert "an unspaced && does not fuse into the branch name" feats/spliced "$(hb_head)"
+
+# TWO command-position `cd`s are AMBIGUOUS - the amend may run in either - so the guard must fall
+# back to the payload cwd, whose label already says it is a guess, rather than presenting the
+# FIRST cd as the directory the command changes into.
+hb_dead="$(mktemp -d)"
+hb_fire "cd $hb_dead && echo x && cd $hb_other && git commit --amend --no-edit" "$hb_other" >/dev/null
+assert "two cds fall back to the payload cwd, not the first cd" selftest/other-worktree "$(hb_head)"
+rm -rf "$hb_dead"
+
+# A RELATIVE `cd` is relative to where the COMMAND runs. The hook process sits elsewhere, so
+# resolving it from the hook's own directory would test the wrong tree - and succeed, because
+# same-named subdirectories exist in every worktree of this repository.
+( cd "$hb_other" && mkdir -p relsub && cd relsub && : > .keep )
+hb_fire 'cd relsub && git commit --amend --no-edit' "$hb_other" >/dev/null
+assert "a relative cd resolves against the payload cwd" selftest/other-worktree "$(hb_head)"
+
+# THE LAST-RESORT TIER: no refspec, no cd, no payload cwd leaves only the hook process's own
+# directory, and the refusal must SAY that is what it used - the least trustworthy answer in the
+# derivation order, which is exactly why its label has to survive.
+hb_out="$(hb_fire 'git commit --amend --no-edit' -)"
+case "$hb_out" in *"this hook process's directory"*) got=labelled_last_resort ;; *) got=unlabelled ;; esac
+assert "with no cwd at all, the hook-directory fallback is labelled" labelled_last_resort "$got"
+
+# THE CODEX ROUND (astubbs/parallel-consumer#382), pinned - four more ways to steer the guard.
+
+# A -C recorded while scanning an EARLIER invocation must not survive into the one that carries
+# the verdict: `git -C <dir> status && git commit --amend` runs the amend in the payload cwd.
+# Pre-fix this either answered about <dir> or, when <dir> was not a repository, went completely
+# SILENT - a bypass of the refusal itself.
+hb_bleed="$(mktemp -d)"
+hb_out="$(hb_fire "git -C $hb_bleed status && git commit --amend --no-edit" "$hb_other")"
+[ -n "$hb_out" ] && got=DENY || got=ALLOW
+assert "a -C on an EARLIER command does not bleed into the amend" DENY "$got"
+assert "...and the amend is answered from the payload cwd" selftest/other-worktree "$(hb_head)"
+rm -rf "$hb_bleed"
+
+# --recurse-submodules takes a separate value; the python copy of the parser must skip it too
+# (change one, change the other - and the first round changed only the bash one).
+hb_fire 'git push --force --recurse-submodules on-demand origin feats/subm' >/dev/null
+assert "the python parser skips --recurse-submodules and its value" feats/subm "$(hb_head)"
+
+# `cd /x & git commit` BACKGROUNDS the cd into a subshell - the amend stays where the payload says,
+# so the prefix must not be trusted across a cwd-losing operator.
+hb_fire "cd $hb_other & git commit --amend --no-edit" >/dev/null
+assert "a backgrounded cd does not relocate the amend" "$hb_cwd_branch" "$(hb_head)"
+
+# AN UNEXPANDED $VAR is source text, not a branch - fall back with the label, never assert the
+# literal.
+hb_out="$(hb_fire 'git push --force origin $TARGET_BRANCH')"
+assert "an unexpanded \$VAR refspec falls back to this directory" "$hb_cwd_branch" "$(hb_head)"
+case "$hb_out" in *"DOES NOT NAME A BRANCH"*) got=says_it_guessed ;; *) got=presented_as_fact ;; esac
+assert "and the \$VAR fallback is labelled as a guess" says_it_guessed "$got"
+
+rm -rf "$hb_stub" "$hb_other"
+cd "$hb_prev_cwd" || exit 1
 echo
 echo "--- the PR lookup, in the three hooks that make one ---"
 

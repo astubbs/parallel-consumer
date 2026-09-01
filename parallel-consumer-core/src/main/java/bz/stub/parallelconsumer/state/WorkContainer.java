@@ -5,11 +5,9 @@ package bz.stub.parallelconsumer.state;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.PollContextInternal;
 import bz.stub.parallelconsumer.internal.utils.ThrowableUtils;
 import bz.stub.parallelconsumer.RecordContext;
 import bz.stub.parallelconsumer.internal.PCModule;
-import bz.stub.parallelconsumer.internal.ProducerManager;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NonNull;
@@ -816,19 +814,5 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
      */
     public boolean isAvailableToTakeAsWork() {
         return isClaimableFrom(state.get());
-    }
-
-    /**
-     * Only unlock our producing lock, when we've had the {@link WorkContainer} state safely returned to the controllers
-     * inbound queue, so we know it'll be included properly before the next commit as a succeeded offset. As in order
-     * for the controller to perform the transaction commit, it will be blocked from acquiring its commit lock until all
-     * produce locks have been returned, inbound queue processed, and thus their representative offsets placed into the
-     * commit payload (offset map).
-     */
-    public void onPostAddToMailBox(PollContextInternal<K, V> context, Optional<ProducerManager<K, V>> producerManager) {
-        producerManager.ifPresent(pm -> {
-            var producingLock = context.getProducingLock();
-            producingLock.ifPresent(pm::finishProducing);
-        });
     }
 }

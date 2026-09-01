@@ -52,14 +52,51 @@ hook_lib="${BASH_SOURCE[0]%/*}/lib/hook-common.sh"
 # shellcheck source=.claude/hooks/lib/hook-common.sh
 . "$hook_lib"
 
-hook_git_runs "$payload" push || exit 0
+# ONE tokeniser spawn answers both questions - "is this a push?" and "which branch does it name?" -
+# the same shape as remind-inflight-on-push.sh, wrapped-haystack match included. The refspec
+# outranks HEAD for the reason hook-common.sh's `hook_push_head_ref` states: this hook does not run
+# in the directory its guarded command runs in, so `git push origin other-branch` from here used to
+# measure THIS worktree's drift and report it against a push that never touched this branch.
+invocations="$(hook_git_invocations "$payload")"
+case $'\n'"$invocations"$'\n' in *$'\n'push$'\n'*|*$'\n'push$'\t'*) ;; *) exit 0 ;; esac
 
+# THE REPOSITORY COMES FROM THE COMMAND'S OWN DIRECTORY, not this hook process's - same reasoning
+# and same edge as remind-inflight-on-push.sh, which owns the comment.
+cmd_cwd="$(hook_payload_cwd "$payload")"
+if [ -n "$cmd_cwd" ] && [ -d "$cmd_cwd" ]; then
+    cd "$cmd_cwd" 2>/dev/null || true
+fi
 root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$root" ] || exit 0
 cd "$root" 2>/dev/null || exit 0
 
-branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+# TWO SIDES OF ONE REFSPEC: `git push origin src:dst` publishes the LOCAL branch `src` under the
+# REMOTE name `dst`. The dst is the right LABEL (it is what a PR has as its head branch, and what
+# the stamp is keyed by); the src is the CONTENT being pushed, so it is what the drift measurement
+# must read - measuring a same-named local `dst` reported another branch's drift, or went silent
+# when no such local branch existed (Codex review, astubbs/parallel-consumer#382). With no colon
+# the sides agree; an empty src (bare push, HEAD:x, an unexpanded $var) falls back to HEAD below.
+branch="$(hook_push_head_ref "$invocations")"
+push_src="$(hook_push_head_ref "$invocations" src)"
+head_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+[ -n "$branch" ] || branch="$head_branch"
 [ -n "$branch" ] && [ "$branch" != "HEAD" ] || exit 0
+
+# THE MEASUREMENT MUST DESCRIBE THE SAME BRANCH AS THE NAME. Everything below measured `HEAD..` -
+# fine while the branch WAS HEAD, but pairing a refspec-named branch with the session tree's
+# measurement would report branch B's name over branch A's drift, the exact wrong-pairing defect
+# astubbs/parallel-consumer#382 exists to kill. So: pushing the checked-out branch measures HEAD
+# (working tree included, as before); pushing another branch measures that branch's own local ref,
+# with a plain committed diff because the working tree here belongs to a different branch; a branch
+# with no local ref in this repository cannot be measured at all, and a reminder that cannot
+# measure stays silent rather than guessing.
+measure_ref="HEAD"
+worktree_diff=1
+if [ -n "$push_src" ] && [ "$push_src" != "$head_branch" ]; then
+    measure_ref="$(git rev-parse --verify --quiet "refs/heads/$push_src" 2>/dev/null || true)"
+    [ -n "$measure_ref" ] || exit 0
+    worktree_diff=0
+fi
 
 base_ref="${MASTER_DRIFT_REF:-origin/master}"
 # Pushing master itself has nothing to inherit. Compared against the ref BOTH ways, so a local
@@ -89,25 +126,29 @@ prev=""
 [ -f "$stamp" ] && prev="$(head -n1 "$stamp" 2>/dev/null || true)"
 printf '%s\n' "$base_sha" > "$stamp" 2>/dev/null || true
 
-behind="$(git rev-list --count "HEAD..$base_sha" 2>/dev/null || echo 0)"
+behind="$(git rev-list --count "$measure_ref..$base_sha" 2>/dev/null || echo 0)"
 case "$behind" in ''|*[!0-9]*) behind=0 ;; esac
 [ "$behind" -gt 0 ] || exit 0
 [ "$prev" != "$base_sha" ] || exit 0
 
-merge_base="$(git merge-base HEAD "$base_sha" 2>/dev/null || true)"
+merge_base="$(git merge-base "$measure_ref" "$base_sha" 2>/dev/null || true)"
 [ -n "$merge_base" ] || exit 0
 
 # CAPPED, AND THE CAP IS STATED. A silent truncation reads as a complete list, which is the failure
 # this repo has already published a wrong count from.
 commit_cap="${MASTER_DRIFT_COMMIT_CAP:-25}"
-commits="$(git log --format='  %h  %s' -n "$commit_cap" "HEAD..$base_sha" 2>/dev/null || true)"
+commits="$(git log --format='  %h  %s' -n "$commit_cap" "$measure_ref..$base_sha" 2>/dev/null || true)"
 commits_omitted=$(( behind > commit_cap ? behind - commit_cap : 0 ))
 
 # OVERLAP is the question the report exists to answer: has master touched anything this branch
 # touches? `git diff <merge-base>` with no second commit reads the WORKING TREE, so uncommitted work
 # counts as this branch's - a file you are editing right now is exactly the one you want to know
 # about.
-mine="$(git diff --name-only "$merge_base" 2>/dev/null | sort -u)"
+if [ "$worktree_diff" = 1 ]; then
+    mine="$(git diff --name-only "$merge_base" 2>/dev/null | sort -u)"
+else
+    mine="$(git diff --name-only "$merge_base" "$measure_ref" 2>/dev/null | sort -u)"
+fi
 theirs="$(git diff --name-only "$merge_base" "$base_sha" 2>/dev/null | sort -u)"
 overlap="$(comm -12 <(printf '%s\n' "$mine") <(printf '%s\n' "$theirs") 2>/dev/null | sed '/^$/d')"
 
