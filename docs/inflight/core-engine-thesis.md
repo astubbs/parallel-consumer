@@ -160,7 +160,9 @@ do not apply there yet because the section they are about has not landed.
    sustainable internal concurrency; slow loop: fleet decides instance count.
    [`core-auto-scaling.md`](core-auto-scaling.md) has the full design; the strategy summary should
    compress it, not omit it.
-4. **No embedded-vs-cluster positioning.**
+4. **No embedded-vs-cluster positioning.** And it now needs stating precisely rather than as a
+   slogan: [`core-standalone-deployment.md`](core-standalone-deployment.md) shows the line falls
+   between advising/vending and deciding-per-call, not between one process and two.
 5. **"The v1 framing is..." conflates release framing with strategy.** Keep the conservative
    release scope, but say so: *the v1 release framing is deliberately narrower than the
    architectural possibility.* Otherwise the doc contradicts itself the moment the thesis section

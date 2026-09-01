@@ -69,7 +69,9 @@ cannot expose more useful work, vote 0 - this is the per-key generalisation of t
 partition-count cap. The client-side vantage is exactly what makes the distinction observable
 (admission saturation vs downstream latency vs blocked ordering domains), and it is what makes the
 recommendation stronger than "tell infrastructure when more would help" - the signal no external
-autoscaler can construct.
+autoscaler can construct. **That claim is exactly what an agentless deployment has to give up**,
+which is why [`core-standalone-deployment.md`](core-standalone-deployment.md) treats scraped
+recommendations as a different, shallower tier rather than the same feature from further away.
 
 **Addition from the follow-up conversation, 2026-08-29/30: a loop below these two.** When one
 process hosts many processing functions, each runs dimension 1 independently and the process

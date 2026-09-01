@@ -8,6 +8,12 @@ over HTTP. It **takes the product decision** that
 [`core-fleet-capacity-coordination.md`](core-fleet-capacity-coordination.md)'s claim 2 recorded as
 explicitly not taken, and records the mechanisms that claim never named.
 
+The same session's continuation asks the inverse question - whether the runtime itself has to sit
+inside anyone's process at all - and
+[`core-standalone-deployment.md`](core-standalone-deployment.md) owns that. It reads the four
+mechanisms below as an ordered adoption ramp, and it is where the credit-vending surface stops being
+a side door and becomes the product's only way to act.
+
 ## Why it is a correctness argument, not a market-widener
 
 The system's claim is that it moves capacity toward the current global constraint. **If a third of
@@ -116,7 +122,9 @@ is** - it describes the semantics from the caller's side, not the mechanism.
   the foundation comes first and all sorts of things can be built on top of it. Note that the vending
   surface offers a dial the in-process navigator does not have: a batch of one is an authoritative
   per-request grant, and a batch of N is delegation with overshoot proportional to N. The
-  hard-ceiling half stays inside the ring-fence the risks register put around it.
+  hard-ceiling half stays inside the ring-fence the risks register put around it. That dial turns
+  out to decide something larger too - see the embedded-not-cluster section of
+  [`core-standalone-deployment.md`](core-standalone-deployment.md).
 - **Anything about which telemetry systems, which protocol, or what the endpoint looks like.**
 
 ## One collision to avoid
