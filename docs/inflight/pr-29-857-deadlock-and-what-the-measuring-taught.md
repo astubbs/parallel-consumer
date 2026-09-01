@@ -731,6 +731,33 @@ reporter. **A skipped-then-recoverable offset is the shape of the offset-complet
 (astubbs#344 marking incomplete offsets complete; astubbs#108 recording a post-departure commit as
 successful), not of a lock. It should be assessed on its own before being counted here.
 
+**Settled 2026-09-01, and this paragraph's call was right while both its nominations were wrong.**
+astubbs#183 was assessed on its own, as asked here, and closed as fixed by astubbs#31 (which carries
+confluentinc#909) - so *"not this family, assess it separately"* holds, and the two offset-completion
+candidates named above do not:
+
+- **astubbs#344 is withdrawn.** It corrupts committed offset metadata, so it destroys records **at
+  restore** - it cannot produce a record that comes back after a restart, which is the signal the
+  report leads with. It also predicts lag falling and no live skip.
+- **astubbs#108 is withdrawn.** A commit rejected after leaving the group and recorded as successful
+  produces **duplicates, not skips**: every record is processed, and a restart replays a range rather
+  than one offset.
+
+What settled it was an elimination on the reported build rather than a shape match. At tag `0.5.3.1`,
+`ProcessingShard`'s `containsKey`-then-drop is the **only** path in core that silently loses a single
+record for a still-assigned partition; every other drop site is whole-batch, revoked-partition-only,
+or replay-safe. Two findings closed the remaining gap: the **saturated-pipeline precondition does not
+apply to 0.5.3.1** - the take-scan stale eviction it suppresses was added later, so on that build the
+defect needs a rebalance and nothing else - and the reported `[1,2,3,5,6,7...]` **requires `KEY`
+ordering**, which is the default, because a stale resident makes `couldBeTakenAsWork` false and breaks
+the shard scan, freezing the whole partition under `PARTITION`/`UNORDERED`. confluentinc#909's own
+reporter annotated their timeline with one shard per key, independently.
+
+**The "no rebalance is mentioned anywhere in the report" observation above stands, and is recorded as
+the closure's residual.** It does not rule confluentinc#909 out: the report describes no topology at
+all, and the elimination found no rebalance-free path with this signature. Full reasoning in the
+closing comment, https://github.com/astubbs/parallel-consumer/issues/183#issuecomment-5494367492.
+
 **The no-rebalance case is genuinely rare, which makes dmironowicz's report more interesting, not
 less.** Across every duplicate report on both timelines, the pause ties to a rebalance, a redeploy
 or (once) a leader election. Only two exceptions exist: sangreal's July `pc_log` reading of *"not
