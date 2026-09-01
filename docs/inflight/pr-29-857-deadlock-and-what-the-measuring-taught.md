@@ -128,19 +128,7 @@ unlucky run blocks a merge, and `largeNumberOfInstances` was measured at one fai
 
 ## NEXT TASKS, in order
 
-**CLOSED 2026-08-31 - whether the fix covers the COOPERATIVE revoke path.** It was an inference
-(the fix sits on the revoke path, so it should be assignor-independent) until measured. A seed
-replay of the family's twentieth capture could not settle it - a chaos seed fixes the conductor's
-schedule, not the poll-versus-control interleaving - so it was asked on the deterministic probe
-instead, which forces the window open. Four cells, {fix, pre-fix control} x {eager, cooperative},
-twenty repetitions each: both fix cells pass throughout, both control cells fail throughout. The
-pre-fix cycle is therefore not eager-specific, which fits the twentieth capture being a cooperative
-revoke. Cells, caveats and the two instrumentation faults caught along the way are in
-`docs/solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md` and
-the probe's own Calibration status javadoc.
 
-**DONE 2026-09-01 - master is merged and all three predicted traps fired exactly as written.** The
-merge commit records each resolution; in short:
 
 - **The six scripts duplicated with ZERO conflicts reported**, as predicted. The originals are
   deleted. Diffing first was not ceremony: the pairs differ by 33-93 lines and the `exp-` copies are
@@ -197,10 +185,6 @@ narrative. The roadmap half of this item is DONE: `known-defects-cleared`'s `sta
 says "mitigation drafted" and now records a fix measured against a one-term control on both
 assignors.
 
-**DONE 2026-09-01: the compounding pass is discharged.** Both learnings landed - the metrics-teardown
-one in `docs/solutions/runtime-errors/a-throwing-meter-registry-kills-the-poll-thread-and-strands-close.md`,
-and the rest across `docs/solutions/best-practices/` and `docs/solutions/workflow-issues/`. The note
-that tracked the pass was deleted once it had nothing left, as it said it should be.
 
 **Do not re-attribute the eager `CLASS2_STALL` sightings to this PR.** Four measured arms say
 otherwise; details below and in `test-857-revoke-under-work-sightings.md`.
@@ -251,32 +235,6 @@ left the live threads without a home. Append here as you go rather than reconstr
 
 **Decisions that are the owner's, not an agent's**
 
-- **DECIDED 2026-08-19 by the owner: stop GATING on `LAG_STAGNATION_BOUND`.** The question asked was
-  "shouldn't we just remove it - it isn't testing anything", and it holds up: a genuinely wedged run
-  is already caught twice without it, by the quiet-phase `await()` failing at `QUIET_CAP` and by the
-  scenario's `@Timeout(600)` behind that. The bound's only unique contributions are detecting
-  earlier and naming the partition, bought at the cost of firing on every slow-but-correct run and -
-  through `failFast` - destroying the evidence at the moment of detection.
-  <br>
-  **Keep the measurement, drop the gate.** The peak stagnation figure is worth having in an autopsy;
-  it must not fail a build. `ProgressProbe` already has the mechanism - observer mode records
-  violations without gating - so this is a mode change rather than a deletion, and the peak stays in
-  the autopsy block either way.
-  <br>
-  What takes over as the gate is the shard-progress check: holding work while completing none is a
-  real wedge, and unlike a duration it cannot fire on slowness. **Sequence matters** - land the
-  shard check, prove it fires and stays silent in the right places, and only then stop gating on the
-  bound. Doing it the other way leaves a window with no Class 2 gate at all. The three options
-  previously listed here (raise the bound, shorten `HEAVY_SLEEP`, retire the eager arm) are
-  superseded; the rejected move is unchanged - nudging a threshold until a run goes green, which the
-  July recalibration already did once. Background:
-  `test-class2-probe-asserts-timing-not-correctness.md`.
-  <br>
-  **Still unimplemented on this branch as of 2026-08-20, deliberately.** Flipping the gate right
-  after the sightings above, with no demonstrating chaos run (fires on a wedge, silent on a
-  slow-but-correct drain), would be indistinguishable in the history from tuning-to-green - the
-  rejected move. It wants its own small change where that demonstration is the content; the
-  principle itself is now durable in `docs/investigating.md` ("Designing a liveness check").
 - **Whether the ordering ledger should gate.** `ChaosKeyOrderIT` is `@Tag("chaos")`, so ordering
   under real churn runs only on demand; what gates every build is `KeyOrderLedgerIT`, which checks
   the ledger's LOGIC against synthetic histories. So a genuine ordering regression under churn would
@@ -299,7 +257,7 @@ left the live threads without a home. Append here as you go rather than reconstr
 
 **Merge mechanics not yet done**
 
-- **Review deferral: its precondition is now MET, 2026-09-01.** It was deferred on 2026-08-19 until
+- **DONE 2026-09-02: the review deferral is discharged.** It was requested and `claude-review` has run green. The rest of this entry is the record of why it was deferred. It was deferred on 2026-08-19 until
   astubbs#204, astubbs#31, astubbs#57 and astubbs#267 had landed, because reviewing a tree about to
   change spends a cycle and buys a second one later. All four have merged, master has been merged in,
   and the deadlock fix was re-verified afterwards on a four-cell control across both assignors. So
@@ -315,20 +273,6 @@ left the live threads without a home. Append here as you go rather than reconstr
   `Rebalance857CommitSyncDeadlockProbeIT` (the 60/60 to 0/60 proof, 20 tests / ~5.6 min),
   `ShardManagerStaleContainerTest`, `OutForProcessingCounterDriftProbeTest` and
   `InstanceStallProbeIT`. Compiling is not evidence that the fencing argument survived.
-- **DONE 2026-09-01: the roadmap edit.** `known-defects-cleared`'s `stage_detail` no longer says
-  "mitigation drafted"; it records a fix measured against a one-term control on both assignors, and
-  states that the family is NOT closed by it because the transactional revoke wait (astubbs#44) is a
-  separate defect in a commit mode this fix cannot reach. `stage` stays `in-progress`, as this entry
-  required. The 2026-08-19 constraint - do not edit early, because it would assert something not yet
-  true - is respected: the wording says the fix is measured and unmerged, which is what is true now.
-  Still out of reach of `roadmap-stage-gate.js`, which only fires for entries carrying a
-  `pull_request:` field.
-- **DONE 2026-09-01: merge strategy recommended and the squash message written.** Squash, not
-  re-cut: the separable workstreams have already left as astubbs#375, astubbs#376, astubbs#381 and
-  astubbs#393, so what remains is one idea with a long research narrative - and a re-cut means a
-  force-push onto a PR carrying inline review comments, which re-anchors or orphans them. The
-  message lives in the session scratchpad, deliberately NOT in the PR body, per
-  `docs/merge-checklist.md`.
 - **Duplicate-code and file-similarity reports** need reading once review runs; clones introduced by
   this PR are in scope, pre-existing ones are not.
 
@@ -410,6 +354,73 @@ at merge; the remaining items below keep their existing owners or await promotio
 - **Run-mode experiments belong in the demo app** (`branch-polyglot-demo-ideation.md`) - the
   assignor x stop-mode matrix is a user-facing result, and the harness that produced it is a
   ready-made engine for the bring-your-own-topic direction.
+
+## Closed out on this PR
+
+Items that were open above and are finished. Kept rather than deleted: each states what was
+decided and why, which is the part a reader arriving late actually needs.
+
+**CLOSED 2026-08-31 - whether the fix covers the COOPERATIVE revoke path.** It was an inference
+(the fix sits on the revoke path, so it should be assignor-independent) until measured. A seed
+replay of the family's twentieth capture could not settle it - a chaos seed fixes the conductor's
+schedule, not the poll-versus-control interleaving - so it was asked on the deterministic probe
+instead, which forces the window open. Four cells, {fix, pre-fix control} x {eager, cooperative},
+twenty repetitions each: both fix cells pass throughout, both control cells fail throughout. The
+pre-fix cycle is therefore not eager-specific, which fits the twentieth capture being a cooperative
+revoke. Cells, caveats and the two instrumentation faults caught along the way are in
+`docs/solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md` and
+the probe's own Calibration status javadoc.
+
+**DONE 2026-09-01 - master is merged and all three predicted traps fired exactly as written.** The
+merge commit records each resolution; in short:
+
+**DONE 2026-09-01: the compounding pass is discharged.** Both learnings landed - the metrics-teardown
+one in `docs/solutions/runtime-errors/a-throwing-meter-registry-kills-the-poll-thread-and-strands-close.md`,
+and the rest across `docs/solutions/best-practices/` and `docs/solutions/workflow-issues/`. The note
+that tracked the pass was deleted once it had nothing left, as it said it should be.
+
+- **DECIDED 2026-08-19 by the owner: stop GATING on `LAG_STAGNATION_BOUND`.** The question asked was
+  "shouldn't we just remove it - it isn't testing anything", and it holds up: a genuinely wedged run
+  is already caught twice without it, by the quiet-phase `await()` failing at `QUIET_CAP` and by the
+  scenario's `@Timeout(600)` behind that. The bound's only unique contributions are detecting
+  earlier and naming the partition, bought at the cost of firing on every slow-but-correct run and -
+  through `failFast` - destroying the evidence at the moment of detection.
+  <br>
+  **Keep the measurement, drop the gate.** The peak stagnation figure is worth having in an autopsy;
+  it must not fail a build. `ProgressProbe` already has the mechanism - observer mode records
+  violations without gating - so this is a mode change rather than a deletion, and the peak stays in
+  the autopsy block either way.
+  <br>
+  What takes over as the gate is the shard-progress check: holding work while completing none is a
+  real wedge, and unlike a duration it cannot fire on slowness. **Sequence matters** - land the
+  shard check, prove it fires and stays silent in the right places, and only then stop gating on the
+  bound. Doing it the other way leaves a window with no Class 2 gate at all. The three options
+  previously listed here (raise the bound, shorten `HEAVY_SLEEP`, retire the eager arm) are
+  superseded; the rejected move is unchanged - nudging a threshold until a run goes green, which the
+  July recalibration already did once. Background:
+  `test-class2-probe-asserts-timing-not-correctness.md`.
+  <br>
+  **Still unimplemented on this branch as of 2026-08-20, deliberately.** Flipping the gate right
+  after the sightings above, with no demonstrating chaos run (fires on a wedge, silent on a
+  slow-but-correct drain), would be indistinguishable in the history from tuning-to-green - the
+  rejected move. It wants its own small change where that demonstration is the content; the
+  principle itself is now durable in `docs/investigating.md` ("Designing a liveness check").
+
+- **DONE 2026-09-01: the roadmap edit.** `known-defects-cleared`'s `stage_detail` no longer says
+  "mitigation drafted"; it records a fix measured against a one-term control on both assignors, and
+  states that the family is NOT closed by it because the transactional revoke wait (astubbs#44) is a
+  separate defect in a commit mode this fix cannot reach. `stage` stays `in-progress`, as this entry
+  required. The 2026-08-19 constraint - do not edit early, because it would assert something not yet
+  true - is respected: the wording says the fix is measured and unmerged, which is what is true now.
+  Still out of reach of `roadmap-stage-gate.js`, which only fires for entries carrying a
+  `pull_request:` field.
+
+- **DONE 2026-09-01: merge strategy recommended and the squash message written.** Squash, not
+  re-cut: the separable workstreams have already left as astubbs#375, astubbs#376, astubbs#381 and
+  astubbs#393, so what remains is one idea with a long research narrative - and a re-cut means a
+  force-push onto a PR carrying inline review comments, which re-anchors or orphans them. The
+  message lives in the session scratchpad, deliberately NOT in the PR body, per
+  `docs/merge-checklist.md`.
 
 ## Already fixed
 
