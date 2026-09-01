@@ -146,6 +146,28 @@ jobs:
           path: '**/target/*-reports/*.xml'
           retention-days: 14
 
+      # PERFORMANCE ONLY, and the retention is deliberately not the chaos lane's 14 days above.
+      # Those reports diagnose ONE failure and are read within days. These are the accumulation
+      # itself: docs/inflight/perf-throughput-regression-gate.md defers a throughput gate until
+      # somebody has seen the real spread, and until this step existed the only surviving copy of any
+      # number was the PC-THROUGHPUT lines inside the job log - which is exactly the artefact
+      # docs/solutions/workflow-issues/gh-run-view-log-truncation.md says truncates silently when read
+      # the obvious way. A short window here would defeat the purpose of collecting at all.
+      #
+      # THIS IS A STOPGAP AND SHOULD NOT BE READ AS THE GATE'S PRECONDITION BEING MET. An artifact is
+      # per-run and still expires, so a distribution still means downloading N runs by hand
+      # (`gh run download <run-id> -n performance-throughput-<n>`). It replaces log-scraping with a
+      # machine-readable file; it does not accumulate. Storing a series durably was considered and
+      # declined - no data branch, no write grant (operator decision, 2026-09-01).
+      - name: Upload throughput summary
+        if: always() && matrix.suite == 'performance'
+        uses: actions/upload-artifact@v7
+        with:
+          name: performance-throughput-${{ github.run_number }}
+          path: '**/target/performance-throughput.txt'
+          retention-days: 90
+          if-no-files-found: warn
+
       - name: Upload coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v5
