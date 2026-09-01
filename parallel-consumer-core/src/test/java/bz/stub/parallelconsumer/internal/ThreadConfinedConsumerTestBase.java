@@ -40,9 +40,20 @@ abstract class ThreadConfinedConsumerTestBase {
     private ExecutorService foreignThread;
 
     @BeforeEach
-    void setUpConfinedConsumerFixture() {
+    void setUpConfinedConsumerFixture() throws InterruptedException {
         delegate = new MockConsumer<>(OffsetResetStrategy.EARLIEST);
         confined = new ThreadConfinedConsumer<>(delegate);
+        // Stop whatever is already here before the field stops pointing at it. JUnit runs the
+        // teardown below between tests so this cannot fire today, and the threads are daemons so a
+        // leaked pool could not hold a JVM open either - but overwriting a live ExecutorService
+        // field is a leak shape regardless of who currently guarantees it cannot happen, and
+        // fb-contrib reports it here (HES_EXECUTOR_OVERWRITTEN_WITHOUT_SHUTDOWN). Not having the
+        // shape costs three lines; the only sanctioned alternative is switching the rule off for the
+        // whole repository, which docs/inflight/static-spotbugs-rule-registry.md prices far higher.
+        if (foreignThread != null) {
+            foreignThread.shutdownNow();
+            foreignThread.awaitTermination(5, TimeUnit.SECONDS);
+        }
         foreignThread = Executors.newSingleThreadExecutor(runnable -> {
             Thread thread = new Thread(runnable, FOREIGN_THREAD_NAME);
             thread.setDaemon(true);
