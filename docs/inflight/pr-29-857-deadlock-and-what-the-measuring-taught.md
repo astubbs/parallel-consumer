@@ -77,17 +77,30 @@ that shared a JVM with the throughput test are now `@Disabled` and cost 0.020s -
 **runner speed** (the neighbouring tests in the same run are within 5% of the passing baseline while
 the throughput test is 39% down; a slower machine slows everything proportionally).
 
-That leaves this branch's tree as the only remaining difference between a passing run and a failing
-one. It is **not** established - the instrument's own spread across identical code is 1.54x, and none
-of it reproduces on a development machine, where this tree gives 73,722 rec/s alone and 72,498 in the
-full lane.
+That left this branch's tree as the only remaining difference between a passing run and a failing one
+- and **a mechanism on this tree has since been found**, which is what changed on 2026-09-01.
+
+`handoff/enable-large-number-of-instances` was merged in for it (merge commit's body carries the
+detail). The control loop passed a shard-wide sum as a plain `log.trace` argument: SLF4J defers
+formatting, not argument evaluation, so it ran every pass at every level, and it scales with in-flight
+key cardinality while the loop spins fastest under saturation. Both costs peak together, and the
+failing test is the only `KEY`-ordered member of the lane - which fits the selectivity that ruled
+runner speed out. `docs/inflight/perf-control-loop-log-argument-evaluated-eagerly.md` owns it.
+
+**Fitting is still not measuring.** The instrument's spread across identical code is 1.54x, and none
+of it reproduces on a development machine, where this tree gave 73,722 rec/s alone and 72,498 in the
+full lane. What the merge does change is that the hypothesis is now testable *here*: the lane runs
+this tree, and this tree now has the fix, so the next `Performance Tests` run is the first
+like-for-like read on it. One run inside a 1.54x spread is evidence, not a verdict, in either
+direction.
 
 **An earlier claim on this branch that there is no product regression has been WITHDRAWN.** It rested
 on a local like-for-like pair, and was retracted once the neighbour timings showed the CI machines
 were comparable. Treat it as unproven in both directions.
 
 The measurement that would settle it - `MultiInstanceHighVolumeTest` alone, on CI, on this tree and on
-master, more than once per side - has never been run. It is owned by
+master, more than once per side - has still never been run, and the fix above does not remove the need
+for it. It is owned by
 `handoff/enable-large-number-of-instances`, whose `docs/handoffs/perf-lane-throughput-shortfall.md`
 carries the full evidence.
 <!-- file-refs: N/A - names a document on another branch, which is where that work lives -->
