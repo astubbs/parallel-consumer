@@ -81,11 +81,19 @@ stricter control checks out the whole pre-astubbs#336 file and fixes up compilat
 
 ## What is open, in the order worth doing
 
-1. **Does a larger bound make it fire?** This is the experiment that separates "under-powered here"
-   from "unreachable here", and it was running when the branch was handed over - `iterations(500)`,
-   ten times the committed bound, on the clean tree. Re-run it and record the answer, because
-   everything below branches on it. If it fires, the bound was priced on another machine, which is
-   exactly the 3.4x finding the lane's own note warns transfers to no other machine.
+1. **The bound is NOT the answer - that experiment is done, and it came back negative.**
+   `iterations(500)`, ten times the committed bound, on the clean tree: no violation, twice. Taken
+   with the control above, neither *reintroducing the defect* nor *spending ten times the search
+   budget* produces a violation here. So this is not an under-priced bound and not the 3.4x
+   machine-dependence the lane's note describes - those would both yield hits at some cost. The
+   harness is not reaching the seam on this machine at all, and the next question is why.
+
+   **What has not been ruled out**, roughly in order of cheapness: the JDK or Lincheck version
+   differing from the one that priced the arm; the operation set no longer producing the interleaving
+   after astubbs#335 and astubbs#373 also rewrote `ProcessingShard` (both post-date the harness);
+   or a host property - core count, scheduler - that changes which interleavings stress mode reaches.
+   Confirming the arm still fires *anywhere* is the cheap first move: run it on the machine that
+   wrote it, or in CI, before spending anything on the harness.
 2. **Decide what the lane gates on.** The commit's argument for gating is that *a Lincheck violation
    is a real finding rather than a timing wobble, because the model checker explores interleavings
    deterministically instead of sampling them*. That is true of the model-checking arms and **false
