@@ -24,10 +24,12 @@
         topology's own code does not change.
 
         THE SEAM IS OFF BY DEFAULT - this is an opt-in preview. Turn it on for a JVM with
-        -Dpc.streams.dispatch.enabled=true. It is off because the refusal envelope that would make it
-        safe for an arbitrary topology does not exist yet: joins, windows, suppression, EOS and
-        stream-time punctuation are NOT supported and are NOT yet refused, so a topology using one
-        gets wrong behaviour rather than an error. PcDispatchSwitch's javadoc owns that reasoning.
+        -Dpc.streams.dispatch.enabled=true. Joins, windows, suppression, versioned and session stores
+        and EOS are unsupported and are now REFUSED by name, at build time and at task construction,
+        rather than allowed to return silently wrong answers. What the default is waiting on now is
+        task lifecycle: with the seam on, Kafka's own task-corruption recovery revives a task whose
+        dispatcher was closed with it, and the loud-failure floor there leaves the StreamThread.
+        PcDispatchSwitch's javadoc owns that decision and the measurement behind it.
 
         Build machinery: the named classes are unpacked from the published kafka-streams sources jar,
         a tracked patch is applied, and the result is compiled into this module's own target/classes,
@@ -88,8 +90,22 @@
              kill switch and why StreamThreadTest joins the upstream oracle below.
 
              If this list has to grow much past a dozen, that sprawl is itself the answer to "how little had
-             to change" - see the "Do not apply when" section of the technique write-up. -->
-        <patched.classes>org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java,org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java,org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java,org/apache/kafka/streams/processor/internals/StreamTask.java,org/apache/kafka/streams/processor/internals/StreamThread.java</patched.classes>
+             to change" - see the "Do not apply when" section of the technique write-up.
+
+             The eight kstream entries are the refusal envelope (astubbs#255), and they come in matched pairs
+             for a reason the compiler enforces. A call site resolves to the symbol its receiver's STATIC TYPE
+             declares, so `stream.join(...)` against a KStream variable resolves to KStream#join - an
+             annotation on KStreamImpl is invisible there. That is why the four public INTERFACES carry
+             @DoNotCall/@Deprecated. Conversely an interface method has no body to throw from, which is why
+             the four IMPLS carry the runtime refusal. Neither half substitutes for the other.
+
+             This list is now thirteen, which is past the point the sentence above sets rather than at it.
+             Stated rather than absorbed: the smaller alternative is a single check in InternalStreamsBuilder
+             keyed on the DSL's graph-node types, at the cost of a message one step removed from the method
+             the user actually called. It reaches ten, not five - the four IMPLS go away and
+             InternalStreamsBuilder arrives, but the four INTERFACES stay patched, because the compile-time
+             refusal is the half that has to sit on the symbol a call site resolves to. -->
+        <patched.classes>org/apache/kafka/streams/processor/internals/AbstractProcessorContext.java,org/apache/kafka/streams/processor/internals/ProcessorContextImpl.java,org/apache/kafka/streams/processor/internals/RecordCollectorImpl.java,org/apache/kafka/streams/processor/internals/StreamTask.java,org/apache/kafka/streams/processor/internals/StreamThread.java,org/apache/kafka/streams/kstream/KStream.java,org/apache/kafka/streams/kstream/KTable.java,org/apache/kafka/streams/kstream/KGroupedStream.java,org/apache/kafka/streams/kstream/CogroupedKStream.java,org/apache/kafka/streams/kstream/internals/KStreamImpl.java,org/apache/kafka/streams/kstream/internals/KTableImpl.java,org/apache/kafka/streams/kstream/internals/KGroupedStreamImpl.java,org/apache/kafka/streams/kstream/internals/CogroupedKStreamImpl.java</patched.classes>
 
         <!-- Module-local and explicitly versioned on purpose: pinning jackson-databind in root
              dependencyManagement forces WireMock (parallel-consumer-vertx) onto an incompatible Jackson and
@@ -181,6 +197,18 @@
         <dependency>
             <groupId>org.awaitility</groupId>
             <artifactId>awaitility</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- TopologyTestDriver, which the refusal envelope's Processor API backstop arms build a real
+             topology against. It runs the topology on the calling thread, which is exactly right here and
+             exactly wrong for the dispatch arms below: a refusal is thrown while the task is CONSTRUCTED, so
+             no worker pool and no broker are needed to observe it, and the driver is several orders of
+             magnitude cheaper than a container per case. -->
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-streams-test-utils</artifactId>
+            <version>${kafka.version}</version>
             <scope>test</scope>
         </dependency>
 
@@ -453,6 +481,13 @@
                     <classpathDependencyExcludes>
                         <classpathDependencyExclude>org.slf4j:slf4j-reload4j</classpathDependencyExclude>
                     </classpathDependencyExcludes>
+                    <!-- Handed to ShadowedClassLoadingTest so it can assert its own list against the real
+                         property rather than against a "keep in sync" comment. A class added here and not
+                         there would otherwise be silently unproven - which is precisely the false positive
+                         that test exists to prevent. -->
+                    <systemPropertyVariables>
+                        <patched.classes>${patched.classes}</patched.classes>
+                    </systemPropertyVariables>
                 </configuration>
                 <executions>
                     <execution>

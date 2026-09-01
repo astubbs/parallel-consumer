@@ -19,7 +19,7 @@ Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutio
 | Test | Rate | Why it is worth attention |
 |---|---|---|
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. Mechanism known and owned (astubbs#262), quarantined - see below |
-| `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 3 seen (2026-08-18, 2026-08-19, 2026-08-25) | Not from the original scan - each found while babysitting a branch carrying **no main Java**. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third sighting carries the failing batch contents and they point at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
+| `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 4 seen (2026-08-18, 2026-08-19, 2026-08-25, 2026-08-31) | Not from the original scan - each found while babysitting a branch carrying **no main Java** in the failing module. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third and fourth sightings carry the failing batch contents and both point at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
 
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
 door, and for the same reason: two of that family turned out to be real product bugs, and the third
@@ -82,6 +82,33 @@ under KEY ordering, and predict a deterministic failure; then five distinct keys
 always passes. If both hold, this is
 the test's own input and neither the runner nor the batcher. If the collision case passes, the draw
 is a red herring and contention-versus-product stands as before.
+
+#### The 2026-08-31 sighting: the key-collision reading survives its second independent test
+
+<!-- post-merge: checked-begin -->
+<!-- Reads the same after the merge: it cites the landed PR whose CI produced the sighting, which is a
+     permanent link, and names no live branch. -->
+`ReactorBatchTest`, on the CI Unit lane of astubbs/parallel-consumer#389 - a branch whose diff is a
+leaf module plus documentation and contains **no Reactor code at all**. Same
+`Expected size: 3 but was: 4`. Passed on the previous push of the same branch and is the only
+sighting so far to appear twice in one lane's history without a code change between.
+<!-- post-merge: checked-end -->
+
+**The payload matches the 2026-08-25 reading rather than merely being consistent with it.** Keys drawn
+were `80, 51, 80, 80, 89` - a three-way collision on key 80, exactly the shape the previous sighting
+had on key 36 - and the batches came out `{o0(k80), o1(k51)}`, `{o4(k89)}`, `{o2(k80)}`, `{o3(k80)}`.
+Under KEY ordering only one key-80 record can be in flight at a time, so its three records cannot
+share a batch however fast the runner is, and four batches is the *only* achievable answer for that
+draw. The expectation of three is computed from the record count alone.
+
+So two independent sightings, in two modules, on two machines, both show a three-way key collision and
+both show the extra batch falling exactly where that collision forces it. That is not proof - the
+prediction still has to be run - but it moves the expectation-versus-input reading from "a third
+reading to separate" to the one to test first, and it makes the contention reading harder to hold:
+contention would have to reproduce the same collision shape twice by coincidence.
+
+**The experiment named above is still the one to run, and still nobody has run it.** Its value has
+gone up: it now has a prediction with two prior observations behind it rather than one.
 
 ### `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` - a helper defect, not a test defect
 
