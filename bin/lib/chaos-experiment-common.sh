@@ -4,16 +4,16 @@
 #
 # Shared definitions for the confluentinc#857 experiment runners - THE single home of the maven
 # invocation, the JDK pin, the failsafe-report outcome classifier, the detector-verdict classifier
-# and the violation-trajectory parsing that exp-hunt-async-stall-answer.sh, exp-confirm-async-drain.sh,
-# exp-audit-stall-detector-silence.sh, exp-measure-large-instances-failure-rate.sh,
-# exp-sweep-large-instances-scale.sh and exp-batch-857.sh all need. Source this; do not copy
+# and the violation-trajectory parsing that exp-audit-stall-detector-silence.sh,
+# exp-measure-large-instances-failure-rate.sh, exp-sweep-large-instances-scale.sh and
+# exp-batch-857.sh all need. Source this; do not copy
 # from it.
 #
 # Same rule, and the same reason, as bin/lib/quarantine-common.sh: the copies drift, and the drift
 # is silent because each copy still runs. It had already happened here before this file existed -
-# exp-confirm-async-drain.sh carries a fixed trajectory-parsing bug (`paste -sd'->'` treats -d as a
-# character LIST, so it joined with '-', the sed matched nothing, and four runs that plainly drained
-# were labelled FLAT) that the two sibling copies of the same parsing never received.
+# a now-retired drain-confirmation runner carried a fixed trajectory-parsing bug (`paste -sd'->'`
+# treats -d as a character LIST, so it joined with '-', the sed matched nothing, and four runs that
+# plainly drained were labelled FLAT) that the two sibling copies of the same parsing never received.
 #
 # These runners are unattended: nobody is watching when one of them answers wrongly, so every
 # classifier here is written to be loud or absent rather than plausible.

@@ -350,8 +350,7 @@ answer it.
 | How often does `largeNumberOfInstances` fail, and how? | `bin/exp-measure-large-instances-failure-rate.sh [n]` | **open** - unmeasured since the 2026-01 upstream report on confluentinc#857 | anywhere |
 | Does that failure rate move with SCALE? | `bin/exp-sweep-large-instances-scale.sh` | **open** - rate rising with scale points at the group coordinator, flat points at PC | anywhere |
 | Does the `NO_PROGRESS` detector MISS real failures? | `bin/exp-audit-stall-detector-silence.sh [n]` | **open, reopened 2026-08-31** - a detector that stays quiet on a real failure is worse than an absent one, because the suite goes green on its silence | anywhere |
-| When the async stall fires, does the backlog DRAIN or stay FLAT? | `bin/exp-hunt-async-stall-answer.sh [n]` | **open** - draining means a timing proxy, flat means a real wedge reproducible on demand | anywhere |
-| Does that stall drain EVERY time, or only in the firings collected so far? | `bin/exp-confirm-async-drain.sh` | **open, but narrower than it was** - `ChaosChurnStormIT`'s "Calibration status" javadoc records six firings that all drained, so a drain reproduces a known result and only a run that does NOT complete the backlog is new | local only |
+| Did the async stall drain or wedge? | **RETIRED 2026-09-01 - answered** | the backlog drained on all six firings collected; method and discriminator in [`solutions/test-flakiness/collect-more-firings-not-more-seeds-2026-09-01.md`](solutions/test-flakiness/collect-more-firings-not-more-seeds-2026-09-01.md) |
 | All of the above, unattended, one tally | `bin/exp-batch-857.sh` | a batch of whatever was outstanding when it was written - read its header before trusting its scope | local only |
 
 **"Local only" is enforced, not advisory.** Those two compare this tree against sibling worktrees

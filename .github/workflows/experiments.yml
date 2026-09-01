@@ -32,14 +32,14 @@
 # self-hosted machine. Inputs pass through env (data), never ${{ }} inside run blocks (code).
 # See docs/self-hosted-runner.md.
 #
-# NOT EVERY RUNNER IN bin/ IS OFFERED HERE, and the omission is the interesting part. The two
-# cross-tree runners - exp-confirm-async-drain and exp-batch-857 - read sibling worktrees
+# NOT EVERY RUNNER IN bin/ IS OFFERED HERE, and the omission is the interesting part. The
+# cross-tree runner exp-batch-857 reads sibling worktrees
 # (.claude/worktrees/pr29, .claude/worktrees/pre-344) that exist only on a machine where somebody cut
 # them. `actions/checkout` creates one workspace and no siblings, so dispatching either one here
 # measured nothing while reporting success: a green job and an artifact with no data in it, which is
 # the worst of the three possible outcomes because it is indistinguishable from a clean result. Both
-# scripts now refuse to start without their trees (pc_require_tree, exit 2), and neither is offered
-# as a choice. Provisioning arbitrary historical worktrees on a runner is the alternative, and it is
+# It now refuses to start without its trees (pc_require_tree, exit 2) and is not offered as a
+# choice. Provisioning arbitrary historical worktrees on a runner is the alternative, and it is
 # not one - those trees are specific branches at specific commits, chosen by hand for a comparison.
 # Run them locally; docs/testing.md's runner table says which are which.
 #
@@ -61,7 +61,6 @@ on:
           - exp-measure-large-instances-failure-rate
           - exp-sweep-large-instances-scale
           - exp-audit-stall-detector-silence
-          - exp-hunt-async-stall-answer
       iterations:
         description: 'Iterations - empty for the script default, otherwise a positive integer'
         required: false
@@ -113,7 +112,7 @@ jobs:
           set -euo pipefail
           case "$EXPERIMENT" in
               exp-measure-large-instances-failure-rate|exp-sweep-large-instances-scale| \
-              exp-audit-stall-detector-silence|exp-hunt-async-stall-answer) ;;
+              exp-audit-stall-detector-silence) ;;
               *) echo "Unknown experiment: $EXPERIMENT" >&2; exit 2 ;;
           esac
           # VALIDATE THE COUNT HERE - the script will not do it for you. The runners set `set -u` and

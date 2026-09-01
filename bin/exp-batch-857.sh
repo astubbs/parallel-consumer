@@ -64,9 +64,11 @@ if [ -n "$FOUND" ]; then
         lg=/tmp/batch857/B-diag-$i.log
         pc_run_chaos "$D" "$FOUND" "$lg" -Dchaos.diagnoseStallRecovery=true
         fired=$(pc_first_violation "$lg")
-        # `fired` is the probe's AGGREGATE violation count, so it says something fired, never which -
-        # the same distinction exp-hunt-async-stall-answer.sh's header sets out. Both are recorded;
-        # only the target signal stops the phase.
+        # `fired` is the probe's AGGREGATE violation count, so it says something fired, never which.
+        # Both are recorded; only the target signal stops the phase. The runner that used to make
+        # that distinction in its header has been retired - the reasoning now lives in
+        # docs/solutions/test-flakiness/collect-more-firings-not-more-seeds-2026-09-01.md, along with
+        # the discriminator: a drain re-derives a known result, a flat backlog is the finding.
         target=no
         pc_signal_fired NO_PROGRESS "$lg" && target=yes
         say "B-diag\trun=$i\tseed=$FOUND\tfired=${fired:-none}\tno_progress=$target\tfinal=$(grep -oE 'consumed=[0-9]+/[0-9]+' "$lg" | tail -1)"
