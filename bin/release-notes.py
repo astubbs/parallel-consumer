@@ -286,7 +286,10 @@ def main(argv):
     args = parser.parse_args(argv)
 
     path = args.changelog or default_changelog()
-    ref = args.ref or "v%s" % args.version
+    # normalise_version, because `v0.5.2.2` and `0.5.2.2` are both accepted for the SAME release
+    # (find_section says so) - and "v" + "v0.5.2.2" is a tag that does not exist, so every relative
+    # link in the body would 404 while the notes themselves rendered perfectly.
+    ref = args.ref or "v%s" % normalise_version(args.version)
     try:
         with open(path, encoding="utf-8") as handle:
             text = handle.read()

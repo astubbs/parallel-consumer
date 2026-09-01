@@ -119,6 +119,13 @@ assert "the last section runs to end of file" \
     "Oldest." "$(render "$THREE_SECTIONS" 0.5.2.2)"
 assert "a v-prefixed argument finds the same section" \
     "Oldest." "$(render "$THREE_SECTIONS" v0.5.2.2)"
+# ...and resolves relative links against the same tag. "v" + "v0.5.2.2" is a ref that does not
+# exist, so the notes would render perfectly with every relative link in them 404ing.
+V_PREFIXED=$(changelog '== v0.5.2.2
+
+See link:docs/x.md[the doc].')
+assert "a v-prefixed argument does not double the v in the link ref" \
+    "$(render "$V_PREFIXED" 0.5.2.2)" "$(render "$V_PREFIXED" v0.5.2.2)"
 
 SUFFIXED=$(changelog '== 0.6.0.0 (unreleased)
 
