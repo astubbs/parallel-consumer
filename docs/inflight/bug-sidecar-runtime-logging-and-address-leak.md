@@ -84,3 +84,39 @@ So the two halves fit: the Rust client **discards stdout** because that is the l
 drains for the port line, and the C++ client **inherits stderr** precisely so the sidecar can be
 diagnosed. Moving the sidecar's own logging to stderr is therefore not a proposal needing a design -
 at least one client already expects it there, and one has demonstrated the chain end to end.
+
+
+## Confirmed live: the fix's own trap, hit by the C++ demo
+
+The C++ agent gave its demo image an SLF4J binding - step 1 of the fix ordering above - and got both
+of the problems steps 2 and 4 exist to prevent, in one run:
+
+- **the flood**: 568 lines of demo output, roughly 500 of them routine sidecar chatter burying the
+  two tables;
+- **the leak**: a full `ConsumerConfig values` dump per arm, printing `bootstrap.servers = [...]`
+  into lines the DEMO owns - not the broker's. `bin/ci-demo-conformance.sh` greps for exactly that
+  and would have failed the credential rule.
+
+It fixed its own image with `-Dorg.slf4j.simpleLogger.defaultLogLevel=warn`, overridable through
+`PC_SIDECAR_LOG_LEVEL`.
+
+**This is not a C++ finding.** Every language whose demo image gains that binding inherits both
+problems, and adding the binding is precisely what the first step of the fix asks for. It is the
+clearest evidence yet that these four steps are one job: shipping step 1 alone would hand every
+language a noisier demo and a credential leak at the same time.
+
+
+## A sixth face, on the demo side: the banner cannot be first
+
+The contract requires the product's name to be the first thing printed. **In Java it is not**, and
+the Java agent established why rather than working around it: `parallel-consumer-core`'s test jar is
+on the demo's classpath - the sidecar spawn needs it - and carries a `logback-test.xml` with
+`scan="true"`. Logback cannot watch a file inside a jar, warns, and the warning triggers a full
+status dump of roughly thirty lines **before** anything the demo prints.
+
+**A `logback.xml` in the demo module cannot fix it**, because a `logback-test.xml` anywhere on the
+classpath outranks it. Both paths were checked rather than assumed.
+
+So this belongs with the rest: the fix is wherever that test jar's logging configuration lives, which
+is the same place steps 1 and 2 above have to land. It is one more reason the demos cannot be made
+right one at a time from the demo side.

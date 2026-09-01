@@ -28,7 +28,7 @@
     "lint": "eslint .",
     "proto": "node scripts/generate-proto.mjs",
     "proto:check": "node scripts/generate-proto.mjs --check",
-    "clean": "rm -rf dist *.tsbuildinfo"
+    "clean": "rm -rf dist demo/dist *.tsbuildinfo"
   },
   "dependencies": {
     "@bufbuild/protobuf": "2.10.2",

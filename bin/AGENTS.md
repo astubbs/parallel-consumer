@@ -1,8 +1,9 @@
 # `bin/` - how these scripts relate to CI and to the reviewer
 
 Repo scripts. This doc owns the conventions for writing a script in `bin/`; the root AGENTS.md
-routes here and keeps only what binds every session. Two conventions live here because nothing else
-enforces them.
+routes here and keeps only what binds every session. These conventions live here because nothing
+else enforces them. The portability rule below is the exception to the directory in the title: it
+binds **every shell script in the repo**, including `.githooks/` and `.claude/hooks/`.
 
 ## Naming a script here can grant it to the PR reviewer
 
@@ -61,6 +62,33 @@ Two structural guards exist and are worth copying into any new checker's self-te
   buried mid-body and a match at the very end, and neither can trigger the bug - the first is small,
   the second has nothing following it. A case that reaches it is added in astubbs#210.
 
+## Every script must be cross-platform, and degrade rather than guess
+
+Scripts here run on macOS dev machines, Linux CI runners, and self-hosted runners, so **a script that
+only works on the author's machine is a broken script**. Two rules, and the second is the one that
+actually bites:
+
+- **Never let a missing tool become a confident wrong answer.** Probe for what you need and skip what
+  is absent, saying so. `docker`, `gdate`, `realpath`, `timeout` and `sha256sum` are all absent
+  somewhere this repo runs. A check that cannot run must report that it did not run - the failure
+  mode to design against is the one where "I could not measure it" is indistinguishable from "it is
+  fine".
+
+- **`stat -f` is NOT a portable idiom, and must never be used as a try-then-fallback.** On macOS
+  `stat -f %b` is a *file's* allocated blocks; on GNU/Linux `-f` switches stat into *filesystem*
+  mode, where `%b` is the total blocks in the filesystem. It exits **0** and returns a number three
+  orders of magnitude too large, so `stat -f ... || stat -c ...` silently produces garbage on Linux
+  rather than falling through. Resolve the platform once from `uname -s` and branch. The same
+  divergence applies to `date -r` vs `date -d`, `sed -i ''` vs `sed -i`, and `readlink -f`.
+
+  `.claude/hooks/warn-low-disk.sh` is the worked example, and it also shows the seam that makes such
+  a branch testable: which `stat` **syntax** to speak is read from the real `uname` and is never
+  injectable, while which platform **layout** to look for is injectable - so a self-test can exercise
+  the macOS branch on a Linux runner without pretending Linux has BSD stat.
+
+- **`df` needs `-P`.** Without POSIX output a long device name wraps onto its own line on Linux and a
+  column-indexing `awk` silently reads the wrong field.
+
 ## Workflows
 
 **One version per action.** `bin/check-action-versions.sh` fails if any action appears at two
@@ -77,6 +105,20 @@ caught it in review, and the same mistake had been seen before.
 
 The github-actions ecosystem was re-enabled in `.github/dependabot.yml` at the same time; it had
 been off since 2022, when the repo genuinely had no workflows.
+
+**One toolchain declaration.** `bin/check-toolchain-versions.sh` fails when `mise.toml` and the
+`.github/workflows/clients.yml` matrix disagree about a language's version, and runs in Repo Hygiene
+behind its own self-test. The two *install* differently on purpose - mise locally, `setup-*` actions
+on the runner, which carry the client matrix's caching and a SHA-pinned `ruby/setup-ruby` - but they
+must never *declare* differently. Same class as the rule above: **nothing else could catch it**, and
+they had already drifted by whole major versions (dotnet 8 against 9, node 22 against 25) before the
+gate existed. The four languages with no host toolchain (swift and cpp build in containers, kotlin
+and scala on the Maven reactor) are asserted absent from both, so "nobody declared it" cannot be
+mistaken for "it deliberately has none".
+
+`bin/build-client.sh` asserts the *installed* version separately, at build time, on major.minor
+only - the declarations are exact, but a developer one patch along from the pin is not a problem
+worth blocking, and every failure the assertion exists for was a major or minor gap.
 
 **Temporary CVE exclusions expire.** `bin/check-cve-exclusions.sh` parses the root pom's
 `excludeVulnerabilityIds` and fails once an entry marked `TEMPORARY-SINCE: YYYY-MM-DD` is more than

@@ -51,6 +51,15 @@ dev = [
     "pip-audit>=2.10,<3",
 ]
 
+# THE DEMO'S OWN DEPENDENCY, and it is deliberately not in `dev`. confluent-kafka (librdkafka) is
+# Python's own Apache Kafka client: it IS the demo's AK core arm, and it is what creates the topic
+# and produces the backlog. The library never imports it - nothing in src/ holds a broker
+# connection, which is the whole point of the sidecar - and neither the test suite nor the
+# conformance runner needs it, so putting it in `dev` would add a compiled wheel to the CI row's
+# critical path for a directory that row does not run. `make demo-build` installs this extra;
+# demo/run.sh and the demo container both go through that.
+demo = ["confluent-kafka>=2.3,<3"]
+
 [project.urls]
 Homepage = "https://github.com/astubbs/parallel-consumer"
 Issues = "https://github.com/astubbs/parallel-consumer/issues"
@@ -125,4 +134,12 @@ follow_imports = "skip"
 # the library it drives is not.
 [[tool.mypy.overrides]]
 module = ["grpc_tools.*"]
+ignore_missing_imports = true
+
+# confluent-kafka publishes no type information: it is a C extension with a .py shim and no
+# py.typed marker, so mypy cannot see past the import. The DEMO code that calls it is still
+# checked - only the library's own shape is unknown - and the demo is not part of the shipped
+# surface, which is why this sits under --check-untyped-defs rather than --strict.
+[[tool.mypy.overrides]]
+module = ["confluent_kafka.*"]
 ignore_missing_imports = true

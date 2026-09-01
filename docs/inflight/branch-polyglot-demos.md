@@ -1,8 +1,9 @@
 # The ten per-language demos: ten branches, no PR, and what the fan-out found
 
-Session handoff, 2026-08-21. Ten agents built the per-language demos in parallel, one worktree and
-one branch each. **Nothing is merged and only `feats/java-sidecar-demo` is pushed.** This file exists
-because the work is real, on disk, and invisible to `gh`.
+Ten agents built the per-language demos in parallel, one worktree and one branch each; an eleventh
+wave polished all of them. **All of it is now merged into `feats/polyglot-demos`**, which has commits
+that are not pushed. This file exists because the work is real, on disk, and largely invisible to
+`gh`.
 
 ## Where the code is
 
@@ -70,8 +71,10 @@ recorded objections in their own notes, by instruction. These are unresolved:
    `bootstrap.servers` at INFO several times a run. It should bind the whole run.
 6. **`bin/ci-demo-test.sh` is Java-only** - confirmed independently by every agent. Ten demos can
    ship while the contract claims both entry points are tested per language.
-7. The big-replay title's `total * delayMs / 1000` is integer arithmetic and prints "would take 0s+"
-   at small volumes. A seed wart, faithfully mirrored everywhere.
+7. ~~The big-replay title prints "would take 0s+" at small volumes.~~ **Fixed in all eleven**: the
+   unit is now chosen so the figure is never zero (`80s` at the demo's own defaults, `80ms` at CI's).
+   Two languages had already fixed it independently and differently - Ruby omitted the clause, Python
+   changed the unit - and Python's answer won because it keeps the information at every volume.
 8. **Every non-JVM demo container is a two-toolchain image** and the contract does not say so - the
    sidecar is a child of the *running* demo, so it cannot be a discarded build stage.
 
@@ -127,3 +130,105 @@ U35's second half - the *reading* demo (three modes, TTY prompt, serde marker, s
 the reconciliation it needs: **KTD40 in the plan still describes every demo as having three modes**,
 while the seed has none and says why. Plan and seed disagree on paper until someone amends KTD40 or
 records that it governs the reading demo only. That reconciliation, not the code, is the open item.
+
+
+## What is next, in order (2026-08-22)
+
+1. **`close()` reports success and leaves non-daemon threads running** -
+   [`bug-engine-close-leaves-non-daemon-threads.md`](bug-engine-close-leaves-non-daemon-threads.md).
+   Surfaced as the Java demo hanging forever on the container path, but the defect is in
+   `parallel-consumer-core` and a user's application would hang the same way. It blocks CI rather
+   than failing it: nothing in either harness wraps a run in a timeout, so a hang burns the job.
+   Highest priority of anything here.
+2. **Run the conformance harness across more than two languages.** Its patterns were repaired and
+   verified against real output from two languages, but the drift check still has not proved
+   anything at the width it exists for. This is the first thing the merged branch makes possible.
+3. **Push, then decide the PR shape.** Current recommendation is to fold `feats/polyglot-demos` into
+   astubbs#328 rather than open a second PR, because that PR still ships the **old, disproven**
+   divergence rule and the correction's evidence is the fan-out itself - reviewing one without the
+   other reviews a conclusion with no argument. Reverse that if astubbs#293 merges first.
+4. **The idle-machine measurement pass**, blocked twice: it needs a quiet box, and it needs the
+   unexplained baseline shift in [`next-demo-seed-followups.md`](next-demo-seed-followups.md) item 1
+   resolved, because every ratio divides by a figure that moved 15% between sessions for reasons a
+   control arm refuted.
+5. **The sidecar logging defect**, in the order its own record specifies - see
+   [`bug-sidecar-runtime-logging-and-address-leak.md`](bug-sidecar-runtime-logging-and-address-leak.md).
+   Each step alone regresses something, which is why it is one job.
+6. **Owner decisions, not work**: the `enable.auto.commit` divergence between the two transports; the
+   KTD40 reconciliation (the plan still says every demo has three modes, the seed has none and says
+   why); and whether the merged `demos/*` and `polish/*` branches and their worktrees are cleaned up.
+
+### The broker is quiet now - measured, and the assertion is still missing
+
+`KAFKA_LOG4J_ROOT_LOGLEVEL` does not work; the cp-kafka image writes its own per-logger map
+(`kafka=INFO`, `kafka.controller=TRACE`, `state.change.logger=TRACE`) which outranks the root level.
+Four agents measured it independently - 1465, 927, 883 and 584 broker lines against 35-42 of the
+demo's own. `KAFKA_LOG4J_LOGGERS` is the variable that merges into that map, and a container run of
+the Java demo now gives:
+
+```
+broker lines: 12   (1 INFO, 1 WARN; the rest are the image's own "===>" banner, not log4j)
+demo lines:  216
+```
+
+**Still open: nothing asserts it.** The native path never sees broker output at all - Testcontainers
+does not attach the broker's stdout - so this was invisible to every check that exists, and would
+regress silently. A broker-line-count assertion in `bin/ci-demo-test.sh` is what closes it.
+
+## Reconciliation items found during the polish wave
+
+- **The column order is settled** - all eleven print
+  `arm | records | keys | elapsed | msg/s | vs AK core`, the contract states it, and Java now carries
+  a test for it. **The lesson is what is worth keeping**: the contract was silent on position and the
+  harness regex was not, so two independent implementers let a broken test define the spec. That is
+  what an under-specified contract plus a visible check will always produce.
+
+- **Ruby and Rust both publish host port 29092**, so their demos cannot run back to back without
+  `Bind for 0.0.0.0:29092 failed`. Python already parameterises its port
+  (`${PC_DEMO_BROKER_PORT:-19095}`), which is the shape that fixes it. Patching one language alone
+  only moves the collision.
+
+  **This is also an argument for the shared-broker test harness** already agreed: one broker and one
+  reused topic for the whole suite removes per-language ports entirely, rather than allocating eleven
+  non-colliding ones.
+
+- **Eleven concurrent demos exhaust the Docker VM's disk**, and it does not present as a disk
+  problem. Three agents hit it within minutes of each other; the broker exits 1 having logged
+  `Formatting metadata directory ... No space left on device`, and the demo reports only "starting
+  the broker failed". Worth a friendlier message, and worth knowing before running the full eleven
+  again on one machine.
+
+
+## A third wave is owed: every serious client, as its own arm
+
+Owner correction (2026-08-21): **excluding sarama from the Go demo was wrong, and so is the
+equivalent exclusion in every other language.** The contract said "consider running both"; it now
+says run them all. Each of these is somebody's production choice, and answering "is this fast in my
+language" for one client out of three leaves two thirds of readers guessing.
+
+Known to be missing, from the agents' own READMEs:
+
+| language | runs | also serious, not yet an arm |
+|---|---|---|
+| Go | franz-go | **sarama**; confluent-kafka-go (blocked by `CGO_ENABLED=0` in its image - a real constraint, and the kind worth writing down) |
+| Python | confluent-kafka | kafka-python, aiokafka |
+| TypeScript | kafkajs | confluentinc-kafka-javascript (librdkafka binding) |
+| Ruby | rdkafka | ruby-kafka is archived - a legitimate exclusion, and it belongs in the README with its reason |
+| others | one each | unaudited; each demo's README must now name what it found and what it skipped, with reasons |
+
+Two things had to change before this was even possible, and both are done: the harness compares the
+**required** arms and permits extras, and Java is no longer exempt from that comparison. Go had
+already costed a sarama arm, found it cheap, and declined **because the harness would have failed it
+for obeying the contract** - so the rule and the check were in direct conflict.
+
+## And the internals are NOT the seed's to dictate
+
+Owner correction, same conversation: **the Java demo is a seed, not a template.** Uniformity is owed
+on everything the contract specifies - flags, banner, tables, arms, container rules, exit codes - and
+on nothing below that line. Each demo should be written the way someone fluent in that language would
+write it: its idioms, its concurrency primitives, its layout, its test framework.
+
+This is now stated in the contract under "Idiomatic inside, identical outside", because the risk was
+live rather than theoretical: eleven agents were handed a Java reference and told to mirror a
+contract, and the natural failure mode is transliteration. A Java program rewritten in Ruby teaches a
+Ruby reader nothing about using this client in Ruby.

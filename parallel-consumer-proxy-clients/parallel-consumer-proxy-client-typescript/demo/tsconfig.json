@@ -1,0 +1,38 @@
+{
+  "//": [
+    "Copyright (C) 2026 Antony Stubbs and contributors",
+    "",
+    "The demo's own compiler project, separate from the client library's beside it. It repeats the",
+    "library's settings rather than extending them because the two are different npm packages with",
+    "different node_modules: `extends: ../tsconfig.json` would resolve relative paths against THIS",
+    "directory anyway, so the inheritance would buy nothing but a broken-looking path.",
+    "",
+    "`strict` plus the four extra checks is the demo's whole bug-finding gate. The library also runs",
+    "type-aware eslint; the demo does not, because that is another 200 packages installed to lint",
+    "five files, and the library's eslint.config.mjs ignores demo/ for the same reason.",
+    "",
+    "CommonJS, matching the library: its `main` is CommonJS, and an ESM demo would have to import it",
+    "through Node's interop for no gain."
+  ],
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "ESNext.Disposable"],
+    "module": "commonjs",
+    "moduleResolution": "node10",
+    "rootDir": ".",
+    "outDir": "dist",
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "sourceMap": true,
+
+    "strict": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
+  },
+  "include": ["src"]
+}

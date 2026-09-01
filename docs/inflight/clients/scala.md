@@ -10,9 +10,10 @@ shared note.
 user's function, the report with the token echoed verbatim, and a clean client-initiated shutdown -
 proven by two end-to-end tests against the real test-mode sidecar. The module is at
 `parallel-consumer-proxy-clients/parallel-consumer-proxy-client-scala/`; its maturity and
-testing-evidence deferrals are lifted and it has a CI row. Later waves: leases and heartbeats, the
-manifest reconnect, worker death, terminal outcomes, the `Shutdown` drain, the demo and its
-container, and publishing - **most of which this client inherits rather than implements.**
+testing-evidence deferrals are lifted and it has a CI row. **The demo and its container landed on
+`demos/scala`** - see "The demo" below. Later waves: leases and heartbeats, the manifest reconnect,
+worker death, terminal outcomes, the `Shutdown` drain, and publishing - **most of which this client
+inherits rather than implements.**
 
 ## The decisions this wave was left to make
 
@@ -154,3 +155,254 @@ row to un-defer. Two facts the row's owner may want:
   `src/docs/README_TEMPLATE.adoc` against the *process's* working directory, so a build started from
   a module directory fails on a file that never moved. The row runs `scanner-cmd` with the module as
   its working directory, so any JVM client whose recipe shells out to Maven hits this.
+
+## The demo
+
+`parallel-consumer-proxy-clients/parallel-consumer-proxy-client-scala/demo/` - `run.sh`, `Dockerfile`,
+`docker-compose.yml`, a `README.md` recording what is Scala's own, a `logback.xml`, and the sources
+under `demo/src/main/scala`. It keeps the contract in `parallel-consumer-proxy/demo/README.md`
+exactly: the seven flags with the same defaults, the same `PC_DEMO_*` variables with flags beating
+environment beating defaults, the banner first and the effective-configuration fingerprint straight
+after it, never carrying the bootstrap address, the two tables in the same order with the same
+columns, and no latency anywhere.
+
+**Two arms - `AK core (KafkaConsumer)` and `scala-grpc (this client)` - and the four extra ones the
+Java seed carries are absent on purpose.** Scala is a JVM language, so it *could* run `pc-core`, `java-direct` and the rest against
+the same broker in the same process, which is exactly why the temptation had to be named and
+declined: the contract's value is that a reader who has run one language's demo has run them all, and
+a six-row Scala table beside a two-row Ruby table would not be that. `scala-grpc` goes through
+`ParallelConsumerClient`, not the wire - nothing in the demo's sources names a protobuf message, a
+channel or a token.
+
+### The demo is behind a Maven profile, for the reason the harness lane is
+
+The sidecar arm has to hand its child process a classpath carrying `parallel-consumer-proxy`.
+Declared unconditionally that is a permanent reactor edge to the engine, and `bin/build.sh` opens
+with `clean` - which would delete the sidecar jar every other language's conformance test spawns. So
+the demo's sources are a **test source root added only by the `scala-demo` profile**
+(`-Dpc.scalaDemo`, passed by `run.sh` and by the Dockerfile), and its dependencies live there too.
+
+**Verified with a control arm rather than asserted**, because "the edge is only in the profile" is
+exactly the kind of claim that is comfortable and wrong. One term changed, everything else identical,
+and the reactor listing is what flips:
+
+| command | reactor | `parallel-consumer-proxy` |
+|---|---|---|
+| `./mvnw -pl :parallel-consumer-proxy-client-scala -am validate` | 8 modules | **absent** |
+| the same, plus `-Dpc.scalaDemo` | 9 modules | present, as "Language Proxy" |
+
+Read the reactor listing, not the build result: **that command currently fails on this machine for an
+unrelated reason**, and a reader who greps for `BUILD SUCCESS` will think the check is broken.
+`validate` produces no artifacts, so in a reactor whose snapshots are not installed locally
+`parallel-consumer-proxy-client-java-grpc` cannot resolve `parallel-consumer-proxy-client-java-api`
+and Maven has a cached Central miss for it. Confirmed to have nothing to do with Scala: the identical
+failure reproduces on `./mvnw -pl :parallel-consumer-proxy-client-java-grpc -am validate`, which
+never mentions this module. `-U`, or any lane that reaches `package`, does not have it.
+
+This is the third thing in this module arranged that way, after `scala-e2e-harness` and the
+conformance runner's classpath. Any JVM client whose demo spawns a real sidecar will need the same
+shape, and it is worth stating once rather than each wave rediscovering it.
+
+### Three findings that are not Scala's, recorded rather than fixed
+
+The first two apply to **every JVM demo, the Java seed included**, and neither is this branch's to
+edit.
+
+- **With no logback configuration on the classpath, logback's fallback is root at `DEBUG`.** A
+  fifty-record run of this demo emitted over four thousand lines of Netty frame dumps, docker-java
+  HTTP headers and Kafka client configuration, with the two tables buried in the middle. Measured on
+  the first run of this demo, before `demo/logback.xml` existed. The Java seed's demo module carries
+  no logging configuration either, so it will do the same; this branch fixed only its own, by pointing
+  `-Dlogback.configurationFile` at a file in `demo/` rather than shipping a resource, because
+  `target/test-classes` is also what `scripts/conformance-runner` runs from and the demo's logging
+  preferences must not silently become the shared suite's.
+- **Every Kafka client logs its full effective configuration at `INFO` when constructed, and
+  `bootstrap.servers` is in it.** The contract's rule that a demo never prints the bootstrap address
+  exists because own-cluster mode puts a user's real broker there - and the demo's own fingerprint
+  honours it, while the client's dump prints it anyway, several times a run. `org.apache.kafka` is at
+  `WARN` in this demo's logging configuration for that reason and not for noise. **Whoever owns the
+  Java seed should check the same thing.** *Settled since:* the contract now says the rule binds the
+  whole run rather than only the fingerprint block, and `bin/ci-demo-conformance.sh` enforces it by
+  grepping every line the demo prints. So this is closed as a contract question and stays open only
+  as something each language's logging configuration has to keep honouring.
+- **`SidecarCommand` requires an absolute path to an executable, and a JVM sidecar is a jar**, so
+  every JVM caller writes "this JVM's `java` plus a `-cp` argument" again. That is now in three places
+  in this module's orbit: `OneRecordThroughTheSidecarTest`, the Java seed's `SidecarProcess`, and this
+  demo. It reinforces the note above that spawning belongs to the Java lifecycle unit rather than to
+  each client.
+
+### The reader-experience wave: banner, arm labels, and the two deterministic columns
+
+Applied from the rewritten contract, after someone watched a demo run and found it unimpressive.
+Four things changed in this module, and two of them cost a decision worth recording.
+
+- **The banner is printed by the demo, not by `run.sh`.** It has to appear on the container path too,
+  where `run.sh` is not in the picture, so the application owns it - and printing it in both places
+  would show it twice on the native path. `println` rather than the logger: a timestamp and a logger
+  name in front of the rule line would put a configuration line first again, which is the exact
+  failure the banner exists to fix.
+- **Which forced the launcher's own output to standard error.** `Mode: native - a JDK toolchain is
+  present` is a configuration line, and it was the first thing on standard output. So was the Maven
+  build's: even at `-q` it prints the copyright check's summary and one `Jabel: initialized` per
+  compiled module, and on the first run of this change **four `Jabel` lines and two copyright lines
+  sat above the banner**. Both now go to standard error. Nothing is suppressed - a failing build still
+  explains itself and `set -e` still stops the script - and standard output now opens with the banner
+  on both paths. Any JVM demo whose `run.sh` shells out to Maven has this, because the build's
+  chatter is not the demo's output.
+- **The fingerprint moved ahead of the broker.** It used to be the first thing `runFor` did, which put
+  it *after* `DemoBroker.resolve` had pulled and started a Kafka image - so a reader waited the better
+  part of a minute before learning what settings the numbers were produced with. `main` now prints it
+  before resolving, which is also the contract's stated order: banner, configuration, run.
+- **Arm labels name the client**, so `AK core (KafkaConsumer)` and `scala-grpc (this client)`. The
+  group ids are unaffected: they were always built from separate literals rather than from these
+  constants, which is lucky rather than designed - a label carrying spaces and parentheses into a
+  `group.id` would have been an unpleasant way to find that out.
+
+**Scala's answer to "does this language have more than one serious client" is unusual and is recorded
+in the demo's README**, as the contract asks. Alpakka/Pekko Kafka, FS2 Kafka, ZIO Kafka and
+`kafka-streams-scala` are what a Scala team actually uses, and every one of them **wraps
+`org.apache.kafka.clients.consumer.KafkaConsumer`** rather than speaking the protocol. So unlike Go or
+Ruby there is no second independent client to run as a second arm - a second row would measure a
+streaming façade's own scheduling on top of the same consumer, which is a different question.
+
+#### The column order was chosen without coordination, and the integrator has to reconcile it
+
+Eleven agents applied this contract at once, in eleven worktrees, and the contract fixes *which*
+columns exist without fixing where the two new ones go. This module chose:
+
+```
+arm | records | keys | elapsed | msg/s | vs AK core
+```
+
+`records` and `keys` come immediately after the arm because they are what shows the work happened,
+and the contract's own argument for them is that the table should demonstrate the run rather than
+assert it. **If another language put them at the end, one of the two has to move** - the contract's
+"same columns, same order" is the binding clause and neither choice is more correct.
+
+**`bin/ci-demo-conformance.sh` cannot read the new table, and it does not fail - it goes quiet.**
+That file is not this branch's to edit, and this was measured rather than reasoned about: its
+`skeleton` function was run verbatim over this demo's captured output, and what came back was six
+`DIAL` lines and two `TITLE` lines and **nothing else**. No `HEADER`, no `ROW`.
+
+That is the dangerous shape. The skeleton is not empty, so the script's own
+`[ ! -s "$lang.skel" ]` guard does not skip the language; the absolute assertions all still pass;
+and the drift check happily compares eleven skeletons that no longer say anything about the tables.
+**A green run would mean the table columns and the arm order had stopped being checked at all** -
+which is precisely the "narrowed run that reads like a full one" the script's own header says it
+exists to prevent.
+
+Two of its `awk` patterns were written against the old shape:
+
+- its `HEADER` pattern matches `arm elapsed msg/s vs AK core` as a prefix, which no longer describes
+  the header row under this column order. Note that a language which *appended* the two columns
+  instead would still match it - so the header line alone cannot be relied on to reveal the drift;
+- its `ROW` pattern is `^ <name> <elapsed>s <rate> <ratio>$` with the name constrained to
+  `[A-Za-z][A-Za-z0-9 _-]*`. **The arm labels alone break it** - `AK core (KafkaConsumer)` contains
+  parentheses - and it is anchored at the end, so trailing columns break it too. Its
+  `normalise_arms` sed, `^ROW [a-z0-9]+-grpc$`, does not match `scala-grpc (this client)` either.
+
+None of that is fixable from a language branch without eleven conflicting edits to one shared file.
+Whoever integrates the fan-out should update those three patterns once, against whatever column order
+is settled on, and then re-run the drift check - which is the point at which any disagreement between
+the eleven becomes visible rather than theoretical. **Worth adding while they are in there: a
+`ROW`-count or `HEADER`-present assertion**, so that a skeleton which has quietly stopped recognising
+the tables fails instead of comparing clean.
+
+#### One blemish observed and deliberately not fixed here
+
+The big replay's heading computes the serial arm's cost as `total * delayMs / 1000` in integer
+seconds, so at the conformance harness's own volume it reads **"AK core is serial and would take
+0s+"** - which is both untrue and the sort of thing that makes a demo look unfinished. It is
+pre-existing, it is in the shared table title rather than in anything this wave touched, and the
+wording is almost certainly identical in the other ten languages. Changing it unilaterally would
+introduce exactly the cross-language prose drift the contract exists to prevent, so it is reported
+rather than fixed.
+
+### What was run, and what was not
+
+Run natively on macOS, under heavy concurrent load from the parallel client fan-out - load average
+above 100 on twelve cores at the time of the second run - so **no throughput figure from these runs
+means anything and none is recorded here**. What they prove is that the machinery works:
+
+- `demo/run.sh --records 20 --replay-factor 2 --partitions 2 --concurrency 8` - both arms completed,
+  both tables rendered, exit 0, 59 lines of output end to end. The `--replay-factor 2` was chosen over
+  1 deliberately: at 1 the big replay is skipped, and the second table's rendering path would never
+  have executed at all.
+- `demo/run.sh` with **no arguments at all**, configured entirely through `PC_DEMO_RECORDS`,
+  `PC_DEMO_REPLAY_FACTOR`, `PC_DEMO_PARTITIONS` and `PC_DEMO_CONCURRENCY`. This is the case that has
+  broken before - `bash 3.2` under `set -u` treats an empty array expansion as an unbound variable -
+  and it proves the environment layer at the same time.
+- `--help` and a misspelled flag both reach the usage text; the misspelled flag exits 2.
+
+Re-run twice after the reader-experience wave, as
+`demo/run.sh --records 20 --concurrency 4 --partitions 2 --replay-factor 2` - the flags
+`bin/ci-demo-conformance.sh` uses. Exit 0 both times, both tables rendered, and:
+
+- standard output opens with the banner, with nothing above it;
+- both arms report **20 records over 20 keys** in the small replay and the sidecar arm **40 over 40**
+  in the big one, identical across the two runs while every timing moved - which is the determinism
+  claim actually observed rather than asserted;
+- the two absolute assertions the conformance harness makes hold on the captured output: no
+  `bootstrap.servers` anywhere in the demo's own lines, and no latency, percentile, `p95` or `p99`.
+
+**The container path has now been run, and it passes.** This was the gap two earlier sessions left
+open. `demo/run.sh --docker --records 20 --concurrency 4 --partitions 2 --replay-factor 2`, image
+built from scratch, **exit 0**. What it proves, beyond "it runs":
+
+- the banner is the first line the demo container prints, with nothing above it - the container
+  entry point is the `Dockerfile`'s, so this is a genuinely separate proof from the native one;
+- **the sidecar spawns as a child process inside the demo's own container** (`Sidecar listening on
+  loopback port 43325`, then again on a different port for the big replay). That is the rule the
+  compose file declines to break by adding a sidecar service, and until now nothing had shown it
+  actually works in a container;
+- the broker was reached as a compose sibling, with no host Docker socket anywhere;
+- **the same deterministic figures as the two native runs**: 20 records over 20 keys in both arms of
+  the small replay, 40 over 40 in the big one. Three runs, two entry points, one machine state that
+  changed wildly in between - and those four numbers did not move while every timing did. That is
+  the determinism claim tested rather than restated;
+- the two absolute assertions hold on the demo's own 50 lines: no `bootstrap.servers`, no latency.
+
+The image build took **310s of Maven inside the container** plus about two minutes to export and
+load a 288MB layer, on a box carrying eleven agents. That is why earlier sessions skipped it; it is
+worth knowing the cost is real rather than a one-off.
+
+#### The broker is NOT quiet, and the compose fix that was supposed to do it cannot
+
+Measured on this run: the broker emitted **584 `INFO` lines and 1 `WARN`** while
+`KAFKA_LOG4J_ROOT_LOGLEVEL: WARN` and `KAFKA_TOOLS_LOG4J_LOGLEVEL: WARN` were both set and both
+confirmed present in the container's environment. **This is not a Scala problem** - the same two
+lines were added to all eleven compose files by the wave that wrote the contract's "the broker is
+quiet" clause, so all eleven are equally affected, and nothing here is this branch's to change.
+
+Root-caused rather than guessed at, by reading the image's own template
+(`/etc/confluent/docker/log4j.properties.template` in `confluentinc/cp-kafka:7.9.0`):
+
+```
+log4j.rootLogger={{ env["KAFKA_LOG4J_ROOT_LOGLEVEL"] | default('INFO') }}, stdout
+{% set loggers = { 'kafka': 'INFO', 'kafka.controller': 'TRACE',
+                   'kafka.log.LogCleaner': 'INFO', 'state.change.logger': 'TRACE', ... } -%}
+{% if env['KAFKA_LOG4J_LOGGERS'] %} ... merge ... {% endif %}
+```
+
+`KAFKA_LOG4J_ROOT_LOGLEVEL` **worked** - the generated file really does say `log4j.rootLogger=WARN`.
+It is simply outranked: the template then writes a fixed per-logger map, and a named logger beats the
+root in log4j. So `kafka` stays at `INFO`, and `kafka.controller` and `state.change.logger` stay at
+**`TRACE`** - which are, precisely, the "controller elections and log-segment chatter" the contract
+names as the noise it was trying to remove. The one variable that can lower them is
+`KAFKA_LOG4J_LOGGERS`, which merges into that map:
+
+```yaml
+KAFKA_LOG4J_LOGGERS: "kafka=WARN,kafka.controller=WARN,state.change.logger=WARN,kafka.log.LogCleaner=WARN"
+```
+
+Whoever owns the compose files should make that change in all eleven at once and re-measure, rather
+than eleven branches each editing the file they were told not to. **The clause is currently a no-op
+on the noisiest categories**, and nothing would have caught it, because no check counts broker lines
+and the native path never sees them at all - Testcontainers does not attach the broker's stdout to
+the demo's.
+
+**It is still not wired into `bin/ci-demo-test.sh`**, which runs the Java demo through both entry
+points on every pull request. That file is shared across the fan-out and this branch does not own it;
+whoever integrates the eleven demos should add the Scala row. The container path has now been proven
+once, by hand, on one machine - which is not the same as being *kept* working, and that is what the
+row is for.

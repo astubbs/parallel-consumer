@@ -3,6 +3,7 @@ package bz.stub.parallelconsumer.conformance;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
@@ -103,6 +104,56 @@ public final class LanguageRunners {
     }
 
     /**
+     * Where a runner was built INTO the image this suite is running in, or {@code null} when it is not.
+     *
+     * <p><b>Why this exists.</b> The container route builds a Linux binary and extracts it to the host, which
+     * works only when the host is Linux too. On macOS the artifact cannot be executed at all - the shell
+     * answers {@code 126}, "found, but cannot execute" - so the two languages that build in containers, C++
+     * and Swift, simply cannot be driven from a macOS developer's machine.
+     *
+     * <p>Containerising only the RUNNER does not fix that, and the reason is the product's shape rather than
+     * an implementation detail: the client spawns the sidecar as its own child process (KTD41) and connects
+     * to it over loopback, and {@link SidecarShim} announces a bare port with no host precisely so the client
+     * exercises its real spawn-and-reap path. Client, shim and engine therefore have to share one loopback.
+     * Measured on Docker Desktop: from a container, {@code --network host} cannot reach the host's
+     * {@code 127.0.0.1} at all, and the address that does work is one no client can be told to use without
+     * adding a connect-to-a-port option to an API that binds ten languages.
+     *
+     * <p>So the whole run moves inside one container - this suite, its in-JVM engine, the shim it writes and
+     * the runner it spawns - where that one loopback is the container's own. The runner is already compiled
+     * into the image by the same Dockerfile stage that CI extracts from, so there is nothing left to build
+     * and the build command is empty, exactly as it is for the JVM languages the Maven reactor has already
+     * built. {@code bin/run-conformance-in-container.sh} sets this variable.
+     */
+    private static Path prebuiltRunner(String language, String binary) {
+        var directory = System.getenv(PREBUILT_RUNNERS_ENV);
+        if (directory == null || directory.isBlank()) {
+            return null;
+        }
+        var runner = Path.of(directory).resolve(binary);
+        if (!Files.isRegularFile(runner)) {
+            // Not an error, and an earlier version of this threw here - which was wrong, because
+            // `all()` constructs EVERY language's runner to build the selectable list, long before
+            // the selection filters it. One image holds one language's binary, so the C++ image
+            // legitimately has no Swift runner and threw on a language that was never going to run.
+            //
+            // Falling through is still loud, which is what the throw was protecting: the ordinary
+            // declaration's build command is bin/build-client.sh, and inside a container that has no
+            // Docker it refuses by name - "docker is not installed ... this is NOT a pass". So a
+            // language genuinely selected without a runner here still fails, and says why.
+            return null;
+        }
+        return runner;
+    }
+
+    /**
+     * Names the directory holding runners already compiled into the image - see {@link #prebuiltRunner}.
+     * Read from the environment rather than a system property because it is set by a container's
+     * {@code docker run -e}, before any JVM exists to take a {@code -D}.
+     */
+    static final String PREBUILT_RUNNERS_ENV = "PC_CONFORMANCE_PREBUILT_RUNNERS";
+
+    /**
      * C++: the one entry whose build command is not its language's own tool, because there is no C++
      * toolchain on this machine to run.
      * <p>
@@ -120,6 +171,10 @@ public final class LanguageRunners {
      */
     public static LanguageRunner cpp() {
         var module = module("cpp");
+        var prebuilt = prebuiltRunner("cpp", "pc-cpp-conformance-runner");
+        if (prebuilt != null) {
+            return new LanguageRunner("cpp", module, List.of(), prebuilt);
+        }
         return new LanguageRunner("cpp", module,
                 List.of(RepoLayout.workingTreeRoot().resolve("bin").resolve("build-client.sh").toString(), "cpp"),
                 module.resolve("target").resolve("container").resolve("pc-cpp-conformance-runner"));
@@ -158,6 +213,10 @@ public final class LanguageRunners {
      */
     public static LanguageRunner swift() {
         var module = module("swift");
+        var prebuilt = prebuiltRunner("swift", "pc-swift-conformance-runner");
+        if (prebuilt != null) {
+            return new LanguageRunner("swift", module, List.of(), prebuilt);
+        }
         return new LanguageRunner("swift", module,
                 List.of(RepoLayout.workingTreeRoot().resolve("bin").resolve("build-client.sh").toString(), "swift"),
                 module.resolve("target").resolve("container").resolve("pc-swift-conformance-runner"));

@@ -32,4 +32,9 @@
     <ProjectReference Include="../../src/Bz.Stub.ParallelConsumer.Proxy.Client/Bz.Stub.ParallelConsumer.Proxy.Client.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Shared with the demo project by link rather than by assembly; see the file's own remarks. -->
+    <Compile Include="$(MSBuildThisFileDirectory)../../shared/JvmToolchain.cs" Link="JvmToolchain.cs" />
+  </ItemGroup>
+
 </Project>

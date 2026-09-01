@@ -52,8 +52,18 @@
     <!--
         Package versions live here so the library and the test project cannot drift apart on the
         protobuf runtime - Grpc.Tools generates code that the Google.Protobuf runtime must match.
+
+        GrpcVersion HAS A FLOOR, AND IT IS NOT A PREFERENCE. Grpc.Tools 2.71.0 ships a bundled
+        linux_arm64 protoc that SEGFAULTS (exit 139) when MSBuild spawns it inside a container on
+        an arm64 host - so this module, and therefore the demo's image, could not be built on an
+        Apple Silicon machine at all. Established with a control rather than by upgrading and
+        hoping: in one container, one four-line .proto, one project, only the Grpc.Tools version
+        changed - 2.71.0 died with MSB6006 "protoc exited with code 139", 2.83.0 generated the
+        stubs. The same protoc run BY HAND with MSBuild's exact command line succeeded at both
+        versions, which is why it reads as an environment bug rather than a bad argument.
+        Do not lower this without re-running that control.
     -->
-    <GrpcVersion>2.71.0</GrpcVersion>
+    <GrpcVersion>2.83.0</GrpcVersion>
     <ProtobufVersion>3.31.1</ProtobufVersion>
 
     <!--

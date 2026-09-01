@@ -78,11 +78,24 @@ nothing else.
 
 Not implemented, and not silently half-implemented - the capability is simply not declared:
 heartbeats and the liveness lease, the `Manifest` reconnect and `Drop`, `WorkerDied`, `Terminal`
-outcomes, the proxy-initiated `Shutdown` drain and the `Released` outcome. Also absent: the demo and
-its container, and NuGet packaging.
+outcomes, the proxy-initiated `Shutdown` drain and the `Released` outcome. Also absent: NuGet
+packaging.
 
 The current findings, including the ones the frozen documents could not answer, are in
 [`docs/inflight/clients/dotnet.md`](../../docs/inflight/clients/dotnet.md).
+
+## The demo
+
+```bash
+demo/run.sh
+```
+
+The same records through `Confluent.Kafka` one at a time, and through this library over a sidecar it
+spawns - two throughput tables out, Docker the only requirement. Its own
+[`demo/README.md`](demo/README.md) records what is specific to .NET, above all why the simulated work
+is an awaited timer rather than the blocking sleep the shared contract permits in C#. The contract
+every language's demo keeps is
+[`parallel-consumer-proxy/demo/README.md`](../../parallel-consumer-proxy/demo/README.md).
 
 ## Generated code
 

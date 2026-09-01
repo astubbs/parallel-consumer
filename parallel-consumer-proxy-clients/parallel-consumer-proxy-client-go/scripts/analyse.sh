@@ -40,4 +40,15 @@ go vet ./...
 echo "==> staticcheck ./... (pinned in go.mod)"
 go tool staticcheck ./...
 
+# THE DEMO IS A NESTED MODULE (demo/go.mod), so neither `./...` above reaches it - Go's package
+# patterns stop at a directory that has its own go.mod. It is analysed here explicitly, or it is
+# analysed nowhere.
+#
+# `go vet` ONLY, AND THAT IS A GAP RATHER THAN A JUDGEMENT. `go tool staticcheck` builds the version
+# pinned in the module it runs in, and the demo module does not pin it - adding the directive would
+# put staticcheck's dependency tree into the module graph that the demo's Dockerfile resolves, and
+# that image was verified without it. Recorded as an open follow-up in docs/inflight/clients/go.md.
+echo "==> go vet ./... (demo, a nested module)"
+(cd demo && go vet ./...)
+
 echo "==> static analysis clean"

@@ -87,3 +87,35 @@ COPY --from=build /work/build/pc-cpp-selftest /
 COPY --from=build /work/build/pc-cpp-selftest-dynamic /
 COPY --from=build /work/build/pc-cpp-conformance-runner /
 COPY --from=build /work/build/link-report.txt /
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# The stage the CONFORMANCE SUITE runs inside, for hosts that cannot execute what `artifact` exports.
+#
+# `artifact` above is a Linux binary. On a Linux host that runs natively and this stage is unused; on
+# macOS it cannot be executed at all - the shell answers 126, "found but cannot execute" - so C++ and
+# Swift simply could not be driven from a developer's laptop.
+#
+# Containerising only the runner does not fix it. The client spawns the sidecar as its own child and
+# talks to it over loopback, and the suite's shim announces a bare port with no host, deliberately, so
+# the client exercises its real spawn-and-reap path. Client, shim and engine must therefore share ONE
+# loopback - and measured on Docker Desktop, a container cannot reach the host's 127.0.0.1 even with
+# --network host. So the whole run comes in here instead, where that loopback is this container's own.
+#
+# The runner is COPIED from the same `build` stage CI extracts from, so this stage and CI drive the
+# identical binary rather than two builds that could differ. Nothing is compiled here.
+FROM toolchain AS conformance
+
+# A JDK, not a JRE: the suite is built and run by Maven inside this container.
+COPY --from=eclipse-temurin:17-jdk /opt/java/openjdk /opt/java/openjdk
+ENV JAVA_HOME=/opt/java/openjdk
+ENV PATH="/opt/java/openjdk/bin:${PATH}"
+
+COPY --from=build /work/build/pc-cpp-conformance-runner /opt/pc-runners/pc-cpp-conformance-runner
+
+# Read by LanguageRunners.prebuiltRunner: with this set, the C++ entry carries NO build command,
+# exactly as the JVM languages do, because its binary is already here.
+ENV PC_CONFORMANCE_PREBUILT_RUNNERS=/opt/pc-runners
+
+# The repository is mounted here by bin/run-conformance-in-container.sh rather than copied: the suite
+# is driven from the working tree the developer is actually editing.
+WORKDIR /repo

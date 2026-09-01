@@ -84,8 +84,9 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 | [`docs/self-hosted-runner.md`](docs/self-hosted-runner.md) | Setting up or operating the self-hosted highcpu runner |
 | [`docs/agent-harness.md`](docs/agent-harness.md) | Adding a rule you need agents to follow *reliably* - which layers fire on their own, and which are merely available |
 | [`docs/merge-checklist.md`](docs/merge-checklist.md) | Getting a PR ready to merge - what to offer the author, including the squash message and reorganising the commits |
-| [`bin/AGENTS.md`](bin/AGENTS.md) | Writing or changing a script in `bin/` - the shell conventions, including the ones no check enforces |
+| [`bin/AGENTS.md`](bin/AGENTS.md) | Writing or changing **any shell script** - `bin/`, `.githooks/`, `.claude/hooks/` - the shell conventions, including the cross-platform rule and the others no check enforces |
 | [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md) | Adding, editing or retiring a note in `docs/inflight/` - what may live there, the tag vocabulary, and where a note's content goes when its work lands |
+| [`parallel-consumer-proxy-clients/AGENTS.md`](parallel-consumer-proxy-clients/AGENTS.md) | Changing a client or its demo - the two test suites over them, which one your feature needs, and why neither substitutes for the other |
 | [`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md`](parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md) | Changing a field in the engine - the `@GuardedBy` rule, the known shared state and its ledgers, and the shard-map pin |
 
 **A directory with its own `AGENTS.md` owns the rules for what goes in it - read it before you write
@@ -292,9 +293,28 @@ counts. This is a community-maintained fork of the no-longer-maintained
 
 ## Build Requirements
 
-- **JDK 17** (the project uses Jabel to compile Java 17 source to Java 8 bytecode)
+- **JDK 17** (the project uses Jabel to compile Java 17 source to Java 8 bytecode). On JDK 21 the
+  build dies as `Unable to delombok: InvocationTargetException` in `parallel-consumer-core` - a
+  module your change never touched, so it reads as a real breakage and is not one. Check
+  `java -version` first. Set it **per command** (`JAVA_HOME=... ./mvnw`), never by repointing a
+  shared default that every other session inherits.
 - **Docker** (integration tests - TestContainers spins up Kafka brokers)
 - **Maven via wrapper** (`./mvnw`) - do not use system Maven
+- **[mise](https://mise.jdx.dev)**, for the cross-language conformance module and the client
+  builds. `mise install` reads **`mise.toml`**, which is the single declaration of every toolchain
+  version; the CI matrix mirrors it and `bin/check-toolchain-versions.sh` fails if the two ever
+  disagree. It provides every foreign toolchain except the two that build in containers
+  (`bin/build-client.sh` names them: C++ and Swift). **Agents may install it and run `mise use -g`
+  themselves** - that call is recorded in
+  [`docs/inflight/parked-containerised-toolchains-and-runtime.md`](docs/inflight/parked-containerised-toolchains-and-runtime.md),
+  along with the rule that follows from it: *do not build an image fleet for problems mise has
+  already solved*.
+
+  Without mise the build falls through to whatever the host has, and the conformance module then
+  **fails** - correctly, because it refuses to let a runner nobody could build look like a runner
+  that passed. The two failure modes read as project breakage and are not: Go reports
+  `go.mod: unknown block type: tool` when `go env GOTOOLCHAIN` is `local` rather than its default
+  `auto`, and Ruby reports a missing `bundler` when macOS's system 2.6 is on `PATH`.
 
 ## How to Build
 

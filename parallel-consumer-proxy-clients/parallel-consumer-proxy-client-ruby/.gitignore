@@ -12,6 +12,13 @@
 # vendor/bundle, which is what the clients CI matrix caches for this row. Without it a CI run
 # installs to the system gem directory and caches an empty directory.
 
+# THE DEMO'S LOCKFILE IS NOT COMMITTED, and the module's is - which is a difference worth stating.
+# The demo's Gemfile pins every version it adds exactly and inherits the module's pins wholesale, so
+# a lockfile here would add nothing but a list of the platforms it was last resolved on. Committing
+# one would make a native run on any other platform rewrite it, so `git status` would be dirty after
+# running the demo - which is a worse thing than resolving the same pinned versions again.
+demo/Gemfile.lock
+
 vendor/
 .yardoc/
 doc/

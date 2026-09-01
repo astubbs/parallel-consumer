@@ -168,3 +168,31 @@ COPY --from=build /out/pc-swift-selftest-dynamic /
 COPY --from=build /out/pc-swift-conformance-runner /
 COPY --from=build /out/Package.resolved /
 COPY --from=build /out/link-report.txt /
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# The stage the CONFORMANCE SUITE runs inside, for hosts that cannot execute what `artifact` exports.
+#
+# Same reasoning as the C++ module's identical stage, and Swift has a second reason of its own: it
+# has no native path here at all, because SwiftPM refuses a dependency's unsafe build flags outside
+# a container. `artifact` above is a Linux binary; on macOS the shell answers 126 for every scenario.
+#
+# The whole run comes in here - this suite, the engine in its own JVM, the shim it writes and the
+# runner it spawns - so the loopback they must share is this container's own. See
+# bin/run-conformance-in-container.sh for why containerising only the runner cannot work.
+#
+# The runner is COPIED from the same `build` stage CI extracts from, so this stage and CI drive one
+# binary rather than two builds that could differ.
+FROM toolchain AS conformance
+
+# A JDK, not a JRE: the suite is built and run by Maven inside this container.
+COPY --from=eclipse-temurin:17-jdk /opt/java/openjdk /opt/java/openjdk
+ENV JAVA_HOME=/opt/java/openjdk
+ENV PATH="/opt/java/openjdk/bin:${PATH}"
+
+COPY --from=build /out/pc-swift-conformance-runner /opt/pc-runners/pc-swift-conformance-runner
+
+# Read by LanguageRunners.prebuiltRunner: with this set, the Swift entry carries NO build command,
+# because its binary is already here.
+ENV PC_CONFORMANCE_PREBUILT_RUNNERS=/opt/pc-runners
+
+WORKDIR /repo

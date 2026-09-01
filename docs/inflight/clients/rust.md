@@ -11,8 +11,12 @@ report, and a clean client-initiated shutdown, proven by one end-to-end test aga
 sidecar. The module is at
 `parallel-consumer-proxy-clients/parallel-consumer-proxy-client-rust/`; its maturity and
 testing-evidence deferrals are lifted. Later waves: leases and heartbeats, the manifest reconnect,
-worker death, terminal outcomes, the shutdown drain, the demo and its container, crates.io
-publishing, and the rest of the conformance suite.
+worker death, terminal outcomes, the shutdown drain, crates.io publishing, and the rest of the
+conformance suite.
+
+**The demo landed too**, at `.../parallel-consumer-proxy-client-rust/demo/` - two arms, both
+replays, both entry points run. What it found is in "What the demo wave found" below; what is still
+open from it is in "Open from the demo wave".
 
 ## The falsification result
 
@@ -119,6 +123,144 @@ inventing a third shape.
   says so at the point where the wave that implements the drain will add the branch. (The Go wave
   reported the same collision; both clients resolved it the same way.)
 - **The port line is scanned for, not read as the first line**, per the guide's harness carve-out.
+
+## What the demo wave found
+
+The demo is a crate of its own at `.../parallel-consumer-proxy-client-rust/demo/`, beside the
+client rather than inside it: it needs `rdkafka` for its AK core arm and for seeding, and the
+client library must never need a Kafka client at all. A `src/bin/` target would have shared the
+library's dependency list and quietly contradicted the claim the demo exists to make.
+
+### The blocking-sleep carve-out needs a Rust footnote, and every async language should be asked
+
+The contract's per-language rule exempts Python and TypeScript from a blocking sleep and names Rust
+among the languages where one is fine. It is fine - and *where* it blocks decides whether the
+engine's ceiling means anything, because this client's executors are tasks on an async runtime.
+
+Measured with one term changed and everything else identical (12 cores, 40,000 records,
+`--delay-ms 2`, `--concurrency 100`, same broker, same run of the demo):
+
+| the user's function | msg/s |
+|---|---|
+| `blocking(\|r\| thread::sleep(..))` - the library's blocking-pool entry point | **10,341** |
+| `async move { thread::sleep(..) }` - the same sleep, inside the executor task | **3,518** |
+
+2.9x, and the low figure is about the core count divided by the delay - the predicted ceiling for a
+runtime whose worker threads are all asleep. The prediction was stated before the run and held.
+
+**This is not a Rust-only question.** C#, TypeScript and Python's asyncio all have a user function
+running on a scheduler with a bounded worker set. The wave sync should decide whether the contract
+says "a blocking sleep, through whatever the client library offers for blocking user code" rather
+than "a blocking sleep is fine".
+
+### The demo cannot see the sidecar's logs at all
+
+The proxy module carries no logback configuration, so logback's default console appender writes to
+**stdout** - and stdout is the lifecycle channel `sidecar.rs` drains and discards after the port
+line. Setting `sidecar_stderr` does not bring them back; it governs the other stream. Observed, not
+inferred: the sidecar prints several dozen start-up lines before its `port:` line when run by hand,
+and none of them appear in any of the demo's runs.
+
+So a Rust application whose sidecar fails to configure sees "the session failed" and no reason,
+which is exactly the case `SidecarStderr::Inherit`'s doc comment says the default exists to
+prevent. Two possible fixes, and the choice is not the demo's: give the proxy a logback
+configuration that logs to stderr, or have the client forward drained stdout lines somewhere the
+application can reach.
+
+### The container needs two things the reference's does not, and both failed first
+
+The demo's image carries **two** toolchains, because the application is Rust and the sidecar it
+spawns is a Java program. Both extras were found by running it, not by reading:
+
+- **`libprotobuf-dev`, not just `protobuf-compiler`.** Debian's `protobuf-compiler` ships the protoc
+  binary only; the well-known types the frozen schema imports (`duration.proto`, `timestamp.proto`)
+  live in `libprotobuf-dev`. Without it the build fails with "File not found" for those imports
+  while a perfectly good protoc is installed - which reads as a broken schema. **Every non-JVM
+  client that containerises its codegen will meet this**, and it is a third data point for the
+  build-time-toolchain question already open above.
+- **Nothing may look for `.git` inside the image.** The root `.dockerignore` excludes `.git`, so a
+  walk up the tree to find the repository - which is how the demo locates its own compose file -
+  cannot succeed there. The first version asked for it eagerly, which would have failed the
+  container before its first Kafka call; only the branch that starts a broker natively needs it, so
+  the resolution is now lazy. Caught by reading the `.dockerignore` against the code path, not by
+  the container failing. Any language whose demo derives paths from the repository root has the
+  same trap.
+
+### `build.rs` picked a `protoc` it could not execute, in preference to a working one
+
+Fixed on this branch. `protoc_from_maven_repository()` selected the Maven-downloaded protoc on
+`is_file()` alone, and Maven stores that artifact `0644` - `protobuf-maven-plugin` chmods the copy
+it extracts, never the one in `~/.m2`. Because that fallback is consulted *before* `PATH`, a
+machine with a perfectly good protoc installed still failed, with a `Permission denied` naming a
+path under `~/.m2` - which reads as a corrupt download. The candidate filter now requires the
+executable bit, so an unexecutable copy falls through to `PATH` instead of being preferred over it.
+
+**Where else the class could live, checked:** `parallel-consumer-proxy-client-go`'s
+`scripts/generate-proto.sh` resolves the same `~/.m2/com/google/protobuf/protoc` directory the same
+way - and it already `chmod +x`es what it finds, so it does not have the defect. It fixes it by
+*mutating the user's local Maven repository*, which is the trade the Rust fix declines to make; the
+two are worth reconciling at the wave sync, not unilaterally. No other client resolves that
+directory (`grep -rn 'com/google/protobuf/protoc' parallel-consumer-proxy-clients/` finds only
+those two).
+
+## Open from the demo wave
+
+- **No CI row runs this demo.** `bin/ci-demo-test.sh` runs the Java demo through both entry points
+  on every pull request, and the contract says a per-language demo inherits that. Wiring it is
+  outside this branch's ownership (it may not touch `bin/` or `.github/`), so it is open. Until it
+  is wired, the Rust demo's container is exactly the kind of thing the contract warns about:
+  shipped, and only ever run by the person who wrote it.
+- **The demo crate is not in any Maven or cargo gate.** The module's pom runs
+  `cargo clippy --all-targets -- -D warnings` and `cargo test` in the *client* crate's directory,
+  which does not reach `demo/`. Both commands pass in `demo/` today, run by hand. The pom is not
+  this branch's to edit either.
+
+## The reader-experience polish, and the one thing it breaks
+
+The demo now keeps the contract's rewritten output rules: the banner is the first thing printed,
+each arm names the client that produced its row (`AK core (rdkafka)`, `rust-grpc (this client)`),
+and both tables carry `records` and `keys` beside `msg/s`. Broker log levels were already set and
+were not touched.
+
+**`bin/ci-demo-conformance.sh` can no longer see a single arm row, and this is not Rust-specific.**
+Observed, not predicted - its own `skeleton()` awk was run by hand over this demo's captured
+output, and the result was `DIAL`s, two `TITLE`s, two `HEADER`s and **zero `ROW` lines**. Two
+independent causes, either of which is sufficient:
+
+- its arm-name character class is `[A-Za-z0-9 _-]*`, which excludes the parentheses the contract
+  now requires in every arm label;
+- its row pattern is anchored with `$` immediately after the ratio column, so any additional
+  column - which is exactly what `records` and `keys` are - fails the match.
+
+`normalise_arms` has the same problem one step later: `s/^ROW [a-z0-9]+-grpc$/ROW SIDECAR/` cannot
+match `rust-grpc (this client)`. The failure is quiet rather than red: the skeleton is still
+non-empty, so no language is *skipped*; the drift check simply stops comparing arm identity and
+order, which is one of the two things it exists to compare. `bin/` is outside this branch's
+ownership, so it is open here rather than fixed.
+
+**The column order was chosen to keep the one regex that still works.** `records` and `keys` go
+*after* `vs AK core`, because the `HEADER` pattern is not end-anchored and therefore still matches;
+putting them anywhere else would have broken the header check as well as the row check. Eleven
+languages picked their own order simultaneously, so **whoever reconciles this must confirm all
+eleven agree** - the drift check cannot tell them apart until its row pattern is repaired, and a
+demo whose columns are in a different order from its neighbours' would pass today.
+
+## Two shared-machine hazards seen while verifying, neither of them the demo's fault
+
+Both were hit on a box running eleven language agents at once, and both are worth knowing before
+someone reads a failed demo run as a defect.
+
+- **Ruby's and Rust's compose files publish the same host port, 29092.** Two native demos cannot run
+  at once, and the second reports
+  `Bind for 0.0.0.0:29092 failed: port is already allocated` from `docker compose up`. Python's file
+  already parameterises its port (`${PC_DEMO_BROKER_PORT:-19095}`), which is the shape that fixes
+  this; changing Rust's alone would only move the collision, so it is recorded rather than patched.
+- **The Docker VM ran out of disk**, and the symptom names Kafka rather than the disk: the broker
+  container exits 1 having logged
+  `Formatting metadata directory /var/lib/kafka/data ... No space left on device`, and the demo
+  reports only "starting the broker failed". The C++ demo's broker was in the same state at the same
+  time. The host volume was at 99% with eleven image builds in flight. Nothing was pruned - that is
+  shared state - beyond this demo's own compose project.
 
 ## Local gates, and the proof each one fires
 

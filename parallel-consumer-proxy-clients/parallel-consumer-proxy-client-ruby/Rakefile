@@ -40,8 +40,13 @@ end
 # NOT ADDED TO `default`: the parse belongs to the compile phase, and the test lane's RuboCop
 # already refuses to lint a file it cannot parse.
 desc "Parse every Ruby source file - the check Maven's compile phase must fail on"
+# THE DEMO IS LISTED EXPLICITLY, AND NOT AS `demo/**/*.rb`. Its bundle installs into
+# demo/vendor/bundle, and FileList would happily parse every gem in it - minutes of `ruby -c` over
+# third-party source that this module does not ship. Two narrow patterns cover everything the demo
+# actually is; a new demo directory needs a line here.
 task :syntax do
-  files = FileList["lib/**/*.rb", "spec/**/*.rb"].to_a + ["scripts/conformance-runner"]
+  files = FileList["lib/**/*.rb", "spec/**/*.rb", "demo/*.rb", "demo/lib/**/*.rb"].to_a +
+          ["scripts/conformance-runner"]
   broken = files.reject { |file| system(RbConfig.ruby, "-c", file, out: File::NULL) }
   abort "syntax check failed: #{broken.join(', ')}" unless broken.empty?
   puts "syntax OK: #{files.size} files"

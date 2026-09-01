@@ -460,6 +460,20 @@ shipped its first version without it: a review then found six defects in one 25-
 letting the exact mistake it was named after through and two hard-blocking legitimate merges. Every
 one is a case in that file, and the suite goes red against the old parser.
 
+The disk hook's cases are worth reading before adding a hook of your own, because it has the failure
+mode every warn-only hook shares: **its correct behaviour on a healthy machine is to print nothing,
+which is byte-identical to it being broken, unregistered, or not running at all.** So its silent case
+is pinned to thresholds of zero rather than to a healthy disk, and pairs with forced cases proving the
+same call path can be made to speak. An earlier version left the thresholds at their defaults, which
+made the suite a function of how much free space the machine happened to have - three cases flipped
+to failing mid-session when the host dropped below the default warn line. A self-test for a disk
+warner must not itself depend on the disk.
+
+**Still unverified for this hook: whether the harness reaches it at all.** The `claude -p` reachability
+check that settled that question for the other three could not be run when it was added. That is the
+separate question flagged under *`if` matches a PREFIX* - a self-test can only prove what a script
+does - and it stays open until someone runs it.
+
 ## Adding to it
 
 1. **Decide what the rule needs.** To be *known* -> a `CLAUDE.md`. To be *enforced* -> a hook or a

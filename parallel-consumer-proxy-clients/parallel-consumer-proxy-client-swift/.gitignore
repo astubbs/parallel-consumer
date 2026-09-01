@@ -1,0 +1,6 @@
+# SwiftPM's build directory, which holds a full git CHECKOUT of every dependency - two dozen of them
+# for this module. Nothing ignored it until 2026-08-22, so a `swift build` here followed by a
+# `git add -A` stages 1,100+ vendored files and git warns about "embedded git repositories" rather
+# than refusing. It only stayed invisible because Swift builds in a container on CI and most
+# developers never build it natively at all.
+.build/

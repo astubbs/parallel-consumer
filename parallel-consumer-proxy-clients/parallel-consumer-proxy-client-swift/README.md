@@ -84,7 +84,7 @@ Extracted into `target/container/`:
 | `pc-swift-conformance-runner` | This language's half of the shared cross-language conformance suite |
 | `link-report.txt` | `ldd` of each, and the toolchain versions - read it before believing either portability claim |
 
-There is no published package and no demo.
+There is no published package. There **is** a demo - see below.
 
 ### In the Maven build
 
@@ -135,6 +135,25 @@ lifecycle never reaching `validate` where the enforcer is bound.
 - **The extracted artifacts carry the timestamps of the layer that made them**, not of your build,
   so `ls -l` is no evidence that a compile actually ran. Read `link-report.txt` for what was built
   and with which toolchain.
+
+## The demo
+
+```bash
+demo/run.sh                       # from anywhere in the repo
+cd demo && docker compose up      # or the plain container path
+```
+
+Two arms - Swift's own Kafka client one record at a time, and Swift over the sidecar through the
+client library above - over one pre-produced backlog, reporting throughput. It needs Docker and
+nothing else: the broker is a compose sibling and the sidecar is a child process, never a service.
+
+[`demo/README.md`](demo/README.md) records what is specific to Swift, including the three
+divergences from the shared contract ([`parallel-consumer-proxy/demo/README.md`](../../parallel-consumer-proxy/demo/README.md)):
+the simulated work is `Task.sleep` rather than a blocking sleep, `--partitions` reaches the broker
+rather than an admin client swift-kafka-client does not have, and there is no native mode.
+
+**The demo is not part of the Maven build.** It is its own SwiftPM package with a path dependency on
+this one, built by its own `Dockerfile`, so nothing in the reactor builds or runs it.
 
 ## Testing it
 

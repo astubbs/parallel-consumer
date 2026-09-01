@@ -1,0 +1,67 @@
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+    THE .NET DEMO (astubbs#242, plan unit U35). The same records through .NET's own Kafka client,
+    one at a time, and through this module's client library over a real sidecar.
+
+    IN THE MODULE'S ONE SOLUTION, not beside it. Two reasons, and the first is a rule this module
+    already carries: `dotnet build`, `dotnet test` and the CI row's `dotnet format analyzers` all
+    run here with NO project argument and error out if the module root holds more than one
+    candidate, so a demo project has to join the existing solution rather than add a second one.
+    The second is that a demo nobody compiles rots - being in the solution means the module's
+    ordinary build, and therefore the clients CI row, keeps this compiling.
+
+    IT TARGETS net8.0 LIKE THE REST OF THE MODULE, and rolls forward like the conformance runner,
+    for the same measured reason: `dotnet run` launches a real net8.0 app, and on a machine whose
+    only runtime is newer that dies with "You must install or update .NET" unless it may roll
+    forward. The demo is launched directly by demo/run.sh, so it meets that difference exactly as
+    the conformance runner does.
+
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>pc-dotnet-demo</AssemblyName>
+    <RootNamespace>Bz.Stub.ParallelConsumer.Proxy.Client.Demo</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <!-- Nothing consumes this as a library, so XML docs would be documentation for nobody. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+        THE AK CORE ARM'S KAFKA CLIENT. Confluent.Kafka is .NET's Kafka client the way
+        `org.apache.kafka:kafka-clients` is Java's - it wraps librdkafka and carries the native
+        binaries for every platform this demo runs on, macOS arm64 and Debian x86_64 included.
+
+        It is a DEMO dependency and deliberately not the library's: an application that reaches the
+        engine through the sidecar needs no Kafka client at all, which is the whole point of the
+        sidecar arm. Only the comparison needs one.
+    -->
+    <PackageReference Include="Confluent.Kafka" Version="2.15.0" />
+
+    <!--
+        The broker, when the caller supplies none. Same choice the Java demo makes, one language
+        over: a real broker in a container is what a user actually runs.
+
+        NEVER REACHED FROM INSIDE THE DEMO'S OWN CONTAINER - that path is always given the address
+        of a compose sibling, because a demo container is never granted the host Docker socket
+        (plan unit U35). Testcontainers needs that socket, so the rule and the dependency never
+        meet.
+    -->
+    <PackageReference Include="Testcontainers.Kafka" Version="4.14.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Bz.Stub.ParallelConsumer.Proxy.Client/Bz.Stub.ParallelConsumer.Proxy.Client.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Shared with the test project by link rather than by assembly; see the file's own remarks. -->
+    <Compile Include="$(MSBuildThisFileDirectory)../../shared/JvmToolchain.cs" Link="JvmToolchain.cs" />
+  </ItemGroup>
+
+</Project>
