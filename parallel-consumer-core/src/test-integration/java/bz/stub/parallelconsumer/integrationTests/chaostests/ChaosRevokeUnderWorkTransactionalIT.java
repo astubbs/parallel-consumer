@@ -20,7 +20,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * gap read as a considered exclusion.
  *
  * <p><b>What that cost.</b> astubbs/parallel-consumer#44 (confluentinc/parallel-consumer#803) is the
- * only issue upstream ever labelled a <i>verified bug</i>, and it is transactional. So is the
+ * one issue upstream labelled a <i>verified bug</i> - one of a couple of dozen so labelled, not
+ * the only one - and it is transactional. So is the
  * unbounded revoke wait in {@code docs/inflight/bug-857-transactional-revoke-wait.md}, whose fix is
  * blocked on an unsettled design decision. The suite built to hunt this family could not reach
  * either of them.

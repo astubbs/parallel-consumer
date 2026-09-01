@@ -20,8 +20,9 @@
 #   * DATA SKIP - confluentinc#875 describes an offset silently never delivered, lag growing, and a
 #     restart making it reappear. That is not a liveness failure and no liveness detector will see
 #     it. The end-of-run LEDGER_LOSS check is what would catch it (see COMPLETENESS below).
-#   * the UNBOUNDED REVOKE WAIT in transactional mode - the only issue upstream ever labelled a
-#     verified bug (astubbs#44 / confluentinc#803). THIS RUN DOES NOT HUNT IT. See below.
+#   * the UNBOUNDED REVOKE WAIT in transactional mode - astubbs#44 / confluentinc#803, which
+#     carries upstream's `verified bug` label (one of a couple of dozen that do; this file
+#     previously called it the only one, which was false). THIS RUN DOES NOT HUNT IT. See below.
 #
 # ############################################################################################
 # THE TRANSACTIONAL HUNT IS NOT HAPPENING, AND THIS HARNESS WILL NOT PRETEND OTHERWISE.
@@ -48,11 +49,22 @@
 # that scenario transactional changes what the experiment is, per scenario, and that decision is
 # adjacent to the one docs/inflight/bug-857-transactional-revoke-wait.md says not to settle alone.
 #
-# AND THE CHAOS SUITE CANNOT BE DRIVEN THERE AT ALL. Checked rather than assumed:
-# `grep -rl PERIODIC_TRANSACTIONAL_PRODUCER` over the chaostests package returns NOTHING. Not one
-# chaos scenario is built for that mode, so no flag, rotation entry or property could reach it -
-# the transactional hunt needs a DIFFERENT VEHICLE, not a wider rotation. The 214-cycle run of
-# 2026-08-29 confirmed the consequence from the other side: 129 SYNC, 85 ASYNC, zero transactional.
+# WHY THE ROTATION STILL DOES NOT HUNT IT - and this reason CHANGED on 2026-09-01, so read it
+# rather than the version you may remember. It used to be that no chaos scenario existed for that
+# mode at all: `grep -rl PERIODIC_TRANSACTIONAL_PRODUCER` over the chaostests package returned
+# NOTHING, so no flag or rotation entry could have reached it, and the 214-cycle run of 2026-08-29
+# confirmed it from the other side - 129 SYNC, 85 ASYNC, zero transactional.
+#
+# A VEHICLE NOW EXISTS: ChaosRevokeUnderWorkTransactionalIT overrides commitMode() to return
+# PERIODIC_TRANSACTIONAL_PRODUCER, and it is reachable by name:
+#
+#     bin/torture-overnight.sh --scenario ChaosRevokeUnderWorkTransactionalIT
+#
+# What is still true is the sentence at the top of this block: the DEFAULT ROTATION does not run
+# it, so an ordinary overnight run is not a transactional hunt and must not be reported as one.
+# What is also still true is the harder half - that scenario's first green run established only
+# that it RUNS. Whether repeating it hunts the unbounded revoke wait is an OPEN QUESTION, not
+# something this script asserts by being able to select it.
 #
 # The vehicles that DO exist are outside the chaos group, which is why --groups exists:
 #   RebalanceEoSDeadlockTest   untagged; its javadoc keeps the mode deliberately, because the
