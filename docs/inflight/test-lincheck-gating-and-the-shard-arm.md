@@ -12,6 +12,10 @@ with the failure measured and diagnosed as far as the evidence goes, rather than
 Whoever picks this up decides the fix; this note is the evidence they would otherwise have to
 re-derive, including the hypothesis that looked obviously right and is refuted.
 
+**Read [*What CI added*](#what-ci-added)
+first.** The lane has since run in CI, and the result rules out two of the three remaining causes -
+so the open question is narrower than the rest of this note was written to leave it.
+
 [`test-lincheck-lane-open-items.md`](test-lincheck-lane-open-items.md) **owns the lane itself** - its
 coverage gaps, the stress-arm calibration method, and the 3.4x machine-dependence finding. This note
 owns only the gating attempt and the one arm blocking it. Where they disagree, that one wins.
@@ -94,6 +98,9 @@ stricter control checks out the whole pre-astubbs#336 file and fixes up compilat
    or a host property - core count, scheduler - that changes which interleavings stress mode reaches.
    Confirming the arm still fires *anywhere* is the cheap first move: run it on the machine that
    wrote it, or in CI, before spending anything on the harness.
+
+   **DONE, and it narrows the list to one.** See *What CI added* below: two of those three are now
+   ruled out, and the surviving one is the operation set.
 2. **Decide what the lane gates on.** The commit's argument for gating is that *a Lincheck violation
    is a real finding rather than a timing wobble, because the model checker explores interleavings
    deterministically instead of sampling them*. That is true of the model-checking arms and **false
@@ -106,6 +113,48 @@ stricter control checks out the whole pre-astubbs#336 file and fixes up compilat
    test failing under stress may be exposing a real bug, and loosening it is not a diagnosis.
 4. **Do not add a retry.** This repo removed surefire reruns because they retried failures into green
    and hid three flakes. Demote to advisory before masking anything.
+
+## What CI added
+
+**The arm misses on a second, structurally different host - but stress mode works there.**
+
+The cheap first move above has been run. The lane executed on this PR's head for the first time -
+`ubuntu-latest`, four cores, the opposite end of the range from the 32-core box - and the arm
+**missed again**, with the identical message. Nine tests, one failure, and it is the same one.
+
+**The decisive part is not the miss - it is what passed alongside it.** On that same runner, in that
+same JVM, two *other* stress arms found their violations:
+
+| Arm | Mode | Outcome on `ubuntu-latest` |
+|---|---|---|
+| `LincheckToolchainProbeTest` control probe | stress | violation found |
+| `LincheckToolchainProbeTest` control probe | model checking | violation found |
+| `PartitionStateLincheckTest` | stress | violation found |
+| `ShardManagerLincheckTest.stressMustNotRediscoverTheShardTear` | stress | **no violation** |
+
+The toolchain probe exists to answer exactly this question, and it answers it: Lincheck's stress
+strategy works on that host, the JDK is adequate, the `-Plincheck` flags are landing, and an inverted
+stress arm can and does fire. So the three candidates listed above collapse to one:
+
+- **A JDK or Lincheck version difference - ruled out.** The probe's stress arm fires on both hosts.
+- **A host property (core count, scheduler) - ruled out.** 32 cores and 4 cores agree, and a second
+  production stress arm fires on the 4-core host.
+- **The operation set no longer producing the interleaving - the only one left standing.**
+  `astubbs#335`, `astubbs#336` and `astubbs#373` all rewrote `ProcessingShard` after this harness was
+  written. The next question is not about bounds or hosts at all: it is whether this arm's declared
+  operations can still reach the seam they were written against.
+
+**This also re-reads the earlier control.** Reintroducing the check-then-act produced no violation
+either - which under the old three-candidate list was ambiguous, and under this one is corroborating:
+if the operations no longer reach the seam, restoring the defect *at* the seam would change nothing,
+which is what was observed. The caveat on that control still stands, and a stricter one (whole
+pre-astubbs#336 file, compilation fixed up) is now worth more than it was.
+
+**Cost correction.** The lane is ~2m50s locally but **7m42s** on a hosted runner, `WorkManagerLincheckTest`
+alone accounting for 364s of it. The matrix entry's `timeout: 20` still covers it; the `~2m30s`
+estimate in that entry's comment does not, and should be corrected whenever the entry is next touched.
+
+Evidence: run `33511221453`, job `99867204560`, head `58c8c7cd1`.
 
 ## Reproducing
 
