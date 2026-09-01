@@ -3,7 +3,8 @@
 <!-- inflight-type: task -->
 <!-- inflight-impact: stranded-work -->
 
-Two open upstream reports, mirrored as astubbs#175 and astubbs#177. Both show the same signature:
+Two upstream reports, **both still open upstream**, mirrored as astubbs#175 and astubbs#177. Both
+show the same signature:
 
 ```
 InternalRuntimeException: Timeout waiting for commit response PT30S to request
@@ -13,6 +14,25 @@ InternalRuntimeException: Timeout waiting for commit response PT30S to request
 Found while checking whether the transactional battle test had covered the reported transactional
 hangs. It had not - it planned against confluentinc#803 and never opened these two, even though
 astubbs#44's mirror names them.
+
+## The astubbs#177 mirror was closed on 2026-09-01, and confluentinc#833 was not
+
+Recorded because a closed mirror over an open upstream report is precisely the state that stops the
+next reader looking. The fork owner closed astubbs#177 as completed, with **no reason on the issue and
+no linking commit** - so nothing here can say why, only that it happened. confluentinc#833 is open and
+still has no reply, which means the *closing* happened and the *telling* did not.
+
+The last comment on the mirror, five days earlier, says the opposite of a fix: it explains that
+astubbs#267 renames the type in the title but does **not** fix the report, points at astubbs#29 and
+astubbs#317 as the work that would, and ends "Left open". Whatever changed the decision after that is
+not written down anywhere this note can find.
+
+**So task 3 below is now half unreachable and task 4 has grown.** Commenting on a closed mirror
+reaches nobody; the reporter is upstream. If the assessment in this note holds, the thing owed is a
+comment on confluentinc#833 itself - and the mirror should either be reopened or carry a closing
+comment saying what settled it, because AGENTS.md makes the mirror the owner of an upstream issue's
+live status, and right now it asserts a status the upstream issue contradicts.
+
 
 ## Why they are plausibly fixed
 
@@ -66,7 +86,8 @@ on.
 2. **Establish whether astubbs#100 covers them.** The mechanism matches confluentinc#833 closely;
    confluentinc#809's close-path entry needs its own look. A reproduction would settle it - the shape
    is a broker-poll thread death during rebalance under a failing workload.
-3. **If it does, say so upstream and on the mirrors.** Both are open with no response. Per AGENTS.md,
+3. **If it does, say so upstream and on the mirrors.** Both upstream issues are open with no
+   response; astubbs#177's mirror is closed, so only the upstream half is still reachable. Per AGENTS.md,
    comment upstream only when there is something to act on - a fix in a published version is exactly
    that. Use plain cross-repo references, never `Fixes`/`Closes`, and check for the hidden marker
    before posting so it cannot double-comment.

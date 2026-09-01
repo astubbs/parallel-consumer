@@ -11,9 +11,11 @@ Blockers, collisions, and decisions someone is waiting on. Not a PR list - `gh` 
   this file's - the ORDER is the standing coordination fact, and it is recorded here because it
   outlived the note that held it (it lived only in astubbs#323's own note, which that PR's merge
   deleted).
-- **astubbs#29 and astubbs#31 target `master-confluent`**, the pinned pre-rebrand mirror, so merging either would
-  land its fix where no user can reach it. Retarget to `master` - but not mechanically: astubbs#29's deadlock
-  fix predates the internals astubbs#80 reshaped, so it needs reconciling rather than replaying.
+- **The `master-confluent` retarget is done - what is left is the reconciliation.** astubbs#29 and
+  astubbs#31 both used to target the pinned pre-rebrand mirror, where a merge lands a fix no user can
+  reach. astubbs#31 has since merged, and astubbs#29 now targets `master` and is out of draft. The
+  half that was never mechanical still stands: astubbs#29's deadlock fix predates the internals
+  astubbs#80 reshaped, so it needs reconciling rather than replaying.
 - **astubbs#38 (JUnit 6) is blocked on something other than the version bump.** JUnit 6 needs Java 17, *and*
   `archunit-junit5` will not run on it with no `archunit-junit6` engine in existence. The ArchUnit
   tests must be rewired first. See `deps-deferred-majors.md`.
@@ -29,29 +31,29 @@ Blockers, collisions, and decisions someone is waiting on. Not a PR list - `gh` 
 - **astubbs#8 (`features/retry-dlq`, 2022) is an abandoned draft**, kept only because it is the sole
   DLQ code that exists. Close or finish it; it is not in flight.
 
-## The transactional stack - land in this order
+## The transactional stack - what it was, and the one debt it left
 
-<!-- post-merge: checked-begin - the numbered items state what each PR IS and what its merge owes,
-     which stays true forever; the live red/green of the dependency gate is deliberately not recorded
-     here, because that is what `gh pr checks` answers and what rots the moment either lands -->
-Two PRs, one dependency chain, declared with `depends on` in astubbs#262's body and enforced by the
-`Check PR Dependencies` required check. A child sitting red on that check while its parent is open is
-the gate working, not a failure - do not try to fix it.
+<!-- post-merge: checked-begin - the chain is recorded as history and the outstanding item is stated
+     against master rather than against a PR's live state, so nothing here turns false on a merge -->
+Three PRs, one dependency chain, declared with `depends on` in astubbs#262's body and enforced by the
+`Check PR Dependencies` required check. Both parents have merged - astubbs#261 on 2026-08-14, then
+astubbs#257 - so the chain is discharged and only astubbs#262 is still open. Kept because a reader who
+knows this work as a three-PR stack needs telling which parts are already master.
 
-1. **astubbs#257** - produce-lock double release. At `batchSize >= 2` the lock was taken per poll
-   context but released per record, so every batch failed and - because only a *success* marks a
-   partition dirty - **no commit was ever attempted** and the source offset froze. Its own commit
-   message describes the symptom as duplicates; astubbs#262 established it is a **stall**, which is
-   more severe. Correct that description before merging it, or the changelog generator publishes the
-   wrong severity.
-2. **astubbs#262** - the battle test itself, which merges astubbs#257 in. **Rebase-merge, not
-   squash**: it holds separable workstreams, and squashing buries two real defect discoveries under
-   one 5,000-line test commit.
+1. **astubbs#261**, merged - a terminally failed send left a partial result set visible at
+   `read_committed`.
+2. **astubbs#257**, merged - produce-lock double release. At `batchSize >= 2` the lock was taken per
+   poll context but released per record.
+3. **astubbs#262**, open - the battle test itself. **Rebase-merge, not squash**: it holds separable
+   workstreams, and squashing buries two real defect discoveries under one 5,000-line test commit.
 
-**astubbs#261** was the third link and merged on 2026-08-14 - a terminally failed send left a partial
-result set visible at `read_committed`. It is named rather than dropped because the chain's shape is
-what this entry records, and a reader who knows the stack as three PRs needs telling which one is
-already master.
+**The debt: astubbs#257's merged commit message understates the defect, and release notes are
+generated from the log.** It describes redelivery - "handed records back for a second delivery" - and
+never says the word *stall*. What astubbs#262 established is more severe: because only a *success*
+marks a partition dirty, every batch failing meant **no commit was ever attempted**, and the source
+offset froze at 3 of 201. `grep -i stall` against `b36ad9428` returns nothing. Correcting it now means
+either an amended note in the release section when 0.6.0.0 is cut, or a follow-up commit that says so
+- but the changelog generator will publish the weaker claim until somebody does one of them.
 <!-- post-merge: checked-end -->
 
 ### Decisions waiting on a human
