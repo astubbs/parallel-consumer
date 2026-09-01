@@ -87,7 +87,8 @@ is simultaneously
   append,
 - and why a like-for-like CI comparison against master has to be **manufactured** with a throwaway PR
   from a branch at master's tip rather than found in history. See
-  `docs/handoffs/perf-lane-throughput-shortfall.md`, whose named experiment this constrains.
+  `docs/inflight/test-perf-lane-asserts-a-deadline-on-a-varying-machine.md`, whose named experiment this
+  constrains.
 
 ## The order that unblocks it, cheapest first
 

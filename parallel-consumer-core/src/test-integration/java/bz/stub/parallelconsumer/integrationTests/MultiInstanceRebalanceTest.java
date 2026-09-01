@@ -26,7 +26,6 @@ import org.assertj.core.internal.StandardComparisonStrategy;
 import org.awaitility.Awaitility;
 import org.awaitility.core.ConditionTimeoutException;
 import org.awaitility.core.TerminalFailureException;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -67,10 +66,17 @@ import static org.awaitility.Awaitility.waitAtMost;
  *   subject), and the assertion is <em>progress</em> - the consumed count must advance within
  *   {@link ProgressProbe#NO_PROGRESS_WINDOW} while work remains - never "all N records within T",
  *   which fails a slow run and a stalled run identically.</li>
- *   <li><b>Capacity profiles</b> ({@code @Tag("performance")} - the performance lane, which never
- *   gates a merge): the original {@link Churn#RANDOM_STORM random chaos-monkey storm} at full
- *   aggression, on the shared (contended) broker. Their pass <em>rate</em> over many runs is the
- *   measurement; a single run's outcome is not a verdict on PC.</li>
+ *   <li><b>Capacity profiles</b> ({@code @Tag("performance")}): the original
+ *   {@link Churn#RANDOM_STORM random chaos-monkey storm} at full aggression, on the shared
+ *   (contended) broker. Their pass <em>rate</em> over many runs is the measurement, and a single
+ *   run's outcome is weak evidence about PC.
+ *   <p><b>The performance lane GATES.</b> {@code Performance Tests} is a required check, so a single
+ *   red run here blocks a merge. This javadoc previously claimed the lane "never gates a merge",
+ *   which was false and cost three CI cycles on astubbs/parallel-consumer#29 before anyone checked.
+ *   Running them under a gate anyway is deliberate (2026-09-01): a capacity profile that silently
+ *   degrades teaches nobody anything, and a shifting baseline is precisely what we want to be told
+ *   about. The cost is that an unlucky run blocks a merge - read a red one as a prompt to look, not
+ *   as a verdict, and check the {@code AMBIENT PROBE AUTOPSY} block before diagnosing by hand.</li>
  * </ul>
  * The astubbs#68 precedent cuts both ways here: giving every test an uncontended broker made the
  * suite green and thereby <em>hid</em> the confluentinc#857 deadlock - so uncontended is right for
@@ -398,7 +404,7 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
      * KafkaConsumer group with no PC in the path. Until then, do NOT reduce this profile's churn:
      * its residual failure rate is the baseline that investigation measures against.
      * TODO(refactor): settle the residual-failure attribution — see
-     * docs/inflight/test-largenumberofinstances-residual-failures-unmeasured.md
+     * docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md
      * <p>
      * <b>Fixes applied (from confluentinc#857 investigation):</b>
      * <ul>
@@ -415,24 +421,6 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
      *
      * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/857">#857</a>
      */
-    @Disabled("RE-DISABLED 2026-09-01, and unlike the annotation this replaces, with a reason. "
-            + "This test was @Disabled on master carrying no explanation - its javadoc says only that it "
-            + "'takes some time', so it was switched off for COST and has never been shown to fail. This "
-            + "branch removed that @Disabled and tagged it @Tag(\"performance\"), which put it in a lane "
-            + "that GATES (Performance Tests is a required check - the class javadoc's claim that the "
-            + "performance lane 'never gates a merge' is false). It then failed on its first exposure: a "
-            + "progress timeout at 111.2s, 500,000 records, PERIODIC_CONSUMER_ASYNCHRONOUS/UNORDERED, with "
-            + "'PC reported exception states: []' - no crash and no recorded cause. It also degraded its "
-            + "neighbour: running 21 instances for 111s immediately before MultiInstanceHighVolumeTest in "
-            + "the same reused JVM dropped that test from 73,722 to 39,684 records/second, which read as a "
-            + "product regression and is not one. THE FAILURE RATE HAS SINCE BEEN MEASURED, on "
-            + "handoff/enable-large-number-of-instances: one failure in ten consecutive runs on an idle "
-            + "Linux box, and the failure is a STALL rather than an overload - the ambient probe caught "
-            + "ZOMBIE_MEMBER/REBALANCE_BLOCKED, a coordinator dwelling in PreparingRebalance because a "
-            + "member stopped answering. That branch was merged here on 2026-09-01 for its control-loop "
-            + "fix, and THIS annotation was deliberately held back out of that merge: one failure in ten "
-            + "is not a rate a required check can carry. Re-enabling stays that branch's work - see "
-            + "docs/inflight/test-largenumberofinstances-residual-failures-unmeasured.md.")
     @Tag("performance")
     @Test
     void largeNumberOfInstances() {
@@ -460,7 +448,6 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
      * <p>
      * Uses parameters closer to the production environments reported in confluentinc#857: 30 partitions, 4 consumers.
      */
-    @Disabled("Held out of the performance lane on astubbs/parallel-consumer#29, 2026-09-01. Not because this test is wrong - because the lane it was added to GATES, and a capacity profile cannot gate. This class's own javadoc says their pass RATE over many runs is the measurement and a single run is not a verdict on PC, which is precisely what a required check cannot express. Leaving them in cost three CI cycles on astubbs/parallel-consumer#29 and produced a phantom 45% throughput regression in a NEIGHBOURING test that shares the lane. Re-enabling all of these, and deciding where capacity profiles belong, is the work on handoff/enable-large-number-of-instances - see its docs/handoffs/ document.")
     @Tag("performance")
     @Test
     void cooperativeStickyRebalanceShouldNotStall() {
@@ -486,7 +473,6 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
      * If this test passes but {@link #largeNumberOfInstances()} fails, the issue is rebalance storm tolerance,
      * not a PC state management bug.
      */
-    @Disabled("Held out of the performance lane on astubbs/parallel-consumer#29, 2026-09-01. Not because this test is wrong - because the lane it was added to GATES, and a capacity profile cannot gate. This class's own javadoc says their pass RATE over many runs is the measurement and a single run is not a verdict on PC, which is precisely what a required check cannot express. Leaving them in cost three CI cycles on astubbs/parallel-consumer#29 and produced a phantom 45% throughput regression in a NEIGHBOURING test that shares the lane. Re-enabling all of these, and deciding where capacity profiles belong, is the work on handoff/enable-large-number-of-instances - see its docs/handoffs/ document.")
     @Tag("performance")
     @Test
     void gentleChaosRebalance() {

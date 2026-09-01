@@ -100,10 +100,16 @@ were comparable. Treat it as unproven in both directions.
 
 The measurement that would settle it - `MultiInstanceHighVolumeTest` alone, on CI, on this tree and on
 master, more than once per side - has still never been run, and the fix above does not remove the need
-for it. It is owned by
-`handoff/enable-large-number-of-instances`, whose `docs/handoffs/perf-lane-throughput-shortfall.md`
-carries the full evidence.
-<!-- file-refs: N/A - names a document on another branch, which is where that work lives -->
+for it. `docs/inflight/test-perf-lane-asserts-a-deadline-on-a-varying-machine.md` carries the full
+evidence, the two ruled-out explanations and the wrong paths already taken.
+
+**All three capacity profiles are now ENABLED in the gating lane, operator decision 2026-09-01.**
+They were `@Disabled` here for three days because the lane gates and a capacity profile's output is a
+rate rather than a verdict. That is reversed deliberately: a profile that silently degrades teaches
+nobody anything, and a shifting baseline is what we want to be told about. It also makes the next
+`Performance Tests` run the first real read on the control-loop fix. The cost is accepted - an
+unlucky run blocks a merge, and `largeNumberOfInstances` was measured at one failure in ten on Linux
+*before* that fix existed, so whether the fix moves that rate is itself now under test.
 
 ## NEXT TASKS, in order
 
@@ -472,8 +478,12 @@ arm, 5/5 failing on the fixed arm. The issue's headline evidence for "still open
 amrynsky, 2026-01-11, on upstream: `MultiInstanceRebalanceTest.largeNumberOfInstances` is disabled by
 default and *"every other run of this test is failing"* with `No progress beyond 285591 records after
 11 rounds`. It is the closest thing to a repeatable in-repo instance of the reported symptom and it
-is switched off. `test-largenumberofinstances-residual-failures-unmeasured.md` concedes the claim
-that the residual failures are Kafka's has never been measured.
+was switched off. **Both halves of that changed on 2026-09-01**: it is enabled in the gating lane,
+and the rate has been measured - one failure in ten on Linux, failing as a rebalance stall rather
+than the overload an earlier sweep produced. What has NOT been established is whether the residual is
+Kafka's or PC's; the ambient probe found a coordinator blocked on a member that stopped answering,
+and the members are PC instances.
+`test-largenumberofinstances-residual-failures-measured-not-explained.md` owns that thread.
 
 ### The experiment that would settle the no-rebalance pause
 

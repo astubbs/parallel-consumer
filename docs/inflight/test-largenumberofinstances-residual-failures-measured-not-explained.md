@@ -1,7 +1,11 @@
-# `largeNumberOfInstances`: the claim that the residual failures are Kafka's has never been measured
+# `largeNumberOfInstances`: the residual failures are measured now, and still not explained
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: blind-spot -->
+
+**Renamed 2026-09-01.** This note was `...-residual-failures-unmeasured.md`, and the "unmeasured"
+was true for as long as every run happened on a machine that never failed. It stopped being true when
+the test failed on Linux, so the filename was making a claim the contents contradicted.
 
 ## The claim
 
@@ -206,3 +210,30 @@ Found while trying to answer it from the artefacts this run already produced:
 `pc_experiment_java_home` looks for an SDKMAN candidate that does not exist outside the machine it
 was written on, and says so rather than failing, so an unset `JAVA_HOME` runs under whatever the
 wrapper finds. Roughly ninety seconds a run at the default scale.
+
+## 2026-09-01: enabled in the gating lane, deliberately, and what that is now testing
+
+All three capacity profiles in `MultiInstanceRebalanceTest` are enabled and `Performance Tests` is a
+required check, so this test now blocks merges. That reverses a three-day-old decision to hold them
+out, and the reasoning is worth keeping because it is not the obvious one.
+
+**The ten-run measurement predates the control-loop fix.** One failure in ten was measured on a tree
+that still evaluated a shard-wide sum as an unguarded `log.trace` argument on every control-loop pass
+(`docs/inflight/perf-control-loop-log-argument-evaluated-eagerly.md`). So that rate describes the
+unfixed tree, and quoting it as this test's failure rate going forward would be quoting a number for
+code that no longer exists.
+
+**The failure mode makes the connection plausible rather than idle.** The failure was a stall with
+the group dwelling in `PreparingRebalance` waiting on a member that stopped answering - and a control
+thread doing an O(shards) scan every pass, fastest under saturation, is a candidate reason a live
+member answers late. That is a hypothesis, not a finding: the profile also kills instances
+continuously, so a silent member may simply be one the harness stopped. **The sharp question is
+unchanged - is the unresponsive member one the harness stopped, or one still running?** - and the
+three instrumentation gaps above still stand between it and an answer.
+
+**What the enablement buys, and what it costs.** It buys the rate on the fixed tree, which nothing
+else was going to produce: this test has never run on master, so there is no history to mine and no
+baseline series to consult. It costs merge-blocking on an unlucky run. A red run here is a prompt to
+read the `AMBIENT PROBE AUTOPSY` block, not a verdict on PC - and if the rate does not improve, the
+honest reading is that the log-argument defect was not this test's problem, which is itself a result
+worth having.

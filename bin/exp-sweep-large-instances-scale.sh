@@ -5,7 +5,7 @@
 # Does the largeNumberOfInstances failure rate MOVE WITH SCALE?
 #
 # The experiment astubbs#a8b4e196e's own commit body proposes, and the one
-# test-largenumberofinstances-residual-failures-unmeasured.md is about: is the residual failure the
+# test-largenumberofinstances-residual-failures-measured-not-explained.md is about: is the residual failure the
 # group coordinator failing to converge, or a PC defect?
 #
 #   rate RISES with scale  -> consistent with the coordinator struggling at size. Kafka's problem.

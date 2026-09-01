@@ -34,9 +34,9 @@ not.
 
 **Fitting is not the same as established.** Nobody has measured the fix against the shortfall, and
 the instrument's own spread on identical code is 1.54x, which is wide enough to produce this
-appearance by chance. `docs/handoffs/perf-lane-throughput-shortfall.md` carries the
-full investigation and the two explanations already ruled out by measurement (lane composition, and
-runner speed).
+appearance by chance. `docs/inflight/test-perf-lane-asserts-a-deadline-on-a-varying-machine.md`
+carries the full investigation, including the two explanations ruled out by measurement (lane
+composition, and runner speed) and the wrong paths already taken.
 
 **What would settle it** is the pair that handoff names and nobody has run:
 `MultiInstanceHighVolumeTest` alone, on CI, on both trees, more than once per side. Note while
@@ -72,10 +72,14 @@ operator decision to keep that PR on the eager form deliberately - a decision ta
 on a branch that could not merge without dragging the whole stack with it. Merging in the other
 direction removed the obstacle, so the reasoning expired rather than being overruled.
 
-**`largeNumberOfInstances` was NOT re-enabled by that merge.** The source branch had it enabled; the
-annotation holding it disabled was kept, because the rate that branch measured - one failure in ten
-consecutive runs, failing as a stall rather than an overload - is not a rate a required check can
-carry. `docs/inflight/test-largenumberofinstances-residual-failures-unmeasured.md` owns that thread.
+**All three capacity profiles were then re-enabled, same day, by operator decision.** The merge
+initially held `largeNumberOfInstances` disabled on the grounds that one failure in ten is not a rate
+a required check can carry. That was reversed once the ordering was checked: the ten-run measurement
+predates this fix, so the rate it produced is a rate for the *unfixed* tree. Whether it survives the
+fix is an open question, and the failure mode makes the connection plausible rather than idle - the
+failure was a rebalance stall with a member not answering, and a control thread scanning every shard
+every pass is a candidate reason a member answers late. Enabling them is how that gets tested.
+`docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md` owns it.
 
 Verify rather than trust, since both branches move:
 
