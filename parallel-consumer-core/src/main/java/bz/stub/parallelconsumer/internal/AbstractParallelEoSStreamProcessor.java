@@ -278,6 +278,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     private final RateLimiter queueStatsLimiter = new RateLimiter();
 
+    /**
+     * How often, at most, to report that the loading factor is sitting at its ceiling. The condition is a steady state,
+     * and {@link #checkPipelinePressure()} runs on every control loop pass, so without this the report is emitted
+     * thousands of times a minute for as long as the condition holds.
+     */
+    private static final int LOAD_FACTOR_AT_CEILING_REPORT_RATE_SECONDS = 30;
+
+    private final RateLimiter loadFactorAtCeilingLimiter = new RateLimiter(LOAD_FACTOR_AT_CEILING_REPORT_RATE_SECONDS);
+
     @Getter(PROTECTED)
     PCModule<K, V> module;
 
@@ -305,8 +314,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Control for stepping loading factor - shouldn't step if work requests can't be fulfilled due to restrictions.
      * (e.g. we may want 10, but maybe there's a single partition and we're in partition mode - stepping up won't
      * help).
+     * <p>
+     * {@code volatile} because the setter below widens the write beyond the control thread which owns the field: a
+     * test driving {@link #checkPipelinePressure()} sets it from whichever thread it runs on, and SpotBugs
+     * (AT_STALE_THREAD_WRITE_OF_PRIMITIVE) is right that a plain {@code boolean} gives that write no visibility
+     * guarantee. The field is touched once per control loop pass, so the barrier costs nothing measurable.
      */
-    private boolean lastWorkRequestWasFulfilled = false;
+    @Setter(PROTECTED) // visible for testing - lets a test put the pressure check into its guarded branch
+    private volatile boolean lastWorkRequestWasFulfilled = false;
 
     private io.micrometer.core.instrument.Timer userProcessingTimer;
     private Gauge loadFactorGauge;
@@ -1577,8 +1592,48 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 log.debug("isPoolQueueLow(): Executor pool queue is not loaded with enough work (queue: {} vs target: {}), stepped up loading factor to {}",
                         getNumberOfUserFunctionsQueued(), getPoolLoadTarget(), dynamicExtraLoadFactor.getCurrentFactor());
             } else if (dynamicExtraLoadFactor.isMaxReached()) {
-                log.warn("isPoolQueueLow(): Max loading factor steps reached: {}/{}", dynamicExtraLoadFactor.getCurrentFactor(), dynamicExtraLoadFactor.getMaxFactor());
+                reportLoadFactorAtCeiling();
             }
+        }
+    }
+
+    /**
+     * The queue is below its target but the loading factor cannot grow any further.
+     * <p>
+     * This is a saturation signal, not a failure - so it is reported accordingly, and never on every control loop
+     * pass:
+     * <ul>
+     *     <li>When the factor is <em>fixed</em> (see {@link DynamicLoadFactor#isStaticFactor()}) there is nothing to
+     *     report at all: the ceiling is the value the user configured, so being at it is the configuration doing
+     *     exactly what was asked. It goes to debug.</li>
+     *     <li>When the factor is dynamic, having exhausted the step-up range is worth knowing about - but the
+     *     condition persists, so it is rate limited to once per
+     *     {@value #LOAD_FACTOR_AT_CEILING_REPORT_RATE_SECONDS} seconds.</li>
+     * </ul>
+     *
+     * @see <a href="https://github.com/astubbs/parallel-consumer/issues/155">astubbs#155</a> (confluentinc#402) - the
+     *         unlimited WARN filled users' logs, and read like an error when it was not one
+     */
+    private void reportLoadFactorAtCeiling() {
+        if (dynamicExtraLoadFactor.isStaticFactor()) {
+            log.debug("Executor pool queue is below its target ({} queued vs {}), and the loading factor is fixed at {} by configuration - " +
+                            "not stepping up, so the in-flight target stays at {} records.",
+                    getNumberOfUserFunctionsQueued(),
+                    getPoolLoadTarget(),
+                    dynamicExtraLoadFactor.getCurrentFactor(),
+                    getQueueTargetLoaded());
+        } else {
+            loadFactorAtCeilingLimiter.performIfNotLimited(() ->
+                    log.warn("Loading factor has reached its maximum ({}/{}) and the executor pool queue is still below its target " +
+                                    "({} queued vs {}), so the in-flight target of {} records will not grow further. This is a saturation " +
+                                    "signal, not an error: raise ParallelConsumerOptions#maximumLoadFactor or #messageBufferSize to buffer " +
+                                    "more records. Repeats are suppressed for {}s.",
+                            dynamicExtraLoadFactor.getCurrentFactor(),
+                            dynamicExtraLoadFactor.getMaxFactor(),
+                            getNumberOfUserFunctionsQueued(),
+                            getPoolLoadTarget(),
+                            getQueueTargetLoaded(),
+                            LOAD_FACTOR_AT_CEILING_REPORT_RATE_SECONDS));
         }
     }
 

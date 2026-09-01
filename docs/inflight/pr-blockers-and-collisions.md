@@ -26,5 +26,11 @@ Blockers, collisions, and decisions someone is waiting on. Not a PR list - `gh` 
   astubbs#80 reshaped. Pick parallel work accordingly - and check `gh pr list` for which of these
   are still open, since a merged one's files are simply master's again.
 <!-- post-merge: checked-end -->
+- **Two branches grew a log-capture test helper at the same time, and both PRs are still open.**
+  astubbs#203 (`fix/log-verbosity-batch`) adds a reusable `LogCapture` (an `AutoCloseable` appender +
+  level override); astubbs#201 (`fix/155-load-factor-noise`) has the same logic inline in
+  `LoadFactorCeilingReportingTest` because neither was on `master` when the other was written.
+  **Whichever merges second must delete its copy and use the shared one** - do not leave two ways to
+  capture a log line.
 - **astubbs#8 (`features/retry-dlq`, 2022) is an abandoned draft**, kept only because it is the sole
   DLQ code that exists. Close or finish it; it is not in flight.
