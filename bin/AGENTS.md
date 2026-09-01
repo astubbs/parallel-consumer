@@ -15,7 +15,7 @@ because churn is its own risk.
 `ENDFILE` parsed cleanly under mawk - the default `awk` here - matched nothing, and printed its success
 line over a file containing the exact defect it was written to catch. `exp` turned out to be a reserved
 awk function name. And the structural evidence is stronger than either anecdote: **two entire gates
-exist only to police shell's traps** ([`check-shell-sigpipe.sh`](check-shell-sigpipe.sh),
+exist only to police shell's traps** (`bin/lib/source-patterns.mjs` (rule `sigpipe-into-grep-q`),
 [`check-shell-hazards.sh`](check-shell-hazards.sh)), plus a shared helper for `grep -c` printing `0`
 and exiting `1`. When a fifth of the tooling guards the tooling, the language is the problem.
 
@@ -135,7 +135,7 @@ Two structural guards exist and are worth copying into any new checker's self-te
 - **No `printf | grep -q` or `| awk` under `set -o pipefail`.** The early-exiting reader closes the
   pipe, the writer takes `EPIPE`, and `pipefail` promotes 141 to the pipeline's status - so *matching*
   becomes a failure. It needs more than one pipe buffer (64 KiB) of trailing input to bite, which is
-  why it survives small fixtures. Use a herestring. **`bin/check-shell-sigpipe.sh` enforces this
+  why it survives small fixtures. Use a herestring. **`bin/lib/source-patterns.mjs` (rule `sigpipe-into-grep-q`) enforces this
   across every script in this directory** and runs in CI, so a new violation fails the build rather
   than waiting to be noticed - `bin/check-review-posted.sh` shipped with one and misreported four
   PRs first. `shellcheck` does **not** catch this pattern (verified against the known-bad line,

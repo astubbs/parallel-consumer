@@ -102,15 +102,15 @@ document. This section is the detail behind it.
 
   What the lane covers, and why each one is not obvious:
 
-  - **`check-shell-sigpipe.sh`** fails any script piping into `grep -q` under `pipefail`. That
-    construct can report failure *because* it matched, once the producer still has more than a pipe
-    buffer left to write when `grep` exits - so it passes every small fixture and surfaces only in
-    production. ShellCheck does not detect it. Full mechanism in the script header and in
-    [`solutions/workflow-issues/a-check-that-reports-success-without-having-run.md`](solutions/workflow-issues/a-check-that-reports-success-without-having-run.md).
+  - **`check-source-patterns.mjs`**, rule `sigpipe-into-grep-q`, fails any script piping into
+    `grep -q` under `pipefail`. That construct inverts its own answer - `grep -q` exits on match, the
+    writer takes EPIPE, and `pipefail` promotes it - so a MATCH reports failure. It shipped in
+    `check-review-posted.sh` and reported "no review posted" on four PRs whose reviews had posted.
+    Was `check-shell-sigpipe.sh` until it became a row in `bin/lib/source-patterns.mjs`.
   - **`check-shell-hazards.sh`** fails coreutils flags that mean different things on GNU and BSD -
     `stat -f` exits 1 on GNU while printing filesystem prose to stdout, `sed -i` takes its suffix
     attached on one and as the next argument on the other. Same class as the above, and it should
-    eventually absorb it ([`inflight/ci-fold-sigpipe-into-shell-hazards.md`](inflight/ci-fold-sigpipe-into-shell-hazards.md)).
+    eventually absorb it (`bin/lib/source-patterns.mjs`).
   - **`test-rename-packages.sh`** self-tests the package-rename tool - run by hand once per branch,
     exactly the shape that rots unnoticed between the day it is written and the day a whole rename
     depends on it.

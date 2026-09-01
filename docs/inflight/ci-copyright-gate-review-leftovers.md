@@ -49,7 +49,7 @@ astubbs#338 fixed one instance. Two more stand:
 
 - **The bespoke shell corpus is one directory level deep**, so `bin/lib/`, `scripts/` and the two
   repo-root scripts are outside it. It now lives in `bin/lib/shell-corpus.sh`
-  (`shell_corpus_files`, `ls "$d"/*.sh`) and is shared by `bin/check-shell-sigpipe.sh` and
+  (`shell_corpus_files`, `ls "$d"/*.sh`) and is shared by `bin/lib/source-patterns.mjs` (rule `sigpipe-into-grep-q`) and
   `bin/check-shell-hazards.sh`, so extracting it doubled the gap's reach rather than closing it.
   A scope gap rather than live instances, and both halves of that are worth keeping: of the
   excluded files, most carry no `set -o pipefail` at all, and `scripts/upstream-sweep.sh`'s

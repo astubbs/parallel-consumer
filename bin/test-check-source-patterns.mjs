@@ -44,26 +44,39 @@ for (const r of RULES) {
     r.allowIf.test('#!/usr/bin/env bash\necho hi\n'), false)
 }
 
-// --- awk-endfile ------------------------------------------------------------------------------
+// --- sigpipe-into-grep-q ----------------------------------------------------------------------
+// Migrated from bin/check-shell-sigpipe.sh, so these cases are ITS cases: the port must agree with
+// the gate it replaced, and the first draft did not - it flagged thirteen files the shell gate passes.
 {
-  const r = rule('awk-endfile')
-  check('endfile: catches the gawk-only block', r.forbid.test('  ENDFILE {\n    print\n  }\n'), true)
-  check('endfile: does not catch plain END', r.forbid.test('  END { print }\n'), false)
-  check('endfile: does not catch the word in prose',
-    r.forbid.test('# mawk has no ENDFILE, which is why this exists\n'), false)
-  check('endfile: applies to shell files', r.files.test('bin/x.sh'), true)
-  check('endfile: does not apply to Node', r.files.test('bin/x.mjs'), false)
-}
-
-// --- awk-reserved-exp -------------------------------------------------------------------------
-{
-  const r = rule('awk-reserved-exp')
-  check('reserved: catches exp= inside an awk program',
-    r.forbid.test(`awk 'BEGIN { exp = 3 }'`), true)
-  check('reserved: does not catch a shell variable named exp outside awk',
-    r.forbid.test('exp=3\necho "$exp"\n'), false)
-  check('reserved: does not catch a comparison',
-    r.forbid.test(`awk 'BEGIN { if (exp == 3) print }'`), false)
+  const r = rule('sigpipe-into-grep-q')
+  const pipefail = 'set -euo pipefail\n'
+  check('sigpipe: only applies where pipefail is set',
+    r.requires.test(pipefail), true)
+  check('sigpipe: a file without pipefail is out of scope',
+    r.requires.test('#!/usr/bin/env bash\necho hi\n'), false)
+  check('sigpipe: catches a pipe into grep -q',
+    r.forbid.test(pipefail + 'printf x | grep -q foo\n'), true)
+  check('sigpipe: catches the long flag',
+    r.forbid.test(pipefail + 'printf x | grep --quiet foo\n'), true)
+  check('sigpipe: catches it with other flags first',
+    r.forbid.test(pipefail + 'printf x | grep -E -q foo\n'), true)
+  // The comment guard. Without it the first draft flagged every file that merely DOCUMENTS the hazard,
+  // including the gate being replaced - thirteen false positives against a gate that reports none.
+  check('sigpipe: does NOT catch it inside a comment',
+    r.forbid.test(pipefail + '# never write: printf x | grep -q foo\n'), false)
+  check('sigpipe: does NOT catch a logical or',
+    r.forbid.test(pipefail + 'foo || grep -q bar file\n'), false)
+  check('sigpipe: does NOT catch a herestring, which is the fix',
+    r.forbid.test(pipefail + 'grep -q foo <<<"$data"\n'), false)
+  // Every flag spelling the deleted gate covered. These are not decoration: -qE, -qF and the
+  // space-separated `grep -v -q` are the ones a hand-written regex gets wrong, and reasoning about
+  // whether they match is how you convince yourself of the wrong answer. The old gate's own self-test
+  // had an arm for each; losing them silently is how a migration becomes a regression.
+  for (const flags of ['-q', '-qE', '-qF', '-Eq', '--quiet', '--silent', '-v -q', '-E -q']) {
+    check(`sigpipe: catches grep ${flags}`,
+      r.forbid.test(pipefail + `printf x | grep ${flags} foo\n`), true)
+  }
+  check('sigpipe: applies to shell', r.files.test('bin/x.sh'), true)
 }
 
 if (failures === 0) { console.log('\nAll source-pattern self-tests passed'); process.exit(0) }

@@ -16,6 +16,12 @@
 // separates them, because resetting to the tip calls everything master gained since the branch was
 // cut "new here".
 //
+// `requires` IS NOT A NICETY - it arrived from a real rule. Folding check-shell-sigpipe.sh in needed
+// "only files that also set pipefail", because piping into `grep -q` is only a wrong ANSWER when
+// pipefail promotes the reader's SIGPIPE to the pipeline's status. Without the precondition the rule
+// flags correct code. A table that could not express that would have been a table that only fits the
+// rules its author invented for it.
+//
 // OPT-OUTS ARE SENTENCES. A rule may name an `allowIf` marker, and the convention is that the marker
 // carries a reason (`shell-justified: <why>`). A bare flag lets somebody silence a rule without
 // saying anything a reviewer can disagree with.
@@ -58,6 +64,7 @@ for (const rule of RULES) {
   for (const f of files) {
     const text = read(f)
     if (text === null) continue
+    if (rule.requires && !rule.requires.test(text)) continue
     if (rule.allowIf && rule.allowIf.test(text)) continue
     if (rule.forbid.test(text)) hits.push(f)
   }

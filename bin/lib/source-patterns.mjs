@@ -14,6 +14,17 @@
 // inherits the walking, the marker handling, the exit codes and the reporting, and it cannot drift
 // from its neighbours because there is only one implementation of all of that.
 //
+// CHECK WHAT WE ALREADY RUN BEFORE ADDING A ROW. This repo already has ShellCheck, SpotBugs with
+// fb-contrib/findsecbugs/findbugs-slf4j, Infer, forbiddenapis, ArchUnit and CodeQL. A rule that one of
+// them covers does not belong here at any price - a second implementation of somebody else's check is
+// a wheel, and it will disagree with theirs eventually.
+//
+// Two rules were written for this table and then deleted before it shipped, which is the standard: they
+// flagged gawk's ENDFILE under mawk, and awk's reserved function names used as variables. Both were
+// real - each had bitten this session - but each was generalised from a single incident, into policing
+// a language now frozen for new work. A bespoke linter for the language you are leaving is the clearest
+// possible case of reinventing a wheel nobody needs to roll.
+//
 // WHAT DOES NOT BELONG HERE. A check that has to *think* - parse XML, call an API, compare numbers,
 // know about git history beyond a diff - is a real program and gets its own file. This is for the
 // "grep with a reason attached" family, which is most of them, and the honesty test is whether the
@@ -24,7 +35,7 @@
 // and it survives long after the thing it guarded stopped mattering - which is how a linter becomes
 // noise people learn to skip.
 
-/** @typedef {{id: string, why: string, files: RegExp, forbid: RegExp, allowIf?: RegExp, fix: string, scope?: 'added-files'}} Rule */
+/** @typedef {{id: string, why: string, files: RegExp, forbid: RegExp, requires?: RegExp, allowIf?: RegExp, fix: string, scope?: 'added-files'}} Rule */
 
 /** @type {Rule[]} */
 export const RULES = [
@@ -41,23 +52,25 @@ export const RULES = [
     fix: 'Write it as .mjs, or state why shell is right: # shell-justified: <reason>',
   },
   {
-    id: 'awk-endfile',
-    why: 'ENDFILE is a gawk extension. The default awk on Debian and Ubuntu is mawk, which parses the '
-       + 'program, silently never runs the block, and exits 0 - so the check passes everything. This '
-       + 'happened here, to a gate written to catch a specific defect, over a file containing it.',
+    id: 'sigpipe-into-grep-q',
+    why: 'Under `set -o pipefail`, `writer | grep -q PATTERN` INVERTS its own answer. grep -q exits the '
+       + 'instant it matches, the writer takes EPIPE and dies with 141, and pipefail promotes that to '
+       + 'the pipeline status - so a MATCH reports failure. It hides well: the writer only gets that far '
+       + 'with more than one pipe buffer still to write, so small inputs pass forever. It shipped in '
+       + 'check-review-posted.sh, which reported "no review posted" on four PRs whose reviews had posted. '
+       + 'ShellCheck does not catch it - verified against the known-bad line. Migrated from '
+       + 'bin/check-shell-sigpipe.sh, whose own header said it was a hazard category rather than a gate.',
     files: /\.(sh|bash)$/,
-    forbid: /^\s*ENDFILE\s*\{/m,
-    fix: 'One awk invocation per file with END, or write it in Node.',
-  },
-  {
-    id: 'awk-reserved-exp',
-    why: '`exp` is a built-in awk function, so using it as a variable is a syntax error - and one that '
-       + 'only shows when the line is reached, which for a gate can be long after it was written.',
-    files: /\.(sh|bash)$/,
-    // `=(?!=)` and not `=`: `if (exp == 3)` is a comparison, not an assignment, and the first
-    // draft flagged it. Caught by the must-NOT-match half of this rule's self-test, which is
-    // the half that exists for exactly this.
-    forbid: /awk[^\n]*\b(exp|log|int|split|index|length|substr)\s*=(?!=)/,
-    fix: 'Rename the variable. Node has no reserved-word trap of this shape.',
+    requires: /set -.*pipefail/,
+    // LINE-ANCHORED, and the `(?![ \t]*#)` is load-bearing. A whole-file regex without it flagged
+    // thirteen files the shell gate passes, because most of them only MENTION the hazard in a comment -
+    // including the gate being replaced and its own self-test. The shell version got this by running
+    // line-oriented and piping through a second `grep -v` for comments; a single pattern has to carry
+    // both halves, and finding that out is why one real rule was migrated instead of shipping the
+    // table with only invented ones.
+    //
+    // `[^|]\|` keeps `||` out: a logical-or is not a pipeline.
+    forbid: /^(?![ \t]*#)[^\n]*[^|]\|[ \t]*grep(?:[ \t]+-[a-zA-Z-]+)*[ \t]+(?:-[a-zA-Z]*q|--quiet|--silent)/m,
+    fix: 'Use a herestring: grep -q PATTERN <<<"$data". No pipeline, so no SIGPIPE for pipefail to promote.',
   },
 ]
