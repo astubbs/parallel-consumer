@@ -3,10 +3,14 @@
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
 
+<!-- post-merge: checked-begin -->
+<!-- Reads the same after the merge: the PR is cited as the landed change that first ran this class on
+     CI, which is a permanent link, and no live branch is named. -->
 `PcDrivenStatefulProofTest.pcDrivenAggregationMatchesTheStockBaseline` timed out on repetition 2 of 3
-in the `Integration Tests` lane of astubbs/parallel-consumer#398, the run that first put that class on
-CI. Repetitions 1 and 3 passed in the same JVM. **One sighting, not a rate**, and it is written down
-because the alternative was to re-run and learn nothing.
+in the `Integration Tests` lane of astubbs/parallel-consumer#398, the change that first put that class
+on CI. Repetitions 1 and 3 passed in the same JVM. **One sighting, not a rate**, and it is written
+down because the alternative was to re-run and learn nothing.
+<!-- post-merge: checked-end -->
 
 **Do not loosen the drain timeout, shorten the repetitions, or serialise the class to make this go
 away.** What the evidence rules out is exactly the reading that would justify any of those.
@@ -67,8 +71,9 @@ arm, because it holds the machine fixed and changes only the concurrency. If it 
 of the two unattributed lines above belongs to this fork. If it still stalls, the load is a red
 herring and this is a defect in completion on the PC path, which is the error-surfacing rung's ground.
 
-Before either, add a second sighting cheaply: the lane re-runs on every push to that branch, so the
-rate is being collected whether or not anybody asks for it.
+Before either, add a second sighting cheaply: the lane runs on every push and on every merge to
+master, so the rate accumulates whether or not anybody asks for it. A second sighting is worth more
+than a second opinion here - one occurrence cannot distinguish a rare race from a one-off.
 
 ## Delete when
 
