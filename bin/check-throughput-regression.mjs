@@ -42,7 +42,7 @@ import { readFileSync, writeFileSync, existsSync, globSync, mkdtempSync, rmSync,
 import { tmpdir } from 'node:os'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { verdictFor, FAIL_BELOW, WARN_BELOW } from './lib/throughput-verdict.mjs'
+import { verdictFor, displayRatio, headlineFor, FAIL_BELOW, WARN_BELOW } from './lib/throughput-verdict.mjs'
 
 // Anchored like the shell original's `cd "$ROOT"`. Without it the relative paths below resolve
 // against the caller's directory, and the gate reports "nothing in scope" - a clean tree - when what
@@ -156,6 +156,31 @@ if (!(observedControl > 0)) {
 None of the control classes (\`${CONTROLS.join(', ')}\`) produced a time, so machine speed cannot be cancelled and no comparison is possible. The raw number above is recorded but comparable to nothing.
 
 **Not a pass.**`)
+  process.exit(CANNOT)
+}
+// THE THIRD NOT-A-PASS GUARD, AND IT WAS THE ONLY ONE MISSING. `verdictFor` has a `no-subject`
+// sentinel that nothing between here and the call site could ever produce a report for: the
+// destructure below leaves `ratio` undefined, `${ratio.toFixed(3)}` throws while the template is
+// being built, and Node exits 1 - which is this file's own code for VIOLATION. A subject test that
+// did not run therefore read as a REGRESSION, and did it while writing no report at all, breaking
+// the "EVERY EXIT WRITES A REPORT" rule stated above by the one exit that never reached writeReport.
+//
+// Ordered AFTER the control guard, not before it as in `verdictFor`. When both are absent the
+// broader fact is the useful one - nothing in the lane produced per-method times - and naming the
+// subject alone would send the reader looking at one test.
+if (!(observedSubject > 0)) {
+  console.error(`check-throughput-regression: no per-method time for ${SUBJECT}, so there is nothing to compare.`)
+  reportStatus = 'no-subject'
+  writeReport(`### 🟠 Throughput — the subject test did not run
+
+| What | Value |
+|---|---|
+| **This run** | ${observedRate} rec/s |
+| Control tests took | ${observedControl.toFixed(1)}s |
+
+The control classes produced times but \`${SUBJECT}\` — the test this check exists to measure — produced none. Either it did not run in this lane, or its failsafe report did not reach the glob.
+
+**Not a pass.** A rate was reported without the test that earns it, and that looks identical to a clean lane from the outside.`)
   process.exit(CANNOT)
 }
 
@@ -312,12 +337,9 @@ const spread = `${Math.min(...shares).toFixed(3)} – ${Math.max(...shares).toFi
 // 1.713 is the subject's time divided by the CONTROLS' time in the SAME run; the only figure that
 // says anything about master is the comparison. The headline sentence exists so the common question
 // is answered before anyone reaches a number, and every row is now named in words rather than in the
-// vocabulary of the method.
-const faster = ratio >= 1
-const magnitude = Math.abs(1 - ratio) < 0.005
-  ? 'the same speed as'
-  : `about ${pct(Math.abs(1 - ratio))} ${faster ? 'faster' : 'slower'} than`
-const headline = `**This branch is ${magnitude} master**, on the one test this measures.`
+// vocabulary of the method. It lives in lib/throughput-verdict.mjs beside the noise floor it has to
+// disclose, so a bound and its caveat cannot drift apart, and so it can be asserted without a run.
+const headline = headlineFor(ratio)
 
 const report = `### ${icon} Throughput — ${word}
 
@@ -325,7 +347,7 @@ ${headline}
 
 | What | Value | Meaning |
 |---|---|---|
-| **Compared with master** | **${ratio.toFixed(3)}** | above 1.00 is faster, below is slower |
+| **Compared with master** | **${displayRatio(ratio)}** | above 1.00 is faster, below is slower |
 | Subject test took | ${observedSubject.toFixed(1)}s | the test under measurement |
 | Control tests took | ${observedControl.toFixed(1)}s | the other tests in this same run |
 | Subject ÷ controls, here | ${observedShare.toFixed(3)} | **not a speed** - a shape that cancels machine speed |

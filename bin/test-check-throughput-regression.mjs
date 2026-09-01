@@ -15,7 +15,8 @@ import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, globSync } 
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
-import { verdictFor, FAIL_BELOW, WARN_BELOW, median } from './lib/throughput-verdict.mjs'
+import { verdictFor, bandOf, displayRatio, headlineFor,
+         FAIL_BELOW, WARN_BELOW, NOISE_FLOOR, median } from './lib/throughput-verdict.mjs'
 
 let failures = 0
 const check = (desc, actual, expected) => {
@@ -80,6 +81,38 @@ check('a missing control is not a pass', verdictFor({ subject: 27, control: 0 },
 check('fail bound is a 50% loss', FAIL_BELOW, 0.50)
 check('flag bound is a 30% loss', WARN_BELOW, 0.70)
 
+// --- the printed number must never contradict the icon beside it -----------------------------------
+{
+  // The report prints the ratio and, two lines below, the bounds it was judged against. Rounding to
+  // three places crosses those bounds: 0.4996 is a FAIL that prints as "0.500", and the report's own
+  // "Allowable range" line says 🔴 is < 0.50. A reader checking the number against the stated range
+  // then reaches the opposite conclusion from the icon. These pin BOTH boundaries, in both
+  // directions, because the bug is symmetric and only one side of it was ever noticed.
+  check('a fail that rounds up to the bound keeps its band', bandOf(Number(displayRatio(0.4996))), 'fail')
+  check('and prints enough digits to show it', displayRatio(0.4996), '0.4996')
+  check('a flag that rounds up to the bound keeps its band', bandOf(Number(displayRatio(0.6996))), 'flag')
+  check('and prints enough digits to show it', displayRatio(0.6996), '0.6996')
+  // Away from a boundary nothing widens - three places stays the normal case, so this is not a
+  // licence to print six digits at every reader.
+  check('an ordinary ratio still prints three places', displayRatio(0.98042), '0.980')
+  check('a value exactly on a bound is already consistent', displayRatio(0.5), '0.500')
+}
+
+// --- the headline must disclose the noise floor it sits inside -------------------------------------
+{
+  // A single run's difference smaller than this test's own spread is a reading, not a result. Stating
+  // it flatly is what a reviewer read as a finding, in a comment that separately printed the spread.
+  check('the noise floor is the measured share spread', NOISE_FLOOR, 0.17)
+  const small = headlineFor(1.08)
+  check('a difference inside the spread says so', small.includes('INSIDE'), true)
+  check('and still gives the number', small.includes('about 8% faster'), true)
+  check('and does not claim the branch IS faster', /branch is about/.test(small), false)
+  const big = headlineFor(0.50)
+  check('a difference outside the spread is not caveated away', big.includes('INSIDE'), false)
+  check('and is called out as worth looking at', big.includes('larger than'), true)
+  check('no measurable difference says exactly that', headlineFor(1.0).includes('the same speed as master'), true)
+}
+
 
 // THE REPORT MUST CARRY A REAL STATUS, CHECKED BY RUNNING IT RATHER THAN BY GREPPING FOR ONE.
 //
@@ -114,7 +147,11 @@ check('flag bound is a 30% loss', WARN_BELOW, 0.70)
   const root = fileURLToPath(new URL('..', import.meta.url))
   const summary = join(root, 'target/performance-throughput.txt')
   const report = join(root, 'target/throughput-report.md')
-  const saved = [summary, report].map(f => [f, existsSync(f) ? readFileSync(f, 'utf8') : null])
+  // The second case's fixture. It is in `saved` so restore() deletes it however this block exits -
+  // leaving a stray failsafe report behind would fail the precondition on the NEXT run of this test,
+  // and read as the developer's own dirty tree rather than as this test's litter.
+  const controlXml = join(root, 'target/failsafe-reports/TEST-VeryLargeMessageVolumeTest.xml')
+  const saved = [summary, report, controlXml].map(f => [f, existsSync(f) ? readFileSync(f, 'utf8') : null])
   const restore = () => {
     for (const [f, body] of saved) {
       if (body === null) rmSync(f, { force: true })
@@ -149,6 +186,32 @@ check('flag bound is a 30% loss', WARN_BELOW, 0.70)
       // written to catch that exact bug could not fail. Split the payload off and assert the status
       // literal appears NOWHERE in the prose a human reads.
       check('the status did not land inside the message', text.split('<!-- pc-throughput-data:')[0].includes('no-control'), false)
+
+      // SECOND RUNTIME PATH: no-subject. Worth reaching by running the reporter rather than by
+      // reasoning about it, because the bug it guards was that the path did not exist - `verdictFor`
+      // returned its `no-subject` sentinel, the destructure left `ratio` undefined, and the template
+      // threw on `ratio.toFixed(3)`. Node exits 1 for an uncaught throw, which is this file's code for
+      // VIOLATION, so a subject test that never ran was reported as a REGRESSION and wrote no report
+      // at all. Exit code and report are therefore both asserted: either alone would have passed
+      // against some version of the bug.
+      //
+      // Reached offline by giving the reporter a CONTROL time and no subject time, which clears the
+      // two earlier guards and stops before the `gh run list` the verdict path needs. That ordering is
+      // load-bearing for this test staying hermetic.
+      mkdirSync(join(root, 'target/failsafe-reports'), { recursive: true })
+      writeFileSync(controlXml,
+        '<?xml version="1.0" encoding="UTF-8"?>\n<testsuite name="VeryLargeMessageVolumeTest">\n' +
+        '<testcase name="shouldProcess" classname="bz.stub.parallelconsumer.integrationTests.VeryLargeMessageVolumeTest" time="80.0"/>\n' +
+        '</testsuite>\n')
+      rmSync(report, { force: true })
+      const noSubject = spawnSync(process.execPath, [join(root, 'bin/check-throughput-regression.mjs')], { encoding: 'utf8' })
+      check('the reporter exited CANNOT for no-subject', noSubject.status, 2)
+      const subjText = existsSync(report) ? readFileSync(report, 'utf8') : ''
+      const sm = /<!-- pc-throughput-data: (.*?) -->/.exec(subjText)
+      check('the no-subject exit wrote a report at all', Boolean(sm), true)
+      check('and its payload names the status', sm ? JSON.parse(sm[1]).status : null, 'no-subject')
+      check('and the status did not land inside the message',
+        subjText.split('<!-- pc-throughput-data:')[0].includes('no-subject'), false)
     }
   } finally {
     for (const sig of ['SIGINT', 'SIGTERM']) process.removeListener(sig, onSignal)
