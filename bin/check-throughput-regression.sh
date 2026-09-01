@@ -181,4 +181,23 @@ if below "$ratio" "$WARN_BELOW"; then
     exit 0
 fi
 
+# THE TRIGGER FOR RAISING THE BASELINE, because otherwise there is not one.
+#
+# --suggest-baseline exists but nobody is prompted to run it, and a capability nobody is reminded of is
+# one that does not happen - the same failure that left a throughput gate deferred for a fortnight
+# while the data to set it sat in CI logs. So the prompt goes where somebody is already looking: the
+# output of the run that noticed.
+#
+# A SINGLE RUN CANNOT ESTABLISH THAT THE PRODUCT GOT FASTER, and this does not claim it does. Spread on
+# effectively identical code has been measured at 0.778 to 1.000, so one high ratio is as likely to be
+# a fast runner. What it says is "this happened, and if it keeps happening the baseline is stale",
+# which is the honest content of one observation.
+if [ "$(awk -v a="$ratio" 'BEGIN { exit !(a > 1.15) }'; echo $?)" = "0" ]; then
+    printf '\nBASELINE MAY BE STALE: ratio %s - this tree beat the baseline by more than 15%% after\n' "$ratio"
+    printf 'normalising. One run does not establish that, since the spread on identical code reaches 0.78\n'
+    printf 'to 1.00. If master keeps landing here, the baseline is measuring a floor the code has left\n'
+    printf 'behind, and every later regression is judged from too low a bar:\n'
+    printf '  bin/perf-backfill.sh --suggest-baseline\n'
+fi
+
 printf '\nOK: within what machine speed accounts for.\n'

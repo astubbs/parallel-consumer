@@ -166,6 +166,17 @@ jobs:
       # (`gh run download <run-id> -n performance-throughput-<n>`). It replaces log-scraping with a
       # machine-readable file; it does not accumulate. Storing a series durably was considered and
       # declined - no data branch, no write grant (operator decision, 2026-09-01).
+      # Per-METHOD timings, which the job log does not carry - see the comment on the same step in
+      # perf-baseline.yml for why class granularity is the weaker instrument.
+      - name: Upload failsafe reports
+        if: always() && matrix.suite == 'performance'
+        uses: actions/upload-artifact@v7
+        with:
+          name: performance-failsafe-xml-${{ github.run_number }}
+          path: '**/target/failsafe-reports/*.xml'
+          retention-days: 90
+          if-no-files-found: warn
+
       - name: Upload throughput summary
         if: always() && matrix.suite == 'performance'
         uses: actions/upload-artifact@v7

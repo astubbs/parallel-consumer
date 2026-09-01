@@ -87,6 +87,22 @@ jobs:
       # whole reason the summary is useful - and a lane that produced none must say so rather than
       # fail the job for a missing file. bin/performance-test.sh already prints a loud NONE FOUND in
       # that case, and that distinction is the one this artifact exists to preserve.
+      # THE FAILSAFE XML, not just the throughput summary. It carries <testcase time=> PER METHOD,
+      # where a job log only ever shows the per-class aggregate - and class time folds in container
+      # startup and @BeforeAll, so it moves when infrastructure moves. On one A/B pair the class view
+      # showed the subject +19% against neighbours flat to 1%, and the method view showed +22.5%
+      # against eight control methods flat to 2.7%: same data, cleaner signal, stronger control.
+      # Without this step that precision exists at run time and is thrown away, which is how the
+      # per-class view came to be the only history anyone could mine.
+      - name: Upload failsafe reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: performance-failsafe-xml-master-${{ github.run_number }}
+          path: '**/target/failsafe-reports/*.xml'
+          retention-days: 90
+          if-no-files-found: warn
+
       - name: Upload throughput summary
         if: always()
         uses: actions/upload-artifact@v7
