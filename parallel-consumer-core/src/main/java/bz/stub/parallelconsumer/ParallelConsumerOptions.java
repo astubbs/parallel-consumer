@@ -620,6 +620,18 @@ public class ParallelConsumerOptions<K, V> {
      * Switching this off restores the pre-0.6.0.1 behaviour exactly: no context crosses into the worker pool, and
      * anything your function puts into the MDC is left on the pooled thread for the next, unrelated, record to
      * inherit.
+     * <p>
+     * <b>On by default deliberately, and settled</b> (astubbs#205). Not propagating fails silently for everyone who
+     * has established a context; propagating fails visibly - an unexpected key in a log line - and has this switch.
+     * The pinning described above is the known cost of that choice and was accepted along with it. Flipping the
+     * default is a one-line change, but it takes evidence of the pinning actually biting rather than a re-reading of
+     * the same trade.
+     * <p>
+     * <b>Known gap on the reactive engines.</b> For Reactor and Mutiny this covers the invocation of your function and
+     * Parallel Consumer's own terminal signal handling. It does not follow the operators of the {@code Publisher} /
+     * {@code Uni} you return onto further schedulers - that needs Reactor's own
+     * {@code io.micrometer:context-propagation}, and is your call rather than Parallel Consumer's. It is a gap by
+     * decision, not an oversight.
      *
      * @see MdcPropagation
      */

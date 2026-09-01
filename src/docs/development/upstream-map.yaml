@@ -451,8 +451,9 @@ entries:
       MDC.getCopyOfContextMap()/setContextMap(), so a caller's trace_id /
       request_id was lost crossing into the worker pool, and again crossing
       into vert.x / Reactor / Mutiny. Fixed by MdcPropagation +
-      ParallelConsumerOptions.propagateMdc (default true -- NOT yet signed off
-      by the maintainer; see the PR body for the residual pinning risk).
+      ParallelConsumerOptions.propagateMdc (default true -- signed off by the
+      maintainer at merge prep on astubbs#205, so settled; the residual pinning
+      risk and the reasoning behind the default are on that option's javadoc).
       Also fixes a pre-existing leak: whatever the user function put into the
       MDC stayed on the pooled thread for the next, unrelated, record.
       A backlink comment on confluentinc#907 is worth posting only once this
