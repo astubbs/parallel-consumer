@@ -265,3 +265,33 @@ should start from rather than invent
   dynamic adjustment, priorities, multitenancy) than the earlier characterisation acknowledged.
   Anything not proved under leases, failures, dynamic declarations and indivisible work is
   original research, and should be written as such.
+
+## Implicit detected dependencies - the scaler as dependency prober (owner idea, 2026-09-01)
+
+Undeclared resource dependencies can be **discovered experimentally by the auto-scaler**. If
+function A declares no resources, but scaling A out slows function B - and B *does* declare
+resource X, and X's observed rate degrades as A scales - the system can infer that A carries an
+implicit dependency on X. The navigator micro-MVP already ships the instruments this needs: the
+per-resource rates and conservation counters are the signal, and the scaler's deliberate
+parallelism changes are the controlled perturbation (the same control-arm discipline
+`docs/investigating.md` demands of humans, run by the machine).
+
+Modelling rules, as stated by the owner:
+
+- An inferred dependency is a **separate class from a declared one** - "implicit detected", never
+  silently promoted to explicit - but it **participates in optimisation calculations exactly as
+  if declared**, so the allocator can stop A's scale-out from starving B's contract on X.
+- It **expires**: an implicit dependency has a TTL and must keep being rediscovered, so a deploy
+  that removes the hidden coupling is forgotten rather than haunting the model.
+- Before acting on one at higher stakes (isolation decisions), the probing scaler can **re-test
+  it** - perturb A deliberately and confirm X still responds - so the inference is re-verified at
+  the moment it matters, not just remembered.
+
+This directly narrows the closing caveat above: preclaiming's "declarations are complete"
+assumption becomes "declarations are complete *or detectable*". It also gives the declaration
+surface a graceful adoption story - functions that never declare anything still get modelled,
+with declared contracts remaining the stronger, cheaper, always-current path. Fits with
+[`core-capacity-fingerprinting.md`](core-capacity-fingerprinting.md) (an inferred dependency is a
+fingerprint fact worth persisting, stamped with the environment it was measured under and its
+expiry) and [`core-auto-scaling.md`](core-auto-scaling.md) (the prober is the same controller
+that already runs scale-out experiments).

@@ -18,6 +18,20 @@ Auto-scaling (astubbs#227) now has its own note - [`core-auto-scaling.md`](core-
 split 2026-08-18 because the two efforts will reach mergeable PRs at different times and carry
 distinct prototype trails. Idea 8 in the ideation doc is the shared convergence record.
 
+## The end MVP goal is the rate-limiting feature itself (owner, 2026-09-01)
+
+The Hasten navigator track and astubbs#228's feature ask are one deliverable - the owner's framing:
+the navigator micro-MVP (astubbs/parallel-consumer#392, the in-process rung) is, finished and kept
+on focus, **PC's global rate limiting feature**. So the track's end MVP goal is to ship that
+feature - not the PR-level rung goals along the way - two birds, one stone: the Hasten scheduler
+research produces the headline user-facing capability astubbs#228 has asked for since upstream.
+What distinguishes it from a bolt-on limiter stays the product edge and must survive the rungs:
+engine-integrated (declare a tag, no limiter code in the user function, no blocked workers),
+soft/cooperative credits (degrades honestly, never deadlocks), and first-class attribution ("you
+waited because api-a, next credit at T"). The remaining rung between here and that MVP is the
+Kafka-coordinated allocator behind the same `ResourceAllocator` seam
+([`core-shared-execution-resources.md`](core-shared-execution-resources.md) owns the design).
+
 Decisions that gate any build:
 
 - **Standalone throttle vs self-scaling controller** (idea 8): does rate limiting ship as its
