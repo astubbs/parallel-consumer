@@ -3,7 +3,9 @@
 // Copyright (C) 2026 Antony Stubbs and contributors
 //
 
-// PORTED FROM bin/check-throughput-regression.mjs. The BUSINESS behaviour is identical - same inputs,
+// PORTED FROM bin/check-throughput-regression.sh, which cb8d18d65 deleted - read it with
+// `git show cb8d18d65^:bin/check-throughput-regression.sh`, the repair docs/citations.md prescribes
+// for a path that is gone. The BUSINESS behaviour is identical - same inputs,
 // same arithmetic, same thresholds, same exit codes - and bin/test-check-throughput-regression.mjs
 // pins that with the same six cases and the same four ratios the shell version produced. Mixing a
 // rewrite into a port is how a language change gets blamed for a behaviour change, so the known
@@ -20,6 +22,14 @@
 //     to bite today, which is exactly the kind of thing that starts biting when somebody adds a class.
 
 import { readFileSync, existsSync, globSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+// ANCHORED TO THE REPO ROOT, like the shell version's `cd "$ROOT"`. The first port dropped that and
+// kept the relative paths, so run from anywhere but the root it found no baseline and no summary and
+// exited 3 - "nothing in scope" - which reads as a clean tree rather than as a gate that could not
+// look. A gate whose answer depends on the caller's working directory is worse than no gate.
+process.chdir(resolve(dirname(fileURLToPath(import.meta.url)), '..'))
 
 const BASELINE = 'docs/perf-baseline.tsv'
 const SUMMARY = 'target/performance-throughput.txt'
@@ -28,7 +38,7 @@ const WARN_BELOW = 0.85
 const STALE_ABOVE = 1.15
 
 /** exit codes, per bin/check-all.sh's contract */
-const PASS = 0, VIOLATION = 1, CANNOT = 2, NOTHING_IN_SCOPE = 3
+const VIOLATION = 1, CANNOT = 2, NOTHING_IN_SCOPE = 3
 
 const die = (code, ...lines) => { console.error(lines.join('\n')); process.exit(code) }
 
@@ -52,9 +62,13 @@ if (!baseline.subject) {
   die(CANNOT, `check-throughput-regression: ${BASELINE} has no 'rate' row - nothing to compare against.`)
 }
 
+// The subject name comes from a data file and is interpolated into a pattern, so it is escaped.
+// Java class names cannot contain regex metacharacters today; the escape costs nothing and means the
+// gate cannot be broken by editing a .tsv.
+const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const observedRate = Number(
   [...readFileSync(SUMMARY, 'utf8').matchAll(
-    new RegExp(`test=${baseline.subject.name}\\s.*?recordsPerSecond=(-?\\d+)`, 'g'))].pop()?.[1] ?? 0)
+    new RegExp(`test=${escapeRe(baseline.subject.name)}\\s.*?recordsPerSecond=(-?\\d+)`, 'g'))].pop()?.[1] ?? 0)
 
 if (!(observedRate > 0)) {
   // A missing or -1 rate is a real finding, not a quiet pass: either the test did not run or

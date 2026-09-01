@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Copyright (C) 2026 Antony Stubbs and contributors
 //
-// SPIKE: the Node counterpart of bin/perf-backfill.mjs, written to answer whether these data-shaping
+// SPIKE: the Node counterpart of bin/perf-backfill.sh (deleted by cb8d18d65; read it with
+// `git show cb8d18d65^:bin/perf-backfill.sh`), written to answer whether these data-shaping
 // scripts belong in shell at all. Read the comparison in
 // docs/inflight/ci-node-query-client.md before extending either one - two implementations of the same
 // thing is the worst possible resting state, so this is a decision aid with a deadline, not a fork.
@@ -40,7 +41,14 @@
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, readdirSync, readFileSync, existsSync, mkdirSync, appendFileSync, writeFileSync } from 'node:fs'
 import { tmpdir, homedir } from 'node:os'
-import { join, dirname } from 'node:path'
+import { join, dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+// Resolved from this file, not from the caller's cwd. --suggest-baseline reads the committed baseline
+// to refuse a recommendation that would LOWER it, and a relative path there means the guard silently
+// does not fire when the script is run from anywhere but the repo root - a guard that depends on cwd
+// is not a guard.
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 const REPO = 'astubbs/parallel-consumer'
 const SUBJECT = 'MultiInstanceHighVolumeTest'
@@ -49,15 +57,20 @@ const HISTORY = process.env.PC_PERF_HISTORY ?? join(homedir(), '.parallel-consum
 const sh = (cmd, args, opts = {}) =>
   execFileSync(cmd, args, { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, ...opts })
 
-/** Every <testcase> in a failsafe job log's XML, as {clazz, method, seconds}. */
-function methodsFrom(text) {
+/**
+ * Per-CLASS timings from a job log, as {clazz, seconds}.
+ *
+ * Named for classes because that is what it returns. It was `methodsFrom` returning a `method: null`
+ * field on every row - a name and a shape both promising per-method data that a job log cannot carry.
+ */
+function classesFrom(text) {
   const out = []
   // Failsafe prints "Tests run: ..., Time elapsed: N s -- in <fqcn>" per class, but the per-METHOD
   // figures only exist in the XML, which the job log does not contain. So the log route gives class
   // granularity and a local run gives method granularity - stated because it is the one place where
   // this script is weaker than reading a checkout's target/ directory, and it is not a fixable one.
   for (const m of text.matchAll(/Time elapsed: ([\d.]+) s[^-]*-- in [\w.]*\.(\w+)/g)) {
-    out.push({ clazz: m[2], method: null, seconds: Number(m[1]) })
+    out.push({ clazz: m[2], seconds: Number(m[1]) })
   }
   return out
 }
@@ -88,9 +101,12 @@ function collect(maxRuns) {
       const log = readdirSync(work, { recursive: true })
         .find(f => /Performance Tests.*\.txt$/.test(String(f)))
       if (!log) { nodata++; continue }
-      const rows = methodsFrom(readFileSync(join(work, String(log)), 'utf8'))
+      // One read. These logs run to megabytes and it was read twice - once for the timings and once
+      // for the rate - for no reason beyond the two regexes being written at different times.
+      const text = readFileSync(join(work, String(log)), 'utf8')
+      const rows = classesFrom(text)
       if (rows.length === 0) { nodata++; continue }
-      const rate = readFileSync(join(work, String(log)), 'utf8')
+      const rate = text
         .match(new RegExp(`PC-THROUGHPUT test=${SUBJECT} .*?recordsPerSecond=(-?\\d+)`))?.[1] ?? 'none'
       for (const r of rows) {
         appendFileSync(HISTORY, [id, created.slice(0, 19), branch, conclusion,
@@ -122,7 +138,7 @@ function suggestBaseline() {
   const runs = [...byRun.entries()].sort((a, b) => a[1] - b[1])
   const [runId, rate] = runs[Math.floor((runs.length - 1) / 2)]
 
-  const current = Number(readFileSync('docs/perf-baseline.tsv', 'utf8').split('\n')
+  const current = Number(readFileSync(join(REPO_ROOT, 'docs/perf-baseline.tsv'), 'utf8').split('\n')
     .find(l => l.startsWith('rate\t'))?.split('\t')[2] ?? 0)
   if (current && rate < current) {
     console.error(`REFUSING TO RECOMMEND: ${rate} is BELOW the current baseline of ${current}.`)

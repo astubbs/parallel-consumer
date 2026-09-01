@@ -46,7 +46,7 @@ mkdir -p "$(dirname "$SUMMARY")"
 # the box it came from cannot be compared with anything later - hosted runners are not identical, and
 # the same code has been observed at a 1.54x spread across them.
 #
-# It is METADATA, not an input to any verdict. bin/check-throughput-regression.sh cancels machine
+# It is METADATA, not an input to any verdict. bin/check-throughput-regression.mjs cancels machine
 # speed by comparing against the other classes in the SAME run, which is strictly better than bucketing
 # by hardware: it needs no model list, and it keeps working on a runner nobody has seen before. This
 # line exists so somebody can later CHECK that normalisation is doing its job - if the normalised ratio
