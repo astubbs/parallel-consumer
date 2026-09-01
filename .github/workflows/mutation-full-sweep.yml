@@ -180,7 +180,11 @@ jobs:
           PIT_FULL_SWEEP: 'true'
           PIT_TARGET_CLASSES: ${{ inputs.target-classes || 'bz.stub.parallelconsumer.offsets.*' }}
           PIT_TARGET_TESTS: ${{ inputs.target-tests || 'bz.stub.parallelconsumer.*' }}
-        run: time bin/ci-mutation-test.sh -Dverbose=true -Dthreads=${{ inputs.threads || matrix.threads }}
+          # Bound here rather than interpolated into the `run:` line below, like its two
+          # neighbours: a free-text dispatch input inside `${{ }}` is substituted before bash
+          # parses the script, so it arrives as code. See bin/AGENTS.md -> Workflows.
+          THREADS: ${{ inputs.threads || matrix.threads }}
+        run: time bin/ci-mutation-test.sh -Dverbose=true -Dthreads="$THREADS"
 
       - name: Upload PIT report
         if: always()
