@@ -84,15 +84,18 @@ pc_count_matches() { # extended-regex file
 # 0 and is indistinguishable from a pass in a rate. That discipline has changed an answer more than
 # once, which is why it is shared rather than remembered.
 
-# Delete the reports BEFORE a run, so an iteration that dies before failsafe (compile break, bad
-# -Dit.test, dependency resolution) cannot be classified from the previous iteration's file. Without
-# this the DID-NOT-RUN verdict below is unreachable in exactly the case it exists for: the stale
-# report still says tests="1", so a broken tree reports the last good run over and over. It fails
-# toward "everything is fine", which is the direction that hides a problem. bin/chaos-test.sh met the
-# neighbouring version of this - every rep writes the SAME TEST-<class>.xml - and solved it by
-# archiving; here the previous rep's file has already been read, so deleting is enough.
+# Report location and the rep-overwrite hazard are shared with bin/chaos-test.sh, which answers it
+# with the KEEP policy because its reports are still going to be read. These runners use the DELETE
+# policy: an iteration that dies before failsafe (compile break, bad -Dit.test, dependency failure)
+# must be visibly absent rather than silently classified from its predecessor's file. Without it the
+# DID-NOT-RUN verdict below is unreachable in exactly the case it exists for - the stale report still
+# says tests="1", so a broken tree reports the last good run indefinitely, failing toward "everything
+# is fine". Both policies and the two report globs are documented together in that file.
+# shellcheck source=bin/lib/chaos-reports-common.sh
+. "${BASH_SOURCE[0]%/*}/chaos-reports-common.sh"
+
 pc_clear_failsafe_reports() { # tree-root report-name-fragment
-    rm -f "$1/parallel-consumer-core/target/failsafe-reports"/TEST-*"$2"*.xml
+    chaos_clear_reports "$1" "$2"
 }
 
 # The last matching report's counts, verbatim - callers print it when there is nothing to classify.
