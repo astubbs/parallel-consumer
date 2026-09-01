@@ -98,4 +98,19 @@ abstract class BrokerStreamsIntegrationTest extends BrokerIntegrationTest<String
         });
         return streams;
     }
+
+    /**
+     * Simulated processing cost, shared because every arm that needs a slow processor needs the same
+     * behaviour on interrupt: restore the flag and fail loudly. An arm that swallowed the interrupt would
+     * silently stop simulating cost, and the measurement it was taking would quietly become meaningless
+     * rather than failing.
+     */
+    static void sleep(final Duration duration) {
+        try {
+            Thread.sleep(duration.toMillis());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while simulating processing cost", e);
+        }
+    }
 }

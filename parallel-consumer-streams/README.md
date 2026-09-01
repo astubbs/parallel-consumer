@@ -45,19 +45,31 @@ else changed, shows those three cases green, no exception leaving any StreamThre
 passed before regressing - plus five `StreamTaskTest` close and checkpoint cases going green with
 them, because the same work taught `validateClean` to see records that are still running.
 
-**Reason three, open, and it is why the default still does not move.** A
-`TaskCorruptedException` or `TaskMigratedException` raised *inside a processor* is caught by the
-worker, delivered one or more pump cycles later, and wrapped in a `StreamsException` - so Kafka's
-`TaskManager` never sees the type it dispatches recovery on, and an application stock Streams would
-have recovered shuts down instead. `StreamThreadTest.shouldReinitializeRevivedTasksInAnyState` fails
-for exactly that, identically before and after the lifecycle work. It cannot be refused, because it
-is a property of the exception rather than of the topology shape; it belongs to the error-surfacing
-work.
+**Reason three, closed: a typed control-flow exception raised inside a processor.** A
+`TaskCorruptedException` or `TaskMigratedException` is how a topology tells Kafka's `TaskManager` to
+recover a task rather than fail. On the PC path a worker's exception was wrapped in a
+`StreamsException` *and* delivered one or more pump cycles later, so the type never reached the
+machinery that dispatches on it and an application stock Streams would have recovered shut down
+instead. Both halves are fixed - see
+[Error surfacing: the type, the timing, and the commit fence](#error-surfacing-the-type-the-timing-and-the-commit-fence) -
+and the seam-on measurement, taken before and after with nothing else changed, shows
+`StreamThreadTest.shouldReinitializeRevivedTasksInAnyState` green on both parameter combinations this
+module supports, with no case that passed before regressing.
+
+**So why is it still off?** Because the flip is a decision about the *reconciled* module, not about
+any one piece of work in flight against it, and the seam-on numbers move with every rung. There is
+also one still-unrefused item left on this path - stream-time punctuation - which belongs to a
+different piece of work and is listed under
+[What is still unsupported and NOT refused](#what-is-still-unsupported-and-not-refused). What holds
+the default now is therefore a *reconciliation step* rather than a named defect, and that is written
+down in
+[`docs/inflight/streams-dispatch-default-flip-is-reserved-until-the-rungs-reconcile.md`](../docs/inflight/streams-dispatch-default-flip-is-reserved-until-the-rungs-reconcile.md).
 
 Whoever moves the default should re-run the seam-on measurement rather than trusting this section -
-three times now it has named the next reason.
+three times now it has named the next reason, so treat "no reason left" as something to show rather
+than assume.
 
-Two further switches, both process-wide for the reason given in
+Three further switches, all process-wide for the reason given in
 [`PcDispatchSwitch`](src/main/java/bz/stub/parallelconsumer/streams/PcDispatchSwitch.java) (there is
 no seam through `KafkaStreams` to inject a collaborator):
 
@@ -66,6 +78,7 @@ no seam through `KafkaStreams` to inject a collaborator):
 | `pc.streams.dispatch.enabled` | `false` | the seam itself |
 | `pc.streams.dispatch.poolSize` | `4` | worker threads per task, and PC's `maxConcurrency` |
 | `pc.streams.wakeOnWork.enabled` | `true` | the split poll wait; unreachable while the seam is off |
+| `pc.streams.backpressure.enabled` | `true` | pausing a partition once PC holds more than `buffered.records.per.partition` for it; unreachable while the seam is off. **Off is the control arm of the memory-bound proof, not a supported mode** - it restores unbounded accumulation under a slow processor |
 
 A value that is neither `true` nor `false` throws rather than being read as the default - a typo in
 the property that selects an arm would otherwise produce a run that looks like the arm you asked for
@@ -232,6 +245,100 @@ split wait idle. That measurement, its refuted prediction and its arms are owned
 produces one is a separate unit and a number copied out of its write-up drifts silently from it. What
 this rung ships is the mechanism and the tests that show it is load-bearing.
 
+### Backpressure: what bounds memory on this path
+
+Stock Kafka Streams pauses a partition once its `RecordQueue` holds more than
+`buffered.records.per.partition`, and resumes it when processing brings the queue back down. On the PC
+path there is no `RecordQueue` to measure: the records went to Parallel Consumer,
+`partitionGroup.numBuffered()` answers zero however much PC is holding, the pause never fired, and
+**nothing bounded inflow but heap**. A topology with a processor slower than the broker feed simply
+accumulated.
+
+The pause is now applied from the same threshold with the occupancy read from PC, and the resume
+mirrors it exactly - **only partitions this path paused are ever handed back**, because Kafka pauses
+partitions for reasons that have nothing to do with buffering (an offset reset, for one) and a resume
+computed from the whole assignment would restart fetches on those. Mirroring is also what makes the
+resume provably no more eager than the pause, which is the property the bound rests on.
+
+**"Buffered" means accepted and not yet handed to a worker**, which is what Kafka's own
+`RecordQueue.size()` means - a record being processed has left the buffer. The two definitions differ
+by the in-flight set, which the pool size bounds, so this is both the faithful analogue and the only
+unbounded quantity of the two.
+
+**The count is derived from Parallel Consumer's own incomplete-offset set, not maintained alongside
+it.** A count raised by predicting what PC would accept drifts the moment PC applies a rule the
+prediction does not model - a re-delivered offset, for instance, which PC's shard drops because it
+already holds a live container for it, so the count goes up and never comes back down and the
+partition is paused for good. Deriving is immune to it. Why that was not obvious, and the objection it
+had to answer, are in
+[`docs/solutions/architecture-patterns/predicting-what-a-collaborator-will-accept-drifts-derive-the-count-from-its-own-state.md`](../docs/solutions/architecture-patterns/predicting-what-a-collaborator-will-accept-drifts-derive-the-count-from-its-own-state.md).
+
+**The bound is proven with a control arm rather than asserted.** `BackpressureBoundIntegrationTest`
+runs the same topology, data, processing cost, broker and JVM twice, varying only
+`pc.streams.backpressure.enabled`, and samples occupancy from a watcher thread throughout - because
+the interesting quantity is a *peak*, and a peak is invisible to any assertion made after the run.
+Two ways it could pass vacuously are closed: the fixed arm must also **reach** its threshold, or a run
+that never filled the buffer would pass with the feature deleted; and every record must come out the
+far end, because a bound achieved by dropping records is not a bound.
+
+Over a 600-record backlog with a processor slower than the feed, the arms measured **596 held with the
+pause off against 30 with it on** - the fixed arm landing exactly on its derived bound of
+`buffered.records.per.partition` plus one poll batch, which is what says the derivation is right rather
+than merely generous. Re-derive rather than copy: the figures move with the machine, and the arm prints
+them.
+
+### Error surfacing: the type, the timing, and the commit fence
+
+A worker's exception cannot be thrown where it happened, so it is carried back to the StreamThread.
+Three things have to be true for that to be equivalent to what stock does.
+
+**The type survives.** `TaskCorruptedException` and `TaskMigratedException` are Kafka's *control-flow*
+signals to the `TaskManager` - close this task dirty, revive it, re-initialise its state - and
+`StreamThread` dispatches recovery on the type. They are passed through unchanged, exactly as stock's
+own catch ladder does. Everything else is wrapped in a `StreamsException` naming the topic, partition
+and offset, because what failed is one record out of `poolSize` running concurrently and "which one"
+is the first question anyone asks.
+
+**One deliberate divergence from stock, and it is the interesting one.** Stock rethrows a
+`TimeoutException` raw, which its `TaskExecutor` reads as *retriable* - keep the task running and come
+back to it. That is safe there because the record is still in the queue and will be re-selected. Here
+retries are disabled and the failure bar has closed dispatch, so honouring it would mean `process()`
+returning false for ever, `task.timeout.ms` never tripping, and the partition staying paused: zero
+throughput, no exception, nothing in the log, from an ordinary broker timeout. It is wrapped instead.
+**Matching the exception TYPE would have broken the exception CONTRACT.**
+
+**The timing survives.** A pump that dispatched work and then runs out of it waits, bounded, for the
+outcome of what is in flight, and re-checks before returning - so the failure of a record reaches the
+`TaskManager` from the same `runOnce` that ran it, which is what Kafka's own recovery test asserts.
+
+**That wait is gated on running out of WORK rather than out of pool capacity, and the gate is the
+interesting part.** Unconditional, it also fired in the saturated case - pool full, plenty of work,
+nowhere to put it - where the StreamThread's next act would have been to poll. Measured with the pause
+switched off so nothing else bounded inflow, that cost a **sixteen-fold** intake throttle, and worse:
+it silently supplied a second memory bound, which made the memory-bound proof's own control arm look
+almost bounded. A contaminated control arm turns a measurement into a reassurance. The residual the
+gate leaves - at `poolSize` 1 a single record fills the pool, so the same-`runOnce` guarantee is a
+guarantee about a pool with a spare slot - and the latency it still costs in the starved regime are
+recorded in
+[`docs/inflight/perf-streams-failure-settle-wait-has-no-throughput-arm.md`](../docs/inflight/perf-streams-failure-settle-wait-has-no-throughput-arm.md).
+
+**Nothing commits past a failure.** Kafka's loop runs process, then punctuate, then commit, so a
+failure landing in that window would otherwise let a scheduled commit make *another key's* offsets
+durable for a task about to be closed dirty and rewound - and for a `TaskCorruptedException` that is
+worse than a duplicate, because recovery wipes the state those offsets claim to cover. A pending
+failure therefore fences commit-data collection. It does **not** fence the "is there work outstanding"
+question, which is the opposite one: that is what `validateClean` turns into a `TaskMigratedException`
+so the task closes dirty, and fencing it would make a failed task look clean to close.
+
+A failure also **stops further dispatch**, so what runs after a known failure is bounded to what was
+already in flight rather than to a whole poll budget. In-flight records are left to finish rather than
+interrupted: a worker cancelled mid-chain leaves a half-forwarded record.
+
+The knowledge behind all of this is owned by
+[`docs/solutions/architecture-patterns/an-async-seam-owes-a-control-flow-exception-both-its-type-and-its-timing.md`](../docs/solutions/architecture-patterns/an-async-seam-owes-a-control-flow-exception-both-its-type-and-its-timing.md),
+including why fixing the type alone was declined: with the timing untouched, no test can tell the
+unwrap from its absence.
+
 ### Task lifecycle: what happens when a task changes hands
 
 Kafka Streams moves a task around a great deal - it suspends it, recycles it into a standby, gains and
@@ -351,14 +458,16 @@ warning, no output. It is the one item of the original unsupported list this env
 because it is a call on the processor context rather than a topology shape or a store type. Wall-clock
 punctuation does fire.
 
-**A typed control-flow exception raised inside a processor.** `TaskCorruptedException` and
-`TaskMigratedException` are how a topology tells Kafka's `TaskManager` to recover a task rather than
-fail. On the PC path a worker's exception is surfaced one or more pump cycles later and wrapped in a
-`StreamsException`, so the type never reaches the machinery that dispatches on it, and an application
-stock Streams would have recovered shuts down instead. It escapes the envelope for a structural
-reason: it is a property of the exception, not of the topology's shape, so there is nothing to refuse
-at build time or at task construction. This is what the default is currently waiting on - see
-[Turning it on, and why it is off](#turning-it-on-and-why-it-is-off).
+**Kafka's own processing-threads mode.** With Kafka's private `__processing.threads.enabled__` config
+on, `DefaultTaskExecutor` calls `task.process` from its own thread, which drives the dispatcher off
+the thread it was bound to. It is unreachable by default and has been named as out of scope in
+[`PcTaskDispatcher`](src/main/java/bz/stub/parallelconsumer/streams/PcTaskDispatcher.java)'s threading
+contract since the seam landed; it is listed here so a seam-on run showing that parameter of
+`StreamThreadTest` red is recognised rather than re-diagnosed.
+
+A typed control-flow exception raised inside a processor **used to be on this list and is not any
+more** - see
+[Error surfacing: the type, the timing, and the commit fence](#error-surfacing-the-type-the-timing-and-the-commit-fence).
 
 ---
 
