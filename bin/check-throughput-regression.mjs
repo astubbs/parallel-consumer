@@ -100,6 +100,13 @@ const rateFrom = text =>
 // measured, and the reader gets a number with nothing to compare it to. The workflow reads this back
 // off its own last comment to render a delta and to notice when the STATUS changed.
 //
+// THE `pc-throughput-data` MARKER IS WRITTEN HERE AND PARSED IN TWO OTHER PLACES, deliberately
+// unshared: the reader in `.github/workflows/maven.yml` is a YAML-embedded github-script that cannot
+// import this module, and the one in `bin/test-check-throughput-regression.mjs` is independent ON
+// PURPOSE - a test that parsed with the producer's own code would agree with it by construction,
+// which is the exact failure the runtime test replaced. Nothing enforces that the three agree, so if
+// you change the marker's shape, `grep -rn pc-throughput-data` is the list you must change.
+//
 // The status is set into `reportStatus` on the line before each call rather than passed as an
 // argument. That is deliberate: the report bodies are template literals containing escaped
 // backticks, and an earlier attempt to add a second argument landed the status INSIDE the prose of

@@ -11,7 +11,7 @@
 // red on a quiet day, and the first person to hit one switches the gate off - taking the collection
 // with it. So this asserts what the gate must NOT do at least as hard as what it must.
 
-import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, globSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
@@ -93,27 +93,66 @@ check('flag bound is a 30% loss', WARN_BELOW, 0.70)
 // reporter will look. Anything already there is saved and put back, because a developer with a real
 // report on disk should not lose it to a self-test. `no-control` is the cheapest path to reach: a
 // summary carrying a rate, with no control classes present.
+//
+// FOUR THINGS BELOW EXIST BECAUSE "IT RUNS THE REPORTER" IS NOT THE SAME AS "IT CHECKED THE RUN",
+// and the first version of this block made all four mistakes at once:
+//
+//   * THE FIXTURE IS ONLY HALF THE INPUT. The reporter also globs `**/target/failsafe-reports/`, so a
+//     developer holding real failsafe XML gives it a control class, which takes it OFF the no-control
+//     path and out to `gh run list` - a networked, credentialed, non-deterministic run wearing this
+//     test's name. The precondition is asserted and fails LOUDLY, because a skip is not a pass.
+//   * A STALE REPORT SCORES AS A FRESH ONE. `target/throughput-report.md` is removed before the spawn,
+//     so the assertions can only read a file this run produced. Without that, a reporter that wrote
+//     nothing at all passes against last week's output.
+//   * THE SPAWN RESULT WAS DISCARDED. A reporter that writes the right report and then returns the
+//     WRONG exit code passed every assertion, while the workflow branches on that code
+//     (`steps.throughput.outputs.code`). Exit 2 is CANNOT-MEASURE, which is what no-control means.
+//   * `finally` DOES NOT RUN ON Ctrl-C. Node terminates on SIGINT with no listener installed, so an
+//     interrupted test left the developer's real files replaced by the fixture. The handlers restore
+//     and then re-raise with the default disposition.
 {
   const root = fileURLToPath(new URL('..', import.meta.url))
   const summary = join(root, 'target/performance-throughput.txt')
   const report = join(root, 'target/throughput-report.md')
   const saved = [summary, report].map(f => [f, existsSync(f) ? readFileSync(f, 'utf8') : null])
-  try {
-    mkdirSync(join(root, 'target'), { recursive: true })
-    writeFileSync(summary,
-      'PC-THROUGHPUT test=MultiInstanceHighVolumeTest processed=3 expected=3 elapsedMs=1 recordsPerSecond=75000 outcome=PASSED\n')
-    spawnSync(process.execPath, [join(root, 'bin/check-throughput-regression.mjs')], { encoding: 'utf8' })
-    const text = existsSync(report) ? readFileSync(report, 'utf8') : ''
-    const m = /<!-- pc-throughput-data: (.*?) -->/.exec(text)
-    const data = m ? JSON.parse(m[1]) : {}
-    check('the report carries a machine-readable payload', Boolean(m), true)
-    check('the payload names a real status', data.status, 'no-control')
-    check('the status did not land inside the message', text.includes('control classes (`'), true)
-  } finally {
+  const restore = () => {
     for (const [f, body] of saved) {
       if (body === null) rmSync(f, { force: true })
       else writeFileSync(f, body)
     }
+  }
+  const onSignal = sig => { restore(); process.removeListener(sig, onSignal); process.kill(process.pid, sig) }
+  for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, onSignal)
+  try {
+    const stray = globSync('**/target/failsafe-reports/TEST-*.xml', { cwd: root })
+    if (stray.length) {
+      console.error(`FAIL  leftover failsafe reports (${stray.length}) would take the reporter off the`)
+      console.error('      no-control path and out to the network - run `./mvnw clean` and retry.')
+      failures++
+    } else {
+      mkdirSync(join(root, 'target'), { recursive: true })
+      rmSync(report, { force: true })
+      writeFileSync(summary,
+        'PC-THROUGHPUT test=MultiInstanceHighVolumeTest processed=3 expected=3 elapsedMs=1 recordsPerSecond=75000 outcome=PASSED\n')
+      const run = spawnSync(process.execPath, [join(root, 'bin/check-throughput-regression.mjs')], { encoding: 'utf8' })
+      check('the reporter ran', run.error === undefined, true)
+      // 2 is CANNOT, the documented code for "the check could not measure". Pinned here because the
+      // workflow reads it and this is the only place the four-value contract is asserted at all.
+      check('the reporter exited CANNOT for no-control', run.status, 2)
+      const text = existsSync(report) ? readFileSync(report, 'utf8') : ''
+      const m = /<!-- pc-throughput-data: (.*?) -->/.exec(text)
+      const data = m ? JSON.parse(m[1]) : {}
+      check('the report carries a machine-readable payload', Boolean(m), true)
+      check('the payload names a real status', data.status, 'no-control')
+      // ABSENCE, NOT PRESENCE. The first version asserted the message's opening text was still there -
+      // which stayed true whether or not the status had been injected into it, so the assertion
+      // written to catch that exact bug could not fail. Split the payload off and assert the status
+      // literal appears NOWHERE in the prose a human reads.
+      check('the status did not land inside the message', text.split('<!-- pc-throughput-data:')[0].includes('no-control'), false)
+    }
+  } finally {
+    for (const sig of ['SIGINT', 'SIGTERM']) process.removeListener(sig, onSignal)
+    restore()
   }
 }
 
