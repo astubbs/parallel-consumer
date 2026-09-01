@@ -23,6 +23,8 @@ baseline for comparison is 15/20 runs fully clean, zero stall-class failures.
 **The 2026-09-01 sighting is worth more than its tally row, because the load was measured rather than
 assumed.** It came from a `-am` build of `parallel-consumer-streams` on a developer machine, which
 runs core's whole integration suite alongside the streams module's brokers - so several broker
+<!-- post-merge: checked - the branch is named outright rather than called "this branch", and the
+     check beside it is a command anyone can re-run against whatever that ref resolves to -->
 containers were up at once. The branch it was seen on (`feats/ks-streams-reconciled`) changes **zero
 files under `parallel-consumer-core`**, which is checkable rather than asserted:
 `git diff --name-only origin/master...HEAD -- parallel-consumer-core` is empty. Re-running the
