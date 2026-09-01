@@ -570,14 +570,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
         log.debug("Partitions revoked {}, state: {}", partitions, state);
         isRebalanceInProgress.set(true);
-        while (isTransactionCommittingInProgress())
-            Thread.sleep(100); //wait for the transaction to finish committing
 
         numberOfAssignedPartitions = numberOfAssignedPartitions - partitions.size();
 
         try {
-            // commit any offsets from revoked partitions BEFORE truncation
-            commitOffsetsThatAreReady();
+            // commit any offsets from revoked partitions BEFORE truncation - declining to, rather than
+            // waiting, when a transaction commit is already running
+            tryCommitOffsetsOnRevoke(partitions);
 
             // truncate the revoked partitions
             wm.onPartitionsRevoked(partitions);
@@ -592,6 +591,76 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         } catch (Exception e) {
             throw new ExceptionInUserFunctionException("Error from rebalance listener function after #onPartitionsRevoked", e);
         }
+    }
+
+    /**
+     * The revocation-time commit, which <b>declines rather than waits</b> when a transaction commit is already
+     * running - fixing astubbs/parallel-consumer#44 (confluentinc/parallel-consumer#803).
+     * <p>
+     * <b>What it replaces.</b> This callback used to hold the poll thread in two unbounded waits, and the
+     * tracking notes only ever named the first:
+     * <ol>
+     *   <li>{@code while (isTransactionCommittingInProgress()) Thread.sleep(100)}, added by
+     *       confluentinc#548, which spins for as long as any thread holds the producer transaction lock; and</li>
+     *   <li>the commit beneath it, whose {@link ProducerManager} acquisition waits up to
+     *       {@link ParallelConsumerOptions#getCommitLockAcquisitionTimeout()} - <b>five minutes</b> by default.
+     *       That is the one confluentinc#803's stack trace actually threw from
+     *       ({@code "Timeout getting commit lock (which was set to PT5M)"}, raised inside
+     *       {@code onPartitionsRevoked}), and the reporter's timeline matches it exactly: rebalance at 0,
+     *       eviction at {@code max.poll.interval.ms}, the throw at {@code commitLockAcquisitionTimeout}.</li>
+     * </ol>
+     * Removing only the first would have left the report reproducible, which is why both go.
+     * <p>
+     * <b>Why the producer lock is the only gate needed.</b> In transactional mode the control thread takes that
+     * write lock in {@code maybeAcquireCommitLock()} <em>before</em> entering the commit, and holds it across
+     * the whole cycle. So a thread that holds it cannot be racing a control-thread commit, and everything
+     * downstream - including {@code commitOffsetsThatAreReady()}'s monitor - is then uncontended. Declining the
+     * lock is therefore sufficient; no second guard is needed.
+     * <p>
+     * <b>Truncation still runs when the commit is declined</b>, and that is safe rather than merely tolerable:
+     * an in-flight commit that lands after the partitions are gone resolves through
+     * {@link bz.stub.parallelconsumer.state.RemovedPartitionState}, whose whole purpose is to absorb exactly
+     * this - "to protect for stale messages still in queues which reference it".
+     * <p>
+     * Sibling, and deliberately the same name: astubbs#317 introduces a {@code tryCommitOffsetsOnRevoke} for the
+     * <em>consumer</em> lane's commit-cycle monitor. Both are the same rule - a rebalance callback may only ever
+     * {@code tryLock} - applied to the two different locks the two commit modes use, and if both land they
+     * should be unified rather than coexist.
+     * <p>
+     * <b>Known residual, deliberately not fixed here:</b> the commit this proceeds with still calls
+     * {@code Producer#flush()} and then the transaction commit, both broker round trips on the poll thread.
+     * Those are bounded by the producer's own {@code delivery.timeout.ms} / {@code max.block.ms} rather than
+     * being unbounded, which is the difference between this and what was removed - but they are not free, and
+     * Kafka Streams' guidance for the same inline-commit shape is to keep
+     * {@code max.poll.interval.ms > max.block.ms}.
+     */
+    private void tryCommitOffsetsOnRevoke(Collection<TopicPartition> partitions) throws TimeoutException, InterruptedException {
+        if (!options.isUsingTransactionCommitMode()) {
+            commitOffsetsThatAreReady();
+            return;
+        }
+
+        //noinspection OptionalGetWithoutIsPresent - transactional mode implies a producer manager
+        var pm = producerManager.get();
+
+        // The close path reaches this callback on the control thread, which may already own the lock. Re-taking
+        // it would push the hold count to 2, which postCommit() rejects outright - so re-enter deliberately.
+        if (pm.isCommitLockHeldByCurrentThread()) {
+            commitOffsetsThatAreReady();
+            return;
+        }
+
+        if (!pm.tryAcquireCommitLockForRevocation()) {
+            log.warn("Declining the revocation commit for {} - a transaction commit is already in progress. " +
+                    "The uncommitted offsets stay dirty and travel to the partitions' new assignee, which " +
+                    "reprocesses them (at-least-once). Waiting here instead would burn max.poll.interval.ms " +
+                    "and evict this member - see astubbs/parallel-consumer#44.", partitions);
+            return;
+        }
+
+        // Acquired: the ordinary commit path re-enters the lock harmlessly and its postCommit() releases it in a
+        // finally, so this method must NOT release it itself.
+        commitOffsetsThatAreReady();
     }
 
     /**
@@ -2101,11 +2170,6 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         notifySomethingToDo();
     }
 
-
-    private boolean isTransactionCommittingInProgress() {
-        return options.isUsingTransactionCommitMode() &&
-                producerManager.map(ProducerManager::isTransactionCommittingInProgress).orElse(false);
-    }
 
     @Override
     public void pauseIfRunning() {

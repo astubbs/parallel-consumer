@@ -778,4 +778,71 @@ class ProducerManagerTest {
                         .validate());
     }
 
+    /**
+     * The revocation seam behind astubbs/parallel-consumer#44 (confluentinc#803). Unit-level because the
+     * integration probe that proves the whole path, {@code Revoke857TransactionalWaitProbeIT}, needs a broker
+     * and three minutes - so a regression there would only surface in the failsafe lane. These three run in
+     * seconds and pin the contract itself.
+     */
+    @Test
+    void revocationDeclinesRatherThanWaitingWhenAnotherThreadIsCommitting() {
+        var committerHoldsLock = new CountDownLatch(1);
+        var revocationAttempted = new CountDownLatch(1);
+
+        var committer = new Thread(() -> {
+            try {
+                producerManager.preAcquireOffsetsToCommit();
+                committerHoldsLock.countDown();
+                LatchTestUtils.awaitLatch(revocationAttempted);
+                producerManager.postCommit();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }, "fake-pc-control");
+        committer.start();
+
+        LatchTestUtils.awaitLatch(committerHoldsLock);
+        Truth.assertThat(producerManager.isTransactionCommittingInProgress()).isTrue();
+
+        // The whole point: this returns, rather than waiting out commitLockAcquisitionTimeout (5 minutes by
+        // default) on a thread that is inside consumer.poll().
+        Truth.assertWithMessage("a revocation must DECLINE while another thread is committing, never wait")
+                .that(producerManager.tryAcquireCommitLockForRevocation())
+                .isFalse();
+
+        revocationAttempted.countDown();
+    }
+
+    @Test
+    void revocationAcquiresWhenNoCommitIsRunning() {
+        Truth.assertThat(producerManager.isTransactionCommittingInProgress()).isFalse();
+
+        Truth.assertWithMessage("an uncontended revocation must be able to commit")
+                .that(producerManager.tryAcquireCommitLockForRevocation())
+                .isTrue();
+        Truth.assertThat(producerManager.isCommitLockHeldByCurrentThread()).isTrue();
+
+        // Handed to the ordinary commit path, whose postCommit() releases it - the caller must not.
+        producerManager.postCommit();
+        Truth.assertThat(producerManager.isTransactionCommittingInProgress()).isFalse();
+    }
+
+    /**
+     * Re-entering would take the write hold count to 2, which {@code postCommit} rejects as "Lock held too many
+     * times" - a deadlock, not a warning. The close path reaches the revoke callback on the control thread,
+     * which may already own the lock, so callers check {@code isCommitLockHeldByCurrentThread()} first and this
+     * refuses loudly if one forgets.
+     */
+    @Test
+    void revocationRefusesToReenterALockThisThreadAlreadyHolds() throws Exception {
+        producerManager.preAcquireOffsetsToCommit();
+        Truth.assertThat(producerManager.isCommitLockHeldByCurrentThread()).isTrue();
+
+        var thrown = assertThrows(IllegalStateException.class,
+                () -> producerManager.tryAcquireCommitLockForRevocation());
+        Truth.assertThat(thrown).hasMessageThat().contains("already held by this thread");
+
+        producerManager.postCommit();
+    }
+
 }

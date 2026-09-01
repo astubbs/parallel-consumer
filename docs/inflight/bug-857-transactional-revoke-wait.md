@@ -8,25 +8,39 @@
 <!-- post-merge: checked -->
 and the AB-BA deadlock in astubbs#29 are in mutually exclusive modes and cannot be the same bug.
 
-## The defect
+## The defect - TWO unbounded waits, not one
 
-`AbstractParallelEoSStreamProcessor.onPartitionsRevoked` waits with **no deadline** for an in-flight
+`AbstractParallelEoSStreamProcessor.onPartitionsRevoked` held the poll thread in **two** waits with
 <!-- post-merge: checked -->
-transaction, on master, predating astubbs#29:
+no deadline, on master, predating astubbs#29. Every earlier version of this note named only the
+first, which is the correction that matters most here:
 
-```java
-// AbstractParallelEoSStreamProcessor.java:418-419 (master)
-while (isTransactionCommittingInProgress())
-    Thread.sleep(100); //wait for the transaction to finish committing
-```
+1. **The spin**, added by confluentinc#548:
 
-`isTransactionCommittingInProgress()` (`:1494-1496`) is gated on
-`options.isUsingTransactionCommitMode()`, so this loop only runs in transactional mode - and there it
-is the *common* case, not a rare race: the control thread takes the producer write lock in
-`maybeAcquireCommitLock()` before committing.
+   ```java
+   while (isTransactionCommittingInProgress())
+       Thread.sleep(100); //wait for the transaction to finish committing
+   ```
 
-The callback runs on the poll thread inside `poll()`, so it is bounded by `max.poll.interval.ms`.
-Overrunning it evicts the member.
+   The predicate is `producerTransactionLock.isWriteLocked()`, gated on
+   `options.isUsingTransactionCommitMode()`, so it runs in transactional mode only - and there it is
+   the *common* case, not a rare race: the control thread takes that write lock in
+   `maybeAcquireCommitLock()` before every commit.
+
+2. **The commit beneath it.** `commitOffsetsThatAreReady()` reaches
+   `ProducerManager#acquireCommitLock`, whose `writeLock.tryLock(commitLockAcquisitionTimeout)` waits
+   **five minutes** by default. **This is the one confluentinc#803 actually threw from** - its stack
+   trace is `TimeoutException: Timeout getting commit lock (which was set to PT5M)` raised *inside*
+   `onPartitionsRevoked`, and `grep -rn "Timeout getting commit lock"` finds exactly one throw site.
+   The reporter's timeline confirms it: rebalance at t=0, `max.poll.interval.ms` eviction at 180s,
+   the throw at 300s = `commitLockAcquisitionTimeout`.
+
+**Fixing only the spin would have left the user's report reproducible**, which is why the earlier
+plan of record - "delete the `KNOWN_BLOCKING_VIOLATIONS` entry and the rule goes green" - was not a
+sufficient acceptance criterion. See the ArchUnit gap below.
+
+Both run on the poll thread inside `poll()`, so both are bounded by nothing but
+`max.poll.interval.ms`. Overrunning it evicts the member.
 
 ## Why this is not astubbs#29's deadlock <!-- post-merge: checked -->
 
@@ -75,27 +89,65 @@ It is the **only** issue on the upstream tracker ever labelled *verified bug*. I
 astubbs#29 and onto this block on 2026-08-18; its `pr-available` label was removed, because no open
 PR addresses it.
 
-## Open decision - do not write code before settling it
+## Decision, settled 2026-09-01: decline, do not deadline
 
-The wait needs a deadline, and the obvious design is ruled out: the poll thread **cannot** abort the
-transaction, because `ProducerManager` enforces single-writer from the control thread and throws
-`ConcurrentModificationException` otherwise.
+**The revoke path takes the producer write lock with a bare `tryLock()` and skips the commit when it
+cannot have it.** Both waits above are gone: the spin is deleted, and the commit is only attempted
+once the lock is already held, so `acquireCommitLock`'s five-minute wait is never reached with the
+lock contended.
 
-The candidate is to deadline the **holder** instead - bound the control thread, which owns the
-transaction and can abort itself - rather than the revoke callback that merely notices the overrun.
-Not agreed with the user.
+**Why not deadline the holder**, which was the standing candidate. Two independent reasons, one of
+them measured rather than argued:
 
-**A measurement now constrains that decision.** `Revoke857TransactionalWaitProbeIT` reproduces the
-overrun, and on the defect arm the callback held the poll thread **79s** against a 10s
-`max.poll.interval.ms` - from a dwell of only 20s. With a 1s commit interval the control thread
-re-takes the write lock as fast as it drops it, so the waiter is starved across *successive*
-transactions and `isTransactionCommittingInProgress()` never reads false long enough to exit the
-loop. **Bounding any single transaction therefore does not fix this**: the deadline has to sit on
-the wait itself, or on the holder's willingness to keep re-acquiring. The probe's javadoc carries
-the full calibration for both arms.
+- **A per-transaction bound cannot work.** `Revoke857TransactionalWaitProbeIT`'s defect arm held the
+  poll thread **79s** from a dwell of only **20s**. With a 1s commit interval the control thread
+  re-takes the write lock as fast as it drops it, so the waiter is starved across *successive*
+  transactions. Bounding any one transaction leaves that untouched; the deadline has to sit on the
+  wait, and the shortest correct deadline is none.
+- **It trades a stall for a crash.** Deadlining the holder means aborting a transaction it owns, and
+  `ProducerFencedException` is still fatal - see
+  [`core-recoverable-producer-fencing.md`](core-recoverable-producer-fencing.md) and astubbs#225.
+  **Declining does not touch that**: when it declines, no transaction operation happens at all, so
+  astubbs#225 is not a blocker for this design. That asymmetry is the deciding practical difference.
 
-Proceeding past the wait is separately unsafe until producer fencing is recoverable:
-`ProducerFencedException` is wrapped in `InternalRuntimeException` and kills the instance. See
-[`core-recoverable-producer-fencing.md`](core-recoverable-producer-fencing.md) and astubbs#225.
+**What declining costs.** The offsets were never marked committed, so they stay dirty and travel to
+the partitions' new assignee, which reprocesses them. That is at-least-once doing its ordinary job -
+already the published contract for the consumer lane in the rebalance-behaviour feature record
+(*"declines rather than blocks ... and declining is what keeps the callback inside
+max.poll.interval.ms"*), and the same disposition astubbs#317's `tryCommitOffsetsOnRevoke` takes
+there. That record lives on astubbs#29's branch, not master, so it is named rather than cited -
+and **its transactional boundary needs updating when this lands**: it currently says the
+transactional revoke wait "is currently unbounded". This change applies the identical rule to the other lock the transactional mode uses.
 
-Branch `fix/bound-revoke-transaction-wait` exists with no code on it.
+**It is also what Kafka does.** Kafka Streams commits inline in `onPartitionsRevoked`
+(`TaskManager.handleRevocation` -> `taskExecutor.commitOffsetsOrTransaction`, whose comment says it
+must not skip the commit because a rebalance is in progress) - but it can only do that because one
+`StreamThread` owns the consumer *and* the producer, so there is no lock to wait on. When its own
+bound (`max.block.ms`) expires it falls back to `closeDirtyAndRevive`: abandon and replay. PC cannot
+have the first half without the ownership change, so it takes the fallback as its normal path.
+
+**Ruled out, do not re-propose:** the poll thread aborting the transaction itself. `ProducerManager`
+enforces single-writer from the control thread and throws `ConcurrentModificationException`
+(grep `is not safe for multi-threaded access`).
+
+**The successor, not superseded by this:** unify who owns the consumer, so the callback can commit
+inline as Streams does - confluentinc#200 / astubbs#142, still open. The architecture write-up's
+verdict stands: *"mode-conditional thread topology is the root hazard ... a fix should unify who
+commits across modes, or unify who owns the consumer."* Declining removes the stall; it does not
+remove the split that produced it.
+
+## The ArchUnit acceptance criterion is not sufficient as written
+
+`ArchitectureTest.rebalanceCallbacksMustNotBlock` exempts this callback in
+`KNOWN_BLOCKING_VIOLATIONS` with *"remove this entry when that lands"*. **Removing it is necessary
+but does not prove the fix**, for two independent reasons, and the rule lives on astubbs#29's branch
+so neither can be repaired from here:
+
+- **`Lock.tryLock(long, TimeUnit)` is not in `BLOCKING_CALLS`.** The rule's own message says
+  *"Decline (tryLock) rather than wait"*, treating tryLock as the cure - but a five-minute timed
+  acquire is waiting, and it is the call confluentinc#803 threw from. Timed acquires need adding.
+- **The transitive walk stops at the interface.** It resolves `call.getTarget().resolveMember()`,
+  and `committer` is declared as `OffsetCommitter`, so the walk never descends into
+  `ProducerManager#acquireCommitLock` at all.
+
+Until both are fixed, **the probe is this defect's acceptance test**, not the ArchUnit rule.

@@ -45,8 +45,14 @@ import static org.awaitility.Awaitility.await;
  * getting commit lock while second instance starts"</i>), the only issue upstream ever labelled
  * <i>verified bug</i>.
  * <p>
- * NOT a candidate for merging as a normal test - it is an instrument, and on the defect arm it is
- * <b>expected to fail</b>. It exists to make the overrun observable before any bound is designed.
+ * Built as an instrument to make the overrun observable before any bound was designed - on the defect
+ * arm, against the unfixed code, it was <b>expected to fail</b>. The fix has since landed on this
+ * branch, so it is now the <b>regression test</b> for it: both arms are expected to pass, and the
+ * defect arm going red again means the callback has started waiting on the transaction lock once more.
+ * <p>
+ * <b>A green run is only meaningful alongside a nonzero {@link DwellingProducerManager#revocationDeclines()}</b> - see that
+ * field. The fixed callback returns in milliseconds because it declined, which is indistinguishable
+ * from a run where no commit was ever in flight unless the decline is counted.
  *
  * <h2>The defect being probed</h2>
  * {@code AbstractParallelEoSStreamProcessor.onPartitionsRevoked} opens with
@@ -80,22 +86,25 @@ import static org.awaitility.Awaitility.await;
  * One term differs between them, {@code -Dprobe857tx.dwellMs}:
  * <ul>
  *   <li><b>defect arm</b> (default, {@value #DEFAULT_DWELL_MS}ms) - the dwell exceeds
- *       {@link #MAX_POLL_INTERVAL_MS}, so the revoke wait breaches the poll interval and the member
- *       is evicted. <b>Expected to FAIL on current code.</b> A bound on the holder is what should
- *       turn this arm green.</li>
+ *       {@link #MAX_POLL_INTERVAL_MS}, so a revoke that <i>waits</i> breaches the poll interval and the
+ *       member is evicted. This arm fails on the unfixed code and passes on the fixed code; it is the
+ *       one that carries the regression signal.</li>
  *   <li><b>control arm</b> ({@code -Dprobe857tx.dwellMs=2000}) - the dwell is well under the poll
- *       interval, so the same forced overlap is harmless and every assertion passes. This arm
- *       proves the instrument can go green at all; it says nothing about the code being fixed.</li>
+ *       interval, so even a waiting revoke stays inside budget. It proves the instrument can go green
+ *       at all, and it passes on both the fixed and the unfixed code - so on its own it says nothing
+ *       about whether the defect is present.</li>
  * </ul>
  *
  * <h2>Two traps this probe is built to avoid</h2>
  * Both voided runs of the sibling instrument, and both are cheap to avoid:
  * <ul>
- *   <li><b>Confirm the arm actually engaged.</b> The resolved dwell is logged and asserted, and
- *       {@link #dwellsEntered} counts the commits that actually held the lock. If the revoke never
- *       overlapped a commit the wait is ~0 and every assertion below would pass <i>vacuously</i> on
- *       the defect arm - a false green that reads exactly like a fix. {@link #WINDOW_OPENED_FLOOR_MS}
- *       turns that into an explicit INCONCLUSIVE failure instead.</li>
+ *   <li><b>Confirm the arm actually engaged.</b> The resolved dwell is logged, and
+ *       {@link DwellingProducerManager#dwellsEntered()} counts the commits that actually held the lock. A
+ *       revoke that never overlapped a commit returns in ~0ms and would pass every assertion below
+ *       <i>vacuously</i> - a false green that reads exactly like a fix. The window-opened gate turns that
+ *       into an explicit INCONCLUSIVE failure, and it accepts <b>either</b> a long wait (unfixed code) or a
+ *       nonzero {@link DwellingProducerManager#revocationDeclines()} (fixed code), because after the fix
+ *       "it was fast" is no longer evidence of anything on its own.</li>
  *   <li><b>Run with {@code -Dpc.log.level=info}</b> or the revoke path's log lines are filtered at
  *       the default test verbosity, and their absence is indistinguishable from the race never
  *       happening.</li>
@@ -106,36 +115,58 @@ import static org.awaitility.Awaitility.await;
  * 2026-08-31.
  *
  * <h2>Calibration status</h2>
- * <b>2026-09-01</b>, both arms run locally on one shared TestContainers broker, five repetitions
- * each, {@code -Dpc.log.level=info}. Read this before running, so a result already established is
- * not re-derived:
+ * Both arms, five repetitions each, one shared TestContainers broker, {@code -Dpc.log.level=info}. Read this
+ * before running, so a result already established is not re-derived.
+ *
+ * <p><b>2026-09-01, BEFORE the fix</b> - the measurement the fix was designed against:
  * <ul>
- *   <li><b>control arm</b> ({@code -Dprobe857tx.dwellMs=2000}) - <b>5/5 pass</b>. Fifteen revokes
- *       fired: ten on {@code pc-broker-poll} (the rebalance path, two per repetition) and five on
- *       {@code pc-control} (the close path). Measured waits quantised to the dwell: 2001ms, 4110ms,
- *       5416ms. The instrument can go green, and it goes green for the expected reason.</li>
  *   <li><b>defect arm</b> (default {@value #DEFAULT_DWELL_MS}ms) - <b>5/5 fail</b>,
- *       {@code VERDICT=POLL_INTERVAL_BREACHED}, every breaching revoke on {@code pc-broker-poll}.
- *       The callback held the poll thread <b>79,394ms</b> against a 10,000ms
- *       {@code max.poll.interval.ms}.</li>
+ *       {@code VERDICT=POLL_INTERVAL_BREACHED}, every breaching revoke on {@code pc-broker-poll}. The callback
+ *       held the poll thread <b>79,394ms</b> against a 10,000ms {@code max.poll.interval.ms}.</li>
+ *   <li><b>control arm</b> ({@code -Dprobe857tx.dwellMs=2000}) - <b>5/5 pass</b>, waits quantised to the dwell
+ *       at 2001/4110/5416ms. Proof the instrument could go green at all; it said nothing about the code.</li>
  * </ul>
- * Two things that measurement establishes beyond "the wait is unbounded":
+ *
+ * <p><b>2026-09-01, AFTER the fix</b> (the revoke path declines the commit lock instead of waiting):
  * <ul>
- *   <li><b>79s from a 20s dwell.</b> The wait is not bounded by <i>one</i> transaction. The commit
- *       interval is 1s, so the control thread re-acquires the write lock as soon as it releases it,
- *       and the waiter is starved across successive commits - {@code isTransactionCommittingInProgress()}
- *       never reads false long enough for the loop to exit. Any bound placed on a single
- *       transaction's duration would therefore <b>not</b> fix this; the deadline has to be on the
- *       wait itself or on the holder's willingness to keep re-taking the lock.</li>
- *   <li><b>The ambient probe corroborates it independently</b> - the failure carries
- *       {@code ZOMBIE_MEMBER/REBALANCE_BLOCKED: group dwelling in CompletingRebalance for 15s - a
- *       member is not answering the rebalance (protocol-unresponsive)}. That is astubbs#44's
- *       reported symptom, reached from a different instrument than this class's own assertion.</li>
+ *   <li><b>defect arm</b> - <b>5/5 pass</b>. Revoke callback <b>6ms</b>, down from 79,394ms; 3 dwells entered,
+ *       <b>2 revocations declined</b>, 605 records processed. The decline count is the part that matters: it
+ *       proves the window opened and the fix path ran, rather than the run being fast because nothing
+ *       happened.</li>
+ *   <li><b>control arm</b> - <b>5/5 pass</b>, callback 11ms, 3 dwells, 1 decline, 600 records. Note this arm
+ *       changed meaning: it used to wait out the short dwell, and now declines it like any other.</li>
  * </ul>
- * <b>Known confound, not yet controlled:</b> {@code junit.jupiter.execution.parallel} runs the five
- * repetitions concurrently against one broker, so five PC instances contend and {@link #dwellsEntered}
- * is shared across them. It did not change either verdict - the arms separate cleanly - but a
- * per-repetition dwell count is not trustworthy until the class is pinned to one thread.
+ *
+ * <p>What the pre-fix measurement established beyond "the wait is unbounded", and what ruled out the
+ * deadline-the-holder design: <b>79s came out of a 20s dwell.</b> The commit interval is 1s, so the control
+ * thread re-acquires the write lock as soon as it releases it and the waiter is starved across <i>successive</i>
+ * commits - {@code isTransactionCommittingInProgress()} never reads false long enough for the loop to exit. Any
+ * bound on a single transaction's duration would therefore <b>not</b> have fixed this. The ambient probe
+ * corroborated it independently, with
+ * {@code ZOMBIE_MEMBER/REBALANCE_BLOCKED: group dwelling in CompletingRebalance for 15s}, which is astubbs#44's
+ * reported symptom reached from a different instrument.
+ *
+ * <p><b>Two traps met while re-running this, both self-inflicted and both cheap to avoid.</b> First: with the
+ * dwell left armed for the whole run it fired 45 times, holding the producer write lock 20s out of every commit,
+ * and post-rebalance work could not drain inside the liveness window - PC was demonstrably healthy throughout
+ * (no failure cause, not closed), so that was the instrument throttling the product. {@code disarmDwell()}
+ * exists for that. Second: running any other Maven command against this worktree while a failsafe JVM is live
+ * rewrites {@code target/test-classes} underneath it, which surfaces as a bogus
+ * {@code NoClassDefFoundError: ChaosSeed$Holder} in teardown - a build collision, not a defect.
+ *
+ * <b>Shared-broker contention is the wanted condition, not a confound - do not "fix" it by pinning
+ * this class to one thread.</b> An earlier version of this paragraph called
+ * {@code junit.jupiter.execution.parallel} an uncontrolled confound and proposed serialising the
+ * repetitions. That is backwards, and
+ * the confluentinc#857 revoke-path cluster decomposition plan establishes why on
+ * the sibling defect: forking one broker per fork <b>removes the window</b>, which is how the
+ * integration suite went green for months while the deadlock sat untouched. Contention is what opens
+ * the window this class exists to measure.
+ * <p>
+ * The bookkeeping used to be shared - both counters were {@code static}, so a figure read off them belonged
+ * to no particular repetition, and one repetition declining would have satisfied the window-opened gate for
+ * all five. They are now fields of {@link DwellingProducerManager}, one per PC instance, so each repetition
+ * asserts on its own evidence.
  */
 @Slf4j
 class Revoke857TransactionalWaitProbeIT extends BrokerIntegrationTest<String, String> {
@@ -186,8 +217,8 @@ class Revoke857TransactionalWaitProbeIT extends BrokerIntegrationTest<String, St
      */
     AtomicLong revokeCallbackTookMs;
 
-    /** Commits that actually took the write lock and dwelled. Proof the instrument was armed. */
-    static final AtomicLong dwellsEntered = new AtomicLong();
+    /** The instrument, held so its per-instance counters can be asserted on. */
+    DwellingModule<String, String> dwellingModule;
 
     {
         super.numPartitions = 2;
@@ -208,13 +239,65 @@ class Revoke857TransactionalWaitProbeIT extends BrokerIntegrationTest<String, St
             super(producerWrapper, consumerManager, workManager, options);
         }
 
+        /**
+         * Turned off once the revoke under test has returned. The dwell exists to hold the window open across
+         * ONE rebalance; leaving it on afterwards holds the producer write lock 20s out of every commit for the
+         * rest of the run, which starves the produce path and makes the liveness check below measure the
+         * instrument rather than the product. Measured: with it left on, 45 dwells fired and post-rebalance work
+         * could not drain inside 120s while PC stayed demonstrably healthy - no failure cause, not closed.
+         */
+        private volatile boolean dwellArmed = true;
+
+        /** Commits that took the write lock and dwelled. Per instance - see the class javadoc. */
+        private final AtomicLong dwellsEntered = new AtomicLong();
+
+        /**
+         * Revocations that found the lock held and <b>declined</b> - the fix path executing.
+         * <p>
+         * This is what makes a green run mean anything, and it is the lesson
+         * the confluentinc#857 revoke-path cluster decomposition plan paid for on the
+         * sibling defect: <i>"A clean fixed arm with a zero skip-count would be indistinguishable from a probe
+         * that never opened the window, which is exactly how this fix looked unproven for four months."</i>
+         * <p>
+         * Before the fix the outcome variable carried that proof itself - a revoke that waited 79s had
+         * self-evidently overlapped a commit. After the fix the callback returns in milliseconds precisely
+         * <em>because</em> it declined, so "it was fast" no longer distinguishes a working fix from a window
+         * that never opened. The count does.
+         */
+        private final AtomicLong revocationDeclines = new AtomicLong();
+
+        void disarmDwell() {
+            dwellArmed = false;
+        }
+
+        long dwellsEntered() {
+            return dwellsEntered.get();
+        }
+
+        long revocationDeclines() {
+            return revocationDeclines.get();
+        }
+
         @Override
         protected void preAcquireOffsetsToCommit() throws java.util.concurrent.TimeoutException, InterruptedException {
             super.preAcquireOffsetsToCommit();
+            if (!dwellArmed) {
+                return;
+            }
             long entered = dwellsEntered.incrementAndGet();
             log.info("PROBE857TX: commit #{} holds the producer write lock, dwelling {}ms - a revoke landing now " +
                     "spins in onPartitionsRevoked", entered, COMMIT_DWELL_MS);
             ThreadUtils.sleepQuietly(COMMIT_DWELL_MS);
+        }
+
+        @Override
+        public boolean tryAcquireCommitLockForRevocation() {
+            boolean acquired = super.tryAcquireCommitLockForRevocation();
+            if (!acquired) {
+                long declines = revocationDeclines.incrementAndGet();
+                log.info("PROBE857TX: revocation #{} DECLINED the commit lock - the fix path executed", declines);
+            }
+            return acquired;
         }
     }
 
@@ -226,7 +309,7 @@ class Revoke857TransactionalWaitProbeIT extends BrokerIntegrationTest<String, St
      */
     static class DwellingModule<K, V> extends PCModule<K, V> {
 
-        private ProducerManager<K, V> dwelling;
+        private DwellingProducerManager<K, V> dwelling;
 
         DwellingModule(ParallelConsumerOptions<K, V> options) {
             super(options);
@@ -237,6 +320,11 @@ class Revoke857TransactionalWaitProbeIT extends BrokerIntegrationTest<String, St
             if (dwelling == null) {
                 dwelling = new DwellingProducerManager<>(producerWrap(), consumerManager(), workManager(), options());
             }
+            return dwelling;
+        }
+
+        /** Null until PC first asks for the producer manager, which it does during construction. */
+        DwellingProducerManager<K, V> dwellingManager() {
             return dwelling;
         }
     }
@@ -251,7 +339,6 @@ class Revoke857TransactionalWaitProbeIT extends BrokerIntegrationTest<String, St
     void setup() {
         firstRevokeCompleted = new CountDownLatch(1);
         revokeCallbackTookMs = new AtomicLong(-1);
-        dwellsEntered.set(0);
         setupTopic();
 
         log.info("PROBE857TX: dwell arm = {}ms against max.poll.interval.ms = {}ms - expecting {}",
@@ -274,7 +361,8 @@ class Revoke857TransactionalWaitProbeIT extends BrokerIntegrationTest<String, St
                 .ordering(PARTITION) // no keys needed
                 .build();
 
-        pc = new ParallelEoSStreamProcessor<>(pcOptions, new DwellingModule<>(pcOptions)) {
+        dwellingModule = new DwellingModule<>(pcOptions);
+        pc = new ParallelEoSStreamProcessor<>(pcOptions, dwellingModule) {
             @Override
             public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
                 log.info("PROBE857TX: revoke callback entered on thread {} for {} - about to wait for any " +
@@ -287,6 +375,11 @@ class Revoke857TransactionalWaitProbeIT extends BrokerIntegrationTest<String, St
                     revokeCallbackTookMs.compareAndSet(-1, took);
                     log.info("PROBE857TX: revoke callback returned after {}ms (max.poll.interval.ms is {}ms)",
                             took, MAX_POLL_INTERVAL_MS);
+                    // The window this instrument exists to force is now closed. Leaving the dwell armed would
+                    // hold the producer write lock for COMMIT_DWELL_MS out of every subsequent commit, starving
+                    // the produce path for the rest of the run - which makes the liveness check below a
+                    // measurement of the instrument rather than of PC.
+                    dwellingModule.dwellingManager().disarmDwell();
                     firstRevokeCompleted.countDown();
                 }
             }
@@ -329,9 +422,20 @@ class Revoke857TransactionalWaitProbeIT extends BrokerIntegrationTest<String, St
 
         // Guard against a vacuous pass: if the revoke never overlapped a commit, nothing was measured
         // and the assertion below would report success on the defect arm.
-        assertWithMessage("PROBE857TX VERDICT=INCONCLUSIVE: the revoke returned in %sms having entered %s dwells, "
-                + "so it never overlapped an in-flight transaction and this run measured nothing", took, dwellsEntered.get())
-                .that(took).isGreaterThan(WINDOW_OPENED_FLOOR_MS);
+        //
+        // TWO WAYS THE WINDOW CAN BE SHOWN TO HAVE OPENED, and which one applies tells you which code you are
+        // running. Before the fix, the revoke WAITED, so a long callback was itself the proof. After the fix it
+        // DECLINES, so the callback is fast precisely because the window opened - and "it was fast" would
+        // otherwise be indistinguishable from a run where no commit was ever in flight. Requiring either keeps
+        // one assertion honest against both arms; requiring only the first would fail every fixed run, and
+        // "relax the guard until it passes" is how a fix gets declared against an instrument that stopped
+        // looking.
+        var instrument = dwellingModule.dwellingManager();
+        boolean windowOpened = instrument.revocationDeclines() > 0 || took > WINDOW_OPENED_FLOOR_MS;
+        assertWithMessage("PROBE857TX VERDICT=INCONCLUSIVE: the revoke returned in %sms having entered %s dwells "
+                + "and declined %s times, so it never overlapped an in-flight transaction and this run measured "
+                + "nothing", took, instrument.dwellsEntered(), instrument.revocationDeclines())
+                .that(windowOpened).isTrue();
 
         // The defect. The callback runs on the poll thread inside poll(), so anything it spends here
         // counts against max.poll.interval.ms; overrunning it evicts the member, which is astubbs#44.
@@ -354,7 +458,8 @@ class Revoke857TransactionalWaitProbeIT extends BrokerIntegrationTest<String, St
                 + "post-rebalance work did not flow", count.get(), total)
                 .that(count.get()).isAtLeast(total);
 
-        log.info("PROBE857TX VERDICT=OK: revoke callback {}ms, {} dwells entered, {} records processed",
-                took, dwellsEntered.get(), count.get());
+        log.info("PROBE857TX VERDICT=OK: revoke callback {}ms, {} dwells entered, {} revocations declined, "
+                + "{} records processed", took, instrument.dwellsEntered(), instrument.revocationDeclines(),
+                count.get());
     }
 }

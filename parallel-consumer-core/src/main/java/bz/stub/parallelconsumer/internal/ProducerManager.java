@@ -457,6 +457,61 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
     }
 
     /**
+     * @return true if <em>this</em> thread already owns the commit lock, so a commit made from here re-enters
+     *         rather than acquiring. Distinct from {@link #isTransactionCommittingInProgress()}, which answers
+     *         for any thread.
+     */
+    public boolean isCommitLockHeldByCurrentThread() {
+        return producerTransactionLock.isWriteLockedByCurrentThread();
+    }
+
+    /**
+     * The revocation path's acquisition: takes the commit lock <b>only if it is free right now</b>, and otherwise
+     * declines. Never waits.
+     * <p>
+     * <b>Why a rebalance callback may only ever try.</b> It runs on the broker-poll thread inside
+     * {@code consumer.poll()}, so every millisecond spent here is charged against {@code max.poll.interval.ms}
+     * and the whole group waits. Both of this callback's former waits were unbounded against that budget: the
+     * {@code while (isTransactionCommittingInProgress()) Thread.sleep(100)} spin, and - the one that actually
+     * threw in confluentinc#803 - {@link #acquireCommitLock()}'s
+     * {@code writeLock.tryLock(commitLockAcquisitionTimeout)}, five minutes by default.
+     * <p>
+     * <b>Waiting is not merely slow here, it is self-defeating.</b> The control thread holds this lock across
+     * {@code flush()} and the transaction commit, and a transaction commit needs the group coordinator - which
+     * cannot finish the rebalance until this callback returns. Measured on the reproducer: a 20s dwell produced
+     * a <b>79s</b> callback, because with a short commit interval the control thread re-takes the lock as fast
+     * as it drops it and the waiter is starved across <em>successive</em> transactions. So no bound on any one
+     * transaction fixes this; the deadline has to be on the wait, and the shortest correct deadline is none.
+     * <p>
+     * <b>Declining costs only a replay.</b> The offsets were never marked committed, so they stay dirty and
+     * travel to whoever ends up owning the partitions, who reprocesses from where the broker actually is. That
+     * is PC's at-least-once contract doing its ordinary job, traded for the rebalance completing - the same
+     * disposition the rebalance-behaviour feature record already publishes for the consumer lane
+     * (<i>"declines rather than blocks ... declining is what keeps the callback inside
+     * max.poll.interval.ms"</i>), and the same one Kafka Streams falls back to when its own inline revoke
+     * commit exhausts {@code max.block.ms}.
+     * <p>
+     * <b>The caller must not release what this returns.</b> On success the lock is handed to the ordinary commit
+     * path, whose {@link #postCommit()} releases it in a {@code finally} - so a caller that also released would
+     * unlock a lock it no longer owns.
+     *
+     * @return true if the lock was acquired and the caller should proceed with the commit; false if a commit is
+     *         already running and the caller must skip it
+     */
+    public boolean tryAcquireCommitLockForRevocation() {
+        // Re-entrant acquisition would take the hold count to 2, which postCommit() rejects outright
+        // ("Lock held too many times"). The close path reaches the revoke callback on the control thread, which
+        // may already own the lock, so this case is reachable rather than theoretical.
+        if (producerTransactionLock.isWriteLockedByCurrentThread()) {
+            throw new IllegalStateException("Bug: revocation commit lock already held by this thread - "
+                    + "callers must check isCommitLockHeldByCurrentThread() first");
+        }
+        boolean acquired = producerTransactionLock.writeLock().tryLock();
+        log.debug("Revocation commit lock {}", acquired ? "acquired" : "DECLINED - a commit is already running");
+        return acquired;
+    }
+
+    /**
      * Must call before sending records - acquires the lock on sending records, which blocks committing transactions)
      */
     public ProducingLock beginProducing(PollContextInternal<K, V> context) throws java.util.concurrent.TimeoutException {

@@ -22,51 +22,67 @@ transaction - the `while (isTransactionCommittingInProgress())` loop with its
 `poll()`, so it is bounded only by `max.poll.interval.ms`, and overrunning it evicts the member.
 Give that wait a deadline.
 
-## Read this before forming a plan - a decision is open and it is not yours to make alone
+## The decision is settled - read it before changing the shape of the fix
 
-The note's "Open decision - do not write code before settling it" section is the reason this has no
-code. The obvious design is already **ruled out**: the poll thread cannot abort the transaction,
-because `ProducerManager` enforces single-writer from the control thread and throws
-`ConcurrentModificationException` otherwise. The live candidate is to deadline the **holder** - bound
-the control thread, which owns the transaction and can abort itself - rather than the revoke callback
-that merely notices the overrun. **That candidate is recorded as not agreed with the user.** Settle
-it with them before writing code.
+It was open for weeks, and it is not open now. **Decline, do not deadline**, settled with Antony on
+2026-09-01. [`bug-857-transactional-revoke-wait.md`](bug-857-transactional-revoke-wait.md) owns the
+reasoning; what binds anyone editing this branch is the short form:
 
-There is also a blocker sitting underneath it: proceeding past the wait is unsafe until producer
-fencing is recoverable, because `ProducerFencedException` is wrapped in `InternalRuntimeException`
-and kills the instance. See
-[`core-recoverable-producer-fencing.md`](core-recoverable-producer-fencing.md) and astubbs#225,
-which is open.
+- **Do not reintroduce a wait of any length on the revoke path.** The measurement that killed the
+  deadline-the-holder candidate is that 79s came out of a 20s dwell - the waiter is starved across
+  *successive* transactions, so no per-transaction bound helps.
+- **Do not make the poll thread abort the transaction.** `ProducerManager` enforces single-writer
+  from the control thread and throws `ConcurrentModificationException` (grep `is not safe for
+  multi-threaded access`).
+- **astubbs#225 is not a blocker for this design, and was for the other one.** Declining performs no
+  transaction operation at all, so recoverable producer fencing is not on its critical path. If you
+  find yourself reaching for an abort, you have left the settled design.
 
 ## Current state
 
-**A reproducer exists; the fix does not.** `Revoke857TransactionalWaitProbeIT` (added 2026-09-01)
-forces the window open and measures the overrun - 5/5 fail on the defect arm at 79s against a 10s
-`max.poll.interval.ms`, 5/5 pass on the control arm. It is an instrument, expected to fail, and is
-not wired into any lane. No main-code change exists, and **the design decision below is still
-open** - though the probe's 79s result now rules out bounding a single transaction as a fix.
+**The fix is written; nothing is pushed and no PR exists.** Settled 2026-09-01 with Antony: the
+revoke path **declines** the producer commit lock rather than deadlining anyone. Both unbounded
+waits are gone - the `Thread.sleep` spin is deleted, and the commit is attempted only once the lock
+is already held, so `acquireCommitLock`'s five-minute wait is unreachable under contention. The
+reasoning, the ruled-out alternatives and the Kafka Streams comparison are in
+[`bug-857-transactional-revoke-wait.md`](bug-857-transactional-revoke-wait.md), which owns the
+decision; this file only says where the work stands.
 
-- `fix/bound-revoke-transaction-wait` is an **empty branch** cut from an old master - no commits, no
-  PR. It is held by the `.claude/worktrees/revoke-wait` worktree (machine-local). Either reset it
-  onto master or delete it; do not assume it contains a starting point.
-- This branch, `fix/857-bound-transactional-revoke-wait`, carries documentation only.
+`Revoke857TransactionalWaitProbeIT` (added 2026-09-01) is now the **regression test** rather than a
+one-way instrument: it grew a `revocationDeclines` counter, and its vacuity guard accepts either a
+long wait (pre-fix) or a nonzero decline count (post-fix). Without that counter a fixed run and a run
+where no commit was ever in flight look identical - the lesson the cluster-decomposition plan paid
+for on the sibling defect.
+
+- The branch is now **`fix/803-bound-transactional-revoke-wait`**, renamed from `fix/857-...` on
+  2026-09-01: confluentinc#857 is the *other* defect, in the mutually exclusive commit mode, and the
+  branch name was the last place still conflating them.
+- `fix/bound-revoke-transaction-wait` is a separate **empty branch** cut from an old master - no
+  commits, no PR. Delete it or reset it; it is not a starting point.
+
+**Correction owed on `709e2a92b`.** Its commit message says prior art was checked including *"a git
+grep of every local and remote ref"*. That sweep was `*.java` only, and it missed the cluster
+decomposition plan, the commit-seam architecture write-up and a sibling defect note - all
+branch-only. The claim overstates what was done. Not amendable without a history rewrite, so it is
+recorded here instead; `node bin/prior-art.mjs` (astubbs#400) is the tool that closes the gap.
 
 **No open PR addresses this**, verified 2026-08-31 by sweeping every open PR for an edit to the wait
-loop:
+loop, and re-checked 2026-09-01:
 
 - astubbs/parallel-consumer#257 (transactional batches failing and reprocessing succeeded records)
   does not touch it - the keyword matches in its diff are context lines.
 - astubbs/parallel-consumer#262 (prove or falsify every documented transactional guarantee) only
-  *observes* `isTransactionCommittingInProgress()` in test assertions. It changes nothing here.
+  *observes* `isTransactionCommittingInProgress()` in test assertions. It changes nothing here. It is
+  merged into this branch as its base, and is now OPEN, non-draft and MERGEABLE - a `depends on
+  astubbs/parallel-consumer#262` line belongs in this PR's body when one is opened.
+- astubbs/parallel-consumer#317 on `feats/833-commit-failure-seam` adds a `tryCommitOffsetsOnRevoke`
+  that declines - but for the **consumer** lane's commit-cycle monitor, leaving this loop untouched.
+  Same rule, different lock. **This branch deliberately reuses that method name**, so if both land
+  the collision is visible and they get unified rather than silently coexisting.
 - astubbs/parallel-consumer#29 appears in a naive sweep, but the loop is textually identical to
   master there; it merely moved down the file when that PR wrapped the code below it in a try/catch.
   The mode discriminator in the note explains why astubbs#29 *cannot* fix this: the AB-BA cycle it
   fixes lives in a commit mode where this loop does not run.
-
-**The sequencing argument for waiting is real but is not coverage.** astubbs#262 sets out to prove or
-falsify the documented transactional guarantees, so it may well establish what the correct bound is
-and reframe the design. That is a reason to talk to it first - not a reason to believe it is being
-handled.
 
 ## What is already known, so it is not rediscovered
 
