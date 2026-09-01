@@ -236,8 +236,13 @@ jobs:
               try { return m ? JSON.parse(m[1]) : null } catch { return null }
             }
 
-            const existing = (await github.rest.issues.listComments({ owner, repo, issue_number }))
-              .data.find(c => c.body.includes(marker))
+            // PAGINATE, and only trust our own comments. listComments returns 30 per page, so on a busy PR the
+            // report scrolls off page one and every push posts a fresh comment instead of updating - the delta
+            // disappears and the fifteen-comments problem returns. And the comment we find is now an INPUT: its
+            // payload steers the update-vs-post decision, so restrict it to comments this workflow could have
+            // written rather than to anything carrying the marker.
+            const all = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 })
+            const existing = all.find(c => c.body.includes(marker) && c.user?.type === 'Bot')
             const prev = readData(existing?.body)
             const cur = readData(body)
 
@@ -274,7 +279,12 @@ jobs:
             // comment is posted at the bottom, and the old one is retired: its marker renamed so later pushes
             // stop targeting it, and a link forward so a reader who lands on the stale one is not stranded.
             // Number-only movement still updates in place; only the VERDICT earns a new comment.
-            const statusChanged = prev && cur && prev.status !== cur.status
+            // A COMMENT WITH NO PAYLOAD MUST COUNT AS A CHANGE, not as "no change". Written `prev && cur && ...`
+            // this was falsy whenever prev was null - which is every comment posted before the payload existed,
+            // and such comments sit on open PRs right now. The first green-to-red after this merges would then
+            // have been edited in place silently: exactly the failure this change removes, on the run where it
+            // matters most. Unknown is not the same as unchanged.
+            const statusChanged = cur && (!prev || prev.status !== cur.status)
             if (existing && !statusChanged) {
               await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: payload })
             } else {
@@ -282,7 +292,7 @@ jobs:
               if (existing) {
                 const retired = existing.body
                   .replace(marker, '<!-- pc-throughput-report (superseded) -->')
-                  .replace(/^### /m, `### [superseded - status changed to ${cur?.status}] `)
+                  .replace(/^### /m, `### [superseded - status changed to ${String(cur?.status ?? 'unknown').replace(/[^a-zA-Z-]/g, '')}] `)
                 await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id,
                   body: `${retired}\n\n<sub>Superseded by [a newer report](${created.data.html_url}).</sub>` })
               }
