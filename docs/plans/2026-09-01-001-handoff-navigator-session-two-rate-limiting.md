@@ -133,7 +133,8 @@ What the landed rung hands the next one:
 - Verification lanes shipped "opt-in for now": the lane's guard rotted unnoticed for its whole
   unwired life (`docs/solutions/workflow-issues/a-lane-nothing-runs-cannot-catch-its-own-guard-drifting.md`).
 - Cross-model review peers at xhigh effort: three timeouts at the 1200s cap in one day; pin
-  `cross_model_effort: high` in `.compound-engineering/config.yaml` if corroboration is wanted.
+  the compound-engineering plugin's `cross_model_effort` key to `high` (repo-root CE config,
+  uncommitted here) if corroboration is wanted.
 
 ## Machine-local notes (origin machine only - do not chase these elsewhere)
 
