@@ -1156,6 +1156,14 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
         // make sure all work that's been completed are arranged ready for commit
         Duration timeToBlockFor = shouldTryCommitNow ? Duration.ZERO : getTimeToBlockFor();
+        // RED ARM - DO NOT MERGE. Verbatim reintroduction of the defect astubbs/parallel-consumer#29
+        // carried: an O(shards) accessor passed as a plain log argument, so it is evaluated on every
+        // control-loop pass at every log level. Present only to prove that
+        // bin/check-throughput-regression.sh goes red on it. The branch exists to be thrown away.
+        log.trace("Control loop: blocking on mailbox for {}, shouldCommit={}, queuedInShards={}, outForProcessing={}",
+                timeToBlockFor, shouldTryCommitNow,
+                wm.getNumberOfWorkQueuedInShardsAwaitingSelection(),
+                wm.getNumberRecordsOutForProcessing());
         processWorkCompleteMailBox(timeToBlockFor);
 
         //
