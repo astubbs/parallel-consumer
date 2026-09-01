@@ -27,9 +27,13 @@ is that the revoke-time flush holds it - and after `max.poll.interval.ms` the me
 the group. On 0.5.2.4, `PERIODIC_TRANSACTIONAL_PRODUCER`, 4 instances / 4 partitions, 16 threads
 each. They raised the produce-lock timeout from 2 to 4 minutes with no change.
 
-This is a user-observed instance of a lock lifecycle we already have open questions about - see
-[`bug-producing-lock-double-release.md`](bug-producing-lock-double-release.md), and the
-`bug-857-stall-after-rebalance` entry in the manifest. `produceLockAcquisitionTimeout` still defaults
+This is a user-observed instance of a lock lifecycle we have had defects in - the double-release one
+<!-- post-merge: checked -->
+is fixed and closed by astubbs#257 (§11 of
+[`../plans/2026-08-03-001-investigate-transactional-commit-flake.md`](../plans/2026-08-03-001-investigate-transactional-commit-flake.md)),
+and the `bug-857-stall-after-rebalance` entry in the manifest is still open. **That fix is not this
+report's fix**: it was about *releasing* a lock twice on the produce path, where this is a failure to
+*acquire* one during revoke. Do not read it as having addressed this. `produceLockAcquisitionTimeout` still defaults
 to 1 minute. Worth reading before more produce-lock work: it is the only field report of this
 failure mode we have, and raising the timeout demonstrably did not fix it, which is evidence about
 the mechanism rather than the duration.

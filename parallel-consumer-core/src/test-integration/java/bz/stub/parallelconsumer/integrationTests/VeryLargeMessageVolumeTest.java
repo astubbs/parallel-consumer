@@ -33,6 +33,8 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.time.Instant;
+import bz.stub.parallelconsumer.internal.utils.ThroughputReport;
 
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
 import static java.time.Duration.ofSeconds;
@@ -200,6 +202,11 @@ public class VeryLargeMessageVolumeTest extends BrokerIntegrationTest<String, St
         Assertions.useRepresentation(new TrimListRepresentation());
         var failureMessage = StringUtils.msg("All keys sent to input-topic should be processed and produced, within time (expected: {} commit: {} order: {} max poll: {})",
                 expectedMessageCount, commitMode, order, maxPoll);
+        // Measured from the START OF THE WAIT, not from the method entry: everything before this is
+        // producing the fixture and standing up a broker, which is machine time rather than product
+        // time, and folding it in would make the rate track container-pull speed.
+        ThroughputReport.reporting("VeryLargeMessageVolumeTest", expectedMessageCount, consumedKeys::size,
+                () -> "", () -> {
         try {
             waitAtMost(ceilingFor(expectedMessageCount))
                     // dynamic reason support still waiting https://github.com/awaitility/awaitility/pull/193#issuecomment-873116199
@@ -217,6 +224,7 @@ public class VeryLargeMessageVolumeTest extends BrokerIntegrationTest<String, St
         } catch (ConditionTimeoutException e) {
             fail(failureMessage + "\n" + e.getMessage());
         }
+        });
 
         bar.close();
 
@@ -232,4 +240,10 @@ public class VeryLargeMessageVolumeTest extends BrokerIntegrationTest<String, St
 
     }
 
+
+    /**
+     * One reporter for both exits, so a passing and a failing run cannot drift apart in what they
+     * carry - the same rule {@code MultiInstanceHighVolumeTest} states next door. A failing run's rate
+     * is the more interesting of the two and is the one a collector would otherwise never see.
+     */
 }

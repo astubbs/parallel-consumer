@@ -45,13 +45,45 @@ hook_lib="${BASH_SOURCE[0]%/*}/lib/hook-common.sh"
 # shellcheck source=.claude/hooks/lib/hook-common.sh
 . "$hook_lib"
 
-hook_git_runs "$payload" push || exit 0
+# ONE tokeniser spawn answers both of this hook's questions - "is this a push?" here, and "which
+# branch does it name?" below. `hook_git_runs "$payload" push` would pay python3 a second time to
+# walk the same token list, the economy hook-common.sh's `hook_git_runs_any` records. A push
+# invocation is a line reading `push` or `push<TAB>args...` - matched with the haystack WRAPPED in
+# newlines so every line has a boundary on both sides. The first version matched a bare `push` only
+# at the string's start or end, so `git push && git status` (invocation list `push`,`status`) never
+# fired the reminder at all - the exact silently-stops-working class hook-common.sh exists to stop,
+# reintroduced by the refactor meant to save a process spawn (caught by three reviewers at once on
+# astubbs/parallel-consumer#382).
+invocations="$(hook_git_invocations "$payload")"
+case $'\n'"$invocations"$'\n' in *$'\n'push$'\n'*|*$'\n'push$'\t'*) ;; *) exit 0 ;; esac
 
+# THE REPOSITORY COMES FROM THE COMMAND'S OWN DIRECTORY, not this hook process's. A subagent (or a
+# push run with an explicit path) acts on a repository the hook's own cwd says nothing about, and
+# pairing the command's branch with the SESSION's repo quoted another tree's inflight note (Codex
+# review, astubbs/parallel-consumer#382). The payload cwd is the strongest source this fail-open
+# reminder can afford; a `git -C <path> push` to a THIRD repository remains the documented edge in
+# docs/inflight/ci-pr-lookup-is-copied-into-three-hooks.md.
+cmd_cwd="$(hook_payload_cwd "$payload")"
+if [ -n "$cmd_cwd" ] && [ -d "$cmd_cwd" ]; then
+    cd "$cmd_cwd" 2>/dev/null || true
+fi
 root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$root" ] || exit 0
 cd "$root" 2>/dev/null || exit 0
 
-branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+# WHICH BRANCH IS BEING PUSHED - the command's refspec first, this directory's HEAD only as a
+# fallback. A hook does not run in the directory its guarded command runs in, and this repository
+# keeps many worktrees checked out at once, so HEAD alone answers about whichever branch the SESSION
+# sits on: `git push origin other-branch` from here would look up THIS branch's PR and quote
+# `docs/inflight/pr-<n>-*.md` for work the push does not touch. Observed on 2026-08-31 in the sibling
+# guard, twice, on two different branches - .claude/hooks/check-history-rewrite.sh records both under
+# "WHICH BRANCH". `hook_push_head_ref` owns the refspec rules.
+inferred_branch=0
+branch="$(hook_push_head_ref "$invocations")"
+if [ -z "$branch" ]; then
+    inferred_branch=1
+    branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+fi
 [ -n "$branch" ] && [ "$branch" != "HEAD" ] || exit 0
 
 # THROTTLE. Same branch, same hour, one reminder.
@@ -179,10 +211,19 @@ outstanding="$(awk '/^## Already fixed/ {exit} {print}' "$note" 2>/dev/null)"
 export NOTE_BODY="$outstanding"
 export NOTE_PATH="$note"
 export PR_NUM="$pr_num"
+# SAY WHEN THE BRANCH WAS A GUESS. A bare `git push` names no refspec, so the branch came from this
+# directory's HEAD - and "You are pushing to astubbs/parallel-consumer#N" is then a claim the hook
+# cannot support. The reminder is still worth making; presenting it as a fact is not.
+if [ "$inferred_branch" = 1 ]; then
+    export BRANCH_CAVEAT="The command names no branch, so this was looked up for \`$branch\`, the current HEAD of $root. If you are pushing something else, ignore all of this and read that branch's own note. "
+else
+    export BRANCH_CAVEAT=""
+fi
 python3 -c '
 import json, os
 print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
     "additionalContext": (
+        os.environ["BRANCH_CAVEAT"] +
         "READINESS IS THE OPERATOR\u2019S CALL, NOT YOURS. Do not tell them this PR is ready, "
         "mergeable or good to go. `MERGEABLE/CLEAN` from gh is a GIT fact - it means no conflicts - "
         "and saying it in prose reaches them earlier than any guard can fire, because a hook can "

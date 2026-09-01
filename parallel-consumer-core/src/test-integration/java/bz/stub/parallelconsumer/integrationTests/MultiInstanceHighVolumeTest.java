@@ -7,6 +7,7 @@ package bz.stub.parallelconsumer.integrationTests;
 
 import bz.stub.parallelconsumer.internal.utils.ProgressBarUtils;
 import bz.stub.parallelconsumer.internal.utils.StringUtils;
+import bz.stub.parallelconsumer.internal.utils.ThroughputReport;
 import bz.stub.parallelconsumer.internal.utils.TrimListRepresentation;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
@@ -18,10 +19,12 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.assertj.core.api.Assertions;
 import org.assertj.core.api.SoftAssertions;
 import org.awaitility.core.ConditionTimeoutException;
+import org.awaitility.core.TerminalFailureException;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -114,6 +117,8 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
         var failureMessage = StringUtils.msg("All keys sent to input-topic should be processed and produced, within time " +
                         "(expected: {} commit: {} order: {} max poll: {})",
                 expectedMessageCount, commitMode, order, maxPoll);
+        ThroughputReport.reporting("MultiInstanceHighVolumeTest", expectedMessageCount, consumedKeys::size,
+                () -> StringUtils.msg("commitMode={} order={} maxPoll={}", commitMode, order, maxPoll), () -> {
         try {
             waitAtMost(ceilingFor(expectedMessageCount))
                     // dynamic reason support still waiting https://github.com/awaitility/awaitility/pull/193#issuecomment-873116199
@@ -130,7 +135,16 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
                     });
         } catch (ConditionTimeoutException e) {
             fail(failureMessage + "\n" + e.getMessage());
+        } catch (TerminalFailureException e) {
+            // The failFast arm above exits through THIS, not ConditionTimeoutException - Awaitility's
+            // two failure exits are unrelated siblings under RuntimeException. Catching only the
+            // timeout meant the one failure mode with a named cause ("PC died") was the one that
+            // reported no throughput at all, so bin/performance-test.sh printed NONE FOUND for a run
+            // that had just measured a processor death - the exact case the on-failure figure exists
+            // for. Rethrown unchanged: this reports, it does not soften the failure.
+            throw e;
         }
+        });
 
         assertThat(processedCount.get())
                 .as("messages processed and produced by parallel-consumer should be equal")
@@ -141,6 +155,15 @@ class MultiInstanceHighVolumeTest extends BrokerIntegrationTest<String, String> 
 
         bars.forEach(ProgressBar::close);
     }
+
+    /**
+     * One reporter for both exits of the wait, so the two lines cannot drift apart in what they
+     * carry. They already had: the failing line named {@code outcome=FAILED} and the passing line
+     * carried no {@code outcome} field at all, so a collector could only tell a green run from a
+     * schema change by the absence of a key - which is exactly the reading a
+     * {@code key=value} line exists to remove. Both now say which they are, matching the
+     * {@code PC-DEADLINE-HEADROOM} line the ambient probe emits.
+     */
 
     private ParallelEoSStreamProcessor<String, String> buildPc(String inputTopicName, int maxPoll, ProcessingOrder order, CommitMode commitMode) {
         var pc = getKcu().buildPc(order, commitMode, maxPoll);
