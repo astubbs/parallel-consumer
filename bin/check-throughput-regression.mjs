@@ -142,7 +142,7 @@ if (!(observedControl > 0)) {
   reportStatus = 'no-control'
   writeReport(`### 🟠 Throughput — no control ran
 
-| | |
+| What | Value |
 |---|---|
 | **This run** | ${observedRate} rec/s |
 
@@ -170,7 +170,7 @@ try {
     reportStatus = 'bootstrapping'
     writeReport(`### ⚪ Throughput — no reference yet (bootstrapping)
 
-| | |
+| What | Value |
 |---|---|
 | **This run** | ${observedRate} rec/s |
 | Subject time | ${observedSubject.toFixed(1)}s |
@@ -187,7 +187,7 @@ The numbers above are this run's, recorded here rather than left in a job log.`)
   reportStatus = 'check-failed'
   writeReport(`### 🟠 Throughput — the check could not run
 
-| | |
+| What | Value |
 |---|---|
 | **This run** | ${observedRate} rec/s |
 | Subject time | ${observedSubject.toFixed(1)}s |
@@ -210,7 +210,7 @@ if (runs.length === 0) {
   reportStatus = 'no-reference'
   writeReport(`### ⚪ Throughput — no reference yet
 
-| | |
+| What | Value |
 |---|---|
 | **This run** | ${observedRate} rec/s |
 | Subject time | ${observedSubject.toFixed(1)}s |
@@ -281,7 +281,7 @@ if (reference.length === 0) {
   reportStatus = 'incomparable'
   writeReport(`### ⚪ Throughput — no comparable reference
 
-| | |
+| What | Value |
 |---|---|
 | **This run** | ${observedRate} rec/s |
 | Subject time | ${observedSubject.toFixed(1)}s |
@@ -300,20 +300,40 @@ const verdict = { icon, word, exit: v.failed ? VIOLATION : 0 }
 const shares = reference.map(r => (r.subject / r.control))
 const spread = `${Math.min(...shares).toFixed(3)} – ${Math.max(...shares).toFixed(3)}`
 
+// LEAD WITH THE ANSWER, IN WORDS. A reviewer read "Subject share, this run: 1.713" as "this build is
+// 1.7x faster than master" - a reasonable reading of those words, and wrong by a factor of twenty.
+// 1.713 is the subject's time divided by the CONTROLS' time in the SAME run; the only figure that
+// says anything about master is the comparison. The headline sentence exists so the common question
+// is answered before anyone reaches a number, and every row is now named in words rather than in the
+// vocabulary of the method.
+const faster = ratio >= 1
+const magnitude = Math.abs(1 - ratio) < 0.005
+  ? 'the same speed as'
+  : `about ${pct(Math.abs(1 - ratio))} ${faster ? 'faster' : 'slower'} than`
+const headline = `**This branch is ${magnitude} master**, on the one test this measures.`
+
 const report = `### ${icon} Throughput — ${word}
 
-| | |
-|---|---|
-| **Subject share, this run** | ${observedShare.toFixed(3)} |
-| **Reference share (median)** | ${referenceShare.toFixed(3)} |
-| **Ratio** | **${ratio.toFixed(3)}** |
-| Subject time | ${observedSubject.toFixed(1)}s |
-| Control time | ${observedControl.toFixed(1)}s |
-| Reported rate | ${observedRate} rec/s |
+${headline}
+
+| What | Value | Meaning |
+|---|---|---|
+| **Compared with master** | **${ratio.toFixed(3)}** | above 1.00 is faster, below is slower |
+| Subject test took | ${observedSubject.toFixed(1)}s | the test under measurement |
+| Control tests took | ${observedControl.toFixed(1)}s | the other tests in this same run |
+| Subject ÷ controls, here | ${observedShare.toFixed(3)} | **not a speed** - a shape that cancels machine speed |
+| Subject ÷ controls, master | ${referenceShare.toFixed(3)} | median of recent master runs |
+| Reported rate | ${observedRate} rec/s | this machine only; not comparable across runners |
 
 **Allowable range** 🟢 ≥ ${WARN_BELOW.toFixed(2)} · 🟡 ${FAIL_BELOW.toFixed(2)}–${WARN_BELOW.toFixed(2)} (about a ${pct(1 - WARN_BELOW)} loss) · 🔴 < ${FAIL_BELOW.toFixed(2)} (about a ${pct(1 - FAIL_BELOW)} loss)
 
-<details><summary>How this is derived, and what it cannot tell you</summary>
+<details><summary>What the numbers mean, and what they cannot tell you</summary>
+
+**The one that gets misread.** \`Subject ÷ controls\` is a shape, not a speed. 1.7 means the subject took 1.7 times as long as the control tests **in the same run** - it says nothing about master on its own, and a reviewer has already read it as "1.7x faster than master". Only **Compared with master** answers that question.
+
+**Why a shape and not a rate.** A rate depends on which runner you drew. A shape does not: every test here processes a fixed number of records, so a runner twice as slow doubles the subject and the controls together and leaves their ratio alone. That is the whole trick, and it is why the reported rate is shown last and labelled as this machine only.
+
+**Reading the comparison.** \`master ÷ this run\`. Above 1.00 the subject is proportionally quicker here than on master; below 1.00 it is slower. 0.50 means it takes twice as long relative to its controls - that is the failing bound, not a small one.
 
 **By conservation, not by correction.** Every test in this lane processes a fixed number of records, so within one run the ratio of one test's time to another's is invariant under machine speed — a runner twice as slow doubles both terms and leaves the ratio alone. There is no machine-index correction to be wrong, because nothing needed correcting. \`share = subjectSeconds / controlSeconds\`, both from this same run.
 
