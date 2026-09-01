@@ -95,20 +95,30 @@ jobs:
           # never wired up, which is the "a test that never runs is not a passing test" case AGENTS.md
           # names - and nothing went red for a week to say so.
           #
-          # GATING, like the chaos entry below and for the same reason: a Lincheck violation is a real
-          # finding, not a timing wobble. The model checker explores interleavings deterministically
-          # rather than sampling them, so a reported violation reproduces.
+          # GATING, and the argument has to be made about the arms this lane actually has. A Lincheck
+          # violation is a real finding rather than a timing wobble, but "the model checker explores
+          # interleavings deterministically" is not why - NO model-checking arm over a product class
+          # runs here at all. They are blocked on Lincheck 3.7 rewriting a Lombok
+          # @EqualsAndHashCode(callSuper = true) super.hashCode() into a recursing self-call, which
+          # LincheckSuperHashCodeProbeTest tracks and fires when it is fixed. What licenses gating is
+          # that the three arms asserting NO violation - RetryQueue, ShardManager, WorkManager - need
+          # no hit to pass, so their bounds are a straight cost with no rate to price, and a red is a
+          # statement about the code.
           #
-          # THE RISK WORTH NAMING is the STRESS arms, not the model-checking ones. Their hit rate is
-          # machine-dependent - measured at 3.4x across two machines in
-          # docs/inflight/test-lincheck-lane-open-items.md - and their bounds were priced on the machine
-          # that wrote them, not on a hosted runner. If this entry flakes, that is the cause and the fix
-          # is repricing the bound in the test, NOT a retry: this repo removed surefire reruns because
-          # they hid three flakes. Demote to advisory before masking anything.
+          # THE RISK WORTH NAMING is the INVERTED arms, which still need Lincheck to FIND something:
+          # PartitionStateLincheckTest, and LincheckToolchainProbeTest, the control that says whether
+          # the toolchain is instrumenting anything. Those depend on a stress hit rate measured 3.4x
+          # apart across two machines (docs/inflight/test-lincheck-lane-open-items.md), priced on the
+          # machine that wrote them rather than a hosted runner. If this entry flakes, that is where to
+          # look - and the fix is NOT a retry: this repo removed surefire reruns because they hid three
+          # flakes. Demote to advisory before masking anything, and read
+          # docs/solutions/best-practices/reverting-half-a-fix-is-not-a-control-2026-09-01.md before
+          # concluding a quiet inverted arm means its bug is still there.
           #
-          # ~2m30s for the whole lane, most of it WorkManagerLincheckTest, whose inverted arm cannot
-          # stop early and always pays its full bound. bin/lincheck-test.sh's header owns the five flags
-          # that each fail silently on their own.
+          # 7m42s measured on ubuntu-latest (about 2m50s locally), nearly all of it
+          # WorkManagerLincheckTest, whose inverted arm cannot stop early and always pays its full
+          # bound. bin/lincheck-test.sh's header owns the five flags that each fail silently on their
+          # own.
           - suite: lincheck
             name: "Lincheck"
             cmd: "bin/lincheck-test.sh"
