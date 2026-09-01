@@ -117,6 +117,19 @@ That is also why the lane consults the ledgered-flake registry **last** among th
 and **first** on the control arm. A flake explains a dirty control; letting it explain a divergence is
 how a real one disappears.
 
+## An entry reported stale on one run is not necessarily stale
+
+The lane reports a `seam-on-divergence` entry that matched nothing, which is usually a rung having
+fixed the thing. There is one benign way to get the same report: **a case that fails in the CONTROL
+arm falls out of the divergence set entirely**, because a divergence is green-off-and-red-on and that
+case was not green off. `shouldLogAndRecordSkippedRecordsForInvalidTimestamps` does exactly this
+whenever its ledgered flake fires seam-off - it moves to "failing in both arms", and its attribution
+here goes quiet for that run without having stopped being true.
+
+So check which list the case is in before deleting an entry the lane called stale. Two runs with the
+case green in the control and still not diverging is the signal to act on; one run with a dirty
+control is not.
+
 ## Delete when
 
 Every class above has either been closed by the rung that owns it or moved to a durable home. The
