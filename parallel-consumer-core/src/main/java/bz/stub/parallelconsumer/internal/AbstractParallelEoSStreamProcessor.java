@@ -1865,13 +1865,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             }
 
             logWithoutEscaping(e, () -> {
+                // summary, not the whole context: the full render grows with the batch (astubbs#170)
                 String msg = msg("Exception caught in user function running stage, registering WC as failed, returning to" +
-                        " mailbox. Context: {}", context, e);
+                        " mailbox. Context: {}", context.summariseForLog(), e);
                 if (PCRetriableException.isPresentIn(e)) {
                     log.debug("Explicit " + PCRetriableException.class.getSimpleName() + " caught, logging at DEBUG only. " + msg, e);
                 } else {
                     log.error(msg, e);
                 }
+                log.debug("Full context of the batch that failed in the user function: {}", context);
             });
             throw e; // trow again to make the future failed
         } finally {

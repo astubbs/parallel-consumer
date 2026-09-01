@@ -5,9 +5,7 @@ package bz.stub.parallelconsumer;
  */
 
 import ch.qos.logback.classic.Level;
-import ch.qos.logback.classic.Logger;
-import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.core.read.ListAppender;
+import bz.stub.parallelconsumer.internal.utils.LogCapture;
 import bz.stub.parallelconsumer.integrationTests.AmbientProbeExtension;
 import bz.stub.parallelconsumer.integrationTests.NoAmbientProbe;
 import bz.stub.parallelconsumer.integrationTests.chaostests.ChaosSeed;
@@ -19,7 +17,6 @@ import org.junit.jupiter.api.extension.ExtensionContext;
 import org.junitpioneer.jupiter.ClearSystemProperty;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.junitpioneer.jupiter.SetSystemProperty;
-import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Method;
 import java.time.Instant;
@@ -28,7 +25,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.Function;
-import java.util.stream.Collectors;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
@@ -464,15 +460,11 @@ class AmbientProbeExtensionTest {
         assertThat(observer.isObserverMode()).isTrue();
         assertThat(chaos.isObserverMode()).isFalse();
 
-        var probeLogger = (Logger) LoggerFactory.getLogger(ProgressProbe.class);
-        var appender = new ListAppender<ILoggingEvent>();
-        appender.start();
-        probeLogger.addAppender(appender);
-        try {
+        List<String> errors;
+        try (var logs = LogCapture.of(ProgressProbe.class)) {
             violate(observer, "AMBIENT_SYNTHETIC: observer violation");
             violate(chaos, "CHAOS_SYNTHETIC: chaos violation");
-        } finally {
-            probeLogger.detachAppender(appender);
+            errors = logs.messagesAt(Level.ERROR);
         }
 
         // violations are recorded identically in both modes...
@@ -481,11 +473,8 @@ class AmbientProbeExtensionTest {
 
         // ...but only chaos mode reports at ERROR - the ambient observer is silent on a green test
         // (its violations surface through the failure-time autopsy instead)
-        List<ILoggingEvent> errors = appender.list.stream()
-                .filter(event -> event.getLevel() == Level.ERROR)
-                .collect(Collectors.toList());
         assertThat(errors).hasSize(1);
-        assertThat(errors.get(0).getFormattedMessage()).contains("CHAOS_SYNTHETIC");
+        assertThat(errors.get(0)).contains("CHAOS_SYNTHETIC");
     }
 
     // --- helpers ---
