@@ -47,14 +47,14 @@ on:
         required: true
         type: choice
         options:
-          - measure-large-instances-failure-rate
-          - sweep-large-instances-scale
-          - audit-stall-detector-silence
-          - hunt-async-stall-answer
-          - confirm-async-drain
-          - batch-857-experiments
+          - exp-measure-large-instances-failure-rate
+          - exp-sweep-large-instances-scale
+          - exp-audit-stall-detector-silence
+          - exp-hunt-async-stall-answer
+          - exp-confirm-async-drain
+          - exp-batch-857
       iterations:
-        description: 'Iterations (empty = the script default; ignored by batch-857-experiments)'
+        description: 'Iterations (empty = the script default; ignored by exp-batch-857)'
         required: false
         default: ''
   schedule:
@@ -98,14 +98,14 @@ jobs:
         env:
           # Data, never code. A scheduled run has no inputs, so it falls back to the one experiment
           # the schedule exists for.
-          EXPERIMENT: ${{ inputs.experiment || 'measure-large-instances-failure-rate' }}
+          EXPERIMENT: ${{ inputs.experiment || 'exp-measure-large-instances-failure-rate' }}
           ITERATIONS: ${{ inputs.iterations }}
         run: |
           set -euo pipefail
           case "$EXPERIMENT" in
-              measure-large-instances-failure-rate|sweep-large-instances-scale| \
-              audit-stall-detector-silence|hunt-async-stall-answer|confirm-async-drain| \
-              batch-857-experiments) ;;
+              exp-measure-large-instances-failure-rate|exp-sweep-large-instances-scale| \
+              exp-audit-stall-detector-silence|exp-hunt-async-stall-answer|exp-confirm-async-drain| \
+              exp-batch-857) ;;
               *) echo "Unknown experiment: $EXPERIMENT" >&2; exit 2 ;;
           esac
           echo "=== $EXPERIMENT ==="

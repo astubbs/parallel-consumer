@@ -347,12 +347,12 @@ answer it.
 
 | Ask this | Run | Its question is |
 |---|---|---|
-| How often does `largeNumberOfInstances` fail, and how? | `bin/measure-large-instances-failure-rate.sh [n]` | **open** - unmeasured since the 2026-01 upstream report on confluentinc#857 |
-| Does that failure rate move with SCALE? | `bin/sweep-large-instances-scale.sh` | **open** - rate rising with scale points at the group coordinator, flat points at PC |
-| Does the `NO_PROGRESS` detector MISS real failures? | `bin/audit-stall-detector-silence.sh [n]` | **open, reopened 2026-08-31** - a detector that stays quiet on a real failure is worse than an absent one, because the suite goes green on its silence |
-| When the async stall fires, does the backlog DRAIN or stay FLAT? | `bin/hunt-async-stall-answer.sh [n]` | **open** - draining means a timing proxy, flat means a real wedge reproducible on demand |
-| Does that stall drain EVERY time, or was that once? | `bin/confirm-async-drain.sh` | **open** - the demotion rests on a single firing; a second confirms it |
-| All of the above, unattended, one tally | `bin/batch-857-experiments.sh` | a batch of whatever was outstanding when it was written - read its header before trusting its scope |
+| How often does `largeNumberOfInstances` fail, and how? | `bin/exp-measure-large-instances-failure-rate.sh [n]` | **open** - unmeasured since the 2026-01 upstream report on confluentinc#857 |
+| Does that failure rate move with SCALE? | `bin/exp-sweep-large-instances-scale.sh` | **open** - rate rising with scale points at the group coordinator, flat points at PC |
+| Does the `NO_PROGRESS` detector MISS real failures? | `bin/exp-audit-stall-detector-silence.sh [n]` | **open, reopened 2026-08-31** - a detector that stays quiet on a real failure is worse than an absent one, because the suite goes green on its silence |
+| When the async stall fires, does the backlog DRAIN or stay FLAT? | `bin/exp-hunt-async-stall-answer.sh [n]` | **open** - draining means a timing proxy, flat means a real wedge reproducible on demand |
+| Does that stall drain EVERY time, or was that once? | `bin/exp-confirm-async-drain.sh` | **open** - the demotion rests on a single firing; a second confirms it |
+| All of the above, unattended, one tally | `bin/exp-batch-857.sh` | a batch of whatever was outstanding when it was written - read its header before trusting its scope |
 
 The tracking note for that first row lives on the branch the runners came from and is not on master
 yet, so the row deliberately cites no path - a link into a file that only exists on another branch

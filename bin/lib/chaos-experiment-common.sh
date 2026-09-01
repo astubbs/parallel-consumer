@@ -4,14 +4,14 @@
 #
 # Shared definitions for the confluentinc#857 experiment runners - THE single home of the maven
 # invocation, the JDK pin, the failsafe-report outcome classifier, the detector-verdict classifier
-# and the violation-trajectory parsing that hunt-async-stall-answer.sh, confirm-async-drain.sh,
-# audit-stall-detector-silence.sh, measure-large-instances-failure-rate.sh,
-# sweep-large-instances-scale.sh and batch-857-experiments.sh all need. Source this; do not copy
+# and the violation-trajectory parsing that exp-hunt-async-stall-answer.sh, exp-confirm-async-drain.sh,
+# exp-audit-stall-detector-silence.sh, exp-measure-large-instances-failure-rate.sh,
+# exp-sweep-large-instances-scale.sh and exp-batch-857.sh all need. Source this; do not copy
 # from it.
 #
 # Same rule, and the same reason, as bin/lib/quarantine-common.sh: the copies drift, and the drift
 # is silent because each copy still runs. It had already happened here before this file existed -
-# confirm-async-drain.sh carries a fixed trajectory-parsing bug (`paste -sd'->'` treats -d as a
+# exp-confirm-async-drain.sh carries a fixed trajectory-parsing bug (`paste -sd'->'` treats -d as a
 # character LIST, so it joined with '-', the sed matched nothing, and four runs that plainly drained
 # were labelled FLAT) that the two sibling copies of the same parsing never received.
 #
@@ -122,7 +122,7 @@ pc_failsafe_outcome() { # tree-root report-name-fragment
 # Sets PC_VERDICT to one of no-progress, other-probe or LEDGER-ONLY-MISS-CASE, plus PC_NO_PROGRESS
 # and PC_OTHER_PROBE. Three results rather than one string because the callers print the raw counts
 # beside the verdict - a verdict whose evidence is not in the tally cannot be re-checked from it.
-# bin/audit-stall-detector-silence.sh's header owns what each verdict MEANS and why it is the
+# bin/exp-audit-stall-detector-silence.sh's header owns what each verdict MEANS and why it is the
 # question worth asking.
 pc_detector_verdict() { # run-log
     PC_NO_PROGRESS=$(pc_count_matches 'NO_PROGRESS' "$1")
