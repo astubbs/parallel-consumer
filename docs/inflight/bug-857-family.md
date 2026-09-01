@@ -230,7 +230,77 @@ sighting names the replay as its deciding experiment. That is the family's cheap
 Per sighting, when its seed has been replayed and the result explained - not on a release, and not
 on astubbs#29 merging. astubbs#29 landing resolves at most the two consumer-sync sightings, and
 only if their replays confirm. (When *this* file may be retired is a separate question, answered
-under `## Delete when` at the end.)
+under `## 2026-09-01, sixth capture on the DRAIN arm - and a replay that came back CLEAN
+
+**Not a new class. The same discriminator as the 2026-08-26 series, on the same arm as the fifth
+capture**, carried here from another machine via a transport branch rather than observed directly.
+Recorded because the date, the PR and the replay result are new; the signature is not.
+
+`ChaosRevokeUnderWorkDrainIT.revokeUnderDrainingStopsStaysProtocolHonest`, seed
+`1170511790377175835`, from astubbs/parallel-consumer#200 at head `e7b1dda88`
+([run 33458796933](https://github.com/astubbs/parallel-consumer/actions/runs/33458796933), job
+99704435326). It failed once and passed on a plain re-run of the same job with a different seed.
+
+Captured symptom, as reported: `POLL THREAD AT TIMEOUT: BLOCKED ... Lock: AtomicBoolean@5e65d395,
+held by: pc-control-PC-44` - the same monitor, the same holder-naming and the same method pair as
+every capture in the 2026-08-26 series.
+
+**Three novelty claims arrived with it, and none of them survives this file.** The handoff document
+argued this was new because of the Drain scenario, the BLOCKED-with-named-holder signature, and an
+uncontaminated tree. The fifth capture above is the Drain arm, carries the identical signature, and
+is already recorded as a not-PR-introduced control. Written down because the claims were made in good
+faith by a session that had read the ledger's opening and the eleventh sighting but not this series -
+which is the argument for reading a ledger to its end before adding to it.
+
+**It also made a line-number correction that is wrong, in the exact way this file already warns
+about.** It reported master's `:580` as "the control-thread side". At master's `d1827df41`, `:580` is
+the `commitOffsetsThatAreReady()` call *inside* `onPartitionsRevoked` - the POLL-thread side - and
+`:1775` is the `synchronized (commitCommand)` acquisition inside `commitOffsetsThatAreReady`, where
+the control thread holds across the blocking `retrieveOffsetsAndCommit()`. Verified directly against
+master rather than reasoned about. The fifth capture's own paragraph says it: *anyone matching future
+captures by line number will mis-file them; match by method and monitor.* This is that mistake, made
+by a reader who had the warning available.
+
+### The replay: CLEAN on master, once, locally
+
+The seed was replayed on this laptop against master at `d1827df41`, in a throwaway worktree, with
+`-Dit.test=ChaosRevokeUnderWorkDrainIT` and the seed above. Classified from the failsafe report
+rather than maven's exit code: `tests="1" errors="0" skipped="0" failures="0"`, 160.2s, no probe
+observations. **It did not reproduce.**
+
+**That is close to no evidence either way, and the reason is recorded on astubbs/parallel-consumer#29
+already: a chaos seed fixes the conductor's schedule, not the poll-versus-control interleaving.** A
+seed cannot pin the race this family turns on, which is why the assignor question was settled on the
+deterministic probe instead of by replaying a capture. One clean replay of a race that the instrument
+cannot force is a sample, not a result - and N=1, on a laptop, where the original failure occurred on
+a loaded CI runner.
+
+**The first attempt at that replay produced a false GREEN and is worth more than the replay itself.**
+It was run without `-Dfailsafe.failIfNoSpecifiedTests=false`, so the `-Dit.test` filter matched
+nothing on `parallel-consumer-parent`, no failsafe report was written at all, and the run still had
+to be classified from the report to notice - the exit code alone would have read as a pass. That flag
+is the first entry in the experiment runners' shared skip array for exactly this reason - that
+library arrives with astubbs/parallel-consumer#381 and is not on this file's branch yet - and the
+command was hand-written instead of going through its `pc_run_chaos` helper.
+
+### What this capture is actually worth
+
+Not a new signature and not a settled question. What it adds is **another in-the-wild occurrence on a
+tree that changes no `.java` at all** (astubbs/parallel-consumer#200 is documentation-only, measured:
+`git diff --name-only origin/master HEAD | grep '\.java$'` is empty), dated after the 2026-08-26
+series, on a different PR.
+
+The question it bears on is already settled by a stronger instrument: astubbs/parallel-consumer#29's
+four-cell control on `Rebalance857CommitSyncDeadlockProbeIT` - pre-fix arm red every repetition on
+both assignors, fixed arm green every repetition on both. This capture corroborates that from
+production-shaped conditions rather than from a forced window. **It does not need to replay in order
+to do that**, which is the thing to remember before anyone spends another chaos run on this seed.
+
+Nothing was recorded from astubbs/parallel-consumer#200 itself, and correctly so: it is a docs-only
+PR, and a sighting written from an unrelated branch is how a ledger acquires entries nobody can vouch
+for. The capture reached this file by being carried to the branch that owns the investigation.
+
+## Delete when` at the end.)
 
 <!-- post-merge: checked-end -->
 
