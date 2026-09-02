@@ -155,6 +155,15 @@ aborts the script instead of reaching its documented fail-closed branch. `hook_f
 carries `|| true` on both arms for exactly this, so it is safe to point the other two at - but point
 them, do not copy them back.
 
+### `bin/release-notes.py` is Python in a Node-default `bin/` (SMALL, decided: port later)
+
+`bin/release-notes.py` and its shell self-test `bin/test-release-notes.sh` landed with astubbs#199 the
+same day the Node-default ruling did (`bin/lib/source-patterns.mjs`, astubbs#403), which says *"Node,
+not Python, and the repo already chose"*. The gate matches only `sh|bash`, so it never saw the `.py`;
+the `.sh` carries a `shell-justified:` line naming this. Owner's ruling, 2026-09-02: let it ride, port
+later - the renderer is tested and reviewed, and the ruling's own commit says churn is its own risk.
+Port both together, and delete the `shell-justified:` line with them.
+
 ### Thread model: eliminate the separate poller thread (MASSIVE, UNDECIDED)
 *Mirror: [#142](https://github.com/astubbs/parallel-consumer/issues/142) · orphaned implementation in [confluentinc PR #270](https://github.com/confluentinc/parallel-consumer/pull/270), closed unmerged in the 2023-06-15 sweep.*
 - **confluentinc#200** - "Consider a shared-nothing architecture, to reduce thread
