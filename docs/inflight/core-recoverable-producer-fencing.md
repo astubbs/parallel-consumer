@@ -1,61 +1,48 @@
 # Next: make producer fencing recoverable instead of fatal
 
 <!-- inflight-type: feature -->
-<!-- inflight-impact: reliability -->
+<!-- inflight-impact: crash -->
 <!-- inflight-state: deferred - after v6, nothing breaks by shipping without it -->
 
 
-> Extracted from `origin/docs/session-learnings-857-family` @94bb98a9d, `docs/inflight/core-recoverable-producer-fencing.md`.
-
-A `ProducerFencedException` during a transactional commit currently kills the PC instance. It should
-be treated as "our partitions moved, clean up and rejoin" - which is what Kafka Streams does.
-
-## What happens today
-
-`ProducerManager.commitOffsets()` catches `ProducerFencedException` from `sendOffsetsToTransaction`
-and rethrows it wrapped in `PCInternalRuntimeException`. That propagates out of
-`AbstractOffsetCommitter.retrieveOffsetsAndCommit()`, out of `commitOffsetsThatAreReady()`, out of
-`controlLoop()`, and lands in the supervisor loop, which records it as `failureReason`, calls
-`doClose()` and rethrows. The instance is gone.
-
-Offset bookkeeping does survive this correctly - `onOffsetCommitSuccess()` is skipped, so offsets
-stay dirty and the records are redelivered - and `postCommit()` runs in a `finally`, so the produce
-lock is released. The data is safe. It is the liveness that is wrong.
-
-## Why it matters
-
-Under KIP-447 (`exactly_once_v2`), fencing by *consumer generation* is the normal mechanism by which
-a rebalance takes partitions away from a producer. Being fenced is a routine consequence of a
-rebalance you lost, not an error condition. Treating a routine event as fatal means any consumer
-that is slow enough to lose a race during a rebalance dies rather than rejoining.
-
-## The Kafka Streams model, which is the one to copy
-
-Streams unwraps `ProducerFencedException` in `RecordCollectorImpl` specifically so it can be
-converted into `TaskMigratedException` rather than triggering a shutdown. `TaskMigratedException` is
-handled by closing out the assigned tasks and **rejoining the consumer group**. The thread survives.
-
-Do not treat this as a solved problem upstream: `KAFKA-14567` ("Kafka Streams crashes after
-ProducerFencedException") shows the same class of bug reaching Streams in EOS-v2. Copy the shape of
-the design, not the assumption that it is airtight.
-
-## Proposal
-
-Introduce a distinct, recoverable exception - the PC equivalent of `TaskMigratedException` - raised
-where fencing is detected, and handle it in the control loop by aborting the transaction, leaving
-offsets dirty, and letting the consumer rejoin rather than closing.
-
-The bounded revoke wait (see the branch that carries this note) reduces how often fencing is reached
-on the revoke path, but does not remove it: fencing can still arrive from a slow commit that overran
-its generation for reasons unrelated to a revoke. The two changes are complementary and independent.
-
-## What is undecided
-
-- Whether "rejoin" is even expressible in PC's current lifecycle. Streams owns its thread and can
-  re-initialise tasks; PC's control loop has no equivalent re-entry point today, so this may need a
-  state-machine addition rather than just an exception swap. **This is the part to investigate
-  first** - it determines whether this is a small change or a structural one.
-- Whether other fatal paths deserve the same treatment. `PCInternalRuntimeException` is used widely;
-  this proposal deliberately does not widen beyond fencing.
-
+Scoped. `docs/plans/2026-09-02-001-feat-recoverable-producer-fencing-plan.md` owns the requirements,
+the decisions and their rationale; this note keeps only what a reader needs before opening it.
 Tracked as astubbs#225.
+
+## Read the plan, not this note's history
+
+This note previously carried the proposal from astubbs#225 verbatim: raise a recoverable exception,
+abort the transaction, let the consumer rejoin. **Two of those three steps do not work**, and the
+plan replaces them. Anyone designing from the older shape will build the wrong thing, which is why
+the corrections are named here rather than left in the plan alone:
+
+- **Abort is not available on a fenced producer.** `KafkaProducer#abortTransaction` documents
+  `ProducerFencedException` as a fatal `@throws`, exactly as `commitTransaction` does. Kafka Streams
+  calls it anyway and swallows the throw, because the broker has already aborted.
+- **Rejoin is not the hard part.** Recovery needs a *new producer*, and PC cannot build one:
+  `ParallelConsumerOptions` holds a finished instance, `ProducerWrapper` assigns it once from
+  `options.getProducer()`, and a `KafkaProducer`'s configuration cannot be read back out. The plan's
+  first requirement is therefore an ownership change, not an exception swap.
+- **"Whether rejoin is expressible in PC's lifecycle" is answered, and the answer is yes.** No
+  state-machine addition is needed on the commit path: the produce/commit lock pair already gives
+  the control thread exclusive access at the moment fencing is detected. Only the produce path needs
+  a worker-to-controller escalation.
+
+## Two things this note is the only home for
+
+- **The trigger with a real user report is on the produce path, not the commit path.**
+  confluentinc#830 hit `InvalidPidMappingException` after two days of producer inactivity and asked
+  for precisely this feature; confluentinc#839 answered it by shutting the instance down, which is
+  the behaviour the plan reverses. **Neither upstream issue has a fork mirror**, so neither appears
+  in `gh issue list -R astubbs/parallel-consumer --state all`.
+- **It sequences after astubbs/parallel-consumer#352**, which merges first and unchanged. That PR's
+  R6 is true of the behaviour it was written against; this work makes it untrue and owns the update,
+  including the two fencing tests in its `ProducerManagerCommitBudgetTest`.
+
+## Related, and not duplicated here
+
+- `bug-857-transactional-revoke-wait.md` owns the unbounded wait in `onPartitionsRevoked`. It
+  reduces how often the commit path reaches a fencing condition; it does not remove it, and the two
+  are independent.
+- `core-241-tx-commit-failure-taxonomy.md` owns the wider classification of transaction commit
+  failures. This work adds one recoverable condition and deliberately does not widen further.
