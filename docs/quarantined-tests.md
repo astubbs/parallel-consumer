@@ -74,12 +74,33 @@ Rules (full discipline in [`docs/testing.md`](testing.md), AGENTS.md, and the `@
 
 ## Currently quarantined
 
-**Empty - nothing is quarantined.** Both entries this branch inherited have gone, and neither by a
-lapse: `OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing`
-was diagnosed and fixed on master by astubbs#351 (it asserted an offset it had itself frozen), and
-`ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` is this branch's own
-rule-3 re-enable - astubbs#265 deleted the wall-clock assertion that flaked, and astubbs#262, its
-owner, deletes the annotation and this entry together.
+One entry, and it is an unreliable failure rather than a deterministic one, so it carries
+`flapping = true`: a pass proves nothing and the lane reports it without demanding action. It was
+never hidden by the surefire retry, because the test did not run in a gating lane until the PR that
+quarantines it.
 
-An empty list is the goal state, not a signal the registry stopped being used: rule 5 stops blocking
-releases only while it stays that way, and the next flake met gets an entry here as before.
+`ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` was master's other
+entry and is **deliberately not carried here**: astubbs#262, which this branch is built on, is that
+entry's own recorded owner and deletes the annotation and the entry together (rule 3 - annotation and
+entry go together). Master keeps both until astubbs#262 lands; nothing was dropped by lapse.
+
+- [ ] `MultiInstanceRebalanceTest.largeNumberOfInstances` - a rebalance stall whose mechanism is
+  measured but not explained. The progress detector returns `FLAT` - the record count *stops* rather
+  than slowing, which is the discriminator it exists to report - and the `AMBIENT PROBE AUTOPSY`
+  block names `ZOMBIE_MEMBER/REBALANCE_BLOCKED`: the group dwells in `PreparingRebalance` because a
+  member stopped answering, with the whole assignment frozen at comparable lag rather than one shard
+  wedged. Measured at one failure in ten consecutive runs on an idle Linux box, plus repeated CI
+  failures, always that signature. It reproduces on the tree carrying this branch's log-argument
+  fix, so it is neither the confluentinc#857 revoke deadlock nor the SLF4J argument-evaluation
+  defect but a third, open mechanism. Sighting ledger, including what would settle the attribution:
+  [`docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md`](inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md).
+  Unowned - no fix PR exists, because no diagnosis does.
+
+  **Rule 2 is satisfied prospectively rather than retrospectively, and that is worth stating plainly
+  rather than letting a later reader find it.** The ledger was measured while this test was
+  PR-state: on master it is `@Disabled`, so it cannot fail there and no master-state ledger for it
+  can exist. The PR carrying this entry enables it into the required `Performance Tests` lane, which
+  is exactly the act that makes its failures master-state - master would otherwise inherit a gating
+  check that fails about one run in ten. The quarantine lands in the same change as the enablement,
+  so the test never spends a day blocking merges on an unexplained stall. If the enablement were
+  ever reverted, this entry should go with it.

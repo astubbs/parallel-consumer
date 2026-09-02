@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.integrationTests;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.Quarantined;
 import bz.stub.parallelconsumer.internal.utils.ProgressBarUtils;
 import bz.stub.parallelconsumer.internal.utils.ProgressTracker;
 import bz.stub.parallelconsumer.internal.utils.TrimListRepresentation;
@@ -347,6 +348,64 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
      * regression signal, not a flake: there is no random input to blame, and the failure names the
      * stalled phase.
      */
+
+    /**
+     * CAPACITY measurement (performance lane - its pass RATE over runs is the output, and a single
+     * red run is not a verdict): 12 PC instances on 80 partitions with an aggressive chaos monkey
+     * toggling up to 6 of 11 secondary instances every 0-500ms. PC-0 is never toggled and should
+     * always be alive. The deterministic correctness twin that gates merges is
+     * {@link #scriptedChurnRoundsCompleteWithoutStall()}.
+     * <p>
+     * Originally created to reproduce state and concurrency issues (confluentinc#188,
+     * confluentinc#189), re-enabled for the confluentinc#857 investigation.
+     * <p>
+     * <b>What the test does:</b>
+     * <ol>
+     *   <li>Pre-produces 30% of 500k messages, starts PC-0, waits for it to consume</li>
+     *   <li>Starts 11 more PCs + a background producer for the remaining 70%</li>
+     *   <li>Chaos monkey continuously toggles (stop/start) random secondary instances</li>
+     *   <li>Waits up to 5 minutes for ALL 500k keys to be consumed by any instance</li>
+     *   <li>Fails if no progress is made for 11 consecutive 1-second checks</li>
+     * </ol>
+     * <p>
+     * <b>Measured output: the pass rate (last measured ~90%; 80%+ expected).</b> This test
+     * deliberately pushes the Kafka consumer group rebalance protocol to its limits, so the rate is
+     * a measurement of how much churn the stack survives, not a gate. The residual failure occurs
+     * when rapid membership changes prevent the group coordinator from completing partition
+     * assignment (consumers show assignedPartitions=0). This is documented Kafka behaviour
+     * under extreme churn, not a PC bug — all PC-internal issues have been fixed.
+     * If the pass rate drops materially, reassess: a new PC bug may have been introduced.
+     * <p>
+     * <b>Corollary, and read it before backing the parameters off: the paragraph above is asserted,
+     * never measured.</b> No experiment separates "the group coordinator cannot converge at this
+     * churn rate" from "PC has a defect that only appears at this churn rate" — both look identical
+     * from outside, as instances alive with an empty assignment and no progress. That matters
+     * because the obvious response to a flaky stress test is to reduce the churn until it passes,
+     * and if any part of the residual is PC's, that <em>hides</em> a defect rather than removing a
+     * confound. It is the same shape that let the confluentinc#857 deadlock survive four months:
+     * astubbs#68 gave every test an uncontended broker, the suite went green, and the defect was
+     * untouched. What would settle it is a control arm — the same churn against a plain
+     * KafkaConsumer group with no PC in the path. Until then, do NOT reduce this profile's churn:
+     * its residual failure rate is the baseline that investigation measures against.
+     * TODO(refactor): settle the residual-failure attribution — see
+     * docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md
+     * <p>
+     * <b>Fixes applied (from confluentinc#857 investigation):</b>
+     * <ul>
+     *   <li>commitCommand deadlock — ReentrantLock.tryLock() in onPartitionsRevoked</li>
+     *   <li>Non-blocking stopAsync() in chaos monkey — prevents 30-40s close() freeze</li>
+     *   <li>ThreadConfinedConsumer wrapper — runtime thread-safety enforcement</li>
+     *   <li>Raw consumer field removed from PC — all access via ConsumerManager/DI</li>
+     *   <li>ArchUnit rules — compile-time consumer field isolation</li>
+     *   <li>Multiple defensive fixes (counter adjustment, throttle reset, lifecycle guard)</li>
+     * </ul>
+     * <p>
+     * For the full investigation history, see branch {@code bugs/857-paused-consumption-multi-consumers-bug}
+     * and {@code docs/BUG_857_INVESTIGATION.md (deleted 2026-08-18; retrieve with `git show 262629aab:docs/BUG_857_INVESTIGATION.md`)}.
+     *
+     * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/857">#857</a>
+     */
+    @Tag("performance")
     @Test
     void scriptedChurnRoundsCompleteWithoutStall() {
         numPartitions = 8;
@@ -423,6 +482,21 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
      */
     @Tag("performance")
     @Test
+    @Quarantined(
+            reason = "Rebalance stall, mechanism unexplained. The detector returns FLAT - the record count "
+                    + "stops rather than slows - and the ambient probe autopsy reports "
+                    + "ZOMBIE_MEMBER/REBALANCE_BLOCKED with the group dwelling in PreparingRebalance because a "
+                    + "member stopped answering, the whole assignment frozen at comparable lag. Measured at one "
+                    + "failure in ten consecutive runs on an idle Linux box, plus repeated CI failures, always "
+                    + "that same signature. It reproduces on the tree carrying this branch's log-argument fix, so "
+                    + "it is neither the confluentinc#857 revoke deadlock nor the SLF4J argument-evaluation "
+                    + "defect - it is a third thing. QUARANTINED PRE-EMPTIVELY, and the evidence tension is "
+                    + "deliberate rather than overlooked: the ledger was measured while this test was PR-state, "
+                    + "because on master the test is @Disabled and cannot fail there. This PR enables it into a "
+                    + "required lane, so on merge master inherits a gating check that fails about one run in ten. "
+                    + "The quarantine is applied at exactly the moment the failure becomes master-state.",
+            tracking = "docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md",
+            flapping = true)
     void largeNumberOfInstances() {
 
         numPartitions = scaled(80);
@@ -678,7 +752,6 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
         assertThat(duplicates)
                 .as("There should be few duplicate keys")
                 .hasSizeLessThan((int) (scenario.messageCount * percentageDuplicateTolerance)); // in some env, there are a lot more. i.e. Jenkins running parallel suits
-
 
     }
 
