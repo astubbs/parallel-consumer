@@ -31,6 +31,7 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { RULES } from './lib/source-patterns.mjs'
+import { addedByBranch } from './lib/added-files.mjs'
 
 /** exit codes, per bin/check-all.sh's contract */
 const VIOLATION = 1, CANNOT = 2, NOTHING_IN_SCOPE = 3
@@ -80,11 +81,17 @@ const tracked = sh('git', ['ls-files']).split('\n').filter(Boolean)
 // would have allowed exactly the addition it exists to reject, and only CI would have caught it after
 // the fact. The union covers both callers: the hook sees the staged addition, CI sees the committed
 // one, and a file in both is deduplicated.
+//
+// AND MINUS WHAT IS ALREADY ON origin/master. During a `git merge master` that is staged but not yet
+// committed, HEAD is still the pre-merge tip, so every file master added since the branch was cut is
+// an addition against the merge base - and the rule fires on somebody else's already-merged work,
+// advising --no-verify. bin/lib/added-files.mjs owns that subtraction and states the incident.
 const added = mergeBase
-  ? [...new Set([
-      ...sh('git', ['diff', '--name-only', '--diff-filter=A', mergeBase, 'HEAD']).split('\n'),
-      ...sh('git', ['diff', '--name-only', '--diff-filter=A', '--cached', mergeBase]).split('\n'),
-    ])].filter(Boolean)
+  ? addedByBranch({
+      committed: sh('git', ['diff', '--name-only', '--diff-filter=A', mergeBase, 'HEAD']).split('\n'),
+      staged: sh('git', ['diff', '--name-only', '--diff-filter=A', '--cached', mergeBase]).split('\n'),
+      alreadyOnBase: sh('git', ['ls-tree', '-r', '--name-only', 'origin/master']).split('\n'),
+    })
   : null
 
 // One read per file, not one per rule. Rules overlap - `^bin/.*\.sh$` and `\.(sh|bash)$` both match

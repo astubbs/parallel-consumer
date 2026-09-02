@@ -825,8 +825,8 @@ different and much larger job, because deduplicating them means a generified tes
 test-jar that each module parameterises with its own processor type. Ranked, with a verdict, so the
 next reader does not re-derive the list.
 
-Every figure below is **measured**, off the `duplicate-code-detection-tool` report this PR's own CI
-posted, and quoted as a band for the same reason the `MockConsumer*Test` figures are: the measure is
+Every figure below is **measured**, off the `duplicate-code-detection-tool` report CI posted on
+astubbs/parallel-consumer#206, and quoted as a band for the same reason the `MockConsumer*Test` figures are: the measure is
 corpus-relative, so decimals drift on merges that touch none of these files. Nothing here is
 estimated from reading the source - an earlier draft of this section was, and every one of its five
 numbers was wrong, by 7 to 48 points.
@@ -943,7 +943,8 @@ astubbs#228 (confluentinc#24, distributed rate limiting); ideation:
 - `origin/refactor/empty-tests` @5f8b3dba - **the removal half already landed** on master via
   upstream `confluentinc#493`, which deleted `ParallelEoSStreamProcessorTest.avro`,
   `WorkManagerOffsetMapCodecManagerTest.truncationOnCommit`, `WorkManagerTest.maxPerPartition` and
-  `.maxPerTopic`. What this branch (draft `confluentinc#496`) still holds is the *implement* half:
+  `.maxPerTopic`. What `origin/refactor/empty-tests` (draft `confluentinc#496`) still holds is the
+  *implement* half:
   restoring them as `NotImplementedException` stubs so the debt is visible rather than absent. Never
   merged; no PR on the fork.
 - `origin/improvements/test-perf` @932210b6, `.../multi-topic-test` @dd3ad77b - test perf / multi-topic.
