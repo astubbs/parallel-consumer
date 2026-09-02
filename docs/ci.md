@@ -206,7 +206,8 @@ PR, forever. "Spoken" includes a comment of ours that an earlier run retired and
 replace - the retire-then-create order makes that the failure mode - which the correction completes
 (`action: recovered`) rather than skipping past. A correction also folds the comment it retires under
 its heading in a `<details>` block: that comment was wrong, not merely older, and a prefixed heading
-above a fully visible ACTION REQUIRED table still leads with the table.
+above a fully visible ACTION REQUIRED table still leads with the table. The post step logs
+`result.action`, so a `skipped` run says so in the job log.
 
 The SpotBugs step uses the module's lookup and stamp but keeps its own update-or-create: whether a
 clean-to-dirty SpotBugs transition deserves a new comment is a judgement nobody has made, and adding

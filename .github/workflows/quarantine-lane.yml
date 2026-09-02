@@ -162,7 +162,10 @@ jobs:
             // annotation and a registry entry be deleted, on the PR that just deleted them. With
             // nothing of ours on the PR to retract it posts nothing at all.
             const report = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/quarantine-report-comment.js`)
-            await report.post({ github, context, core, body })
+            const result = await report.post({ github, context, core, body })
+            // `skipped` is a legitimate outcome here and looks identical to a step that did nothing
+            // wrong - name it, so the log answers "did it post?" without reading the PR.
+            core.info(`quarantine lane report: ${result.action}${result.url ? ` ${result.url}` : ''}`)
       - name: Summarize quarantine lane
         if: steps.any.outputs.found == 'true'
         run: |
