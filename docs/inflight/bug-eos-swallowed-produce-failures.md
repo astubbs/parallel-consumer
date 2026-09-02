@@ -24,6 +24,14 @@ fixed: output missing, offset advanced. The trigger is real rather than theoreti
 wrapped in `ExecutionException` and correctly falls to the generic arm instead, which is why this has
 stayed hidden.
 
+**The same exception has a real user report, closed upstream with no fix.** confluentinc#830 (closed
+2024-11-04, against 0.5.2.8) reports PC stuck in a retry loop on `InvalidPidMappingException` in
+`PERIODIC_TRANSACTIONAL_PRODUCER` with `UNORDERED` and `batchSize(1)`, and asks for the producer to be
+closed and replaced. It establishes the trigger fires in the field rather than only in review - but it
+was written from the *stall*, so nobody has yet looked at the succeeded-batch consequence above, which
+at `batchSize(1)` is one record's offset rather than a whole batch's and is correspondingly quieter.
+Its "close and replace the producer" ask is a second, larger design question than the rethrow below.
+
 **Why it matters more now.** astubbs#261's rationale is that not throwing from the produce callback
 is safe *because* "the failure still reaches the work container either way - `processAndProduceResults`
 waits on each returned `Future`". That holds for every arm except this one.

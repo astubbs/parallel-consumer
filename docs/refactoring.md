@@ -9,6 +9,18 @@ too big or too risky to fold into the change at hand, to be picked up **when thi
 is a solo-maintainer list, not an issue tracker: entries live here (versioned, greppable, zero
 per-item ceremony) instead of as GitHub issues.
 
+**"When things are quiet" is now measurable, for the few entries big enough to be worth measuring.**
+`bin/refactor-candidates.json` lists those files with a per-file threshold, and
+`node bin/inflight.mjs refactor-window` reports whether any large in-flight change stands on one -
+naming the branch to land if the answer is no. Two hooks deliver it unasked, so nobody has to
+remember to ask. Worked example: [`docs/inflight-tool.md`](inflight-tool.md).
+
+**This document stays the editorial owner of *why* each of those should be decomposed**, and its
+entries below carry the full case. The config owns only what the signal needs, plus **the one line
+an agent is shown mid-edit** - that hint is the config's, so the two do not state the same fact
+twice. Adding a candidate there without an entry here leaves a machine that knows to nag and a
+reader who cannot find out what for.
+
 **The axis is weight, not timing.** The moment an entry acquires a decision, a blocker, or evidence
 worth keeping, it has outgrown this file: promote it to a `docs/inflight/` note and delete the line in
 the same commit - neither file may state it twice.

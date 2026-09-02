@@ -300,3 +300,105 @@ hook_file_mtime() { # <path>
 hook_stamp_path() { # <prefix> <key>
     printf '%s/%s-%s' "${TMPDIR:-/tmp}" "$1" "$(printf '%s' "$2" | tr '/' '_')"
 }
+
+# WHICH EVENT FIRED, for a hook registered on more than one of them.
+#
+# Same argument as `hook_payload_cwd` above, and the same argument this whole file was written on:
+# check-branch-behind-its-own-remote.sh and remind-refactor-window.sh both branch on this, and the
+# second one arrived as a byte-identical copy of the first. A copy is correct until exactly one side
+# is fixed. Empty on anything unparseable, which every caller treats as "not the event I wanted".
+hook_event_name() { # <payload-json>
+    printf '%s' "$1" | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("hook_event_name") or "")
+except Exception:
+    pass' 2>/dev/null || true
+}
+
+# THE REPOSITORY A HOOK SHOULD ACT ON, derived from the COMMAND first and the session last.
+#
+# THE ORDER IS THE WHOLE POINT, and the first version of this had it backwards - it returned
+# $CLAUDE_PROJECT_DIR whenever it was set, which under the harness is always. That is the defect
+# docs/solutions/workflow-issues/a-hook-processes-own-directory-describes-the-session-not-the-command-2026-08-31.md
+# records and astubbs/parallel-consumer#382 fixed for two other guards: a hook process is a separate
+# process from the tool call it fires on, so anything it reads from its OWN environment describes
+# the SESSION. With a dozen worktrees checked out - routine here - and subagents having working
+# directories the session-level environment cannot see, that produces a confident wrong answer
+# rather than an error. The fix's derivation order, strongest source first:
+#
+#   1. the payload's own `cwd` - where a subagent's actual directory arrives
+#   2. $CLAUDE_PROJECT_DIR - the session's project root
+#   3. this process's own directory - pure last resort
+#
+# Something the command itself names (`git -C <path>`, a push refspec) is stronger still, but it is
+# per-command and belongs in the caller that already tokenises it, not here.
+#
+# Prints nothing when there is no answer, so a caller can fail open on the empty string rather than
+# acting on a guess. Pass the payload when you have one; without it this degrades to the old order.
+hook_project_root() { # [payload-json]
+    local cwd_from_payload root
+    if [ -n "${1:-}" ]; then
+        cwd_from_payload="$(hook_payload_cwd "$1")"
+        if [ -n "$cwd_from_payload" ] && [ -d "$cwd_from_payload" ]; then
+            root="$(git -C "$cwd_from_payload" rev-parse --show-toplevel 2>/dev/null || true)"
+            if [ -n "$root" ]; then printf '%s' "$root"; return 0; fi
+        fi
+    fi
+    if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+        printf '%s' "$CLAUDE_PROJECT_DIR"
+        return 0
+    fi
+    git rev-parse --show-toplevel 2>/dev/null || true
+}
+
+# THE `-C` TARGET, which hook_git_invocations parses and then deliberately discards.
+#
+# A COMPANION RATHER THAN A WIDER CONTRACT. `hook_git_invocations` consumes `-C <path>` with the
+# other value-taking globals so the subcommand lands at rest[0] - correct for its own job, and three
+# hooks read its output today. Emitting the value there would change what all three receive, so this
+# reuses the same lexer and answers the one extra question instead. The two must keep the same
+# VALUE_FLAGS list; that is the cost of the split and it is cheaper than the alternative.
+#
+# WHY IT MATTERS: a hook that resolves its repository from the payload cwd measures the SESSION for
+# `git -C /other/worktree push`, so it can stay silent because this tree is quiet while the pushed
+# one is not - the confident wrong answer
+# docs/solutions/workflow-issues/a-hook-processes-own-directory-describes-the-session-not-the-command-2026-08-31.md
+# records. Prints nothing when the command names no -C, which callers treat as "use the fallback".
+hook_git_dash_c() { # <payload-json> <subcommand>
+    printf '%s' "$1" | SUBCOMMAND="$2" python3 -c '
+import json, os, shlex, sys
+try:
+    data = json.load(sys.stdin)
+    cmd = data.get("tool_input", {}).get("command", "")
+    lex = shlex.shlex(cmd, posix=True, punctuation_chars="();<>|&;\n")
+    lex.whitespace = " \t\r"
+    lex.whitespace_split = True
+    toks = list(lex)
+except Exception:
+    sys.exit(0)
+want = os.environ.get("SUBCOMMAND", "")
+for i, t in enumerate(toks):
+    if t.rsplit("/", 1)[-1] == "git":
+        # NO APOSTROPHES IN THIS BLOCK - it lives inside a single-quoted shell string.
+        # Must stay in step with hook_git_invocations VALUE_FLAGS.
+        VALUE_FLAGS = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path")
+        j, rest, target = i + 1, [], ""
+        while j < len(toks):
+            t = toks[j]
+            if t == "-C" and j + 1 < len(toks):
+                target = toks[j + 1]
+                j += 2
+                continue
+            if t in VALUE_FLAGS:
+                j += 2
+                continue
+            if t.startswith("-"):
+                j += 1
+                continue
+            rest.append(t)
+            break
+        if rest and rest[0] == want:
+            print(target)
+            break
+' 2>/dev/null || true
+}
