@@ -2221,6 +2221,56 @@ still records its verification status as Unproven. **A seventh capture of this s
 less than one replay of any of the six**, and this entry exists only because the seed would
 otherwise expire with the log.
 
+## 2026-09-02, `INSTANCE_STALL` fires a second time - and the first seed replay in this file comes back clean
+
+**The gating detector, not the timing proxy.** `Chaos Pain Suite`,
+`ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger`, killed by
+`INSTANCE_STALL/NO_WORK_COMPLETED`: *instance 42 holds work (queued=212, outForProcessing=80) but
+has returned no work result for 150s (bound 150s) at 28251 results returned*, at `t=+150797ms`. The
+24 autopsy observations were all `CLASS2_STALL/LAG_STAGNATION` and non-gating; as with the first
+firing, the interesting line is in the run log, not the autopsy list. Instance 42 was in the initial
+fleet (`PERIODIC_CONSUMER_ASYNCHRONOUS`, `UNORDERED`), never touched by the conductor - no
+STOP/RESTART event names it - and at close ten of its worker threads did not answer interrupt
+(*Clean execution pool termination failed ... Threads still not done count: 10*). No thread dump is
+taken on this path, so the log says nothing about what they were in.
+<!-- post-merge: checked-begin - a dated sighting against a job id and a sha, both durable -->
+Seen on astubbs/parallel-consumer#203's CI
+([run 33643246412](https://github.com/astubbs/parallel-consumer/actions/runs/33643246412), job
+100291589476), at head `a615560bc`, a GitHub-hosted runner.
+<!-- post-merge: checked-end -->
+
+**Seed `4088857311712263252`**, and the replay line as the log printed it:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=4088857311712263252
+
+To run only this scenario add `-Dit.test=ChaosChurnStormIT -Dfailsafe.failIfNoSpecifiedTests=false`
+- the *failsafe* property, not surefire's; the `-am` pulls the parent in first and it has nothing
+matching, so without that flag the replay dies before the test starts.
+
+**Replayed the same hour, on the same tree, and it was CLEAN** - the first replay of any seed in this
+file. Same seed, same scenario, a 32-core box at load 0.2 with nothing else running: zero violations,
+zero observations, `consumed=100322`, 102s against CI's 172s. So this seed does not reproduce off the
+runner, which is the reading the first firing's own caveat gives - `INSTANCE_STALL` is re-armed by
+any returned result, so an instance that is merely starved can trip it - and one clean replay does
+not prove that reading either, because a load-shaped stall by definition needs the load. What it
+does establish is that the seed is not a deterministic reproducer, which the first firing left open.
+
+<!-- post-merge: checked-begin - describes the branch's diff and its earlier runs in the past tense -->
+**Not attributable to that branch, on mechanism.** Its main-code diff is log-line formatting behind
+`isDebugEnabled()` guards, a summary type, and comment changes; the chaos suite runs at INFO, so none
+of it executes. Two earlier heads of the same branch passed this suite the same day carrying the same
+astubbs#29 fix, and the head after it - a merge of master and a ledger edit - is the one that fired.
+<!-- post-merge: checked-end -->
+
+**Two corrections to earlier sections, dated rather than edited in.** First, the 2026-08-25 section
+above says `Chaos Pain Suite` is *not* in master's required-checks ruleset and so a red here blocks
+no merge. As of 2026-09-02 it is in the ruleset (`gh api repos/astubbs/parallel-consumer/rules/branches/master`
+lists it), and this firing held a merge until a re-run - so "each red is an asset, not noise" now has
+a cost attached that the section did not have to weigh. Second, the standing prediction asks for
+the Class 2 rate after astubbs#29 and the backlog land; this run had 24 Class 2 observations on the
+tree that carries astubbs#29, which is the rate continuing as predicted, not dropping off.
+
 ## Delete when
 
 The `CLASS2_STALL` entries above are superseded by this section and kept only as the record of how a
