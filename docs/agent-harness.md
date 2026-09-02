@@ -221,7 +221,7 @@ So the two hooks are registered differently, on purpose:
 |---|---|---|
 | `check-squash-subject.sh` | **none** - runs on every Bash call | It can only ever allow, or deny a real `gh pr merge`. A `grep` for `merge` in the payload rejects the overwhelming majority before python starts, so the cost is a shell test. |
 | `check-merge-outstanding-work.sh` (astubbs#324) | **none** - runs on every Bash call | Same reasoning as the squash guard, and the same shapes must reach it: `echo ready && gh pr merge ...` is exactly the case a prefix `if` would miss. A cheap `*merge*` pre-filter skips the interpreter on everything else; the decision itself is tokenised with `shlex`, so `gh pr comment --body "run gh pr merge later"` is not a merge. It watches this session's background TASKS only - it deliberately does not scan the process table for builds. |
-| `pre-commit-gate.sh` | `Bash(git commit *)` | It runs the gates and can `exit 2`, so firing it on every Bash call is the outage described above. It no longer gates *the session's* repository: it derives the commit's own working tree from the payload, so a subagent committing in another worktree is gated against that worktree - see its bullet below. **It self-filters as well**, exiting 0 when the payload holds no commit, because the `if` is a belt the script must not hang its trousers on - see below. |
+| `pre-commit-gate.sh` | `Bash(git commit *)` | It runs the gates and can `exit 2`, so firing it on every Bash call is the outage described above. It no longer gates *the session's* repository: it derives the commit's own working tree from the command (`git -C`, a leading `cd`), so a subagent committing in another worktree is gated against that worktree when the command names it; a bare commit that resolves to a tree with nothing to commit is refused with that remedy, because the payload's `cwd` is the session's directory, not the subagent's - see its bullet below. **It self-filters as well**, exiting 0 when the payload holds no commit, because the `if` is a belt the script must not hang its trousers on - see below. |
 
 The `git commit` case that `if` therefore misses (`cd sub && git commit`) is covered by
 `.githooks/pre-commit`, which git runs inside the target repository. That is the layering working
@@ -312,9 +312,12 @@ what this one got wrong was not calling the tool but owning the tool's correctne
   **And it decides for itself which working tree to gate**, from the command's `git -C`, a leading
   `cd`, then the payload's `cwd`, with `$CLAUDE_PROJECT_DIR` as a labelled last resort - because that
   variable names the SESSION's root, and a subagent working in another worktree issues a bare
-  `git commit` from a different tree entirely. Its own header owns the incident, both directions of
-  it: a red gate that was not the agent's, and the mirror image where a red tree passes because the
-  session's is green.
+  `git commit` from a different tree entirely. The payload's `cwd` names the session's launch
+  directory too, so a bare commit that resolves to a tree with **nothing to commit** - one git would
+  refuse anyway - is refused with `git -C <worktree>` as the remedy rather than gated against the
+  wrong files; `--allow-empty` and `--amend`, the honest commits against a clean tree, still reach
+  the gate. Its own header owns the incident, both directions of it: a red gate that was not the
+  agent's, and the mirror image where a red tree passes because the session's is green.
 - `PreToolUse` on `Bash`, **with no `if`** - it runs on every Bash call and filters itself - runs
   `.claude/hooks/check-squash-subject.sh`, which refuses a `--subject` that would drop or misstate
   the PR number. It carried `if: Bash(gh pr merge *)` until review pointed out that a prefix match

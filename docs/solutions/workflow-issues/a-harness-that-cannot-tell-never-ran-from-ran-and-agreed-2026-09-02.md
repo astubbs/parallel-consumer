@@ -104,4 +104,20 @@ passed with the guard fixed. The vacuous scoring was real; it was not masking a 
 - `bin/inflight.mjs` - `invokedDirectly()`, realpath on both sides, fails closed on an unresolvable `argv[1]`.
 - `bin/test-inflight.mjs` - `the-front-door-runs-through-a-symlinked-path`, and `utimesSync` in the freshness fixture.
 - `.claude/hooks/pre-commit-gate.sh` - the clean-tree refusal, exit code 3 from the resolver.
-- `bin/test-check-agent-hooks.sh` - the refusal, its dirty-tree control, and the `--allow-empty` exception.
+- `bin/test-check-agent-hooks.sh` - the refusal, its dirty-tree control, the `--allow-empty` and
+  `--amend` exceptions, and the control that a flag named only inside the commit message exempts
+  nothing.
+
+## Related
+
+- [`a-hook-processes-own-directory-describes-the-session-not-the-command-2026-08-31.md`](a-hook-processes-own-directory-describes-the-session-not-the-command-2026-08-31.md) -
+  the previous incident on the same hook. It records derivation rule 3, the payload `cwd`, as the
+  directory a subagent arrives in; the third instance above is that claim failing. The payload `cwd`
+  is the session's launch directory, and a subagent that changed directory in an earlier tool call
+  has nothing in the payload that names its tree.
+- [`silent-cwd-reset-runs-git-in-the-wrong-checkout.md`](silent-cwd-reset-runs-git-in-the-wrong-checkout.md) -
+  why a `cd` in one tool call does not carry into the next, which is how the third instance arises.
+- [`gnu-only-constructs-fail-silently-on-bsd-2026-08-25.md`](gnu-only-constructs-fail-silently-on-bsd-2026-08-25.md) -
+  the class the second instance belongs to; `touch -d` is a site that sweep did not cover.
+- [`a-check-that-reports-success-without-having-run.md`](a-check-that-reports-success-without-having-run.md) -
+  the check-level case this document generalises.

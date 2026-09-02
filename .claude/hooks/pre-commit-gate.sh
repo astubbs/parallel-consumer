@@ -49,7 +49,8 @@
 #      every commit in the payload names the same one;
 #   2. a leading `cd <path> &&` - belt-and-braces, since the registration above does not currently
 #      match that shape;
-#   3. the payload's own `cwd`, which is what a subagent's directory arrives in;
+#   3. the payload's own `cwd` - which is the SESSION's launch directory, not the subagent's, so a
+#      bare commit that lands here on a tree with nothing to commit is refused rather than gated;
 #   4. `$CLAUDE_PROJECT_DIR`, then this process's directory - the labelled last resorts.
 #
 # The gate script and its working directory both come from that answer, so a gate added on one
@@ -147,7 +148,7 @@ except Exception:
 
 
 def commit_bypass_counts(line):
-    """(commits, bypassing, dirs) for `git commit` in COMMAND POSITION on this line.
+    """(commits, bypassing, dirs, honest_empty) for `git commit` in COMMAND POSITION on this line.
 
     Counted rather than short-circuited because ONE command line can hold SEVERAL commits, and a
     later one asking for a bypass must not exempt an earlier one that did not:
@@ -157,6 +158,10 @@ def commit_bypass_counts(line):
     `dirs` holds one entry per commit: the value of its `git -C <path>`, or "" when it has none and
     so runs where the tool call runs. Collected HERE rather than by a second walk because this loop
     already skips the git global flags that take a value, which is the whole difficulty.
+
+    `honest_empty` counts the commits that carry `--allow-empty` or `--amend` as a REAL argument -
+    the two forms git accepts against a tree with nothing to commit. Read from the same token slice
+    as `--no-verify`, for the same reason: a message that merely mentions the flag is not the flag.
     """
     # `\n` joins the default punctuation set and leaves `whitespace`, so a newline becomes a
     # TOKEN the loop can reset command position on - see SEPARATOR_CHARS above. Quoted newlines
@@ -165,7 +170,7 @@ def commit_bypass_counts(line):
     lexer.whitespace = " \t\r"
     lexer.whitespace_split = True
     tokens = list(lexer)
-    commits = bypassing = 0
+    commits = bypassing = honest_empty = 0
     dirs = []
     i, at_command = 0, True
     while i < len(tokens):
@@ -210,12 +215,14 @@ def commit_bypass_counts(line):
                 dirs.append(repo_dir)
                 if "--no-verify" in tokens[j:end]:
                     bypassing += 1
+                if "--allow-empty" in tokens[j:end] or "--amend" in tokens[j:end]:
+                    honest_empty += 1
                 i = end
                 at_command = True
                 continue
         at_command = False
         i += 1
-    return commits, bypassing, dirs
+    return commits, bypassing, dirs, honest_empty
 
 
 def leading_cd(line):
@@ -276,12 +283,13 @@ def resolve_against(path, base):
 
 
 dirs = []
+honest_empty = 0
 try:
     # The WHOLE command is lexed at once. Splitting into lines first breaks a quoted multiline
     # message down the middle, so the first line raises ValueError and the fallback below finds
     # `--no-verify` in the MESSAGE TEXT - which meant `git commit -m "...\n--no-verify\n..."`
     # skipped the gate entirely. shlex handles the newlines; the line split never needed to.
-    commits, bypassing, dirs = commit_bypass_counts(cmd)
+    commits, bypassing, dirs, honest_empty = commit_bypass_counts(cmd)
     # NO COMMIT AT ALL: skip. The registration's `if: Bash(git commit *)` is supposed to scope
     # this hook, but the script must not lean on it - observed live (astubbs#324 babysit): with
     # the gate red, a plain `ls` and a read-only `cat` of the gate itself were blocked with the
@@ -317,9 +325,12 @@ if not bypass:
     # call, were all gated against the main checkout - which had nothing changed - while their real
     # trees went unchecked. Nothing-to-commit is the signature: git would refuse this commit anyway,
     # so the only thing a gate can do here is read the wrong files and report their defects as yours.
-    # `--allow-empty` is the one honest commit against a clean tree, and is let through to the gate.
+    # `--allow-empty` and `--amend` are the honest commits against a clean tree and go through to the
+    # gate - keyed on the flag the commit CARRIES, not on the text of the command, or a message that
+    # mentions the flag would switch this check off. The first version exempted `--allow-empty` alone
+    # by substring, and refused a plain amend with a remedy that reproduced the refusal.
     # (No apostrophes in these comments: Apple bash 3.2 quote-counts a heredoc inside $( ) naively.)
-    if target and "--allow-empty" not in cmd:
+    if target and honest_empty < commits:
         try:
             st = subprocess.run(["git", "-C", target, "status", "--porcelain"],
                                 capture_output=True, text=True, timeout=10)

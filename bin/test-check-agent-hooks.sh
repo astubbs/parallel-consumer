@@ -553,8 +553,33 @@ assert "control: ...and the gate actually spoke" gated "$got"
 # And --allow-empty on a clean tree is the one honest case, so it must reach the gate too.
 rm "$clean_red/f"
 wt_out=$(wt_fire "$clean_red" "$clean_red" 'git commit --allow-empty -m x')
+assert "--allow-empty against a clean tree reaches the gate, which blocks" 2 "${wt_out%%|*}"
 case "$wt_out" in *"GATE OF clean-red"*) got=gated ;; *) got="refused: ${wt_out#*|}" ;; esac
 assert "--allow-empty against a clean tree reaches the gate rather than being refused" gated "$got"
+# --amend rewrites a commit and legitimately needs no working-tree change, so it must reach the gate
+# too. The first version refused it with a message naming a condition that did not hold and a remedy
+# (git -C the same tree) that reproduced the refusal - found three ways in review of
+# astubbs/parallel-consumer#416.
+wt_out=$(wt_fire "$clean_red" "$clean_red" 'git commit --amend -m x')
+case "$wt_out" in *"GATE OF clean-red"*) got=gated ;; *) got="refused: ${wt_out#*|}" ;; esac
+assert "--amend against a clean tree reaches the gate rather than being refused" gated "$got"
+# ...and the exemption is keyed on the flag the COMMIT carries, not on the text of the command. A
+# message that mentions --allow-empty is still a bare commit against a clean tree - the same
+# distinction commit_bypass_counts already draws for --no-verify.
+wt_out=$(wt_fire "$clean_red" "$clean_red" 'git commit -m "document --allow-empty"')
+assert "--allow-empty inside the message does not exempt a clean-tree commit" 2 "${wt_out%%|*}"
+case "$wt_out" in *"git -C <your-worktree>"*) got=refused_as_wrong_tree ;; *) got="${wt_out#*|}" ;; esac
+assert "...and it is the wrong-tree refusal, not the gate" refused_as_wrong_tree "$got"
+# WHEN CLEANLINESS CANNOT BE READ - the resolved target is not a git repository - the check says
+# nothing and the hook falls through to its pre-existing path: no gate found there, exit 0, the
+# documented fail-open on our own bug. Pinned so a change to that direction is a decision, not a
+# side effect (Codex raised it in review of astubbs/parallel-consumer#416 and it predates the check).
+nogit="$TMP/nogit-$RANDOM$RANDOM"; mkdir -p "$nogit"
+wt_out=$(wt_fire "$nogit" "$nogit" 'git commit -m x')
+assert "a target that is not a git repo is not refused as clean - it falls through" 0 "${wt_out%%|*}"
+case "$wt_out" in *"NO changes"*) got="refused: ${wt_out#*|}" ;; *) got=fell_through ;; esac
+assert "...without the wrong-tree message" fell_through "$got"
+rm -rf "$nogit"
 
 rm -rf "$session_green" "$commit_red" "$session_red" "$commit_green" "$clean_red"
 
