@@ -96,7 +96,9 @@ public class MdcPropagation {
         if (!enabled) {
             return null;
         }
-        // returns null (not an empty map) when the context is empty - no allocation for callers who never use MDC
+        // Usually null when the context is empty - no allocation for callers who never use MDC - but not always: a
+        // thread that has put and then removed a key is left holding an empty map by logback, and this returns {}
+        // for it. Both readers below treat null and empty alike, so callers must not rely on the null.
         return MDC.getCopyOfContextMap();
     }
 

@@ -14,6 +14,9 @@ astubbs#265, and `OffsetEncodingBackPressureTest.backPressureShouldPreventTooMan
 (4/45, the most frequent), which asserted an offset that back pressure exists to stop advancing -
 written up in
 [`back-pressure-freezes-the-frontier-the-test-asserted-2026-08-24.md`](../solutions/test-flakiness/back-pressure-freezes-the-frontier-the-test-asserted-2026-08-24.md).
+Also fixed and out: `MdcContextPropagationTest.anEmptyCallerContextIsHandledAndNothingLeaks`, which
+asserted a null MDC on a runner thread two other classes had left holding `{}` -
+[`mdc-precondition-asserted-a-thread-state-it-never-established-2026-09-02.md`](../solutions/test-flakiness/mdc-precondition-asserted-a-thread-state-it-never-established-2026-09-02.md).
 Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutions/).
 
 | Test | Rate | Why it is worth attention |
@@ -23,7 +26,6 @@ Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutio
 | `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 4 seen (2026-08-18, 2026-08-19, 2026-08-25, 2026-09-01) | Not from the original scan - each found while babysitting a branch. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third and fourth sightings independently carry the **same three-way key collision** in the failing batch contents, which points at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
 | `RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed` | 1 seen (2026-09-01) | Not from the original scan - found while babysitting astubbs#257. Failed its **saturation/pause-point setup guard**, not the confluentinc#909 signature assertion, so it proves nothing about the defect it reproduces - see below <!-- post-merge: checked --> |
 | `ParallelEoSStreamProcessorTest.processInKeyOrder` | 2 seen locally (2026-09-01), 1 in 3 isolated runs; the input-data failure separately 1 of 8 on **unmodified `master`** | **Two DIFFERENT failures under one test name, and the documented fix is already in the tree.** See below - this one is not a fresh flake, it is a solved one still firing. The second failure now has a control arm and a source-level lead, so classify from those rather than re-measuring |
-| `MdcContextPropagationTest.anEmptyCallerContextIsHandledAndNothingLeaks` | 1 seen locally (2026-09-01) | Not from the original scan. Its own PRECONDITION fails - `expected: null but was: {}` on the JUnit thread before PC is involved - so it says nothing yet about MDC propagation. Diagnosis, the logback-clear hypothesis and its falsification path live in [`test-mdc-empty-context-precondition-is-order-dependent.md`](test-mdc-empty-context-precondition-is-order-dependent.md); not quarantined, on one sighting |
 
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
 door, and for the same reason: two of that family turned out to be real product bugs, and the third
