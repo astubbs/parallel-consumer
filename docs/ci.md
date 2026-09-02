@@ -907,6 +907,12 @@ measured, not a regression**. Tracked in
 [`docs/inflight/ci-the-coverage-uploads-still-use-the-inert-glob.md`](inflight/ci-the-coverage-uploads-still-use-the-inert-glob.md),
 which owns the outstanding proof and the condition for closing it.
 
+**A second, independent cause reads the same from the check list**: a master run cancelled before it
+uploaded, which leaves Codecov with no report for that base commit and every PR comparing against
+older master data. The files count in the diff block tells them apart - equal on both sides is the
+glob, base short by more than the PR adds is the missing upload - and the inflight note above carries
+the measurement.
+
 ### Reading it without a browser
 
 The API answers **unauthenticated** because this repository is public, which is what makes it usable

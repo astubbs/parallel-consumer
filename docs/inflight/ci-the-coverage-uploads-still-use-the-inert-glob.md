@@ -60,6 +60,30 @@ against a base assembled the old way. **A red per-flag gate inside that window i
 still being measured, not a new one** - the same shape of expected-red the sibling note above
 records for the flag split, and for the same reason.
 
+## A second, independent way the same gates go red - and the one-line tell that separates them
+
+Seen from the other side while astubbs/parallel-consumer#207 was being compared against master, and
+it is not the glob. Master's run at `beb01e1ce` was `completed/cancelled` - superseded by the next
+push - so nothing uploaded for that commit at all and Codecov holds no report for it. Every PR
+comparing against it falls back to older master data: that PR's diff block read base 83 files /
+4448 lines against head 93 / 4894, on a change that adds three files, and `node bin/inflight.mjs
+codecov` agreed that master was still recorded at 83 files. The same PR then saw both per-flag gates
+green on one head and red on the next with no code change between them - the difference being
+whether the base master commit's run had completed. So the gates are neither reliably self-clearing
+nor permanently broken, and a red one says nothing about the branch until the files count has been
+read.
+
+The files count separates the two causes in one line:
+
+| | the inert glob (this note) | a cancelled master run |
+|---|---|---|
+| Files, base vs head | **equal** - the flags hold unlike sets, not unlike files | **base is short** by more than the PR adds |
+| Clears when | this lands and master re-uploads | the base moves to a master commit whose run completed |
+
+This note does not fix the second cause and does not close on it. It is recorded here because the
+time it cost was spent attributing its deltas to the first, and the tell above is what would have
+separated them immediately.
+
 ## A correction worth keeping
 
 The first diagnosis recorded here was wrong in the opposite direction - it claimed the PR lane

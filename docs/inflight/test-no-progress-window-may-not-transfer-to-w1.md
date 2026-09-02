@@ -82,11 +82,12 @@ consumption resumes. Drains -> calibration, and W1 wants the same widening W4 ha
 this is the fleet-level stall the family has been hunting, and it is a much better lead than any
 `CLASS2_STALL` seed in [`bug-857-family.md`](bug-857-family.md).
 
-**Three seeds are now available for that experiment, not one** - the original plus `87978223167568`
-and `106062481479157` from the soak. That matters because
+**That experiment no longer rests on a single seed - every row in the table above is one**, and the
+table is where the set lives, so a sentence here does not restate it (an earlier version of this
+paragraph counted them, and the count went stale the next time a row was added). That matters because
 [`test-857-churn-storm-async-stalls.md`](test-857-churn-storm-async-stalls.md)'s "ANSWERED" section
 rests on a single firing of a single seed and says so outright: *"a second firing, ideally on a
-different seed, is what would put it beyond argument."* Two different seeds is what these are for.
+different seed, is what would put it beyond argument."* Different seeds are what these are for.
 
 A repeat soak now answers this without anyone reading a log: `bin/torture-overnight.sh` engages the
 recovery diagnostic on every cycle and prints a drain verdict per cycle.
