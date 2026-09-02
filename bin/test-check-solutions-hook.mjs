@@ -20,9 +20,12 @@
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { match, render } from '../.claude/hooks/lib/solutions-for-named-components.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const HOOK = path.join(root, '.claude', 'hooks', 'inject-solutions-for-named-components.mjs');
+// One literal path, not joined segments: bin/test-check-agent-hooks.sh proves every registered hook
+// is self-tested by finding `.claude/hooks/<name>` in test CODE, so the path has to be visible as one.
+const HOOK = path.join(root, '.claude/hooks/inject-solutions-for-named-components.mjs');
 
 // The hook remembers, per session, what it has already surfaced. Fixed session ids would pass on a
 // clean machine and fail on every run after - a red that means nothing - so each invocation of this
@@ -32,11 +35,11 @@ const RUN = `t${process.pid}-${Math.floor(Date.now() % 1e6)}`;
 let fails = 0;
 let n = 0;
 
-function runHook(caseName, filePath, content, env = {}) {
+function runHook(caseName, filePath, content, env = {}, toolInput = null) {
   const payload = JSON.stringify({
     session_id: `${RUN}-${caseName}`,
     hook_event_name: 'PreToolUse',
-    tool_input: { file_path: filePath, content },
+    tool_input: toolInput ?? { file_path: filePath, content },
   });
   try {
     return execFileSync('node', [HOOK], {
@@ -136,6 +139,57 @@ else {
   console.log(`  FAIL cap - no hidden-count line; output: ${many.slice(0, 200)}`);
   fails += 1;
 }
+
+console.log('input shapes:');
+// MultiEdit carries its text in edits[].new_string, not content. The hook parses that array, and until
+// this case nothing drove it - a wrong property name there would have shipped silently.
+const multi = runHook('me', null, null, {}, {
+  file_path: 'notes.md',
+  edits: [{ old_string: 'x', new_string: 'nothing here' }, { old_string: 'y', new_string: 'ProducerManager' }],
+});
+expectFires('MultiEdit edits[].new_string is read', multi, 'docs/solutions/');
+
+console.log('fixture-based (decoupled from the live corpus):');
+// The cases above drive the real docs/solutions/ tree, so a retitled write-up or a moved class reddens
+// them for reasons unrelated to hook logic. These pin the LOGIC against a fixed vocabulary and fixed
+// write-ups, injected through the parameters match() exposes for exactly this purpose.
+const types = new Set(['Alpha', 'Beta']);
+const docs = [
+  { relPath: 'docs/solutions/x/alpha.md', title: 'About Alpha', components: ['Alpha', 'concept'],
+    appliesWhen: ['Touching Alpha at all', 'Second reason', 'Third reason', 'Fourth reason'] },
+  { relPath: 'docs/solutions/x/beta.md', title: 'About Beta', components: ['Beta'], appliesWhen: [] },
+];
+const fx = (text) => match(text, '/nonexistent', { types, docs });
+
+n += 1;
+const one = fx('We change Alpha here.');
+if (one.length === 1 && one[0].relPath.endsWith('alpha.md') && one[0].named.join() === 'Alpha') {
+  console.log('  ok   fixture: exact component name matches exactly one write-up');
+} else { console.log(`  FAIL fixture exact: ${JSON.stringify(one)}`); fails += 1; }
+
+n += 1;
+if (fx('AlphaBet and betaAlpha and Alpha_x').length === 0) {
+  console.log('  ok   fixture: boundary control - prefix, suffix and underscore do not match');
+} else { console.log('  FAIL fixture boundary control fired'); fails += 1; }
+
+n += 1;
+if (fx('concept').length === 0) {
+  console.log('  ok   fixture: a concept-only related_components entry is inert (not a Java type)');
+} else { console.log('  FAIL fixture: concept entry matched'); fails += 1; }
+
+n += 1;
+const rendered = render(one, 4);
+const shownWhen = (rendered.match(/applies when:/g) || []).length;
+if (rendered.includes('applies when: Touching Alpha at all') && shownWhen === 3) {
+  console.log('  ok   fixture: applies_when is shown for a matched write-up, capped at three lines');
+} else { console.log(`  FAIL fixture applies_when render (${shownWhen} lines):\n${rendered}`); fails += 1; }
+
+n += 1;
+const both = fx('Alpha and Beta');
+const capped = render(both, 1);
+if (both.length === 2 && /1 further write-up/.test(capped)) {
+  console.log('  ok   fixture: render says how many it hid');
+} else { console.log(`  FAIL fixture hidden count: ${capped}`); fails += 1; }
 
 console.log('');
 if (fails === 0) {

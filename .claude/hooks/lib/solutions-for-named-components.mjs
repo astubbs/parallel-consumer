@@ -40,11 +40,12 @@
 //
 // WHAT IT DELIBERATELY DOES NOT DO
 //
-// It does not read `applies_when`, whose lines are free prose with no reliable match against
+// It does not MATCH on `applies_when`, whose lines are free prose with no reliable match against
 // arbitrary text; a fuzzy match there reproduces the noise that made session-start injection
-// ineffective. `related_components` is already structured, so this uses the half that is
-// machine-checkable and leaves `applies_when` as what a human reads once the write-up is in front
-// of them. Coverage is therefore bounded by how many write-ups name real classes.
+// ineffective. `related_components` is already structured, so matching uses the half that is
+// machine-checkable. `applies_when` IS shown for a write-up that has already matched - at that
+// point it costs no false positives, and it is the field carrying the retrieval intent. Coverage
+// is therefore bounded by how many write-ups name real classes.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -80,6 +81,7 @@ export function javaTypeNames(root) {
 }
 
 const RELATED = /^related_components:\n((?:[ \t]+-[ \t].*\n)+)/m;
+const APPLIES = /^applies_when:\n((?:[ \t]+-[ \t].*\n)+)/m;
 
 /** Every write-up under docs/solutions/, with the components it declares and its title. */
 export function writeUps(root) {
@@ -108,10 +110,15 @@ export function writeUps(root) {
         .map((l) => l.trim().replace(/^-\s*/, '').trim())
         .filter(Boolean);
       const heading = body.split('\n').find((l) => l.startsWith('# '));
+      const a = APPLIES.exec(body);
+      const appliesWhen = a
+        ? a[1].split('\n').map((l) => l.trim().replace(/^-\s*/, '').trim()).filter(Boolean)
+        : [];
       out.push({
         relPath: path.relative(root, abs),
         title: heading ? heading.slice(2).trim() : f.replace(/\.md$/, '').replace(/-/g, ' '),
         components,
+        appliesWhen,
       });
     }
   }
@@ -166,6 +173,10 @@ export function render(hits, cap) {
     lines.push(`  ${h.relPath}`);
     lines.push(`      ${h.title}`);
     lines.push(`      matched: ${h.named.join(', ')}`);
+    // `applies_when` is not used for MATCHING - free prose against arbitrary text is the noise this
+    // hook exists to cut through. But once a write-up has matched on a component, showing when its
+    // author said to read it costs no false positives and hands over the retrieval intent directly.
+    for (const w of (h.appliesWhen || []).slice(0, 3)) lines.push(`      applies when: ${w}`);
   }
   if (hidden > 0) {
     lines.push('');

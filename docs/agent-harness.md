@@ -270,7 +270,7 @@ merged as a no-op - `git ls-files | grep -c CLAUDE.md` returned **0**. The three
 negated individually rather than with a blanket `!CLAUDE.md`; the reasoning is in `.gitignore`
 itself, next to the rule.
 
-**`.claude/settings.json`** - fourteen hook scripts across sixteen registrations, and the file is
+**`.claude/settings.json`** - fifteen hook scripts across seventeen registrations, and the file is
 **tracked**. The entries below are the ones whose design decisions are worth recording here;
 `remind-inflight-on-push.sh` and `check-history-rewrite.sh` carry theirs in their own headers.
 The count is stated because it drifted: this said "five" while the file registered seven, which is
