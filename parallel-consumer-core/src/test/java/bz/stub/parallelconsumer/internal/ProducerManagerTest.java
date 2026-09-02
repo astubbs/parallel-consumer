@@ -299,8 +299,9 @@ class ProducerManagerTest {
                 // Acquire against the REAL context and hand the lock to it, exactly as
                 // ParallelEoSStreamProcessor#pollAndProduce does. This is load-bearing, not tidying: the
                 // lock must not be released until the work has reached the controller's inbound queue -
-                // see WorkContainer#onPostAddToMailBox, which states the invariant and is the sanctioned
-                // release point. Releasing it here, inside the user function, opens a window in which the
+                // see AbstractParallelEoSStreamProcessor#cleanUpContext, which states the invariant and is the
+                // single sanctioned release point (astubbs#257 made it the only one; the release that used to run
+                // per-record from addToMailbox is gone). Releasing it here, inside the user function, opens a window in which the
                 // controller can take the commit lock, drain a mailbox that does not yet contain this
                 // work, and commit an offset one behind - which is what made this test flaky (~1 in 6).
                 try {
@@ -321,11 +322,11 @@ class ProducerManagerTest {
 
                 // Guard against this test regressing to hand-managing the lock. The lock must still be
                 // owned by the context when the user function returns - that ownership is what defers
-                // release to WorkContainer#onPostAddToMailBox. Reintroduce a manual unlock here and this
+                // release to cleanUpContext. Reintroduce a manual unlock here and this
                 // fails deterministically, instead of coming back as a ~1-in-6 flake that also takes the
                 // whole PIT mutation lane down with it.
                 Truth.assertWithMessage("produce lock must still be owned by the context when the user "
-                                + "function returns, so release is deferred to onPostAddToMailBox")
+                                + "function returns, so release is deferred to cleanUpContext")
                         .that(context.getProducingLock().isPresent())
                         .isTrue();
 

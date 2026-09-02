@@ -16,8 +16,22 @@ baseline for comparison is 15/20 runs fully clean, zero stall-class failures.
 | `DbTest` | 2/20 | postgres container start under contention |
 | `KafkaSanityTests`, `TransactionMarkersTest` | singles | residual, uncategorised |
 | `PartitionStateCommittedOffsetIT.committedOffsetRemoved[3] none` | 1 sighting (2026-08-05) | `RebalanceInProgressException` out of the test's own setup |
+| `ParallelEoSStreamProcessorTest.inFlightMessagesCommittedIfProcessedDuringShutdown[1]` | 1/15 (2026-08-07) | `assertCommits(of(1))`, "1 record completed during shutdown", in the transactional arm |
 | `PartitionStateCommittedOffsetIT.committedOffsetRemoved[2] earliest` | 1 sighting (2026-08-25, astubbs#353, [job 97859037375](https://github.com/astubbs/parallel-consumer/actions/runs/32865269364/job/97859037375)) | `checkHowManyRecordsWithKeyPresent` expected 2 got 1 - the `[1] latest` assertion signature (solved 2026-08-05 as a nudge race) appearing on the `earliest` parameter; `probe clean` autopsy (test-side, not consumer-group progress), on a branch with no Java <!-- post-merge: checked --> |
+| `PartitionStateCommittedOffsetIT.committedOffsetRemoved[1] latest` | 1 sighting (2026-09-01, astubbs#407, [job 100057065090](https://github.com/astubbs/parallel-consumer/actions/runs/33568429332/job/100057065090)) | `checkHowManyRecordsWithKeyPresent` expected 2 got 1 - the assertion the `[2]` row carries, but the record that SURVIVED is the compactor rather than the original, which the 2026-08-05 mechanism cannot produce; `probe clean`, `forkCount=4`, on a branch with no Java <!-- post-merge: checked --> |
 | `TransactionTimeoutsTest.commitTimeout[2]` | 1 sighting (2026-08-06, astubbs#204) | incompletes `[8]` where the parameter pins `[8, 12]` |
+
+**On `inFlightMessagesCommittedIfProcessedDuringShutdown[1]` - read the parameter index before
+deciding it is unrelated.** `[1]` is
+`PERIODIC_TRANSACTIONAL_PRODUCER`, not the consumer-commit arm, so it lands on whatever transactional
+change is in flight and looks like a regression. It was seen once, in a full-suite run on
+astubbs/parallel-consumer's produce-lock double-release branch, and did not reproduce: 6/6 in
+isolation, 1 failure in 15 runs on that branch overall, and 0/4 on unmodified `master` in a
+same-magnitude sequential control. Zero-in-four cannot rule out a ~7% flake, so the control shows only
+that there is no *elevated* rate - it is not a clean bill of health for `master`, and nobody should
+cite it as one. The branch was cleared on mechanism instead: the test uses `poll()`, which never
+reaches `processAndProduceResults`, so no produce lock is ever set on its contexts and both the old and
+new release paths are no-ops for it.
 
 **A third member has now left the family, and it left by being reclassified rather than fixed-as-tight.**
 `TransactionTimeoutsTest.commitTimeout[1]` failed once on CI (2026-08-07,
@@ -86,6 +100,41 @@ bug in exactly this area (a rebalance-time commit killing the broker-poll thread
 **Explicitly NOT a member: `RebalanceEoSDeadlockTest.noDeadlockOnRevoke`** (1/20). Per the astubbs#68 record
 its contended failure maps to the real confluentinc#857 deadlock - that sighting is live confirmation the
 deadlock is still on master, with its fix waiting in astubbs#29.
+
+## `committedOffsetRemoved[1] latest` - the same assertion as the `[2]` row, failing from the other side (2026-09-01)
+
+<!-- post-merge: checked-begin - names astubbs#407 in the past tense as the branch the sighting came
+     from, which stays true once that work has landed -->
+
+`Integration Tests` on astubbs#407's head `7517bd983`
+([job 100057065090](https://github.com/astubbs/parallel-consumer/actions/runs/33568429332/job/100057065090)),
+`forkCount=4`, one failure in 161 integration tests. Recorded rather than diagnosed, per this
+ledger's own rule: the evidence expires with the logs.
+
+**WHICH record survived is the whole point, and it is the reverse of the solved case.** The assertion
+is the `checkHowManyRecordsWithKeyPresent("key-" + offset, 2)` inside `causeCommittedOffsetToBeRemoved`,
+and the scan came back holding exactly one:
+
+    offset = 202, key = key-50, value = compactor
+
+The 2026-08-05 diagnosis - the nudge race, and the scan-window half now recorded in that method's own
+javadoc - was that **the reader stopped early**: extra nudge records pushed the compaction records past
+a caller-supplied window, so the scan found the ORIGINAL `value-50` and reported the compactor missing.
+Here the scan plainly reached offset 202, because it is holding the compactor; what is absent is the
+original. A window that stops short cannot produce that, so **this is not the solved bug wearing its
+signature again**, and reading it as one would send the next person to a fix that is already in the
+tree. The reading the evidence supports is that the earlier `key-50` was compacted away before the
+scan ran - an ordering the test does not control - but that is a hypothesis from one sighting, not a
+diagnosis, and it has not been reproduced.
+
+**Master state, not astubbs#407's.** That branch changes one workflow and two Node scripts, and no
+Java at all, so nothing in it is reachable from the code under test.
+
+**Do not merge it into the `[2] earliest` row above.** That row carries the same assertion text and the
+same `probe clean` autopsy, but on the other parameter, and whether the two share a cause is precisely
+what is open. Two sightings on two parameters is not yet a rate on either.
+
+<!-- post-merge: checked-end -->
 
 ## `commitTimeout[2]`, for whoever picks it up (seen 2026-08-06 on astubbs#204)
 
