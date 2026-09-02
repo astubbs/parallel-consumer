@@ -223,9 +223,10 @@ So the two hooks are registered differently, on purpose:
 | `check-merge-outstanding-work.sh` (astubbs#324) | **none** - runs on every Bash call | Same reasoning as the squash guard, and the same shapes must reach it: `echo ready && gh pr merge ...` is exactly the case a prefix `if` would miss. A cheap `*merge*` pre-filter skips the interpreter on everything else; the decision itself is tokenised with `shlex`, so `gh pr comment --body "run gh pr merge later"` is not a merge. It watches this session's background TASKS only - it deliberately does not scan the process table for builds. |
 | `pre-commit-gate.sh` | `Bash(git commit *)` | It runs the gates and can `exit 2`, so firing it on every Bash call is the outage described above. It no longer gates *the session's* repository: it derives the commit's own working tree from the command (`git -C`, a leading `cd`), so a subagent committing in another worktree is gated against that worktree when the command names it **with a literal path** - a `-C "$W"` reaches the hook unexpanded and is refused; a bare commit that resolves to a tree with nothing to commit is refused with that remedy, because the payload's `cwd` is the session's directory, not the subagent's - see its bullet below. **It self-filters as well**, exiting 0 when the payload holds no commit, because the `if` is a belt the script must not hang its trousers on - see below. |
 
-The `git commit` case that `if` therefore misses (`cd sub && git commit`) is covered by
-`.githooks/pre-commit`, which git runs inside the target repository. That is the layering working
-as intended, not a hole - see *Known gaps*.
+The `git commit` case that `if` therefore misses (`cd sub && git commit`) is the git hook's to
+cover - `.githooks/pre-commit` runs inside the target repository - once `core.hooksPath` is set,
+which in this clone it is not. That is the layering as designed, and today a hole - see *Known
+gaps*.
 
 ## What is wired up today
 
@@ -300,9 +301,10 @@ in-flight tool rather than reimplement what it needs. That migration is
 what this one got wrong was not calling the tool but owning the tool's correctness.
 
 - `PreToolUse` on `Bash`, `if` `Bash(git commit *)`, runs `.claude/hooks/pre-commit-gate.sh`, a
-  wrapper around the same pre-commit script. Belt-and-braces: it catches the agent even in a clone
-  where `core.hooksPath` was never set, which is the likely state of a fresh worktree on a new
-  machine. The wrapper exists so the hook can **read the payload and honour `--no-verify`** - the
+  wrapper around the same pre-commit script. Designed as belt-and-braces, to catch the agent in a
+  clone where `core.hooksPath` was never set - which is not the fresh-machine edge case it sounds
+  like but this clone's standing state, so in practice it is the only gate that fires; *Known gaps*
+  owns that. The wrapper exists so the hook can **read the payload and honour `--no-verify`** - the
   original inline `pre-commit || exit 2` could not see the command it was gating, which left the
   agent with no escape hatch at all while the pre-commit header promises an easy one. It exits 2
   with the failing gate's output on stderr, so the model is told *why* rather than just "no".
@@ -580,11 +582,14 @@ one is a case in that file, and the suite goes red against the old parser.
   **Open decision** - the alternatives are a stash with a robust trap, gating `git diff --cached`
   instead of the tree (which several of these gates cannot do, being whole-tree scans), or leaving
   it as is.
-- **`core.hooksPath` cannot be committed.** A fresh clone has no hooks until someone runs the config
-  command. The `PreToolUse` hook covers Claude Code in that window; nothing covers a human.
+- **`core.hooksPath` cannot be committed, and nothing sets it.** A fresh clone has no git hooks
+  until someone runs the config command, and that window does not close on its own: in this clone
+  it is unset, so `pre-commit-gate.sh` is the only gate that fires, and nothing covers a human. The
+  hook's header owns the consequence - its wrong-tree cases refuse rather than fall open, because
+  there is nothing behind it.
 - **The `PreToolUse` `if` matches the command as written.** `Bash(git commit *)` does not fire on
-  `cd sub && git commit ...`. The git hook covers that case; the Claude-side belt-and-braces does
-  not. **And it does not filter reliably in the other direction either** - verified against 2.1.231,
+  `cd sub && git commit ...`. The git hook would cover that case once wired; until then nothing
+  does. **And it does not filter reliably in the other direction either** - verified against 2.1.231,
   the same registration lets a COMPOUND command through to the hook: a `for` loop with a nested `if`
   and a command substitution reached an always-deny hook and was blocked, while a plain `echo` was
   correctly filtered out. That is the misfire this harness has now been bitten by twice. Treat `if`

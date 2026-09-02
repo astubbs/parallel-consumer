@@ -7,9 +7,11 @@
 # `--no-verify` the way git itself does.
 #
 # WHY THIS EXISTS AT ALL. `core.hooksPath` cannot be committed, so a fresh clone has no git hooks
-# until someone runs the config command once. This covers Claude Code in that window. It is
-# belt-and-braces, not the primary mechanism - the git hook binds every process that runs `git`,
-# including humans and other agents; this binds one tool.
+# until someone runs the config command once. This covers Claude Code in that window. The git hook
+# is the designed primary mechanism - it binds every process that runs `git`, including humans and
+# other agents, where this binds one tool - but the window does not close by itself: in this clone
+# `core.hooksPath` is unset, so this hook is the only gate that fires. The paragraph that closes
+# the tree-resolution list below owns what follows from that.
 #
 # WHY IT IS A SCRIPT AND NOT `... || exit 2` INLINE. The inline form never reads the hook payload,
 # so it could not see the command it was gating - which meant `git commit --no-verify` ran the
