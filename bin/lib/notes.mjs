@@ -40,33 +40,14 @@
 //
 // No process.exit, no printing: bin/inflight.mjs owns the process boundary.
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 
+import { cacheRead, cacheWrite } from './cache.mjs'
 import { baseline, blobDiffStat, blobsForPath, exec, lines, refTips, treeEntries } from './git.mjs'
 
 export const NOTES_DIR = 'docs/inflight'
 const REPO = 'astubbs/parallel-consumer'
-const CACHE_DIR = join(tmpdir(), `pc-inflight-cache-${process.getuid?.() ?? 0}`)
-
 /** PR state moves without any ref moving, so this one key is time-based - and bounded, not trusted. */
 const PR_CACHE_TTL_MS = 30 * 60 * 1000
-
-function cacheRead(name, maxAgeMs) {
-    try {
-        const raw = JSON.parse(readFileSync(join(CACHE_DIR, name), 'utf8'))
-        if (maxAgeMs && Date.now() - raw.at > maxAgeMs) return null
-        return raw.value
-    } catch { return null }
-}
-
-function cacheWrite(name, value) {
-    try {
-        mkdirSync(CACHE_DIR, { recursive: true, mode: 0o700 })
-        writeFileSync(join(CACHE_DIR, name), JSON.stringify({ at: Date.now(), value }))
-    } catch { /* a cache that cannot be written must not break the answer */ }
-}
 
 /**
  * Every (blob, path) under docs/inflight/ on every ref, plus the derived indexes.
@@ -149,12 +130,19 @@ export function corpusIndex() {
 
 /** headRefName -> {number, title, state}. One gh call for every ref, never one per branch. */
 export function prsByBranch({ cache = true } = {}) {
-    const cached = cache ? cacheRead('prs.json', PR_CACHE_TTL_MS) : null
+    // KEYED ON THE FIELD SET, so widening it cannot serve a cached answer that lacks the new
+    // field. Adding `baseRefName` did exactly that: the code read it, the cache had never stored it,
+    // and every branch silently looked unexplained until the TTL expired.
+    const shape = 'headRefName,baseRefName,number,title,state'
+    const cached = cache ? cacheRead('prs.json', { key: shape, maxAgeMs: PR_CACHE_TTL_MS }) : null
     if (cached) return { ok: true, cached: true, map: new Map(cached) }
     // Naming the repo is not optional: `gh` resolves a bare command against `upstream` in this fork,
     // and an answer for confluentinc reads exactly like "this branch has no PR".
     const res = exec('gh', ['pr', 'list', '-R', REPO, '--state', 'all', '--limit', '500',
-        '--json', 'headRefName,baseRefName,number,title,state,body'])
+        // NOT `body`: adding it took this response from 56K to 2.3MB, for data used on the rare
+        // branch that looks untracked. `baseRefName` is a few bytes and answers the common case
+        // exactly. The body question is asked per-branch, on a miss, by prSearch below.
+        '--json', 'headRefName,baseRefName,number,title,state'])
     // UNAVAILABLE IS NOT "NO PR", and saying so needs a shape that can carry the difference. This
     // returned a bare Map, so an unauthenticated or rate-limited `gh` was indistinguishable from a
     // branch that genuinely has no PR - and the caller silently fell through to guessing a theme
@@ -168,11 +156,11 @@ export function prsByBranch({ cache = true } = {}) {
     }
     const pairs = rows.map((r) => [r.headRefName, {
         number: r.number, title: r.title, state: r.state,
-        // Carried because a PR EXPLAINS branches other than its own head: its base is a branch by
-        // definition, and its body routinely names the rungs it depends on.
-        baseRefName: r.baseRefName, body: r.body ?? '',
+        // Carried because a PR EXPLAINS branches other than its own head: its base IS a branch, by
+        // definition, and costs a few bytes to know.
+        baseRefName: r.baseRefName,
     }])
-    if (cache) cacheWrite('prs.json', pairs)
+    if (cache) cacheWrite('prs.json', pairs, shape)
     return { ok: true, cached: false, map: new Map(pairs) }
 }
 

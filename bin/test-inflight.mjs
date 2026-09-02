@@ -83,7 +83,11 @@ function buildFixture() {
     note('shared.md', '# Shared note\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\nv2 on master\n')
     commit('v2')
     note('closed.md', '# A note that will close\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\ntopic A\n')
-    commit('add closed.md')
+    // A workstream note on the baseline, so the remedy has an existing owner to point at rather
+    // than a filename to invent - the case that sent the first real remedy to the wrong file.
+    note('branch-feature-workstream.md',
+        '# The feature workstream\n\n<!-- inflight-type: feature -->\n<!-- inflight-impact: coordination -->\nsignpost\n')
+    commit('add closed.md and the workstream note')
     git('rm', '-q', 'docs/inflight/closed.md')
     commit('close it, per the directory contract')
 
@@ -679,11 +683,15 @@ const CHECKS = [
                     number: 1, title: 't', state: 'OPEN', baseRefName: 'stranded-work', body: '',
                 }]])
                 if (b.trackingGap(b.branchView(g, 'stranded-work', based))) return false
-                // So does a PR body that names it.
-                const named = new Map([['feature-a', {
-                    number: 2, title: 't', state: 'OPEN', baseRefName: 'master', body: 'depends on stranded-work',
+                // A body mention is deliberately NOT checked here: carrying every PR body took the
+                // bulk fetch from 56K to 2.3MB to answer a question about the rare untracked
+                // branch. That question moved to prSearch, which asks GitHub about ONE name and
+                // only on a miss - so what this check owns is that the base-ref path works and
+                // that an unrelated PR does not silently explain anything.
+                const unrelated = new Map([['feature-a', {
+                    number: 2, title: 't', state: 'OPEN', baseRefName: 'master',
                 }]])
-                return b.trackingGap(b.branchView(g, 'stranded-work', named)) === null
+                return b.trackingGap(b.branchView(g, 'stranded-work', unrelated)) !== null
             })
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'branches.mjs'),
@@ -709,6 +717,65 @@ const CHECKS = [
         mutate: (binDir) => patch(join(binDir, 'lib', 'branches.mjs'),
             '    const predatesBaseline = moment !== null && firstCommit !== undefined',
             '    const predatesBaseline = moment === null || firstCommit !== undefined'),
+    },
+    {
+        id: 'the-remedy-points-at-a-note-that-already-owns-the-branch',
+        why: 'a second note for one workstream is what the directory rules forbid, and the first real remedy proposed exactly that',
+        run: async (binDir) => {
+            const b = await branches(binDir)
+            return inFixture(() => {
+                const g = b.commitGraph()
+                if (!g.ok) return false
+                // `feature-a` shares the long token `feature` with branch-feature-workstream.md.
+                const owned = b.branchView(g, 'feature-a', new Map())
+                if (!owned.candidateNotes.some((f) => f.endsWith('branch-feature-workstream.md'))) return false
+                const gap = b.trackingGap(owned)
+                if (!gap || !gap.remedy.includes('branch-feature-workstream.md')) return false
+                // An unrelated branch shares no token, so it gets a filename to write instead.
+                const orphan = b.branchView(g, 'stranded-work', new Map())
+                return orphan.candidateNotes.length === 0
+                    && b.trackingGap(orphan).remedy.includes('branch-stranded-work.md')
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'branches.mjs'),
+            '        return shared.some((t) => t.length >= 6) || shared.length >= 2',
+            '        return false'),
+    },
+    {
+        id: 'a-cache-keyed-on-its-shape-cannot-serve-a-stale-shape',
+        why: 'widening the PR field set silently served answers that lacked the new field until the TTL expired',
+        // REGRESSION TEST FOR A LIVE MISS. Adding `baseRefName` to the PR query made every branch
+        // look unexplained: the code read the field, the cached answer predated it, and nothing said
+        // so. The key is the field set, so a widened query is a miss rather than a wrong answer.
+        run: async (binDir) => {
+            const c = await import(pathToFileURL(join(binDir, 'lib', 'cache.mjs')).href)
+            const name = `selftest-${process.pid}.json`
+            c.cacheWrite(name, [1, 2, 3], 'shape-a')
+            if (JSON.stringify(c.cacheRead(name, { key: 'shape-a' })) !== '[1,2,3]') return false
+            return c.cacheRead(name, { key: 'shape-b' }) === null
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'cache.mjs'),
+            '        if (key !== undefined && raw.key !== key) return null',
+            '        if (false) return null'),
+    },
+    {
+        id: 'pr-search-cannot-report-a-failure-as-no-result',
+        why: 'the fallback exists to answer "is this branch mentioned anywhere"; a failed query rendered as "no" is the whole silent-miss class',
+        // WHAT THIS CAN AND CANNOT PROVE, stated rather than implied. It asserts the SHAPE - that
+        // every return carries an explicit `ok` alongside its list - because that shape is what
+        // makes "GitHub could not answer" expressible at all. It does not exercise the failure
+        // branch: `gh` succeeds on this machine and returns an empty list for a name that cannot
+        // exist, so a mutant flipping that branch's flag would run nothing and stay green, which is
+        // the vacuous control this suite exists to refuse. Injecting a gh failure would need a
+        // seam prSearch does not have, and inventing one for a single check is not worth it.
+        run: async (binDir) => {
+            const b = await branches(binDir)
+            const r = b.prSearch('a-branch-name-that-cannot-exist-xyzzy', { cache: false })
+            return typeof r.ok === 'boolean' && Array.isArray(r.prs)
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'branches.mjs'),
+            "    return { ok: true, cached: false, prs: rows }",
+            "    return { prs: rows }"),
     },
 ]
 

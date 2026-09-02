@@ -19,6 +19,9 @@
 //
 // No process.exit, no printing: bin/inflight.mjs owns the process boundary.
 
+import { cacheRead, cacheWrite } from './cache.mjs'
+
+const REPO = 'astubbs/parallel-consumer'
 import { baseline, exec, lines, refTips, treeEntries } from './git.mjs'
 import { NOTES_DIR } from './notes.mjs'
 
@@ -155,9 +158,27 @@ export function branchView(graph, ref, prs) {
     const explainedBy = []
     for (const [head, pr] of prs) {
         if (head === bare) continue
+        // A base ref IS a branch, so this is exact and costs a few bytes in the bulk PR fetch.
         if (pr.baseRefName === bare) explainedBy.push({ pr, how: 'bases on it' })
-        else if (pr.body?.includes(bare)) explainedBy.push({ pr, how: 'names it in its body' })
     }
+
+    // A NOTE THAT PLAUSIBLY OWNS THIS BRANCH, before proposing a new file. The remedy told me to
+    // write branch-feats-ks-streams-reconciled.md while branch-ks-streams-workstream.md already
+    // owned that workstream - a second file for one item is what docs/inflight/AGENTS.md forbids.
+    // Matched on the branch's distinctive tokens rather than the whole slug, since a workstream note
+    // is named for the workstream and not for any one of its branches.
+    const tokens = bare.split(/[^A-Za-z0-9]+/)
+    // Listed then filtered in JS: a `branch-*.md` PATHSPEC returns nothing here, while the plain
+    // directory returns all thirteen - ls-tree's glob handling is not what the shell teaches you to
+    // expect, and a pathspec that silently matches nothing is the shape of every quiet miss above.
+    const existing = lines(exec('git', ['ls-tree', '-r', '--name-only', graph.baseline,
+        '--', `${NOTES_DIR}/`]).out).filter((f) => f.includes('/branch-'))
+    // One long token is enough - `ks-streams-workstream` is named for the workstream, not for any
+    // one of its branches, so requiring two shared tokens found nothing. Two short ones also count.
+    const candidateNotes = existing.filter((f) => {
+        const shared = tokens.filter((t) => t.length >= 3 && f.includes(t))
+        return shared.some((t) => t.length >= 6) || shared.length >= 2
+    })
 
     // Cut before the tool arrived on the baseline, so nothing asked for a note at the time.
     const moment = baselineMoment(graph.baseline)
@@ -187,10 +208,40 @@ export function branchView(graph, ref, prs) {
         notesOnly,
         mentions,
         explainedBy,
+        candidateNotes,
         predatesBaseline,
         baselineKnown: baselineMoment(graph.baseline) !== null,
         slug,
     }
+}
+
+/**
+ * ASK GITHUB ABOUT ONE BRANCH, only when everything local came up empty.
+ *
+ * Antony's design, and it replaces fetching every PR body: that took the bulk response from 56K to
+ * 2.3MB to answer a question about the rare branch that looks untracked. This asks GitHub's search
+ * API for one name instead - measured at 0.94s - and only on a miss.
+ *
+ * The result is cached locally, but the REAL cache is the fix: the agent writes the tracking note,
+ * the note merges, and every later run answers from the tree without asking GitHub at all. A
+ * self-eliminating query is better than a warm cache.
+ *
+ * Returns `{ok, prs}` - `ok: false` means GitHub could not answer, which is not the same as "no PR
+ * mentions this branch" and must never be rendered as though it were.
+ */
+export function prSearch(ref, { cache = true } = {}) {
+    const bare = ref.replace(/^origin\//, '')
+    const key = `search:${bare}`
+    const hit = cache ? cacheRead('pr-search.json', { key, maxAgeMs: 6 * 60 * 60 * 1000 }) : null
+    if (hit) return { ok: true, cached: true, prs: hit }
+
+    const res = exec('gh', ['search', 'prs', '--repo', REPO, bare,
+        '--json', 'number,title,state', '--limit', '5'])
+    if (!res.ok) return { ok: false, prs: [] }
+    let rows = []
+    try { rows = JSON.parse(res.out) } catch { return { ok: false, prs: [] } }
+    if (cache) cacheWrite('pr-search.json', rows, key)
+    return { ok: true, cached: false, prs: rows }
 }
 
 /**
@@ -211,9 +262,14 @@ export function trackingGap(view) {
     if (view.containedInBaseline) return null // already landed; nothing to lose
     if (view.mentions.length > 0) return null
     if (view.explainedBy.length > 0) return null // another PR bases on it or names it
+    // Point at the note that plausibly already owns this branch rather than inventing a filename.
+    const write = view.candidateNotes.length > 0
+        ? `record it in ${view.candidateNotes[0]}, which already covers this workstream`
+        : `write docs/inflight/branch-${view.slug}.md saying what it is`
+
     if (view.parents.length > 0) {
         return { kind: 'integration', remedy: `integration branch for ${view.parents.length} others `
-            + `- record that in docs/inflight/branch-${view.slug}.md so it does not read as an orphan` }
+            + `- ${write}, so it does not read as an orphan` }
     }
     const unpushed = !view.isRemote && !view.upstream
     // Grandfathered rather than silenced: still reported, but as backlog rather than as a new gap,
@@ -221,12 +277,12 @@ export function trackingGap(view) {
     if (view.predatesBaseline) {
         return { kind: 'pre-baseline', remedy: `predates the tool reaching ${view.baseline}, so it is `
             + `backlog rather than a new gap - triage when convenient, or write `
-            + `docs/inflight/branch-${view.slug}.md` }
+            + write }
     }
     return {
         kind: unpushed ? 'unpushed-and-untracked' : 'untracked',
         remedy: unpushed
-            ? `NOT PUSHED and named nowhere. Push it, or write docs/inflight/branch-${view.slug}.md saying what it is`
-            : `named nowhere. Open a PR, or write docs/inflight/branch-${view.slug}.md saying what it is`,
+            ? `NOT PUSHED and named nowhere. Push it, or ${write}`
+            : `named nowhere. Open a PR, or ${write}`,
     }
 }

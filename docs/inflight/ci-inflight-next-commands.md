@@ -114,6 +114,43 @@ The name says "reconciled" and the graph proves it: it is an integration branch 
 report as a bare orphan - so these two features are worth building together, and the detector should
 say "integration branch for N others" rather than "tracked nowhere".
 
+## Asking GitHub: local first, one name on a miss, and the fix is the cache
+
+**The bulk PR fetch must stay cheap.** Carrying every PR body took that response from **56K to
+2.3MB** - Antony caught it - to answer a question about the rare branch that looks untracked. A PR's
+`baseRefName` is a few bytes and settles the common case exactly, because a base ref IS a branch.
+
+So the shape is: answer from the tree and the cheap bulk fields; only when a branch would otherwise
+be reported as untracked, ask GitHub's **search API about that one name** - measured at 0.94s - and
+cache it locally.
+
+**The real cache is the fix, not the cache.** The agent writes the tracking note, the note merges,
+and every later run answers from the tree without asking GitHub at all. A query that eliminates
+itself beats a warm one.
+
+### Where this goes, once there is a GitHub graph
+
+Antony, thinking out loud, and worth keeping because the bootstrap problem is the hard part of
+[`ci-issue-index-has-no-edges.md`](ci-issue-index-has-no-edges.md):
+
+- the per-branch search results are exactly the edges that graph would hold, so **this is a cheap
+  bootstrap for it** - the cache is populated by ordinary use rather than by a migration
+- **a shared bootstrap could ride on GitHub Actions artifacts**, which would make GitHub itself the
+  store - and one that **TTLs naturally when nobody is working on the project**, which is the right
+  behaviour for a cache of a repository's live state rather than a defect in it
+
+Neither is a decision. Both are recorded because the alternative was losing them.
+
+## Before this merges
+
+**Re-run the comparison against Backlog.md and the rest of the field** - Antony's instruction, and
+deliberately timed for just before merge rather than now. The survey in
+[`../plans/2026-09-01-001-investigate-beads-comparison.md`](../plans/2026-09-01-001-investigate-beads-comparison.md)
+was written before this tool existed, and the thing being compared has changed underneath it: what
+was a proposal is now a working CLI with commands, measurements and a self-test. The question "what
+does adopting Backlog.md replace" therefore has a different answer than it did, and the honest
+version of it can only be asked once the tool has stopped moving.
+
 ## Delete when
 
 Each command above has shipped or been ruled out in writing, and the branch index has been
