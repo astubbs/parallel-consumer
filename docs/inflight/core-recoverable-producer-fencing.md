@@ -1,15 +1,16 @@
-# Recoverable producer fencing: what is still open after astubbs#410
+# Recoverable producer fencing: what is still open once the implementation is on master
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: crash -->
-<!-- inflight-state: open - the implementation is on astubbs#410; what remains is merge-time reconciliation -->
+<!-- inflight-state: open - the implementation has landed; what remains is reconciliation with two PRs that were open beside it -->
 
 
-The feature is implemented on astubbs/parallel-consumer#410 against the plan
+<!-- post-merge: checked -->
+The feature was implemented by astubbs/parallel-consumer#410 against the plan
 `docs/plans/2026-09-02-001-feat-recoverable-producer-fencing-plan.md`, which owns the requirements, the
 decisions and the mechanisms (its "Inherited from astubbs#262" section records what the merge brought).
 Tracked as astubbs#225. This note keeps only what a later PR has to do, because it depends on which of
-two open PRs lands second.
+the PRs that were open beside it lands second.
 
 ## Merge-time reconciliation with astubbs/parallel-consumer#352 (KTD10)
 
@@ -25,7 +26,8 @@ lands second rewrites, in that PR's own terms:
 - its R6 line, the matching statements in its commit-failure-seam feature file, and its README section.
 
 Both PRs edit `ProducerManager.commitOffsets`; a textual conflict in the fencing branch there is
-expected. The reasoning being overridden is recorded in astubbs#410's commit that changed
+<!-- post-merge: checked -->
+expected. The reasoning being overridden is recorded in the astubbs#410 commit that changed
 `commitOffsets` (`feat(core) astubbs#225: recognise an invalidated producer on both paths`), so the
 change does not read as an oversight.
 
@@ -33,7 +35,8 @@ change does not read as an oversight.
 
 That PR makes the revoke path decline both locks with `tryLock` instead of spinning, and rethrows
 `ProducerFencedException | InvalidProducerEpochException` from the revoke-path commit so fencing stays
-fatal. Under astubbs#410 that rethrow becomes record-and-decline: `ProducerManager.commitOffsets` already
+<!-- post-merge: checked -->
+fatal. With recovery on master (astubbs#410) that rethrow becomes record-and-decline: `ProducerManager.commitOffsets` already
 records the condition and unwinds with `ProducerInvalidatedException`, which `tryCommitOffsetsOnRevoke`'s
 catch logs, and the control thread recovers on its next pass. Its three `ProducerManager` lock helpers
 coexist with the waiting entry `beginReplacement` uses. The bounded wait and holder-deadlining that
