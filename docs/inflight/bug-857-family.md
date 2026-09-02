@@ -2271,11 +2271,11 @@ a cost attached that the section did not have to weigh. Second, the standing pre
 the Class 2 rate after astubbs#29 and the backlog land; this run had 24 Class 2 observations on the
 tree that carries astubbs#29, which is the rate continuing as predicted, not dropping off.
 
-## 2026-09-02, an `INSTANCE_STALL` firing on astubbs#201's CI - a separate seed, and a control arm that rules the branch out on evidence rather than on mechanism
+## 2026-09-02, an `INSTANCE_STALL` firing on astubbs#201's CI - a separate seed, and a control arm that rules the branch out on evidence rather than on mechanism <!-- post-merge: checked -->
 
 **Distinct from the firing recorded in the section above, not a second write-up of it.** That one was
 `ChaosChurnStormIT` on astubbs#203's CI at head `a615560bc`; this one is the same test and the same
-gating detector on astubbs#201's CI at a different head, and it carries its own seed. Neither was a
+gating detector on astubbs#201's CI at a different head, and it carries its own seed. Neither was a <!-- post-merge: checked -->
 replay of the other, and the ordinal in that section's title is left as written rather than renumbered
 around this one.
 
@@ -2299,7 +2299,7 @@ Seen on astubbs/parallel-consumer#201's CI
 Add `-Dit.test=ChaosChurnStormIT -Dfailsafe.failIfNoSpecifiedTests=false` to run only this scenario,
 per the sibling section - the *failsafe* property, not surefire's.
 
-**Not attributable to astubbs#201, and the argument here is a control arm rather than a mechanism
+**Not attributable to astubbs#201, and the argument here is a control arm rather than a mechanism <!-- post-merge: checked -->
 argument.** The head that fired differs from the immediately preceding head of the same branch by no
 Java at all: `git diff --name-only 976623b86..0c5820fae` names only agent hooks, `bin/` scripts, docs,
 `pom.xml` and `.github/workflows/maven.yml`. The chaos suite passed on that preceding head and failed
