@@ -251,6 +251,13 @@ The fields are HTML comments after the heading. Only `inflight-type` is always r
 already says the latter. The impact answers the question a reader actually has, and it spans
 prefixes - `misdirection` covers notes filed under `ci-`, `test-`, `branch-`, `deps-` and `static-`.
 
+**A single consequence axis was tried and rejected - do not re-propose it.**
+`<!-- inflight-class: X -->` folded kind and consequence into one field, so it could not say that a
+feature addressing a crash belongs beside the crashes - the case `bin/lib/inflight-tags.sh`'s header
+names when it explains why the impact sets are partitioned by type. The three axes here are its
+successor and carry the sentence above forward unchanged. Branch
+`ci/inflight-index-by-type-and-priority`, merged superseded into astubbs#400.
+
 The impacts, in the order `.claude/hooks/inject-recorded-knowledge.sh` presents them at session
 start. **The order is not severity - signal integrity comes first**, because you cannot judge the
 state of the code through instruments that lie, and acting on a false green is worse than acting on
