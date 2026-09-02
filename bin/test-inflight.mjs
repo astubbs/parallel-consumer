@@ -410,6 +410,32 @@ const CHECKS = [
         mutate: (binDir) => patch(join(binDir, 'lib', 'views.mjs'),
             'const plural = (n, w) =>', 'const plural = (n, w) => "" && ('),
     },
+    {
+        id: 'jq-filter-escapes-a-regex-term-completely',
+        why: 'a jq string is a JSON string, and `\\b` is a valid JSON escape - so a hand-rolled quoter turns a regex into a backspace and reports "nothing"',
+        // REGRESSION TEST FOR A CodeQL FINDING ON THIS PR. The filter escaped `"` and left `\` alone,
+        // so `prior-art '\bRetryQueue\b'` asked GitHub for a literal backspace character, matched
+        // nothing, and reported it as nothing found - with no error at any layer.
+        run: async (binDir) => {
+            const { jqFilter } = await lib(binDir)
+            const term = String.raw`\bRetryQueue\b`
+            const filter = jqFilter(term, '.number')
+            // The emitted literal must survive a JSON round-trip back to the exact term, which is
+            // the property "escaped completely" actually means.
+            const literal = filter.slice(filter.indexOf('test(') + 5, filter.indexOf('; "i")'))
+            let parsed
+            try { parsed = JSON.parse(literal) } catch { return false }
+            if (parsed !== term) return false
+            // And a quote-plus-backslash term must not be able to close the literal early.
+            const nasty = String.raw`x\"; "i")) | .secret | (.`
+            const hostile = jqFilter(nasty, '.number')
+            const hostileLiteral = hostile.slice(hostile.indexOf('test(') + 5, hostile.lastIndexOf('; "i")'))
+            try { return JSON.parse(hostileLiteral) === nasty } catch { return false }
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'prior-art.mjs'),
+            'test(${JSON.stringify(pattern)}; "i")',
+            'test("${pattern.replace(/"/g, \'\\\\"\')}"; "i")'),
+    },
 ]
 
 console.log('bin/test-inflight.mjs - front door and prior-art library self-test\n')

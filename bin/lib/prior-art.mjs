@@ -49,6 +49,24 @@ import { formatWarnings } from './views.mjs'
 
 const REPO = 'astubbs/parallel-consumer'
 
+/**
+ * The jq filter that matches a search pattern against a GitHub item's title and body.
+ *
+ * EXPORTED SO IT CAN BE TESTED. It was a closure inside `priorArt`, which is why the escaping bug
+ * below could only be found by reading it rather than by running it.
+ *
+ * `JSON.stringify` for the pattern, never hand-rolled quoting: a jq string literal IS a JSON string,
+ * so this is the only escaping that is complete. The previous version escaped `"` and left `\`
+ * alone - CodeQL flagged it, and it bites on the first example this tool's own usage text gives.
+ * Terms are documented as extended regexes, and `\b` is ALSO a valid JSON escape, for backspace. So
+ * `prior-art '\bRetryQueue\b'` asked GitHub for a literal backspace character, matched nothing, and
+ * reported "nothing" - a false negative manufactured by the tool built to prevent false negatives,
+ * with no error anywhere.
+ */
+export function jqFilter(pattern, shape) {
+    return `.[] | select((.title + " " + (.body // "")) | test(${JSON.stringify(pattern)}; "i")) | ${shape}`
+}
+
 export const summary = 'search plans, solutions, notes, commits and GitHub across EVERY ref'
 
 export const usage = `Usage: bin/inflight.mjs prior-art [--by-ref] <term> [<term>...]
@@ -196,8 +214,7 @@ export function priorArt(terms, opts = {}) {
     }
     result.github.ran = true
 
-    const jqSelect = (shape) =>
-        `.[] | select((.title + " " + (.body // "")) | test("${pattern.replace(/"/g, '\\"')}"; "i")) | ${shape}`
+    const jqSelect = (shape) => jqFilter(pattern, shape)
 
     const ghList = (heading, note, args) => {
         const res = exec('gh', args)
