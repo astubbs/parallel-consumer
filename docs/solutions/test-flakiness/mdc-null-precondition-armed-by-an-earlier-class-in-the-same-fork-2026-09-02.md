@@ -17,6 +17,7 @@ applies_when:
 symptoms:
   - "expected: null but was : {} on the first assertion of the method, before the product is involved"
   - "Passes alone and in most full runs; fails at a low, branch-independent rate on CI, occasionally several times in a row"
+  - "Two consecutive heads of astubbs#416 (a branch with no Java) red on CI at the same :194, then green on the next head - jobs 100271906271 and 100274796081"
   - "Reproduces deterministically by class order alone, with no code change"
   - "Two trees at the same test count disagree: 2 of 2 full runs red on one, 0 of 3 on another, identical MDC code"
 related_components:
@@ -87,6 +88,12 @@ after one of those two classes and the precondition reads `{}`; land anywhere el
 That is a per-run coin, which is exactly the shape the sighting ledger recorded and could not explain -
 and it is why the same tree failed every time at one test count and depended on the run at another:
 adding eight tests elsewhere moved the fork split.
+
+The inflight note, extended on astubbs#416 while the bisect was running, reached the same shape
+independently from the CI record: no `MethodOrderer`, no JUnit parallelism under `-Pci`, so a sibling
+alone would make it red every time or never - what varies per run is which fork the class lands in and
+which earlier class touched the MDC there. That was its hypothesis; the bisect and the class-order arm
+are the confirmation, with the two classes named.
 
 ## The control experiment
 

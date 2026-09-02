@@ -14,6 +14,10 @@ astubbs#265, and `OffsetEncodingBackPressureTest.backPressureShouldPreventTooMan
 (4/45, the most frequent), which asserted an offset that back pressure exists to stop advancing -
 written up in
 [`back-pressure-freezes-the-frontier-the-test-asserted-2026-08-24.md`](../solutions/test-flakiness/back-pressure-freezes-the-frontier-the-test-asserted-2026-08-24.md).
+Also fixed and out: `MdcContextPropagationTest.anEmptyCallerContextIsHandledAndNothingLeaks`, which
+asserted a null MDC on a runner thread two other classes had left holding `{}` (four sightings, the
+last one master's own build for the astubbs#415 merge; fixed twice over, by two sessions that did not see each other) -
+[`mdc-null-precondition-armed-by-an-earlier-class-in-the-same-fork-2026-09-02.md`](../solutions/test-flakiness/mdc-null-precondition-armed-by-an-earlier-class-in-the-same-fork-2026-09-02.md).
 Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutions/).
 
 | Test | Rate | Why it is worth attention |
@@ -22,8 +26,7 @@ Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutio
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. **Fixed by astubbs#265**, which deleted the wall-clock assertion rather than repairing it. astubbs#262, its owner, lifted the quarantine and deleted the registry entry - see below |
 | `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 5 seen (2026-08-18, 2026-08-19, 2026-08-25, 2026-09-01, 2026-09-02) | Not from the original scan - each found while babysitting a branch. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third, fourth and fifth sightings independently carry the **same three-way key collision** in the failing batch contents, which points at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
 | `RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed` | 1 seen (2026-09-01) | Not from the original scan - found while babysitting astubbs#257. Failed its **saturation/pause-point setup guard**, not the confluentinc#909 signature assertion, so it proves nothing about the defect it reproduces - see below <!-- post-merge: checked --> |
-| `ParallelEoSStreamProcessorTest.processInKeyOrder` | 2 seen locally (2026-09-01), 1 in 3 isolated runs | **Two DIFFERENT failures under one test name, and the documented fix is already in the tree.** See below - this one is not a fresh flake, it is a solved one still firing |
-| `MdcContextPropagationTest.anEmptyCallerContextIsHandledAndNothingLeaks` | 4 seen (2026-09-01 locally; 2026-09-02 on CI: two consecutive heads of astubbs#416, then master's build for the astubbs#415 merge) | **Fixed** - the precondition asserted `null` where a put-then-remove on the same thread leaves `{}`, and which earlier class did that was decided by fork placement. Reproduced by class order alone and settled test-side; the refuted `clear()` hypothesis, the probe, the control arms and the fix are in [`mdc-null-precondition-armed-by-an-earlier-class-in-the-same-fork-2026-09-02.md`](../solutions/test-flakiness/mdc-null-precondition-armed-by-an-earlier-class-in-the-same-fork-2026-09-02.md) |
+| `ParallelEoSStreamProcessorTest.processInKeyOrder` | 2 seen locally (2026-09-01), 1 in 3 isolated runs; the input-data failure separately 1 of 8 on **unmodified `master`** | **Two DIFFERENT failures under one test name, and the documented fix is already in the tree.** See below - this one is not a fresh flake, it is a solved one still firing. The second failure now has a control arm and a source-level lead, so classify from those rather than re-measuring |
 
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
 door, and for the same reason: two of that family turned out to be real product bugs, and the third
@@ -79,6 +82,36 @@ That makes this a **stale-resolution** case rather than a new flake, and it is t
 reading: a solution doc that says "fixed" is why nobody re-opened this. Whoever picks it up should
 start by checking which call sites still take the ordered-list assertion, and update that doc's
 `status`, which is wrong in a way that suppresses attention.
+
+<!-- post-merge: checked-begin - the sighting and the control arm are dated facts about a master
+     commit, stated in the past tense, so both stay true once the branch that measured them lands -->
+#### The parameter `[3]` failure: a control arm, and a lead in the test rather than the product
+
+**It is not confined to one branch, and that was measured rather than argued.** Met again on
+2026-09-01 while re-cutting astubbs/parallel-consumer#203 (2 of 5 full `-pl :parallel-consumer-core`
+runs), so a control arm was run before anything was touched: a detached worktree at the `master`
+commit that re-cut was based on, no changes, same box - **1 of 8 runs failed on the identical line
+with the identical message**. Same assertion, same failure mode, none of that branch's changes
+applied. Re-running the class alone was green 5 of 5, so it needs the concurrent suite's load to
+fire - which is why the single full-suite sighting above did not reproduce in class or method runs.
+
+```
+ParallelEoSStreamProcessorTest.processInKeyOrder:1147 [sanity check input data]
+  Actual and expected should have same size but actual size is: 0 while expected size is: 9
+```
+
+**The lead is in the test, not the product**, and it is a shape `docs/solutions/` already names -
+awaiting a proxy that leads the value under assertion. Grep `processInKeyOrder` for
+`awaitForOneLoopCycle`: the assertion immediately after it counts the records the `consumerSpy.poll`
+doAnswer has accumulated, but one control-loop iteration is not a promise that the poll delivering
+all nine has happened - the first iteration can turn before the broker poller has returned anything,
+and `polled` is then empty rather than short. That reading predicts exactly the observed all-or-
+nothing size (0, never 3 or 7), and it predicts the load dependence.
+
+**Classify before touching it**, per this ledger's rule. The cheap experiment: replace the
+`awaitForOneLoopCycle()` with an await on `polled` reaching nine and predict it goes deterministic;
+if it still fails, the poll genuinely is not happening and that is a product question.
+<!-- post-merge: checked-end -->
 
 ### `RegistrationRaceStaleResidentIT` - the setup guard timed out, which is not the 909 assertion
 

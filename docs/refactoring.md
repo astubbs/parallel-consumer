@@ -790,6 +790,17 @@ rather than fixed there so the gate's scope stayed one decision.
   `docs/inflight/bug-torn-read-family.md`, which is about the two `Racing*State` doubles rather than
   this helper.
 
+### The logback `ListAppender` dance, still inline in `SubmitWorkToPoolShutdownRaceTest`
+
+- **`LogCapture` is the shared helper for capturing a class's log output; convert the last two
+  inline copies onto it and treat it as the only way to do this.**
+  `bz.stub.parallelconsumer.internal.utils.LogCapture` attaches the appender, raises the level for
+  the duration and restores both on close - and its javadoc owns the two hazards of raising a
+  JVM-shared logger, which an inline copy silently reproduces without them.
+  `SubmitWorkToPoolShutdownRaceTest` still builds its own twice (grep `new ListAppender` there); its
+  `getThrowableProxy()` filtering is already covered by `LogCapture.events()`, so no widening of the
+  helper is needed.
+
 ### Cross-module test clones (the file-similarity backlog behind astubbs#40)
 
 Deferred half of [#40](https://github.com/astubbs/parallel-consumer/issues/40). Its first half - the
