@@ -26,16 +26,16 @@
 #      outcome CHANGES. The mechanics under that are .github/scripts/sticky-report-comment.js,
 #      shared with the throughput report.
 #
-#   4. AN EMPTY REGISTRY IS A REPORT, NOT A SILENCE. When the lane has no entries this script used to
-#      print "nothing to report" and exit before writing anything - so the PR that deleted the LAST
-#      quarantine, which is the one whose previous comment says "delete the annotation and the
-#      registry entry", was the one run guaranteed not to speak, and that instruction stayed live on
-#      it forever. It now writes a distinct LANE-EMPTIED report whose payload carries no outcomes, so
-#      the reader next door renders every remaining row as `left the lane` and retracts. The empty
-#      path deliberately stops before the lane-leak self-check: the workflow does not run maven at
-#      all when the registry is empty (and the registry gate has already proved no annotation
-#      survives it), so there are no reports to check and a check over nothing would certify more
-#      than it measured.
+#   4. AN EMPTY REGISTRY IS A REPORT, NOT A SILENCE. The run that empties the lane is the one that
+#      must RETRACT the previous push's "delete the annotation and the registry entry" comment, and
+#      this script used to exit before writing anything for it. The incident, and the class:
+#      docs/solutions/workflow-issues/the-run-that-had-to-retract-was-the-one-gated-silent-2026-09-02.md.
+#      It now writes a distinct LANE-EMPTIED report whose payload carries no outcomes, so the reader
+#      next door renders every remaining row as `left the lane` and retracts. The empty path
+#      deliberately stops before the lane-leak self-check: the workflow does not run maven at all
+#      when the registry is empty (and the registry gate has already proved no annotation survives
+#      it), so there are no reports to check and a check over nothing would certify more than it
+#      measured.
 #
 #      WHY THE POSTING LEFT THIS SCRIPT. It used to upsert the comment itself with `gh api`, and that
 #      copy had two of the three defects astubbs/parallel-consumer#407 fixed for the throughput
@@ -73,8 +73,8 @@ DATA_MARKER="quarantine-lane-data"
 # "unchanged", and "" is exactly the shape a truncated payload has - so a sentinel that cannot be
 # confused with damage is worth the four characters. A non-empty run's digest is a `;`-joined list
 # of `Class.method=OUTCOME`, so it can never collide with this. Read in
-# .github/scripts/quarantine-report-comment.js; `grep -rn quarantine-lane-data` is still the list to
-# change, and its end-to-end self-test is what fails if the two sides drift.
+# .github/scripts/quarantine-report-comment.js; `grep -rn EMPTY_STATUS` is the list to change, and
+# that module's end-to-end self-test is what fails if the two sides drift.
 EMPTY_STATUS="empty"
 REPORT_FILE="${QUARANTINE_REPORT_FILE:-target/quarantine-lane-report.md}"
 DRY_RUN="${DRY_RUN:-0}"
@@ -94,6 +94,13 @@ gh_do() {
 write_report() { # <body>
     mkdir -p "$(dirname "$REPORT_FILE")"
     printf '%s' "$1" > "$REPORT_FILE"
+}
+
+# The machine-readable payload both shapes embed, which is the contract the reader parses back off
+# the previous comment. One template for the same reason as write_report: the two bodies must agree
+# on its shape or the reader's delta silently goes blank.
+payload_marker() { # <status> <outcomes-json>
+    printf '<!-- %s: {"status":"%s","outcomes":%s} -->' "$DATA_MARKER" "$1" "$2"
 }
 
 # outcome <Class> <method>: FAILED / PASSED / NOT_RUN, from surefire+failsafe XML reports.
@@ -170,7 +177,7 @@ thread, if one was opened for that row, still has to be resolved by hand.
 
 <sub>Lane: non-gating; rules: see the Quarantine Audit check.</sub>
 
-<!-- $DATA_MARKER: {\"status\":\"$EMPTY_STATUS\",\"outcomes\":{}} -->
+$(payload_marker "$EMPTY_STATUS" "{}")
 "
     echo "Quarantine lane empty - lane-emptied report written to $REPORT_FILE (status: $EMPTY_STATUS)."
     exit 0
@@ -280,7 +287,7 @@ body="## 🧪🔒 Quarantine Lane Report
 $table
 <sub>🔴 expected while the owner PR is open · 🟡🎲 flapper, pass proves nothing · 🚨 a deterministic quarantined test passing means its fix landed: delete its \`@Quarantined\` annotation + \`docs/quarantined-tests.md\` entry (a merge-blocking review thread has been opened). Lane: non-gating; rules: see the Quarantine Audit check.</sub>
 
-<!-- $DATA_MARKER: {\"status\":\"$status_digest\",\"outcomes\":$outcomes_json} -->
+$(payload_marker "$status_digest" "$outcomes_json")
 "
 
 write_report "$body"
