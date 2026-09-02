@@ -83,6 +83,21 @@ export function javaTypeNames(root) {
 const RELATED = /^related_components:\n((?:[ \t]+-[ \t].*\n)+)/m;
 const APPLIES = /^applies_when:\n((?:[ \t]+-[ \t].*\n)+)/m;
 
+/**
+ * One YAML list line (`  - Foo` or `  - "Foo"`) to its bare value.
+ *
+ * Front matter across this corpus mixes quoted and unquoted list items - the parser is a regex,
+ * not a YAML library, so it must strip a balanced surrounding quote pair itself. Left unstripped,
+ * a quoted `related_components` entry keeps its literal quote characters and can never match the
+ * unquoted vocabulary `javaTypeNames()` builds, and a quoted `applies_when` line prints stray
+ * quote marks in the rendered output.
+ */
+function unquoteListItem(line) {
+  const bare = line.trim().replace(/^-\s*/, '').trim();
+  const quoted = bare.match(/^(["'])(.*)\1$/);
+  return quoted ? quoted[2] : bare;
+}
+
 /** Every write-up under docs/solutions/, with the components it declares and its title. */
 export function writeUps(root) {
   const dir = path.join(root, 'docs', 'solutions');
@@ -107,12 +122,12 @@ export function writeUps(root) {
       if (!m) continue;
       const components = m[1]
         .split('\n')
-        .map((l) => l.trim().replace(/^-\s*/, '').trim())
+        .map((l) => unquoteListItem(l))
         .filter(Boolean);
       const heading = body.split('\n').find((l) => l.startsWith('# '));
       const a = APPLIES.exec(body);
       const appliesWhen = a
-        ? a[1].split('\n').map((l) => l.trim().replace(/^-\s*/, '').trim()).filter(Boolean)
+        ? a[1].split('\n').map((l) => unquoteListItem(l)).filter(Boolean)
         : [];
       out.push({
         relPath: path.relative(root, abs),

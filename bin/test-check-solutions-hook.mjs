@@ -18,9 +18,11 @@
 // branch instead of only where that plan happens to live.
 
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { match, render } from '../.claude/hooks/lib/solutions-for-named-components.mjs';
+import { match, render, writeUps } from '../.claude/hooks/lib/solutions-for-named-components.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // One literal path, not joined segments: bin/test-check-agent-hooks.sh proves every registered hook
@@ -190,6 +192,43 @@ const capped = render(both, 1);
 if (both.length === 2 && /1 further write-up/.test(capped)) {
   console.log('  ok   fixture: render says how many it hid');
 } else { console.log(`  FAIL fixture hidden count: ${capped}`); fails += 1; }
+
+// Quoted YAML list items. The fixtures above inject `docs` directly, which bypasses writeUps()'s
+// own front-matter regex entirely - so none of them would have caught a real corpus write-up like
+// docs/solutions/architecture-patterns/a-deprecation-without-an-explanation-misattributes-itself-to-the-wrong-party.md,
+// whose related_components are all quoted (`- "PcUnsupportedConstruct"`). A parser that strips the
+// leading `- ` but not a surrounding quote pair leaves the quotes attached, so `vocabulary.has(c)`
+// is always false and the entry can never fire. This drives writeUps() itself against a synthetic
+// tree so the case is decoupled from the live corpus but still exercises the real parser.
+n += 1;
+const quotedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'solutions-hook-quoted-'));
+try {
+  const quotedDir = path.join(quotedRoot, 'docs', 'solutions', 'x');
+  fs.mkdirSync(quotedDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(quotedDir, 'quoted.md'),
+    [
+      '---',
+      'related_components:',
+      '  - "Alpha"',
+      "  - 'Beta'",
+      'applies_when:',
+      '  - "Touching Alpha in a specific way"',
+      '---',
+      '# Quoted front matter',
+      'body',
+      '',
+    ].join('\n'),
+  );
+  const [wu] = writeUps(quotedRoot);
+  const ok = wu
+    && wu.components.join(',') === 'Alpha,Beta'
+    && wu.appliesWhen.join(',') === 'Touching Alpha in a specific way';
+  if (ok) console.log('  ok   fixture: quoted related_components/applies_when list items lose their quotes');
+  else { console.log(`  FAIL fixture quoted list items: ${JSON.stringify(wu)}`); fails += 1; }
+} finally {
+  fs.rmSync(quotedRoot, { recursive: true, force: true });
+}
 
 console.log('');
 if (fails === 0) {
