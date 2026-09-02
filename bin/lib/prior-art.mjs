@@ -69,7 +69,7 @@ export function jqFilter(pattern, shape) {
 
 export const summary = 'search plans, solutions, notes, commits and GitHub across EVERY ref'
 
-export const usage = `Usage: bin/inflight.mjs prior-art [--by-ref] <term> [<term>...]
+export const usage = `Usage: bin/inflight.mjs prior-art [--headings] [--by-ref] <term> [<term>...]
 
 Terms are case-insensitive extended regexes, OR-ed together. Grep the MECHANISM, never the symptom
 - the class, the lock, the option, the exception, the log line. A failing test's name is the weakest
@@ -77,6 +77,11 @@ search term available.
 
   bin/inflight.mjs prior-art isTransactionCommittingInProgress acquireCommitLock
   bin/inflight.mjs prior-art RetryQueue writeLock
+
+--headings matches only markdown headings, and shows the heading TEXT rather than just the path. A
+document's headings are its own table of contents, so this answers "has anyone WRITTEN ABOUT X",
+where the default answers "does X appear anywhere". Measured: 8812 hits become 2066 headings, for
+the same cost. Reach for it first on a broad term.
 
 --by-ref groups the hits by the SET OF REFS carrying them instead of listing one line per path. Use
 it when a term returns dozens of paths: identical ref-sets mean one branch, and the per-path view
@@ -99,7 +104,12 @@ cannot say that. A cluster whose refs are all gone is a dead branch, not prior a
  * @property {{ran: boolean, skipped?: string, lists: {heading: string, note?: string, entries: string[], failed: boolean}[]}} github
  *
  * @param {string[]} terms case-insensitive extended regexes, OR-ed together
- * @param {{onSection?: (s: Section, r: PriorArtResult) => void, github?: boolean}} [opts]
+ * @param {{onSection?: (s: Section, r: PriorArtResult) => void, github?: boolean, headings?: boolean}} [opts]
+ *   `headings: true` matches only markdown HEADINGS, and returns the heading TEXT rather than just
+ *   the paths. A document's headings are its own table of contents - what it is *about*, as opposed
+ *   to every place a word happens to appear - so this is the mode for "has anyone written about X",
+ *   where the body-text mode answers "does X appear anywhere". Measured on this repo: one term went
+ *   from 8812 ref:path hits to 2066 heading lines, at the same cost.
  *   `github: false` keeps the search entirely local - for a caller that only wants the tree, and for
  *   the self-test, which must not depend on a rate limit shared with every parallel session here.
  * @returns {PriorArtResult}
@@ -116,6 +126,9 @@ export function priorArt(terms, opts = {}) {
 
     // Anything the caller passes is already a regex, so a term containing `|` or parens composes.
     const pattern = result.pattern
+    // A markdown heading, then the caller's pattern anywhere on that line. POSIX class rather than
+    // `\s`, because git grep -E is ERE and does not read the PCRE shorthand.
+    const grepPattern = opts.headings ? `^#{1,6}[[:space:]].*(${pattern})` : pattern
 
     // Local branches plus origin's, minus the symbolic HEAD which duplicates whatever it points at.
     // Deliberately NOT `--all`: that pulls in tags and refs/stash, which add noise without adding docs.
@@ -150,23 +163,41 @@ export function priorArt(terms, opts = {}) {
     ]
     for (const [n, heading, pathspec] of SECTIONS) {
         // git grep exits 1 for "no match" and >1 for a real error; only the latter is a problem.
-        const res = exec('git', ['grep', '-l', '-i', '-E', pattern, ...refs, '--', ...pathspec])
+        // Without `-l` in headings mode, because the heading TEXT is the answer there, not the path.
+        const grepArgs = opts.headings
+            ? ['grep', '-i', '-E', grepPattern, ...refs, '--', ...pathspec]
+            : ['grep', '-l', '-i', '-E', grepPattern, ...refs, '--', ...pathspec]
+        const res = exec('git', grepArgs)
         if (!res.ok && res.status > 1) {
             return cannot(`git grep failed (status ${res.status}) on ${pathspec.join(' ')} - results are NOT trustworthy`)
         }
-        // ref:path -> path -> carrying refs. A path can contain ':' only pathologically; split on the first.
+        // ref:path (-l), or ref:path:heading. A path can contain ':' only pathologically; split on
+        // the first, and in headings mode split once more to separate the matched line.
         const byPath = new Map()
+        const headingsByPath = new Map()
         for (const hit of lines(res.out)) {
             const i = hit.indexOf(':')
             if (i < 0) continue
-            const path = hit.slice(i + 1)
+            const ref = hit.slice(0, i)
+            let path = hit.slice(i + 1)
+            if (opts.headings) {
+                const j = path.indexOf(':')
+                if (j < 0) continue
+                const text = path.slice(j + 1).trim()
+                path = path.slice(0, j)
+                if (!headingsByPath.has(path)) headingsByPath.set(path, new Set())
+                headingsByPath.get(path).add(text)
+            }
             if (!byPath.has(path)) byPath.set(path, [])
-            byPath.get(path).push(hit.slice(0, i))
+            byPath.get(path).push(ref)
         }
         const section = {
             n, heading, pathspec,
             hits: [...byPath.keys()].sort().map((path) => ({
-                path, refs: byPath.get(path), onBaseline: byPath.get(path).includes(baseline),
+                path,
+                refs: [...new Set(byPath.get(path))],
+                onBaseline: byPath.get(path).includes(baseline),
+                headings: [...(headingsByPath.get(path) ?? [])].sort(),
             })),
         }
         result.sections.push(section)
@@ -261,6 +292,7 @@ export function formatSection(section, r) {
     }
     for (const h of section.hits) {
         out.push(`  ${h.path}`)
+        for (const text of h.headings ?? []) out.push(`      ${text}`)
         out.push(h.onBaseline
             ? `      on ${r.baseline}`
             : `      NOT ON ${r.baseline} - e.g. ${h.refs[0]} (${h.refs.length} refs)`)

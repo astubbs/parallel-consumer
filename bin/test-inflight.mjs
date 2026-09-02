@@ -584,6 +584,31 @@ const CHECKS = [
             "exec('git', ['rev-list', '--full-history', base, '--', path])",
             "exec('git', ['rev-list', '--max-count=1', base, '--', path])"),
     },
+    {
+        id: 'headings-mode-matches-headings-only',
+        why: 'a heading search that also matches body text is just the default search wearing a flag',
+        run: async (binDir) => {
+            const { priorArt } = await lib(binDir)
+            return inFixture(() => {
+                // "v2 on master" is BODY text in the fixture; "Shared note" is a heading.
+                const body = priorArt(['v2'], { github: false, headings: true })
+                const head = priorArt(['Shared'], { github: false, headings: true })
+                if (!body.ok || !head.ok) return false
+                // The discriminating pair: a body-only term must find nothing in headings mode,
+                // while the same corpus DOES contain it unscoped.
+                const bodyHits = body.sections.flatMap((x) => x.hits)
+                const unscoped = priorArt(['v2'], { github: false })
+                if (bodyHits.length !== 0 || unscoped.sections.flatMap((x) => x.hits).length === 0) return false
+                // And a heading term returns the heading TEXT, not merely the path.
+                const hits = head.sections.flatMap((x) => x.hits)
+                return hits.length > 0 && hits.every((h) => Array.isArray(h.headings)
+                    && h.headings.length > 0 && h.headings.every((t) => t.startsWith('#')))
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'prior-art.mjs'),
+            'const grepPattern = opts.headings ? `^#{1,6}[[:space:]].*(${pattern})` : pattern',
+            'const grepPattern = pattern'),
+    },
 ]
 
 console.log('bin/test-inflight.mjs - front door and prior-art library self-test\n')

@@ -73,14 +73,16 @@ const COMMANDS = [
         usage: priorArtUsage,
         run: (args, emit) => {
             const byRef = args.includes('--by-ref')
-            const terms = args.filter((a) => a !== '--by-ref')
+            const headings = args.includes('--headings')
+            const terms = args.filter((a) => a !== '--by-ref' && a !== '--headings')
             if (terms.length === 0) return { ok: false, reason: priorArtUsage }
 
             // Streamed per section in the default view, because a 438-ref search that prints nothing
             // until it finishes reads as a hang. --by-ref cannot stream: a cluster is a statement
             // about every section at once, so it has nothing to say until all of them are in.
             let streamed = false
-            const result = priorArt(terms, byRef ? {} : {
+            const result = priorArt(terms, byRef ? { headings } : {
+                headings,
                 onSection: (section, r) => {
                     if (!streamed) { emit(formatHeader(r)); streamed = true }
                     emit(formatSection(section, r))
