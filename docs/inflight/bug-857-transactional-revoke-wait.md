@@ -105,39 +105,64 @@ make this issue unique. It was re-triaged off
 astubbs#29 and onto this block on 2026-08-18; its `pr-available` label was removed, because no open
 PR addresses it.
 
-## SUPERSEDED BY SEQUENCING, 2026-09-02: wait for astubbs#225, then reconsider
+## Re-settled 2026-09-02: decline stands, and astubbs#225 is what settled it
 
-<!-- post-merge: checked - states an ordering between two pieces of work, and reads the same once
-     both have landed -->
-**The decision below is on hold, and the reason is that its central premise expired.** "Decline, do
-not deadline" rested on two legs: a per-transaction bound cannot fix starvation (measured, and still
-true), *and* deadlining means aborting a transaction while `ProducerFencedException` is fatal.
-astubbs#225 removes the second leg, and it is being finished now.
+<!-- post-merge: checked - records a decision between two pieces of work and how it was reached, and
+     reads the same once both have landed -->
+**Earlier the same day this section put the decision on hold**, because "decline, do not deadline"
+rested on two legs and astubbs#225 was about to remove one: a per-transaction bound cannot fix
+starvation across successive transactions (measured, still true), *and* deadlining the holder meant
+aborting a transaction while `ProducerFencedException` was fatal. With fencing recoverable, a bounded
+wait in the revoke path looked like the better end state - it is Kafka Streams' shape (inline commit
+bounded by `max.block.ms`, `closeDirtyAndRevive` on expiry), and it is what `RebalanceEoSDeadlockTest`
+asserted.
 
-**With astubbs#225 in place, the bounded wait is the better design, for two independent reasons:**
+**astubbs#225's plan, on astubbs#410, took the question up by name and answered it.** Its KTD11
+makes the revoke commit a third detection site for a recoverable condition - recorded and declined on
+the poll thread, never rethrown as fatal and never waited out - and states that once recovery bounds
+the write-locked region to abort, close, drain and replay, **neither a bounded wait nor deadlining the
+holder is needed for liveness**. Both stay viable and both are deliberately not taken. So the fencing
+objection is gone, and so is the reason to want a wait. What is left is a trade: a bounded wait buys
+fewer redeliveries on a transactional rebalance, at the price of an ArchUnit exemption with a stated
+bound, and with the starvation measurement still standing against it. Decline stays.
 
-- **`RebalanceEoSDeadlockTest` already encodes it.** That test passes on master *because* of the
-  unbounded spin - it waits the control-thread commit out, which then succeeds and advances offsets.
-  Its own failure message offers both options: *"either by waiting out the in-flight pc-control
-  commit, or by committing itself"*. A bounded wait satisfies it; declining cannot. Measured control
-  arm: 5/5 pass on base, 5/5 fail with the decline, same machine, one term different.
-- **It is Kafka Streams' actual shape.** Streams commits inline in the revoke callback, bounds it
-  with `max.block.ms`, and on expiry falls back to `closeDirtyAndRevive` - abandon and rejoin. That
-  fallback *is* `TaskMigratedException`, which is astubbs#225's model. Streams is **bounded wait +
-  recoverable migration**; PC can only have the second half once astubbs#225 lands.
+**What that costs, stated once more so nobody rediscovers it as a regression:** with the overlap the
+deadlock test forces - control holding the producer write lock when the revoke lands - the revoke
+path declines, `wm.onPartitionsRevoked` truncates the revoked partitions, and their completed but
+uncommitted work is redelivered to the next owner. That is the at-least-once contract doing its job,
+and it is the "always declines on a busy instance" consequence `docs/features/rebalance-behaviour.yaml`
+records. It is not a loss of data; it is a replay.
 
-<!-- post-merge: checked - names the PR that widened the rule, which reads the same once merged -->
-**A trap for whoever builds the bounded version.** The ArchUnit widening on astubbs#408 adds
-`Lock.tryLock(long, TimeUnit)` and siblings to `BLOCKING_CALLS`, so a bounded wait will trip the
-rule. It cannot distinguish a 2s bound from the 5-minute one that caused confluentinc#803 - a
-duration is invisible to a static walk - so the site needs an explicit exemption with a "bounded well
-under max.poll.interval.ms" justification, or the rule needs a way to see the bound.
+**`RebalanceEoSDeadlockTest` is amended accordingly, not weakened.** It used to assert that the
+group's committed offsets for the revoked partitions had advanced by the time the callback returned,
+which on master held *because of* the unbounded spin - the callback waited the control commit out.
+It now asserts what the confluentinc#541 guard actually needs plus the new contract: the callback
+returns well inside the forced dwell (so it neither deadlocked nor waited the commit out), and the
+window was resolved without blocking - either the revocation declined (observed by counting, the same
+instrument the probe uses) or, if the dwell had already ended, it committed inline and the offsets
+moved. The vacuity guard on the forced overlap is unchanged. Survival and liveness are unchanged.
 
-**What survives the redesign either way:** the ArchUnit widening (it found three pre-existing
-blocking reaches, one the confluentinc#857 AB-BA edge, that the walk could not see through an
-interface hop); `RemovedPartitionState.onOffsetCommitSuccess`; the probe, which measures callback
-duration and is valid against either design. **What does not:** the fencing rethrow, which astubbs#225
-replaces with a migration signal.
+<!-- post-merge: checked-begin - names the PR that widened the rule, which reads the same once merged -->
+**A trap for whoever builds the bounded version, should the trade ever be re-argued.** The ArchUnit
+widening on astubbs#408 adds `Lock.tryLock(long, TimeUnit)` and siblings to `BLOCKING_CALLS`, so a
+bounded wait will trip the rule. It cannot distinguish a 2s bound from the 5-minute one that caused
+confluentinc#803 - a duration is invisible to a static walk - so the site needs an explicit exemption
+with a "bounded well under max.poll.interval.ms" justification, or the rule needs a way to see the
+bound.
+<!-- post-merge: checked-end -->
+
+<!-- post-merge: checked-begin - names the PR whose merge triggers the reconciliation; the
+     reconciliation itself is owned by core-recoverable-producer-fencing.md -->
+**Reconciliation owed when astubbs#410 lands, owned by
+[`core-recoverable-producer-fencing.md`](core-recoverable-producer-fencing.md) ("Merge-time
+reconciliation with astubbs/parallel-consumer#408").** The `ProducerFencedException |
+InvalidProducerEpochException` rethrow in `tryCommitOffsetsOnRevoke` goes: on the PC-built path the
+commit path already converts those into `ProducerInvalidatedException`, which the generic catch logs,
+and on the deprecated producer-instance path the pre-recovery behaviour is that PR's to keep. Note
+also that the rethrow only ever fired for a raw fence from `commitTransaction` - master already wraps
+a fenced `sendOffsetsToTransaction` as an internal error at that site - so it was narrower than its
+comment claimed, and nothing pinned it.
+<!-- post-merge: checked-end -->
 
 ## Decision, settled 2026-09-01: decline, do not deadline
 

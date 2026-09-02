@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.integrationTests;
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.integrationTests.utils.DeclineCountingProducerManager;
 import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.internal.ConsumerManager;
@@ -236,7 +237,7 @@ class Revoke857TransactionalWaitProbeIT extends BrokerIntegrationTest<String, St
      * {@code commitOffsets} keeps the dwell strictly inside the lock-held window without changing
      * anything about the commit itself.
      */
-    static class DwellingProducerManager<K, V> extends ProducerManager<K, V> {
+    static class DwellingProducerManager<K, V> extends DeclineCountingProducerManager<K, V> {
 
         DwellingProducerManager(ProducerWrapper<K, V> producerWrapper,
                                 ConsumerManager<K, V> consumerManager,
@@ -257,31 +258,12 @@ class Revoke857TransactionalWaitProbeIT extends BrokerIntegrationTest<String, St
         /** Commits that took the write lock and dwelled. Per instance - see the class javadoc. */
         private final AtomicLong dwellsEntered = new AtomicLong();
 
-        /**
-         * Revocations that found the lock held and <b>declined</b> - the fix path executing.
-         * <p>
-         * This is what makes a green run mean anything, and it is the lesson
-         * the confluentinc#857 revoke-path cluster decomposition plan paid for on the
-         * sibling defect: <i>"A clean fixed arm with a zero skip-count would be indistinguishable from a probe
-         * that never opened the window, which is exactly how this fix looked unproven for four months."</i>
-         * <p>
-         * Before the fix the outcome variable carried that proof itself - a revoke that waited 79s had
-         * self-evidently overlapped a commit. After the fix the callback returns in milliseconds precisely
-         * <em>because</em> it declined, so "it was fast" no longer distinguishes a working fix from a window
-         * that never opened. The count does.
-         */
-        private final AtomicLong revocationDeclines = new AtomicLong();
-
         void disarmDwell() {
             dwellArmed = false;
         }
 
         long dwellsEntered() {
             return dwellsEntered.get();
-        }
-
-        long revocationDeclines() {
-            return revocationDeclines.get();
         }
 
         @Override
@@ -294,16 +276,6 @@ class Revoke857TransactionalWaitProbeIT extends BrokerIntegrationTest<String, St
             log.info("PROBE857TX: commit #{} holds the producer write lock, dwelling {}ms - a revoke landing now " +
                     "spins in onPartitionsRevoked", entered, COMMIT_DWELL_MS);
             ThreadUtils.sleepQuietly(COMMIT_DWELL_MS);
-        }
-
-        @Override
-        public boolean tryAcquireCommitLockForRevocation() {
-            boolean acquired = super.tryAcquireCommitLockForRevocation();
-            if (!acquired) {
-                long declines = revocationDeclines.incrementAndGet();
-                log.info("PROBE857TX: revocation #{} DECLINED the commit lock - the fix path executed", declines);
-            }
-            return acquired;
         }
     }
 
