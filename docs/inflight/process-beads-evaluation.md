@@ -5,14 +5,17 @@
 
 [`process-adopt-external-harness.md`](process-adopt-external-harness.md) **owns the adopt-or-build
 decision** and defers it until after v6.
+
+Two dated documents own the findings, and the later one wins where they disagree:
 [`docs/plans/2026-09-01-001-investigate-beads-comparison.md`](../plans/2026-09-01-001-investigate-beads-comparison.md)
-**owns the findings** - all of them, including which candidate keeps state in the working tree, what
-adoption would and would not replace, and why the nearest neighbour is not the one everybody names.
-Read it there; this note deliberately does not summarise it, because a summary of a document that
+is the desk survey of the whole field, and
+[`docs/plans/2026-09-02-001-investigate-adopt-or-build-re-run.md`](../plans/2026-09-02-001-investigate-adopt-or-build-re-run.md)
+re-ran the Backlog.md half against a running binary and names the four conclusions it retracts. Read
+them there; this note deliberately does not summarise either, because a summary of a document that
 may not be rewritten is a second copy that drifts from the first.
 
-**What this note owns is the part that is still OPEN**: the desk pass was documentary, and the
-probes it defers have not been run.
+**What this note owns is the part that is still OPEN, and it is now only the Beads half.** Backlog.md
+has been driven; `bd` has not, so every probe below is untouched.
 
 ## What is left, and it needs `bd` to have run
 
@@ -27,7 +30,10 @@ version asserted four things about Claude Code that turned out false, each with 
 built on top.
 
 **Probe 1 is the one that matters** - does `bd` follow the git branch? Nothing in the documentation
-says, and the answer is close to deciding this on its own.
+says, and the answer is close to deciding this on its own. The 2026-09-02 pass raises its value
+rather than lowering it: driving Backlog.md showed that a tool can travel with the branch and still
+resolve every disagreement away silently, so "does it follow the branch" is only half the question.
+The other half is what it does when two branches disagree, and that has to be provoked, not read.
 
 ## Delete when
 

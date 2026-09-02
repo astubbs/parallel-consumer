@@ -41,6 +41,14 @@ and to whether the nearest neighbour composes with us is recorded in
 which owns those findings - including that `sd0xdev/sd0x-dev-flow` is closer to this repo's thesis
 than anything named above.
 
+**Re-run 2026-09-02 against a running binary, and the tracker half is now answered.**
+[`docs/plans/2026-09-02-001-investigate-adopt-or-build-re-run.md`](../plans/2026-09-02-001-investigate-adopt-or-build-re-run.md)
+owns it: **build, do not adopt Backlog.md for the query layer**, because its cross-branch feature
+reconciles to one winner where this repo's contract requires the disagreement to be reported. That
+verdict is entered here, and it covers the tracker and query layer ONLY. **The hooks question above
+is untouched and still deferred** - nothing in that pass re-examined `sd0x-harness` (the renamed
+`sd0x-dev-flow`) or `karanb192/claude-code-hooks`, and the reasons for deferring below still hold.
+
 ## What adoption would cost us, honestly
 
 - **The conventions are not in the code.** The tag vocabulary, the weight-axis boundary between

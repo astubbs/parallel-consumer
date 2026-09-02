@@ -39,9 +39,12 @@ opt_in:
 boundaries:
   - >
     It is not a tracker and does not try to be. Backlog (the markdown-file tracker) is the one
-    surveyed tool that keeps task state in the working tree and reconciles it across branches; this
-    reads a repository rather than owning a schema. What no surveyed tracker does - making a forge's own graph queryable from the
-    repo - is recorded as unbuilt in docs/inflight/ci-inflight-next-commands.md.
+    surveyed tool that keeps task state in the working tree and reconciles it across branches - and
+    reconciling is the opposite of what this does, since it resolves every branch disagreement to a
+    single winner rather than reporting it; driven and recorded in
+    docs/plans/2026-09-02-001-investigate-adopt-or-build-re-run.md. This reads a repository rather
+    than owning a schema. What no surveyed tracker does - making a forge's own graph queryable from
+    the repo - is recorded as unbuilt in docs/inflight/ci-inflight-next-commands.md.
   - >
     Answers are only as fresh as the refs. Every command reports staleness it can detect - a stale
     fetch, a shallow clone, a HEAD behind the baseline, the main checkout - because a complete search

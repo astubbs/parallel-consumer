@@ -236,15 +236,18 @@ server and the Gerrit connector; the storage layer stayed at its interfaces.
 So the *decision* survives and the *implementation* does not. That is the whole of what this repo can
 teach us, and it is worth exactly one read - which has now happened.
 
-## Before this merges
+## The comparison was re-run, and it moved the answer
 
-**Re-run the comparison against Backlog.md and the rest of the field** - Antony's instruction, and
-deliberately timed for just before merge rather than now. The survey in
-[`../plans/2026-09-01-001-investigate-beads-comparison.md`](../plans/2026-09-01-001-investigate-beads-comparison.md)
-was written before this tool existed, and the thing being compared has changed underneath it: what
-was a proposal is now a working CLI with commands, measurements and a self-test. The question "what
-does adopting Backlog.md replace" therefore has a different answer than it did, and the honest
-version of it can only be asked once the tool has stopped moving.
+Antony asked for the Backlog.md comparison to be re-run once the tool had stopped moving, because
+the 2026-09-01 survey was written while this was still a proposal.
+[`../plans/2026-09-02-001-investigate-adopt-or-build-re-run.md`](../plans/2026-09-02-001-investigate-adopt-or-build-re-run.md)
+**owns those findings** - it drove Backlog.md 1.50.1 rather than reading about it, and the headline
+is that its cross-branch layer RECONCILES to one winner where `note drift` REPORTS the
+disagreement. Read it there; this note does not summarise it.
+
+The verdict still belongs to
+[`process-adopt-external-harness.md`](process-adopt-external-harness.md), which owns the
+adopt-or-build decision and keeps it deferred until after v6.
 
 ## Delete when
 

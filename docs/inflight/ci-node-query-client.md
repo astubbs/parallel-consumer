@@ -9,20 +9,25 @@ rather than the checked-out one, (b) is the tunnel for reading GitHub, forcibly 
 links to related issues and PRs, and (c) consolidates the gates onto one runtime. The aim is a
 harness that is easier to program and that makes good practice the path of least resistance.
 
-## Half of this ships today, at 6.6k stars
+## The tracker half that looked like ours - and, once run, is not
 
-**Backlog.md already does the tracker half, including the cross-branch part** - markdown task files
-committed to the repo and travelling with branches, plus `checkActiveBranches`, `remoteOperations`
-and `activeBranchDays`, which reconcile task state across branches and optionally check remote
-branches for newer states. TypeScript, MIT, actively maintained.
-[`docs/plans/2026-09-01-001-investigate-beads-comparison.md`](../plans/2026-09-01-001-investigate-beads-comparison.md)
-owns the survey; §10 there records how this was missed on the first pass.
+**CORRECTED 2026-09-02, and the earlier version of this section was wrong in the direction that
+stops work happening.** It said Backlog.md "already does the tracker half, including the
+cross-branch part", read off `checkActiveBranches`, `remoteOperations` and `activeBranchDays`, and
+concluded that reading notes across branches was not a differentiator - *"do not spend the budget
+proving something an `npm i -g` already does"*.
 
-So "read the notes on every branch and report drift" is **not** the differentiator it looked like.
-That capability belongs back in the adopt-or-build decision that
-[`process-adopt-external-harness.md`](process-adopt-external-harness.md) owns, with the default on
-adopt because it ships - rebuilding it is still open, it just has to be argued there rather than
-assumed here. Do not spend the budget proving something an `npm i -g` already does.
+Driven rather than read, its cross-branch layer **reconciles to one winner and never reports the
+disagreement**: standing on a branch, its board shows one version of a shared task and says nothing
+about the others, and its CLI answers task lookups from the working copy only.
+[`docs/plans/2026-09-02-001-investigate-adopt-or-build-re-run.md`](../plans/2026-09-02-001-investigate-adopt-or-build-re-run.md)
+**owns that finding** and the probe behind it; the 2026-09-01 survey it supersedes on this point is
+[`2026-09-01-001-investigate-beads-comparison.md`](../plans/2026-09-01-001-investigate-beads-comparison.md).
+
+So the default-on-adopt recorded here for the cross-branch reader is **withdrawn**. It is withdrawn
+for that capability only - the wider adopt-or-build question is still
+[`process-adopt-external-harness.md`](process-adopt-external-harness.md)'s, still deferred, and
+nothing here touches the hooks half of it.
 
 ## The half nobody ships: the GitHub tunnel
 
@@ -42,11 +47,11 @@ whichever lands first owns the edges, and the other becomes its consumer.
 
 <!-- post-merge: checked -->
 **The cross-branch reader was built after all, in astubbs/parallel-consumer#400**, and the
-adopt-or-build argument this note said to have was had: Backlog.md ships the reader, but its schema
-carries status, milestones, dependencies and acceptance criteria - not a consequence ordering - so
-adopting it would have replaced the store and left the ordering, the gates and the injection layer
-to be kept anyway. `bin/inflight.mjs` now answers `note find`, `note drift` and `stranded` over one
-fan-out of every ref.
+adopt-or-build argument this note said to have was had - twice, and the second pass moved it. The
+schema objection recorded here first (status, milestones, dependencies and acceptance criteria, not
+a consequence ordering) is real but narrower than stated; the load-bearing objection is the one
+above, that a reconciler cannot answer `note drift`'s question at all. `bin/inflight.mjs` answers
+`note find`, `note drift` and `stranded` over one fan-out of every ref.
 
 Two of this note's decisions were settled by building it, and both are recorded in the code:
 
@@ -88,5 +93,6 @@ Two of this note's decisions were settled by building it, and both are recorded 
 
 ## Delete when
 
-The tunnel is built, or the decision is taken to adopt Backlog.md's cross-branch capability instead
-of rebuilding it.
+The tunnel is built. The other exit this note used to carry - adopting Backlog.md's cross-branch
+capability instead of rebuilding it - is closed: the reader is built, and the capability was not the
+same one.
