@@ -448,4 +448,20 @@ class ProducerManagerRecoveryTest {
         assertThat(thrown).hasMessageThat().contains("no usable producer");
         assertThat(manager.isTransactionCommittingInProgress()).isFalse();
     }
+
+    /**
+     * An Error from the abort or the close inside the write-locked region must not leave the lock held: the
+     * instance ends on an Error, and its close commits under that very lock, so a held lock turns "ends" into
+     * "hangs in shutdown". The automated review asked for this to be a decision rather than an oversight.
+     */
+    @Test
+    void anErrorInsideTheWriteLockedRegionStillReleasesTheWriteLock() throws Exception {
+        manager.recordInvalidation(new ProducerFencedException("fenced"));
+        doThrow(new OutOfMemoryError("simulated, from abortTransaction")).when(initial).abortTransaction();
+
+        assertThrows(OutOfMemoryError.class, manager::beginReplacement);
+
+        assertWithMessage("the write lock is not left held by a thread that is going down")
+                .that(manager.isTransactionCommittingInProgress()).isFalse();
+    }
 }

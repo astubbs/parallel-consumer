@@ -823,7 +823,11 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
                 closeQuietly(discarded, "the invalidated producer");
             }
             return true;
-        } catch (RuntimeException unexpected) {
+        } catch (RuntimeException | Error unexpected) {
+            // Error included, not only RuntimeException: an OutOfMemoryError from the abort or the close would
+            // otherwise leave the write lock held for good, and the close that follows an Error commits under that
+            // very lock - so the instance would hang in shutdown instead of ending. The review that asked for this
+            // decision is on astubbs#225's PR; the lock is released, the Error still ends the instance.
             releaseCommitLock();
             throw unexpected;
         }
