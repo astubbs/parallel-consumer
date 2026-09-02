@@ -30,11 +30,13 @@ the corrections are named here rather than left in the plan alone:
 
 ## Two things this note is the only home for
 
-- **The trigger with a real user report is on the produce path, not the commit path.**
-  confluentinc#830 hit `InvalidPidMappingException` after two days of producer inactivity and asked
-  for precisely this feature; confluentinc#839 answered it by shutting the instance down, which is
-  the behaviour the plan reverses. **Neither upstream issue has a fork mirror**, so neither appears
-  in `gh issue list -R astubbs/parallel-consumer --state all`.
+- **The trigger with a real user report is on the produce path, not the commit path.** astubbs#411
+  (`confluentinc#830`) hit `InvalidPidMappingException` after two days of producer inactivity and
+  asked for precisely this feature; `confluentinc#839` answered it by shutting the instance down,
+  which is the behaviour the plan reverses. The mirror was created on demand: the 2026-08-05 bulk
+  import covered open upstream issues and the 2023 sweep cohort, and an issue closed in 2024 by a
+  genuinely merged fix was in neither. `confluentinc#839` gets no mirror and no manifest entry - it
+  is an upstream PR already carried in this fork's history, and the manifest keys on *fork* work.
 - **It sequences after astubbs/parallel-consumer#352**, which merges first and unchanged. That PR's
   R6 is true of the behaviour it was written against; this work makes it untrue and owns the update,
   including the two fencing tests in its `ProducerManagerCommitBudgetTest`.
