@@ -80,6 +80,12 @@ export function javaTypeNames(root) {
   return names;
 }
 
+/** A front-matter list block as its unquoted, non-blank items - or [] when the field is absent. */
+function parseYamlList(regex, body) {
+  const m = regex.exec(body);
+  return m ? m[1].split('\n').map(unquoteListItem).filter(Boolean) : [];
+}
+
 const RELATED = /^related_components:\n((?:[ \t]+-[ \t].*\n)+)/m;
 const APPLIES = /^applies_when:\n((?:[ \t]+-[ \t].*\n)+)/m;
 
@@ -118,17 +124,12 @@ export function writeUps(root) {
       } catch {
         continue;
       }
-      const m = RELATED.exec(body);
-      if (!m) continue;
-      const components = m[1]
-        .split('\n')
-        .map((l) => unquoteListItem(l))
-        .filter(Boolean);
+      // Both regexes require at least one list item, so a miss and an empty list coincide: this
+      // `continue` fires on exactly the inputs it did when the two parses were hand-written twice.
+      const components = parseYamlList(RELATED, body);
+      if (components.length === 0) continue;
       const heading = body.split('\n').find((l) => l.startsWith('# '));
-      const a = APPLIES.exec(body);
-      const appliesWhen = a
-        ? a[1].split('\n').map((l) => unquoteListItem(l)).filter(Boolean)
-        : [];
+      const appliesWhen = parseYamlList(APPLIES, body);
       out.push({
         relPath: path.relative(root, abs),
         title: heading ? heading.slice(2).trim() : f.replace(/\.md$/, '').replace(/-/g, ' '),
