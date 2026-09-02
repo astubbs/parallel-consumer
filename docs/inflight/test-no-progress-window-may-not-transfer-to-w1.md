@@ -20,7 +20,7 @@ for it either:
 | `bug-857-family.md`'s fourteenth sighting (from astubbs/parallel-consumer#347) | `NO_PROGRESS, fleet stuck at 97896/100000` - 30s against a 30s bound | **`1521825993857670757`** |
 | Torture soak 2026-08-29, cycle 51 (`bin/torture-overnight.sh`) | `fleet consumed count stuck at 97386/100000 for 30s (bound 30s)` | **`87978223167568`** |
 | Torture soak 2026-08-29, cycle 166 | `fleet consumed count stuck at 97297/100000 for 30s (bound 30s)` | **`106062481479157`** |
-| PR lane, hosted runner, 2026-09-02 - astubbs/parallel-consumer#414 at `810a8b3ac` (a workflow-only branch: no Java differs from master) | `fleet consumed count stuck at 95209/100000 for 30s (bound 30s)` | **`2512758007437016849`** |
+| PR lane, hosted runner, 2026-09-02 - astubbs/parallel-consumer#414 at `810a8b3ac` (a workflow-only branch: no Java differs from master) | `fleet consumed count stuck at 95209/100000 for 30s (bound 30s)` | **`2512758007437016849`** <!-- post-merge: checked - a PR number and a sha are durable; the row reads the same after the merge --> |
 <!-- file-refs: N/A - the harness moved to branch test/overnight-torture-harness-v2; named here as the instrument that produced these runs, not as a file in this tree -->
 
 **The soak gives this line its first RATE, and its first control arm.** `NO_PROGRESS` killed
