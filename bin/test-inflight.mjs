@@ -761,21 +761,24 @@ const CHECKS = [
     {
         id: 'pr-search-cannot-report-a-failure-as-no-result',
         why: 'the fallback exists to answer "is this branch mentioned anywhere"; a failed query rendered as "no" is the whole silent-miss class',
-        // WHAT THIS CAN AND CANNOT PROVE, stated rather than implied. It asserts the SHAPE - that
-        // every return carries an explicit `ok` alongside its list - because that shape is what
-        // makes "GitHub could not answer" expressible at all. It does not exercise the failure
-        // branch: `gh` succeeds on this machine and returns an empty list for a name that cannot
-        // exist, so a mutant flipping that branch's flag would run nothing and stay green, which is
-        // the vacuous control this suite exists to refuse. Injecting a gh failure would need a
-        // seam prSearch does not have, and inventing one for a single check is not worth it.
+        // ENVIRONMENT-INDEPENDENT BY CONSTRUCTION, after two goes at it. `gh` is authenticated on a
+        // developer machine and deliberately is not in the repo-hygiene workflow, so prSearch takes
+        // a different branch in each place - and a mutant aimed at either one proved nothing in the
+        // other. The first version mutated the failure branch and stayed green locally; the second
+        // mutated the success branch, passed locally, and went green in CI. Both were vacuous in
+        // exactly the environment that mattered.
+        //
+        // The contract is that EVERY return carries an explicit `ok`, which is what makes "GitHub
+        // could not answer" expressible at all. prSearch now builds every return through one
+        // constructor, so the mutation lands on whichever path runs.
         run: async (binDir) => {
             const b = await branches(binDir)
             const r = b.prSearch('a-branch-name-that-cannot-exist-xyzzy', { cache: false })
             return typeof r.ok === 'boolean' && Array.isArray(r.prs)
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'branches.mjs'),
-            "    return { ok: true, cached: false, prs: rows }",
-            "    return { prs: rows }"),
+            '    const answer = (ok, prs, cached = false) => ({ ok, prs, cached })',
+            '    const answer = (ok, prs, cached = false) => ({ prs, cached })'),
     },
 ]
 

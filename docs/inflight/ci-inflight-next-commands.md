@@ -158,6 +158,26 @@ Antony, thinking out loud, and worth keeping because the bootstrap problem is th
 
 Neither is a decision. Both are recorded because the alternative was losing them.
 
+## Prior art to mine: Antony's own Gerrit fork
+
+**Antony built distributed issue tracking on a Gerrit fork around 2008**, as a company that never
+went public, and still has the code. He has asked that it be read for ideas before this goes much
+further, and it is worth more than a courtesy look: it is the same problem, attempted by the person
+now specifying this one, with the benefit of knowing which parts did not survive contact.
+
+The timing is the interesting part. Everything in that generation - ditz, Bugs Everywhere, ticgit,
+git-issue - shared one failure: the tooling assumed a human would maintain the state by hand, and
+humans did not. What has changed is not the idea but who maintains it. An agent will, and there is
+now a reason to read the state that did not exist then.
+
+**And the field is still open**, which the 2026-09-01 survey establishes rather than assumes:
+[`../plans/2026-09-01-001-investigate-beads-comparison.md`](../plans/2026-09-01-001-investigate-beads-comparison.md)
+found exactly one surveyed tracker that keeps state in the working tree, and nothing at all that
+makes GitHub's own graph queryable from the repository.
+
+Read it before the GitHub-graph work starts, not after - a design already half-built is the worst
+moment to discover someone solved a piece of it seventeen years ago.
+
 ## Before this merges
 
 **Re-run the comparison against Backlog.md and the rest of the field** - Antony's instruction, and

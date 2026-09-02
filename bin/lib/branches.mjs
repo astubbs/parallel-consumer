@@ -230,18 +230,25 @@ export function branchView(graph, ref, prs) {
  * mentions this branch" and must never be rendered as though it were.
  */
 export function prSearch(ref, { cache = true } = {}) {
+    // EVERY RETURN GOES THROUGH ONE CONSTRUCTOR, so "did this answer, or fail to answer" cannot be
+    // omitted from a path by accident - and so a self-test can break the contract in one place
+    // rather than three. Which path runs here is decided by the ENVIRONMENT: `gh` is authenticated
+    // on a developer machine and deliberately is not in the repo-hygiene workflow, so a check that
+    // mutated only the success path passed locally and proved nothing in CI. It did exactly that.
+    const answer = (ok, prs, cached = false) => ({ ok, prs, cached })
+
     const bare = ref.replace(/^origin\//, '')
     const key = `search:${bare}`
     const hit = cache ? cacheRead('pr-search.json', { key, maxAgeMs: 6 * 60 * 60 * 1000 }) : null
-    if (hit) return { ok: true, cached: true, prs: hit }
+    if (hit) return answer(true, hit, true)
 
     const res = exec('gh', ['search', 'prs', '--repo', REPO, bare,
         '--json', 'number,title,state', '--limit', '5'])
-    if (!res.ok) return { ok: false, prs: [] }
+    if (!res.ok) return answer(false, [])
     let rows = []
-    try { rows = JSON.parse(res.out) } catch { return { ok: false, prs: [] } }
+    try { rows = JSON.parse(res.out) } catch { return answer(false, []) }
     if (cache) cacheWrite('pr-search.json', rows, key)
-    return { ok: true, cached: false, prs: rows }
+    return answer(true, rows)
 }
 
 /**
