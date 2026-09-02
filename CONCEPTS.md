@@ -301,6 +301,14 @@ and never blocks. Its failure budget is the mirror of a refusing guard's: silenc
 blocking is not, and a reminder that fires too often trains its reader to skip it, which is the
 same end state as one that never fires.
 
+### Divergent version
+A copy of a document, on some branch, that carries content the mainline has never held. It is
+distinct from a copy that is merely **behind** - one that lacks what the mainline gained since the
+branch was cut - because a behind copy is nobody's finding and gets further behind every day, while
+a divergent one holds knowledge the mainline reader cannot see. Divergence is sized against the
+branch's own fork point, so it says what the branch added, not how far the mainline has moved. A
+**divergence header** is the advisory reminder that surfaces this at the moment a document is read.
+
 ### Labelled fallback
 The rule that an automated answer must name its own provenance, and that an answer derived from a
 weaker source must say so. A guard that cannot read the authoritative fact (the thing the action
