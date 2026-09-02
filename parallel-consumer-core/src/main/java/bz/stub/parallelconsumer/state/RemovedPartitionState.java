@@ -162,6 +162,14 @@ public class RemovedPartitionState<K, V> extends PartitionState<K, V> {
      * is an accidental safety net in another class, not a property of this one - and
      * astubbs/parallel-consumer#44 leaned on it, because declining the revoke commit means truncation no longer
      * waits for an in-flight commit to finish. Made explicit rather than left incidental.
+     * <p>
+     * <b>Cleared 2026-09-02.</b> The remaining inherited mutators were walked: {@code onFailure} has an empty
+     * body, and {@code addNewIncompleteRecord}'s only caller {@code maybeRegisterNewPollBatchAsWork} is itself
+     * overridden here - so this was the one reachable write. <b>What would reopen it:</b> a new mutator added to
+     * {@link PartitionState} without a no-op override here, or any reader of {@code lastCommittedOffset} /
+     * {@code stateChangedSinceCommitStart} that stops filtering on
+     * {@link #isPartitionRemovedOrNeverAssigned()}. Nothing enforces either - the ArchUnit rules in this repo do
+     * not check override completeness against a base class.
      */
     @Override
     public void onOffsetCommitSuccess(OffsetAndMetadata committed) {

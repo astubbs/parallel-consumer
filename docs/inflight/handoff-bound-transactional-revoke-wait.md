@@ -40,7 +40,9 @@ reasoning; what binds anyone editing this branch is the short form:
 
 ## Current state
 
-**The fix is written; nothing is pushed and no PR exists.** Settled 2026-09-01 with Antony: the
+**The fix is written, pushed, and open as astubbs/parallel-consumer#408**, stacked on
+astubbs/parallel-consumer#29 (for its ArchUnit rule) and carrying astubbs/parallel-consumer#262 as
+its base - both are `depends on` lines in that PR's body. Settled 2026-09-01 with Antony: the
 revoke path **declines** the producer commit lock rather than deadlining anyone. Both unbounded
 waits are gone - the `Thread.sleep` spin is deleted, and the commit is attempted only once the lock
 is already held, so `acquireCommitLock`'s five-minute wait is unreachable under contention. The

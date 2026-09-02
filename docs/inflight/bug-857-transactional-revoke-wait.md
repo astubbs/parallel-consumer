@@ -1,8 +1,57 @@
-# confluentinc#857 family: the unbounded revoke wait in transactional mode
+# confluentinc#857 family: the transactional revoke wait, and the decision behind its fix
+
+<!-- post-merge: checked-begin - written to read the same once astubbs/parallel-consumer#408 is a
+     merged PR rather than an open one; no "delete this when it merges" marker, which
+     docs/inflight/AGENTS.md forbids -->
+> **The wait is no longer unbounded.** astubbs/parallel-consumer#408 made the revoke path decline
+> both locks rather than wait on either, and the two-sites correction below is why bounding only the
+> spin would not have been enough. What is still open is named in
+> [`core-revoke-commit-skips-the-work-mailbox-drain.md`](core-revoke-commit-skips-the-work-mailbox-drain.md)
+> and in the successor this does not remove - unifying consumer ownership, confluentinc#200 /
+> astubbs#142. The decision record below outlives this note and belongs in `docs/solutions/`.
+<!-- post-merge: checked-end -->
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
 <!-- inflight-labels: concurrency -->
+
+**Commit mode: `PERIODIC_TRANSACTIONAL_PRODUCER` only.** This is the discriminator - the defect below
+<!-- post-merge: checked -->
+and the AB-BA deadlock in astubbs#29 are in mutually exclusive modes and cannot be the same bug.
+
+## The defect - TWO unbounded waits, not one
+
+`AbstractParallelEoSStreamProcessor.onPartitionsRevoked` held the poll thread in **two** waits with
+<!-- post-merge: checked -->
+no deadline, on master, predating astubbs#29. Every earlier version of this note named only the
+first, which is the correction that matters most here:
+
+1. **The spin**, added by confluentinc#548:
+
+   ```java
+   while (isTransactionCommittingInProgress())
+       Thread.sleep(100); //wait for the transaction to finish committing
+   ```
+
+   The predicate is `producerTransactionLock.isWriteLocked()`, gated on
+   `options.isUsingTransactionCommitMode()`, so it runs in transactional mode only - and there it is
+   the *common* case, not a rare race: the control thread takes that write lock in
+   `maybeAcquireCommitLock()` before every commit.
+
+2. **The commit beneath it.** `commitOffsetsThatAreReady()` reaches
+   `ProducerManager#acquireCommitLock`, whose `writeLock.tryLock(commitLockAcquisitionTimeout)` waits
+   **five minutes** by default. **This is the one confluentinc#803 actually threw from** - its stack
+   trace is `TimeoutException: Timeout getting commit lock (which was set to PT5M)` raised *inside*
+   `onPartitionsRevoked`, and `grep -rn "Timeout getting commit lock"` finds exactly one throw site.
+   The reporter's timeline confirms it: rebalance at t=0, `max.poll.interval.ms` eviction at 180s,
+   the throw at 300s = `commitLockAcquisitionTimeout`.
+
+**Fixing only the spin would have left the user's report reproducible**, which is why the earlier
+plan of record - "delete the `KNOWN_BLOCKING_VIOLATIONS` entry and the rule goes green" - was not a
+sufficient acceptance criterion. See the ArchUnit gap below.
+
+Both run on the poll thread inside `poll()`, so both are bounded by nothing but
+`max.poll.interval.ms`. Overrunning it evicts the member.
 
 ## Why this is not astubbs#29's deadlock <!-- post-merge: checked -->
 

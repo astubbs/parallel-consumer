@@ -23,6 +23,8 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.MockConsumer;
 import org.apache.kafka.clients.consumer.internals.ConsumerCoordinator;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.errors.InvalidProducerEpochException;
+import org.apache.kafka.common.errors.ProducerFencedException;
 import org.slf4j.MDC;
 
 import javax.naming.InitialContext;
@@ -703,6 +705,16 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             log.info("Acquired commitLock on revoke without contention - committing offsets " +
                     "inline. See confluentinc#857.");
             performCommit();
+        } catch (ProducerFencedException | InvalidProducerEpochException e) {
+            // FENCING STAYS FATAL. Everything else here is downgraded to a WARN because a failed revoke commit
+            // is recoverable - the offsets stay dirty and the next owner reprocesses them. Fencing is not: it
+            // means another producer with our transactional.id has taken over, so this instance is a zombie and
+            // every subsequent commit will fail too. Before astubbs#44 an exception here propagated out of
+            // onPartitionsRevoked as a PCInternalRuntimeException and BrokerPollSystem failed the instance
+            // loudly; swallowing it would leave a fenced member polling and accepting work until some later
+            // commit happened to surface the same error somewhere less obvious. Rethrown so that path is
+            // unchanged. Recoverable fencing is astubbs#225, and this is what it will replace.
+            throw e;
         } catch (Exception e) {
             // Restore the flag rather than swallowing the interrupt: this runs inside the poll
             // thread's rebalance callback, and dropping it strands whatever is waiting on it.
@@ -717,6 +729,9 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                     log.warn("Failed to commit offsets during revoke: {}",
                             ThrowableUtils.describeWithRootCause(e), e));
         } finally {
+            // Only a lock THIS method took. Note the narrower guarantee than "never releases another owner's
+            // hold": on the already-held branch performCommit() -> postCommit() unlocks unconditionally, which
+            // is the pre-existing commit-path contract and not something this flag can or should override.
             if (tookTransactionLock) {
                 // NOT redundant with postCommit(). retrieveOffsetsAndCommit() calls preAcquireOffsetsToCommit()
                 // OUTSIDE its try/finally, and that is where flush() runs - so a throwing flush escapes before

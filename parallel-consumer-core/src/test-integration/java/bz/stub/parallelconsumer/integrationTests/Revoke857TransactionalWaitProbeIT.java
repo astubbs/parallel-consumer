@@ -51,8 +51,14 @@ import static org.awaitility.Awaitility.await;
  * defect arm going red again means the callback has started waiting on the transaction lock once more.
  * <p>
  * <b>A green run is only meaningful alongside a nonzero {@link DwellingProducerManager#revocationDeclines()}</b> - see that
- * field. The fixed callback returns in milliseconds because it declined, which is indistinguishable
- * from a run where no commit was ever in flight unless the decline is counted.
+ * field.
+ * <p>
+ * <b>Known blind spot, stated rather than implied:</b> {@code tryCommitOffsetsOnRevoke} declines at TWO gates -
+ * {@code commitLock.tryLock()} first, then the producer transaction lock - and only the second is observable
+ * from here, because the first is private to the processor and has no seam. So this probe cannot distinguish
+ * "declined at the commitLock gate" from "the revoke never overlapped anything", and it cannot prove the
+ * ACQUIRE path still commits inline. It proves the callback is fast and that the producer-lock decline fires;
+ * a regression making the callback ALWAYS decline would leave every assertion here green.
  *
  * <h2>The defect being probed</h2>
  * {@code AbstractParallelEoSStreamProcessor.onPartitionsRevoked} opens with
@@ -367,6 +373,14 @@ class Revoke857TransactionalWaitProbeIT extends BrokerIntegrationTest<String, St
             public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
                 log.info("PROBE857TX: revoke callback entered on thread {} for {} - about to wait for any " +
                         "in-flight transaction", Thread.currentThread().getName(), partitions);
+                // DISARM BEFORE super, not after. The dwell exists to hold the window open for the commit the
+                // CONTROL thread is running when the revoke lands. If the revoke goes on to acquire the lock and
+                // commit inline - the success path this probe must also allow - that commit runs through the same
+                // preAcquireOffsetsToCommit override, dwells COMMIT_DWELL_MS, and blows the poll interval. The
+                // probe would then fail a CORRECT fix, which is the worst failure an instrument can have.
+                // Disarming here keeps the window open for everything up to this point and closed for the
+                // callback's own commit.
+                dwellingModule.dwellingManager().disarmDwell();
                 long start = System.currentTimeMillis();
                 try {
                     super.onPartitionsRevoked(partitions);
@@ -375,11 +389,6 @@ class Revoke857TransactionalWaitProbeIT extends BrokerIntegrationTest<String, St
                     revokeCallbackTookMs.compareAndSet(-1, took);
                     log.info("PROBE857TX: revoke callback returned after {}ms (max.poll.interval.ms is {}ms)",
                             took, MAX_POLL_INTERVAL_MS);
-                    // The window this instrument exists to force is now closed. Leaving the dwell armed would
-                    // hold the producer write lock for COMMIT_DWELL_MS out of every subsequent commit, starving
-                    // the produce path for the rest of the run - which makes the liveness check below a
-                    // measurement of the instrument rather than of PC.
-                    dwellingModule.dwellingManager().disarmDwell();
                     firstRevokeCompleted.countDown();
                 }
             }

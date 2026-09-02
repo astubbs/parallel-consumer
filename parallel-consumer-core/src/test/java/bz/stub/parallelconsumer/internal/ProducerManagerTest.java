@@ -828,12 +828,6 @@ class ProducerManagerTest {
     }
 
     /**
-     * Re-entering would take the write hold count to 2, which {@code postCommit} rejects as "Lock held too many
-     * times" - a deadlock, not a warning. The close path reaches the revoke callback on the control thread,
-     * which may already own the lock, so callers check {@code isCommitLockHeldByCurrentThread()} first and this
-     * refuses loudly if one forgets.
-     */
-    /**
      * The leak this guards is not hypothetical. {@code AbstractOffsetCommitter#retrieveOffsetsAndCommit} calls
      * {@code preAcquireOffsetsToCommit()} OUTSIDE its {@code try/finally}, and this class's implementation of
      * that is {@code acquireCommitLock(); flush();} - so a {@code flush()} that throws escapes before the
@@ -873,6 +867,12 @@ class ProducerManagerTest {
         producerManager.releaseCommitLockIfHeldByCurrentThread();
     }
 
+    /**
+     * Re-entering would take the write hold count to 2, which {@code postCommit} rejects as "Lock held too many
+     * times" - a deadlock, not a warning. The close path reaches the revoke callback on the control thread,
+     * which may already own the lock, so callers check {@code isCommitLockHeldByCurrentThread()} first and this
+     * refuses loudly if one forgets.
+     */
     @Test
     void revocationRefusesToReenterALockThisThreadAlreadyHolds() throws Exception {
         producerManager.preAcquireOffsetsToCommit();
