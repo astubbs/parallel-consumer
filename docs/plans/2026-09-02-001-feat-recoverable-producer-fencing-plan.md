@@ -289,6 +289,17 @@ stateDiagram-v2
   end note
 ```
 
+### Inherited from astubbs#262
+
+Merged from master mid-implementation, after U2. Its final commit records four defects it found and deliberately did not fix, all on this plan's ground; each is answered here rather than rediscovered.
+
+- **The `InvalidPidMappingException` close marks the batch succeeded.** `ParallelEoSStreamProcessor` catches, closes and does not rethrow, so every `WorkContainer` in the batch is marked succeeded and the close-time commit publishes offsets for records whose output was never produced. That is R13's failure mode stated from the other side. U3 removes the close on the PC-built path (R18) and, on the instance path, rethrows after the close so the batch is marked failed and its offsets stay uncommitted - the one instance-path behaviour this work does change, because it is a data-loss defect and not a liveness policy (R19's "keeps its current behaviour" is read as the liveness outcome, not the lost offsets).
+- **A throwing `abortTransaction()` skips `closeProducer`.** `ProducerManager.close` aborts then closes, and an abort that throws - which a fenced producer's always does - leaks the producer. KTD4's recovery sequence aborts-and-swallows and then closes regardless; U3 gives `close()` the same shape.
+- **A configured `commitInterval` can be replaced by the transactional default**, because `transactionsValidation` tests "did the user set it?" by reference identity. Not fixed here (it is an options defect with its own register claim, `COMMIT_INTERVAL_AUTO_REDUCED`), but it is why KTD5's memory bound is stated against the configured interval rather than assumed to be 100 ms.
+- **"PC has no recovery path from a poisoned transaction short of `close()`"** - settled from the code in `docs/inflight/bug-wedged-after-poisoned-transaction.md`, with the design decision left open. This plan is that decision for every condition in R8: abort, replace, replay. A transaction poisoned by a cause outside R8 (a `RecordTooLargeException`, say) stays where astubbs#262 left it; the recovery machinery built here is the obvious home for it, and `docs/inflight/bug-poisoned-transaction-not-aborted-while-running.md` now points back here for that follow-up.
+
+Two things it added that this work must keep green: the guarantee register (`TransactionalClaim`, checked by `TransactionalClaimCoverageTest` - a recorded sentence that leaves its source file fails the build, so the options javadoc inside the `transactionalJavadoc` tag region is edited with that in mind, and U7 registers the recovery guarantee as a claim of its own), and the two produce-lock guards in `PollContextInternal.setProducingLock` and `cleanUpContext`, which KTD7's wait-before-acquire shape respects because a context still holds exactly one lock, released once.
+
 ### Assumptions
 
 Decisions made without a user in the loop; each is reversible and named so a reviewer can object to it directly.
