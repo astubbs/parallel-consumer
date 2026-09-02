@@ -1121,9 +1121,14 @@
                          dedicated hardware: what actually runs them is the "Performance Tests" leg of
                          maven.yml (ubuntu-latest, a REQUIRED check on every PR, via bin/performance-test.sh)
                          and chaos-pain.yml on the self-hosted runner.
-                         Select them with BOTH -Dincluded.groups=performance AND -Dexcluded.groups= - which is
-                         what bin/performance-test.sh does, and the reason to use it rather than a hand-rolled
-                         mvnw line. The include alone selects nothing: exclusion beats inclusion in JUnit
+                         Select them with BOTH -Dincluded.groups=performance AND an -Dexcluded.groups= that
+                         does not list performance - which is what bin/performance-test.sh does, and the reason
+                         to use it rather than a hand-rolled mvnw line. That script passes
+                         -Dexcluded.groups=quarantined rather than an empty value, because an override REPLACES
+                         the default list and an empty one would drop the quarantine exclusion too, letting a
+                         @Quarantined performance test keep gating the required lane. Use an empty value only
+                         when you deliberately want the quarantined ones as well. The include alone selects
+                         nothing: exclusion beats inclusion in JUnit
                          Platform and excluded.groups already contains performance, so the run exits BUILD
                          SUCCESS having tested nothing. NOT -Dgroups=performance either: the groups element
                          below is pinned to ${included.groups}, so the explicit pom value wins and a bare
@@ -1330,7 +1335,27 @@
                                         <exclude>com.github.javafaker</exclude>
                                     </excludes>
                                 </bannedDependencies>
-                                <reactorModuleConvergence />
+                                <!-- The <message> is the actionable half. This rule's default text is
+                                     "Module parents have been found which could not be found in the reactor",
+                                     which is what a contributor gets from `mvn -pl <module>` and says nothing
+                                     about the fix - and the same subset build is how people arrive at the
+                                     "cannot find symbol: class ManagedTruth" report in
+                                     astubbs#180      https://github.com/astubbs/parallel-consumer/issues/180
+                                     confluentinc#861 https://github.com/confluentinc/parallel-consumer/issues/861
+                                     The message body is deliberately left-aligned: Maven echoes the element's
+                                     text verbatim, one [ERROR] line per newline, so any indentation here is
+                                     reprinted in the contributor's terminal. Do not re-indent it to match the
+                                     surrounding POM. Keep it in sync with docs/building.md. -->
+                                <reactorModuleConvergence>
+                                    <message>
+This build was invoked on a SUBSET of the reactor (e.g. `-pl &lt;module&gt;`), so the parent POM is not in it.
+  Build the whole reactor:      ./mvnw test-compile          (from the repo root)
+  ...or pull in dependencies:   ./mvnw -pl &lt;module&gt; -am test-compile
+A subset build also skips `generate-test-sources`, which is where the Google Truth assertion subjects
+(bz.stub.parallelconsumer.ManagedTruth and friends) are generated - so it is also how you end up with
+"cannot find symbol: class ManagedTruth". See docs/building.md.
+                                    </message>
+                                </reactorModuleConvergence>
                                 <!-- Register item 5. wiremock-jre8 pinning ASM 9.4 made Lincheck's
                                      transformer die per-class WHILE REPORTING SUCCESS - a false PASS
                                      on every calibration verdict, caught only by a deliberately

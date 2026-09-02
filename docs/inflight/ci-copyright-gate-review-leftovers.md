@@ -49,8 +49,10 @@ astubbs#338 fixed one instance. Two more stand:
 
 - **The bespoke shell corpus is one directory level deep**, so `bin/lib/`, `scripts/` and the two
   repo-root scripts are outside it. It now lives in `bin/lib/shell-corpus.sh`
-  (`shell_corpus_files`, `ls "$d"/*.sh`) and is shared by `bin/check-shell-sigpipe.sh` and
-  `bin/check-shell-hazards.sh`, so extracting it doubled the gap's reach rather than closing it.
+  (`shell_corpus_files`, `ls "$d"/*.sh`) and now has exactly one consumer, `bin/check-shell-hazards.sh`.
+  The sigpipe rule LEFT it: as a row in `bin/lib/source-patterns.mjs` it walks `git ls-files` and
+  matches every tracked `.sh`/`.bash` path, so `bin/lib/`, `scripts/` and the root scripts are inside
+  its reach. That closes the gap for that rule and narrows this note to the hazards gate alone.
   A scope gap rather than live instances, and both halves of that are worth keeping: of the
   excluded files, most carry no `set -o pipefail` at all, and `scripts/upstream-sweep.sh`'s
   `grep -qx` reads a file argument rather than a pipe, which is not the pattern that bites.

@@ -31,6 +31,10 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
+import java.time.Instant;
+import bz.stub.parallelconsumer.internal.utils.StringUtils;
+import bz.stub.parallelconsumer.internal.utils.ThroughputReport;
+import org.awaitility.core.ConditionTimeoutException;
 
 import static bz.stub.parallelconsumer.internal.utils.GeneralTestUtils.time;
 import static bz.stub.parallelconsumer.internal.utils.Range.range;
@@ -207,6 +211,13 @@ class LargeVolumeInMemoryTests extends ParallelEoSStreamProcessorTestBase {
     /**
      * Runs a round of consumption and returns the time taken
      */
+    /** Size read under the list's own monitor - assertj's iterator-based checks need it, so this does too. */
+    private static int countProcessed(java.util.List<?> successfulWork) {
+        synchronized (successfulWork) {
+            return successfulWork.size();
+        }
+    }
+
     private void testTiming(int numberOfKeys, int quantityOfMessagesToProduce) {
         log.info("Running test for {} keys and {} messages", numberOfKeys, quantityOfMessagesToProduce);
 
@@ -232,7 +243,12 @@ class LargeVolumeInMemoryTests extends ParallelEoSStreamProcessorTestBase {
 //            log.debug(x.toString());
         });
 
-        waitAtMost(defaultTimeout.multipliedBy(15)).untilAsserted(() -> {
+        // In-memory: no broker in the path, so this rate is the cleanest machine-speed reference in
+        // the lane - it moves with the runner and with PC's own overhead, and with nothing else.
+        ThroughputReport.reporting("LargeVolumeInMemoryTests", quantityOfMessagesToProduce,
+                () -> countProcessed(successfulWork),
+                () -> StringUtils.msg("keys={}", numberOfKeys), () -> {
+            waitAtMost(defaultTimeout.multipliedBy(15)).untilAsserted(() -> {
             // assertj's size checker uses an iterator so must be synchronised.
             // .size() wouldn't need it but this output is nicer
             synchronized (successfulWork) {
@@ -244,6 +260,7 @@ class LargeVolumeInMemoryTests extends ParallelEoSStreamProcessorTestBase {
             assertThat(producerSpy.history())
                     .as("Expected number of produced messages")
                     .hasSize(quantityOfMessagesToProduce);
+        });
         });
         bar.close();
 

@@ -279,7 +279,8 @@ the race needs — which makes PIT a *useful reproducer*, not merely a victim.
 | `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/ProducerManager.java` | `preAcquireOffsetsToCommit`, `commitOffsets`, `acquireProduceLock`, `ProducingLock` |
 | `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java` | `runUserFunction` / `runUserFunctionInternal` / `cleanUpContext` — the production ordering |
 | `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/WorkContainer.java` | `onPostAddToMailBox`, the other `finishProducing` caller |
-| `docs/inflight.md` | the ledger entry for this flake — **update it as you go**. (Pointer repair: that single file became the directory [`docs/inflight/`](../inflight/) on 2026-08-04 and was deleted in `0de96fc` — `git show 0de96fc^:docs/inflight.md`, grep `producedRecordsCantBeInTransactionWithoutItsOffsetDirect`, for the entry as it stood. It was already marked FIXED by astubbs#110 there and did not carry into `docs/inflight/`, so nothing live succeeds it. Two look-alikes that are **not** this entry: [`docs/inflight/bug-producing-lock-double-release.md`](../inflight/bug-producing-lock-double-release.md), the separate open follow-up §11 raised, and the same test name in [`docs/inflight/test-untracked-ci-flakes.md`](../inflight/test-untracked-ci-flakes.md), a later `BlockedThreadAsserter` timing defect.) |
+| `docs/inflight.md` | the ledger entry for this flake — **update it as you go**. (Pointer repair: that single file became the directory [`docs/inflight/`](../inflight/) on 2026-08-04 and was deleted in `0de96fc` — `git show 0de96fc^:docs/inflight.md`, grep `producedRecordsCantBeInTransactionWithoutItsOffsetDirect`, for the entry as it stood. It was already marked FIXED by astubbs#110 there and did not carry into `docs/inflight/`, so nothing live succeeds it. Two look-alikes that are **not** this entry: `docs/inflight/bug-producing-lock-double-release.md`, the separate follow-up §11 raised — since answered and the note deleted by astubbs#257, so `git log --diff-filter=D -- docs/inflight/bug-producing-lock-double-release.md` then `git show <sha>^:docs/inflight/bug-producing-lock-double-release.md` for it as this document read it — and the same test name in [`docs/inflight/test-untracked-ci-flakes.md`](../inflight/test-untracked-ci-flakes.md), a later `BlockedThreadAsserter` timing defect.) |
+<!-- file-refs: N/A - bug-producing-lock-double-release.md is named as a record of a file astubbs#257 deleted; the git commands beside it are the repair docs/citations.md prescribes -->
 
 ## 10. Context worth having
 
@@ -389,3 +390,15 @@ alone does not reprocess test resources, so the logging change never reached `ta
 Either both paths do not in fact both fire, or an exception is being swallowed somewhere a test would
 not notice. Worth a look on its own, independently of this fix — it is unrelated to the flake and the
 fix does not depend on the answer.
+
+**Answered (2026-08-07): both paths fire, and the exception was being swallowed.** The second guess in
+the paragraph above was the right one. `ProducingLock#unlock()` logs *after* the unlock, so a release
+that threw left no line in the log and a later acquire-versus-release count read a clean 1:1 while
+half the releases were failing; the `IllegalMonitorStateException` itself went into the worker's
+`Future`, which nothing in main ever reads. Under `batchSize >= 2` it was a live defect, not just
+noise — see `ProduceLockReleaseTest` (citation repair: merged into `ProducerManagerTest` on
+astubbs#262; grep `wholeBatchSucceedsWhenProducing`). `cleanUpContext` is now the single release point, and
+`WorkContainer#onPostAddToMailBox` — named throughout the sections above as the release site — was
+deleted along with it. To read the code as this document describes it, use
+`git log -S'onPostAddToMailBox' -- parallel-consumer-core` for the commit that removed it. The
+sections above are left as they were written; they are a record of what was true then.

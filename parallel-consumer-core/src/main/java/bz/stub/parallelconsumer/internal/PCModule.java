@@ -85,10 +85,16 @@ public class PCModule<K, V> {
 
     protected ConsumerManager<K, V> consumerManager() {
         if (consumerManager == null) {
-            consumerManager = new ConsumerManager<>(optionsInstance.getConsumer(),
+            // Wrap the user's consumer in a thread-confinement guard. Ownership is claimed
+            // by the poll thread when BrokerPollSystem.controlLoop starts. Before that,
+            // init-time calls (subscribe, groupMetadata) are allowed from any thread.
+            // See confluentinc#857.
+            var confinedConsumer = new ThreadConfinedConsumer<>(optionsInstance.getConsumer());
+            consumerManager = new ConsumerManager<>(confinedConsumer,
                     optionsInstance.getOffsetCommitTimeout(),
                     optionsInstance.getSaslAuthenticationRetryTimeout(),
                     optionsInstance.getSaslAuthenticationExceptionRetryBackoff());
+            consumerManager.init();
         }
         return consumerManager;
     }
@@ -223,10 +229,15 @@ public class PCModule<K, V> {
         return pcMetrics;
     }
 
+    /**
+     * A configured {@link ParallelConsumerOptions#messageBufferSize} pins the load factor to whatever multiple of the
+     * in-flight target produces that buffer - the factor is then fixed for the lifetime of the instance, and never
+     * steps.
+     */
     private DynamicLoadFactor initDynamicLoadFactor() {
         if (options().getMessageBufferSize() > 0) {
             int staticLoadFactor = (options().getMessageBufferSize() / options().getTargetAmountOfRecordsInFlight()) + (options().getMessageBufferSize() % options().getTargetAmountOfRecordsInFlight() == 0 ? 0 : 1);
-            return new DynamicLoadFactor(staticLoadFactor, staticLoadFactor);
+            return DynamicLoadFactor.fixedAt(staticLoadFactor);
         } else {
             return new DynamicLoadFactor(options().initialLoadFactor, options().maximumLoadFactor);
         }

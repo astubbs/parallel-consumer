@@ -5,9 +5,8 @@ package bz.stub.parallelconsumer;
  */
 
 import ch.qos.logback.classic.Level;
-import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.core.read.ListAppender;
+import bz.stub.parallelconsumer.internal.utils.LogCapture;
 import bz.stub.parallelconsumer.integrationTests.AmbientProbeExtension;
 import bz.stub.parallelconsumer.integrationTests.NoAmbientProbe;
 import bz.stub.parallelconsumer.integrationTests.chaostests.ChaosSeed;
@@ -15,11 +14,11 @@ import bz.stub.parallelconsumer.integrationTests.chaostests.ProgressProbe;
 import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.extension.ExtensionContext;
 import org.junitpioneer.jupiter.ClearSystemProperty;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.junitpioneer.jupiter.SetSystemProperty;
-import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Method;
 import java.time.Instant;
@@ -27,6 +26,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -62,6 +62,107 @@ class AmbientProbeExtensionTest {
      * lock on every test that calls {@code buildAutopsy}, not just the two asserting on the dump.
      */
     private static final String ENVIRONMENT_DUMP_LOCK = "ambient-probe-environment-dump";
+
+    // --- deadline headroom: measured at the end of the method, LABELLED after teardown ---
+
+    /**
+     * A test whose method passes and whose {@code @AfterEach} then fails is one FAILING test to
+     * failsafe. The headroom line used to be emitted from {@code afterTestExecution}, which runs
+     * before that teardown, so it read {@code outcome=PASSED} inside a failing run - a wrong value in
+     * a {@code key=value} line, which is worse for a collector than a missing one.
+     */
+    @Test
+    void headroomOutcomeComesFromTheWatcherPhaseNotTheEndOfTheTestMethod() {
+        var extension = new AmbientProbeExtension();
+        var context = contextFor(TimedFixture.class, "timedMethod");
+        seedStart(context);
+
+        List<String> lines;
+        try (var logs = LogCapture.of(AmbientProbeExtension.class)) {
+            // end of the test METHOD: the clock stops here, but nothing is said yet - @AfterEach and
+            // every AfterEachCallback still have to run, and either can fail the test
+            extension.afterTestExecution(context);
+            assertWithMessage("headroom must not be reported before teardown has had its say")
+                    .that(headroomLines(logs)).isEmpty();
+
+            // ...and teardown fails it
+            extension.testFailed(context, new AssertionError("@AfterEach blew up"));
+            lines = headroomLines(logs);
+        }
+
+        assertThat(lines).hasSize(1);
+        assertThat(lines.get(0)).contains("outcome=FAILED");
+        assertThat(lines.get(0)).contains("deadlineMs=" + TimeUnit.SECONDS.toMillis(30));
+    }
+
+    /** The other exit: a clean pass still reports, because a green run is what establishes normal. */
+    @Test
+    void headroomIsReportedOnAPassingTestToo() {
+        var extension = new AmbientProbeExtension();
+        var context = contextFor(TimedFixture.class, "timedMethod");
+        seedStart(context);
+
+        List<String> lines;
+        try (var logs = LogCapture.of(AmbientProbeExtension.class)) {
+            extension.afterTestExecution(context);
+            extension.testSuccessful(context);
+            lines = headroomLines(logs);
+        }
+
+        assertThat(lines).hasSize(1);
+        assertThat(lines.get(0)).contains("outcome=PASSED");
+    }
+
+    /**
+     * No {@code @Timeout} means no denominator, so there is no headroom to express - and the watcher
+     * phase must stay silent rather than inventing one. Same silence for a test whose method never
+     * ran: nothing was captured, so nothing is emitted.
+     */
+    @Test
+    void headroomIsSilentWithoutADeadlineAndWithoutAMeasurement() {
+        var extension = new AmbientProbeExtension();
+        var timedButUnmeasured = contextFor(TimedFixture.class, "timedMethod"); // no start instant
+        var measuredButUntimed = contextFor(PlainFixture.class, "plainMethod");
+        seedStart(measuredButUntimed);
+
+        List<String> lines;
+        try (var logs = LogCapture.of(AmbientProbeExtension.class)) {
+            extension.afterTestExecution(timedButUnmeasured);
+            extension.testSuccessful(timedButUnmeasured);
+            extension.testFailed(timedButUnmeasured, new AssertionError("boom"));
+
+            extension.afterTestExecution(measuredButUntimed);
+            extension.testSuccessful(measuredButUntimed);
+            extension.testFailed(measuredButUntimed, new AssertionError("boom"));
+            lines = headroomLines(logs);
+        }
+
+        assertThat(lines).isEmpty();
+    }
+
+    /** Stands in for a broker IT's {@code beforeEach}, which cannot run here - see the class javadoc. */
+    private static void seedStart(ExtensionContext context) {
+        context.getStore(ExtensionContext.Namespace.create(AmbientProbeExtensionTest.class))
+                .put(AmbientProbeExtension.STARTED_KEY, Instant.now().minusMillis(50));
+    }
+
+    /**
+     * Reads through {@link LogCapture} rather than a raw {@code ListAppender}, so these tests share the helper the
+     * rest of the class uses. The marker filter is also what discharges {@code LogCapture}'s second obligation - the
+     * logger is JVM-shared and this module runs thread-parallel, so a reader must scope what it reads.
+     */
+    private static List<String> headroomLines(LogCapture logs) {
+        return logs.events().stream()
+                .map(ILoggingEvent::getFormattedMessage)
+                .filter(message -> message.contains(AmbientProbeExtension.HEADROOM_MARKER))
+                .collect(Collectors.toList());
+    }
+
+    static class TimedFixture {
+        @Timeout(value = 30, unit = TimeUnit.SECONDS)
+        void timedMethod() {
+        }
+    }
 
     // --- fixtures for the isDisabled() matrix ---
 
@@ -464,15 +565,11 @@ class AmbientProbeExtensionTest {
         assertThat(observer.isObserverMode()).isTrue();
         assertThat(chaos.isObserverMode()).isFalse();
 
-        var probeLogger = (Logger) LoggerFactory.getLogger(ProgressProbe.class);
-        var appender = new ListAppender<ILoggingEvent>();
-        appender.start();
-        probeLogger.addAppender(appender);
-        try {
+        List<String> errors;
+        try (var logs = LogCapture.of(ProgressProbe.class)) {
             violate(observer, "AMBIENT_SYNTHETIC: observer violation");
             violate(chaos, "CHAOS_SYNTHETIC: chaos violation");
-        } finally {
-            probeLogger.detachAppender(appender);
+            errors = logs.messagesAt(Level.ERROR);
         }
 
         // violations are recorded identically in both modes...
@@ -481,11 +578,8 @@ class AmbientProbeExtensionTest {
 
         // ...but only chaos mode reports at ERROR - the ambient observer is silent on a green test
         // (its violations surface through the failure-time autopsy instead)
-        List<ILoggingEvent> errors = appender.list.stream()
-                .filter(event -> event.getLevel() == Level.ERROR)
-                .collect(Collectors.toList());
         assertThat(errors).hasSize(1);
-        assertThat(errors.get(0).getFormattedMessage()).contains("CHAOS_SYNTHETIC");
+        assertThat(errors.get(0)).contains("CHAOS_SYNTHETIC");
     }
 
     // --- helpers ---

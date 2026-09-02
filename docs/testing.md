@@ -63,6 +63,15 @@ truncate, and check the log you did fetch is complete before diagnosing from it:
 [`docs/solutions/workflow-issues/gh-run-view-log-truncation.md`](solutions/workflow-issues/gh-run-view-log-truncation.md)
 **owns those routes** and the completeness check.
 
+**Locally there is no artifact, and the confirming re-run destroys the evidence.** CI uploads the
+failsafe XML, so a failure's report survives being looked at; on a developer box the re-run writes
+over `target/*-reports/TEST-<class>.xml` in place, taking the autopsy, the seed and the assertion's
+actual-versus-expected with it. **Copy the report aside before you re-run** - `cp
+parallel-consumer-core/target/*-reports/TEST-<class>.xml /tmp/`. The re-run that proves "it passes in
+isolation" is precisely the one that overwrites the failure it is being compared against: on
+2026-08-19 a `PCMetricsTest` sighting lost its actual-versus-expected that way, leaving only a
+timing the ledger already had, and so could not be told apart from ordinary load.
+
 **A failing chaos test's autopsy carries its own replay.** `chaos seed:` and `chaos replay:` sit
 directly under the failure line, the replay command complete - the `chaos` tag is excluded by
 default, so the seed alone does not select the test. **First move on a chaos failure is to run that
@@ -120,6 +129,12 @@ Rules:
    proving the failure is master-state. A hunch stays red and blocks, on purpose.
    [`docs/quarantined-tests.md`](quarantined-tests.md) **owns the full rule** and the reasoning
    behind the 2026-08-19 change from "diagnosis" to "evidence".
+   **Where the sightings can come from without re-reading expired logs:**
+   `bin/inflight.mjs codecov test <name>` prints that one test's recorded outcome per commit, and
+   `codecov flaky` lists every test ever recorded with more than one outcome - history that outlives
+   a CI log. It reports candidates and never a verdict, because the same evidence fits a regression
+   that landed between two commits; rule 1 is unchanged by it.
+   [`docs/inflight-tool.md`](inflight-tool.md) **owns those commands**.
 2. **Quarantine is master-state, not PR-state** - see AGENTS.md, Testing.
 3. **The owning fix PR deletes the annotation AND its registry entry in the same commit** after
    merging master, atomically restoring the test to the gating lane. An owning PR is the goal, not
@@ -172,6 +187,11 @@ A seeded, calibrated chaos suite (`integrationTests.chaostests`: `ChaosConductor
 protocol-invisible per-partition lag stagnation (Class 2), drain overruns, and record loss or
 duplication. Tagged `@Tag("chaos")` and excluded from all default and gating suites via `pom.xml`'s
 `excluded.groups` default.
+
+W1 and W4 make no ordering claim and record no history: they run `UNORDERED` over a unique key
+per record, so `KeyOrderLedger` is W5's instrument alone. `KafkaTestUtils.checkExactOrdering` is
+the no-redelivery equivalent for mock-consumer tests and must not be reached for from a
+rebalance test.
 
 **What it can assert, so you know whether a question is already answerable.** Reach for an existing
 capability before building one - the calibration behind each of these is the expensive part, not the
@@ -265,6 +285,12 @@ is why the chaos job summary prints the peak rather than a verdict - read it as 
 - **A RED run is investigation food, not flake noise.** The probes are calibrated against the real
   historical drain-zombie defect (RED on pre-fix compositions, GREEN on fixed; thresholds sit in
   measured gaps). **Never loosen a probe to go green** - tune the workload or conductor instead.
+- **A workload artifact reads exactly like a defect, and the tuning is the finding.** W5's calibration
+  produced a 154s `CLASS2_STALL/LAG_STAGNATION` that was neither a stall nor probe noise: its heavy
+  tail is spaced on the record index, so with `HEAVY_EVERY` a multiple of `KEY_SPACE` every heavy
+  record landed on one key, and KEY ordering serialised the whole tail onto one shard. Its scenario
+  javadoc carries the arithmetic, and `heavyRecordsMustNotAllShareOneKey` is the check - the pattern to
+  copy is turning the conclusion into an assertion rather than a comment.
 
 ## Lincheck lane (`@Tag("lincheck")`) - scheduler-controlled concurrency testing, never gates
 
@@ -341,6 +367,56 @@ disagree, because a tag the pom excludes and a wrapper does not runs in the GATI
 
 Calibration result, the obstacles, and the cost tables:
 [`docs/plans/2026-08-25-001-test-lincheck-poc-plan.md`](plans/2026-08-25-001-test-lincheck-poc-plan.md).
+
+## Experiment runners - instruments, not a lane
+
+Every section above describes a **lane**: a way of running tests that reports pass or fail. The
+scripts here are not a lane. They **drive** the chaos and performance lanes repeatedly and report a
+*measurement* - a rate, a trajectory, a classification of what caught a failure. None of them
+asserts anything, and none of them gates.
+
+**Reach for one when your question is empirical.** "Does this fail, and why" is a test. "How OFTEN
+does it fail, and does that move when I change X" is one of these, and running a test once cannot
+answer it.
+
+| Ask this | Run | Its question is | Where |
+|---|---|---|---|
+| How often does `largeNumberOfInstances` fail, and how? | `bin/exp-measure-large-instances-failure-rate.sh [n]` | **open** - unmeasured since the 2026-01 upstream report on confluentinc#857 | anywhere |
+| Does that failure rate move with SCALE? | `bin/exp-sweep-large-instances-scale.sh` | **open** - rate rising with scale points at the group coordinator, flat points at PC | anywhere |
+| Does the `NO_PROGRESS` detector MISS real failures? | `bin/exp-audit-stall-detector-silence.sh [n]` | **open, reopened 2026-08-31** - a detector that stays quiet on a real failure is worse than an absent one, because the suite goes green on its silence | anywhere |
+| Did the async stall drain or wedge? | **RETIRED 2026-09-01 - answered** | the backlog drained on all six firings collected; method and discriminator in [`solutions/test-flakiness/collect-more-firings-not-more-seeds-2026-09-01.md`](solutions/test-flakiness/collect-more-firings-not-more-seeds-2026-09-01.md) |
+| All of the above, unattended, one tally | `bin/exp-batch-857.sh` | a batch of whatever was outstanding when it was written - read its header before trusting its scope | local only |
+
+**"Local only" is enforced, not advisory.** Those two compare this tree against sibling worktrees
+(`.claude/worktrees/pr29`, `.claude/worktrees/pre-344`) that exist only where somebody cut them, so
+they refuse to start without them (exit 2) rather than recording a missing-tree row and finishing
+green. They are deliberately absent from the dispatch workflow's choices for the same reason.
+
+The tracking note for that first row lives on the branch the runners came from and is not on master
+yet, so the row deliberately cites no path - a link into a file that only exists on another branch
+reads as a broken reference to everyone else. Grep `docs/inflight/` for `largenumberofinstances` once
+that work lands, and add the link then.
+<!-- file-refs: N/A - deliberately names no path, for the reason stated -->
+
+**Choosing between these and the lanes above:**
+
+- Replaying a known schedule to see a failure again -> `bin/chaos-test.sh` with `CHAOS_SEED`.
+- Running one scenario once while you change code -> the IT directly, or the chaos lane.
+- Asking how often, at what rate, or whether a number moves -> an experiment runner.
+
+The distinction that matters is that a rate needs N runs. A single run gives a pass or a fail, which
+is not a rate, and no lane in this repo aggregates results across runs.
+
+**The single-tree ones can be dispatched instead of run locally.** `.github/workflows/experiments.yml`
+offers each of those as a `workflow_dispatch` choice on the high-CPU runner, which is where the
+expensive ones belong - a ten-iteration batch is a runner-hour, not a desk-hour. The `largeNumberOfInstances` rate also
+runs weekly on a schedule, alone, because its question is open and a rate nothing samples stays
+unmeasured. **Nothing here runs on push and nothing gates**; that workflow's header carries the
+reasoning, including why gating on a rate would need a threshold nobody has the spread to choose.
+
+**When a question in that table is ANSWERED, the row and the script both go**, and the method moves
+to [`docs/solutions/`](solutions/). [`bin/AGENTS.md`](../bin/AGENTS.md) owns that lifecycle; this
+table is the discovery half of it, and a row that outlives its script is worse than no row.
 
 ## Mutation-check every new assertion, not just the risky-looking ones
 

@@ -57,3 +57,5 @@ references:
     path: docs/testing.md
   - label: What the probes check, and the Class 2 bound's open calibration question
     path: docs/solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md
+  - label: Recorded sightings, each with its seed and replay command
+    path: docs/inflight/test-857-revoke-under-work-sightings.md

@@ -54,6 +54,44 @@ The rule existed, was correct, and was linked from the root `AGENTS.md`. It was 
 The lesson generalises: **if a rule must not be missed, it cannot live only in a doc an agent chooses
 to read.** It needs a layer that fires on its own.
 
+## The same layer carries KNOWLEDGE, not only rules
+
+A rule is the obvious use of a mechanism that fires on its own, and it is not the only one. **Write
+the code so a future agent can use it correctly without doing research**, by having the code say what
+it needs to know at the moment it is used - startup log, failure message, hook output, gate note.
+Where a rule needs a gate that can fail, knowledge needs only delivery, so this is cheaper and
+applies far more widely.
+
+The distinction that makes it worth stating separately: a rule protects the repo from the agent, and
+you can test whether it fires. Knowledge protects the agent from wasted work, and **nothing goes red
+when it fails to arrive** - the cost is silent, paid as an experiment repeated, a constraint
+rediscovered, or a symptom misread. So there is no feedback telling you the delivery was needed. You
+have to decide it in advance, when you write the thing.
+
+Two incidents, one day apart, are the worked examples:
+
+- **Prior art that the documented route could not reach.** `ChaosRevokeUnderWorkIT`'s class javadoc
+  records that a recovery diagnostic was already run at an earlier scenario shape, and what it
+  established. An agent ran all six of `AGENTS.md`'s prior-art checks correctly and still repeated
+  the experiment - because those six search plans, solutions, inflight notes, PRs and issues, and
+  **none of them reaches a class javadoc**. The fix was not "read more carefully": the diagnostic
+  mode now prints the earlier result and the remaining question when it starts, so the prior art
+  arrives at the moment it is about to be repeated.
+- **State no agent can see.** `/tmp` on the dev box reached 99%, and the visible effects were a chaos
+  log truncated mid-run - which read as a test ending early, and cost real diagnosis time - plus
+  another session's watcher dying on ENOSPC. Both agents were behaving correctly and neither had any
+  way to notice. `.githooks/pre-commit` now carries a disk advisory that is silent below 75%.
+
+**Silence below the threshold is part of the design, not a detail.** Advisory output competes for
+attention with every rule in `AGENTS.md`, and the file already warns that attention, not tokens, is
+the scarce resource. A notice that prints on every commit is one an agent learns to skip, which
+costs more than it delivers - so an advisory earns its place by being rare enough that its
+appearance means something.
+
+**When you add a flag, mode, or tool an agent might misuse**, ask what it must know at the moment of
+use, and have the code say it then - rather than only adding a line to a document someone must first
+decide to open.
+
 ## What actually loads, and what does not
 
 Verified against Claude Code **2.1.223**. This is the part most people get wrong:
@@ -183,16 +221,23 @@ So the two hooks are registered differently, on purpose:
 |---|---|---|
 | `check-squash-subject.sh` | **none** - runs on every Bash call | It can only ever allow, or deny a real `gh pr merge`. A `grep` for `merge` in the payload rejects the overwhelming majority before python starts, so the cost is a shell test. |
 | `check-merge-outstanding-work.sh` (astubbs#324) | **none** - runs on every Bash call | Same reasoning as the squash guard, and the same shapes must reach it: `echo ready && gh pr merge ...` is exactly the case a prefix `if` would miss. A cheap `*merge*` pre-filter skips the interpreter on everything else; the decision itself is tokenised with `shlex`, so `gh pr comment --body "run gh pr merge later"` is not a merge. It watches this session's background TASKS only - it deliberately does not scan the process table for builds. |
-| `pre-commit-gate.sh` | `Bash(git commit *)` | It runs the gates and can `exit 2`. Firing it on every Bash call is the outage described above - and it must stay prefix-matched anyway, because it gates *the session's* repository, which is only the right one when the command has no `cd` in front of it. **It self-filters as well**, exiting 0 when the payload holds no commit, because the `if` is a belt the script must not hang its trousers on - see below. |
+| `pre-commit-gate.sh` | `Bash(git commit *)` | It runs the gates and can `exit 2`, so firing it on every Bash call is the outage described above. It no longer gates *the session's* repository: it derives the commit's own working tree from the command (`git -C`, a leading `cd`), so a subagent committing in another worktree is gated against that worktree when the command names it **with a literal path** - a `-C "$W"` reaches the hook unexpanded and is refused; a bare commit that resolves to a tree with nothing to commit is refused with that remedy, because the payload's `cwd` is the session's directory, not the subagent's - see its bullet below. **It self-filters as well**, exiting 0 when the payload holds no commit, because the `if` is a belt the script must not hang its trousers on - see below. |
 
-The `git commit` case that `if` therefore misses (`cd sub && git commit`) is covered by
-`.githooks/pre-commit`, which git runs inside the target repository. That is the layering working
-as intended, not a hole - see *Known gaps*.
+The `git commit` case that `if` therefore misses (`cd sub && git commit`) is the git hook's to
+cover - `.githooks/pre-commit` runs inside the target repository - once `core.hooksPath` is set,
+which in this clone it is not. That is the layering as designed, and today a hole - see *Known
+gaps*.
 
 ## What is wired up today
 
 **`.githooks/pre-commit`** - runs the fast read-only gates (~1.5s total): copyright headers, issue
-references, docs data, shell sigpipe, quarantine registry, action versions. Enable per clone, once:
+references, docs data, shell sigpipe, quarantine registry, action versions. It also carries one
+**advisory** that blocks nothing: a disk check that is silent below 75% and otherwise tells the
+agent which filesystem is tight and that tidying its own `/tmp` scratch files is part of finishing a
+task. That is the layer being used for what it is uniquely good at - not enforcement, but putting a
+fact into an agent's context that nothing else would. An agent cannot notice a filesystem filling
+up; it only meets the consequence, as a truncated log or an ENOSPC in something unrelated. Enable
+per clone, once:
 
 ```
 git config core.hooksPath .githooks
@@ -226,7 +271,7 @@ merged as a no-op - `git ls-files | grep -c CLAUDE.md` returned **0**. The three
 negated individually rather than with a blanket `!CLAUDE.md`; the reasoning is in `.gitignore`
 itself, next to the rule.
 
-**`.claude/settings.json`** - fourteen hook scripts across sixteen registrations, and the file is
+**`.claude/settings.json`** - seventeen hook scripts across twenty registrations, and the file is
 **tracked**. The entries below are the ones whose design decisions are worth recording here;
 `remind-inflight-on-push.sh` and `check-history-rewrite.sh` carry theirs in their own headers.
 The count is stated because it drifted: this said "five" while the file registered seven, which is
@@ -235,16 +280,51 @@ the same silent staleness the rest of this document exists to prevent. `.gitigno
 this; the negations `!/.claude/settings.json` and `!/.claude/hooks/**` open that door. Personal
 grants stay in `settings.local.json`, still ignored.
 
+**A HOOK NAMED FOR A TRIGGER IS A DESIGN SMELL, and `after-pr-create-refresh-cache.mjs` was the
+worked example - it is deleted.** It existed to reach into the in-flight tool's PR cache from
+outside and repair a staleness the cache would not admit to, and it is named for the event that
+repairs it rather than for anything it does. That framing hides the defect: it covered exactly ONE
+of the ways a pull request comes into existence - `gh pr create`, in a session that had the hook
+loaded - and none of the others, so a PR opened on the web, from another machine, or by another
+session still read as "no PR" until a TTL expired.
+
+**The fix was to give the cache a policy instead of an event.** `bin/lib/cache.mjs` now states
+per kind how long an answer lives and whether an ABSENCE may be stored at all, and refuses to store
+one where it may not - so "this branch has no PR" is re-asked rather than remembered, whoever
+created it and wherever. A cache that needs an external event to be correct is coupled to that
+event, and every path that does not fire it is silently wrong. **The rule that generalises: a hook
+may decide WHEN to act; it may not be load-bearing for whether another component is correct.**
+
+The direction that hook was reaching for is still right, and still wanted - hooks should CALL the
+in-flight tool rather than reimplement what it needs. That migration is
+[`docs/inflight/ci-inflight-absorbs-the-query-half.md`](inflight/ci-inflight-absorbs-the-query-half.md);
+what this one got wrong was not calling the tool but owning the tool's correctness.
+
 - `PreToolUse` on `Bash`, `if` `Bash(git commit *)`, runs `.claude/hooks/pre-commit-gate.sh`, a
-  wrapper around the same pre-commit script. Belt-and-braces: it catches the agent even in a clone
-  where `core.hooksPath` was never set, which is the likely state of a fresh worktree on a new
-  machine. The wrapper exists so the hook can **read the payload and honour `--no-verify`** - the
+  wrapper around the same pre-commit script. Designed as belt-and-braces, to catch the agent in a
+  clone where `core.hooksPath` was never set - which is not the fresh-machine edge case it sounds
+  like but this clone's standing state, so in practice it is the only gate that fires; *Known gaps*
+  owns that. The wrapper exists so the hook can **read the payload and honour `--no-verify`** - the
   original inline `pre-commit || exit 2` could not see the command it was gating, which left the
   agent with no escape hatch at all while the pre-commit header promises an easy one. It exits 2
   with the failing gate's output on stderr, so the model is told *why* rather than just "no".
   It also **decides for itself** whether the payload contains a commit, rather than trusting the
   `if` to have filtered for it - and finding a commit means finding it wherever the shell would run
   one, `then`, `do`, `{` and `!` included, or the self-filter turns a scope fix into an exemption.
+  **And it decides for itself which working tree to gate**, from the command's `git -C`, a leading
+  `cd`, then the payload's `cwd`, with `$CLAUDE_PROJECT_DIR` as a labelled last resort - because that
+  variable names the SESSION's root, and a subagent working in another worktree issues a bare
+  `git commit` from a different tree entirely. The payload's `cwd` names the session's launch
+  directory too, so a bare commit that resolves to a tree with **nothing to commit** - one git would
+  refuse anyway - is refused with `git -C <worktree>` as the remedy rather than gated against the
+  wrong files; `--allow-empty` and `--amend`, the honest commits against a clean tree, still reach
+  the gate. **The `git -C` has to be a literal path.** The hook reads the command before the shell
+  expands it, so `git -C "$W" commit` arrives as the text `$W` - a path that does not exist, which
+  used to fall through to the session tree under a label saying the command never said where it
+  runs. A `-C` holding a `$`, a backtick or a leading `~` is now refused, naming the value, whether
+  or not a `cd` elsewhere in the command names the right tree. Its own header owns the incident,
+  both directions of it: a red gate that was not the agent's, and the mirror image where a red
+  tree passes because the session's is green.
 - `PreToolUse` on `Bash`, **with no `if`** - it runs on every Bash call and filters itself - runs
   `.claude/hooks/check-squash-subject.sh`, which refuses a `--subject` that would drop or misstate
   the PR number. It carried `if: Bash(gh pr merge *)` until review pointed out that a prefix match
@@ -346,10 +426,12 @@ grants stay in `settings.local.json`, still ignored.
   fetched `origin/master`, never fetched astubbs#205's own two-week-stale ref, re-did a package
   rename of 239 files, resolved 43 conflicts on top, and learned at the rejected push that all of it
   was already published. Its own header owns the incident.
-- The push detection and the portable `stat` both live in `.claude/hooks/lib/hook-common.sh`, shared
-  by the two push hooks. Each had been got wrong once in a way that made a hook *silently stop
-  working* - `git -C <path> push` unmatched, `stat -c` unavailable on BSD - and a second copy hides
-  the next such bug until somebody re-runs the same experiment on the same platform.
+- The push detection, the portable `stat` and the **pushed-branch derivation** all live in
+  `.claude/hooks/lib/hook-common.sh`, shared by the two push hooks. Each had been got wrong once in a
+  way that made a hook *silently stop working, or answer about the wrong thing* - `git -C <path> push`
+  unmatched, `stat -c` unavailable on BSD, and `git rev-parse --abbrev-ref HEAD` naming whichever
+  worktree the SESSION sat in rather than the branch the command names. A second copy hides the next
+  such bug until somebody re-runs the same experiment on the same platform.
 - `PreToolUse` on `Bash`, **with no `if`** - runs `.claude/hooks/check-history-rewrite.sh`, one of
   the two guards here that **refuse**: it stops a force-push, rebase, amend or any other ref-moving
   command while a review is in flight, because a rewrite orphans inline review threads and destroys
@@ -391,6 +473,37 @@ grants stay in `settings.local.json`, still ignored.
   context the agent's own grep does the rest, and a hook that injected bodies would cost per session
   what the whole corpus costs to read. It is the clearest case in this file of the distinction the
   whole harness turns on: the rule was there, was read, and was not run - so it became a mechanism.
+
+- `PreToolUse` on `Write|Edit|MultiEdit` runs
+  `.claude/hooks/inject-solutions-for-named-components.mjs`, which names the `docs/solutions/`
+  write-ups whose `related_components` appear in the text being written. It is the relevance half of
+  the entry above: session-start injection answers *does a document exist*, this answers *does one
+  apply to what I am writing now*, and the two fail differently. Once per write-up per session, and
+  it never blocks. **The corpus it reads is the tree the file is going into**, derived from the
+  write itself the way the pre-commit gate derives the commit's tree from its command -
+  `$CLAUDE_PROJECT_DIR` names the session's root, and a write into another worktree was matched
+  against the wrong tree's corpus before that ordering existed. Its self-test asserts the
+  never-blocks contract on every invocation - exit 0, nothing on stderr - because a helper that
+  mapped a crash to silence once passed a mutant that blocked every edit.
+
+  It exists because `related_components` and `applies_when` were **inert**. A majority of write-ups
+  carried an `applies_when`, and `grep -rln applies_when bin/ .claude/` returned nothing - retrieval
+  metadata written, reviewed, and read by no layer. Meanwhile
+  `docs/solutions/architecture-patterns/two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md`
+  records that three separate 2026 investigations each re-derived part of it before acting; a fourth
+  followed on astubbs#225, which proposed rejoining the consumer group while holding the very lock
+  `onPartitionsRevoked` spins on. A review round caught it. One paragraph would have.
+
+  **It matches the text, not the file path, and that was measured rather than assumed.** Against the
+  incident that produced it, path matching fires zero times - the whole episode was spent writing a
+  requirements document and no Java file was touched. Text matching fires five, including both
+  write-ups that would have prevented the defect. It reads `related_components` only:
+  `applies_when` is free prose, and a fuzzy match on it rebuilds the noise that makes a flat list
+  ineffective, so that field stays what a human reads once the write-up is in front of them.
+
+  Coverage is bounded by how many write-ups name a real Java type - a minority of the corpus, since
+  the field also carries concepts like `documentation` and `control-arm`, which match no filename
+  and are inert here by design rather than by accident.
 
 The checklist itself is a plain doc, not embedded in the hook, so Codex and anything else reading
 `AGENTS.md` gets the same words from the same file. Only the delivery is Claude-specific - and the
@@ -500,11 +613,14 @@ one is a case in that file, and the suite goes red against the old parser.
   **Open decision** - the alternatives are a stash with a robust trap, gating `git diff --cached`
   instead of the tree (which several of these gates cannot do, being whole-tree scans), or leaving
   it as is.
-- **`core.hooksPath` cannot be committed.** A fresh clone has no hooks until someone runs the config
-  command. The `PreToolUse` hook covers Claude Code in that window; nothing covers a human.
+- **`core.hooksPath` cannot be committed, and nothing sets it.** A fresh clone has no git hooks
+  until someone runs the config command, and that window does not close on its own: in this clone
+  it is unset, so `pre-commit-gate.sh` is the only gate that fires, and nothing covers a human. The
+  hook's header owns the consequence - its wrong-tree cases refuse rather than fall open, because
+  there is nothing behind it.
 - **The `PreToolUse` `if` matches the command as written.** `Bash(git commit *)` does not fire on
-  `cd sub && git commit ...`. The git hook covers that case; the Claude-side belt-and-braces does
-  not. **And it does not filter reliably in the other direction either** - verified against 2.1.231,
+  `cd sub && git commit ...`. The git hook would cover that case once wired; until then nothing
+  does. **And it does not filter reliably in the other direction either** - verified against 2.1.231,
   the same registration lets a COMPOUND command through to the hook: a `for` loop with a nested `if`
   and a command substitution reached an always-deny hook and was blocked, while a plain `echo` was
   correctly filtered out. That is the misfire this harness has now been bitten by twice. Treat `if`

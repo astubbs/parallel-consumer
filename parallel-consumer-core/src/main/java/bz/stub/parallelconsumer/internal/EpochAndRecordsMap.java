@@ -33,12 +33,13 @@ public class EpochAndRecordsMap<K, V> {
             if (epochOfPartition == null) {
                 // Race: poll() returned records for a partition before onPartitionsAssigned()
                 // has fired. This is more likely with Kafka 2.x's eager rebalance protocol.
-                // Safe to skip — these records haven't been committed, so Kafka will re-deliver
+                // Safe to skip - these records haven't been committed, so Kafka will re-deliver
                 // them on the next poll after the assignment callback completes.
                 log.warn("Skipping {} records for partition {} — no epoch assigned yet. " +
                         "Records will be re-delivered on next poll after assignment completes.", records.size(), partition);
                 return;
             }
+            log.trace("Tagging {} records for {} with epoch {}", records.size(), partition, epochOfPartition);
             RecordsAndEpoch entry = new RecordsAndEpoch(partition, epochOfPartition, records);
             recordMap.put(partition, entry);
         });

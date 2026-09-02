@@ -13,7 +13,8 @@
 # that no workflow named. The failure is silent by construction: nothing goes red to tell you a
 # check is not running.
 #
-# `bin/check-all.sh --with-tests` globs `bin/check-*.sh` and `bin/test-*.sh`, so the set cannot drift
+# `bin/check-all.sh --with-tests` globs `bin/check-*.{sh,mjs}` and `bin/test-*.{sh,mjs}`, so the set
+# cannot drift
 # from what exists. It does not stop at the first failure - every check runs, and the summary names
 # each one that failed with the tail of its output - so a single lane loses no attribution against
 # the previous per-job layout. It runs the gates concurrently and finishes in about a minute, which
@@ -191,6 +192,12 @@ jobs:
       # testing anything while staying green - the failure mode the bash-3.2 pin assertion guards
       # against one step up. The distinction bought here is ATTRIBUTION: the log now says which of
       # the two happened, so nobody debugs a BSD defect that does not exist.
+      # SHELL ONLY, AND DELIBERATELY - do not "fix" this glob to include bin/test-*.mjs. This job
+      # exists to catch BSD userland differences: bash 3.2, BSD sed and awk, the things that behave
+      # differently here from a Linux runner. A Node self-test has no such exposure, so running it
+      # twice buys nothing, and the .mjs self-tests are already swept on Linux by the
+      # `bin/check-all.sh --with-tests` step above, whose globs cover both suffixes. Widening this loop
+      # would look like closing a gap and would actually just be duplicate coverage.
       - name: Shell self-tests on BSD userland
         run: |
           ran=0; failed=0; cannot=0
