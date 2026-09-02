@@ -18,21 +18,29 @@ baseline for comparison is 15/20 runs fully clean, zero stall-class failures.
 | `PartitionStateCommittedOffsetIT.committedOffsetRemoved[3] none` | 1 sighting (2026-08-05) | `RebalanceInProgressException` out of the test's own setup |
 | `ParallelEoSStreamProcessorTest.inFlightMessagesCommittedIfProcessedDuringShutdown[1]` | 1/15 (2026-08-07) | `assertCommits(of(1))`, "1 record completed during shutdown", in the transactional arm |
 | `PartitionStateCommittedOffsetIT.committedOffsetRemoved[2] earliest` | 1 sighting (2026-08-25, astubbs#353, [job 97859037375](https://github.com/astubbs/parallel-consumer/actions/runs/32865269364/job/97859037375)) | `checkHowManyRecordsWithKeyPresent` expected 2 got 1 - the `[1] latest` assertion signature (solved 2026-08-05 as a nudge race) appearing on the `earliest` parameter; `probe clean` autopsy (test-side, not consumer-group progress), on a branch with no Java <!-- post-merge: checked --> |
-| `PartitionStateCommittedOffsetIT.committedOffsetRemoved[1] latest` | 1 sighting (2026-09-01, astubbs#207, [job 99717308477](https://github.com/astubbs/parallel-consumer/actions/runs/33462670308/job/99717308477)) | `checkHowManyRecordsWithKeyPresent` expected 2 got 1, `probe clean`. **The parameter the 2026-08-05 nudge-race fix targeted, with that fix in the tree** - so this is a recurrence, not a new member. Green 7/7 locally on the same commit when the class ran scoped; CI runs `forkCount=4` <!-- post-merge: checked --> |
+| `PartitionStateCommittedOffsetIT.committedOffsetRemoved[1] latest` | 2 sightings (both 2026-09-01, astubbs#407 [job 100057065090](https://github.com/astubbs/parallel-consumer/actions/runs/33568429332/job/100057065090) and astubbs#207 [job 99717308477](https://github.com/astubbs/parallel-consumer/actions/runs/33462670308/job/99717308477)) | `checkHowManyRecordsWithKeyPresent` expected 2 got 1, `probe clean`, `forkCount=4` on both. The astubbs#407 sighting captured WHICH record survived and it rules out the 2026-08-05 mechanism - see below; the astubbs#207 one did not, and its log has since expired, so it cannot be classified either way <!-- post-merge: checked --> |
 | `TransactionTimeoutsTest.commitTimeout[2]` | 1 sighting (2026-08-06, astubbs#204) | incompletes `[8]` where the parameter pins `[8, 12]` |
 
-**The `[1] latest` recurrence is the one worth a second look**, because it is not a new member of the family -
-it is the exact parameter and assertion signature that
-[`latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md`](../solutions/test-flakiness/latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md)
-recorded as SOLVED, reappearing with that fix present. Either the fix is partial, or a second mechanism produces the
-same observable. The 2026-08-25 sighting on `[2] earliest` already hinted at that - the solved doc says "ONLY the
-[1]=latest parameter ever fails", and `earliest` failing contradicted it.
+**`committedOffsetRemoved[1] latest` has its own section below**, which owns what the two 2026-09-01 sightings
+mean; do not re-derive it here. One correction belongs at the table, though, because it is about how a row
+gets read rather than about the defect:
 
 <!-- post-merge: checked-begin -->
-What the astubbs#207 sighting adds: it was **green 7/7 locally on the same commit** with the class run scoped, and red
-on CI at `forkCount=4` with a clean probe. So the discriminator is contention, not the branch - astubbs#207 changes
-offset *decoding*, and this test removes the committed offset entirely, so there is no metadata for its paths to reach.
-Not diagnosed further; recorded so the next sighting has two data points on the same parameter rather than one.
+**Matching a signature is not classifying a failure, and this row is the worked example.** The astubbs#207
+sighting was written up here as a *recurrence* of the mechanism
+[`latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md`](../solutions/test-flakiness/latest-reset-nudge-race-committedoffsetremoved-2026-07-30.md)
+records as SOLVED - same test, same parameter, same `expected 2 got 1`, same clean probe. The section below
+then established from the astubbs#407 sighting that the surviving record is the one the solved mechanism
+cannot leave behind, so the signature was never evidence of a recurrence. That reading is withdrawn.
+
+Two things survive it. The astubbs#207 branch is still ruled out **on mechanism**: it changes offset
+*decoding*, and this test removes the committed offset entirely, so there is no metadata for its paths to
+reach - and the class ran green 7/7 locally at that commit when scoped, red only on CI at `forkCount=4`.
+And that sighting is now unclassifiable: **which record survived was never captured, and its log has since
+expired**, which is this ledger's own rule about evidence arriving too late, paid in full.
+
+Separately, and still open: the solved doc asserts "ONLY the `[1]=latest` parameter ever fails", which the
+2026-08-25 `[2] earliest` sighting in the table above contradicts. Whoever reopens that doc owns the claim.
 <!-- post-merge: checked-end -->
 
 **On `inFlightMessagesCommittedIfProcessedDuringShutdown[1]` - read the parameter index before
@@ -113,7 +121,43 @@ bug in exactly this area (a rebalance-time commit killing the broker-poll thread
 
 **Explicitly NOT a member: `RebalanceEoSDeadlockTest.noDeadlockOnRevoke`** (1/20). Per the astubbs#68 record
 its contended failure maps to the real confluentinc#857 deadlock - that sighting is live confirmation the
-deadlock is still on master, with its fix waiting in astubbs#29.
+<!-- post-merge: checked -->
+deadlock was still on master when this was recorded, with its fix carried by astubbs#29.
+
+## `committedOffsetRemoved[1] latest` - the same assertion as the `[2]` row, failing from the other side (2026-09-01)
+
+<!-- post-merge: checked-begin - names astubbs#407 in the past tense as the branch the sighting came
+     from, which stays true once that work has landed -->
+
+`Integration Tests` on astubbs#407's head `7517bd983`
+([job 100057065090](https://github.com/astubbs/parallel-consumer/actions/runs/33568429332/job/100057065090)),
+`forkCount=4`, one failure in 161 integration tests. Recorded rather than diagnosed, per this
+ledger's own rule: the evidence expires with the logs.
+
+**WHICH record survived is the whole point, and it is the reverse of the solved case.** The assertion
+is the `checkHowManyRecordsWithKeyPresent("key-" + offset, 2)` inside `causeCommittedOffsetToBeRemoved`,
+and the scan came back holding exactly one:
+
+    offset = 202, key = key-50, value = compactor
+
+The 2026-08-05 diagnosis - the nudge race, and the scan-window half now recorded in that method's own
+javadoc - was that **the reader stopped early**: extra nudge records pushed the compaction records past
+a caller-supplied window, so the scan found the ORIGINAL `value-50` and reported the compactor missing.
+Here the scan plainly reached offset 202, because it is holding the compactor; what is absent is the
+original. A window that stops short cannot produce that, so **this is not the solved bug wearing its
+signature again**, and reading it as one would send the next person to a fix that is already in the
+tree. The reading the evidence supports is that the earlier `key-50` was compacted away before the
+scan ran - an ordering the test does not control - but that is a hypothesis from one sighting, not a
+diagnosis, and it has not been reproduced.
+
+**Master state, not astubbs#407's.** That branch changes one workflow and two Node scripts, and no
+Java at all, so nothing in it is reachable from the code under test.
+
+**Do not merge it into the `[2] earliest` row above.** That row carries the same assertion text and the
+same `probe clean` autopsy, but on the other parameter, and whether the two share a cause is precisely
+what is open. Two sightings on two parameters is not yet a rate on either.
+
+<!-- post-merge: checked-end -->
 
 ## `commitTimeout[2]`, for whoever picks it up (seen 2026-08-06 on astubbs#204)
 

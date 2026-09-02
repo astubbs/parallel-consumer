@@ -106,6 +106,26 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
     protected static final Duration HEAVY_SLEEP = Duration.ofSeconds(20);
 
     /** The single experimental variable between W4 variants. */
+    /**
+     * The commit mode this scenario runs in. Defaults to {@code PERIODIC_CONSUMER_SYNC} - sync
+     * commits sharpen revoke-versus-commit lock contention, which is the confluentinc#857 deadlock
+     * recipe and why every scenario in this family used it.
+     *
+     * <p><b>Promoted to an accessor so the transactional half of the family is reachable at all.</b>
+     * It was a hardcoded constant, and combined with {@code ManagedPCInstance} never wiring a
+     * producer, that made {@code PERIODIC_TRANSACTIONAL_PRODUCER} unreachable by construction rather
+     * than by decision. The consequence was not academic: astubbs/parallel-consumer#44 - the only
+     * issue upstream ever labelled a verified bug - is in that mode, and so is the unbounded revoke
+     * wait in {@code docs/inflight/bug-857-transactional-revoke-wait.md}. The suite built to hunt
+     * this family could not enter the room they are in.
+     *
+     * <p>Overriding it changes what a scenario measures, so a variant that does should say what it
+     * expects to see that the sync arm cannot - see {@link ChaosRevokeUnderWorkTransactionalIT}.
+     */
+    protected CommitMode commitMode() {
+        return CommitMode.PERIODIC_CONSUMER_SYNC;
+    }
+
     protected abstract boolean useCooperativeAssignor();
 
     /** Short label for topic names and log lines (e.g. "w4" / "w4coop"). */
@@ -197,8 +217,7 @@ abstract class AbstractRevokeUnderWorkScenario extends ChaosScenarioBase {
         Properties quickEviction = new Properties();
         quickEviction.put(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, MAX_POLL_INTERVAL_MS);
         ManagedPCInstance.Config pcConfig = ManagedPCInstance.Config.builder()
-                // sync commits sharpen revoke-vs-commit lock contention - the confluentinc#857 deadlock recipe
-                .commitMode(CommitMode.PERIODIC_CONSUMER_SYNC)
+                .commitMode(commitMode())
                 .order(processingOrder())
                 .inputTopic(topic)
                 .pollDelayMs(1)
