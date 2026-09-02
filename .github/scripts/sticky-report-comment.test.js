@@ -528,6 +528,24 @@ asyncTest("a failed forward link on the recovery path warns rather than throwing
   assert.strictEqual(core.warnings.length, 1, core.warnings.join("; "));
 });
 
+// The same half-done retirement, followed by an ORDINARY report rather than a correction: the lane
+// emptied (create failed), a test was re-quarantined, and the next run has something to report. A
+// report posts fresh whenever nothing is live, so this never went silent - but the first cut looked
+// for the retired comment only under `postWhenAbsent: false`, so the report was created, the retired
+// comment was never linked forward, and its "should follow for this push" note stood forever.
+// Found by review on astubbs/parallel-consumer#415. RED-PROOF: restore the `correction ?` gate on
+// `unreplaced` and this goes red on `action`.
+asyncTest("an ordinary report after a half-done retirement also finishes it", async () => {
+  const { gh, result } = await twoRuns({
+    secondBody: bodyWith("regression"), secondOptions: { postWhenAbsent: true },
+  });
+  assert.strictEqual(result.action, "recovered");
+  assert.deepStrictEqual(result.prev, { status: "green" }, "the previous state was not read from the retired comment");
+  const retired = gh.store.find(c => c.id === 7).body;
+  assert.ok(retired.includes(`Superseded by [a newer report](${result.url}).`), `no forward link: ${retired}`);
+  assert.ok(!retired.includes("should follow for this push"), `the place-less note was left in place: ${retired}`);
+});
+
 // CONTROL: the recovery must not turn the flag back into "always post". With nothing of ours on the
 // PR - live or retired - the correction stays silent.
 asyncTest("CONTROL: with no retired comment either, the correction is still skipped", async () => {

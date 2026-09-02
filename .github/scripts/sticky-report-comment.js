@@ -227,8 +227,8 @@ function retiredBody({ body, marker, supersededMarker, headingRe, label, note, c
  * Returns `{ action, commentId, url, statusChanged, prev, cur }` where `action` is one of
  * `updated` (edited in place), `created` (no previous comment), `superseded` (retired the old one
  * and posted fresh because the status changed), `recovered` (posted fresh and forward-linked a
- * comment an earlier run retired but never replaced - see below) or `skipped` (nothing was written).
- * The last two are only reachable under `postWhenAbsent: false`.
+ * comment an earlier run retired but never replaced - see below; reachable from every caller) or
+ * `skipped` (nothing was written; only reachable under `postWhenAbsent: false`).
  *
  * Required: `github`, `context`, `core` (the github-script globals), `marker`, `dataMarker`, `body`.
  * Optional: `supersededMarker` (defaults to the marker with ` (superseded)` before the `-->`),
@@ -283,20 +283,26 @@ async function postStickyReport({
   const existing = pickOurComment(all, marker);
   const cur = readPayload(body, dataMarker);
 
-  // Nothing LIVE of ours to correct - but have we spoken? A previous run may have retired our comment
-  // and then failed to create its replacement (the retire-then-create order below makes that the
-  // failure mode, by design). Such a comment carries the superseded marker and still ends with the
-  // first, place-less note; nothing else ever revisits it, so if this path also stays silent the
-  // wrong instruction sits under a heading promising a report that never comes, permanently. It is
-  // ours, so we finish the job: post the correction and link the retired comment forward to it.
+  // Nothing LIVE of ours - but have we spoken? A previous run may have retired our comment and then
+  // failed to create its replacement (the retire-then-create order below makes that the failure
+  // mode, by design). Such a comment carries the superseded marker and still ends with the first,
+  // place-less note; nothing else ever revisits it, so unless THIS run finishes the job the wrong
+  // instruction sits under a heading promising a report that never comes, permanently. It is ours,
+  // so whatever body this run carries is that comment's successor: post it, read the previous state
+  // from the retired comment so the delta is real, and link the retired comment forward.
+  //
+  // ON EVERY PATH, not only a correction's. For a correction the retired comment is also the licence
+  // to speak at all. For an ordinary report it is not needed for that - a report posts fresh
+  // whenever nothing is live - but the report is still the successor, and the first cut looked only
+  // under `correction`, so a lane that emptied (create failed), refilled, and reported again left
+  // the retired comment orphaned: found by review on astubbs/parallel-consumer#415.
   //
   // THE NEWEST UNLINKED ONE, not the oldest. Several retired comments can lack a forward link - the
   // link is a best-effort third write - but only the newest is the one whose replacement never
   // existed: every older one was superseded by the comment retired after it. Linking an older one
   // here would point it past a successor it really had.
   const unreplaced = existing ? undefined
-    : correction ? pickOurComment(all, supersededMarker, { where: awaitingForwardLink, newest: true })
-    : undefined;
+    : pickOurComment(all, supersededMarker, { where: awaitingForwardLink, newest: true });
   if (!existing && correction && !unreplaced) {
     return { action: "skipped", commentId: null, url: null, statusChanged: false, prev: null, cur };
   }
@@ -336,11 +342,10 @@ async function postStickyReport({
   //                          sits orphaned. Silent, self-perpetuating, and worst on the status change
   //                          it exists to announce.
   //   retire then create  -> the create fails and NO comment carries the live marker. Degraded,
-  //                          obvious, and the next run repairs it: a report posts fresh because it
-  //                          finds nothing live, and a correction finds the unreplaced retired
-  //                          comment above and posts fresh for that reason. A correction that only
-  //                          looked for a LIVE comment would stay silent here forever - which is how
-  //                          this path was first written.
+  //                          obvious, and the next run repairs it: report or correction, it finds
+  //                          the unreplaced retired comment above, posts fresh and links it forward
+  //                          (`recovered`). A correction that only looked for a LIVE comment would
+  //                          stay silent here forever - which is how this path was first written.
   //
   // The forward link costs a third write, so it is best-effort and last: by the time it runs, the
   // marker state is already correct whether or not it succeeds.

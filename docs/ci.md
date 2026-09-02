@@ -203,11 +203,12 @@ we have not already spoken on that PR. The quarantine lane's emptied-lane body i
 PR whose earlier push demanded an annotation be deleted it is the retraction and must be posted, and
 on a PR that never carried a report it would be an announcement that nothing is quarantined, on every
 PR, forever. "Spoken" includes a comment of ours that an earlier run retired and then failed to
-replace - the retire-then-create order makes that the failure mode - which the correction completes
-(`action: recovered`) rather than skipping past. A correction also folds the comment it retires under
-its heading in a `<details>` block: that comment was wrong, not merely older, and a prefixed heading
-above a fully visible ACTION REQUIRED table still leads with the table. The post step logs
-`result.action`, so a `skipped` run says so in the job log.
+replace - the retire-then-create order makes that the failure mode - which the next run completes
+(`action: recovered`) whether it is a correction or an ordinary report: a lane that emptied, refilled
+and reported again still links the retired comment forward. A correction also folds the comment it
+retires under its heading in a `<details>` block: that comment was wrong, not merely older, and a
+prefixed heading above a fully visible ACTION REQUIRED table still leads with the table. The post
+step logs `result.action`, so a `skipped` run says so in the job log.
 
 The SpotBugs step uses the module's lookup and stamp but keeps its own update-or-create: whether a
 clean-to-dirty SpotBugs transition deserves a new comment is a judgement nobody has made, and adding
