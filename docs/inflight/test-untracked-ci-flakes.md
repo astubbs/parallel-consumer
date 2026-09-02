@@ -18,11 +18,12 @@ Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutio
 
 | Test | Rate | Why it is worth attention |
 |---|---|---|
-| `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. Mechanism known and owned (astubbs#262), quarantined - see below |
+<!-- post-merge: checked - the row states the fix and the lift as things that happened -->
+| `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. **Fixed by astubbs#265**, which deleted the wall-clock assertion rather than repairing it. astubbs#262, its owner, lifted the quarantine and deleted the registry entry - see below |
 | `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 4 seen (2026-08-18, 2026-08-19, 2026-08-25, 2026-09-01) | Not from the original scan - each found while babysitting a branch. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third and fourth sightings independently carry the **same three-way key collision** in the failing batch contents, which points at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
-
 | `RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed` | 1 seen (2026-09-01) | Not from the original scan - found while babysitting astubbs#257. Failed its **saturation/pause-point setup guard**, not the confluentinc#909 signature assertion, so it proves nothing about the defect it reproduces - see below <!-- post-merge: checked --> |
 | `ParallelEoSStreamProcessorTest.processInKeyOrder` | 2 seen locally (2026-09-01), 1 in 3 isolated runs | **Two DIFFERENT failures under one test name, and the documented fix is already in the tree.** See below - this one is not a fresh flake, it is a solved one still firing |
+| `MdcContextPropagationTest.anEmptyCallerContextIsHandledAndNothingLeaks` | 1 seen locally (2026-09-01) | Not from the original scan. Its own PRECONDITION fails - `expected: null but was: {}` on the JUnit thread before PC is involved - so it says nothing yet about MDC propagation. Diagnosis, the logback-clear hypothesis and its falsification path live in [`test-mdc-empty-context-precondition-is-order-dependent.md`](test-mdc-empty-context-precondition-is-order-dependent.md); not quarantined, on one sighting |
 
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
 door, and for the same reason: two of that family turned out to be real product bugs, and the third
@@ -49,6 +50,24 @@ it merges: the evidence expires with the logs.
   is 0 while expected size is 9", the latch list empty. Seen ONCE, in a full 533-test suite run, and
   NOT reproduced in two subsequent full-class runs or three method runs. Different parameter,
   different phase, different message. Nothing yet says the two share a cause.
+
+<!-- post-merge: checked-begin - a dated sighting, written in the past tense against a PR number
+     rather than a branch name, so it stays resolvable after the branch is deleted -->
+**A second, independent sighting of `[3]` - three tests, not one.** 2026-08-13, full core unit suite
+on astubbs/parallel-consumer#262, at the head that had just merged master:
+`processInKeyOrder`, `executorThreadsInterruptedOnShutdownTimeout` and
+`inFlightMessagesCommittedIfProcessedDuringShutdown` failed together, all on `(CommitMode)[3]`, all
+in about ten seconds - the shared elapsed time being the only positive signal, and it points at a
+common timeout rather than at three defects. A different subset failed on each repeat and every one
+of them passed in isolation. That branch's two main-code changes are ruled out by grep, not by
+argument: `Produce lock already held` and `Could not return the produce lock` are the strings they
+would have emitted, and the run log carries neither.
+
+The assertion messages from that run were not kept, so **it is not established that this is the same
+`[3]` failure as the one above** - what it establishes is that the `[3]` parameter fails on branches
+whose changes cannot explain it, which is the same conclusion from a second direction. The control
+that would settle it is still unrun and still cheap: the same suite on plain `origin/master`.
+<!-- post-merge: checked-end -->
 
 **The part worth acting on: that solution doc records its fix as `e8c9bb12` on astubbs#264 and
 "UNMERGED as of 2026-08-13". astubbs#264 merged that same day, and the frontier assertion it
@@ -217,29 +236,24 @@ however long arming plus lambda setup takes. Under load that gap widens past a m
 `isAtLeast` fails a correct implementation. Any test using this helper can show the same signature,
 which is why it is filed against the helper.
 
-**The mechanism above no longer exists, and this entry's open task has changed accordingly.** Two
-PRs proposed different fixes - astubbs#262 stamping `armedAtNanos` just before `schedule()` so the
-measurement is correct, and astubbs#265 deleting the wall-clock assertion outright. This ledger
-predicted the collision and called it a real decision: measure it correctly, or stop measuring it.
-**astubbs#265 landed second and chose to stop measuring it.**
+<!-- post-merge: checked-begin - the collision and both its halves are recorded as history, and the
+     rule-3 lift as done rather than owed, since both PRs are cited for what they did -->
+**Fixed by astubbs#265**, and the way it was fixed settled the open question this entry used to pose.
+Two answers were live - measure it correctly, or stop measuring it. astubbs#262 took the first,
+anchoring the elapsed window to a nanos stamp taken just before `schedule()`; astubbs#265 took the
+second, deleting the wall-clock assertion outright and replacing it with a causal one (still parked
+when the unblocker ran, return ordered after it), plus `BlockedThreadAsserterTest` to hold it.
 
-`BlockedThreadAsserter#assertUnblocksAfter` now asserts an ordering fact - both events take a tick
-from a shared monotonic sequence and the return must come after the unblock - so there is no elapsed
-clock left to be short, and `isAtLeast(unblocksAfter)`/`getElapsed()` are gone from the helper. Its
-javadoc states the new contract: *"That is a causality assertion, so it is asserted as an ordering
-fact rather than as a duration."*
+astubbs#265 reached master first, and astubbs#262 resolved the collision by taking it wholesale and
+dropping its own anchoring. That was the better outcome and not a reluctant one: anchoring shrank the
+error and kept the run slow, while removing the assertion ends the whole class of scheduler-jitter
+failure and stops the helper sleeping out its own timeout. The residual the anchoring approach had to
+disclose does not exist, because nothing is measured.
 
-**So the diagnosis this test is quarantined under describes code that is not there.** Measured
-2026-08-17 on `master` merged in: 4 runs, 4 passes, 2.66-4.37s (astubbs#265 reported the same test
-going from 23.06s to 3.32s). Run it with
-`bin/quarantined-test.sh` or `-Dincluded.groups=quarantined` - a plain `-Dtest=` run reports
-`Tests run: 0` because the gating suites exclude it, which is not a pass.
-
-**What is open is the re-enable, not the fix.** Under rule 3 of
-[`docs/quarantined-tests.md`](../quarantined-tests.md) the annotation and the registry entry come out
-together, in the owning change, after merging master. astubbs#262 is still open and still named as
-the owner, but its fix is now redundant - so whoever picks this up should decide whether astubbs#262
-still carries the re-enable or whether it belongs in a change of its own.
+The rule-3 re-enable was astubbs#262's to perform, being the entry's owner, and it performed it: the
+`@Quarantined` annotation and the `docs/quarantined-tests.md` entry went in the same change that
+merged master, returning the test to the gating lane.
+<!-- post-merge: checked-end -->
 
 **Why it was not in this ledger already.** The 2026-08-07 scan read surefire `Flakes:` markers, which
 only appear when the retry re-ran a test and it then passed. This one failed the run outright, so it
