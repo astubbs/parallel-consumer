@@ -661,6 +661,55 @@ const CHECKS = [
         mutate: (binDir) => patch(join(binDir, 'lib', 'branches.mjs'),
             '    if (view.parents.length > 0) {', '    if (false) {'),
     },
+    {
+        id: 'a-pr-that-bases-on-a-branch-explains-it',
+        why: 'the detector called a documented stack base untracked, which is the cry-wolf that gets a detector ignored',
+        // REGRESSION TEST FOR A FALSE POSITIVE Antony caught. astubbs/parallel-consumer#271 bases on
+        // `feats/ks-streams-reconciled` and names it in its body, so that branch was documented all
+        // along - by a PR rather than a note, which is the half the detector could not see.
+        run: async (binDir) => {
+            const b = await branches(binDir)
+            return inFixture(() => {
+                const g = b.commitGraph()
+                if (!g.ok) return false
+                // With no PR anywhere, stranded-work is a gap.
+                if (!b.trackingGap(b.branchView(g, 'stranded-work', new Map()))) return false
+                // A PR whose BASE is that branch explains it, even though its head is elsewhere.
+                const based = new Map([['feature-a', {
+                    number: 1, title: 't', state: 'OPEN', baseRefName: 'stranded-work', body: '',
+                }]])
+                if (b.trackingGap(b.branchView(g, 'stranded-work', based))) return false
+                // So does a PR body that names it.
+                const named = new Map([['feature-a', {
+                    number: 2, title: 't', state: 'OPEN', baseRefName: 'master', body: 'depends on stranded-work',
+                }]])
+                return b.trackingGap(b.branchView(g, 'stranded-work', named)) === null
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'branches.mjs'),
+            '    if (view.explainedBy.length > 0) return null',
+            '    if (false) return null'),
+    },
+    {
+        id: 'an-unknown-baseline-moment-never-grandfathers',
+        why: 'if "before tracking was expected" cannot be established, silencing everything is the worst possible default',
+        run: async (binDir) => {
+            const b = await branches(binDir)
+            return inFixture(() => {
+                const g = b.commitGraph()
+                if (!g.ok) return false
+                // The fixture has no bin/inflight.mjs, so the moment is unknowable there.
+                if (b.baselineMoment(g.baseline) !== null) return false
+                const v = b.branchView(g, 'stranded-work', new Map())
+                // Unknown must mean "not grandfathered", so the gap still reports loudly.
+                return v.baselineKnown === false && v.predatesBaseline === false
+                    && b.trackingGap(v)?.kind !== 'pre-baseline'
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'branches.mjs'),
+            '    const predatesBaseline = moment !== null && firstCommit !== undefined',
+            '    const predatesBaseline = moment === null || firstCommit !== undefined'),
+    },
 ]
 
 console.log('bin/test-inflight.mjs - front door and prior-art library self-test\n')

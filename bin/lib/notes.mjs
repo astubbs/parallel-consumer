@@ -154,7 +154,7 @@ export function prsByBranch({ cache = true } = {}) {
     // Naming the repo is not optional: `gh` resolves a bare command against `upstream` in this fork,
     // and an answer for confluentinc reads exactly like "this branch has no PR".
     const res = exec('gh', ['pr', 'list', '-R', REPO, '--state', 'all', '--limit', '500',
-        '--json', 'headRefName,number,title,state'])
+        '--json', 'headRefName,baseRefName,number,title,state,body'])
     // UNAVAILABLE IS NOT "NO PR", and saying so needs a shape that can carry the difference. This
     // returned a bare Map, so an unauthenticated or rate-limited `gh` was indistinguishable from a
     // branch that genuinely has no PR - and the caller silently fell through to guessing a theme
@@ -166,7 +166,12 @@ export function prsByBranch({ cache = true } = {}) {
     } catch {
         return { ok: false, reason: 'gh returned output that is not JSON', map: new Map() }
     }
-    const pairs = rows.map((r) => [r.headRefName, { number: r.number, title: r.title, state: r.state }])
+    const pairs = rows.map((r) => [r.headRefName, {
+        number: r.number, title: r.title, state: r.state,
+        // Carried because a PR EXPLAINS branches other than its own head: its base is a branch by
+        // definition, and its body routinely names the rungs it depends on.
+        baseRefName: r.baseRefName, body: r.body ?? '',
+    }])
     if (cache) cacheWrite('prs.json', pairs)
     return { ok: true, cached: false, map: new Map(pairs) }
 }

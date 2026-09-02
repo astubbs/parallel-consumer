@@ -111,6 +111,27 @@ export function ownership(ref) {
  * `notesOnly` is the count that matters for loss: note paths this branch carries that the baseline
  * does not have at all. Two ls-trees rather than the whole corpus, because this is one branch.
  */
+/**
+ * THE BASELINE MOMENT, looked up rather than stored.
+ *
+ * Antony's design, and better than the two alternatives it replaced - a committed marker per orphan,
+ * or a generated snapshot the tool diffs against. Both store state that goes stale; this derives it.
+ *
+ * The moment the tool arrived on the baseline is the moment tracking became expected. A branch whose
+ * own history predates it was cut when nothing asked, and reporting it every run would make the
+ * detector noise nobody reads - roughly sixty branches here. A branch cut afterwards has no excuse.
+ *
+ * The set shrinks on its own as old branches land or die, and there is no snapshot file to rot,
+ * which is the failure docs/todo-index.md is this repository's cautionary tale for.
+ *
+ * @returns {number|null} epoch ms, or null when the tool has not reached the baseline yet
+ */
+export function baselineMoment(base) {
+    const added = lines(exec('git', ['log', base, '--diff-filter=A', '--format=%ct', '--', 'bin/inflight.mjs']).out)
+    const oldest = added[added.length - 1]
+    return oldest ? Number(oldest) * 1000 : null
+}
+
 export function branchView(graph, ref, prs) {
     const meta = graph.refs.find((r) => r.ref === ref)
     if (!meta) return { ref, ok: false, reason: `no such ref: ${ref}` }
@@ -125,6 +146,24 @@ export function branchView(graph, ref, prs) {
     // branch. Its own notes naming it would be circular, so this asks the baseline only.
     const mentions = lines(exec('git', ['grep', '-l', '-F', ref, graph.baseline, '--', `${NOTES_DIR}/`]).out)
         .map((l) => l.slice(l.indexOf(':') + 1))
+
+    // A PR EXPLAINS BRANCHES OTHER THAN ITS OWN HEAD, and missing that produced a false positive:
+    // astubbs/parallel-consumer#271 bases on `feats/ks-streams-reconciled` and names it in its body,
+    // so that branch was documented all along while the detector called it tracked nowhere. A base
+    // ref is exact; a body mention is textual and weaker, so they are reported separately.
+    const bare = ref.replace(/^origin\//, '')
+    const explainedBy = []
+    for (const [head, pr] of prs) {
+        if (head === bare) continue
+        if (pr.baseRefName === bare) explainedBy.push({ pr, how: 'bases on it' })
+        else if (pr.body?.includes(bare)) explainedBy.push({ pr, how: 'names it in its body' })
+    }
+
+    // Cut before the tool arrived on the baseline, so nothing asked for a note at the time.
+    const moment = baselineMoment(graph.baseline)
+    const firstCommit = lines(exec('git', ['log', ref, `^${graph.baseline}`, '--format=%ct']).out).pop()
+    const predatesBaseline = moment !== null && firstCommit !== undefined
+        && Number(firstCommit) * 1000 < moment
     const slug = ref.replace(/^origin\//, '').replace(/[^A-Za-z0-9]+/g, '-')
 
     return {
@@ -147,6 +186,9 @@ export function branchView(graph, ref, prs) {
         ...ownership(ref),
         notesOnly,
         mentions,
+        explainedBy,
+        predatesBaseline,
+        baselineKnown: baselineMoment(graph.baseline) !== null,
         slug,
     }
 }
@@ -168,11 +210,19 @@ export function trackingGap(view) {
     if (view.pr) return null
     if (view.containedInBaseline) return null // already landed; nothing to lose
     if (view.mentions.length > 0) return null
+    if (view.explainedBy.length > 0) return null // another PR bases on it or names it
     if (view.parents.length > 0) {
         return { kind: 'integration', remedy: `integration branch for ${view.parents.length} others `
             + `- record that in docs/inflight/branch-${view.slug}.md so it does not read as an orphan` }
     }
     const unpushed = !view.isRemote && !view.upstream
+    // Grandfathered rather than silenced: still reported, but as backlog rather than as a new gap,
+    // so the detector's loud channel stays for branches cut after tracking became expected.
+    if (view.predatesBaseline) {
+        return { kind: 'pre-baseline', remedy: `predates the tool reaching ${view.baseline}, so it is `
+            + `backlog rather than a new gap - triage when convenient, or write `
+            + `docs/inflight/branch-${view.slug}.md` }
+    }
     return {
         kind: unpushed ? 'unpushed-and-untracked' : 'untracked',
         remedy: unpushed

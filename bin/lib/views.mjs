@@ -141,10 +141,13 @@ export function formatBranch(v, gap) {
 
     out.push('')
     if (v.mentions.length) out.push(row('tracked', `named in ${v.mentions.join(', ')}`))
+    for (const e of v.explainedBy) {
+        out.push(row('tracked', `astubbs/parallel-consumer#${e.pr.number} ${e.how}`))
+    }
     if (gap) {
         out.push(row('TRACKED', 'NOWHERE - no PR, no branch note, named in no note on the baseline'))
         out.push(row('FIX', gap.remedy))
-    } else if (!v.mentions.length && v.pr) {
+    } else if (!v.mentions.length && !v.explainedBy.length && v.pr) {
         out.push(row('tracked', `by its PR`))
     }
     return out.join('\n')

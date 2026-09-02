@@ -65,7 +65,22 @@ each gap: *push it*, or *write `docs/inflight/branch-<slug>.md` saying what this
 prefix already exists in [`AGENTS.md`](AGENTS.md) for exactly this - "work sitting on a branch with
 no PR" - and nothing enforces it.
 
-**Baselining, so the detector is not noise on day one.** Roughly sixty branches would report at
+**Baselining is a TIMESTAMP LOOKUP, not stored state** - Antony's design, and better than the two it
+replaced (a committed marker per orphan, or a generated snapshot the tool diffs against; both store
+something that goes stale). The moment `bin/inflight.mjs` first appears on the baseline is the moment
+tracking became expected, and it is recoverable from git at any time:
+
+```
+git log <baseline> --diff-filter=A --format=%ct -- bin/inflight.mjs | tail -1
+```
+
+A branch whose own history predates that was cut when nothing asked, and is reported as backlog
+rather than as a new gap. One cut afterwards has no excuse. The grandfathered set shrinks on its own
+as those branches land or die, and there is no snapshot file to rot. **An unknown moment never
+grandfathers** - if the tool has not reached the baseline yet, every gap still reports loudly, since
+silencing everything is the worst possible default for a detector.
+
+**The remaining day-one concern.** Roughly sixty branches would report at
 once, and a check that always says the same sixty things is a check nobody reads. The answer is not a
 separate baseline file: **backfill the branch index first**, giving every existing orphan a
 `branch-*.md` even where it says only "not yet triaged". An orphan is then *by definition* a branch
