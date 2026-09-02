@@ -1,7 +1,7 @@
 # The commands `inflight` should grow next
 
 <!-- inflight-type: feature -->
-<!-- inflight-impact: stranded-work -->
+<!-- inflight-impact: blind-spot -->
 
 Queued capabilities for `bin/inflight.mjs`, each measured on this repository rather than estimated.
 Sibling note: [`ci-inflight-absorbs-the-query-half.md`](ci-inflight-absorbs-the-query-half.md) owns

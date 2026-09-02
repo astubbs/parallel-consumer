@@ -1,7 +1,7 @@
 # A Node query client over branch-distributed state - and the half of it that is already built
 
 <!-- inflight-type: feature -->
-<!-- inflight-impact: ci -->
+<!-- inflight-impact: blind-spot -->
 
 **Proposal (2026-09-01):** keep the data model - markdown notes in the tree, three tag axes - and put
 a Node client in front of it that (a) answers "what is open" by reading notes across *every* branch
