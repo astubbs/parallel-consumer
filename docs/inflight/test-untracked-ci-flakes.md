@@ -26,6 +26,7 @@ Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutio
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. **Fixed by astubbs#265**, which deleted the wall-clock assertion rather than repairing it. astubbs#262, its owner, lifted the quarantine and deleted the registry entry - see below |
 | `AmbientProbeExtensionTest.headroomIsReportedOnAPassingTestToo`, `headroomOutcomeComesFromTheWatcherPhaseNotTheEndOfTheTestMethod`, `headroomIsSilentWithoutADeadlineAndWithoutAMeasurement` | 4 of 5 local runs (2026-09-02) | Found while verifying the producer-recovery work (astubbs#225) locally; that change does not touch the class. UNDIAGNOSED - see below |
 | `JStreamParallelEoSStreamProcessorTest.testConsumeAndProduce` and `.testFlatMapProduce` | 1 seen (2026-09-01) | Not from the original scan - found in a **local** core unit run on a parallel re-cut of astubbs#207, not on astubbs#207 itself. Both failed together on produced-record count (`Expected size: 1/2 but was: 0`), i.e. the returned stream carried nothing. **Mechanism now known and owned by astubbs#116** - see below | <!-- post-merge: checked -->
+| `LoadFactorCeilingReportingTest.fixedMessageBufferSizeDoesNotWarnOnEveryPass` | 1 seen (2026-09-02, local full run) | Its WARN capture on the processor's shared logger caught a user-function failure line from an instance an earlier class left running; passes alone and beside `UserFunctionFailureLoggingTest`. Same shape as the `AmbientProbeExtensionTest` row - see below |
 | `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 5 seen (2026-08-18, 2026-08-19, 2026-08-25, 2026-09-01, 2026-09-02) | Not from the original scan - each found while babysitting a branch. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third, fourth and fifth sightings independently carry the **same three-way key collision** in the failing batch contents, which points at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
 | `Mutation Tests (PIT, PR-scoped)` lane | 1 seen (2026-09-02, astubbs#207, [run 33610711974](https://github.com/astubbs/parallel-consumer/actions/runs/33610711974)) | Not a test - the LANE hit its `timeout-minutes: 30` cap and was cancelled, on a **markdown-only** delta from a head where it had scored in 19m18s with the same class set. The cap has about a third headroom over a normal run, so it will flap on a slow runner. `continue-on-error: true`, so it never gates a merge - but a cancelled row reads like a failure <!-- post-merge: checked --> |
 | `ManagedPCInstanceLifecycleTest.rapidToggleShouldNotCreateDuplicateInstances` | 1 seen (2026-09-02, astubbs#207, [job 100175277225](https://github.com/astubbs/parallel-consumer/actions/runs/33607572165/job/100175277225)) | Not from the original scan - **arrived on master with astubbs#29 and failed on the first PR to merge it**. `consumeCount` 0, repetition 1 of 5, `forkCount=4`, `probe clean`. Every wait in the test is a fixed sleep, and its assertion names a cause it cannot discriminate - see below <!-- post-merge: checked --> |
@@ -388,6 +389,19 @@ asserting - so the first suspect is an appender that outlives its method, or two
 `PC-DEADLINE-HEADROOM` logger without the `@ResourceLock` the environment-dump cases carry. Not
 diagnosed; nothing was changed. The count varying between runs (2 or 3) says the order of the
 methods decides which capture sees the stray line.
+
+### `LoadFactorCeilingReportingTest` - a leaked instance from an earlier class logs into its capture
+
+Seen 2026-09-02 in one local full run of the core suite on the producer-recovery branch (astubbs#225),
+about forty seconds after `UserFunctionFailureLoggingTest` finished. The class is `@Isolated`, so no
+other class ran beside it; the line it captured is the user-function failure summary
+(`... registering WC as failed, returning to mailbox. Context: input-0.56...-0: 1 record, offset 0`),
+which some earlier class's still-running control thread emitted on the shared processor logger after
+its own class had ended. Passes alone, passes paired with `UserFunctionFailureLoggingTest`, and the
+recorded history on its own branch is all-pass, so the leak is an instance not closed by a test in the
+same fork, not this test. `@Isolated` cannot protect a capture from a thread that outlives its class;
+the fix is in whichever test leaks, once identified - the surefire report timestamps name the
+candidates that ran in the preceding minute.
 
 ### `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` - a helper defect, not a test defect
 
