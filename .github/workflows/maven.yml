@@ -317,6 +317,34 @@ jobs:
           flags: ${{ matrix.suite }}
           token: ${{ secrets.CODECOV_TOKEN }}
 
+      # TEST RESULTS, NOT COVERAGE - a separate Codecov product and a separate upload. It ingests the
+      # JUnit XML surefire and failsafe already write, and gives failure RATES and flake identification
+      # over time.
+      #
+      # WHY THIS REPO WANTS IT, specifically. Flake data here is currently reconstructed BY HAND from CI
+      # logs that expire: largeNumberOfInstances's one-in-ten rate came from a bespoke overnight script
+      # on an idle box, three sightings were transcribed into docs/inflight/ before their logs aged out,
+      # and docs/quarantined-tests.md demands "a recorded sighting ledger" that a human maintains. This
+      # accumulates the same thing automatically and durably.
+      #
+      # ALL FOUR SUITES ON PURPOSE. Chaos and performance are the noisiest, and that is exactly where the
+      # flakes live - excluding them would omit the data this exists for.
+      #
+      # `!cancelled()` rather than `always()`: a FAILED test run is the interesting upload, so this must
+      # survive the step before it failing; a cancelled job has nothing worth sending.
+      #
+      # IF THIS GOES QUIET, IT WILL DO SO SILENTLY. The coverage upload above reported success for four
+      # months while Codecov could not read the repository at all - the action authenticates with a
+      # token, which needs no repo access, so ingest "worked" while everything downstream did nothing.
+      # Judge this by whether rates appear in the dashboard, never by a green step.
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@v1
+        with:
+          files: '**/target/surefire-reports/TEST-*.xml,**/target/failsafe-reports/TEST-*.xml'
+          flags: ${{ matrix.suite }}
+          token: ${{ secrets.CODECOV_TOKEN }}
+
   # Mutation testing (PIT). ci-mutation-test.sh scopes to the classes CHANGED vs the PR base
   # (GITHUB_BASE_REF), so it's fast enough for the 2-core hosted runner - the full internal.* sweep would
   # time out here (which is why it used to be self-hosted-only).
