@@ -1,43 +1,75 @@
-# Both coverage uploads still use the inert `**` glob, and it is what breaks the per-flag gates
+# The coverage uploads no longer hand Codecov an inert `**` glob - the proof is still outstanding
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
 
-`codecov/project/unit` and `codecov/project/integration` report large negative deltas on branches
-that change no Java. They are required checks, so they read as "the branch under review dropped coverage".
+`codecov/project/unit` and `codecov/project/integration` reported large negative deltas on branches
+that changed no Java. They are required checks, so they read as "the branch under review dropped
+coverage".
 
-**Cause, measured from the upload logs.** The uploader's CLI does not expand `**`, and nothing routes
-`files:` through a shell, so the pattern arrives literally, matches nothing, and the CLI falls back to
+**Cause, measured from the upload logs.** The uploader's CLI does not expand `**`, and nothing routed
+`files:` through a shell, so the pattern arrived literally, matched nothing, and the CLI fell back to
 a tree-wide search:
 
-- On master's full build that fallback finds EVERY jacoco report - both halves, every module - so the
-  `unit` and `integration` flags each receive the whole tree. The tell is that both flags report an
+- On master's full build that fallback found EVERY jacoco report - both halves, every module - so the
+  `unit` and `integration` flags each received the whole tree. The tell is that both flags reported an
   identical figure, which can only happen if both hold the same data.
-- On a pull request each suite job has produced only its own half, so the same fallback finds only
+- On a pull request each suite job has produced only its own half, so the same fallback found only
   that half.
 
-A PR's `integration` flag is therefore compared against a master `integration` flag that silently
-contains the unit half too. The delta measures that, not the branch. [`docs/ci.md`](../ci.md)'s
-Codecov section carries the measured table.
+A PR's `integration` flag was therefore compared against a master `integration` flag that silently
+contained the unit half too. The delta measured that, not the branch. [`docs/ci.md`](../ci.md)'s
+Codecov section **owns the measured table**; what is here is the state of the repair.
 
-**It is the same defect this repository already fixed once**, for the test-results upload: a `files:`
-line that reads as configuration and does nothing, whose fallback produces a plausible answer instead
-of an empty one - which is what makes it survive review.
+It was the same defect this repository had already fixed once, for the test-results upload: a
+`files:` line that reads as configuration and does nothing, whose fallback produces a plausible
+answer instead of an empty one - which is what let it survive review.
 
-## The fix, and why it is its own change
+## What changed
 
-Expand both globs before handing them over and set `disable_search: true`, exactly as the
-test-results upload now does, so the fallback cannot silently re-widen the set.
+<!-- post-merge: checked-begin -->
+Every `codecov/codecov-action` call in `.github/workflows/maven.yml` is now handed a real,
+comma-joined file list built by a preceding `find` step and passed through `$GITHUB_OUTPUT`, with
+`disable_search: true` so the fallback cannot silently re-widen the set, and the upload skipped
+outright when the collector finds nothing rather than handing over an empty `files:`.
 
-Not folded into the change that diagnosed it: this alters what a REQUIRED merge gate measures, and it
-should be the only thing in its diff so the before/after comparison is the proof. Expect the first
-clean per-flag comparison to be that proof.
+The master `build` job collects the two halves into two separate step outputs, because one half per
+flag is exactly the split the per-flag gates compare. The PR `test` matrix and the currently disabled
+`ak-experimental` job each collect both patterns, because a suite job produces only what it produces
+- narrowing which half reaches which flag is the separate, still-open question recorded in
+[`ci-codecov-flags-not-like-for-like.md`](ci-codecov-flags-not-like-for-like.md), and expanding a
+pattern that matched nothing neither answers it nor depends on it.
+
+The work landed on `fix/coverage-uploads-inert-glob`.
+<!-- post-merge: checked-end -->
+
+## What is still open, and it is the point of the whole exercise
+
+**The repair is unverified, and it cannot be verified locally.** What was checked locally is that the
+collector emits the paths it should: the shell was executed against a simulated multi-module tree
+with both halves present, with only one half present, and with neither. That says the step produces
+the right list. It says nothing about whether Codecov then measures like against like, because the
+comparison only exists on the server and only after both sides have re-uploaded.
+
+**The proof is the first per-flag comparison built from real file lists on both sides**: master's
+`unit` and `integration` flags no longer reporting an identical figure, and a branch that changes no
+Java no longer showing a delta.
+
+Until master has run the `build` job once with these uploads, a pull request is still compared
+against a base assembled the old way. **A red per-flag gate inside that window is the old defect
+still being measured, not a new one** - the same shape of expected-red the sibling note above
+records for the flag split, and for the same reason.
 
 ## A correction worth keeping
 
 The first diagnosis recorded here was wrong in the opposite direction - it claimed the PR lane
 uploaded BOTH halves under one flag while master uploaded one file per flag. The upload logs say the
-reverse. It was corrected before this note left the branch, and the wrong version is noted because
-the evidence that settles it (a `Found N coverage files` line far exceeding what a one-file glob could match, and master's two
-flags reporting the same number) was available the whole time and was explained away as an unrelated
-API quirk.
+reverse. It was corrected before it left the branch, and the wrong version is noted because the
+evidence that settles it (a `Found N coverage files` line far exceeding what a one-file glob could
+match, and master's two flags reporting the same number) was available the whole time and was
+explained away as an unrelated API quirk.
+
+## Delete when
+
+A pull request that changes no Java shows `codecov/project/unit` and `codecov/project/integration`
+comparing cleanly, against a master base whose two flags report different figures.

@@ -863,18 +863,18 @@ restructuring lost that, and this section is where it now lives.
 endpoint reports default-branch coverage, and on master only `build` runs. A reader who does not know
 that files a bug against the uploader; this is the third time that has nearly happened.
 
-### The per-flag gates, and why they fail
+### The per-flag gates, and why they failed
 
 `codecov.yml` gates on `unit` and `integration` per flag, at `target: auto, threshold: 1%`, and makes
 the overall project number informational. Its reasoning is sound and worth reading in place: a total
 that compares five flags on a PR against two on master cannot be made honest by tuning a threshold.
 
-**The gates fail because the two lanes upload different file SETS, and the cause is the inert `**`
-glob.** The uploader's CLI does not expand `**`, and nothing routes `files:` through a shell, so the
-pattern arrives literally, matches nothing, and the CLI falls back to its own tree-wide search. On
-master's full build that search finds EVERY jacoco report - both halves, every module - so `unit` and
-`integration` each receive the whole tree and report the same number. On a pull request each suite job
-has produced only its own half, so the same fallback finds only that half.
+**The gates failed because the two lanes uploaded different file SETS, and the cause was the inert
+`**` glob.** The uploader's CLI does not expand `**`, and nothing routed `files:` through a shell, so
+the pattern arrived literally, matched nothing, and the CLI fell back to its own tree-wide search. On
+master's full build that search found EVERY jacoco report - both halves, every module - so `unit` and
+`integration` each received the whole tree and reported the same number. On a pull request each suite
+job has produced only its own half, so the same fallback found only that half.
 
 Measured, from the upload logs rather than inferred:
 
@@ -886,18 +886,26 @@ Measured, from the upload logs rather than inferred:
 <!-- file-refs: N/A - jacoco paths are generated build output under target/, and which files reach
      which flag IS the defect described here -->
 
-So a PR's `integration` flag is compared against a master `integration` flag that silently contains
-the unit half as well. The delta measures that difference, not the branch. The confirming detail: on
-master both flags report an identical figure, which only makes sense if both hold the same data.
+So a PR's `integration` flag was compared against a master `integration` flag that silently contained
+the unit half as well. The delta measured that difference, not the branch. The confirming detail: on
+master both flags reported an identical figure, which only makes sense if both hold the same data.
 
-**This is the same defect as the one fixed for the test-results upload in this repository's history -
-a `files:` line that reads as configuration and does nothing.** The fix is the same: expand the globs
-before handing them over, and set `disable_search: true` so the fallback cannot silently re-widen the
-set.
+**It was the same defect as the one fixed for the test-results upload in this repository's history -
+a `files:` line that reads as configuration and does nothing.** The fix is the same, and every
+`codecov/codecov-action` call in `maven.yml` now carries it: a preceding step expands the pattern with
+`find`, hands the real comma-joined list over through `$GITHUB_OUTPUT`, and sets `disable_search:
+true` so the fallback cannot silently re-widen the set. An upload whose collector found nothing is
+skipped rather than handed an empty `files:`, because empty is what re-opens the fallback. The master
+`build` job collects the two halves into separate outputs, since one half per flag is the split these
+gates compare.
 
-It is deliberately not fixed in the change that diagnosed it: altering what a required coverage gate
-measures should be the only thing in its own diff, so the before/after is legible. Expect the first
-clean comparison to be the proof.
+**It is not proven, and it could not be proven before merging.** The comparison exists only on the
+server, and only once both sides have re-uploaded under real file lists, so the first clean per-flag
+comparison after master has run the `build` job is the evidence. Inside that window a PR is still
+compared against a base assembled the old way, so **a red per-flag gate there is the old defect being
+measured, not a regression**. Tracked in
+[`docs/inflight/ci-the-coverage-uploads-still-use-the-inert-glob.md`](inflight/ci-the-coverage-uploads-still-use-the-inert-glob.md),
+which owns the outstanding proof and the condition for closing it.
 
 ### Reading it without a browser
 

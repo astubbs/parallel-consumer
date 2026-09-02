@@ -309,11 +309,51 @@ jobs:
           retention-days: 90
           if-no-files-found: warn
 
-      - name: Upload coverage to Codecov
+      # THE GLOB WAS INERT - the same defect, and the same fix, as the test-results collector below.
+      # codecov-action does not expand `**` and nothing routes `files:` through a shell, so the
+      # pattern arrived literally, matched nothing, and the CLI fell back to its own tree-wide
+      # search. That fallback produced a PLAUSIBLE answer rather than an empty one, which is what let
+      # it survive review: on master's full build it found every jacoco report in the tree, so `unit`
+      # and `integration` each received both halves and reported the SAME number, while a PR's suite
+      # job has only produced its own half. The per-flag gates then compared unlike sets, and failed
+      # on branches that changed no Java. docs/ci.md -> "The per-flag gates, and why they failed"
+      # carries the measured table.
+      #
+      # BOTH PATTERNS STAY HERE, deliberately. Which halves a given suite job actually produces is
+      # the open question in docs/inflight/ci-codecov-flags-not-like-for-like.md, and narrowing it is
+      # a separate change. Expanding a pattern that matched nothing does not answer it - the job now
+      # uploads exactly the reports it produced, and nothing else.
+      - name: Collect jacoco report files for Codecov
         if: always()
+        id: coverage
+        run: |
+          files=$(find . -type f \
+            \( -path '*/target/site/jacoco/jacoco.xml' \
+            -o -path '*/target/site/jacoco-it/jacoco.xml' \) | paste -sd, -)
+          # HEREDOC DELIMITER, not `echo`. `find` output is filenames, and a filename may legally
+          # contain a newline - which in the plain form injects an extra step-output line. GitHub
+          # documents this delimiter form for exactly that reason.
+          {
+            echo "files<<__CE_FILES__"
+            printf '%s\n' "$files"
+            echo "__CE_FILES__"
+          } >> "$GITHUB_OUTPUT"
+          if [ -z "$files" ]; then
+            echo "::warning::no jacoco reports found - skipping the coverage upload"
+          else
+            echo "found $(printf '%s\n' "$files" | tr ',' '\n' | wc -l) jacoco report(s) to upload"
+          fi
+
+      - name: Upload coverage to Codecov
+        # Skipped when the collector found nothing, rather than handing the action an empty `files:`
+        # - an empty value is exactly what re-opens the tree-wide fallback described above.
+        if: always() && steps.coverage.outputs.files != ''
         uses: codecov/codecov-action@v5
         with:
-          files: '**/target/site/jacoco/jacoco.xml,**/target/site/jacoco-it/jacoco.xml'
+          files: ${{ steps.coverage.outputs.files }}
+          # The second lock: even if `files` is somehow unusable, never let the CLI go looking for
+          # jacoco reports on its own again.
+          disable_search: true
           flags: ${{ matrix.suite }}
           token: ${{ secrets.CODECOV_TOKEN }}
 
@@ -362,7 +402,9 @@ jobs:
           if [ -z "$files" ]; then
             echo "::warning::no surefire/failsafe reports found - skipping the test-results upload"
           else
-            echo "found $(printf '%s' "$files" | tr ',' '\n' | wc -l) report file(s) to upload"
+            # `printf '%s\n'`, not `printf '%s'`: `wc -l` counts newlines, so without the trailing
+            # one this reported N-1 and the log undercounted by one every time.
+            echo "found $(printf '%s\n' "$files" | tr ',' '\n' | wc -l) report file(s) to upload"
           fi
 
       - name: Upload test results to Codecov
@@ -503,11 +545,35 @@ jobs:
             setup-java-Linux-x64-maven-
       - name: Build and Test (Kafka 4.x)
         run: bin/ci-build.sh '[3.9.1,5)'
-      - name: Upload coverage to Codecov
+      # Same inert-`**` fix as the `test` matrix upload, whose step comment carries the reasoning.
+      # This job is `if: false` today, so nothing here is exercised - which is precisely why it is
+      # fixed now: re-enabling it for the Kafka 4.x work would otherwise reintroduce the defect
+      # under a flag nobody is watching.
+      - name: Collect jacoco report files for Codecov
         if: always()
+        id: coverage
+        run: |
+          files=$(find . -type f \
+            \( -path '*/target/site/jacoco/jacoco.xml' \
+            -o -path '*/target/site/jacoco-it/jacoco.xml' \) | paste -sd, -)
+          # Heredoc delimiter, not `echo` - a filename may legally contain a newline.
+          {
+            echo "files<<__CE_FILES__"
+            printf '%s\n' "$files"
+            echo "__CE_FILES__"
+          } >> "$GITHUB_OUTPUT"
+          if [ -z "$files" ]; then
+            echo "::warning::no jacoco reports found - skipping the coverage upload"
+          else
+            echo "found $(printf '%s\n' "$files" | tr ',' '\n' | wc -l) jacoco report(s) to upload"
+          fi
+
+      - name: Upload coverage to Codecov
+        if: always() && steps.coverage.outputs.files != ''
         uses: codecov/codecov-action@v5
         with:
-          files: '**/target/site/jacoco/jacoco.xml,**/target/site/jacoco-it/jacoco.xml'
+          files: ${{ steps.coverage.outputs.files }}
+          disable_search: true
           flags: ak-experimental
           token: ${{ secrets.CODECOV_TOKEN }}
 
@@ -882,17 +948,56 @@ jobs:
       # and `report-integration` executions both run: jacoco/ is the surefire (unit) half and
       # jacoco-it/ the failsafe (integration) half, which is exactly the split the PR lane makes with
       # two separate jobs.
-      - name: Upload unit coverage to Codecov
+      #
+      # ONE COLLECTOR, TWO OUTPUTS - and this is the site the inert `**` hurt most. Both steps below
+      # declared one half each, both patterns matched nothing, and the CLI's tree-wide fallback then
+      # handed BOTH halves to BOTH flags; the tell was master's two flags reporting an identical
+      # figure, which can only happen if they hold the same data. The split has to be real here,
+      # because it is the base half of every `codecov/project/unit` and `codecov/project/integration`
+      # comparison. The `test` matrix upload's step comment carries the rest of the diagnosis.
+      #
+      # The two halves are collected in one step rather than two because this is one job and one
+      # tree walk; keeping the outputs separate is what preserves the per-flag split.
+      - name: Collect jacoco report files for Codecov
         if: always()
+        id: coverage
+        run: |
+          unit=$(find . -type f -path '*/target/site/jacoco/jacoco.xml' | paste -sd, -)
+          integration=$(find . -type f -path '*/target/site/jacoco-it/jacoco.xml' | paste -sd, -)
+          # Heredoc delimiters, not `echo` - a filename may legally contain a newline, which in the
+          # plain form injects an extra step-output line.
+          {
+            echo "unit<<__CE_FILES__"
+            printf '%s\n' "$unit"
+            echo "__CE_FILES__"
+            echo "integration<<__CE_FILES__"
+            printf '%s\n' "$integration"
+            echo "__CE_FILES__"
+          } >> "$GITHUB_OUTPUT"
+          report_half() {
+            if [ -z "$2" ]; then
+              echo "::warning::no jacoco reports found for the $1 half - skipping that upload"
+            else
+              echo "$1: found $(printf '%s\n' "$2" | tr ',' '\n' | wc -l) report(s) to upload"
+            fi
+          }
+          report_half unit "$unit"
+          report_half integration "$integration"
+      - name: Upload unit coverage to Codecov
+        # Skipped rather than handed an empty `files:`, which is what re-opens the tree-wide search.
+        if: always() && steps.coverage.outputs.unit != ''
         uses: codecov/codecov-action@v5
         with:
-          files: '**/target/site/jacoco/jacoco.xml'
+          files: ${{ steps.coverage.outputs.unit }}
+          # The second lock on the split: never let the CLI re-widen this flag to the whole tree.
+          disable_search: true
           flags: unit
           token: ${{ secrets.CODECOV_TOKEN }}
       - name: Upload integration coverage to Codecov
-        if: always()
+        if: always() && steps.coverage.outputs.integration != ''
         uses: codecov/codecov-action@v5
         with:
-          files: '**/target/site/jacoco-it/jacoco.xml'
+          files: ${{ steps.coverage.outputs.integration }}
+          disable_search: true
           flags: integration
           token: ${{ secrets.CODECOV_TOKEN }}
