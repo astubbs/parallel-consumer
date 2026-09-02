@@ -9,6 +9,18 @@ too big or too risky to fold into the change at hand, to be picked up **when thi
 is a solo-maintainer list, not an issue tracker: entries live here (versioned, greppable, zero
 per-item ceremony) instead of as GitHub issues.
 
+**"When things are quiet" is now measurable, for the few entries big enough to be worth measuring.**
+`bin/refactor-candidates.json` lists those files with a per-file threshold, and
+`node bin/inflight.mjs refactor-window` reports whether any large in-flight change stands on one -
+naming the branch to land if the answer is no. Two hooks deliver it unasked, so nobody has to
+remember to ask. Worked example: [`docs/inflight-tool.md`](inflight-tool.md).
+
+**This document stays the editorial owner of *why* each of those should be decomposed**, and its
+entries below carry the full case. The config owns only what the signal needs, plus **the one line
+an agent is shown mid-edit** - that hint is the config's, so the two do not state the same fact
+twice. Adding a candidate there without an entry here leaves a machine that knows to nag and a
+reader who cannot find out what for.
+
 **The axis is weight, not timing.** The moment an entry acquires a decision, a blocker, or evidence
 worth keeping, it has outgrown this file: promote it to a `docs/inflight/` note and delete the line in
 the same commit - neither file may state it twice.
@@ -91,6 +103,15 @@ refactors below, which are non-breaking and can land at any point in any line.
   [`docs/inflight/core-exception-hierarchy-cleanup.md`](inflight/core-exception-hierarchy-cleanup.md)
   owns the rest of the naming work - `InternalException` and the two spellings of the PC prefix are
   untouched, so a later pass will be a second break unless it is done in this same release.
+- **DONE, landing with astubbs/parallel-consumer#201: an inverted `initialLoadFactor` /
+  `maximumLoadFactor` pair is rejected instead of accepted.**
+  `ParallelConsumerOptions#validate()` now throws `IllegalArgumentException` naming both options and
+  both values. A break only for a configuration that never did what it said - today an initial factor
+  above the maximum is accepted and pinned at the initial value, surfacing at best as an inverted
+  `100/10` in the rate-limited saturation warning, so an application carrying the typo starts and
+  runs; after this it fails at construction. Small blast radius, but "started yesterday, will not
+  start today" is what a `=== Breaking` bullet exists for. Recorded here rather than only in the
+  commit, because this section is what the release notes are assembled from.
 - **Remove the deprecated `commitInterval` options** - `public void setTimeBetweenCommits` /
   `public Duration getTimeBetweenCommits` in `internal/AbstractParallelEoSStreamProcessor.java`.
 - **Remove the accreting deprecated `ParallelConsumerOptions` fields**
@@ -101,6 +122,27 @@ refactors below, which are non-breaking and can land at any point in any line.
   `origin/refactor/deprecate-jstream` @8a8f6508.
 - **Rename the enum to the standard pattern** (public enum rename) -
   `origin/refactor/minor-changes` @193bbf80.
+- **Rehome `LongPollingMockConsumer` out of `bz.stub.parallelconsumer.internal.utils`.** astubbs#159 /
+  confluentinc#526 moved it from the test-jar into the main artefact, so downstream users get it by
+  deleting a `<classifier>tests</classifier>` dependency. That move left the package alone, but
+  **leaving it alone is no longer an argument for anything**: the fork's `io.confluent.*` ->
+  `bz.stub.*` rename already forces every downstream user to rewrite the import, for reasons that
+  have nothing to do with this class. The FQN-stability case for the current home is spent, and
+  `internal` in the name now says out loud that a supported test-support class is in the wrong place.
+  It should go to `bz.stub.parallelconsumer.testing`, or into its own `parallel-consumer-test-support`
+  module (the `kafka-streams-test-utils` shape). The old plan was to defer it to the
+  confluentinc#271 package restructure so users were not migrated twice - **re-read that against the
+  open gate above**: 0.6.0.0 is the release carrying the `bz.stub` rename, so doing the rehome in it
+  is one migration rather than two, and deferring it past 0.6.0.0 is what now costs a second one.
+- **`KafkaTestUtils` is the next thing standing between downstream users and the test-jar.**
+  astubbs#159 moved `LongPollingMockConsumer` into the main artefact, but that was a prerequisite,
+  not a fix: eight poms still declare `<classifier>tests</classifier>` because their test sources
+  still reach for `KafkaTestUtils`, `AbstractParallelEoSStreamProcessorTestBase` and
+  `LongPollingMockConsumerSubject`. The Truth subject is the one that cannot simply move - it
+  extends `com.google.common.truth.Subject`, so publishing it would promote `com.google.truth` from
+  `test` to `compile` for every downstream user, which is the cost astubbs#159 was careful not to
+  incur. `KafkaTestUtils` has no such constraint and is the largest remaining reason the classifier
+  exists, so it is where anyone actually closing confluentinc#162 / confluentinc#861 should start.
 - **Evaluate for breakage at the bump:** adopt `@ParametersAreNonnullByDefault`
   (`origin/improvements/nonnull-default` @684c02a0) and add a JPMS `module-info`
   (`origin/improvements/module-info` @d74f5e8b) - both tighten the published
@@ -294,9 +336,10 @@ cosmetic - see the last bullet.*
     `onPartitionsAssigned(Collection<TopicPartition> partitions)` and
     `onPartitionsLost(Collection<TopicPartition> partitions)`) and `ConsumerManager`'s
     `noWakeups`, `erroneousWakups`, `correctPollWakeups` counters.
-  - `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` (3) - primitive written in one thread may not
-    be visible to another: `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled`,
-    `ConsumerManager.commitRequested`, `RetryQueue.closed`.
+  - `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` (2) - primitive written in one thread may not
+    be visible to another: `ConsumerManager.commitRequested`, `RetryQueue.closed`.
+    Was 3: `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled` is now
+    `volatile` (astubbs#201), and SpotBugs no longer reports it.
   - **`AT_STALE_THREAD_WRITE` on an OBJECT reference, which no detector fired on - FIXED 2026-08-18
     on the astubbs#119 branch:**
     `ConsumerManager.metaCache` (`private ConsumerGroupMetadata metaCache;`) is written by the poll
@@ -522,13 +565,18 @@ but not this.*
 ### internal/DynamicLoadFactor.java
 - `private synchronized boolean doStep` locks on `this` - same lock-hygiene note as
   ProducerManager; low priority.
+- The warm-up and cool-down `Duration`s are hard-coded fields with no seam, so
+  stepping to the ceiling for real costs one cool-down per step (minutes for the
+  default 2 -> 100). `LoadFactorCeilingReportingTest` has to assert the terminal
+  state via a subclass because of it. Injecting them (through `PCModule`, with the
+  module's `Clock`) would make the stepping schedule itself testable.
 
 ### internal/ExternalEngine.java
 - `TODO optimise thread usage`: avoid the extra thread (go straight from the control thread).
   `is this method redundant`: method may be redundant now that modules don't use the internal
   threading system.
 
-### ParallelConsumerOptions.java (573 lines)
+### ParallelConsumerOptions.java (627 lines)
 - Accreting deprecated fields (`public void setCommitInterval`,
   `private final Duration defaultMessageRetryDelay`, `isUsingTransactionalProducer`) and the
   `ignoreReflectiveAccessExceptionsForAutoCommitDisabledCheck` temporary
@@ -725,6 +773,27 @@ rather than fixed there so the gate's scope stayed one decision.
   CI coverage ever looks wrong, this is the first suspect - give each fork its own exec
   file (`destFile` with `${surefire.forkNumber}`) and add `jacoco:merge` before the report.
 
+### `internal/utils/LongPollingMockConsumer.java` - `NN_NAKED_NOTIFY`
+
+- SpotBugs flags `wakeup()`'s `notifyAll()` as naked. It is a false positive: the loop's guard **is**
+  set immediately before, but as an `AtomicBoolean`, which SpotBugs does not count as a field write.
+- **Moving the class into `src/main` (astubbs#159) does not surface this - it is already visible.**
+  The original reading was that SpotBugs analyses main sources only, so shipping the class in the
+  main artefact would make the finding new. `includeTests` in the root pom's `spotbugs-maven-plugin`
+  configuration ended that. Measured on master with the class still under `src/test`:
+  `./mvnw -pl :parallel-consumer-core -am -DskipTests test-compile spotbugs:spotbugs` reports
+  `NN_NAKED_NOTIFY` at `LongPollingMockConsumer.wakeup`. The move changes the file's source root,
+  not whether it is analysed, so nothing about the finding's visibility is astubbs#202's doing.
+- Fix = demote `statePretendingToLongPoll` to a plain `boolean`. Every read and write of it already
+  happens while holding `this` (`poll`, `wakeup` and `addRecord` are all `synchronized`), so the
+  `AtomicBoolean` buys nothing and misleadingly implies lock-free access. Kept out of astubbs#159 so
+  that it stayed a pure relocation - rewriting the wait/notify state of the mock consumer every unit
+  test depends on, in the same change, would make any later flake ambiguous between the two.
+- Clean up the redundant nesting in the same pass: `poll()` and `wakeup()` are both already
+  `synchronized` methods and each opens a further `synchronized (this)` block inside itself, which
+  locks the monitor it already holds. Harmless (the lock is reentrant) but it is what makes the
+  guard/notify pairing hard to read, and is probably why the `AtomicBoolean` looked necessary.
+
 ### `MockConsumer.groupMetadata()` workaround, duplicated x4
 
 - `CoreAppTest`, `CoreAppMetricsIntegrationTest`, `ReactorAppTest` and `VertxAppTest` each stub
@@ -744,6 +813,17 @@ rather than fixed there so the gate's scope stayed one decision.
   not the finding, the seven are. Related but distinct from the racing-double unification tracked in
   `docs/inflight/bug-torn-read-family.md`, which is about the two `Racing*State` doubles rather than
   this helper.
+
+### The logback `ListAppender` dance, still inline in `SubmitWorkToPoolShutdownRaceTest`
+
+- **`LogCapture` is the shared helper for capturing a class's log output; convert the last two
+  inline copies onto it and treat it as the only way to do this.**
+  `bz.stub.parallelconsumer.internal.utils.LogCapture` attaches the appender, raises the level for
+  the duration and restores both on close - and its javadoc owns the two hazards of raising a
+  JVM-shared logger, which an inline copy silently reproduces without them.
+  `SubmitWorkToPoolShutdownRaceTest` still builds its own twice (grep `new ListAppender` there); its
+  `getThrowableProxy()` filtering is already covered by `LogCapture.events()`, so no widening of the
+  helper is needed.
 
 ### Cross-module test clones (the file-similarity backlog behind astubbs#40)
 

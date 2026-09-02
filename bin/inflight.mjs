@@ -42,7 +42,8 @@
 // EXIT CODES: 0 ran (whatever it found), 2 cannot run - including a usage error. Self-test:
 // bin/test-inflight.mjs.
 
-import { pathToFileURL } from 'node:url'
+import { realpathSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 import { perfReport, perfStart } from './lib/perf.mjs'
 
@@ -50,9 +51,10 @@ import { baseline, freshnessWarnings, refTips } from './lib/git.mjs'
 import { cacheClear, cacheStatus, knownCaches } from './lib/cache.mjs'
 import { corpusIndex, drift, findNotes, prsByBranch, stranded } from './lib/notes.mjs'
 import { branchView, commitGraph, trackingGap } from './lib/branches.mjs'
+import { loadCandidates, refactorWindow } from './lib/refactor-window.mjs'
 import {
     formatBranch, formatCache, formatCoverage, formatDrift, formatFind, formatFlakes,
-    formatSlowest, formatStranded, formatTimeline, formatWarnings,
+    formatRefactorWindow, formatSlowest, formatStranded, formatTimeline, formatWarnings,
 } from './lib/views.mjs'
 import { coverage, flakeCandidates, slowest, testTimeline } from './lib/codecov.mjs'
 import {
@@ -412,6 +414,84 @@ them separately buries the finding under its own volume.`,
             return { ok: true }
         },
     },
+    {
+        name: 'refactor-window',
+        summary: 'whether a file this repo means to decompose is cheap to decompose right now',
+        when: 'before starting - or deferring - a refactor of a known oversized class, and to see what is blocking one',
+        usage: `Usage: bin/inflight.mjs refactor-window [--if-open]
+       bin/inflight.mjs refactor-window --hint-for <file>
+
+docs/refactoring.md says its entries are to be picked up "when things are quiet". This evaluates
+that, for the files listed in bin/refactor-candidates.json.
+
+THE SIGNAL IS THE LARGEST SINGLE DIVERGENCE any live branch holds against the mainline - not the
+number of branches touching the file. Measured 2026-09-02: PartitionState had dozens of live
+branches with an open PR diverging from it and the largest of those was EIGHT LINES. A count calls
+that blocked with nothing in its way.
+
+The report names the branch and pull request holding that largest divergence, because the
+alternative to waiting is to go and land it.
+
+--if-open prints NOTHING when the signal ran and no candidate is open - the form the hooks use.
+It still prints when anything FAILED, because a hook's silence is indistinguishable from a hook
+that is broken.
+
+Nothing is remembered between runs: no stored verdict, so it keeps saying so until the work is
+done or the entry leaves the config. Thresholds are per candidate and live in that file; retuning
+one is an ordinary commit.
+
+--hint-for prints that file's one-line extraction hint and nothing else, reading only the config -
+no git, no gh, no signal. It is what the edit-time hook calls in front of every edit, where the
+full measurement would be unaffordable. Prints nothing for a file that is not a candidate.
+
+  bin/inflight.mjs refactor-window
+  bin/inflight.mjs refactor-window --if-open
+  bin/inflight.mjs refactor-window --hint-for parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/WorkManager.java`,
+        run: (args, emit) => {
+            // CONFIG ONLY, NO SIGNAL. This is what the edit-time hook calls, in front of every
+            // single file edit, so it must not compute anything: the full signal is ~3.4s and forks
+            // several hundred processes. Reading one small JSON file is ~35ms, and the hook's
+            // alternative - parsing that JSON in bash - is the fragility this repo keeps a whole
+            // gate to police. The loader stays the only thing that parses the file.
+            const hintAt = args.indexOf('--hint-for')
+            if (hintAt >= 0) {
+                const target = args[hintAt + 1]
+                if (!target) return { ok: false, reason: 'refactor-window --hint-for: give a file path' }
+                const cfg = loadCandidates()
+                if (!cfg.ok) return { ok: false, reason: `refactor-window: ${cfg.reason}` }
+                // Suffix match, because a hook is handed an absolute path and the config is
+                // repo-relative. Anchored on a separator so `.../OtherWorkManager.java` cannot
+                // match `.../WorkManager.java`.
+                const hit = cfg.candidates.find((c) => c.paths.some((p) => target === p || target.endsWith(`/${p}`)))
+                if (hit) emit(`${hit.id}: ${hit.hint}`)
+                return { ok: true }
+            }
+
+            const ifOpen = args.includes('--if-open')
+            const r = refactorWindow()
+            if (!r.ok) return { ok: false, reason: `refactor-window: ${r.reason}` }
+            // SPLIT BY WHETHER THE WARNING INVALIDATES THE ANSWER, not by output mode. The first cut
+            // suppressed all of them under --if-open, justified as skipping "a staleness NOTE" - but
+            // `no-baseline` is not staleness, it is a declaration that the run is void, and it was
+            // being dropped on exactly the path both hooks use. That put the compensating control
+            // out of action in the one place the answer could be confidently wrong.
+            const warnings = freshnessWarnings(r.baseline, r.liveRefs)
+            const INVALIDATING = new Set(['no-baseline', 'never-fetched', 'shallow'])
+            // NEVER EMIT AN EMPTY STRING. `emit` is console.log, so `emit('')` writes a newline -
+            // and the documented silent form then produces two bytes rather than none, which is
+            // observable to any caller measuring stdout rather than using command substitution
+            // (which strips trailing newlines and hid this from the self-test that asserted it).
+            const warnText = formatWarnings(ifOpen ? warnings.filter((w) => INVALIDATING.has(w.id)) : warnings)
+            if (warnText) emit(warnText)
+            const body = formatRefactorWindow(r, { ifOpen })
+            if (body) emit(body)
+            // A candidate that could not be measured is a failure of the RUN, not a quiet answer -
+            // exit 2, so a caller can tell "nothing is open" from "this never looked".
+            const failed = r.candidates.filter((c) => !c.ok)
+            if (failed.length > 0) return { ok: false, reason: `refactor-window: ${failed.length} candidate(s) could not be measured` }
+            return { ok: true }
+        },
+    },
 ]
 
 /** Flatten one level, so help and lookup see `note find` as a first-class name. */
@@ -481,10 +561,40 @@ function dispatch(argv, emit) {
     return { ok: false, reason: `inflight: no such command ${which}\n\n${top.usage}` }
 }
 
+/**
+ * Was this file run, rather than imported?
+ *
+ * COMPARE REALPATHS, NEVER THE SPELLINGS. Node resolves `import.meta.url` through symlinks while
+ * `process.argv[1]` is the path exactly as the caller typed it, so the two disagree whenever ANY
+ * component of the path is a link - a symlinked checkout, a worktree behind one, a `/tmp` that is
+ * one. On macOS `os.tmpdir()` is `/var/folders/...`, itself a link to `/private/var/folders/...`,
+ * which is how this was found: bin/test-inflight.mjs builds every mutant under `mkdtempSync`, the
+ * comparison was false in all of them, and the CLI body never executed. `inflight.mjs help` then
+ * printed nothing and exited 0 whatever the mutation had done - so the one control asserting exit 0
+ * failed, and every other invoke()-driven control was scored as "went red" without the mutation
+ * having been exercised at all. Linux `/tmp` is not a link, so CI saw none of it.
+ *
+ * FAILS CLOSED. `argv[1]` need not name an existing file (`node --eval`, a deleted script), and
+ * realpathSync throws on one that does not; deciding whether to run is not a thing to crash over,
+ * so an unresolvable path means "not invoked directly".
+ *
+ * The guard itself has a negative control - `the-front-door-runs-through-a-symlinked-path` in
+ * bin/test-inflight.mjs - which asserts exit 0 AND non-empty output, because exit 0 on its own is
+ * exactly what the broken guard produced.
+ */
+function invokedDirectly() {
+    if (!process.argv[1]) return false
+    try {
+        return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+    } catch {
+        return false
+    }
+}
+
 // Guarded so this file can be imported for its registry without running a command. It remains the
 // only file here permitted to exit the process; being importable is what lets the self-test assert
 // on the registry rather than on a regex over the source.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (invokedDirectly()) {
     const argv = process.argv.slice(2)
     // Stripped before dispatch, so no command has to know the flag exists.
     const perf = argv.includes('--perf')

@@ -1,0 +1,42 @@
+{
+  "about": "Files this repo has decided to decompose, and the size of in-flight change that makes now a bad time to try. Read by bin/lib/refactor-window.mjs; reported by `node bin/inflight.mjs refactor-window`. docs/refactoring.md is the editorial owner of WHY each of these should be decomposed and carries the full case; this file owns only what the signal needs, plus the one line an agent sees mid-edit. Retuning a threshold is an ordinary commit - that is the point of the list living here rather than in the script.",
+  "threshold_note": "threshold is a count of ADDED lines in the largest single divergence any live branch holds against master. Set at roughly a FIFTH of each file's length. Two earlier values are worth recording because both were wrong in instructive ways: a tenth was a guess dressed as a rule, and nothing measured it; a half was tried and immediately read OPEN on the largest candidate while a branch held a +1047 divergence against it, which is nobody's idea of a quiet moment. Scaling to file length is a weak proxy in any case - conflict pain comes from OVERLAP between the extraction and the branch's changes, not from how long the file is - so this is a judgement about tolerance, not a derived number. Retuning here is an ordinary commit, and the first window that actually opens is the first real evidence about it.",
+  "candidates": [
+    {
+      "id": "abstract-parallel-eos-stream-processor",
+      "paths": [
+        "parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java",
+        "parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java"
+      ],
+      "threshold": 480,
+      "hint": "Control loop, lifecycle state machine, commit orchestration, threading and the rebalance listener all live in this one class. If the piece you are touching is one of those, extracting it is the tracked work - docs/refactoring.md says it can be taken piecemeal."
+    },
+    {
+      "id": "work-container",
+      "paths": [
+        "parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/WorkContainer.java",
+        "parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/state/WorkContainer.java"
+      ],
+      "threshold": 165,
+      "hint": "A refactor candidate at 818 lines. Before adding behaviour here, check whether it belongs to a collaborator instead - see docs/refactoring.md."
+    },
+    {
+      "id": "parallel-consumer-options",
+      "paths": [
+        "parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java",
+        "parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/ParallelConsumerOptions.java"
+      ],
+      "threshold": 120,
+      "hint": "This grows by accretion with every new option, and carries the deprecated-option surface. If you are adding validation or defaulting, consider whether it belongs beside the option's own feature rather than here."
+    },
+    {
+      "id": "work-manager",
+      "paths": [
+        "parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/WorkManager.java",
+        "parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/state/WorkManager.java"
+      ],
+      "threshold": 100,
+      "hint": "A refactor candidate, and the destination named by a `todo move into WorkManager` marker - so it accretes by design. Check docs/refactoring.md before adding a new responsibility."
+    }
+  ]
+}

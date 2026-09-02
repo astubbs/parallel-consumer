@@ -475,6 +475,7 @@ public class ParallelConsumerOptions<K, V> {
         Objects.requireNonNull(consumer, "A consumer must be supplied");
 
         transactionsValidation();
+        loadFactorValidation();
     }
 
     private void transactionsValidation() {
@@ -501,6 +502,29 @@ public class ParallelConsumerOptions<K, V> {
                         Fields.commitMode,
                         commitMode));
             }
+        }
+    }
+
+    /**
+     * The load factor bounds have only one meaningful ordering: {@link #initialLoadFactor} is where the dynamic load
+     * factor starts, and {@link #maximumLoadFactor} is the ceiling it is allowed to step up to. An inverted pair can
+     * never step, so it is a typo rather than a request. Unchecked it is accepted and pinned at the initial value,
+     * surfacing at best as an inverted {@code 100/10} inside the rate-limited saturation warning - which only fires
+     * under load, and reads as a capacity signal rather than as the misconfiguration it is.
+     * <p>
+     * Checked whether or not {@link #messageBufferSize} is set. A buffer size makes the pair <em>unused</em>, not
+     * sensible, and accepting a nonsensical value is how it survives to the configuration change that starts reading
+     * it again.
+     */
+    private void loadFactorValidation() {
+        if (initialLoadFactor > maximumLoadFactor) {
+            throw new IllegalArgumentException(msg("Cannot set {} ({}) above {} ({}) - the initial load factor is "
+                            + "where the dynamic load factor starts and the maximum is the ceiling it may step up "
+                            + "to, so an inverted pair can never step",
+                    Fields.initialLoadFactor,
+                    initialLoadFactor,
+                    Fields.maximumLoadFactor,
+                    maximumLoadFactor));
         }
     }
 
@@ -596,6 +620,18 @@ public class ParallelConsumerOptions<K, V> {
      * Switching this off restores the pre-0.6.0.1 behaviour exactly: no context crosses into the worker pool, and
      * anything your function puts into the MDC is left on the pooled thread for the next, unrelated, record to
      * inherit.
+     * <p>
+     * <b>On by default deliberately, and settled</b> (astubbs#205). Not propagating fails silently for everyone who
+     * has established a context; propagating fails visibly - an unexpected key in a log line - and has this switch.
+     * The pinning described above is the known cost of that choice and was accepted along with it. Flipping the
+     * default is a one-line change, but it takes evidence of the pinning actually biting rather than a re-reading of
+     * the same trade.
+     * <p>
+     * <b>Known gap on the reactive engines.</b> For Reactor and Mutiny this covers the invocation of your function and
+     * Parallel Consumer's own terminal signal handling. It does not follow the operators of the {@code Publisher} /
+     * {@code Uni} you return onto further schedulers - that needs Reactor's own
+     * {@code io.micrometer:context-propagation}, and is your call rather than Parallel Consumer's. It is a gap by
+     * decision, not an oversight.
      *
      * @see MdcPropagation
      */

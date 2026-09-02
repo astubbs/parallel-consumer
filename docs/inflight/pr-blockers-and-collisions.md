@@ -30,6 +30,18 @@ Blockers, collisions, and decisions someone is waiting on. Not a PR list - `gh` 
   astubbs#80 reshaped. Pick parallel work accordingly - and check `gh pr list` for which of these
   are still open, since a merged one's files are simply master's again.
 <!-- post-merge: checked-end -->
+<!-- post-merge: checked-begin -->
+- **`LogCapture` is the only supported way to capture a log line in this suite.**
+  `bz.stub.parallelconsumer.internal.utils.LogCapture` is an `AutoCloseable` appender plus level
+  override, and its javadoc owns the two hazards of raising a JVM-shared logger - reading someone
+  else's lines, and flooding everyone with `DEBUG` - along with the different fix each one takes.
+  Read it before writing a capture; do not open a second way to do this. Still un-converted:
+  `SubmitWorkToPoolShutdownRaceTest`'s two inline `(Logger) LoggerFactory.getLogger(...)` +
+  `ListAppender` blocks (`grep -n ListAppender` finds them). The astubbs#201 / astubbs#203 collision
+  this bullet used to record is settled - astubbs#203's branch is merged into astubbs#201's and the
+  inline copy in `LoadFactorCeilingReportingTest` is converted, so no rival implementation can reach
+  master.
+<!-- post-merge: checked-end -->
 - **astubbs#8 (`features/retry-dlq`, 2022) is an abandoned draft**, kept only because it is the sole
   DLQ code that exists. Close or finish it; it is not in flight.
 
@@ -38,16 +50,16 @@ Blockers, collisions, and decisions someone is waiting on. Not a PR list - `gh` 
 <!-- post-merge: checked-begin - the chain is recorded as history and the outstanding item is stated
      against master rather than against a PR's live state, so nothing here turns false on a merge -->
 Three PRs, one dependency chain, declared with `depends on` in astubbs#262's body and enforced by the
-`Check PR Dependencies` required check. Both parents have merged - astubbs#261 on 2026-08-14, then
-astubbs#257 - so the chain is discharged and only astubbs#262 is still open. Kept because a reader who
-knows this work as a three-PR stack needs telling which parts are already master.
+`Check PR Dependencies` required check. **All three are master now** - astubbs#261, then astubbs#257,
+then astubbs#262, which was rebase-merged rather than squashed so its separable workstreams stayed
+separable in the log. Kept because a reader who knows this work as a three-PR stack needs telling that
+none of it is pending, and because the debt below outlived it.
 
-1. **astubbs#261**, merged - a terminally failed send left a partial result set visible at
-   `read_committed`.
-2. **astubbs#257**, merged - produce-lock double release. At `batchSize >= 2` the lock was taken per
-   poll context but released per record.
-3. **astubbs#262**, open - the battle test itself. **Rebase-merge, not squash**: it holds separable
-   workstreams, and squashing buries two real defect discoveries under one 5,000-line test commit.
+1. **astubbs#261** - a terminally failed send left a partial result set visible at `read_committed`.
+2. **astubbs#257** - produce-lock double release. At `batchSize >= 2` the lock was taken per poll
+   context but released per record.
+3. **astubbs#262** - the battle test itself, and the claim register that is now the standing gate on
+   the exactly-once headline.
 
 **The debt: astubbs#257's merged commit message understates the defect, and release notes are
 generated from the log.** It describes redelivery - "handed records back for a second delivery" - and

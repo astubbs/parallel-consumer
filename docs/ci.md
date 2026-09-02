@@ -83,7 +83,13 @@ document. This section is the detail behind it.
   Reporting is **two steps, and the split is the point**: `bin/quarantine-lane-report.sh` classifies
   and *may* fail the job (its lane-leak self-check is what proves the lane ran only quarantined
   tests), then a separate `continue-on-error` step posts the comment, so a rate limit while
-  commenting cannot red a healthy lane. See [`docs/testing.md`](testing.md).
+  commenting cannot red a healthy lane. **Both reporting steps run even when the registry is
+  empty** - gated on the emptiness check having run, not on its answer - because the PR that removes
+  the LAST quarantine is the one that has to retract the previous push's "delete the annotation and
+  the registry entry" comment; the execution steps are still skipped, there being nothing to run.
+  See [`docs/testing.md`](testing.md), and
+  [`docs/solutions/workflow-issues/the-run-that-had-to-retract-was-the-one-gated-silent-2026-09-02.md`](solutions/workflow-issues/the-run-that-had-to-retract-was-the-one-gated-silent-2026-09-02.md)
+  for the class.
 - **`pr-checklist.yml`** - hosts the PR-body gates: the template checklist (rule in AGENTS.md, PR
   Discipline), the changelog-citation gate (`changelog-ref-gate.js`, see
   [`docs/releasing.md`](releasing.md)), the issue-reference gate (`issue-ref-gate.js`, see
@@ -191,6 +197,18 @@ should be deleted - posts a new comment instead of silently editing one thirty s
 producer writes its own payload: `pc-throughput-data` from `bin/check-throughput-regression.mjs`,
 `quarantine-lane-data` from `bin/quarantine-lane-report.sh`. Nothing enforces that a producer and its
 reader agree on the marker's name, so `grep -rn <marker-name>` is the list to change if one moves.
+
+**A body can also be a CORRECTION rather than a report** - `postWhenAbsent: false` posts nothing when
+we have not already spoken on that PR. The quarantine lane's emptied-lane body is the only user: on a
+PR whose earlier push demanded an annotation be deleted it is the retraction and must be posted, and
+on a PR that never carried a report it would be an announcement that nothing is quarantined, on every
+PR, forever. "Spoken" includes a comment of ours that an earlier run retired and then failed to
+replace - the retire-then-create order makes that the failure mode - which the next run completes
+(`action: recovered`) whether it is a correction or an ordinary report: a lane that emptied, refilled
+and reported again still links the retired comment forward. A correction also folds the comment it
+retires under its heading in a `<details>` block: that comment was wrong, not merely older, and a
+prefixed heading above a fully visible ACTION REQUIRED table still leads with the table. The post
+step logs `result.action`, so a `skipped` run says so in the job log.
 
 The SpotBugs step uses the module's lookup and stamp but keeps its own update-or-create: whether a
 clean-to-dirty SpotBugs transition deserves a new comment is a judgement nobody has made, and adding
@@ -854,8 +872,8 @@ restructuring lost that, and this section is where it now lives.
 
 | Lane | Runs on | Uploads |
 |---|---|---|
-| `build` | push to master only | `jacoco/jacoco.xml` as flag `unit`; `jacoco-it/jacoco.xml` as flag `integration` - one file per flag |
-| `test` matrix | pull requests only | **both** files, under one flag per suite (`flags: ${{ matrix.suite }}`) |
+| `build` | push to master only | every module's `jacoco/jacoco.xml` as flag `unit`; every module's `jacoco-it/jacoco.xml` as flag `integration` - one half per flag |
+| `test` matrix | pull requests only | **both** halves, under one flag per suite (`flags: ${{ matrix.suite }}`) |
 <!-- file-refs: N/A - jacoco paths are generated build output under target/, named because the
      asymmetry between the two lanes IS which file goes to which flag -->
 
@@ -863,18 +881,18 @@ restructuring lost that, and this section is where it now lives.
 endpoint reports default-branch coverage, and on master only `build` runs. A reader who does not know
 that files a bug against the uploader; this is the third time that has nearly happened.
 
-### The per-flag gates, and why they fail
+### The per-flag gates, and why they failed
 
 `codecov.yml` gates on `unit` and `integration` per flag, at `target: auto, threshold: 1%`, and makes
 the overall project number informational. Its reasoning is sound and worth reading in place: a total
 that compares five flags on a PR against two on master cannot be made honest by tuning a threshold.
 
-**The gates fail because the two lanes upload different file SETS, and the cause is the inert `**`
-glob.** The uploader's CLI does not expand `**`, and nothing routes `files:` through a shell, so the
-pattern arrives literally, matches nothing, and the CLI falls back to its own tree-wide search. On
-master's full build that search finds EVERY jacoco report - both halves, every module - so `unit` and
-`integration` each receive the whole tree and report the same number. On a pull request each suite job
-has produced only its own half, so the same fallback finds only that half.
+**The gates failed because the two lanes uploaded different file SETS, and the cause was the inert
+`**` glob.** The uploader's CLI does not expand `**`, and nothing routed `files:` through a shell, so
+the pattern arrived literally, matched nothing, and the CLI fell back to its own tree-wide search. On
+master's full build that search found EVERY jacoco report - both halves, every module - so `unit` and
+`integration` each received the whole tree and reported the same number. On a pull request each suite
+job has produced only its own half, so the same fallback found only that half.
 
 Measured, from the upload logs rather than inferred:
 
@@ -886,18 +904,32 @@ Measured, from the upload logs rather than inferred:
 <!-- file-refs: N/A - jacoco paths are generated build output under target/, and which files reach
      which flag IS the defect described here -->
 
-So a PR's `integration` flag is compared against a master `integration` flag that silently contains
-the unit half as well. The delta measures that difference, not the branch. The confirming detail: on
-master both flags report an identical figure, which only makes sense if both hold the same data.
+So a PR's `integration` flag was compared against a master `integration` flag that silently contained
+the unit half as well. The delta measured that difference, not the branch. The confirming detail: on
+master both flags reported an identical figure, which only makes sense if both hold the same data.
 
-**This is the same defect as the one fixed for the test-results upload in this repository's history -
-a `files:` line that reads as configuration and does nothing.** The fix is the same: expand the globs
-before handing them over, and set `disable_search: true` so the fallback cannot silently re-widen the
-set.
+**It was the same defect as the one fixed for the test-results upload in this repository's history -
+a `files:` line that reads as configuration and does nothing.** The fix is the same, and every
+`codecov/codecov-action` call in `maven.yml` now carries it: a preceding step expands the pattern with
+`find`, hands the real comma-joined list over through `$GITHUB_OUTPUT`, and sets `disable_search:
+true` so the fallback cannot silently re-widen the set. An upload whose collector found nothing is
+skipped rather than handed an empty `files:`, because empty is what re-opens the fallback. The master
+`build` job collects the two halves into separate outputs, since one half per flag is the split these
+gates compare.
 
-It is deliberately not fixed in the change that diagnosed it: altering what a required coverage gate
-measures should be the only thing in its own diff, so the before/after is legible. Expect the first
-clean comparison to be the proof.
+**It is not proven, and it could not be proven before merging.** The comparison exists only on the
+server, and only once both sides have re-uploaded under real file lists, so the first clean per-flag
+comparison after master has run the `build` job is the evidence. Inside that window a PR is still
+compared against a base assembled the old way, so **a red per-flag gate there is the old defect being
+measured, not a regression**. Tracked in
+[`docs/inflight/ci-the-coverage-uploads-still-use-the-inert-glob.md`](inflight/ci-the-coverage-uploads-still-use-the-inert-glob.md),
+which owns the outstanding proof and the condition for closing it.
+
+**A second, independent cause reads the same from the check list**: a master run cancelled before it
+uploaded, which leaves Codecov with no report for that base commit and every PR comparing against
+older master data. The files count in the diff block tells them apart - equal on both sides is the
+glob, base short by more than the PR adds is the missing upload - and the inflight note above carries
+the measurement.
 
 ### Reading it without a browser
 

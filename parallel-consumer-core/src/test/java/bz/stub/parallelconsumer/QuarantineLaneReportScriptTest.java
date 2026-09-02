@@ -32,6 +32,12 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * The machine-readable payload gets the same treatment: every assertion about it splits the file on
  * the payload marker first and then asserts, so a status word that leaked into the PROSE cannot be
  * mistaken for one that reached the payload.
+ * <p>
+ * EVERY FIXTURE HERE HAS AT LEAST ONE REGISTRY ENTRY, and that is not an oversight to correct by
+ * adding a case. The EMPTY-registry path - where the script writes a lane-emptied report instead of
+ * a table - only means anything once its output reaches the reader that must retract the previous
+ * comment, so it is driven end-to-end in
+ * {@code .github/scripts/quarantine-report-comment.test.js} rather than asserted twice.
  */
 class QuarantineLaneReportScriptTest extends AbstractQuarantineScriptTest {
 

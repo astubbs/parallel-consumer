@@ -51,6 +51,7 @@ import static bz.stub.parallelconsumer.metrics.PCMetricsDef.USER_FUNCTION_EXECUT
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
+import static lombok.AccessLevel.PACKAGE;
 import static lombok.AccessLevel.PRIVATE;
 import static lombok.AccessLevel.PROTECTED;
 
@@ -289,6 +290,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     private final RateLimiter queueStatsLimiter = new RateLimiter();
 
+    /**
+     * How often, at most, to report that the loading factor is sitting at its ceiling. The condition is a steady state,
+     * and {@link #checkPipelinePressure()} runs on every control loop pass, so without this the report is emitted
+     * thousands of times a minute for as long as the condition holds.
+     */
+    private static final int LOAD_FACTOR_AT_CEILING_REPORT_RATE_SECONDS = 30;
+
+    private final RateLimiter loadFactorAtCeilingLimiter = new RateLimiter(LOAD_FACTOR_AT_CEILING_REPORT_RATE_SECONDS);
+
     @Getter(PROTECTED)
     PCModule<K, V> module;
 
@@ -316,8 +326,17 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Control for stepping loading factor - shouldn't step if work requests can't be fulfilled due to restrictions.
      * (e.g. we may want 10, but maybe there's a single partition and we're in partition mode - stepping up won't
      * help).
+     * <p>
+     * {@code volatile} records the invariant: this is written by the control thread and read by whoever calls
+     * {@link #checkPipelinePressure()}, with no lock between them, so a plain {@code boolean} gives the write no
+     * visibility guarantee - which is what SpotBugs' {@code AT_STALE_THREAD_WRITE_OF_PRIMITIVE} was already saying
+     * about it on master, where it was one of the non-volatile offenders {@code docs/refactoring.md} tracks. The
+     * field is touched once per control loop pass, so the barrier costs nothing measurable.
      */
-    private boolean lastWorkRequestWasFulfilled = false;
+    // Package-private, not protected: the only caller is a same-package test putting the pressure check into its
+    // guarded branch, and PROTECTED would put a test-only seam on the extension surface of a public class.
+    @Setter(PACKAGE)
+    private volatile boolean lastWorkRequestWasFulfilled = false;
 
     private io.micrometer.core.instrument.Timer userProcessingTimer;
     private Gauge loadFactorGauge;
@@ -1295,6 +1314,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * Called from {@code poll*} (i.e. on the user's own thread) before any PC thread exists, because that is the only
      * moment at which the user's context is reachable - none of PC's threads inherit it, the SLF4J MDC is not
      * inheritable.
+     * <p>
+     * <b>The INFO line below fires once per instance, and structurally so.</b> Its only caller is
+     * {@link #supervisorLoop(Function, Consumer)}, which throws {@link IllegalStateException} when {@code poll*} is
+     * called more than once - so there is no arrangement of the public API that puts this on a per-poll or per-record
+     * path. Keep it that way: the same line reached per batch would be an INFO log on the hot path.
      *
      * @see MdcPropagation
      */
@@ -1749,11 +1773,64 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         if (isPoolQueueLow() && lastWorkRequestWasFulfilled) {
             boolean steppedUp = dynamicExtraLoadFactor.maybeStepUp();
             if (steppedUp) {
+                // Deliberately NOT isDebugEnabled()-guarded, unlike the two sites below. Those allocate on every
+                // control loop pass; this one only fires when a step actually happened, which
+                // DynamicLoadFactor#couldStep() bounds by the cool-down and the factor's own ceiling - tens of times
+                // over a process's life, not thousands a minute. Guarding it would spend the pattern's signal ("this
+                // line is on a hot path") on a line that is not.
                 log.debug("isPoolQueueLow(): Executor pool queue is not loaded with enough work (queue: {} vs target: {}), stepped up loading factor to {}",
                         getNumberOfUserFunctionsQueued(), getPoolLoadTarget(), dynamicExtraLoadFactor.getCurrentFactor());
             } else if (dynamicExtraLoadFactor.isMaxReached()) {
-                log.warn("isPoolQueueLow(): Max loading factor steps reached: {}/{}", dynamicExtraLoadFactor.getCurrentFactor(), dynamicExtraLoadFactor.getMaxFactor());
+                reportLoadFactorAtCeiling();
             }
+        }
+    }
+
+    /**
+     * The queue is below its target but the loading factor cannot grow any further.
+     * <p>
+     * This is a saturation signal, not a failure - so it is reported accordingly, and never on every control loop
+     * pass:
+     * <ul>
+     *     <li>When the factor is <em>fixed</em> (see {@link DynamicLoadFactor#isStaticFactor()}) it goes to debug.
+     *     The state is real - the branch needs the last work request to have been <em>fulfilled</em>, so the buffer
+     *     the user pinned is genuinely what the queue is bounded by - but the ceiling is the number they wrote down,
+     *     and there is no step-up that failed. Reporting it at a level anyone runs at reinstates the noise this
+     *     exists to remove, for a configuration chosen on purpose. If that trade is ever revisited, the lever is a
+     *     rate-limited info through {@link #loadFactorAtCeilingLimiter}, not a return to unlimited warn.</li>
+     *     <li>When the factor is dynamic, having exhausted the step-up range is worth knowing about - but the
+     *     condition persists, so it is rate limited to once per
+     *     {@value #LOAD_FACTOR_AT_CEILING_REPORT_RATE_SECONDS} seconds.</li>
+     * </ul>
+     *
+     * @see <a href="https://github.com/astubbs/parallel-consumer/issues/155">astubbs#155</a> (confluentinc#402) - the
+     *         unlimited WARN filled users' logs, and read like an error when it was not one
+     */
+    private void reportLoadFactorAtCeiling() {
+        if (dynamicExtraLoadFactor.isStaticFactor()) {
+            // Guarded, unlike the warn below: a fixed factor reaches this branch on EVERY pass for the life of the
+            // process, and four arguments bind SLF4J's varargs overload - an Object[] plus four boxed ints allocated
+            // per pass whether or not anyone is listening. The rate limiter is what stops the warn doing the same.
+            if (log.isDebugEnabled()) {
+                log.debug("Executor pool queue is below its target ({} queued vs {}), and the loading factor is fixed at {} by configuration - " +
+                                "not stepping up, so the in-flight target stays at {} records.",
+                        getNumberOfUserFunctionsQueued(),
+                        getPoolLoadTarget(),
+                        dynamicExtraLoadFactor.getCurrentFactor(),
+                        getQueueTargetLoaded());
+            }
+        } else {
+            loadFactorAtCeilingLimiter.performIfNotLimited(() ->
+                    log.warn("Loading factor has reached its maximum ({}/{}) and the executor pool queue is still below its target " +
+                                    "({} queued vs {}), so the in-flight target of {} records will not grow further. This is a saturation " +
+                                    "signal, not an error: raise ParallelConsumerOptions#maximumLoadFactor or #messageBufferSize to buffer " +
+                                    "more records. Repeats are suppressed for {}s.",
+                            dynamicExtraLoadFactor.getCurrentFactor(),
+                            dynamicExtraLoadFactor.getMaxFactor(),
+                            getNumberOfUserFunctionsQueued(),
+                            getPoolLoadTarget(),
+                            getQueueTargetLoaded(),
+                            LOAD_FACTOR_AT_CEILING_REPORT_RATE_SECONDS));
         }
     }
 
@@ -1768,8 +1845,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         int queueSize = getNumberOfUserFunctionsQueued();
         int queueTarget = getPoolLoadTarget();
         boolean workAmountBelowTarget = queueSize <= queueTarget;
-        log.debug("isPoolQueueLow()? workAmountBelowTarget {} {} vs {};",
-                workAmountBelowTarget, queueSize, queueTarget);
+        // Guarded for the same reason as the ceiling report above, and it is the other instance of that defect on
+        // this pass: three arguments bind SLF4J's varargs overload, so an unguarded call allocates an Object[] and
+        // boxes every pass with debug off. checkPipelinePressure() calls this on every pass.
+        if (log.isDebugEnabled()) {
+            log.debug("isPoolQueueLow()? workAmountBelowTarget {} {} vs {};",
+                    workAmountBelowTarget, queueSize, queueTarget);
+        }
         return workAmountBelowTarget;
     }
 
@@ -2045,13 +2127,34 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             }
 
             logWithoutEscaping(e, () -> {
-                String msg = msg("Exception caught in user function running stage, registering WC as failed, returning to" +
-                        " mailbox. Context: {}", context, e);
+                // Summary, not the whole context: the full render grows with the batch (astubbs#170). Built inside
+                // each arm rather than once above them, because summarising walks the whole batch and the retriable
+                // arm logs at DEBUG only - PCRetriableException is PC's designed retry signal, so a downstream
+                // outage drives this branch at full processing rate, and doing that work for a line nobody reads is
+                // the disabled-level allocation astubbs#201 found elsewhere.
+                String failureLine = "Exception caught in user function running stage, registering WC as failed," +
+                        " returning to mailbox. Context: {}";
                 if (PCRetriableException.isPresentIn(e)) {
-                    log.debug("Explicit " + PCRetriableException.class.getSimpleName() + " caught, logging at DEBUG only. " + msg, e);
+                    if (log.isDebugEnabled()) {
+                        log.debug("Explicit " + PCRetriableException.class.getSimpleName()
+                                + " caught, logging at DEBUG only. " + failureLine, context.summariseForLog(), e);
+                    }
                 } else {
-                    log.error(msg, e);
+                    log.error(failureLine, context.summariseForLog(), e);
                 }
+                // Inside the lambda, and LAST, both deliberately. Inside, because rendering the context calls
+                // toString() on user keys and values, which is what logWithoutEscaping exists to contain. Last,
+                // because logWithoutEscaping swallows whatever the lambda throws - moving this above the lines
+                // that report the failure would let a hostile toString() suppress the report itself.
+                //
+                // SLF4J's own parameter substitution is a SECOND, independent layer, not the same one said twice:
+                // logback's LoggingEvent.getFormattedMessage() formats through MessageFormatter.arrayFormat, whose
+                // safeObjectAppend catches Throwable from each argument's toString() and substitutes
+                // "[FAILED toString()]". So a hostile key or value degrades one interpolation rather than the line.
+                // It is deliberately NOT relied on: it only covers the {} arguments, and only once formatting is
+                // reached - a level-enabled check or an appender that renders the object by another route is
+                // outside it. logWithoutEscaping is the layer that holds regardless.
+                log.debug("Full context of the batch that failed in the user function: {}", context);
             });
             throw e; // trow again to make the future failed
         } finally {

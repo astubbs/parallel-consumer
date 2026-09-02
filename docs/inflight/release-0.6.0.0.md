@@ -32,16 +32,6 @@ only the reminder that 0.6.0.0 has not had it done yet. Rehearse with `bin/relea
 that prints the exact body the release page will show, and a **Dry run** of the workflow puts it in
 the job summary.
 
-## Bugs found while triaging the upstream mirrors (2026-08-05)
-
-This has no issue of its own - it was found by reading code to diagnose something else.
-
-- **`PCModule#initDynamicLoadFactor` builds `new DynamicLoadFactor(staticLoadFactor, staticLoadFactor)`** when
-  `messageBufferSize` is set, so `isMaxReached()` is true from startup and
-  `AbstractParallelEoSStreamProcessor` logs *"Max loading factor steps reached"* at WARN on
-  every control-loop pass. Anyone following the README's buffer-tuning advice gets permanent log
-  noise reporting a non-problem. Related: astubbs#155, with the fix on astubbs#201.
-
 ## Marked for 0.6.0.0
 
 - **astubbs#196** - fixes astubbs#167 (confluentinc#622): the README's retry-delay example used `multiplier = 0.5`, so

@@ -459,8 +459,9 @@ entries:
       MDC.getCopyOfContextMap()/setContextMap(), so a caller's trace_id /
       request_id was lost crossing into the worker pool, and again crossing
       into vert.x / Reactor / Mutiny. Fixed by MdcPropagation +
-      ParallelConsumerOptions.propagateMdc (default true -- NOT yet signed off
-      by the maintainer; see the PR body for the residual pinning risk).
+      ParallelConsumerOptions.propagateMdc (default true -- signed off by the
+      maintainer at merge prep on astubbs#205, so settled; the residual pinning
+      risk and the reasoning behind the default are on that option's javadoc).
       Also fixes a pre-existing leak: whatever the user function put into the
       MDC stayed on the pooled thread for the next, unrelated, record.
       A backlink comment on confluentinc#907 is worth posting only once this
@@ -543,7 +544,7 @@ entries:
   - id: upstream-pr-log-noise
     group: logging-ux
     summary: Trim noisy user-function / RemovedPartitionState logging
-    fork: {branches: [], prs: [], fork_issues: [238], status: none}
+    fork: {branches: [fix/log-verbosity-batch], prs: [203], fork_issues: [169, 170, 238], status: pr-open}
     upstream: {repo: confluentinc/parallel-consumer, issues: [640, 57], prs: [918, 919], related: [629, 631], status: mixed, last_checked: 2026-08-07}
     adoc_anchor: null
     notes: >
@@ -557,7 +558,43 @@ entries:
       refactor #57 was waiting on (PartitionMonitor -> PartitionStateManager) has
       since happened, so its precondition is satisfied. Upstream status now `mixed`:
       #640 open, #57 closed-by-sweep.
+      2026-08-05: the two named lines are fixed on the fork (mirrors astubbs#169 /
+      astubbs#170) by branch fix/log-verbosity-batch, open as astubbs#203 -- written
+      independently of #918/#919, which are unmerged upstream and predate this fork's
+      internals. Both lines now carry a bounded summary
+      (bz.stub.parallelconsumer.internal.utils.RecordBatchSummary) with the full object
+      left at DEBUG. The wider #57 umbrella (the ~224 debug/trace call sites) is
+      untouched, so this entry stays open after astubbs#203 lands.
 
+
+  - id: issue-402-max-load-factor-log-noise
+    group: logging-ux
+    summary: "\"Max loading factor steps reached\" WARN spammed every control loop pass"
+    fork:
+      branches: [recut/201-load-factor-noise]
+      prs: [201]
+      fork_issue: 155
+      status: pr-open
+    upstream:
+      repo: confluentinc/parallel-consumer
+      issues: [402]
+      prs: []
+      related: [547, 606, 857]
+      status: open
+      last_checked: 2026-08-06
+    adoc_anchor: null
+    notes: >
+      Mirrored as astubbs#155. Two halves to the original report: the STALL was
+      fixed upstream in confluentinc#547/#606 and further in the confluentinc#857
+      family on the fork (astubbs#119), and is not touched here. This is the LOG
+      NOISE half only -- checkPipelinePressure() ran the WARN on every control loop
+      pass with no rate limiting, and a configured messageBufferSize pins the load
+      factor to its own ceiling so it fired from startup. Fix:
+      DynamicLoadFactor#isStaticFactor() -> debug for a fixed factor, plus
+      RateLimiter(30s) and a reworded WARN for a dynamic factor at its cap. No
+      change to buffering behaviour. The reply to the original reporter is drafted
+      in docs/inflight/issue-response-155.md and posted by the pre-release sweep,
+      not at merge.
 
   # ---------------------------------------------------------------------------
   # THE 2023 ADMINISTRATIVE SWEEPS

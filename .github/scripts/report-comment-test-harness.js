@@ -65,15 +65,21 @@ function makeRunner() {
  *
  * The order is the point for half of these tests: retire-before-create is invisible to any
  * assertion that only inspects final state.
+ *
+ * `faults` is exposed and mutable so one fake can span two runs - a create that fails on the first
+ * run and succeeds on the second is the shape of the failure the recovery path exists for, and two
+ * fakes could not share the comment store the second run has to read.
  */
 function fakeGithub({ comments = [], failCreate = false, failForwardLink = false } = {}) {
     const calls = [];
     let nextId = 900;
     const store = comments.map(c => ({ ...c }));
+    const faults = { failCreate, failForwardLink };
     let created = null;
     return {
         calls,
         store,
+        faults,
         paginate: async (fn, params) => {
             calls.push({ op: "paginate", params });
             return fn(params);
@@ -86,7 +92,7 @@ function fakeGithub({ comments = [], failCreate = false, failForwardLink = false
                 },
                 updateComment: async ({ comment_id, body }) => {
                     calls.push({ op: "updateComment", comment_id, body });
-                    if (failForwardLink && created && body.includes("Superseded by")) {
+                    if (faults.failForwardLink && created && body.includes("Superseded by")) {
                         throw new Error("simulated forward-link failure");
                     }
                     const target = store.find(c => c.id === comment_id);
@@ -95,7 +101,7 @@ function fakeGithub({ comments = [], failCreate = false, failForwardLink = false
                 },
                 createComment: async ({ body }) => {
                     calls.push({ op: "createComment", body });
-                    if (failCreate) throw new Error("simulated create failure");
+                    if (faults.failCreate) throw new Error("simulated create failure");
                     created = { id: ++nextId, body, html_url: `https://example.test/c/${nextId}` };
                     store.push({ ...created, user: { type: "Bot" } });
                     return { data: created };
