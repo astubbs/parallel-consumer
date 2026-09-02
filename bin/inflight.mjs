@@ -39,7 +39,7 @@ import { pathToFileURL } from 'node:url'
 import { perfReport, perfStart } from './lib/perf.mjs'
 
 import { baseline, freshnessWarnings, refTips } from './lib/git.mjs'
-import { cacheClear, cacheStatus } from './lib/cache.mjs'
+import { cacheClear, cacheStatus, knownCaches } from './lib/cache.mjs'
 import { corpusIndex, drift, findNotes, prsByBranch, stranded } from './lib/notes.mjs'
 import { branchView, commitGraph, trackingGap } from './lib/branches.mjs'
 import { formatBranch, formatCache, formatDrift, formatFind, formatStranded, formatWarnings } from './lib/views.mjs'
@@ -203,8 +203,8 @@ reported as what it is.
     },
     {
         name: 'cache',
-        summary: 'what is cached, how old it is, and folding one PR in without refetching the rest',
-        when: 'after creating a PR, or when you want to know whether an answer came from the network',
+        summary: 'what is cached, how old each kind is, and what policy decides that',
+        when: 'you want to know whether an answer came from the network, or why a stale one persisted',
         usage: `Usage: bin/inflight.mjs cache            what is cached and how old
        bin/inflight.mjs cache clear     delete orphans (add --all for live caches too)
 
@@ -240,7 +240,7 @@ because the next run then pays full price, so it takes --all.`,
             },
         ],
         run: (args, emit) => {
-            const known = ['prs.json', 'pr-search.json']
+            const known = knownCaches()
             emit(formatCache(cacheStatus(known), known))
             return { ok: true }
         },

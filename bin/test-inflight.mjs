@@ -997,6 +997,26 @@ const CHECKS = [
             "        pr: prs.get(ref.replace(/^origin\\//, '')) ?? prForBranch(ref).pr,",
             "        pr: prs.get(ref.replace(/^origin\\//, '')) ?? null,"),
     },
+    {
+        id: 'the-known-cache-list-is-derived-not-repeated',
+        why: 'it was listed twice and the copies drifted, so `cache` called the live file an orphan and the dead file live',
+        // The inverted report is the whole failure: that view exists to tell a leftover from a live
+        // cache, and a stale second copy made it confidently wrong in both directions at once.
+        run: async (binDir) => {
+            const c = await import(pathToFileURL(join(binDir, 'lib', 'cache.mjs')).href)
+            const known = c.knownCaches()
+            if (!Array.isArray(known) || known.length === 0) return false
+            // Every known name must carry a policy - that is what "derived" means here.
+            if (!known.every((n) => c.policyFor(n) && typeof c.policyFor(n).maxAgeMs === 'number')) return false
+            // The front door must not carry its own copy: a literal list of cache filenames there
+            // is the duplication this replaced, whatever its variable is called.
+            const front = readFileSync(join(binDir, 'inflight.mjs'), 'utf8')
+            return !/\[\s*'[a-z-]+\.json'\s*,/.test(front)
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+            '            const known = knownCaches()',
+            "            const known = ['prs.json', 'pr-search.json']"),
+    },
 ]
 
 console.log('bin/test-inflight.mjs - front door and prior-art library self-test\n')

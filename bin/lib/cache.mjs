@@ -47,6 +47,16 @@ export function policyFor(name) {
 }
 
 /**
+ * THE CACHES THIS CODE ACTUALLY USES, derived from the policy rather than listed a second time.
+ *
+ * It WAS listed a second time, in the front door, and the two had already drifted: renaming a cache
+ * kind here left the other copy naming the retired one, so `cache` reported the live file as an
+ * ORPHAN and the dead file as live - inverting the one thing that view exists to tell you. Anything
+ * with a policy is known; anything else is a leftover, by construction.
+ */
+export const knownCaches = () => Object.keys(POLICY)
+
+/**
  * ONE FILE PER KIND, with the key INSIDE it - never one file per key.
  *
  * A key-named file orphans a copy every time the key changes; 7.4MB accumulated in a single session
@@ -88,7 +98,7 @@ export function cacheWrite(name, value, key) {
  * the point: an unreadable leftover is indistinguishable from a live cache by looking at the
  * directory, and `corpus.json` sat there at 2.5MB after its cache was deleted.
  */
-export function cacheStatus(known = ['prs.json', 'pr-search.json']) {
+export function cacheStatus(known = knownCaches()) {
     let names = []
     try { names = readdirSync(cacheDir()) } catch { return { dir: cacheDir(), exists: false, entries: [] } }
     const entries = names.map((name) => {
@@ -102,7 +112,7 @@ export function cacheStatus(known = ['prs.json', 'pr-search.json']) {
 }
 
 /** Delete cached files. Orphans only by default, because dropping a live cache is a separate ask. */
-export function cacheClear({ all = false, known = ['prs.json', 'pr-search.json'] } = {}) {
+export function cacheClear({ all = false, known = knownCaches() } = {}) {
     const status = cacheStatus(known)
     if (!status.exists) return { removed: [], bytes: 0 }
     const doomed = status.entries.filter((e) => all || e.orphan)
