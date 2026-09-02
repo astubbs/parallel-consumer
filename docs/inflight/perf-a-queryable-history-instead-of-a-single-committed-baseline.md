@@ -15,9 +15,12 @@ removes rather than mitigates.
   a floor the code left behind years ago. Nothing goes red to say so.
 - **The threshold cannot be tightened by better comparison alone - MEASURED, and it was a surprise.**
   The obvious reading of the healthy band (0.778 to 1.000) is that most of the spread is baseline
-  staleness, curable by comparing against master runs near a PR's own merge-base. It is not. The 0.778
-  run is `docs/beads-evaluation`, which is **docs-only** - four markdown files, zero main-code change -
-  so a tree byte-identical to master in every line of code lost 22% AFTER normalisation.
+  staleness, curable by comparing against master runs near a PR's own merge-base. It is not.
+  <!-- post-merge: checked -->
+  The 0.778 run was `docs/beads-evaluation` at a commit where that branch was **docs-only** - four markdown
+  files, zero main-code change - so a tree byte-identical to master in every line of code lost 22%
+  AFTER normalisation. (The branch has since grown the `bin/inflight.mjs` tooling; the measurement
+  stands because it was taken before that, and nothing in it depends on the branch still existing.)
 
   That says the proportionality assumption underneath neighbour-normalising is only approximately true:
   in that run the neighbours were 6% slow while the subject was 27% slow, so the subject AMPLIFIES

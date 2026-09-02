@@ -128,6 +128,15 @@
             "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/after-push-check-ci.sh\""
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/after-pr-create-refresh-cache.mjs\""
+          }
+        ]
       }
     ],
     "SessionStart": [

@@ -616,6 +616,43 @@ assert "a REJECTED push is silent - no CI started" silent \
 
 assert "a malformed payload never breaks the tool call" silent \
     "$(fired 'not json at all')"
+
+# ---------------------------------------------------------------------------
+# after-pr-create-refresh-cache.mjs - folds a newly created PR into the in-flight tool's PR cache.
+#
+# The negative controls carry this one too. It runs on EVERY Bash call, and it SHELLS OUT on a
+# match - so a leak is not just noise, it is a `gh pr view` per unrelated command. The three ways it
+# must stay silent are: not a pr-create at all; a create that failed, where gh printed no PR URL and
+# there is nothing to fold in; and a --dry-run, which creates nothing.
+#
+# `PC_INFLIGHT_HOOK_TOOL` is not set here on purpose: with no CLAUDE_PROJECT_DIR pointing at a tree
+# that has bin/inflight.mjs, the hook exits before running anything, so these cases assert the
+# DECISION rather than the refresh. The refresh itself is covered by bin/test-inflight.mjs.
+# ---------------------------------------------------------------------------
+prcache_hook() { # <json payload> -> prints injected context, or nothing
+    printf '%s' "$1" | CLAUDE_PROJECT_DIR=/nonexistent-on-purpose \
+        "$HOOKS/after-pr-create-refresh-cache.mjs" 2>/dev/null | tr -d '\n'
+}
+prcache_fired() { [ -n "$(prcache_hook "$1")" ] && echo fired || echo silent; }
+
+assert "a non-create Bash call is silent" silent \
+    "$(prcache_fired '{"tool_input":{"command":"git status"},"tool_response":{"stdout":"clean"}}')"
+
+# A PR NUMBER THAT CANNOT EXIST, so recognition is proved without the refresh reaching the network
+# and rewriting the real cache. The hook recognises the command, calls cachePr, gh fails on the
+# number, and it exits silent - so this case pins "did not throw and did not emit", and the
+# RECOGNITION itself is asserted directly against the exported matcher in bin/test-inflight.mjs.
+assert "a create behind a cd does not blow up when the refresh cannot run" silent \
+    "$(prcache_fired '{"tool_input":{"command":"cd /w && gh pr create --title x"},"tool_response":{"stdout":"https://github.com/a/b/pull/99999999"}}')"
+
+assert "a create that printed no PR url is silent - nothing was created" silent \
+    "$(prcache_fired '{"tool_input":{"command":"gh pr create"},"tool_response":{"stderr":"a pull request for branch already exists"}}')"
+
+assert "a dry-run create is silent" silent \
+    "$(prcache_fired '{"tool_input":{"command":"gh pr create --dry-run"},"tool_response":{"stdout":"https://github.com/a/b/pull/7"}}')"
+
+assert "a malformed payload never breaks the tool call" silent \
+    "$(prcache_fired 'not json at all')"
 # ---------------------------------------------------------------------------------------------
 # warn-low-disk.sh
 #
@@ -1137,12 +1174,17 @@ registered = {h["command"].rsplit("/", 1)[-1].rstrip('"')
 # have pushed the next author to satisfy the assertion rather than the property.
 # A LEADING-COMMENT MENTION DOES NOT COUNT: `# Self-test for .claude/hooks/foo.sh` is prose, and
 # accepting it would let a hook buy coverage with a sentence. The path must appear in code.
-covered = set(re.findall(r"\$HOOKS/([a-z0-9-]+\.sh)",
+# BOTH EXTENSIONS, because a hook is no longer necessarily shell. This matched `.sh` only, so the
+# first Node hook was reported as untested however thoroughly it was tested - the assertion pinning
+# the old shape rather than the property, which is the same failure its own comment above warns
+# about one paragraph earlier. Node became the default for new scripts by operator ruling on
+# 2026-09-01; this is that ruling reaching the harness that polices it.
+covered = set(re.findall(r"\$HOOKS/([a-z0-9-]+\.(?:sh|mjs))",
                          (root / "bin/test-check-agent-hooks.sh").read_text()))
-for selftest in sorted((root / "bin").glob("test-*.sh")):
+for selftest in sorted((root / "bin").glob("test-*.sh")) + sorted((root / "bin").glob("test-*.mjs")):
     code = "\n".join(l for l in selftest.read_text().splitlines()
-                     if not l.lstrip().startswith("#"))
-    covered |= set(re.findall(r"\.claude/hooks/([a-z0-9-]+\.sh)", code))
+                     if not l.lstrip().startswith("#") and not l.lstrip().startswith("//"))
+    covered |= set(re.findall(r"\.claude/hooks/([a-z0-9-]+\.(?:sh|mjs))", code))
 disk = [h for g in cfg["hooks"].get("PreToolUse", []) for h in g["hooks"]
         if h["command"].rstrip('"').endswith("warn-low-disk.sh")]
 problems = []

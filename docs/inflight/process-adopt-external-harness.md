@@ -34,16 +34,31 @@ matrix and published pieces from Anthropic and Martin Fowler.
   markdown-file variant.
 - All MIT, so adoption is legally cheap.
 
+**Extended 2026-09-01, and the extension moved the question.** The survey above asked which *hooks
+project* to adopt. Widening it to the trackers, to the first-party features that have since shipped,
+and to whether the nearest neighbour composes with us is recorded in
+[`docs/plans/2026-09-01-001-investigate-beads-comparison.md`](../plans/2026-09-01-001-investigate-beads-comparison.md),
+which owns those findings - including that `sd0xdev/sd0x-dev-flow` is closer to this repo's thesis
+than anything named above.
+
 ## What adoption would cost us, honestly
 
 - **The conventions are not in the code.** The tag vocabulary, the weight-axis boundary between
   `docs/inflight/` and `docs/refactoring.md`, "a filename carries no status", "deferred is a schedule
   and all non-deferred work happens first" - none of that ships with anyone's hooks. Adopting the
   tooling without them gets gates enforcing rules nobody agreed to, which is worse than no gates.
-- **The self-test density is unmatched** - every gate paired one-to-one with a self-test,
-  each verified red against a deliberately broken copy. The research found the *idea* advocated
-  elsewhere and one project genuinely eval-gated, but nobody requires it per gate. That discipline is
-  the thing worth keeping whatever the tooling underneath.
+- **~~The self-test density is unmatched~~ - CORRECTED 2026-09-01, and it was never true.**
+  `karanb192/claude-code-hooks` ships tests for every hook, run in CI across three Node versions,
+  plus a benchmark harness - so the claim is contradicted by the very project the survey above
+  named. The research literature asks for *more* than we do, too:
+  [GENESIS](https://arxiv.org/pdf/2605.27360) makes a negative control an **admission rule**, and
+  its version has three gates where ours has one - a checker must fail on the unsolved state, pass
+  on the reference solution, and fail again on a known-bad mutation.
+
+  What survives is narrower and worth keeping on its own merits: **every gate here is paired
+  one-to-one with a self-test, each verified red against a deliberately broken copy.** That is a
+  real discipline. It is not a differentiator, and treating it as one was how a comfortable claim
+  went three weeks unchecked.
 - **Migration is not free**, and the harness is what every agent session depends on. Doing it during
   a release run would churn the one thing that has to stay reliable.
 
@@ -63,3 +78,8 @@ while.
 
 [`process-quarantine-lane-foss.md`](process-quarantine-lane-foss.md) is the same question about one
 gate and should be decided together with this, not separately.
+
+**The evidence is not deferred with the decision.**
+[`process-beads-evaluation.md`](process-beads-evaluation.md) runs Beads against this repo's actual
+corpus and records what it replaces; the verdict comes back HERE, and this note stays the only place
+the decision is stated.

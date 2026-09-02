@@ -226,7 +226,7 @@ merged as a no-op - `git ls-files | grep -c CLAUDE.md` returned **0**. The three
 negated individually rather than with a blanket `!CLAUDE.md`; the reasoning is in `.gitignore`
 itself, next to the rule.
 
-**`.claude/settings.json`** - fourteen hook scripts across sixteen registrations, and the file is
+**`.claude/settings.json`** - fifteen hook scripts across seventeen registrations, and the file is
 **tracked**. The entries below are the ones whose design decisions are worth recording here;
 `remind-inflight-on-push.sh` and `check-history-rewrite.sh` carry theirs in their own headers.
 The count is stated because it drifted: this said "five" while the file registered seven, which is
@@ -234,6 +234,15 @@ the same silent staleness the rest of this document exists to prevent. `.gitigno
 `/.claude/*` by contents rather than excluding the directory, with a comment anticipating exactly
 this; the negations `!/.claude/settings.json` and `!/.claude/hooks/**` open that door. Personal
 grants stay in `settings.local.json`, still ignored.
+
+**`after-pr-create-refresh-cache.sh` is the first hook that CALLS the in-flight tool rather than
+reimplementing what it needs**, and that direction is the point rather than an implementation detail.
+Every other hook here reads the repository itself - its own grep, its own parsing, its own idea of
+what a note is. This one decides only WHEN to act (a `gh pr create` that actually created something)
+and hands the reading to `bin/inflight.mjs cache pr`. The reverse migration - moving the reading out
+of the hooks that already do it by hand - is
+[`docs/inflight/ci-inflight-absorbs-the-query-half.md`](inflight/ci-inflight-absorbs-the-query-half.md),
+and this is the pattern it is aiming at, arriving from the other side.
 
 - `PreToolUse` on `Bash`, `if` `Bash(git commit *)`, runs `.claude/hooks/pre-commit-gate.sh`, a
   wrapper around the same pre-commit script. Belt-and-braces: it catches the agent even in a clone
