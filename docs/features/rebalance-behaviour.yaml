@@ -51,6 +51,14 @@ boundaries:
     stops polling while draining holds its assignment without consuming, starving its own group.
   - Every rebalance callback runs on the poll thread inside poll(), so anything slow on the revoke
     path is charged against max.poll.interval.ms, and overrunning it evicts the member from the group.
+  - How often the transactional revoke path actually commits depends on
+    allowEagerProcessingDuringTransactionCommit. With its default of false a worker holds the produce
+    read lock for the whole of the user function, and the revoke path needs the matching write lock -
+    so on a busy instance it will usually decline rather than commit, and the partitions' offsets are
+    redelivered. Commit-on-revoke is therefore largely removed in that configuration rather than
+    merely degraded. That is still preferable to what it replaces, which was breaching
+    max.poll.interval.ms and being evicted, but it is a real change in how much a transactional
+    rebalance replays.
   - In transactional commit mode the revoke path declines the same way, on a second lock. If a
     transaction commit is already running it skips the commit rather than waiting for the producer
     transaction lock. It used to wait there with no deadline and could breach max.poll.interval.ms,
