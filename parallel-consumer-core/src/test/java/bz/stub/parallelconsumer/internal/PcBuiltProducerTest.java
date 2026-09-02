@@ -77,8 +77,8 @@ class PcBuiltProducerTest {
 
         // the wrappers themselves are not the subject - what the factory was handed is
         var ignoredInitialA = moduleA.producerWrap();
-        var ignoredReplacementA1 = moduleA.replacementProducerWrap().get().get();
-        var ignoredReplacementA2 = moduleA.replacementProducerWrap().get().get();
+        var ignoredReplacementA1 = moduleA.replacementProducerWrap().get().build();
+        var ignoredReplacementA2 = moduleA.replacementProducerWrap().get().build();
         var ignoredInitialB = moduleB.producerWrap();
 
         assertThat(handedConfigs).hasSize(4);
@@ -125,7 +125,7 @@ class PcBuiltProducerTest {
         var module = moduleWith(cachingFactory, minimalConfig(), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
         var ignoredFirst = module.producerWrap(); // the first call is legitimate; the repeat is the defect
 
-        var thrown = assertThrows(IllegalStateException.class, () -> module.replacementProducerWrap().get().get());
+        var thrown = assertThrows(IllegalStateException.class, () -> module.replacementProducerWrap().get().build());
 
         assertThat(thrown).hasMessageThat().contains("ProducerFactory");
         assertThat(thrown).hasMessageThat().contains("new");

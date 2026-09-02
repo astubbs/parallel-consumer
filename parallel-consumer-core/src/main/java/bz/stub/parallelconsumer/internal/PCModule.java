@@ -23,7 +23,6 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.function.Supplier;
 
 /**
  * Minimum dependency injection system, modled on how Dagger works.
@@ -99,11 +98,14 @@ public class PCModule<K, V> {
      * the supplier resolves the same configuration - the same derived {@code transactional.id} included - and asks
      * the factory for a new producer.
      */
-    public Optional<Supplier<ProducerWrapper<K, V>>> replacementProducerWrap() {
+    public Optional<ReplacementProducerSource<K, V>> replacementProducerWrap() {
         if (options().isProducerInstanceSupplied()) {
             return Optional.empty();
         }
-        return Optional.of(this::buildProducerWrapperFromConfiguration);
+        String transactionalId = options().isUsingTransactionCommitMode()
+                ? TransactionalIdDerivation.derive(groupIdForDerivation(), producerInstanceId)
+                : null;
+        return Optional.of(new ReplacementProducerSource<>(this::buildProducerWrapperFromConfiguration, transactionalId));
     }
 
     private ProducerWrapper<K, V> buildProducerWrapperFromConfiguration() {

@@ -15,7 +15,6 @@ import pl.tlinkowski.unij.api.UniMaps;
 
 import java.time.Duration;
 import java.util.Optional;
-import java.util.function.Supplier;
 
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
 import static com.google.common.truth.Truth.assertThat;
@@ -47,7 +46,7 @@ class ProducerManagerDetectionTest {
     }
 
     private ProducerManager<String, String> managerThatCanRecover() {
-        Supplier<ProducerWrapper<String, String>> replacement = () -> module.producerWrap();
+        var replacement = new ReplacementProducerSource<String, String>(() -> module.producerWrap(), "pc-4-test-id");
         return new ProducerManager<>(wrapper, module.consumerManager(), module.workManager(), module.options(), Optional.of(replacement));
     }
 
