@@ -1844,9 +1844,11 @@ Every earlier capture had to argue this; this one does not.
 <!-- post-merge: checked-end -->
 
 **Intermittent on the same branch, which is a small addition to the rate question.** The same lane
-passed on four earlier heads of that branch and failed on the fifth, all within about three hours
-and none of them carrying Java. That is consistent with the standing intermittency and is not a
-rate - it is one branch's run of five.
+passed on four earlier heads of that branch, failed on this one, and passed again on the next head
+that completed - all within about four hours, and none of them carrying Java. So the failure did not
+reproduce on a re-run of nearly the same tree, which is what "intermittent" has to mean here. That is
+consistent with the standing intermittency and **is not a rate**: it is a handful of runs on one
+branch, gathered while doing something else, not an experiment anybody designed.
 
 **Still not replayed.** Six seeds now exist for the verification the first 2026-08-26 section asks
 for - replay one with astubbs#29's `tryLock()` applied and read whether the poll thread is still
