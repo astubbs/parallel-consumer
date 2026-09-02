@@ -121,6 +121,39 @@ class PcBuiltProducerTest {
         assertThat(wrapper.isConfiguredForTransactions()).isFalse();
     }
 
+    /**
+     * The id is resolved once per instance, so the WARN a caller-set id earns fires once, not once per rebuild: an
+     * operator watching a recovery loop sees the recovery lines, not a repeat of a start-up warning.
+     */
+    @Test
+    void aCallerSetIdIsWarnedAboutOnceAcrossAStartAndTwoReplacements() {
+        String callersId = "callers-id-" + java.util.UUID.randomUUID();
+        var module = moduleWith(capturingFactory,
+                UniMaps.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "broker:9092", ProducerConfig.TRANSACTIONAL_ID_CONFIG, callersId),
+                CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(TransactionalIdDerivation.class);
+        var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            var ignoredInitial = module.producerWrap();
+            var source = module.replacementProducerWrap().get();
+            var ignoredFirstReplacement = source.build();
+            var ignoredSecondReplacement = source.build();
+        } finally {
+            logger.detachAppender(appender);
+        }
+
+        long warnsNamingTheCallersId = appender.list.stream()
+                .filter(event -> event.getLevel().isGreaterOrEqual(ch.qos.logback.classic.Level.WARN))
+                .filter(event -> event.getFormattedMessage().contains(callersId))
+                .count();
+        assertThat(warnsNamingTheCallersId).isEqualTo(1);
+        assertThat(handedConfigs).hasSize(3);
+        assertWithMessage("every build received the same derived id")
+                .that(handedConfigs.stream().map(config -> config.get(ProducerConfig.TRANSACTIONAL_ID_CONFIG)).distinct().count()).isEqualTo(1);
+    }
+
     @Test
     void aFactoryReturningTheSameInstanceTwiceIsRejected() {
         var shared = new MockProducer<>(true, new StringSerializer(), new StringSerializer());

@@ -226,36 +226,29 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
     }
 
     /**
-     * Covers R18 at the detection seam: on the PC-built path the same synchronous throw is recorded for recovery and
-     * the instance stays up; the record fails and returns through the mailbox. Recovery itself is U5's.
+     * The two shapes an InvalidPidMappingException arrives in on the produce path: the synchronous throw from the
+     * send call itself (the shape confluentinc#839 fixed), and the one the field report (astubbs#411,
+     * confluentinc#830) actually has - from the send future, wrapped in ExecutionException.
      */
-    @Test
-    @SneakyThrows
-    public void pcBuiltPathRecordsASynchronousInvalidPidMappingExceptionInsteadOfClosing() {
-        setupParallelConsumerInstance(PERIODIC_CONSUMER_ASYNCHRONOUS);
-        final InvalidPidMappingException invalidPidMappingException = new InvalidPidMappingException("pid mapping gone");
-        var producerManager = mockProducerManagerInto(parallelConsumer, true);
-        when(producerManager.produceMessages(any())).thenThrow(invalidPidMappingException);
-
-        parallelConsumer.pollAndProduceMany((record) -> of(new ProducerRecord<>("outputTopic", record.key(), record.value())));
-
-        verify(producerManager, timeout(10_000).atLeastOnce()).recordInvalidation(invalidPidMappingException);
-        awaitForSomeLoopCycles(2);
-        Assertions.assertThat(parallelConsumer.getFailureCause()).isNull();
-        Assertions.assertThat(stateOf(parallelConsumer)).isEqualTo(State.RUNNING);
+    enum InvalidPidMappingArrival {
+        SYNCHRONOUS_THROW, FAILED_SEND_FUTURE
     }
 
     /**
-     * Covers R9 and R18: the shape the field report (astubbs#411, confluentinc#830) actually has - the condition
-     * arrives from the send future, wrapped in ExecutionException - is recognised on the PC-built path.
+     * Covers R9 and R18 at the detection seam: on the PC-built path the condition, in either shape, is recorded for
+     * recovery and the instance stays up; the record fails and returns through the mailbox. Recovery itself is U5's.
      */
-    @Test
+    @ParameterizedTest
+    @EnumSource(InvalidPidMappingArrival.class)
     @SneakyThrows
-    public void pcBuiltPathRecordsAWrappedInvalidPidMappingExceptionFromTheSendFuture() {
+    public void pcBuiltPathRecordsAnInvalidPidMappingExceptionInsteadOfClosing(InvalidPidMappingArrival arrival) {
         setupParallelConsumerInstance(PERIODIC_CONSUMER_ASYNCHRONOUS);
         final InvalidPidMappingException invalidPidMappingException = new InvalidPidMappingException("pid mapping gone");
         var producerManager = mockProducerManagerInto(parallelConsumer, true);
-        when(producerManager.produceMessages(any())).thenReturn(aSendFutureFailingWith(invalidPidMappingException));
+        switch (arrival) {
+            case SYNCHRONOUS_THROW -> when(producerManager.produceMessages(any())).thenThrow(invalidPidMappingException);
+            case FAILED_SEND_FUTURE -> when(producerManager.produceMessages(any())).thenReturn(aSendFutureFailingWith(invalidPidMappingException));
+        }
 
         parallelConsumer.pollAndProduceMany((record) -> of(new ProducerRecord<>("outputTopic", record.key(), record.value())));
 

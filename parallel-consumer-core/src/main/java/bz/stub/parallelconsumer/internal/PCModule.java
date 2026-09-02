@@ -16,10 +16,12 @@ import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.producer.Producer;
+import org.apache.kafka.clients.producer.ProducerConfig;
 
 import java.lang.ref.WeakReference;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -80,6 +82,21 @@ public class PCModule<K, V> {
     private WeakReference<Producer<K, V>> lastProducerFromFactory = new WeakReference<>(null);
 
     /**
+     * The caller's producer configuration with the {@code transactional.id} PC derives set (or, in a non-transactional
+     * commit mode, removed). Resolved once: the producer PC starts with and every replacement it builds are made from
+     * the same map, and the WARN a caller-set id earns is emitted once per instance rather than once per rebuild.
+     */
+    private Map<String, Object> resolvedProducerConfig;
+
+    private Map<String, Object> resolvedProducerConfig() {
+        if (resolvedProducerConfig == null) {
+            resolvedProducerConfig = TransactionalIdDerivation.resolve(options().getProducerConfig(),
+                    options().isUsingTransactionCommitMode(), groupIdForDerivation(), producerInstanceId);
+        }
+        return resolvedProducerConfig;
+    }
+
+    /**
      * The wrapper around the producer PC starts with - the caller's instance on the deprecated path, or the first
      * producer built from configuration through the factory.
      */
@@ -102,15 +119,15 @@ public class PCModule<K, V> {
         if (options().isProducerInstanceSupplied()) {
             return Optional.empty();
         }
-        String transactionalId = options().isUsingTransactionCommitMode()
-                ? TransactionalIdDerivation.derive(groupIdForDerivation(), producerInstanceId)
-                : null;
+        // null in a non-transactional commit mode, where resolve() removes the key
+        String transactionalId = (String) resolvedProducerConfig().get(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
         return Optional.of(new ReplacementProducerSource<>(this::buildProducerWrapperFromConfiguration, transactionalId));
     }
 
     private ProducerWrapper<K, V> buildProducerWrapperFromConfiguration() {
         boolean transactional = options().isUsingTransactionCommitMode();
-        Map<String, Object> resolved = TransactionalIdDerivation.resolve(options().getProducerConfig(), transactional, groupIdForDerivation(), producerInstanceId);
+        // a copy per call: the map is the factory's to read, and a factory that mutates it must not mutate the memo
+        Map<String, Object> resolved = new LinkedHashMap<>(resolvedProducerConfig());
         // user code, wrapped as every other user function is: a factory that throws an Error (a serializer's static
         // initialiser failing, say) would otherwise escape every catch on the recovery path, leaving the instance
         // RUNNING with its workers parked on the produce lock for good

@@ -494,6 +494,12 @@ cosmetic - see the last bullet.*
   (reports `PT30S` for an actual 10s). Tiny standalone fix + unit test.
 
 ### internal/ProducerManager.java
+- **Extract the availability state machine** (the `Availability` enum, its monitor, the backoff schedule,
+  `recordInvalidation`, the park/wake in `acquireProduceLock`, the replay-owed flag and generation) into a
+  package-private `ProducerAvailability` that holds no lock but its own monitor and makes no client call;
+  the class crossed 1,000 lines with astubbs#225's recovery (astubbs/parallel-consumer#410 review, finding 2),
+  deferred from that PR because the machine now also spans the write-lock path (`beginReplacement` sets the
+  replay-owed flag) and the produce-lock check, so the seam was not clean in one pass.
 - `private synchronized void syncBeginTransaction` locks on `this` -
   lock-hygiene: a dedicated private lock is safer (same idea as the PCMetrics `confluentinc#859`
   fix); low priority, separate concern. `alternatives to this brute force approach`:
