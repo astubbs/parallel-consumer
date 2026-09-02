@@ -151,21 +151,12 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
      */
     private volatile BooleanSupplier suspensionEndsWhen = () -> false;
 
-    /** First delay between recovery attempts; doubles per attempt up to {@link #RECOVERY_BACKOFF_MAX}. */
-    static final Duration RECOVERY_BACKOFF_INITIAL = Duration.ofSeconds(1);
-    /** Cap on the delay between recovery attempts. Not options, because nobody has asked to tune them yet. */
-    static final Duration RECOVERY_BACKOFF_MAX = Duration.ofSeconds(30);
-    /**
-     * How long closing the discarded producer may take. Bounded because it runs under the write lock, which the
-     * revoke callback may be waiting on; a fenced producer's close is usually immediate.
-     */
-    static final Duration DISCARDED_PRODUCER_CLOSE_TIMEOUT = Duration.ofSeconds(10);
     /** How often a parked worker re-checks whether the processor is shutting down. */
     static final Duration SUSPENSION_POLL = Duration.ofMillis(100);
 
     // test hooks: package-private so a test can pace the backoff without a 1 s floor
-    volatile Duration recoveryBackoffInitial = RECOVERY_BACKOFF_INITIAL;
-    volatile Duration recoveryBackoffMax = RECOVERY_BACKOFF_MAX;
+    volatile Duration recoveryBackoffInitial = ProducerRecoveryPolicy.RECOVERY_BACKOFF_INITIAL;
+    volatile Duration recoveryBackoffMax = ProducerRecoveryPolicy.RECOVERY_BACKOFF_MAX;
 
     /**
      * Installed on every send. Built once, because whether this manager uses transactions is already decided before
@@ -740,7 +731,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
                 int consecutive = consecutiveRecoveriesWithoutCommit.get();
                 // the first recovery in a run happens at once; the ones after it, with no successful commit
                 // between, are paced so a rebuild-then-refence loop does not run at the commit cadence
-                nextRecoveryAttemptAt = consecutive == 0 ? Instant.EPOCH : Instant.now().plus(backoffFor(consecutive));
+                nextRecoveryAttemptAt = consecutive == 0 ? Instant.EPOCH : Instant.now().plus(ProducerRecoveryPolicy.backoffFor(consecutive, recoveryBackoffInitial, recoveryBackoffMax));
             }
         }
         if (recorded) {
@@ -772,19 +763,11 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
         }
     }
 
-    private Duration backoffFor(int attempts) {
-        long millis = recoveryBackoffInitial.toMillis();
-        for (int i = 1; i < attempts && millis < recoveryBackoffMax.toMillis(); i++) {
-            millis *= 2;
-        }
-        return Duration.ofMillis(Math.min(millis, recoveryBackoffMax.toMillis()));
-    }
-
     private void scheduleRetry(String why) {
         Duration delay;
         synchronized (availabilityMonitor) {
             failedReplacementAttempts++;
-            delay = backoffFor(failedReplacementAttempts);
+            delay = ProducerRecoveryPolicy.backoffFor(failedReplacementAttempts, recoveryBackoffInitial, recoveryBackoffMax);
             nextRecoveryAttemptAt = Instant.now().plus(delay);
         }
         log.warn("Producer recovery deferred for {}: {}", delay, why);
@@ -850,25 +833,9 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
 
     private void closeQuietly(ProducerWrapper<K, V> discarded, String what) {
         try {
-            discarded.close(DISCARDED_PRODUCER_CLOSE_TIMEOUT);
+            discarded.close(ProducerRecoveryPolicy.DISCARDED_PRODUCER_CLOSE_TIMEOUT);
         } catch (RuntimeException e) {
-            log.warn("Closing {} failed within {}; continuing with the recovery: {}", what, DISCARDED_PRODUCER_CLOSE_TIMEOUT, e.toString());
-        }
-    }
-
-    /**
-     * What a replacement attempt did.
-     */
-    @lombok.Value
-    public static class ReplacementOutcome {
-        public enum Kind {REPLACED, DEFERRED, TERMINAL}
-
-        Kind kind;
-        /** The failure to report, for a TERMINAL outcome; null otherwise. */
-        ProducerInvalidatedException failure;
-
-        public boolean isTerminal() {
-            return kind == Kind.TERMINAL;
+            log.warn("Closing {} failed within {}; continuing with the recovery: {}", what, ProducerRecoveryPolicy.DISCARDED_PRODUCER_CLOSE_TIMEOUT, e.toString());
         }
     }
 
@@ -916,7 +883,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
                 closeQuietly(replacement, "the replacement that failed to initialise");
             }
             String failureType = describeType(failure);
-            if (isTerminalBuildFailure(failure)) {
+            if (ProducerRecoveryPolicy.isTerminalBuildFailure(failure)) {
                 synchronized (availabilityMonitor) {
                     availability = Availability.TERMINAL;
                     availabilityMonitor.notifyAll();
@@ -924,7 +891,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
                 var terminal = new ProducerInvalidatedException(msg(
                         "The replacement producer for transactional.id '{}' cannot be built or initialised ({}), and " +
                                 "retrying cannot fix that - check the TransactionalId ACL for the prefix this id carries",
-                        source.getTransactionalId(), failureType), sanitised(failure));
+                        source.getTransactionalId(), failureType), ProducerRecoveryPolicy.sanitised(failure));
                 log.error("Producer recovery terminal: condition {}, attempt {}: {}", condition, attempt, terminal.getMessage());
                 return new ReplacementOutcome(ReplacementOutcome.Kind.TERMINAL, terminal);
             }
@@ -971,26 +938,6 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
         } else {
             log.warn("Producer recovery {}: condition {}, attempt {}, transactional.id '{}'", outcome, condition, attempt, transactionalId);
         }
-    }
-
-    /**
-     * What retrying a replacement build cannot fix: the broker refusing the id or the feature, the factory breaking
-     * its contract (deterministic - a caching factory caches on every rebuild), and an {@link Error} from the
-     * factory, which arrives wrapped as user-function failure and is never a transient broker condition.
-     */
-    private static boolean isTerminalBuildFailure(Throwable failure) {
-        return ThrowableUtils.anyInCauseChain(failure,
-                f -> f instanceof AuthorizationException || f instanceof UnsupportedVersionException
-                        || f instanceof ProducerFactoryContractException || f instanceof Error);
-    }
-
-    /**
-     * The failure with its stack trace but without its message, which for a configuration error carries the value.
-     */
-    private static Throwable sanitised(Throwable failure) {
-        var copy = new RuntimeException(failure.getClass().getName() + " (message redacted: it may carry configuration values)");
-        copy.setStackTrace(failure.getStackTrace());
-        return copy;
     }
 
     /**

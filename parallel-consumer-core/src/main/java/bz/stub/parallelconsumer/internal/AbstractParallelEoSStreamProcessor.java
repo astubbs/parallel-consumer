@@ -2096,7 +2096,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                     pm.releaseCommitLockAfterReplacement();
                 }
             }
-            ProducerManager.ReplacementOutcome outcome = pm.completeReplacement();
+            ReplacementOutcome outcome = pm.completeReplacement();
             if (outcome.isTerminal()) {
                 if (this.failureReason == null) {
                     this.failureReason = outcome.getFailure();

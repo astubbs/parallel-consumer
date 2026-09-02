@@ -123,7 +123,7 @@ class ProducerManagerRecoveryTest {
         Instant beforeTheAttempt = Instant.now();
         var deferred = manager.completeReplacement();
 
-        assertThat(deferred.getKind()).isEqualTo(ProducerManager.ReplacementOutcome.Kind.DEFERRED);
+        assertThat(deferred.getKind()).isEqualTo(ReplacementOutcome.Kind.DEFERRED);
         assertWithMessage("nothing was built").that(built).isEmpty();
         assertThat(manager.isReplacing()).isTrue();
         assertWithMessage("paced like a failed build, not spun").that(manager.isRecoveryAttemptDue(beforeTheAttempt)).isFalse();
@@ -133,7 +133,7 @@ class ProducerManagerRecoveryTest {
         manager.replayCompleted(0);
         manager.releaseCommitLockAfterReplacement();
         assertThat(manager.isReplayOwed()).isFalse();
-        assertThat(manager.completeReplacement().getKind()).isEqualTo(ProducerManager.ReplacementOutcome.Kind.REPLACED);
+        assertThat(manager.completeReplacement().getKind()).isEqualTo(ReplacementOutcome.Kind.REPLACED);
     }
 
     /**
@@ -325,7 +325,7 @@ class ProducerManagerRecoveryTest {
 
         verify(initial).abortTransaction();
         verify(initial).close(any(Duration.class));
-        assertThat(outcome.getKind()).isEqualTo(ProducerManager.ReplacementOutcome.Kind.REPLACED);
+        assertThat(outcome.getKind()).isEqualTo(ReplacementOutcome.Kind.REPLACED);
         assertThat(manager.isProducerAvailable()).isTrue();
         assertThat(manager.getProducerWrapper()).isNotSameInstanceAs(initial);
     }
@@ -333,7 +333,7 @@ class ProducerManagerRecoveryTest {
     @Test
     void aSuccessfulCommitResetsTheConsecutiveRecoveryCountAndTheNextRecoveryIsNotPaced() throws Exception {
         recoverPhaseA();
-        assertThat(manager.completeReplacement().getKind()).isEqualTo(ProducerManager.ReplacementOutcome.Kind.REPLACED);
+        assertThat(manager.completeReplacement().getKind()).isEqualTo(ReplacementOutcome.Kind.REPLACED);
         assertThat(manager.getConsecutiveRecoveriesWithoutCommit()).isEqualTo(1);
 
         // a second condition with no commit between is paced by the backoff
@@ -342,7 +342,7 @@ class ProducerManagerRecoveryTest {
         assertThat(manager.beginReplacement()).isTrue(); // the pacing gates the control loop, not the lock
         manager.replayCompleted(0);
         manager.releaseCommitLockAfterReplacement();
-        assertThat(manager.completeReplacement().getKind()).isEqualTo(ProducerManager.ReplacementOutcome.Kind.REPLACED);
+        assertThat(manager.completeReplacement().getKind()).isEqualTo(ReplacementOutcome.Kind.REPLACED);
         assertThat(manager.getConsecutiveRecoveriesWithoutCommit()).isEqualTo(2);
 
         // R23 / R24 at the meter: two recoveries so far, both fenced, none committed since
@@ -373,7 +373,7 @@ class ProducerManagerRecoveryTest {
 
         var outcome = manager.completeReplacement();
 
-        assertThat(outcome.getKind()).isEqualTo(ProducerManager.ReplacementOutcome.Kind.DEFERRED);
+        assertThat(outcome.getKind()).isEqualTo(ReplacementOutcome.Kind.DEFERRED);
         verify(built.get(0)).close(any(Duration.class));
         assertWithMessage("the rejected replacement was never published").that(manager.getProducerWrapper()).isNull();
         assertThat(manager.isReplacing()).isTrue();
@@ -386,7 +386,7 @@ class ProducerManagerRecoveryTest {
 
         var outcome = manager.completeReplacement();
 
-        assertThat(outcome.getKind()).isEqualTo(ProducerManager.ReplacementOutcome.Kind.TERMINAL);
+        assertThat(outcome.getKind()).isEqualTo(ReplacementOutcome.Kind.TERMINAL);
         verify(built.get(0)).close(any(Duration.class));
         assertThat(manager.isProducerAvailable()).isFalse();
     }
@@ -403,7 +403,7 @@ class ProducerManagerRecoveryTest {
 
         var outcome = manager.completeReplacement();
 
-        assertThat(outcome.getKind()).isEqualTo(ProducerManager.ReplacementOutcome.Kind.TERMINAL);
+        assertThat(outcome.getKind()).isEqualTo(ReplacementOutcome.Kind.TERMINAL);
         assertThat(outcome.getFailure()).hasMessageThat().contains(ProducerFactoryContractException.class.getName());
         assertWithMessage("the transactional id is named, for the operator").that(outcome.getFailure()).hasMessageThat().contains("pc-4-test-id");
         assertThat(manager.isProducerAvailable()).isFalse();
@@ -430,7 +430,7 @@ class ProducerManagerRecoveryTest {
 
         var outcome = manager.completeReplacement();
 
-        assertThat(outcome.getKind()).isEqualTo(ProducerManager.ReplacementOutcome.Kind.REPLACED);
+        assertThat(outcome.getKind()).isEqualTo(ReplacementOutcome.Kind.REPLACED);
         assertThat(manager.isProducerAvailable()).isTrue();
         assertThat(manager.getProducerWrapper()).isSameInstanceAs(built.get(0));
         assertWithMessage("the recovery counted, whatever the registry did").that(manager.getConsecutiveRecoveriesWithoutCommit()).isEqualTo(1);
