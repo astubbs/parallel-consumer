@@ -30,6 +30,14 @@ opt_in:
 boundaries:
   - close() defaults to the non-draining mode.
   - A user function that swallows interruption can delay close until the configured timeout is exceeded.
+  - The commit attempted during close is a SINGLE attempt and is never retried. The retry loop stops
+    once the poll system is closing, because retrying would stall shutdown while nothing is polling.
+    If that one attempt fails, those offsets are not committed and the records are redelivered to the
+    next consumer of the partitions.
+  - Non-draining close therefore does not guarantee that completed work has been committed. Use
+    closeDrainFirst when offsets must be committed before shutdown; it finishes and commits in-flight
+    work first. The close-time log names this explicitly, and recommends the drain path only when the
+    caller did not already take it.
 references:
   - label: Close-mode example
     path: parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/CoreApp.java

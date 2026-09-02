@@ -61,6 +61,13 @@
 export const FAIL_BELOW = 0.50
 export const WARN_BELOW = 0.70
 
+// THE RUN-TO-RUN SPREAD OF THE QUANTITY THE VERDICT IS BUILT FROM, taken from the measurement table
+// above: the share moved 16.6-17.2% across eight runs of one unchanged commit. Rounded UP to the
+// higher figure, because a floor that understates its own noise is the thing this constant exists to
+// stop. It is not a threshold - nothing branches on it - it is what the headline sentence has to
+// disclose so a small difference is not read as a finding.
+export const NOISE_FLOOR = 0.17
+
 // A TRUE median: on an even-sized set, average the two middle values. The first version took the
 // lower-middle, which systematically understates the reference share and so makes every verdict
 // ratio stricter than the calibrated bound claims - with the default ten reference runs, always.
@@ -90,4 +97,48 @@ export function verdictFor(observed, reference) {
   const word = ratio < FAIL_BELOW ? 'FAIL' : ratio < WARN_BELOW ? 'FLAG' : 'OK'
   return { kind: 'verdict', observedShare, referenceShare, ratio, icon, word,
            failed: ratio < FAIL_BELOW }
+}
+
+/** Which of the three bands a ratio falls in. Same expression as `icon`/`word`, named once. */
+export const bandOf = ratio => (ratio < FAIL_BELOW ? 'fail' : ratio < WARN_BELOW ? 'flag' : 'ok')
+
+/**
+ * The ratio as the report should PRINT it.
+ *
+ * `ratio.toFixed(3)` rounds, and at a bound the rounding crosses it: 0.4996 prints as `0.500` beside
+ * a 🔴 whose bound the very same comment prints as "< 0.50", and 0.6996 prints as `0.700` beside a
+ * 🟡. A reader who does the honest thing - check the number against the stated range - then gets the
+ * opposite answer from the icon, in a report whose whole redesign was about not being misread.
+ * Narrow window, but the fix is to widen the precision until the printed value lands in the same
+ * band as the raw one, so the two can never disagree.
+ */
+export const displayRatio = ratio => {
+  for (const dp of [3, 4, 5, 6, 9]) {
+    const shown = ratio.toFixed(dp)
+    if (bandOf(Number(shown)) === bandOf(ratio)) return shown
+  }
+  // `String(n)` round-trips a double exactly, so this last resort cannot disagree with its own band.
+  return String(ratio)
+}
+
+/**
+ * The report's headline sentence.
+ *
+ * SAY THE SIZE OF THE RULER IN THE SAME BREATH AS THE MEASUREMENT. The first version stated "This
+ * branch is about 8% faster than master" flatly, two paragraphs above the same comment's own
+ * statement that this test moves 13-17% run to run - so the report contradicted itself and the
+ * headline won, because the headline is what gets read. A difference smaller than the instrument's
+ * spread is a reading, not a result, and the sentence now says which of the two it is.
+ *
+ * The verb matters as much as the caveat: "measured about 8% faster" is a fact about this run,
+ * "is about 8% faster" is a claim about the branch, and only the first one is true.
+ */
+export const headlineFor = ratio => {
+  const pct = n => `${(n * 100).toFixed(0)}%`
+  const diff = Math.abs(1 - ratio)
+  if (diff < 0.005) return '**This branch measured the same speed as master**, on the one test this measures.'
+  const sentence = `**This branch measured about ${pct(diff)} ${ratio >= 1 ? 'faster' : 'slower'} than master**, on the one test this measures.`
+  return diff < NOISE_FLOOR
+    ? `${sentence} That is INSIDE this test's own run-to-run spread of about ${pct(NOISE_FLOOR)}, so read it as a reading and not as a result - re-running the same commit moves it by about as much.`
+    : `${sentence} That is larger than this test's own run-to-run spread of about ${pct(NOISE_FLOOR)}, so it is worth looking at.`
 }

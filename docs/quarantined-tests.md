@@ -40,6 +40,14 @@ Rules (full discipline in [`docs/testing.md`](testing.md), AGENTS.md, and the `@
    and what shows it is master-state rather than PR-state). What stays banned is quarantining on a
    hunch - "it's red sometimes" is not evidence, and a single failure is a sighting, not a ledger.
 
+   **A ledger does not have to be assembled by hand from logs that expire.**
+   `node bin/inflight.mjs codecov test <name>` prints that test's recorded outcome per commit, and
+   `codecov flaky` lists every test ever recorded with more than one outcome - Codecov keeps this far
+   longer than a CI log is retained. It reports **candidates and never a verdict**: two outcomes
+   across two commits fits a regression that landed between them just as well as a flake, which is
+   the distinction this rule exists to make, so it informs the ledger rather than writing it.
+   [`docs/inflight-tool.md`](inflight-tool.md) owns those commands.
+
    The rule used to demand a diagnosis outright. That was wrong in a way worth recording: it
    conflated *"we don't know the mechanism"* with *"we don't know whether it's ours"*, and only the
    second justifies blocking. A test with a sighting ledger **is** a finding - it is known
@@ -74,18 +82,35 @@ Rules (full discipline in [`docs/testing.md`](testing.md), AGENTS.md, and the `@
 
 ## Currently quarantined
 
-Every entry below is a timing flake rather than a deterministic failure, so all carry
-`flapping = true`: a pass proves nothing and the lane reports it without demanding action. All
-were hidden by the surefire retry until astubbs#224 removed it.
+The one entry below is an unreliable failure rather than a deterministic one, so it carries
+`flapping = true`: a pass proves nothing and the lane reports it without demanding action. It was never
+hidden by the surefire retry astubbs#224 removed, because the test did not run in a gating lane until
+the PR that quarantines it.
 
-- [ ] `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` - fails inside
-  the shared `BlockedThreadAsserter#assertUnblocksAfter` helper rather than in the test's own
-  assertions, so the same signature can surface from any test that uses it. The unblocker is
-  scheduled *before* the elapsed clock starts, so the measured window begins later than the delay it
-  is compared against and is systematically short by however long arming the scheduler takes;
-  `isAtLeast(unblocksAfter)` then fails by a millisecond or two under load. Seen as `getElapsed()
-  expected to be at least PT20S but was PT19.998S` - 2ms short on a 20s bound - on a PR whose diff
-  contained no Java at all, which is what rules out PR-state under rule 2. Diagnosis in
-  [`docs/inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md).
-  Owner: PR astubbs#262, which anchors the measurement to a nanos stamp taken just before
-  `schedule()`, leaving the residual error sub-millisecond and in the safe direction.
+**The other entry that stood here has gone, and not by a lapse.**
+`ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` is astubbs#262's rule-3
+re-enable: astubbs#265 deleted the wall-clock assertion that flaked, and astubbs#262, its owner,
+deletes the annotation and its entry together.
+(`OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` went
+earlier, diagnosed and fixed on master by astubbs#351 - it asserted an offset it had itself frozen.)
+
+- [ ] `MultiInstanceRebalanceTest.largeNumberOfInstances` - a rebalance stall whose mechanism is
+  measured but not explained. The progress detector returns `FLAT` - the record count *stops* rather
+  than slowing, which is the discriminator it exists to report - and the `AMBIENT PROBE AUTOPSY`
+  block names `ZOMBIE_MEMBER/REBALANCE_BLOCKED`: the group dwells in `PreparingRebalance` because a
+  member stopped answering, with the whole assignment frozen at comparable lag rather than one shard
+  wedged. Measured at one failure in ten consecutive runs on an idle Linux box, plus repeated CI
+  failures, always that signature. It reproduces on the tree carrying this branch's log-argument
+  fix, so it is neither the confluentinc#857 revoke deadlock nor the SLF4J argument-evaluation
+  defect but a third, open mechanism. Sighting ledger, including what would settle the attribution:
+  [`docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md`](inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md).
+  Unowned - no fix PR exists, because no diagnosis does.
+
+  **Rule 2 is satisfied prospectively rather than retrospectively, and that is worth stating plainly
+  rather than letting a later reader find it.** The ledger was measured while this test was
+  PR-state: on master it is `@Disabled`, so it cannot fail there and no master-state ledger for it
+  can exist. The PR carrying this entry enables it into the required `Performance Tests` lane, which
+  is exactly the act that makes its failures master-state - master would otherwise inherit a gating
+  check that fails about one run in ten. The quarantine lands in the same change as the enablement,
+  so the test never spends a day blocking merges on an unexplained stall. If the enablement were
+  ever reverted, this entry should go with it.

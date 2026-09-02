@@ -35,6 +35,12 @@ opt_in:
 boundaries:
   - A larger buffer can hide uneven partition traffic but also increases retained work and recovery exposure.
   - messageBufferSize switches load-factor behavior to a static value; do not treat it as a harmless cosmetic limit.
+  - Whether partitions are paused is read from the consumer rather than tracked separately, so the
+    answer stays correct across a rebalance under either assignor. Kafka discards pause state for
+    every partition on an eager rebalance, but keeps it for partitions retained across a cooperative
+    one; anything holding its own copy of that state has to model both protocols and stay correct as
+    Kafka changes, and a copy that says "not paused" while Kafka still has them paused means nothing
+    ever resumes them - consumption stops with no error.
 references:
   - label: Partition-order tuning guidance
     path: README.adoc#ordering-guarantees
