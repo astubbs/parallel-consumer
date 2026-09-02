@@ -259,36 +259,6 @@ gate_rc() { # <project-dir> <bash-command>
 red=$(make_project 1)
 green=$(make_project 0)
 
-# WRONG-TREE REFUSAL. The payload cwd is the SESSION root, not a subagent worktree; a bare commit
-# resolved to a tree with nothing changed is a commit git would refuse anyway, so gating it can only
-# report another tree's defects. Three subagents hit this on 2026-09-02. The fixture must be a REAL,
-# COMMITTED git repo: an untracked .githooks/ would make it dirty and the check correctly would not fire.
-make_clean_repo() { # <gate-exit-code> -> a committed repo whose tree is clean
-    local dir; dir=$(make_project "$1")
-    git -C "$dir" init -q && git -C "$dir" add -A \
-        && git -C "$dir" -c user.email=t@t -c user.name=t commit -q -m init
-    echo "$dir"
-}
-gate_out() { # <project-dir> <cwd> <bash-command> -> stderr
-    local payload
-    payload=$(python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","cwd":sys.argv[1],"tool_input":{"command":sys.argv[2]}}))' "$2" "$3")
-    printf '%s' "$payload" | CLAUDE_PROJECT_DIR="$1" "$HOOKS/pre-commit-gate.sh" 2>&1 >/dev/null
-}
-cleanrepo=$(make_clean_repo 1)
-out=$(gate_out "$cleanrepo" "$cleanrepo" 'git commit -m x'); rc=$?
-assert "a bare commit resolved to a CLEAN tree is refused as the wrong tree" 2 "$rc"
-assert "...and the RED gate there was NOT run - refusing, not gating" 0 "$(printf '%s' "$out" | grep -c 'STUB GATE SPOKE')"
-assert "...and the refusal names git -C as the remedy" 1 "$(printf '%s' "$out" | grep -c 'git -C <your-worktree>')"
-# CONTROL: the same tree, dirtied, gates normally - so the refusal is keyed on cleanliness, not on cwd
-echo dirty > "$cleanrepo/f"
-out=$(gate_out "$cleanrepo" "$cleanrepo" 'git commit -m x'); rc=$?
-assert "control: the same tree once dirty goes to the gate, which blocks" 2 "$rc"
-assert "control: ...and the gate actually spoke" 1 "$(printf '%s' "$out" | grep -c 'STUB GATE SPOKE')"
-# and --allow-empty on a clean tree is the one honest case, so it must reach the gate too
-rm "$cleanrepo/f"
-out=$(gate_out "$cleanrepo" "$cleanrepo" 'git commit --allow-empty -m x')
-assert "--allow-empty against a clean tree reaches the gate rather than being refused" 1 "$(printf '%s' "$out" | grep -c 'STUB GATE SPOKE')"
-
 assert "green gate lets the commit through" 0 \
     "$(gate_rc "$green" 'git commit -m "ordinary"')"
 
@@ -561,7 +531,32 @@ assert "...labelled as the session's root in the refusal" labelled "$got"
 wt_out=$(wt_fire "$session_green" "$commit_red" 'git commit --no-verify -m "I have a reason"')
 assert "--no-verify bypasses the OTHER tree's red gate too" 0 "${wt_out%%|*}"
 
-rm -rf "$session_green" "$commit_red" "$session_red" "$commit_green"
+# 7. A CLEAN TREE IS THE WRONG TREE. The payload cwd is the SESSION root, not a subagent worktree; a
+# bare commit resolved to a tree with nothing changed is one git would refuse anyway, so gating it can
+# only report another tree's defects. Three subagents hit this on 2026-09-02. The fixture must be
+# COMMITTED: `make_worktree` leaves .githooks/ untracked, which is dirty, and the check correctly does
+# not fire on a dirty tree - which is how the first version of this test passed for the wrong reason.
+clean_red=$(make_worktree clean-red 1)
+git -C "$clean_red" add -A && git -C "$clean_red" -c user.email=t@t -c user.name=t commit -q -m init
+wt_out=$(wt_fire "$clean_red" "$clean_red" 'git commit -m x')
+assert "a bare commit resolved to a CLEAN tree is refused as the wrong tree" 2 "${wt_out%%|*}"
+case "$wt_out" in *"GATE OF clean-red"*) got="gated it: ${wt_out#*|}" ;; *) got=refused_without_gating ;; esac
+assert "...and the RED gate there was NOT run - refusing, not gating" refused_without_gating "$got"
+case "$wt_out" in *"git -C <your-worktree>"*) got=named_the_remedy ;; *) got="${wt_out#*|}" ;; esac
+assert "...and the refusal names git -C as the remedy" named_the_remedy "$got"
+# CONTROL: the same tree, dirtied, gates normally - so the refusal is keyed on cleanliness, not on cwd.
+echo dirty > "$clean_red/f"
+wt_out=$(wt_fire "$clean_red" "$clean_red" 'git commit -m x')
+assert "control: the same tree once dirty goes to the gate, which blocks" 2 "${wt_out%%|*}"
+case "$wt_out" in *"GATE OF clean-red"*) got=gated ;; *) got="did not gate: ${wt_out#*|}" ;; esac
+assert "control: ...and the gate actually spoke" gated "$got"
+# And --allow-empty on a clean tree is the one honest case, so it must reach the gate too.
+rm "$clean_red/f"
+wt_out=$(wt_fire "$clean_red" "$clean_red" 'git commit --allow-empty -m x')
+case "$wt_out" in *"GATE OF clean-red"*) got=gated ;; *) got="refused: ${wt_out#*|}" ;; esac
+assert "--allow-empty against a clean tree reaches the gate rather than being refused" gated "$got"
+
+rm -rf "$session_green" "$commit_red" "$session_red" "$commit_green" "$clean_red"
 
 # ---------------------------------------------------------------------------------------------
 # inject-merge-checklist.sh

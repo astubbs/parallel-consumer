@@ -319,7 +319,7 @@ if not bypass:
     # so the only thing a gate can do here is read the wrong files and report their defects as yours.
     # `--allow-empty` is the one honest commit against a clean tree, and is let through to the gate.
     # (No apostrophes in these comments: Apple bash 3.2 quote-counts a heredoc inside $( ) naively.)
-    if not bypass and target and "--allow-empty" not in cmd:
+    if target and "--allow-empty" not in cmd:
         try:
             st = subprocess.run(["git", "-C", target, "status", "--porcelain"],
                                 capture_output=True, text=True, timeout=10)
