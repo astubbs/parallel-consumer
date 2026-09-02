@@ -818,6 +818,69 @@ const CHECKS = [
             '    e.n += 1', '    e.n = 1'),
     },
     {
+        id: 'a-flake-candidate-needs-two-different-outcomes',
+        why: 'a test that failed twice is not flaky, and calling it flaky is how a real regression gets quarantined',
+        run: async (binDir) => {
+            const cc = await import(pathToFileURL(join(binDir, 'lib', 'codecov.mjs')).href)
+            // Three tests, one of each shape the API can hand back. Fixture rather than network:
+            // an analysis only reachable through a live API is one nothing can check offline.
+            const rows = [
+                { computed_name: 'A::steady', commit_sha: 'aaa1111', outcome: 'pass', duration_seconds: 1, timestamp: '2026-09-01T01:00:00Z' },
+                { computed_name: 'A::steady', commit_sha: 'bbb2222', outcome: 'pass', duration_seconds: 1, timestamp: '2026-09-02T01:00:00Z' },
+                { computed_name: 'B::broke', commit_sha: 'aaa1111', outcome: 'pass', duration_seconds: 1, timestamp: '2026-09-01T01:00:00Z' },
+                { computed_name: 'B::broke', commit_sha: 'bbb2222', outcome: 'failure', duration_seconds: 1, timestamp: '2026-09-02T01:00:00Z' },
+                { computed_name: 'C::alwaysRed', commit_sha: 'aaa1111', outcome: 'failure', duration_seconds: 1, timestamp: '2026-09-01T01:00:00Z' },
+                { computed_name: 'C::alwaysRed', commit_sha: 'bbb2222', outcome: 'failure', duration_seconds: 1, timestamp: '2026-09-02T01:00:00Z' },
+            ]
+            const names = cc.flakesFrom(rows).map((c) => c.name)
+            // Only B changed outcome. A never failed; C never passed, so it is simply broken.
+            return names.length === 1 && names[0] === 'B::broke'
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'codecov.mjs'),
+            '        if (outcomes.size > 1) {', '        if (outcomes.size >= 1) {'),
+    },
+    {
+        id: 'a-timeline-is-newest-first-so-the-change-point-is-readable',
+        why: 'the whole question is WHICH commit it changed at, and an unordered list cannot answer it',
+        run: async (binDir) => {
+            const cc = await import(pathToFileURL(join(binDir, 'lib', 'codecov.mjs')).href)
+            // Deliberately fed oldest-first, so passing proves the sort ran rather than the input order.
+            const rows = [
+                { computed_name: 'X::t', commit_sha: 'old0000', outcome: 'pass', timestamp: '2026-09-01T01:00:00Z' },
+                { computed_name: 'X::t', commit_sha: 'mid0000', outcome: 'pass', timestamp: '2026-09-02T01:00:00Z' },
+                { computed_name: 'X::t', commit_sha: 'new0000', outcome: 'failure', timestamp: '2026-09-03T01:00:00Z' },
+            ]
+            const obs = cc.timelineFrom(rows, 'x::t').matches[0].observations
+            return obs[0].sha === 'new0000' && obs[2].sha === 'old0000'
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'codecov.mjs'),
+            'for (const obs of m.values()) obs.sort((a, b) => String(b.at).localeCompare(String(a.at)))',
+            'for (const obs of m.values()) obs.sort((a, b) => String(a.at).localeCompare(String(b.at)))'),
+    },
+    {
+        id: 'a-search-that-matched-nothing-is-not-a-search-that-failed',
+        why: 'this repo has been bitten repeatedly by a false negative wearing the authority of a completed check',
+        run: async (binDir) => {
+            const cc = await import(pathToFileURL(join(binDir, 'lib', 'codecov.mjs')).href)
+            const t = cc.timelineFrom([{ computed_name: 'Only::one', commit_sha: 'a', outcome: 'pass', timestamp: '2026-09-01T01:00:00Z' }], 'nothingmatchesthis')
+            // An empty match list, and a corpus size proving there WAS something to search.
+            return t.matches.length === 0 && t.corpus === 1
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'codecov.mjs'),
+            '    const hits = [...all.entries()].filter(([name]) => name.toLowerCase().includes(q))',
+            '    const hits = [...all.entries()]'),
+    },
+    {
+        id: 'codecov-is-reachable-from-the-front-door',
+        why: 'bin/inflight.mjs exists because a tool nobody can name is indistinguishable from one that does not exist',
+        run: async (binDir) => {
+            const names = await registeredNames(binDir)
+            return ['codecov', 'codecov test', 'codecov flaky', 'codecov slow'].every((n) => names.includes(n))
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+            "        name: 'codecov',", "        name: 'codecovv',"),
+    },
+    {
         id: 'the-pr-create-hook-recognises-a-command-behind-a-cd',
         why: 'a prefix matcher missed every command shape it existed for, and the shell suite cannot prove recognition without hitting the network',
         // The decision is tested here rather than in bin/test-check-agent-hooks.sh because deciding

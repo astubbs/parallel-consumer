@@ -42,11 +42,21 @@ import { baseline, freshnessWarnings, refTips } from './lib/git.mjs'
 import { cacheClear, cacheStatus } from './lib/cache.mjs'
 import { cachePr, corpusIndex, drift, findNotes, prsByBranch, stranded } from './lib/notes.mjs'
 import { branchView, commitGraph, trackingGap } from './lib/branches.mjs'
-import { formatBranch, formatCache, formatDrift, formatFind, formatStranded, formatWarnings } from './lib/views.mjs'
+import {
+    formatBranch, formatCache, formatCoverage, formatDrift, formatFind, formatFlakes,
+    formatSlowest, formatStranded, formatTimeline, formatWarnings,
+} from './lib/views.mjs'
+import { coverage, flakeCandidates, slowest, testTimeline } from './lib/codecov.mjs'
 import {
     format, formatHeader, formatSection, formatTail,
     priorArt, summary as priorArtSummary, usage as priorArtUsage,
 } from './lib/prior-art.mjs'
+
+/** The two flags every codecov subcommand takes, parsed in one place rather than three. */
+const cvOpts = (args) => ({
+    fresh: args.includes('--fresh'),
+    branch: args.includes('--branch') ? args[args.indexOf('--branch') + 1] : undefined,
+})
 
 /**
  * The registry.
@@ -256,6 +266,86 @@ because the next run then pays full price, so it takes --all.`,
         run: (args, emit) => {
             const known = ['prs.json', 'pr-search.json']
             emit(formatCache(cacheStatus(known), known))
+            return { ok: true }
+        },
+    },
+    {
+        name: 'codecov',
+        summary: 'the recorded outcome and wall-clock of every test, per commit - the history git has not got',
+        when: 'asking WHEN a test started failing, whether it is flaky, or what the coverage is now',
+        usage: `Usage: bin/inflight.mjs codecov                    coverage totals, and per-flag
+       bin/inflight.mjs codecov test <fuzzy>      one test's outcome per commit - the bisect
+       bin/inflight.mjs codecov flaky             tests recorded with more than one outcome
+       bin/inflight.mjs codecov slow [n]          slowest tests by last recorded wall-clock
+
+Add --fresh to any of these to bypass the 10-minute cache, and --branch <ref> to scope to one branch.
+
+NO TOKEN AND NO SETUP: this repo is public, so Codecov's API answers unauthenticated. It works from
+a fresh sandbox and from CI, which is the whole reason it is reachable from here rather than being a
+dashboard somebody has to remember to open.
+
+WHAT IT IS FOR. Codecov keeps per-test outcome and duration per commit, for longer than a CI log is
+retained. That answers "which commit did this start failing at" from RECORDED history rather than by
+re-running builds, and it supplies the sighting evidence docs/quarantined-tests.md demands, which is
+currently assembled by hand from logs that expire.
+
+WHAT IT IS NOT FOR. \`duration_seconds\` is test wall-clock on a shared runner, not the library's
+throughput. It must never feed the throughput regression comparison - see bin/lib/codecov.mjs.`,
+        sub: [
+            {
+                name: 'test',
+                summary: "one test's recorded outcome and duration, per commit, newest first",
+                when: 'a test is failing and you need the commit it changed at, not a guess',
+                usage: `Usage: bin/inflight.mjs codecov test <fuzzy-name> [--branch <ref>] [--fresh]
+
+Substring match, case-insensitive, because you almost always hold the method name and not the
+fully-qualified one. Several matches are listed rather than guessed at: resolving to the wrong test
+here produces a confident answer to a question nobody asked.`,
+                run: (args, emit) => {
+                    const q = args.find((a) => !a.startsWith('--'))
+                    if (!q) return { ok: false, reason: 'codecov test: give part of a test name' }
+                    const r = testTimeline(q, cvOpts(args))
+                    if (!r.ok) return { ok: false, reason: `codecov test: ${r.reason}` }
+                    emit(formatTimeline(r.value))
+                    return { ok: true }
+                },
+            },
+            {
+                name: 'flaky',
+                summary: 'tests recorded with more than one outcome - flake CANDIDATES, never a verdict',
+                when: 'building the sighting evidence a quarantine entry needs, instead of re-reading CI logs',
+                usage: `Usage: bin/inflight.mjs codecov flaky [--branch <ref>] [--fresh]
+
+A candidate list. The same evidence fits a real regression that landed between two commits, which is
+exactly why docs/quarantined-tests.md refuses to quarantine on a rate alone.`,
+                run: (args, emit) => {
+                    const r = flakeCandidates(cvOpts(args))
+                    if (!r.ok) return { ok: false, reason: `codecov flaky: ${r.reason}` }
+                    emit(formatFlakes(r.value))
+                    return { ok: true }
+                },
+            },
+            {
+                name: 'slow',
+                summary: 'the slowest tests by their most recent recorded wall-clock',
+                when: 'CI wall-clock is the complaint and you need to know which tests own it',
+                usage: `Usage: bin/inflight.mjs codecov slow [n] [--branch <ref>] [--fresh]
+
+Wall-clock on a shared GitHub runner. Good for "this test owns four minutes of every run"; not a
+benchmark, and never an input to a throughput comparison.`,
+                run: (args, emit) => {
+                    const n = args.find((a) => /^\d+$/.test(a))
+                    const r = slowest(n ? Number(n) : 20, cvOpts(args))
+                    if (!r.ok) return { ok: false, reason: `codecov slow: ${r.reason}` }
+                    emit(formatSlowest(r.value))
+                    return { ok: true }
+                },
+            },
+        ],
+        run: (args, emit) => {
+            const r = coverage()
+            if (!r.ok) return { ok: false, reason: `codecov: ${r.reason}` }
+            emit(formatCoverage(r.value))
             return { ok: true }
         },
     },

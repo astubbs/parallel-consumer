@@ -72,6 +72,60 @@ node bin/inflight.mjs note find 857
 Substring match over every note path that exists on any ref - including the ones that never reached
 master, which is most of them. Use it to get the path that `note drift` wants.
 
+## Asking when a test started failing, without re-running anything
+
+`bin/inflight.mjs codecov` reads Codecov's API, which holds the **outcome and wall-clock of every
+individual test, per commit, per branch** - for far longer than a CI log is retained. That answers a
+question nothing else here can: not *is this test red now*, but *when did it change, and has it done
+this before*.
+
+**No token and no setup.** This repository is public, so the API answers unauthenticated. The tool
+works from a fresh agent sandbox, from CI, and from a machine that has never run `gh auth login`.
+
+```
+node bin/inflight.mjs codecov test MultiInstanceHighVolume
+```
+
+```
+bz.stub.parallelconsumer.integrationTests.MultiInstanceHighVolumeTest::multiInstance
+    pass        51.4s  3f54f02  ci/quarantine-report-status-changes
+    pass        54.7s  957d583  ci/quarantine-report-status-changes
+  -> 2 runs, all pass.
+```
+
+When the outcome does change across those commits, the tool says so and **refuses to interpret it**:
+the same evidence fits a flake and fits a regression that landed between the two, and deciding which
+is the reader's job. That is the same line [`docs/quarantined-tests.md`](quarantined-tests.md) draws
+when it refuses to quarantine on a failure rate alone.
+
+**Where this replaces manual work.** A quarantine entry needs sighting evidence, and that ledger is
+currently assembled by hand from CI logs that expire - the reason
+[`docs/testing.md`](testing.md) warns that a flake seen on a PR must be recorded before that PR
+merges. `codecov flaky` lists every test recorded with more than one outcome, from history that
+outlives the logs.
+
+```
+node bin/inflight.mjs codecov slow 3
+```
+
+```
+    266.6s  ...WorkManagerLincheckTest::stressMustNotRediscoverTheCheckpointThreeTear  [lincheck]
+    106.0s  ...RunLengthEncoderTest::testSimultaneousWithOverflowErrors(TypeKind)[2]   [unit]
+     58.1s  ...PartitionStateCommittedOffsetIT::committedOffsetRemoved(OffsetResetStrategy)[1]  [integration]
+```
+
+**These durations are not a benchmark, and the distinction is load-bearing.** They are wall-clock on
+a shared GitHub runner, moved by runner contention, Docker pulls and broker startup. The library's
+throughput is a figure the performance test *computes about the library*, on a controlled arm, and
+`bin/check-throughput-regression.mjs` owns that comparison. Feeding runner wall-clock into it would
+reintroduce exactly the noise those control arms exist to remove. Use `codecov slow` for "this test
+owns four minutes of every run"; never for "is the library faster".
+
+**What an empty answer means here.** Codecov only knows tests whose suite has uploaded results, and
+only since that upload was turned on. So "no flakes recorded" is a narrower claim than "no flakes",
+and every one of these commands says so in its own output rather than leaving the reader to assume
+otherwise.
+
 ## What the exit codes mean
 
 **0 means it RAN, whatever it found. 2 means it could not run.** Every command distinguishes these,

@@ -112,6 +112,12 @@ Rules:
    proving the failure is master-state. A hunch stays red and blocks, on purpose.
    [`docs/quarantined-tests.md`](quarantined-tests.md) **owns the full rule** and the reasoning
    behind the 2026-08-19 change from "diagnosis" to "evidence".
+   **Where the sightings can come from without re-reading expired logs:**
+   `bin/inflight.mjs codecov test <name>` prints that one test's recorded outcome per commit, and
+   `codecov flaky` lists every test ever recorded with more than one outcome - history that outlives
+   a CI log. It reports candidates and never a verdict, because the same evidence fits a regression
+   that landed between two commits; rule 1 is unchanged by it.
+   [`docs/inflight-tool.md`](inflight-tool.md) **owns those commands**.
 2. **Quarantine is master-state, not PR-state** - see AGENTS.md, Testing.
 3. **The owning fix PR deletes the annotation AND its registry entry in the same commit** after
    merging master, atomically restoring the test to the gating lane. An owning PR is the goal, not
