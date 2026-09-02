@@ -2160,6 +2160,67 @@ which is why the capture is worth attributing to the merge rather than to the br
 
 <!-- post-merge: checked-end -->
 
+## 2026-09-01, sixth capture: the DRAIN arm again - a seed, and the cheapest control arm yet
+
+**This adds no new signature, and is written down for the seed.** Same arm as the fifth capture,
+same SLO, same discriminator: `Chaos Pain Suite`,
+`ChaosRevokeUnderWorkDrainIT.revokeUnderDrainingStopsStaysProtocolHonest`, killed by
+`no instance may end the run with an unclassified failure cause`, with the poll thread found
+`BLOCKED` on an `AtomicBoolean` monitor held by its own control thread.
+<!-- post-merge: checked-begin -->
+Seen on astubbs/parallel-consumer#407's CI
+([run 33572473589](https://github.com/astubbs/parallel-consumer/actions/runs/33572473589), job
+100069358626), at head `ee173c87d`.
+<!-- post-merge: checked-end -->
+
+```
+instance 48: RuntimeException: Error from poll control thread: Timeout waiting for commit response
+PT10S to request ConsumerOffsetCommitter.CommitRequest(id=9d62549c-...) ...
+POLL THREAD AT TIMEOUT: BLOCKED - the poll thread is waiting to acquire a monitor, so this is
+contention or a lock-ordering defect, NOT a slow broker. Lock:
+java.util.concurrent.atomic.AtomicBoolean@6786a236, held by: pc-control-PC-48.
+Top frames: [...commitOffsetsThatAreReady(AbstractParallelEoSStreamProcessor.java:1780),
+             ...onPartitionsRevoked(AbstractParallelEoSStreamProcessor.java:580),
+             ConsumerRebalanceListenerInvoker.invokePartitionsRevoked, ... ThreadConfinedConsumer.poll]
+```
+
+**The line numbers moved again, which is the fifth capture's warning coming true.** That capture
+recorded `:1589` / `:552` against the first four's `:1585` / `:548`, and said to match future
+captures by method and monitor rather than by line. This one reads `:1780` / `:580` - a drift of
+nearly two hundred lines - and the method, monitor and holder pair are unchanged. Anyone filing by
+line number would have missed it; the guidance is now load-bearing rather than precautionary.
+
+**Seed `1075685698131288762`** - recorded before the log expires:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=1075685698131288762
+
+<!-- post-merge: checked-begin -->
+**The strongest not-PR-introduced control arm in this file, because the diff contains no Java at
+all.** astubbs/parallel-consumer#407 is one workflow file, three Node scripts and one markdown note.
+There is no compiled change for the chaos suite to reach, so ruling the branch out needs no frame
+resolution and no reasoning about which subsystem it touched - the category of change excludes it.
+Every earlier capture had to argue this; this one does not.
+<!-- post-merge: checked-end -->
+
+**Intermittent on the same branch, which is a small addition to the rate question.** The same lane
+passed on four earlier heads of that branch, failed on this one, and passed again on the next head
+that completed - all within about four hours, and none of them carrying Java. So the failure did not
+reproduce on a re-run of nearly the same tree, which is what "intermittent" has to mean here. That is
+consistent with the standing intermittency and **is not a rate**: it is a handful of runs on one
+branch, gathered while doing something else, not an experiment anybody designed.
+
+**Still not replayed.** Six seeds now exist for the verification the first 2026-08-26 section asks
+for.
+<!-- post-merge: checked - names the PR whose fix the replay applies; describes an experiment, so it reads the same once that PR has landed, at which point the replay only gets cheaper -->
+Replay one with astubbs/parallel-consumer#29's `tryLock()` applied and read whether the poll
+thread is still
+found `BLOCKED` on the same monitor. None has been replayed, and
+[`revoke-path-commit-deadlock-between-poll-and-control-threads.md`](../solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md)
+still records its verification status as Unproven. **A seventh capture of this signature is worth
+less than one replay of any of the six**, and this entry exists only because the seed would
+otherwise expire with the log.
+
 ## Delete when
 
 The `CLASS2_STALL` entries above are superseded by this section and kept only as the record of how a
