@@ -838,6 +838,70 @@ It is deliberately a second job rather than a second step in `claude-review`, so
 name in the master ruleset, did not have to be renamed. It is **not head-sensitive**, matching the
 automated half: an LGTM on any commit counts for the whole PR, permanently.
 
+## Codecov
+
+Two different Codecov products run here, from the same workflow, and confusing them is the first
+mistake to avoid.
+
+**Coverage** is jacoco XML. **Test Analytics** is the JUnit XML surefire and failsafe already write;
+it gives per-test outcome and wall-clock per commit, and is what `bin/inflight.mjs codecov` reads.
+They upload separately, are configured separately, and a failure in one says nothing about the other.
+
+`CODECOV_TOKEN` is a repository secret. `7894373cc` added it and documented it in `AGENTS.md`; the
+restructuring lost that, and this section is where it now lives.
+
+### Two lanes upload coverage, and they are NOT symmetric
+
+| Lane | Runs on | Uploads |
+|---|---|---|
+| `build` | push to master only | `jacoco/jacoco.xml` as flag `unit`; `jacoco-it/jacoco.xml` as flag `integration` - one file per flag |
+| `test` matrix | pull requests only | **both** files, under one flag per suite (`flags: ${{ matrix.suite }}`) |
+<!-- file-refs: N/A - jacoco paths are generated build output under target/, named because the
+     asymmetry between the two lanes IS which file goes to which flag -->
+
+**A per-suite flag reading 0% on the default branch is correct, not a broken upload.** The flags
+endpoint reports default-branch coverage, and on master only `build` runs. A reader who does not know
+that files a bug against the uploader; this is the third time that has nearly happened.
+
+### The per-flag gates, and the open question about them
+
+`codecov.yml` gates on `unit` and `integration` per flag, at `target: auto, threshold: 1%`, and makes
+the overall project number informational. Its reasoning is sound and worth reading in place: a total
+that compares five flags on a PR against two on master cannot be made honest by tuning a threshold.
+
+**Those gates began failing the moment they first had a base to compare against**, and the cause is
+not settled. Before astubbs/parallel-consumer#400 landed they reported *"No coverage information
+found on base report"* and passed - a vacuous green. With a base present they report large negative
+deltas on `unit` and `integration` while the overall number RISES and patch coverage is unaffected,
+which is not the shape of a real regression in a subset.
+
+What is established:
+
+- The two lanes upload different FILE SETS per flag (the table above), which `codecov.yml`'s own
+  claim that both sides come from "the same pom executions" does not account for.
+- The deltas are stable across heads, and appear on commits that change no Java at all.
+
+What is **not** established: the arithmetic from that asymmetry to the specific figures. The API's
+`report/?flag=` parameter is ignored - a per-flag query returns the overall total - so per-flag line
+counts could not be compared. Do not repeat that as a dead end.
+
+Anyone fixing this should make the PR lane upload one file per flag, as `build` already does, and
+expect the first green comparison to be the proof rather than the reasoning above.
+
+### Reading it without a browser
+
+The API answers **unauthenticated** because this repository is public, which is what makes it usable
+from CI and from a fresh agent sandbox:
+
+```
+https://api.codecov.io/api/v2/github/astubbs/repos/parallel-consumer/...
+```
+
+`totals/`, `flags/`, `commits/`, `branches/`, `coverage/` and `test-analytics/` all answer. `branch`
+and `commit_sha` filter server-side; `flags`, `interval` and `outcome` are accepted and **ignored**,
+which is the failure mode where a filter that does nothing reads as one that matched everything.
+[`docs/inflight-tool.md`](inflight-tool.md) owns the commands built on this.
+
 ## Self-hosted lanes
 
 Setup and operation: [`docs/self-hosted-runner.md`](self-hosted-runner.md). None of these gate
