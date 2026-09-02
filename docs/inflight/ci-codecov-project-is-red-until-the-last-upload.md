@@ -14,7 +14,7 @@ There are **two causes with the same symptom**, and they need different response
 
 | | mid-run | at a terminal run |
 |---|---|---|
-| What is partial | the **head** - a suite has not uploaded yet | the **base** - master's own report is incomplete |
+| What is partial | the **head** - a suite has not uploaded yet | the **base** - master's CI run at that commit was **cancelled**, so codecov has no report for it |
 | Clears itself? | **yes**, when the last upload lands | **no**, it stays red |
 | What to do | wait for `checks_terminal` | run the files check below |
 
@@ -57,7 +57,10 @@ The flag-scoped pair is the more alarming to look at, because the total can be *
 report a drop. Measured on astubbs#207 at one point: project **+0.59%** (hits +78, misses -14) with
 `unit` at -4.14% and `integration` at -16.32%. Sixty-one added lines out of ~4,800 cannot move a flag
 four points, so a flag delta that large next to a positive total is the baseline talking, not the diff.
-All three were green once every upload had landed.
+**They are not permanently red, and it is worth knowing what flips them.** On astubbs#207 both flag
+checks went **green** on the head whose base was a master commit with a completed run, and **red** on
+the head whose base was a master commit whose run had been cancelled. Same PR, same code, two days'
+worth of the same complaint - decided entirely by the base.
 
 ## Cause 2, at a terminal run: the BASE is partial - and the one-line tell
 
@@ -68,19 +71,34 @@ partial measurement.
 
 Measured on astubbs#207 at a terminal run: base **83** files, head **93**, on a PR that adds **3**.
 The other seven are master's own files missing from the base report - which also accounts for
-`Lines +446` on a diff of about sixty. Project read -0.11%, `integration` -16.99% and `unit` -5.43%
-off that base; none of it was this PR.
+`Lines +446` on a diff of about sixty.
 
-Check that before reading any percentage, including at a terminal run - it is faster than reasoning
-about hits and misses, and unlike them it cannot be argued with.
+**Why the base was short, which is the part worth chasing:** master's CI run at that exact commit was
+`completed/cancelled`, superseded by the next push to master. A cancelled run uploads nothing, so
+codecov has no report for that commit at all and falls back to older master data.
+`gh run list -R astubbs/parallel-consumer --branch master --workflow CI` shows the conclusion per
+commit, and `node bin/inflight.mjs codecov` prints the file and line counts codecov currently holds for
+master - if those are smaller than your head's, that is the whole story.
+
+**The flag numbers look worse than the total for a second reason, and it is structural.** The job that
+uploads `flags: unit` / `integration` is gated `if: github.event_name == 'pull_request'`, so **master
+never publishes per-suite flags**. Codecov carries forward whatever it last had, which is why `unit`
+and `integration` both read exactly the same as the TOTAL on the default branch. Your head reports a
+genuine unit-only figure against a carried-forward all-suites one - unit tests alone legitimately cover
+less than every suite combined, so the delta is a category error rather than a regression. Measured:
+`unit` 76.03% against a base of 81.45%, `integration` 64.46% against the same 81.45%.
+
+Check the files count before reading any percentage, including at a terminal run - it is faster than
+reasoning about hits and misses, and unlike them it cannot be argued with.
 
 ## What to do about it
 
 **Mid-run: nothing.** Wait for `checks_terminal` before reading a project check at all.
 
-**Still red at a terminal run: run the files check.** If the base is short, the percentages are
-measuring master's missing report and there is nothing here to fix on the PR - say so and move on. If
-the files line up, the number is real and worth reading.
+**Still red at a terminal run: run the files check, then look at the base commit's own master run.**
+If the base is short and that run was cancelled, the percentages are measuring master's missing report
+and there is nothing to fix on the PR - it clears when the base moves to a master commit whose run
+completed. If the files line up, the number is real and worth reading.
 
 **Either way, `codecov/patch` is the check that answers "is the code this PR added covered".** It is
 computed from the patch rather than from totals, so it does not swing during a run and it does not
