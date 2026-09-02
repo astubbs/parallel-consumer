@@ -38,6 +38,25 @@ only three transactional tests), was **567 tests, 0 failures**. Same code, same 
 different outcome - which is order or scheduling, not the diff.
 <!-- post-merge: checked-end -->
 
+## Second sighting, on a different branch - and it narrows the hypothesis
+
+<!-- post-merge: checked-begin - a dated sighting attributed to the PR it was seen on, in the past
+     tense; both stay true once that PR lands -->
+Seen again 2026-09-02 on astubbs/parallel-consumer#207, in the core unit suite immediately after that
+branch merged master. Identical failure, identical line: `expected: null but was: {}` at the
+precondition. That branch changes offset decoding and documentation and touches nothing MDC-related,
+so **the two sightings are on two branches with no code in common** - which is the branch-independence
+this note's own "master-state" argument previously had to make from a neighbouring run instead.
+
+**The class ALONE passed 5 of 5 on the same tree, minutes later.** That is the control the sighting is
+worth recording for, because it bears on the hypothesis below rather than just repeating it: if the
+arming `MDC.put` were a sibling *in this class*, running the class by itself should still lose whenever
+JUnit ordered a putting method first. It did not. One green isolated run does not prove within-class
+ordering can never arm it, but it points the search at a **different class sharing the fork's JUnit
+thread**, not at this one's siblings - which is a cheaper thing to falsify than the original wording
+suggests.
+<!-- post-merge: checked-end -->
+
 ## The hypothesis, and it is NOT yet established
 
 `@AfterEach` already calls `MDC.clear()`, so this is not a missing teardown. The candidate mechanism is
@@ -65,7 +84,7 @@ base that calls `MDC.setContextMap(...)`.
 ## Deliberately not quarantined
 
 Rule 1 of [`docs/quarantined-tests.md`](../quarantined-tests.md) wants a diagnosis or a sighting
-ledger, and this has one sighting and an untested hypothesis. Quarantining now would hide a test that
+ledger, and this has two sightings and an untested hypothesis. Quarantining now would hide a test that
 may be catching a real product-side asymmetry, and the registry is currently empty - putting the first
 entry back on a guess is the wrong trade. Diagnose it first.
 

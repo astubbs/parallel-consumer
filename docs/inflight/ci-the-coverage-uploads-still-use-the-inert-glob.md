@@ -62,6 +62,8 @@ records for the flag split, and for the same reason.
 
 ## A second, independent way the same gates go red - and the one-line tell that separates them
 
+<!-- post-merge: checked-begin - every astubbs/parallel-consumer#207 reference in this section is past
+     tense and stays true once that PR has landed; attested by the branch that supplied the observation -->
 Seen from the other side while astubbs/parallel-consumer#207 was being compared against master, and
 it is not the glob. Master's run at `beb01e1ce` was `completed/cancelled` - superseded by the next
 push - so nothing uploaded for that commit at all and Codecov holds no report for it. Every PR
@@ -84,6 +86,7 @@ This note does not fix the second cause and does not close on it. It is recorded
 time it cost was spent attributing its deltas to the first, and the tell above is what would have
 separated them immediately.
 
+<!-- post-merge: checked-end -->
 ## A correction worth keeping
 
 The first diagnosis recorded here was wrong in the opposite direction - it claimed the PR lane
