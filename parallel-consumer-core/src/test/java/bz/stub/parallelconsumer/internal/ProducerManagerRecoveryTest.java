@@ -14,11 +14,21 @@ import org.junit.jupiter.api.Timeout;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Meter;
+import org.apache.kafka.common.errors.TimeoutException;
+import org.apache.kafka.common.errors.TransactionalIdAuthorizationException;
+
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
 import static com.google.common.truth.Truth.assertThat;
@@ -42,22 +52,44 @@ class ProducerManagerRecoveryTest {
     private ProducerWrapper<String, String> initial;
     private ProducerManager<String, String> manager;
     private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
+    /** Every replacement the source built, in order, so a test can ask what became of a rejected one. */
+    private final List<ProducerWrapper<String, String>> built = new ArrayList<>();
+    /** Applied to each replacement as it is built, before the manager sees it; keyed by build index. */
+    private final Map<Integer, Consumer<ProducerWrapper<String, String>>> onBuild = new HashMap<>();
+    /** When set, the source throws this instead of building - a factory that fails outright. */
+    private volatile RuntimeException sourceFailure;
 
     @BeforeEach
     void setUp() {
+        manager = managerOn(registry);
+    }
+
+    private ProducerManager<String, String> managerOn(SimpleMeterRegistry meterRegistry) {
         module = new PCModuleTestEnv(ParallelConsumerOptions.<String, String>builder()
-                .meterRegistry(registry)
+                .meterRegistry(meterRegistry)
                 .commitMode(PERIODIC_TRANSACTIONAL_PRODUCER)
                 .commitLockAcquisitionTimeout(Duration.ofMillis(500))
                 .produceLockAcquisitionTimeout(Duration.ofMillis(200))
                 .build());
         initial = module.producerWrap();
         // a fresh wrapper per build, as the module's configuration path gives; the test env memoises its own spy
-        var source = new ReplacementProducerSource<String, String>(
-                () -> spy(new ProducerWrapper<>(module.options(), true, mock(org.apache.kafka.clients.producer.Producer.class))),
-                "pc-4-test-id");
-        manager = new ProducerManager<>(initial, module.consumerManager(), module.workManager(), module.options(), Optional.of(source));
-        manager.recoveryBackoffInitial = Duration.ofMillis(100);
+        var source = new ReplacementProducerSource<String, String>(this::buildReplacement, "pc-4-test-id");
+        var pm = new ProducerManager<>(initial, module.consumerManager(), module.workManager(), module.options(), Optional.of(source));
+        pm.recoveryBackoffInitial = Duration.ofMillis(100);
+        return pm;
+    }
+
+    private ProducerWrapper<String, String> buildReplacement() {
+        if (sourceFailure != null) {
+            throw sourceFailure;
+        }
+        ProducerWrapper<String, String> replacement = spy(new ProducerWrapper<>(module.options(), true, mock(org.apache.kafka.clients.producer.Producer.class)));
+        Consumer<ProducerWrapper<String, String>> hook = onBuild.get(built.size());
+        built.add(replacement);
+        if (hook != null) {
+            hook.accept(replacement);
+        }
+        return replacement;
     }
 
     private void recoverPhaseA() throws InterruptedException {
@@ -223,6 +255,81 @@ class ProducerManagerRecoveryTest {
                 .that(registry.get("pc.producer.recoveries").tag("condition", "ProducerFencedException").counter().count()).isEqualTo(2.0);
         manager.recordInvalidation(new ProducerFencedException("fenced a third time"));
         assertWithMessage("the first recovery of a new run is not paced").that(manager.isRecoveryAttemptDue(Instant.now())).isTrue();
+    }
+
+    /**
+     * A replacement that was built but could not initialise is nobody's: the manager never published it, the
+     * source has forgotten it, and each one leaked keeps a {@code KafkaProducer}'s network thread - one per attempt,
+     * for as long as the coordinator stays unreachable.
+     */
+    @Test
+    void aReplacementThatFailsToInitialiseIsClosedBeforeTheRetryIsScheduled() throws Exception {
+        onBuild.put(0, replacement -> doThrow(new TimeoutException("coordinator unreachable")).when(replacement).initTransactions());
+        recoverPhaseA();
+
+        var outcome = manager.completeReplacement();
+
+        assertThat(outcome.getKind()).isEqualTo(ProducerManager.ReplacementOutcome.Kind.DEFERRED);
+        verify(built.get(0)).close(any(Duration.class));
+        assertWithMessage("the rejected replacement was never published").that(manager.getProducerWrapper()).isNull();
+        assertThat(manager.isReplacing()).isTrue();
+    }
+
+    @Test
+    void aReplacementThatFailsTerminallyIsClosedToo() throws Exception {
+        onBuild.put(0, replacement -> doThrow(new TransactionalIdAuthorizationException("denied")).when(replacement).initTransactions());
+        recoverPhaseA();
+
+        var outcome = manager.completeReplacement();
+
+        assertThat(outcome.getKind()).isEqualTo(ProducerManager.ReplacementOutcome.Kind.TERMINAL);
+        verify(built.get(0)).close(any(Duration.class));
+        assertThat(manager.isProducerAvailable()).isFalse();
+    }
+
+    /**
+     * A factory that breaks its contract does so on every rebuild - a caching factory caches every time - so
+     * deferring is a retry loop for the life of the instance, each attempt logged as if the coordinator were merely
+     * slow. The failure names the violation, not the wrapper it arrived in.
+     */
+    @Test
+    void aFactoryContractViolationIsTerminalRatherThanRetriedForever() throws Exception {
+        sourceFailure = new ProducerFactoryContractException("The ProducerFactory returned the producer it had already returned");
+        recoverPhaseA();
+
+        var outcome = manager.completeReplacement();
+
+        assertThat(outcome.getKind()).isEqualTo(ProducerManager.ReplacementOutcome.Kind.TERMINAL);
+        assertThat(outcome.getFailure()).hasMessageThat().contains(ProducerFactoryContractException.class.getName());
+        assertWithMessage("the transactional id is named, for the operator").that(outcome.getFailure()).hasMessageThat().contains("pc-4-test-id");
+        assertThat(manager.isProducerAvailable()).isFalse();
+        assertThat(manager.isReplacing()).isFalse();
+    }
+
+    /**
+     * The recovery counter is the user's MeterRegistry. Once the replacement is published it is in use, so a
+     * registry that throws must not turn the outcome into a deferral that schedules a second rebuild against it.
+     */
+    @Test
+    void aThrowingMeterRegistryDoesNotTurnACompletedReplacementIntoADeferredOne() throws Exception {
+        var registryThatRejectsTheRecoveryCounter = new SimpleMeterRegistry() {
+            @Override
+            protected Counter newCounter(Meter.Id id) {
+                if (id.getName().equals("pc.producer.recoveries")) {
+                    throw new IllegalStateException("registry down");
+                }
+                return super.newCounter(id);
+            }
+        };
+        manager = managerOn(registryThatRejectsTheRecoveryCounter);
+        recoverPhaseA();
+
+        var outcome = manager.completeReplacement();
+
+        assertThat(outcome.getKind()).isEqualTo(ProducerManager.ReplacementOutcome.Kind.REPLACED);
+        assertThat(manager.isProducerAvailable()).isTrue();
+        assertThat(manager.getProducerWrapper()).isSameInstanceAs(built.get(0));
+        assertWithMessage("the recovery counted, whatever the registry did").that(manager.getConsecutiveRecoveriesWithoutCommit()).isEqualTo(1);
     }
 
     @Test

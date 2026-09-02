@@ -128,7 +128,7 @@ class PcBuiltProducerTest {
         var module = moduleWith(cachingFactory, minimalConfig(), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
         var ignoredFirst = module.producerWrap(); // the first call is legitimate; the repeat is the defect
 
-        var thrown = assertThrows(IllegalStateException.class, () -> module.replacementProducerWrap().get().build());
+        var thrown = assertThrows(ProducerFactoryContractException.class, () -> module.replacementProducerWrap().get().build());
 
         assertThat(thrown).hasMessageThat().contains("ProducerFactory");
         assertThat(thrown).hasMessageThat().contains("new");
@@ -163,7 +163,7 @@ class PcBuiltProducerTest {
         };
         var module = moduleWith(droppingFactory, minimalConfig(), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
 
-        var thrown = assertThrows(IllegalArgumentException.class, module::producerWrap);
+        var thrown = assertThrows(ProducerFactoryContractException.class, module::producerWrap);
 
         assertThat(thrown).hasMessageThat().contains("ProducerFactory");
         assertThat(thrown).hasMessageThat().contains(ProducerConfig.TRANSACTIONAL_ID_CONFIG);

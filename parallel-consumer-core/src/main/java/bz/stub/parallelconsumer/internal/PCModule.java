@@ -111,12 +111,15 @@ public class PCModule<K, V> {
     private ProducerWrapper<K, V> buildProducerWrapperFromConfiguration() {
         boolean transactional = options().isUsingTransactionCommitMode();
         Map<String, Object> resolved = TransactionalIdDerivation.resolve(options().getProducerConfig(), transactional, groupIdForDerivation(), producerInstanceId);
-        Producer<K, V> producer = options().getProducerFactory().create(resolved);
+        // user code, wrapped as every other user function is: a factory that throws an Error (a serializer's static
+        // initialiser failing, say) would otherwise escape every catch on the recovery path, leaving the instance
+        // RUNNING with its workers parked on the produce lock for good
+        Producer<K, V> producer = UserFunctions.carefullyRun(options().getProducerFactory()::create, resolved);
         if (producer == null) {
-            throw new IllegalStateException("The ProducerFactory returned null; every call must return a new Producer");
+            throw new ProducerFactoryContractException("The ProducerFactory returned null; every call must return a new Producer");
         }
         if (lastProducerFromFactory.get() == producer) {
-            throw new IllegalStateException("The ProducerFactory returned the producer it had already returned; every " +
+            throw new ProducerFactoryContractException("The ProducerFactory returned the producer it had already returned; every " +
                     "call must return a new Producer, because PC discards the previous one when the broker invalidates it");
         }
         lastProducerFromFactory = new WeakReference<>(producer);

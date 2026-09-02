@@ -1926,9 +1926,21 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * replacement that cannot be built yet is retried on a later pass with backoff; one that can never be built ends
      * the instance, naming the transactional id. Nothing thrown here may escape: the supervisor treats an exception
      * escaping {@link #controlLoop} as fatal, which is the outcome this exists to avoid.
+     * <p>
+     * Skipped once the instance is CLOSING or CLOSED: a close during an outage would otherwise wait on a rebuild
+     * that blocks up to {@code max.block.ms} for a producer nobody will use, and {@code ProducerManager.close}
+     * releases the parked workers on its own. DRAINING still recovers, because a drain needs a producer to finish
+     * the work in flight.
+     * <p>
+     * Visible for testing - the state gate is driven directly, because the window between CLOSING and the manager
+     * closing is on this thread only.
      */
-    private void maybeRecoverProducer() throws InterruptedException {
+    void maybeRecoverProducer() {
         if (!producerManager.isPresent() || !options.isUsingTransactionCommitMode()) {
+            return;
+        }
+        if (state == State.CLOSING || state == CLOSED) {
+            log.debug("Not recovering the producer: the instance is {}", state);
             return;
         }
         ProducerManager<K, V> pm = producerManager.get();
@@ -1937,7 +1949,21 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         }
         try {
             if (pm.pendingInvalidation().isPresent()) {
-                boolean entered = pm.beginReplacement();
+                boolean entered;
+                try {
+                    entered = pm.beginReplacement();
+                } catch (InterruptedException wokeUp) {
+                    // This thread's own wake-up, not a stop signal: notifySomethingToDo interrupts the control thread
+                    // whenever the write lock is not HELD, and it is not held while this pass is waiting for it - a
+                    // worker holding the produce lock through its user function keeps the wait open for up to the
+                    // commit-lock timeout, and the rebalance that fenced the producer ends with onPartitionsAssigned,
+                    // which notifies. Shutdown travels in `state`, never in the flag. Clear it and return: the
+                    // condition stays recorded, so the next pass retries. Same shape as the mailbox poll's own catch.
+                    Thread.interrupted();
+                    log.debug("Interrupted while waiting for the producer write lock to begin recovery - a wake-up, not a " +
+                            "shutdown; the condition stays recorded and the next pass retries");
+                    return;
+                }
                 if (!entered) {
                     return; // the wait elapsed; a retry is scheduled and the condition stays recorded
                 }
@@ -1945,7 +1971,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                     // every worker that produced into the aborted transaction has already mailboxed its result
                     // (the write lock guarantees it); land those results before the replay so the ledger is complete
                     processWorkCompleteMailBox(Duration.ZERO);
-                    wm.restoreWorkDiscardedByAbortedTransaction();
+                    int ignoredRestored = wm.restoreWorkDiscardedByAbortedTransaction(); // logged inside; nothing in this pass depends on the count
                 } finally {
                     pm.releaseCommitLockAfterReplacement();
                 }
@@ -1959,6 +1985,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             }
         } catch (RuntimeException e) {
             log.error("Producer recovery pass failed unexpectedly; it will be attempted again on a later pass: {}", describeWithRootCause(e), e);
+        } catch (Error fatal) {
+            // Not retried, and not left to the supervisor either: its catch is Exception, so an Error would leave
+            // the instance RUNNING with every worker parked on the produce lock for good. Leave RUNNING first - that
+            // is what releases them - and record why, then let it go.
+            if (this.failureReason == null) {
+                this.failureReason = new PCInternalRuntimeException("Producer recovery failed with an Error; the instance is closing", fatal);
+            }
+            transitionToClosing();
+            throw fatal;
         }
     }
 

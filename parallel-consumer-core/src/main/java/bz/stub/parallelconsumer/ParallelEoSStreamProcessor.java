@@ -69,7 +69,8 @@ public class ParallelEoSStreamProcessor<K, V> extends AbstractParallelEoSStreamP
     public void pollAndProduceMany(Function<PollContext<K, V>, List<ProducerRecord<K, V>>> userFunction,
                                    Consumer<ConsumeProduceResult<K, V, K, V>> callback) {
         if (!getOptions().isProducerSupplied()) {
-            throw new IllegalArgumentException("To use the produce flows you must supply a Producer in the options");
+            throw new IllegalArgumentException("To use the produce flows you must supply producerConfig for PC to build " +
+                    "a Producer from (or, deprecated, a Producer instance) in the options");
         }
 
         // wrap user func to add produce function

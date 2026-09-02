@@ -84,7 +84,7 @@ public class ProducerWrapper<K, V> implements Producer<K, V> {
      * the factory is rejected here, at construction, rather than failing at its first transactional call.
      *
      * @param expectedTransactional whether the configuration the factory received carried a {@code transactional.id}
-     * @throws IllegalArgumentException when a {@link KafkaProducer} was not built from that configuration
+     * @throws ProducerFactoryContractException when a {@link KafkaProducer} was not built from that configuration
      */
     public static <K, V> ProducerWrapper<K, V> forPcBuilt(ParallelConsumerOptions<K, V> options,
                                                           Producer<K, V> producer,
@@ -97,7 +97,7 @@ public class ProducerWrapper<K, V> implements Producer<K, V> {
         this.producer = producer;
         boolean discovered = discoverIfProducerIsConfiguredForTransactions();
         if (expectedTransactional.isPresent() && producer instanceof KafkaProducer && discovered != expectedTransactional.get()) {
-            throw new IllegalArgumentException(msg("The ProducerFactory returned a KafkaProducer that is {} " +
+            throw new ProducerFactoryContractException(msg("The ProducerFactory returned a KafkaProducer that is {} " +
                             "transactional, but the configuration PC handed it {} a {}. A factory must build the " +
                             "producer from the map it is given, with {} unaltered: dropping or changing it disables " +
                             "the fencing a replacement producer relies on and voids the TransactionalId ACL prefix.",

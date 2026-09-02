@@ -58,8 +58,10 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
     /**
      * The producer in use. Volatile and replaceable: recovery drops the invalidated one under the write lock (the
      * field reads null while no usable producer exists - see {@link #producer()}) and publishes the replacement once
-     * it is initialised. Every path that needs a producer goes through {@link #producer()}, which is what makes an
-     * unavailable producer a {@link ProducerInvalidatedException} rather than a null dereference.
+     * it is initialised. After construction, every path that needs a producer goes through {@link #producer()},
+     * which is what makes an unavailable producer a {@link ProducerInvalidatedException} rather than a null
+     * dereference; the constructor and {@link #initProducer()} read the field directly, and run before any
+     * replacement can exist.
      */
     @Getter
     protected volatile ProducerWrapper<K, V> producerWrapper;
@@ -464,7 +466,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
             throw invalidatedOrRethrow(e, false);
         }
         try {
-            producerWrapper.sendOffsetsToTransaction(offsetsToSend, groupMetadata);
+            producer().sendOffsetsToTransaction(offsetsToSend, groupMetadata);
         } catch (ProducerFencedException e) {
             // todo consider wrapping all client calls with a catch and new exception in the ProducerWrapper, so can get stack traces
             //  see APIException#fillInStackTrace
@@ -738,7 +740,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
             producerWrapper = null;
             if (discarded != null) {
                 abortQuietly(discarded);
-                closeQuietly(discarded);
+                closeQuietly(discarded, "the invalidated producer");
             }
             return true;
         } catch (RuntimeException unexpected) {
@@ -762,11 +764,11 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
         }
     }
 
-    private void closeQuietly(ProducerWrapper<K, V> discarded) {
+    private void closeQuietly(ProducerWrapper<K, V> discarded, String what) {
         try {
             discarded.close(DISCARDED_PRODUCER_CLOSE_TIMEOUT);
         } catch (RuntimeException e) {
-            log.warn("Closing the invalidated producer failed within {}; continuing with the replacement: {}", DISCARDED_PRODUCER_CLOSE_TIMEOUT, e.toString());
+            log.warn("Closing {} failed within {}; continuing with the recovery: {}", what, DISCARDED_PRODUCER_CLOSE_TIMEOUT, e.toString());
         }
     }
 
@@ -803,22 +805,26 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
             attempt = failedReplacementAttempts + 1;
         }
         String condition = conditionUnderRecovery == null ? "unknown" : conditionUnderRecovery.getClass().getSimpleName();
+        // declared outside the try so a replacement that was built but failed to initialise can be closed: nothing
+        // else holds a reference to it, and each leaked KafkaProducer keeps its network thread
+        ProducerWrapper<K, V> replacement = null;
+        int consecutive;
         try {
-            ProducerWrapper<K, V> replacement = source.build();
+            replacement = source.build();
             replacement.initTransactions();
             producerWrapper = replacement;
-            int consecutive = consecutiveRecoveriesWithoutCommit.incrementAndGet();
+            consecutive = consecutiveRecoveriesWithoutCommit.incrementAndGet();
             synchronized (availabilityMonitor) {
                 availability = Availability.AVAILABLE;
                 failedReplacementAttempts = 0;
                 nextRecoveryAttemptAt = Instant.EPOCH;
                 availabilityMonitor.notifyAll();
             }
-            pcMetrics.getCounterFromMetricDef(PCMetricsDef.PRODUCER_RECOVERIES, Tag.of("condition", condition)).increment();
-            logRecovery(condition, "replaced", attempt, consecutive, source.getTransactionalId());
-            return new ReplacementOutcome(ReplacementOutcome.Kind.REPLACED, null);
         } catch (RuntimeException failure) {
-            String failureType = failure.getClass().getName();
+            if (replacement != null) {
+                closeQuietly(replacement, "the replacement that failed to initialise");
+            }
+            String failureType = describeType(failure);
             if (isTerminalBuildFailure(failure)) {
                 synchronized (availabilityMonitor) {
                     availability = Availability.TERMINAL;
@@ -835,6 +841,32 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
                     source.getTransactionalId(), failureType, attempt));
             return new ReplacementOutcome(ReplacementOutcome.Kind.DEFERRED, null);
         }
+        // The replacement is published and in use from here on, whatever the record-keeping below does. The counter
+        // is the user's MeterRegistry - third-party code that has thrown from inside PC before
+        // (docs/solutions/runtime-errors/a-throwing-meter-registry-kills-the-poll-thread-and-strands-close.md) - and
+        // a throw from it inside the try above turned a completed replacement into a "deferred" outcome that
+        // scheduled a second rebuild against a producer already serving traffic.
+        try {
+            pcMetrics.getCounterFromMetricDef(PCMetricsDef.PRODUCER_RECOVERIES, Tag.of("condition", condition)).increment();
+        } catch (RuntimeException registryThrew) {
+            log.warn("The MeterRegistry threw while recording a producer recovery; the recovery itself is complete: {}", registryThrew.toString());
+        }
+        logRecovery(condition, "replaced", attempt, consecutive, source.getTransactionalId());
+        return new ReplacementOutcome(ReplacementOutcome.Kind.REPLACED, null);
+    }
+
+    /**
+     * The failure's class, and its root cause's where that differs - a factory's failure arrives wrapped as
+     * {@link bz.stub.parallelconsumer.ExceptionInUserFunctionException}, which names nothing on its own. Types only,
+     * never messages: a {@code ConfigException}'s message carries the offending configuration value (R7).
+     */
+    private static String describeType(Throwable failure) {
+        String type = failure.getClass().getName();
+        Optional<Throwable> root = ThrowableUtils.innermostInCauseChain(failure, ignored -> true);
+        if (root.isPresent() && root.get() != failure) {
+            return type + " (root cause " + root.get().getClass().getName() + ")";
+        }
+        return type;
     }
 
     /**
@@ -850,9 +882,15 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
         }
     }
 
+    /**
+     * What retrying a replacement build cannot fix: the broker refusing the id or the feature, the factory breaking
+     * its contract (deterministic - a caching factory caches on every rebuild), and an {@link Error} from the
+     * factory, which arrives wrapped as user-function failure and is never a transient broker condition.
+     */
     private static boolean isTerminalBuildFailure(Throwable failure) {
         return ThrowableUtils.anyInCauseChain(failure,
-                f -> f instanceof AuthorizationException || f instanceof UnsupportedVersionException);
+                f -> f instanceof AuthorizationException || f instanceof UnsupportedVersionException
+                        || f instanceof ProducerFactoryContractException || f instanceof Error);
     }
 
     /**
@@ -887,7 +925,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
          // retriable tx
          none
          */
-        producerWrapper.beginTransaction();
+        producer().beginTransaction();
     }
 
     /**

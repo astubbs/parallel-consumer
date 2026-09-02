@@ -7,6 +7,7 @@ package bz.stub.parallelconsumer.internal;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.PollContext;
 import bz.stub.parallelconsumer.ProducerFactory;
 import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
 import ch.qos.logback.classic.Level;
@@ -48,6 +49,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
@@ -84,6 +87,11 @@ class ProducerRecoveryTest {
     /** Applied to each producer as the factory builds it, keyed by build index (0 = the initial producer). */
     private final Map<Integer, Consumer<MockProducer<String, String>>> onBuild = new ConcurrentHashMap<>();
     private volatile Optional<CountDownLatch> holdFactoryUntil = Optional.empty();
+    /** Run before the factory builds, keyed by factory call index (0 = the initial producer); throws to fail the build. */
+    private final Map<Integer, Runnable> beforeBuild = new ConcurrentHashMap<>();
+    /** Runs inside the user function before it returns its record - a hook for holding a worker where it stands. */
+    private volatile Consumer<PollContext<String, String>> insideUserFunction = ignored -> {
+    };
 
     private LongPollingMockConsumer<String, String> consumer;
     private volatile ConsumerGroupMetadata groupMetadata = new ConsumerGroupMetadata(GROUP, 1, "member-1", Optional.empty());
@@ -112,6 +120,10 @@ class ProducerRecoveryTest {
                 }
             });
             derivedTransactionalId = (String) config.get(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
+            Runnable before = beforeBuild.get(factoryCallTimes.size() - 1);
+            if (before != null) {
+                before.run();
+            }
             MockProducer<String, String> producer = spy(new MockProducer<>(true, new StringSerializer(), new StringSerializer()));
             int index = producers.size();
             producers.add(producer);
@@ -151,6 +163,7 @@ class ProducerRecoveryTest {
         consumer.subscribeWithRebalanceAndAssignment(UniLists.of(TOPIC), 1);
         pc.pollAndProduceMany(context -> {
             seen.computeIfAbsent(context.offset(), ignored -> new AtomicInteger()).incrementAndGet();
+            insideUserFunction.accept(context);
             return UniLists.of(new ProducerRecord<>("out", context.key(), context.value()));
         });
     }
@@ -389,5 +402,97 @@ class ProducerRecoveryTest {
 
         assertThat(pc.isClosedOrFailed()).isTrue();
         assertWithMessage("close did not wait out the 30 s shutdown timeout").that(closeTook).isLessThan(Duration.ofSeconds(20));
+    }
+
+    /**
+     * The control thread's own wake-up is not a stop signal. {@code notifySomethingToDo} interrupts the control thread
+     * whenever the producer write lock is not HELD - and recovery does not hold it while WAITING for it, which it
+     * does for as long as a worker holds the produce lock through its user function. The rebalance that fenced the
+     * producer ends with {@code onPartitionsAssigned}, which notifies; before this was caught, that interrupt escaped
+     * {@code maybeRecoverProducer} as an {@link InterruptedException} and the supervisor closed the instance with no
+     * failure cause. One record only, so no commit is attempted: the commit path's own lock wait is a separate,
+     * pre-existing exposure to the same interrupt and would take the interrupt first.
+     */
+    @Test
+    void aWakeUpInterruptWhileRecoveryWaitsForTheWriteLockDoesNotCloseTheInstance() throws Exception {
+        var workerHoldsTheProduceLock = new CountDownLatch(1);
+        var releaseTheWorker = new CountDownLatch(1);
+        var firstDelivery = new AtomicBoolean(true);
+        insideUserFunction = context -> {
+            if (firstDelivery.compareAndSet(true, false)) {
+                workerHoldsTheProduceLock.countDown();
+                try {
+                    releaseTheWorker.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        };
+        start(optionsBuilder().build());
+        addRecords(0, 0);
+        assertThat(workerHoldsTheProduceLock.await(30, TimeUnit.SECONDS)).isTrue();
+        assertWithMessage("fixture: strict mode, so the worker took the produce lock before its user function ran")
+                .that(producerManager().getProducerTransactionLock().getReadLockCount()).isAtLeast(1);
+
+        producerManager().recordInvalidation(new ProducerFencedException("fenced by a rebalance"));
+        await("the control thread to be waiting for the write lock").atMost(Duration.ofSeconds(30))
+                .until(() -> producerManager().getProducerTransactionLock().hasQueuedThreads());
+        pc.notifySomethingToDo(); // what onPartitionsAssigned does at the end of the rebalance
+        Thread.sleep(500); // let the interrupt land while the wait is open, before the worker moves on
+        releaseTheWorker.countDown();
+
+        awaitProducers(2);
+        awaitCommittedThrough(producers.get(1), 1);
+        assertThat(pc.isClosedOrFailed()).isFalse();
+        assertThat(pc.getFailureCause()).isNull();
+        assertWithMessage("the record produced into the aborted transaction ran again").that(seen.get(0L).get()).isAtLeast(2);
+    }
+
+    /**
+     * A factory is user code. An {@link Error} from it - a serializer whose static initialiser fails, say - is
+     * deterministic, so it is terminal rather than retried: the instance closes naming the type, and a worker parked
+     * on the produce lock is released by the close rather than waiting on a replacement that will never come.
+     */
+    @Test
+    void anErrorFromTheFactoryIsTerminalAndClosesTheInstanceNamingIt() {
+        onBuild.put(0, this::fenceAtFirstCommit);
+        beforeBuild.put(1, () -> {
+            throw new NoClassDefFoundError("com/example/Serializer");
+        });
+        start(optionsBuilder().build());
+        addRecords(0, 2);
+
+        await().atMost(Duration.ofSeconds(30)).until(() -> pc.isClosedOrFailed());
+
+        assertThat(factoryCallTimes).hasSize(2);
+        Exception cause = pc.getFailureCause();
+        assertThat(cause).isInstanceOf(ProducerInvalidatedException.class);
+        assertThat(cause).hasMessageThat().contains(NoClassDefFoundError.class.getName());
+        assertThat(cause).hasMessageThat().contains(derivedTransactionalId);
+        assertWithMessage("closed, not merely failed: the parked workers were released and the shutdown completed")
+                .that(producerManager().isProducerAvailable()).isFalse();
+    }
+
+    /**
+     * Recovery is skipped once the instance is closing: a close during an outage must not wait on a rebuild that
+     * blocks up to {@code max.block.ms} for a producer nobody will use. Driven directly, because the window between
+     * CLOSING and the manager's own close is the control thread's alone. An unstarted instance closes to CLOSED
+     * without touching the manager, which is what leaves the condition recordable.
+     */
+    @Test
+    void noReplacementIsAttemptedOnceTheInstanceIsClosing() {
+        pc = new ParallelEoSStreamProcessor<>(optionsBuilder().build());
+        pc.close();
+        assertThat(pc.isClosedOrFailed()).isTrue();
+        producerManager().recordInvalidation(new ProducerFencedException("fenced during close"));
+        assertWithMessage("fixture: the attempt is due, so only the state gate can stop it")
+                .that(producerManager().isRecoveryAttemptDue(Instant.now())).isTrue();
+
+        // through the declaring type: a package-private member is not inherited across packages
+        AbstractParallelEoSStreamProcessor<String, String> engine = pc;
+        engine.maybeRecoverProducer();
+
+        assertWithMessage("no replacement was built").that(factoryCallTimes).hasSize(1);
+        assertThat(producers).hasSize(1);
     }
 }
