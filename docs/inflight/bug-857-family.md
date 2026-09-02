@@ -2317,6 +2317,15 @@ fresh seed each time, so identical code passing on the previous head does not es
 seed would have passed there. It establishes that the branch did not introduce the firing, which is a
 narrower claim than the branch being unable to provoke it.
 
+**Replayed the same afternoon, on the tree that fired it, and CLEAN** - the second seed replay in this
+file, and the second clean one. Same seed, same scenario, the same idle 32-core box as the sibling
+replay: zero violations, zero observations, `consumed=100412`, 165.8s. Two firings of the gating
+detector in one afternoon, on sibling trees carrying astubbs#29, and neither seed reproduces off a
+GitHub-hosted runner. That is now the pattern rather than a single data point, and it points the same
+way the first firing's caveat did: `INSTANCE_STALL` is re-armed by any returned result, so what it is
+measuring on those runners is starvation. What would move it back toward a wedge is a firing whose
+seed replays red on an idle box - and both of today's are now known not to be that seed.
+
 
 ## Delete when
 
