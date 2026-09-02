@@ -13,16 +13,14 @@
 const assert = require("assert");
 const { renderDelta, post, MARKER, SUPERSEDED_MARKER, DATA_MARKER } = require("./throughput-report-comment.js");
 
-let failures = 0;
-const pending = [];
-const section = name => pending.push(() => console.log(name));
-const record = (name, error) => {
-  if (!error) return console.log(`  ok  ${name}`);
-  console.log(`FAIL  ${name}\n      ${error.message.replace(/\n/g, "\n      ")}`);
-  failures++;
-};
-const test = (name, fn) => pending.push(() => { try { fn(); record(name); } catch (e) { record(name, e); } });
-const asyncTest = (name, fn) => pending.push(async () => { try { await fn(); record(name); } catch (e) { record(name, e); } });
+// Runner and fakes are shared - see report-comment-test-harness.js for why the shared fake is the
+// RICHEST of the three rather than the smallest common one. `fakeGithub` keeps its positional
+// signature here so no call site below has to change.
+const harness = require("./report-comment-test-harness.js");
+const { section, test, asyncTest, runAll } = harness.makeRunner();
+const fakeGithub = (comments = []) => harness.fakeGithub({ comments });
+const CONTEXT = harness.fakeContext();
+const CORE = harness.fakeCore();
 
 const bodyFor = data => `### Throughput\n\n(table)\n\n<!-- ${DATA_MARKER}: ${JSON.stringify(data)} -->\n`;
 
@@ -85,39 +83,6 @@ test("the live marker is unchanged from the one on existing comments", () =>
 test("the retired marker is pinned, not derived", () =>
   assert.strictEqual(SUPERSEDED_MARKER, "<!-- pc-throughput-report (superseded) -->"));
 
-function fakeGithub(comments = []) {
-  const calls = [];
-  const store = comments.map(c => ({ ...c }));
-  return {
-    calls, store,
-    paginate: async (fn, p) => fn(p),
-    rest: {
-      issues: {
-        listComments: async () => store,
-        updateComment: async ({ comment_id, body }) => {
-          calls.push({ op: "updateComment", comment_id, body });
-          const t = store.find(c => c.id === comment_id);
-          if (t) t.body = body;
-          return { data: { id: comment_id } };
-        },
-        createComment: async ({ body }) => {
-          calls.push({ op: "createComment", body });
-          const created = { id: 999, body, html_url: "https://example.test/c/999" };
-          store.push({ ...created, user: { type: "Bot" } });
-          return { data: created };
-        },
-      },
-    },
-  };
-}
-const CONTEXT = {
-  repo: { owner: "astubbs", repo: "parallel-consumer" },
-  issue: { number: 29 },
-  serverUrl: "https://github.com",
-  runId: 7,
-  payload: { pull_request: { number: 29, head: { sha: "abcdef1234567890" } } },
-};
-const CORE = { warning: () => {} };
 const existing = data => ({ id: 5, user: { type: "Bot" }, html_url: "u", body: `${MARKER}\n${bodyFor(data)}` });
 const run = (gh, data) => post({
   github: gh, context: CONTEXT, core: CORE, body: bodyFor(data), now: new Date("2026-09-02T03:04:05Z"),
@@ -139,8 +104,4 @@ asyncTest("green -> regression posts fresh, and the retired heading names the ne
 });
 
 // =================================================================================================
-(async () => {
-  for (const r of pending) await r();
-  console.log(failures ? `\n${failures} test(s) failed` : "\nAll tests passed");
-  process.exit(failures ? 1 : 0);
-})();
+runAll();

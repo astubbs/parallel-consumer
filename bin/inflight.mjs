@@ -60,11 +60,25 @@ import {
     priorArt, summary as priorArtSummary, usage as priorArtUsage,
 } from './lib/prior-art.mjs'
 
-/** The two flags every codecov subcommand takes, parsed in one place rather than three. */
-const cvOpts = (args) => ({
-    fresh: args.includes('--fresh'),
-    branch: args.includes('--branch') ? args[args.indexOf('--branch') + 1] : undefined,
-})
+/**
+ * The two flags every codecov subcommand takes, parsed in one place rather than three - and the
+ * POSITIONALS with the flag values removed.
+ *
+ * `rest` is the part that matters. Finding the query with `args.find(a => !a.startsWith('--'))`
+ * looks right and is wrong: `--branch` takes a VALUE, and a branch ref does not start with `--`
+ * either, so `codecov test --branch <ref> <name>` took the REF as the search term and reported
+ * "no test matching /<ref>/" - exit 0, plausible wording, wrong question answered. That is the
+ * silent-wrong-answer shape bin/lib/codecov.mjs's header is written against, in the one command
+ * whose whole value is being trusted during a bisect.
+ */
+const cvOpts = (args) => {
+    const branchAt = args.indexOf('--branch')
+    return {
+        fresh: args.includes('--fresh'),
+        branch: branchAt >= 0 ? args[branchAt + 1] : undefined,
+        rest: args.filter((a, i) => !a.startsWith('--') && i !== branchAt + 1),
+    }
+}
 
 /**
  * The registry.
@@ -296,9 +310,10 @@ Substring match, case-insensitive, because you almost always hold the method nam
 fully-qualified one. Several matches are listed rather than guessed at: resolving to the wrong test
 here produces a confident answer to a question nobody asked.`,
                 run: (args, emit) => {
-                    const q = args.find((a) => !a.startsWith('--'))
+                    const opts = cvOpts(args)
+                    const q = opts.rest[0]
                     if (!q) return { ok: false, reason: 'codecov test: give part of a test name' }
-                    const r = testTimeline(q, cvOpts(args))
+                    const r = testTimeline(q, opts)
                     if (!r.ok) return { ok: false, reason: `codecov test: ${r.reason}` }
                     emit(formatTimeline(r.value))
                     return { ok: true }
@@ -328,8 +343,9 @@ exactly why docs/quarantined-tests.md refuses to quarantine on a rate alone.`,
 Wall-clock on a shared GitHub runner. Good for "this test owns four minutes of every run"; not a
 benchmark, and never an input to a throughput comparison.`,
                 run: (args, emit) => {
-                    const n = args.find((a) => /^\d+$/.test(a))
-                    const r = slowest(n ? Number(n) : 20, cvOpts(args))
+                    const opts = cvOpts(args)
+                    const n = opts.rest.find((a) => /^\d+$/.test(a))
+                    const r = slowest(n ? Number(n) : 20, opts)
                     if (!r.ok) return { ok: false, reason: `codecov slow: ${r.reason}` }
                     emit(formatSlowest(r.value))
                     return { ok: true }

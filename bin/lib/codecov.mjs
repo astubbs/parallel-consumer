@@ -39,11 +39,6 @@ import { cacheRead, cacheWrite } from './cache.mjs'
 
 const API = 'https://api.codecov.io/api/v2/github/astubbs/repos/parallel-consumer'
 
-// Long enough that a burst of queries in one session costs one fetch, short enough that a run
-// finishing mid-session shows up. The whole corpus is a few hundred KB, so this is about latency
-// and politeness rather than size.
-const MAX_AGE_MS = 10 * 60 * 1000
-
 /** One GET, as JSON. Never throws; `ok:false` means the network or the API refused. */
 function get(url) {
     const r = exec('curl', ['-sS', '--max-time', '25', '-w', '\n%{http_code}', url])
@@ -86,7 +81,11 @@ export function coverage() {
 export function testHistory({ branch, pages = 12, fresh = false } = {}) {
     const key = `v1:${branch ?? '*'}:${pages}`
     if (!fresh) {
-        const hit = cacheRead('codecov-tests.json', { key, maxAgeMs: MAX_AGE_MS })
+        // NO maxAgeMs HERE, deliberately. bin/lib/cache.mjs takes the TTL from its POLICY table
+        // and ignores a caller's - "two read sites disagreeing about how old is too old is a cache
+        // with two answers". This call used to pass one; it was silently dropped when
+        // astubbs/parallel-consumer#400 moved TTL into the policy, and nothing reported it.
+        const hit = cacheRead('codecov-tests.json', { key })
         if (hit) return { ok: true, value: { ...hit, cached: true } }
     }
     const results = []
@@ -105,7 +104,11 @@ export function testHistory({ branch, pages = 12, fresh = false } = {}) {
         truncated = i === pages - 1
     }
     const value = { results, truncated, cached: false }
-    cacheWrite('codecov-tests.json', { results, truncated }, key)
+    // cache.mjs's `cacheEmpty: false` guard tests `Array.isArray(value)`, and this value is an
+    // OBJECT wrapping the array - so the guard cannot see inside it and the check has to be made
+    // here. Caching an empty corpus would serve "no test history" for the whole TTL, which reads
+    // as "no flakes recorded" rather than as "the fetch came back empty".
+    if (results.length > 0) cacheWrite('codecov-tests.json', { results, truncated }, key)
     return { ok: true, value }
 }
 

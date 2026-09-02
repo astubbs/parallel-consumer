@@ -25,89 +25,15 @@ const {
   stampFor, retiredBody, postStickyReport,
 } = require("./sticky-report-comment.js");
 
-let failures = 0;
+// Runner, fake GitHub client and fake core are shared - report-comment-test-harness.js. The
+// can-never-fail guard in test() and the call-order recording in fakeGithub were BOTH originally
+// only here; sharing is what gave them to the throughput and quarantine suites too.
+const harness = require("./report-comment-test-harness.js");
+const { section, test, asyncTest, runAll } = harness.makeRunner();
+const fakeGithub = harness.fakeGithub;
+const fakeCore = harness.fakeCore;
 
-// EVERYTHING IS QUEUED, INCLUDING THE SECTION HEADINGS. Half these tests are async, and running the
-// sync ones eagerly printed them all before the first `await` resolved - so every async result
-// landed under the LAST heading in the file and the sections in between printed empty. A test report
-// that files results under the wrong heading is the same class of defect as the code it is testing.
-const pending = [];
 
-function section(name) {
-  pending.push(() => console.log(name));
-}
-
-function record(name, error) {
-  if (!error) return console.log(`  ok  ${name}`);
-  console.log(`FAIL  ${name}\n      ${error.message.replace(/\n/g, "\n      ")}`);
-  failures++;
-}
-
-function test(name, fn) {
-  pending.push(() => {
-    try {
-      const result = fn();
-      if (result && typeof result.then === "function") {
-        throw new Error("async test body passed to test() - use asyncTest, or it can never fail");
-      }
-      record(name);
-    } catch (error) { record(name, error); }
-  });
-}
-
-function asyncTest(name, fn) {
-  pending.push(async () => {
-    try { await fn(); record(name); } catch (error) { record(name, error); }
-  });
-}
-
-// ---- a fake GitHub client that records every call, in order ------------------------------------
-//
-// The order is the point for half of these tests, so it is recorded rather than inferred: the
-// retire-before-create property is invisible to any assertion that only looks at final state.
-function fakeGithub({ comments = [], failCreate = false, failForwardLink = false } = {}) {
-  const calls = [];
-  let nextId = 900;
-  const store = comments.map(c => ({ ...c }));
-  let created = null;
-  return {
-    calls,
-    store,
-    paginate: async (fn, params) => {
-      calls.push({ op: "paginate", params });
-      return fn(params);
-    },
-    rest: {
-      issues: {
-        listComments: async params => {
-          calls.push({ op: "listComments", params });
-          return store;
-        },
-        updateComment: async ({ comment_id, body }) => {
-          calls.push({ op: "updateComment", comment_id, body });
-          if (failForwardLink && created && body.includes("Superseded by")) {
-            throw new Error("simulated forward-link failure");
-          }
-          const target = store.find(c => c.id === comment_id);
-          if (target) target.body = body;
-          return { data: { id: comment_id, body } };
-        },
-        createComment: async ({ body }) => {
-          calls.push({ op: "createComment", body });
-          if (failCreate) throw new Error("simulated create failure");
-          created = { id: ++nextId, body, html_url: `https://example.test/c/${nextId}` };
-          store.push({ ...created, user: { type: "Bot" } });
-          return { data: created };
-        },
-      },
-    },
-  };
-}
-
-const fakeCore = () => {
-  const warnings = [];
-  return { warnings, warning: m => warnings.push(m) };
-};
 
 const fakeContext = {
   repo: { owner: "astubbs", repo: "parallel-consumer" },
@@ -448,8 +374,4 @@ asyncTest("a caller's supersededLabel is what the retired heading says", async (
 });
 
 // =================================================================================================
-(async () => {
-  for (const run of pending) await run();
-  console.log(failures ? `\n${failures} test(s) failed` : "\nAll tests passed");
-  process.exit(failures ? 1 : 0);
-})();
+runAll();

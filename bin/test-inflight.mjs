@@ -170,6 +170,9 @@ const report = (ok, label) => {
 }
 
 /** Run a front door (real or mutant) as a subprocess - the CLI contract is a process-level fact. */
+/** A command that RAN, whatever it found - exit 0. `could not run` is 2. */
+const r0 = (r) => r.code === 0
+
 function invoke(binDir, args, opts = {}) {
     const r = spawnSync(process.execPath, [join(binDir, 'inflight.mjs'), ...args], { encoding: 'utf8', ...opts })
     return { code: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}` }
@@ -882,6 +885,24 @@ const CHECKS = [
         },
         mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
             "        name: 'codecov',", "        name: 'codecovv',"),
+    },
+    {
+        id: 'a-flag-value-is-not-the-search-term',
+        why: 'the flag VALUE does not start with -- either, so it was taken as the query and the bisect answered about the branch ref',
+        run: async (binDir) => {
+            // The whole point is the ORDER: with `--branch` last this always worked, so a test
+            // that only tried that order would have passed against the bug.
+            const bad = invoke(binDir, ['codecov', 'test', '--branch', 'refs/heads/nope', 'ZZQuery'])
+            const good = invoke(binDir, ['codecov', 'test', 'ZZQuery', '--branch', 'refs/heads/nope'])
+            // Both must ask about ZZQuery. Neither may report on the branch ref. The corpus is
+            // empty for a bogus branch, so the wording is the only observable - which is exactly
+            // how the defect hid: exit 0, plausible sentence, wrong question.
+            const asksForQuery = (r) => r.out.includes('ZZQuery') && !r.out.includes('refs/heads/nope')
+            return r0(bad) && r0(good) && asksForQuery(bad) && asksForQuery(good)
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+            "        rest: args.filter((a, i) => !a.startsWith('--') && i !== branchAt + 1),",
+            "        rest: args.filter((a) => !a.startsWith('--')),"),
     },
     {
         id: 'a-narrow-fetch-cannot-look-fresh',

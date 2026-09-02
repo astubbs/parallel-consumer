@@ -25,16 +25,14 @@ const { tmpdir } = require("os");
 const { join } = require("path");
 const { label, renderDelta, post, MARKER, DATA_MARKER } = require("./quarantine-report-comment.js");
 
-let failures = 0;
-const pending = [];
-const section = name => pending.push(() => console.log(name));
-const record = (name, error) => {
-  if (!error) return console.log(`  ok  ${name}`);
-  console.log(`FAIL  ${name}\n      ${error.message.replace(/\n/g, "\n      ")}`);
-  failures++;
-};
-const test = (name, fn) => pending.push(() => { try { fn(); record(name); } catch (e) { record(name, e); } });
-const asyncTest = (name, fn) => pending.push(async () => { try { await fn(); record(name); } catch (e) { record(name, e); } });
+// Runner and fakes are shared - see report-comment-test-harness.js for why the shared fake is the
+// RICHEST of the three rather than the smallest common one. `fakeGithub` keeps its positional
+// signature here so no call site below has to change.
+const harness = require("./report-comment-test-harness.js");
+const { section, test, asyncTest, runAll } = harness.makeRunner();
+const fakeGithub = (comments = []) => harness.fakeGithub({ comments });
+const CONTEXT = harness.fakeContext();
+const CORE = harness.fakeCore();
 
 // A payload exactly as bin/quarantine-lane-report.sh builds it: the digest is the map, sorted and
 // joined, so the two can never disagree here either.
@@ -105,39 +103,6 @@ test("an absent current payload is silence too", () =>
 // =================================================================================================
 section("\npost - the posting decision, which is the point of the whole change");
 
-function fakeGithub(comments = []) {
-  const calls = [];
-  const store = comments.map(c => ({ ...c }));
-  return {
-    calls, store,
-    paginate: async (fn, p) => fn(p),
-    rest: {
-      issues: {
-        listComments: async () => store,
-        updateComment: async ({ comment_id, body }) => {
-          calls.push({ op: "updateComment", comment_id, body });
-          const t = store.find(c => c.id === comment_id);
-          if (t) t.body = body;
-          return { data: { id: comment_id } };
-        },
-        createComment: async ({ body }) => {
-          calls.push({ op: "createComment", body });
-          const created = { id: 999, body, html_url: "https://example.test/c/999" };
-          store.push({ ...created, user: { type: "Bot" } });
-          return { data: created };
-        },
-      },
-    },
-  };
-}
-const CONTEXT = {
-  repo: { owner: "astubbs", repo: "parallel-consumer" },
-  issue: { number: 29 },
-  serverUrl: "https://github.com",
-  runId: 7,
-  payload: { pull_request: { number: 29, head: { sha: "abcdef1234567890" } } },
-};
-const CORE = { warning: () => {} };
 const existingComment = outcomes => ({
   id: 5, user: { type: "Bot" }, html_url: "https://example.test/c/5",
   body: `${MARKER}\n${bodyFor(outcomes)}`,
@@ -268,8 +233,4 @@ asyncTest("the shell reporter's own output drives a failing -> passing FRESH com
 });
 
 // =================================================================================================
-(async () => {
-  for (const run of pending) await run();
-  console.log(failures ? `\n${failures} test(s) failed` : "\nAll tests passed");
-  process.exit(failures ? 1 : 0);
-})();
+runAll();
