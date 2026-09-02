@@ -35,13 +35,94 @@
 // EXIT CODES: 0 all checks passed and every mutant went red; 1 otherwise.
 
 import { spawnSync } from 'node:child_process'
-import { cpSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { chdir, cwd } from 'node:process'
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { mkdtempSync as mkTmp } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const BIN = dirname(fileURLToPath(import.meta.url))
+
+/**
+ * A PURPOSE-BUILT GIT REPOSITORY, because the corpus checks were testing the author's laptop.
+ *
+ * Every check that reads notes across refs used to run against whatever repository happened to be
+ * the working directory. On a developer clone with 436 refs they passed; in CI, where
+ * `actions/checkout` fetches ONE branch and there is no `origin/master`, nine of them failed - so
+ * the suite that gates this tool was contributing no CI signal at all while appearing green locally.
+ * Reproduced with `git clone --single-branch` before this was written.
+ *
+ * The fixture encodes exactly the situations the checks assert about, so each one now has a known
+ * right answer instead of an ambient one:
+ *
+ *   master          shared.md v1 -> v2, plus closed.md added and then `git rm`d (baseline HISTORY)
+ *   behind          shared.md still at v1 - a version master ITSELF once held, so: behind, not drift
+ *   diverged        shared.md with content master has never held - the actual finding
+ *   stranded-work   never-landed.md, which master has never had at all
+ *   reuse           closed.md recreated with DIFFERENT content at a path master closed - the
+ *                   filename-reuse false negative, which the path-only filter used to swallow
+ */
+function buildFixture() {
+    const dir = mkdtempSync(join(tmpdir(), 'inflight-fixture-'))
+    const git = (...args) => {
+        const r = spawnSync('git', args, { cwd: dir, encoding: 'utf8' })
+        if (r.status !== 0) throw new Error(`fixture: git ${args.join(' ')} failed: ${r.stderr}`)
+        return r.stdout.trim()
+    }
+    const note = (name, body) => {
+        mkdirSync(join(dir, 'docs', 'inflight'), { recursive: true })
+        writeFileSync(join(dir, 'docs', 'inflight', name), body)
+    }
+    const commit = (msg) => { git('add', '-A'); git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', msg) }
+
+    git('init', '-q', '-b', 'master')
+    note('shared.md', '# Shared note\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\nv1\n')
+    commit('v1')
+    const v1 = git('rev-parse', 'HEAD')
+    note('shared.md', '# Shared note\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\nv2 on master\n')
+    commit('v2')
+    note('closed.md', '# A note that will close\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\ntopic A\n')
+    commit('add closed.md')
+    git('rm', '-q', 'docs/inflight/closed.md')
+    commit('close it, per the directory contract')
+
+    git('branch', 'behind', v1)
+
+    git('checkout', '-q', '-b', 'diverged', v1)
+    note('shared.md', '# Shared note\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\nv1\ncontent master has never held\n')
+    commit('diverge')
+
+    // TWO stranded notes on ONE branch, so they share a ref-set and must collapse to one cluster.
+    git('checkout', '-q', '-b', 'stranded-work', 'master')
+    note('never-landed.md', '# Never landed\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\nx\n')
+    note('also-never-landed.md', '# Also never landed\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\ny\n')
+    commit('two notes that never reach master')
+
+    // Carries the CLOSED note's original content at its original path - master had both, so this is
+    // finished work, not stranded work. It is what the baseline-history filter exists to exclude,
+    // and without it in the fixture that filter's negative control had nothing to catch.
+    git('checkout', '-q', '-b', 'stale-closed', v1)
+    note('closed.md', '# A note that will close\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\ntopic A\n')
+    commit('still carrying the note master has since closed')
+
+    git('checkout', '-q', '-b', 'reuse', 'master')
+    note('closed.md', '# A DIFFERENT topic at a recycled filename\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\ntopic B\n')
+    commit('reuse the closed filename for unrelated work')
+
+    git('checkout', '-q', 'master')
+    return dir
+}
+
+let FIXTURE = null
+const fixture = () => (FIXTURE ??= buildFixture())
+
+/** Run a predicate with the fixture as the working directory, so the libraries read it. */
+async function inFixture(fn) {
+    const before = cwd()
+    chdir(fixture())
+    try { return await fn(fixture()) } finally { chdir(before) }
+}
 
 let failures = 0
 const report = (ok, label) => {
@@ -134,11 +215,13 @@ const CHECKS = [
         why: 'every queued feature - drift, headings, ref clustering - is a view over the data, not over the page',
         run: async (binDir) => {
             const { priorArt } = await lib(binDir)
-            const r = priorArt(['a-term-that-cannot-match-anything-xyzzy'], { github: false })
-            return r !== null && typeof r === 'object'
-                && r.ok === true && Array.isArray(r.sections) && Array.isArray(r.warnings)
-                && typeof r.refsSearched === 'number' && r.refsSearched > 0
-                && r.sections.every((s) => Array.isArray(s.hits) && typeof s.heading === 'string')
+            return inFixture(() => {
+                const r = priorArt(['a-term-that-cannot-match-anything-xyzzy'], { github: false })
+                return r !== null && typeof r === 'object'
+                    && r.ok === true && Array.isArray(r.sections) && Array.isArray(r.warnings)
+                    && typeof r.refsSearched === 'number' && r.refsSearched > 0
+                    && r.sections.every((s) => Array.isArray(s.hits) && typeof s.heading === 'string')
+            })
         },
         mutate: (binDir) => {
             const f = join(binDir, 'lib', 'prior-art.mjs')
@@ -151,8 +234,10 @@ const CHECKS = [
         why: '"no hits" and "could not look" are different answers, and conflating them is the whole incident',
         run: async (binDir) => {
             const { priorArt } = await lib(binDir)
-            const r = priorArt(['a-term-that-cannot-match-anything-xyzzy'], { github: false })
-            return r.ok === true && r.sections.every((s) => s.hits.length === 0) && r.refsSearched > 0
+            return inFixture(() => {
+                const r = priorArt(['a-term-that-cannot-match-anything-xyzzy'], { github: false })
+                return r.ok === true && r.sections.every((s) => s.hits.length === 0) && r.refsSearched > 0
+            })
         },
         mutate: (binDir) => {
             const f = join(binDir, 'lib', 'prior-art.mjs')
@@ -165,11 +250,13 @@ const CHECKS = [
         why: 'section 4 is headed "everything else"; a pathspec that re-lists sections 1-3 makes that a lie',
         run: async (binDir) => {
             const { priorArt } = await lib(binDir)
-            const r = priorArt([TERM_IN_DOCS], { github: false })
-            if (!r.ok) return false
-            const all = r.sections.flatMap((s) => s.hits.map((h) => h.path))
-            if (all.length === 0) return false // a check that cannot see anything cannot pass
-            return new Set(all).size === all.length
+            return inFixture(() => {
+                const r = priorArt([TERM_IN_DOCS], { github: false })
+                if (!r.ok) return false
+                const all = r.sections.flatMap((s) => s.hits.map((h) => h.path))
+                if (all.length === 0) return false // a check that cannot see anything cannot pass
+                return new Set(all).size === all.length
+            })
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'prior-art.mjs'),
             "            'docs/', ':(exclude)docs/plans/', ':(exclude)docs/solutions/', ':(exclude)docs/inflight/']],",
@@ -271,15 +358,17 @@ const CHECKS = [
         why: 'pairing cat-file output to input by position is correct until anything reorders it',
         run: async (binDir) => {
             const g = await gitlib(binDir)
-            const tips = g.refTips()
-            if (!tips.ok) return false
-            const refs = tips.tips.map((r) => r.ref)
-            const m = g.blobsForPath(refs, 'docs/inflight/AGENTS.md')
-            const known = new Set(refs)
-            if (m.size === 0 || ![...m.keys()].every((k) => known.has(k))) return false
-            const base = g.baseline()
-            const direct = g.exec('git', ['rev-parse', `${base}:docs/inflight/AGENTS.md`]).out.trim()
-            return m.get(base) === direct
+            return inFixture(() => {
+                const tips = g.refTips()
+                if (!tips.ok) return false
+                const refs = tips.tips.map((r) => r.ref)
+                const m = g.blobsForPath(refs, 'docs/inflight/shared.md')
+                const known = new Set(refs)
+                if (m.size === 0 || ![...m.keys()].every((k) => known.has(k))) return false
+                const base = g.baseline()
+                const direct = g.exec('git', ['rev-parse', `${base}:docs/inflight/shared.md`]).out.trim()
+                return m.get(base) === direct
+            })
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'git.mjs'),
             'refs.map((r) => (selfDescribing ? `${r}:${path} ${r}` : `${r}:${path}`))',
@@ -290,10 +379,17 @@ const CHECKS = [
         why: 'a note the baseline git rm-d landed and closed; reporting it as stranded is a false positive',
         run: async (binDir) => {
             const n = await notes(binDir)
-            const index = n.corpusIndex()
-            if (index.baseEverPaths.size === 0) return false
-            const reported = new Set(n.stranded(index).flatMap((c) => c.paths))
-            return [...index.baseEverPaths].every((p) => !reported.has(p))
+            return inFixture(() => {
+                const index = n.corpusIndex()
+                if (!index.ok || index.baseEverPaths.size === 0) return false
+                // closed.md WAS on master and was git rm'd, and the `behind` branch does not carry
+                // it - so it must not be reported. The `reuse` branch's different closed.md must be.
+                const reported = new Set(n.stranded(index).flatMap((c) => c.paths))
+                // `stale-closed` carries the exact content master had at closed.md before removing
+                // it - finished work, must be excluded. `never-landed.md` never reached master at
+                // all - must be reported. Both directions, so the filter cannot pass by doing nothing.
+                return !reported.has('docs/inflight/closed.md') && reported.has('docs/inflight/never-landed.md')
+            })
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
             '        if (index.baseEverPaths.has(path)) {', '        if (false) {'),
@@ -303,9 +399,14 @@ const CHECKS = [
         why: '364 separate lines is a result an agent stops reading, which is the same as no result',
         run: async (binDir) => {
             const n = await notes(binDir)
-            const clusters = n.stranded(n.corpusIndex())
-            const paths = clusters.reduce((t, c) => t + c.paths.length, 0)
-            return paths > 0 && clusters.length < paths
+            return inFixture(() => {
+                const index = n.corpusIndex()
+                if (!index.ok) return false
+                const clusters = n.stranded(index)
+                const paths = clusters.reduce((t, c) => t + c.paths.length, 0)
+                // The two notes on `stranded-work` share a ref-set and must collapse to one cluster.
+                return paths >= 2 && clusters.length < paths
+            })
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
             "        const key = s.refs.join(' ')", '        const key = s.path'),
@@ -315,10 +416,14 @@ const CHECKS = [
         why: 'a branch that has not merged recently is not drift, and it is most of the volume',
         run: async (binDir) => {
             const n = await notes(binDir)
-            const found = await aDriftedNote(binDir)
-            if (!found) return false // no note qualifies: cannot test, which is not a pass
-            const history = n.baselineHistoryBlobs(found.drift.baseline, found.path)
-            return found.drift.divergent.every((c) => !history.has(c.blob))
+            return inFixture(() => {
+                const d = n.drift('docs/inflight/shared.md', { prs: new Map() })
+                if (!d.found) return false
+                // `behind` carries a version master itself held; `diverged` carries one it never did.
+                if (d.behind.versions !== 1 || d.divergent.length !== 1) return false
+                const history = n.baselineHistoryBlobs(d.baseline, 'docs/inflight/shared.md')
+                return d.divergent.every((c) => !history.has(c.blob))
+            })
         },
         // Mutating the `behind` push emptied `behind` too, so the check failed on its own guard
         // rather than on the assertion its `why` names - a control that never exercised the line it
@@ -333,9 +438,10 @@ const CHECKS = [
         id: 'drift-clusters-by-blob-not-by-ref',
         why: 'diffing once per ref instead of once per version is 274 diffs where 37 will do',
         run: async (binDir) => {
-            const found = await aDriftedNote(binDir)
-            if (!found) return false
-            const d = found.drift
+            const n = await notes(binDir)
+            return inFixture(() => {
+            const d = n.drift('docs/inflight/shared.md', { prs: new Map() })
+            if (!d.found) return false
             const all = [...d.divergent, ...(d.baselineCluster ? [d.baselineCluster] : [])]
             const blobs = all.map((c) => c.blob)
             if (!(blobs.length > 0 && blobs.length < d.refsCarrying && new Set(blobs).size === blobs.length)) return false
@@ -343,6 +449,7 @@ const CHECKS = [
             // number; a swap or a missing computation would otherwise turn nothing red.
             return d.divergent.every((c) => c.added !== null
                 && (c.added.newFile === true || (Number.isInteger(c.added.added) && Number.isInteger(c.added.removed))))
+            })
         },
         // The first mutant here truncated each cluster's ref list, which changed nothing the check
         // asserts - a control that cannot fail. This one emits a cluster twice, which is exactly the
@@ -391,17 +498,17 @@ const CHECKS = [
         id: 'every-command-runs-end-to-end',
         why: 'the library was tested and the CLI was not, so argv parsing, --all, emit and the whole views layer shipped unexercised',
         run: async (binDir) => {
-            const found = await aDriftedNote(binDir)
-            if (!found) return false
+            const dir = fixture()
+            const path = 'docs/inflight/shared.md'
             const runs = [
                 [['stranded'], 'NEVER reached'],
-                [['note', 'find', 'inflight'], 'matching'],
-                [['note', 'drift', found.path], found.path],
-                [['note', 'drift', '--all', found.path], found.path],
+                [['note', 'find', 'shared'], 'matching'],
+                [['note', 'drift', path], path],
+                [['note', 'drift', '--all', path], path],
                 [['prior-art', 'a-term-that-cannot-match-anything-xyzzy'], 'nothing'],
             ]
             return runs.every(([args, needle]) => {
-                const r = invoke(binDir, args)
+                const r = invoke(binDir, args, { cwd: dir })
                 return r.code === 0 && r.out.includes(needle)
             })
         },
