@@ -18,6 +18,16 @@ on:
   push:
     branches: [ master ]
   pull_request:
+  # ce-optimize harness: run ONE suite of the PR matrix on demand, on any ref, so a change to a
+  # lane can be measured on the hardware it will run on without opening a PR for every sample.
+  # `suite` is matched against the matrix `suite` key below; empty runs the whole matrix.
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: 'Run only this matrix suite (unit, integration, performance, lincheck, chaos); empty = all'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -71,7 +81,7 @@ jobs:
   # Default Kafka version: split suites for fast, parallel feedback.
   # Uses the same scripts as local development (ci-unit-test.sh, etc.)
   test:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     needs: prepare-deps
     strategy:
       fail-fast: false
@@ -175,6 +185,9 @@ jobs:
           restore-keys: |
             setup-java-Linux-x64-maven-
       - name: ${{ matrix.name }}
+        # ce-optimize harness: a dispatch naming a suite runs only that suite's entries; the other
+        # matrix jobs still spin up (a job-level `if` cannot read `matrix`) but do nothing.
+        if: github.event_name != 'workflow_dispatch' || inputs.suite == '' || inputs.suite == matrix.suite
         run: ${{ matrix.cmd }}
 
       # CHAOS ONLY. The self-hosted lane used to upload these as
@@ -354,7 +367,8 @@ jobs:
       - name: Upload coverage to Codecov
         # Skipped when the collector found nothing, rather than handing the action an empty `files:`
         # - an empty value is exactly what re-opens the tree-wide fallback described above.
-        if: always() && steps.coverage.outputs.files != ''
+        # Dispatched measurement runs stay out of the coverage ledger: they are not PR or master state.
+        if: always() && steps.coverage.outputs.files != '' && github.event_name != 'workflow_dispatch'
         uses: codecov/codecov-action@v5
         with:
           files: ${{ steps.coverage.outputs.files }}
@@ -417,7 +431,7 @@ jobs:
       - name: Upload test results to Codecov
         # Skipped when the collector found nothing, rather than letting the CLI fall back to its
         # tree-wide search - an empty `files:` is exactly what produced the junk sweep above.
-        if: ${{ !cancelled() && steps.testreports.outputs.files != '' }}
+        if: ${{ !cancelled() && steps.testreports.outputs.files != '' && github.event_name != 'workflow_dispatch' }}
         uses: codecov/codecov-action@v5
         with:
           report_type: test_results
