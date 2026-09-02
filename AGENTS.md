@@ -201,6 +201,7 @@ and the traps that voided earlier experiments.
 | **Merged** PRs, by file | `gh pr list -R astubbs/parallel-consumer --state merged --limit 100 --json number,title,files --jq '.[] \| select(.files[]?.path \| test("<ClassName>")) \| "\(.number) \(.title)"'` |
 | Issues, `--state all` | `gh issue list -R astubbs/parallel-consumer --state all --limit 300` - fork issues *and* `upstream-mirror` ones; read the upstream original, not the mirror's summary |
 | **The javadoc of the thing you are about to run or change** | `grep -rn "Calibration status" --include=*.java .` - chaos scenarios record their prior experiments, seeds and verdicts in the class javadoc, nowhere else |
+| **Has this test failed before, and at which commit** | `node bin/inflight.mjs codecov test <name>` - recorded outcome per commit, from history that outlives a CI log; `codecov flaky` lists every test ever recorded with more than one outcome |
 
 - **`grep` and `find` read the working tree, and most of this repo's docs are not in it.** Roughly
   two thirds of everything under `docs/` exists only on branches that have not merged, so a
