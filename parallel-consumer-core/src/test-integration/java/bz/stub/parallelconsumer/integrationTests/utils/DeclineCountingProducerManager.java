@@ -9,9 +9,11 @@ import bz.stub.parallelconsumer.internal.ConsumerManager;
 import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.internal.ProducerManager;
 import bz.stub.parallelconsumer.internal.ProducerWrapper;
+import bz.stub.parallelconsumer.internal.ReplacementProducerSource;
 import bz.stub.parallelconsumer.state.WorkManager;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -35,11 +37,16 @@ public class DeclineCountingProducerManager<K, V> extends ProducerManager<K, V> 
 
     private final AtomicLong revocationDeclines = new AtomicLong();
 
+    /**
+     * Same shape as {@code PCModule#producerManager()} builds, replacement source included, so a test that hands PC
+     * producer configuration rather than an instance (astubbs#225) gets a manager that can recover.
+     */
     public DeclineCountingProducerManager(ProducerWrapper<K, V> producerWrapper,
                                           ConsumerManager<K, V> consumerManager,
                                           WorkManager<K, V> workManager,
-                                          ParallelConsumerOptions<K, V> options) {
-        super(producerWrapper, consumerManager, workManager, options);
+                                          ParallelConsumerOptions<K, V> options,
+                                          Optional<ReplacementProducerSource<K, V>> replacementProducerSource) {
+        super(producerWrapper, consumerManager, workManager, options, replacementProducerSource);
     }
 
     /** Revocations that found the producer transaction lock held and declined the commit. Per instance. */
@@ -74,7 +81,7 @@ public class DeclineCountingProducerManager<K, V> extends ProducerManager<K, V> 
         @Override
         protected ProducerManager<K, V> producerManager() {
             if (manager == null) {
-                manager = new DeclineCountingProducerManager<>(producerWrap(), consumerManager(), workManager(), options());
+                manager = new DeclineCountingProducerManager<>(producerWrap(), consumerManager(), workManager(), options(), replacementProducerWrap());
             }
             return manager;
         }

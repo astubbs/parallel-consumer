@@ -12,6 +12,7 @@ import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.internal.ConsumerManager;
 import bz.stub.parallelconsumer.internal.ProducerManager;
 import bz.stub.parallelconsumer.internal.ProducerWrapper;
+import bz.stub.parallelconsumer.internal.ReplacementProducerSource;
 import bz.stub.parallelconsumer.internal.utils.ThreadUtils;
 import bz.stub.parallelconsumer.state.WorkManager;
 import lombok.SneakyThrows;
@@ -28,6 +29,7 @@ import pl.tlinkowski.unij.api.UniSets;
 
 import java.time.Duration;
 import java.util.Collection;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -242,8 +244,9 @@ class Revoke857TransactionalWaitProbeIT extends BrokerIntegrationTest<String, St
         DwellingProducerManager(ProducerWrapper<K, V> producerWrapper,
                                 ConsumerManager<K, V> consumerManager,
                                 WorkManager<K, V> workManager,
-                                ParallelConsumerOptions<K, V> options) {
-            super(producerWrapper, consumerManager, workManager, options);
+                                ParallelConsumerOptions<K, V> options,
+                                Optional<ReplacementProducerSource<K, V>> replacementProducerSource) {
+            super(producerWrapper, consumerManager, workManager, options, replacementProducerSource);
         }
 
         /**
@@ -296,7 +299,7 @@ class Revoke857TransactionalWaitProbeIT extends BrokerIntegrationTest<String, St
         @Override
         protected ProducerManager<K, V> producerManager() {
             if (dwelling == null) {
-                dwelling = new DwellingProducerManager<>(producerWrap(), consumerManager(), workManager(), options());
+                dwelling = new DwellingProducerManager<>(producerWrap(), consumerManager(), workManager(), options(), replacementProducerWrap());
             }
             return dwelling;
         }

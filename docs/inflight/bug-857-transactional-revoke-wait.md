@@ -151,17 +151,18 @@ with a "bounded well under max.poll.interval.ms" justification, or the rule need
 bound.
 <!-- post-merge: checked-end -->
 
-<!-- post-merge: checked-begin - names the PR whose merge triggers the reconciliation; the
-     reconciliation itself is owned by core-recoverable-producer-fencing.md -->
-**Reconciliation owed when astubbs#410 lands, owned by
-[`core-recoverable-producer-fencing.md`](core-recoverable-producer-fencing.md) ("Merge-time
-reconciliation with astubbs/parallel-consumer#408").** The `ProducerFencedException |
-InvalidProducerEpochException` rethrow in `tryCommitOffsetsOnRevoke` goes: on the PC-built path the
-commit path already converts those into `ProducerInvalidatedException`, which the generic catch logs,
-and on the deprecated producer-instance path the pre-recovery behaviour is that PR's to keep. Note
-also that the rethrow only ever fired for a raw fence from `commitTransaction` - master already wraps
-a fenced `sendOffsetsToTransaction` as an internal error at that site - so it was narrower than its
-comment claimed, and nothing pinned it.
+<!-- post-merge: checked-begin - records a reconciliation already made; it reads the same once both
+     PRs have landed -->
+**Reconciled with astubbs#410, 2026-09-02, on this branch.** The `ProducerFencedException |
+InvalidProducerEpochException` rethrow in `tryCommitOffsetsOnRevoke` is gone: on the PC-built path
+the commit path converts those into `ProducerInvalidatedException`, which the generic catch logs and
+the control thread recovers from on its next pass, and on the deprecated producer-instance path
+nothing is recorded and the raw condition is logged the same way - that path keeps its pre-recovery
+behaviour by astubbs#410's design (its R19). The rethrow had only ever fired for a raw fence from
+`commitTransaction` - master already wrapped a fenced `sendOffsetsToTransaction` as an internal error
+at that site - so it was narrower than its comment claimed, and nothing pinned it. The other side of
+the reconciliation is recorded in
+[`core-recoverable-producer-fencing.md`](core-recoverable-producer-fencing.md).
 <!-- post-merge: checked-end -->
 
 ## Decision, settled 2026-09-01: decline, do not deadline

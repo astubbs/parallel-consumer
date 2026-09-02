@@ -23,8 +23,6 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.MockConsumer;
 import org.apache.kafka.clients.consumer.internals.ConsumerCoordinator;
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.common.errors.InvalidProducerEpochException;
-import org.apache.kafka.common.errors.ProducerFencedException;
 import org.slf4j.MDC;
 
 import javax.naming.InitialContext;
@@ -708,17 +706,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             log.info("Acquired commitLock on revoke without contention - committing offsets " +
                     "inline. See confluentinc#857.");
             performCommit();
-        } catch (ProducerFencedException | InvalidProducerEpochException e) {
-            // FENCING STAYS FATAL. Everything else here is downgraded to a WARN because a failed revoke commit
-            // is recoverable - the offsets stay dirty and the next owner reprocesses them. Fencing is not: it
-            // means another producer with our transactional.id has taken over, so this instance is a zombie and
-            // every subsequent commit will fail too. Before astubbs#44 an exception here propagated out of
-            // onPartitionsRevoked as a PCInternalRuntimeException and BrokerPollSystem failed the instance
-            // loudly; swallowing it would leave a fenced member polling and accepting work until some later
-            // commit happened to surface the same error somewhere less obvious. Rethrown so that path is
-            // unchanged. Recoverable fencing is astubbs#225, and this is what it will replace.
-            throw e;
         } catch (Exception e) {
+            // A producer the broker has invalidated arrives here too, as ProducerInvalidatedException: the
+            // commit path has already recorded the condition, and the control thread replaces the producer
+            // on its next pass (astubbs#225, KTD11 in its plan). This path only declines - it never waits
+            // for the replacement and never rethrows as fatal, which is what kept fencing fatal here
+            // before recovery existed. On the deprecated producer-instance path nothing is recorded and the
+            // raw condition lands here as well; that path keeps its pre-recovery behaviour by design.
             // Restore the flag rather than swallowing the interrupt: this runs inside the poll
             // thread's rebalance callback, and dropping it strands whatever is waiting on it.
             if (e instanceof InterruptedException) {

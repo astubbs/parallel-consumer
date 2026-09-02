@@ -30,16 +30,20 @@ expected. The reasoning being overridden is recorded in the astubbs#410 commit t
 `commitOffsets` (`feat(core) astubbs#225: recognise an invalidated producer on both paths`), so the
 change does not read as an oversight.
 
-## Merge-time reconciliation with astubbs/parallel-consumer#408 (KTD11)
+<!-- post-merge: checked-begin - describes a reconciliation already made on the child branch, which
+     reads the same once both have landed -->
+## Reconciliation with astubbs/parallel-consumer#408 (KTD11) - done on that branch
 
-That PR makes the revoke path decline both locks with `tryLock` instead of spinning, and rethrows
-`ProducerFencedException | InvalidProducerEpochException` from the revoke-path commit so fencing stays
-<!-- post-merge: checked -->
-fatal. With recovery on master (astubbs#410) that rethrow becomes record-and-decline: `ProducerManager.commitOffsets` already
-records the condition and unwinds with `ProducerInvalidatedException`, which `tryCommitOffsetsOnRevoke`'s
-catch logs, and the control thread recovers on its next pass. Its three `ProducerManager` lock helpers
-coexist with the waiting entry `beginReplacement` uses. The bounded wait and holder-deadlining that
-recovery makes viable are named in the plan's KTD11 and deliberately not taken.
+That PR makes the revoke path decline both locks with `tryLock` instead of spinning. It used to
+rethrow `ProducerFencedException | InvalidProducerEpochException` from the revoke-path commit so
+fencing stayed fatal; with recovery in place that became record-and-decline, and astubbs#408 removed
+the rethrow when it merged this branch: `ProducerManager.commitOffsets` records the condition and
+unwinds with `ProducerInvalidatedException`, `tryCommitOffsetsOnRevoke`'s catch logs it, and the
+control thread recovers on its next pass. Its three `ProducerManager` lock helpers coexist with the
+waiting entry `beginReplacement` uses. The bounded wait and holder-deadlining that recovery makes
+viable are named in the plan's KTD11 and deliberately not taken; `RebalanceEoSDeadlockTest` on that
+branch asserts the decline.
+<!-- post-merge: checked-end -->
 
 ## Still outside this work
 
