@@ -184,6 +184,11 @@ export function formatCache(status, known) {
 // and bin/lib/codecov.mjs's header explains why a silently-capped list is the failure mode worth
 // spending two lines on.
 
+// `2026-09-02 03:24` - minutes, in UTC as the API returns it. The date is here because ordering
+// should be readable off the line itself: a reader holding two shas otherwise has to go and look up
+// which came first, which is exactly the cross-reference this whole command exists to remove.
+const stamp = (iso) => (iso ? String(iso).replace('T', ' ').slice(0, 16) : '                ')
+
 const cacheNote = (v) => (v.cached ? '  (cached - add --fresh to refetch)' : '')
 const truncNote = (v) => (v.truncated
     ? '\n\nWARNING: hit the page bound - this is NOT the whole history, so an absence here proves nothing.'
@@ -220,7 +225,7 @@ export function formatTimeline(v) {
         for (const o of m.observations) {
             const secs = typeof o.seconds === 'number' ? `${o.seconds.toFixed(1)}s`.padStart(8) : '       -'
             const mark = o.outcome === 'pass' ? ' ' : '!'
-            out.push(`  ${mark} ${String(o.outcome).padEnd(8)} ${secs}  ${o.sha}  ${o.branch ?? ''}`)
+            out.push(`  ${mark} ${String(o.outcome).padEnd(8)} ${secs}  ${stamp(o.at)}  ${o.sha}  ${o.branch ?? ''}`)
             if (o.failure) out.push(`      ${String(o.failure).split('\n')[0].slice(0, 100)}`)
         }
         const outcomes = new Set(m.observations.map((o) => o.outcome))
@@ -242,8 +247,9 @@ export function formatFlakes(v) {
     const out = [`${plural(v.candidates.length, 'test')} recorded with more than one outcome:${cacheNote(v)}\n`]
     for (const c of v.candidates) {
         out.push(`  ${c.name}`)
-        out.push(`      ${c.failures} non-pass of ${plural(c.runs, 'run')}`
-            + `  - ${c.observations.map((o) => `${o.outcome === 'pass' ? '.' : 'X'}${o.sha}`).join(' ')}`)
+        const span = [c.observations[c.observations.length - 1], c.observations[0]].map((o) => stamp(o.at))
+        out.push(`      ${c.failures} non-pass of ${plural(c.runs, 'run')}, ${span[0]} to ${span[1]}`
+            + `\n      ${c.observations.map((o) => `${o.outcome === 'pass' ? '.' : 'X'}${o.sha}`).join(' ')}`)
     }
     out.push('\nCANDIDATES, not a verdict. The same evidence fits a real regression, which is why')
     out.push('docs/quarantined-tests.md will not quarantine on a rate. Next: inflight codecov test <name>')

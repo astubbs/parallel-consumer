@@ -22,6 +22,14 @@
 // for rules. A tool reachable only by knowing its filename is the state this file exists to end, so
 // a new tool that is not in this table is not finished.
 //
+// AND YOU ARE MEANT TO ADD ONE. If you needed an answer and had to get it some other way, that is a
+// gap in this tool and you are holding the only evidence of what it was - patch it rather than
+// working around it or writing a script beside it. Migrate query-shaped shell scripts in here
+// opportunistically as you touch them (`worktree-status.sh`, `issue-index.sh`, `todo-index.sh` are
+// the standing candidates); scripts that DO something rather than answer something - the builds, the
+// deploys, the check-* gates - stay shell, and bin/AGENTS.md owns those. docs/inflight-tool.md, "If
+// it does not answer your question, change it", carries the full guidance and the three invariants.
+//
 // THIS IS THE ONLY FILE HERE THAT MAY CALL process.exit, and it does so once, at the bottom. The
 // libraries return findings; the views render them; the exit code is a fact about a process and
 // belongs at the process boundary. A library that exits has decided something that is not its to
