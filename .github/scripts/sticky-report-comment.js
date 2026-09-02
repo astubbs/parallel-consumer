@@ -192,14 +192,23 @@ function retiredBody({ body, marker, supersededMarker, headingRe, label, note })
  * Upsert the sticky report comment, posting fresh on a status change.
  *
  * Returns `{ action, commentId, url, statusChanged, prev, cur }` where `action` is one of
- * `updated` (edited in place), `created` (no previous comment), or `superseded` (retired the old
- * one and posted fresh because the status changed).
+ * `updated` (edited in place), `created` (no previous comment), `superseded` (retired the old one
+ * and posted fresh because the status changed), or `skipped` (nothing was written - only reachable
+ * under `postWhenAbsent: false`).
  *
  * Required: `github`, `context`, `core` (the github-script globals), `marker`, `dataMarker`, `body`.
  * Optional: `supersededMarker` (defaults to the marker with ` (superseded)` before the `-->`),
  * `renderDelta(prev, cur)` returning text appended below the body, `headingRe` locating the report's
  * own heading in the retired copy, `supersededLabel(prev, cur)`, `what` (a noun used in warnings),
- * and `now` for tests.
+ * `postWhenAbsent` (see below), and `now` for tests.
+ *
+ * `postWhenAbsent: false` MAKES THIS BODY A CORRECTION RATHER THAN A REPORT: if we have not spoken
+ * on this PR, it stays quiet and returns `{ action: "skipped" }`. The quarantine lane's
+ * lane-emptied body is the case - "there is nothing quarantined" is the healthy steady state and
+ * saying it on every PR is the fifteen-comments problem in a new costume, but on a PR whose earlier
+ * push demanded an annotation be deleted the same body is the retraction, and must be posted. The
+ * flag is here rather than in the caller because the only way to know is the lookup this function
+ * already does; doing it in the caller means paginating the comment list twice.
  */
 async function postStickyReport({
   github, context, core,
@@ -217,6 +226,7 @@ async function postStickyReport({
   headingRe = /^### /m,
   supersededLabel = (prev, cur) => `status changed to ${sanitiseForHeading(cur?.status)}`,
   what = "report",
+  postWhenAbsent = true,
   now = new Date(),
 }) {
   const { owner, repo } = context.repo;
@@ -226,6 +236,11 @@ async function postStickyReport({
   const existing = await findExisting({ github, owner, repo, issue_number, marker });
   const prev = readPayload(existing?.body, dataMarker);
   const cur = readPayload(body, dataMarker);
+
+  // Nothing of ours to correct, and this caller only wanted to correct - so say nothing.
+  if (!existing && !postWhenAbsent) {
+    return { action: "skipped", commentId: null, url: null, statusChanged: false, prev: null, cur };
+  }
 
   const delta = renderDelta(prev, cur) || "";
   const stamp = stampFor({

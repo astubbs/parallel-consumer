@@ -83,7 +83,13 @@ document. This section is the detail behind it.
   Reporting is **two steps, and the split is the point**: `bin/quarantine-lane-report.sh` classifies
   and *may* fail the job (its lane-leak self-check is what proves the lane ran only quarantined
   tests), then a separate `continue-on-error` step posts the comment, so a rate limit while
-  commenting cannot red a healthy lane. See [`docs/testing.md`](testing.md).
+  commenting cannot red a healthy lane. **Both reporting steps run even when the registry is
+  empty** - gated on the emptiness check having run, not on its answer - because the PR that removes
+  the LAST quarantine is the one that has to retract the previous push's "delete the annotation and
+  the registry entry" comment; the execution steps are still skipped, there being nothing to run.
+  See [`docs/testing.md`](testing.md), and
+  [`docs/solutions/workflow-issues/the-run-that-had-to-retract-was-the-one-gated-silent-2026-09-02.md`](solutions/workflow-issues/the-run-that-had-to-retract-was-the-one-gated-silent-2026-09-02.md)
+  for the class.
 - **`pr-checklist.yml`** - hosts the PR-body gates: the template checklist (rule in AGENTS.md, PR
   Discipline), the changelog-citation gate (`changelog-ref-gate.js`, see
   [`docs/releasing.md`](releasing.md)), the issue-reference gate (`issue-ref-gate.js`, see
@@ -191,6 +197,12 @@ should be deleted - posts a new comment instead of silently editing one thirty s
 producer writes its own payload: `pc-throughput-data` from `bin/check-throughput-regression.mjs`,
 `quarantine-lane-data` from `bin/quarantine-lane-report.sh`. Nothing enforces that a producer and its
 reader agree on the marker's name, so `grep -rn <marker-name>` is the list to change if one moves.
+
+**A body can also be a CORRECTION rather than a report** - `postWhenAbsent: false` posts nothing when
+we have not already spoken on that PR. The quarantine lane's emptied-lane body is the only user: on a
+PR whose earlier push demanded an annotation be deleted it is the retraction and must be posted, and
+on a PR that never carried a report it would be an announcement that nothing is quarantined, on every
+PR, forever.
 
 The SpotBugs step uses the module's lookup and stamp but keeps its own update-or-create: whether a
 clean-to-dirty SpotBugs transition deserves a new comment is a judgement nobody has made, and adding

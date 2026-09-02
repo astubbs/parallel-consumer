@@ -68,6 +68,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: bin/check-quarantine-owners.sh
+      # `found` gates the EXECUTION steps only - there is nothing to run when the registry is empty.
+      # The two REPORTING steps below are gated on `steps.any.outcome` instead, which is still
+      # `success` when the lane is empty, because the run that empties the lane is precisely the run
+      # that has to retract the previous push's "delete the annotation and the registry entry"
+      # comment. Gating those on `found` made that the one run guaranteed not to speak, and the
+      # instruction stayed live on the PR that had already carried it out. The class, and why the
+      # empty case is a report rather than a silence:
+      # docs/solutions/workflow-issues/the-run-that-had-to-retract-was-the-one-gated-silent-2026-09-02.md
       - name: Check the lane is not empty
         id: any
         run: |
@@ -109,8 +117,11 @@ jobs:
       # lane-leak self-check - the proof that this lane runs ONLY quarantined tests - runs against
       # master rather than only against PR heads, which is where a regressed `<groups>` binding would
       # actually live.
+      # `steps.any.outcome == 'success'`, NOT `outputs.found` - see the note on that step. It is
+      # still `skipped` when a fail-fast gate above rejected the registry, so a report is never built
+      # from a state a gate has just refused.
       - name: Classify lane outcomes (writes the report, opens threads on unexpected passes)
-        if: always() && steps.any.outputs.found == 'true'
+        if: always() && steps.any.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           # Empty on a push-to-master run, which is the log-only path: the report file is still
@@ -119,7 +130,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: bin/quarantine-lane-report.sh
       - name: Post the quarantine lane report to the PR
-        if: always() && steps.any.outputs.found == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        if: always() && steps.any.outcome == 'success' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         # SAME-REPOSITORY PRs ONLY, and A COMMENT WRITE MUST NOT FAIL THE JOB - both for the reasons
         # the throughput step in maven.yml states at length. On a fork PR the token is read-only and
         # the write 403s; the report is still in the job log either way.
@@ -145,6 +156,11 @@ jobs:
             // wrong. That transition used to happen by silently editing a comment nobody was looking
             // at. Rows entering or leaving the lane count too - a PR that quarantines a test, or
             // deletes a quarantine, has changed what this report is about.
+            //
+            // THE LAST ROW LEAVING is the one this step is now reachable for, and the only report
+            // that RETRACTS rather than states: it withdraws the previous push's demand that an
+            // annotation and a registry entry be deleted, on the PR that just deleted them. With
+            // nothing of ours on the PR to retract it posts nothing at all.
             const report = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/quarantine-report-comment.js`)
             await report.post({ github, context, core, body })
       - name: Summarize quarantine lane

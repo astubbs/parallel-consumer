@@ -374,6 +374,47 @@ asyncTest("a caller's supersededLabel is what the retired heading says", async (
 });
 
 // =================================================================================================
+section("\npostWhenAbsent - a body that is a CORRECTION rather than a report");
+
+// The quarantine lane's emptied-lane body is the case: on a PR whose earlier push said "delete the
+// annotation and the registry entry" it is the retraction and must be posted, but on a PR that never
+// carried a report it is an announcement that nothing is quarantined - noise on every PR forever.
+asyncTest("no previous comment and postWhenAbsent false: nothing is written at all", async () => {
+  const gh = fakeGithub({ comments: [] });
+  const result = await postStickyReport({
+    github: gh, context: fakeContext, core: fakeCore(), marker: MARKER, dataMarker: DATA,
+    body: bodyWith("green"), postWhenAbsent: false, now: new Date("2026-09-02T03:04:05Z"),
+  });
+  assert.strictEqual(result.action, "skipped");
+  assert.strictEqual(gh.calls.filter(c => c.op === "createComment").length, 0);
+  assert.strictEqual(gh.calls.filter(c => c.op === "updateComment").length, 0);
+});
+
+// The half that makes the flag a correction rather than a mute: our own comment being there is
+// exactly what it waits for.
+asyncTest("postWhenAbsent false still corrects a comment we already posted", async () => {
+  const gh = fakeGithub({ comments: [botComment(7, "green")] });
+  const result = await postStickyReport({
+    github: gh, context: fakeContext, core: fakeCore(), marker: MARKER, dataMarker: DATA,
+    body: bodyWith("regression"), postWhenAbsent: false, now: new Date("2026-09-02T03:04:05Z"),
+  });
+  assert.strictEqual(result.action, "superseded");
+  assert.strictEqual(gh.calls.filter(c => c.op === "createComment").length, 1);
+});
+
+// A human comment quoting the marker is not ours, so it is not something to correct either - the
+// author filter and this flag have to agree, or the bot answers a person's comment.
+asyncTest("a human comment carrying the marker does not count as ours to correct", async () => {
+  const gh = fakeGithub({ comments: [{ id: 3, user: { type: "User" }, body: `${MARKER}\nis this right?` }] });
+  const result = await postStickyReport({
+    github: gh, context: fakeContext, core: fakeCore(), marker: MARKER, dataMarker: DATA,
+    body: bodyWith("green"), postWhenAbsent: false, now: new Date("2026-09-02T03:04:05Z"),
+  });
+  assert.strictEqual(result.action, "skipped");
+  assert.strictEqual(gh.store.find(c => c.id === 3).body, `${MARKER}\nis this right?`);
+});
+
+// =================================================================================================
 section("\nthe harness's own guard against a test that can never fail");
 
 asyncTest("test() rejects an async body, because its assertion would reject after 'ok' was logged", async () => {
