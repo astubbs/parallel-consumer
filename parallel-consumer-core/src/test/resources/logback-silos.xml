@@ -1,0 +1,119 @@
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+    SILOED LOG STREAMS - copies, not diversions. Shared by both test logging profiles.
+
+    Every logger here keeps its default additivity, so everything still reaches STDOUT exactly as
+    before. These are ADDITIONAL copies routed by concern, because during analysis a concern is
+    either the only thing you want or the only thing in the way.
+
+    The rule for what earns a file: anything tangential to running the product. Detectors and probes
+    exist to observe the test, not to be the product. The harness is not the product. Those two are
+    the ones that get lost in a shared stream.
+
+    Levels are NOT set here - they are inherited, so `pc.log.level` still governs and
+    bin/check-test-log-config.sh still holds. Raising the harness raises these with it.
+
+    WHY THIS IS A SEPARATE FILE. It used to live inside logback-test.xml only, which meant the
+    integration profile had no silos at all - and because nothing passes
+    -Dlogback.configurationFile, that was invisible: integration tests fall back to logback-test.xml
+    and got the silos by accident rather than by design. Selecting the integration profile as its own
+    header instructs would have silently dropped every stream. Shared here so the two profiles cannot
+    drift apart again, and so neither can lose the silos by being chosen.
+-->
+<included>
+
+    <!-- The local name deliberately differs from the system property it reads. Written as
+         <property name="pc.log.dir" value="${pc.log.dir:-target/pc-logs}"/> the definition refers to
+         itself, and logback resolves the self-reference to the default instead of to -Dpc.log.dir -
+         so the override silently did nothing and every run wrote to target/pc-logs whatever was
+         passed. Keep the two names different. -->
+    <property name="siloDir" value="${pc.log.dir:-target/pc-logs}"/>
+
+    <!-- Two layouts, named once. Seven appenders used to carry a copy each, which is how a silo
+         quietly ends up formatted differently from its siblings and stops being greppable with the
+         same expression. The level/detector streams differ from the whole-run ones in two ways on
+         purpose: a wider logger field, because a stack trace is worth attributing precisely, and
+         %ex, because an error line without its exception is not an error report. -->
+    <property name="SILO_PATTERN" value="%d{HH:mm:ss.SSS} %X{pcId} [%thread] %logger{24} - %msg%n"/>
+    <property name="SILO_PATTERN_WITH_STACK"
+              value="%d{HH:mm:ss.SSS} %X{pcId} [%thread] %logger{36} - %msg%n%ex"/>
+
+    <!-- EVERY error, and EVERY warning, for the whole run - never rolled, never truncated.
+         A ring buffer is the right answer to volume and the wrong answer to a warning from two
+         days ago, which is the line you want when something fails on day three. -->
+    <appender name="ERRORS" class="ch.qos.logback.core.FileAppender">
+        <file>${siloDir}/errors.log</file>
+        <append>true</append>
+        <filter class="ch.qos.logback.classic.filter.LevelFilter">
+            <level>ERROR</level><onMatch>ACCEPT</onMatch><onMismatch>DENY</onMismatch>
+        </filter>
+        <encoder><pattern>${SILO_PATTERN_WITH_STACK}</pattern></encoder>
+    </appender>
+
+    <appender name="WARNINGS" class="ch.qos.logback.core.FileAppender">
+        <file>${siloDir}/warnings.log</file>
+        <append>true</append>
+        <filter class="ch.qos.logback.classic.filter.LevelFilter">
+            <level>WARN</level><onMatch>ACCEPT</onMatch><onMismatch>DENY</onMismatch>
+        </filter>
+        <encoder><pattern>${SILO_PATTERN_WITH_STACK}</pattern></encoder>
+    </appender>
+
+    <appender name="PROBES" class="ch.qos.logback.core.FileAppender">
+        <file>${siloDir}/probes.log</file>
+        <append>true</append>
+        <encoder><pattern>${SILO_PATTERN}</pattern></encoder>
+    </appender>
+
+    <appender name="HARNESS" class="ch.qos.logback.core.FileAppender">
+        <file>${siloDir}/harness.log</file>
+        <append>true</append>
+        <encoder><pattern>${SILO_PATTERN}</pattern></encoder>
+    </appender>
+
+    <appender name="PC_COMMIT" class="ch.qos.logback.core.FileAppender">
+        <file>${siloDir}/pc-commit-offsets.log</file>
+        <append>true</append>
+        <encoder><pattern>${SILO_PATTERN}</pattern></encoder>
+    </appender>
+
+    <appender name="PC_LIFECYCLE" class="ch.qos.logback.core.FileAppender">
+        <file>${siloDir}/pc-poll-rebalance-lifecycle.log</file>
+        <append>true</append>
+        <encoder><pattern>${SILO_PATTERN}</pattern></encoder>
+    </appender>
+
+    <appender name="PC_STATE" class="ch.qos.logback.core.FileAppender">
+        <file>${siloDir}/pc-shard-work-state.log</file>
+        <append>true</append>
+        <encoder><pattern>${SILO_PATTERN}</pattern></encoder>
+    </appender>
+
+    <!-- Routing. No level attributes on purpose: these inherit, so pc.log.level still governs. -->
+
+    <!-- Detectors and probes - the instruments. "Did the detector fire" should be one small file,
+         not a grep of a 38,000-line run log. -->
+    <logger name="bz.stub.parallelconsumer.integrationTests.chaostests.ProgressProbe"><appender-ref ref="PROBES"/></logger>
+    <logger name="bz.stub.parallelconsumer.integrationTests.chaostests.KeyOrderLedger"><appender-ref ref="PROBES"/></logger>
+    <logger name="bz.stub.parallelconsumer.integrationTests.AmbientProbeExtension"><appender-ref ref="PROBES"/></logger>
+    <logger name="bz.stub.parallelconsumer.internal.PollThreadStallDiagnosis"><appender-ref ref="PROBES"/></logger>
+
+    <!-- The harness: what the test did TO the system, separate from what the system did. -->
+    <logger name="bz.stub.parallelconsumer.integrationTests.chaostests.ChaosConductor"><appender-ref ref="HARNESS"/></logger>
+    <logger name="bz.stub.parallelconsumer.integrationTests.chaostests.ChaosScenarioBase"><appender-ref ref="HARNESS"/></logger>
+    <logger name="bz.stub.parallelconsumer.integrationTests.utils.ManagedPCInstance"><appender-ref ref="HARNESS"/></logger>
+
+    <!-- PC subsystems, split by the question you are asking. -->
+    <logger name="bz.stub.parallelconsumer.internal.ConsumerOffsetCommitter"><appender-ref ref="PC_COMMIT"/></logger>
+    <logger name="bz.stub.parallelconsumer.internal.ProducerManager"><appender-ref ref="PC_COMMIT"/></logger>
+    <logger name="bz.stub.parallelconsumer.offsets"><appender-ref ref="PC_COMMIT"/></logger>
+
+    <logger name="bz.stub.parallelconsumer.internal.BrokerPollSystem"><appender-ref ref="PC_LIFECYCLE"/></logger>
+    <logger name="bz.stub.parallelconsumer.internal.ConsumerManager"><appender-ref ref="PC_LIFECYCLE"/></logger>
+    <logger name="bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor"><appender-ref ref="PC_LIFECYCLE"/></logger>
+
+    <logger name="bz.stub.parallelconsumer.state"><appender-ref ref="PC_STATE"/></logger>
+
+</included>

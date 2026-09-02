@@ -78,6 +78,43 @@ GATES=(
     "check-action-versions.sh:"
 )
 
+# FIRST, AND BEFORE ANY CONTENT GATE: are we committing in the MAIN checkout?
+#
+# AGENTS.md's rule is "Never do any work in the main checkout. Every task gets a worktree", because
+# several agent sessions share this clone at once - its HEAD can move between two of your OWN
+# commands. The failure this catches is not carelessness, it is a `cd` that outlived its command:
+# one `cd` inside a compound command (to unzip something, to run a tool) and every later command in
+# the session runs somewhere else while still looking right - same branch names, same-looking
+# paths, clean `git status`. It stays invisible until a commit lands with the wrong parent.
+#
+# This runs FIRST and exits immediately: it is a question about WHERE you are, not about what you
+# are committing, and there is no point spending the gate budget on content headed somewhere wrong.
+#
+# THE TEST: a linked worktree's --git-dir is .git/worktrees/<name> while its --git-common-dir is
+# .git; in the main checkout the two are identical. That is the only reliable distinction - branch,
+# path and status all look normal from either side.
+#
+# SCOPED so it cannot block someone who does not use worktrees: it fires only when this clone HAS
+# linked worktrees, i.e. the workflow is actually in use. A plain contributor clone or a CI checkout
+# is untouched. Drop the `worktree list` condition to make it absolute.
+#
+# BYPASS: `git commit --no-verify`, same as every other gate here, for the same reason.
+if [ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ] \
+        && [ "$(git worktree list | wc -l)" -gt 1 ]; then
+    printf '\n'
+    printf 'pre-commit: REFUSING - this is the MAIN checkout, not a worktree.\n\n'
+    printf "  About to commit to '%s' in %s\n" "$(git rev-parse --abbrev-ref HEAD)" "$(git rev-parse --show-toplevel)"
+    printf '  This clone has %s linked worktree(s), so the work belongs in one of them.\n\n' "$(( $(git worktree list | wc -l) - 1 ))"
+    printf '  Several sessions share this checkout, so its HEAD moves under you. The usual cause is\n'
+    printf '  a `cd` in an earlier command that outlived it - everything since has run here.\n\n'
+    printf '  Check where you are, then work in the right worktree:\n'
+    printf '      git worktree list\n'
+    printf '      bin/worktree-status.sh          # who owns what\n'
+    printf '      git -C <worktree> commit ...    # -C beats cd - it cannot leak into the next command\n\n'
+    printf '  Deliberate? Re-run with --no-verify.\n\n'
+    exit 1
+fi
+
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 
@@ -146,6 +183,41 @@ done
 for s in "${skipped[@]:-}"; do
     [ -n "$s" ] && printf 'pre-commit: skipped %s\n' "$s" >&2
 done
+
+# --- disk advisory -----------------------------------------------------------------------------
+#
+# Advisory only, and SILENT unless a filesystem is genuinely tight. It never fails the commit: a
+# full disk is not a defect in the change being committed, and a gate that blocks on it would get
+# disabled within a day.
+#
+# WHY A HOOK. An agent cannot notice a filesystem filling up - nothing in its context mentions disk
+# until something fails, and then it fails as a confusing symptom rather than as "you are out of
+# space". On 2026-08-19 /tmp reached 99% on this box; the visible effects were a chaos-test log
+# truncated mid-run (which read as a test ending early and cost real diagnosis time) and another
+# agent's watcher dying on ENOSPC. Both agents were behaving correctly and neither could see the
+# cause. This prints it into their context before it bites, which is the point of the layer.
+#
+# /tmp here is a tmpfs, so what it holds is RAM, not disk - filling it degrades the whole machine,
+# and it is exactly where agent scratchpads and test logs accumulate.
+disk_advisory() {
+    local threshold=75 fs pct avail
+    for fs in /tmp .; do
+        [ -d "$fs" ] || continue
+        # Portable-ish: field 5 is Use%, field 4 is Avail. Failure to read is not an error here.
+        pct=$(df -P "$fs" 2>/dev/null | awk 'NR==2 {gsub(/%/,"",$5); print $5}')
+        avail=$(df -Ph "$fs" 2>/dev/null | awk 'NR==2 {print $4}')
+        [ -n "$pct" ] || continue
+        [ "$pct" -ge "$threshold" ] 2>/dev/null || continue
+        printf '\npre-commit: NOTE - %s is %s%% full (%s free). Not blocking this commit.\n' \
+            "$fs" "$pct" "$avail" >&2
+        printf '  Agent scratchpads and test logs are the usual cause, and they are YOURS to tidy:\n' >&2
+        printf '  clean your own /tmp working files as part of finishing a task, not just the repo.\n' >&2
+        printf '  Find the consumer:  du -sh /tmp/claude-*/*/* 2>/dev/null | sort -h | tail\n' >&2
+        printf '  Keep evidence you still need by copying it OFF /tmp first - on this box /tmp is a\n' >&2
+        printf '  tmpfs, so it is RAM, and it is shared with every other agent session.\n' >&2
+    done
+}
+disk_advisory
 
 if [ ${#failed[@]} -gt 0 ]; then
     printf '\npre-commit: %d gate(s) failed: %s\n' "${#failed[@]}" "${failed[*]}" >&2
