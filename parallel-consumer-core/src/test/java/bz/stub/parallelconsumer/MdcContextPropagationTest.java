@@ -8,6 +8,7 @@ import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.MDC;
 
@@ -58,9 +59,21 @@ class MdcContextPropagationTest extends ParallelEoSStreamProcessorTestBase {
 
     private final List<Observation> observations = new CopyOnWriteArrayList<>();
 
+    /**
+     * Before AND after, not only after. This class asserts, as a precondition, that the runner thread arrives with no
+     * context at all ({@code getCopyOfContextMap() == null}), and a test may only assert a precondition it has
+     * established itself: the runner thread is shared with every other class in the fork, and two of them -
+     * {@code ProducerManagerTest} and {@code TransactionalBulkCommitTest} - drive
+     * {@code AbstractParallelEoSStreamProcessor#processWorkCompleteMailBox} on it, whose
+     * {@code MDC.put(...); MDC.remove(...)} pair leaves logback holding an EMPTY map rather than none. On logback
+     * 1.6.1, {@code remove} of the last key gives {@code {}} where {@code clear()} gives {@code null}; measured, not
+     * read. Without this the precondition is a coin flip on fork scheduling - it failed 2 of 2 full runs on one
+     * tree and 0 of 3 on another, with identical code.
+     */
+    @BeforeEach
     @AfterEach
     void clearCallersContext() {
-        // JUnit reuses its runner thread, so context set by one test must not be inherited by the next
+        // JUnit reuses its runner thread, so context set by one test must not be inherited by (or from) the next
         MDC.clear();
     }
 
