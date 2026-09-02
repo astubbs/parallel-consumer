@@ -231,184 +231,25 @@ jobs:
             const path = 'target/throughput-report.md'
             if (!fs.existsSync(path)) return
             const body = fs.readFileSync(path, 'utf8')
-            const marker = '<!-- pc-throughput-report -->'
-            const { owner, repo } = context.repo
-            const issue_number = context.issue.number
 
-            // The reporter embeds one line of machine-readable state. Read it off both the new report and the
-            // previous comment, so this run can say what CHANGED rather than only what it measured - reading
-            // our own last comment is the only store available, since no series is kept anywhere by decision.
-            const readData = text => {
-              const m = /<!-- pc-throughput-data: (.*?) -->/.exec(text ?? '')
-              try { return m ? JSON.parse(m[1]) : null } catch { return null }
-            }
-
-            // PAGINATE, and only trust our own comments. listComments returns 30 per page, so on a busy PR the
-            // report scrolls off page one and every push posts a fresh comment instead of updating - the delta
-            // disappears and the fifteen-comments problem returns. And the comment we find is now an INPUT: its
-            // payload steers the update-vs-post decision, so restrict it to comments this workflow could have
-            // written rather than to anything carrying the marker.
-            const all = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 })
-            const existing = all.find(c => c.body.includes(marker) && c.user?.type === 'Bot')
-            const prev = readData(existing?.body)
-            const cur = readData(body)
-
-            // A delta, never a verdict: this test's own run-to-run spread is wide enough that a single-push
-            // difference is noise far more often than it is a change. Shown because an in-place update
-            // otherwise destroys the only record of what the previous push measured.
-            let delta = ''
-            if (prev && cur) {
-              const bits = []
-              if (prev.status !== cur.status) bits.push(`status **${prev.status} -> ${cur.status}**`)
-              // ORDERED AS THE REPORT'S OWN TABLE ORDERS THEM, most machine-independent first, with the
-              // rate LAST because it is the one number the report itself labels "this machine only".
-              // `share` was the omission worth fixing: it is the raw dimensionless shape the whole
-              // method rests on, it was already in the payload, and leaving it out meant the delta
-              // showed two derived numbers and skipped the measurement they come from.
-              if (typeof prev.ratio === 'number' && typeof cur.ratio === 'number') bits.push(`ratio ${prev.ratio} -> ${cur.ratio}`)
-              if (typeof prev.share === 'number' && typeof cur.share === 'number') bits.push(`share ${prev.share} -> ${cur.share}`)
-              if (typeof prev.rate === 'number' && typeof cur.rate === 'number' && prev.rate > 0) {
-                const pc = ((cur.rate - prev.rate) / prev.rate) * 100
-                bits.push(`rate ${prev.rate} -> ${cur.rate} (${pc >= 0 ? '+' : ''}${pc.toFixed(1)}%)`)
-              }
-              if (bits.length) delta = `\n\n_Since the previous push: ${bits.join(', ')}. One push of difference sits inside this test's measured spread - read it as movement, not as a result._`
-            }
-
-            // AN IN-PLACE UPDATE LOOKS DEAD. The comment body can be identical to last week's and there is
-            // nothing on it to say a run happened - no timestamp, no commit, no link - so a reader cannot tell
-            // a fresh verdict from a stale one, and the honest reaction to that is to stop trusting it.
-            // Stamping the head sha and the run link is what makes "updated in place" legible as "updated".
+            // THIS STEP IS WHERE THE COMMENT MECHANICS WERE MEASURED, AND THEY ARE NO LONGER HERE.
+            // .github/scripts/throughput-report-comment.js carries what is throughput's own - the
+            // markers and the delta - and configures .github/scripts/sticky-report-comment.js, which
+            // owns the five behaviours every report needs: paginated Bot-only lookup of our own last
+            // comment, reading its payload back, update-in-place versus post-fresh on a status change,
+            // retire-before-create, and the sha/run/time stamp. Both modules carry the reasoning and
+            // the measurements behind each, and both have self-tests the PR Checklist job runs.
             //
-            // THE SHA IS A LINK, AND THAT IS THE WHOLE ANSWER TO "IS THIS COMMENT CURRENT?". A static
-            // comment body cannot render the reader's local time - GitHub's sanitiser strips `<time>`,
-            // `<time-ago>` and `<local-time>` to their text, and the REST API does not expose a user's
-            // timezone - so a UTC string leaves every reader outside UTC doing arithmetic to work out
-            // whether this run is recent. The commit page does that work for them: it carries GitHub's
-            // own localised, relative timestamp. One click beats any string we can print here.
+            // They moved out of this YAML when the quarantine lane needed the identical behaviours.
+            // Copying them is precisely how the original defects reached two steps at once - the
+            // SpotBugs step below was written by copying this one, and inherited the missing
+            // pagination and the missing author filter with it. Inline JavaScript is also untestable,
+            // which is the second half of the argument.
             //
-            // POINTED AT THE COMMIT IN THIS PR, not at the bare commit. `/pull/N/commits/<sha>`
-            // resolves (checked) and keeps the PR framing - which commit of THIS review it is, with
-            // its neighbours - where `/commit/<sha>` drops the reader into the repository at large.
-            // The trade is that a commit force-pushed off the branch later stops resolving there while
-            // the bare form would still work; that is worth the framing, and the run link beside it
-            // survives either way.
-            //
-            // AND NOT AT THE CONVERSATION TIMELINE, WHICH WAS TRIED AND MEASURED RATHER THAN GUESSED.
-            // The obvious wish is to scroll the reader to this commit's row in the conversation they
-            // are already on, instead of navigating anywhere. It cannot be done, and the evidence is
-            // one `curl` of the rendered PR page:
-            //
-            //   * THERE IS NO PER-COMMIT ANCHOR. The only fragment targets GitHub emits on a PR
-            //     conversation are `#commits-pushed-<7char>`, `#issuecomment-<id>`,
-            //     `#pullrequestreview-<id>`, `#ref-pullrequest-<id>` and the issue itself. The commit
-            //     rows inside a push event carry no `id`, so the row this stamp names is not
-            //     addressable at all.
-            //   * `#commits-pushed-` IS A PUSH ANCHOR KEYED ON THE PUSH'S OLDEST COMMIT, NOT THE HEAD -
-            //     measured against a push whose contents were known exactly (three commits; the anchor
-            //     is the first of them).
-            //   * A SINGLE-COMMIT PUSH HAS NO ANCHOR EITHER, which is the half that kills the idea.
-            //     It renders as a lone commit row badged `octicon-git-commit` with NO `id`, where a
-            //     multi-commit push renders as `octicon-repo-push` and carries one. So the fragment
-            //     does not merely key on the wrong commit; for the one shape of push where head and
-            //     oldest COINCIDE, it does not exist. Parsing this PR's timeline items in DOM order and
-            //     reading which commits each contains shows it directly: two `repo-push` items holding
-            //     two commits each, one holding three, and a single commit sitting alone, anchorless,
-            //     between them.
-            //
-            // Grouping is also GitHub's rendering choice rather than a one-to-one record of pushes -
-            // consecutive pushes can be coalesced into one event - so even "the oldest commit of my
-            // push" is not a stable key for a push after the fact.
-            //
-            // Across this branch's 8 commits, the head sha was an anchor ZERO times. A stamp linking
-            // `#commits-pushed-${head}` would therefore never resolve; it would land the reader at the
-            // top of a long PR every time, while claiming to point at a commit. The failure is benign
-            // but it is not occasional, and a link that never does what it says is worse than one that
-            // always lands on the right commit - which is the one question this stamp exists to answer.
-            //
-            // Deriving the push's oldest commit instead was rejected on three counts: the issues
-            // timeline API returns `committed` events with NO push grouping, so it is not recoverable
-            // here; `github.event.before` exists on `synchronize` but not on `opened`; and the link
-            // would then target a different commit from the sha printed beside it - reintroducing, in
-            // a worse form, the two-abbreviations-of-one-commit confusion the seven-character change
-            // above exists to remove.
-            //
-            // SEVEN CHARACTERS, because GitHub abbreviates to seven everywhere else on this page. At
-            // nine the comment showed a second, different-looking abbreviation of the same commit, so
-            // a reader had to stop and check it was even the same one.
-            //
-            // The UTC timestamp stays, and stays plain: it is the one thing the links cannot do, which
-            // is show at a glance that a run happened without navigating anywhere.
-            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`
-            const headSha = context.payload.pull_request.head.sha
-            const commitUrl = `${context.serverUrl}/${owner}/${repo}/pull/${context.payload.pull_request.number}/commits/${headSha}`
-            const stamp = `\n\n<sub>Updated for [\`${headSha.slice(0, 7)}\`](${commitUrl}) · [run ${context.runId}](${runUrl})`
-              + ` · ${new Date().toISOString().replace('T', ' ').slice(0, 16)} UTC</sub>`
-
-            const payload = `${marker}\n${body}${delta}${stamp}`
-
-            // NORMALLY UPDATE IN PLACE: a PR with fifteen throughput comments is a PR where nobody reads the
-            // throughput comment.
-            //
-            // EXCEPT WHEN THE STATUS CHANGES. Editing a comment thirty scrolls up produces no notification and
-            // no visible change to anyone reading the PR top to bottom, so a run that went green to red used to
-            // announce itself by silently rewriting a comment nobody was looking at. On a status change a fresh
-            // comment is posted at the bottom, and the old one is retired: its marker renamed so later pushes
-            // stop targeting it, and a link forward so a reader who lands on the stale one is not stranded.
-            // Number-only movement still updates in place; only the VERDICT earns a new comment.
-            // A COMMENT WITH NO PAYLOAD MUST COUNT AS A CHANGE, not as "no change". Written `prev && cur && ...`
-            // this was falsy whenever prev was null - which is every comment posted before the payload existed,
-            // and such comments sit on open PRs right now. The first green-to-red after this merges would then
-            // have been edited in place silently: exactly the failure this change removes, on the run where it
-            // matters most. Unknown is not the same as unchanged.
-            const statusChanged = cur && (!prev || prev.status !== cur.status)
-            if (existing && !statusChanged) {
-              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: payload })
-            } else {
-              // RETIRE FIRST, THEN CREATE - the order is the whole safety property, and it was the
-              // wrong way round. There is no transaction across two API calls, so one of them can fail
-              // after the other succeeded, and the two orders fail very differently:
-              //
-              //   create then retire  -> the retire fails and TWO comments carry the live marker.
-              //                          `listComments` is oldest-first and `all.find` takes the first
-              //                          match, so every later run latches onto the STALE one and
-              //                          updates it forever, while the newer report sits orphaned.
-              //                          Silent, self-perpetuating, and worst on the status change it
-              //                          exists to announce.
-              //   retire then create  -> the create fails and NO comment carries the live marker. The
-              //                          next run simply posts a fresh one. Degraded, obvious, and it
-              //                          recovers by itself.
-              //
-              // The forward link costs a third write, so it is best-effort and last: by the time it
-              // runs, the marker state is already correct whether or not it succeeds. Losing it strands
-              // a reader on a comment that still says, in words, that it was superseded.
-              //
-              // The note is passed WHOLE rather than as a noun slotted into a fixed "Superseded by X"
-              // sentence, because the two writes cannot honestly promise the same thing. The first runs
-              // BEFORE the create, and the create can fail - `continue-on-error` on this step swallows
-              // it by design - so the report it points at may never exist. It must therefore not name a
-              // PLACE: a retired comment reading "further down this conversation" when nothing was
-              // posted sends a reader looking for a report that is not there, and does so permanently,
-              // because the retired marker no longer matches the lookup above and no later run ever
-              // revisits this comment to correct it. Only the second note, written once `created`
-              // demonstrably exists, may point at it.
-              const retiredBody = note => `${existing.body
-                .replace(marker, '<!-- pc-throughput-report (superseded) -->')
-                .replace(/^### /m, `### [superseded - status changed to ${String(cur?.status ?? 'unknown').replace(/[^a-zA-Z-]/g, '')}] `)
-                }\n\n<sub>${note}</sub>`
-              if (existing) {
-                await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id,
-                  body: retiredBody('Superseded - a fresh report should follow for this push.') })
-              }
-              const created = await github.rest.issues.createComment({ owner, repo, issue_number, body: payload })
-              if (existing) {
-                try {
-                  await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id,
-                    body: retiredBody(`Superseded by [a newer report](${created.data.html_url}).`) })
-                } catch (e) {
-                  core.warning(`could not link the retired throughput comment forward: ${e.message}`)
-                }
-              }
-            }
+            // `require` of a repo file works because github-script runs with the workspace checked
+            // out; .github/workflows/pr-checklist.yml loads its gate modules the same way.
+            const report = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/throughput-report-comment.js`)
+            await report.post({ github, context, core, body })
 
       # Exit 1 is a regression. Exit 2 is the check being UNABLE to measure, which this repo treats as
       # never-a-pass ("a skip is not a pass") - so it also fails, with its own message, because a lane
@@ -473,6 +314,68 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           files: '**/target/site/jacoco/jacoco.xml,**/target/site/jacoco-it/jacoco.xml'
+          flags: ${{ matrix.suite }}
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      # TEST RESULTS, NOT COVERAGE - a separate Codecov product and a separate upload. It ingests the
+      # JUnit XML surefire and failsafe already write, and gives failure RATES and flake identification
+      # over time.
+      #
+      # WHY THIS REPO WANTS IT, specifically. Flake data here is currently reconstructed BY HAND from CI
+      # logs that expire: largeNumberOfInstances's one-in-ten rate came from a bespoke overnight script
+      # on an idle box, three sightings were transcribed into docs/inflight/ before their logs aged out,
+      # and docs/quarantined-tests.md demands "a recorded sighting ledger" that a human maintains. This
+      # accumulates the same thing automatically and durably.
+      #
+      # ALL FOUR SUITES ON PURPOSE. Chaos and performance are the noisiest, and that is exactly where the
+      # flakes live - excluding them would omit the data this exists for.
+      #
+      # `!cancelled()` rather than `always()`: a FAILED test run is the interesting upload, so this must
+      # survive the step before it failing; a cancelled job has nothing worth sending.
+      #
+      # IF THIS GOES QUIET, IT WILL DO SO SILENTLY. The coverage upload above reported success for four
+      # months while Codecov could not read the repository at all - the action authenticates with a
+      # token, which needs no repo access, so ingest "worked" while everything downstream did nothing.
+      # Judge this by whether rates appear in the dashboard, never by a green step.
+      # The uploader's CLI does NOT expand `**` itself, and nothing passes these through a shell, so
+      # a glob handed to `files:` arrives literally and matches nothing. The first run proved it:
+      # `Some files were not found --- {"not_found_files": ["**/target/surefire-reports/TEST-*.xml", ...]}`
+      # followed by `Found 55 test_results files` - the config was inert and the CLI had silently
+      # fallen back to its own tree-wide `*test*.xml` search, which swept up 18 logback CONFIG files
+      # (logback-test.xml, logback-integration-test.xml, logback-temp-test.xml) alongside 39 genuine
+      # reports. The step was green throughout. Expanding here is what makes `files:` mean anything.
+      - name: Collect test report files for Codecov
+        if: ${{ !cancelled() }}
+        id: testreports
+        run: |
+          files=$(find . -type f \
+            \( -path '*/target/surefire-reports/TEST-*.xml' \
+            -o -path '*/target/failsafe-reports/TEST-*.xml' \) | paste -sd, -)
+          # HEREDOC DELIMITER, not `echo`. `find` output is filenames, and a filename may
+          # legally contain a newline - which in the plain form injects an extra step-output
+          # line. GitHub documents this delimiter form for exactly that reason.
+          {
+            echo "files<<__CE_FILES__"
+            printf '%s\n' "$files"
+            echo "__CE_FILES__"
+          } >> "$GITHUB_OUTPUT"
+          if [ -z "$files" ]; then
+            echo "::warning::no surefire/failsafe reports found - skipping the test-results upload"
+          else
+            echo "found $(printf '%s' "$files" | tr ',' '\n' | wc -l) report file(s) to upload"
+          fi
+
+      - name: Upload test results to Codecov
+        # Skipped when the collector found nothing, rather than letting the CLI fall back to its
+        # tree-wide search - an empty `files:` is exactly what produced the junk sweep above.
+        if: ${{ !cancelled() && steps.testreports.outputs.files != '' }}
+        uses: codecov/codecov-action@v5
+        with:
+          report_type: test_results
+          files: ${{ steps.testreports.outputs.files }}
+          # The second lock on the junk sweep: even if `files` is somehow unusable, never let the
+          # CLI go looking for `*test*.xml` on its own again.
+          disable_search: true
           flags: ${{ matrix.suite }}
           token: ${{ secrets.CODECOV_TOKEN }}
 
@@ -885,32 +788,37 @@ jobs:
                 body = `## :warning: SpotBugs Report\n\n**${totalBugs} bug(s) found**${baselineNote}. See the annotations on the Files Changed tab for details.\n`;
               }
             }
-            // PAGINATE, AND ONLY TRUST OUR OWN COMMENTS - the same two-part fix the throughput step's
-            // lookup carries a few hundred lines above. Both halves are pre-existing on master and not
-            // introduced by this PR; they are fixed here because it is the same defect class in the same
-            // file, and a second branch to change two lines costs more than it saves.
+            // THE LOOKUP IS SHARED, and this step is half the reason the module exists. It carried
+            // its own copy of the throughput step's lookup - because it was written by copying it -
+            // and inherited both of that copy's defects with it. The module's header owns the
+            // reasoning for each; the summary is that `listComments` returns 30 per page oldest-first
+            // (so the bug is latent until a sticky comment is born on a busy PR, then duplicates on
+            // EVERY push), and that matching any comment containing "SpotBugs Report" would overwrite
+            // a HUMAN who wrote about SpotBugs before the bot first posted.
             //
-            // WHY THE PAGINATION BUG IS LATENT RATHER THAN VISIBLE, which is the part worth writing down:
-            // the issue-comments API returns 30 per page OLDEST FIRST, so a sticky comment born EARLY
-            // sits on page one forever and keeps being found. It only breaks when the comment is born
-            // LATE - created once the PR already has 30+ comments, it lands on page two, `find` never
-            // sees it again, and every later push takes the create branch. So it does not miss once and
-            // recover: it duplicates on EVERY push, and each duplicate is itself on page two. The busiest
-            // PRs in this repo today are 13, 11, 11, 10 and 9 comments, all comfortably above the fold,
-            // which is exactly why nobody has met it.
-            //
-            // The author filter is the other half. `includes('SpotBugs Report')` matches ANY comment
-            // carrying that string - including a human quoting the report - and `find` takes the oldest
-            // match, so a person who wrote about SpotBugs before the bot first posted would have their
-            // comment silently OVERWRITTEN by the next run. Restricting to a Bot author is what makes
-            // this lookup mean "the comment this workflow wrote" rather than "any comment on the topic".
-            const all = await github.paginate(github.rest.issues.listComments,
-              { owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, per_page: 100 });
-            const existing = all.find(c => c.body.includes('SpotBugs Report') && c.user?.type === 'Bot');
+            // The marker stays the bare string rather than becoming an HTML comment: changing it
+            // would orphan every SpotBugs comment already live on an open PR, leaving the stale one
+            // beside a fresh one - which is the failure this whole PR is about.
+            const sticky = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/sticky-report-comment.js`)
+            const { owner, repo } = context.repo
+            const issue_number = context.issue.number
+            const existing = await sticky.findExisting({ github, owner, repo, issue_number, marker: 'SpotBugs Report' })
+
+            // STAMPED FOR THE SAME REASON THE THROUGHPUT COMMENT IS. This one updates in place too, so
+            // "no bugs found" can sit unchanged for weeks with nothing on it to say a run happened.
+            // It does NOT get the fresh-comment-on-status-change behaviour: that is a judgement about
+            // whether a clean-to-dirty SpotBugs transition deserves a new comment, and nobody has made
+            // it. Adding the stamp needs no such decision; adding the posting rule does.
+            const stamped = body + sticky.stampFor({
+              serverUrl: context.serverUrl, owner, repo,
+              prNumber: context.payload.pull_request.number,
+              headSha: context.payload.pull_request.head.sha,
+              runId: context.runId,
+            })
             if (existing) {
-              await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body });
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: stamped });
             } else {
-              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
+              await github.rest.issues.createComment({ owner, repo, issue_number, body: stamped });
             }
 
   # Dependency vulnerability scanning - GitHub's own dependency review

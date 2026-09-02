@@ -185,3 +185,110 @@ export function formatCache(status, known) {
     // touches it - and a cache that LOOKS fresh is worse than one that admits it is old.
     return out.join('\n')
 }
+
+// --- Codecov. What the recorded test history looks like when a human reads it. -------------------
+//
+// Every one of these renders the CACHED marker and the TRUNCATED marker when they apply. That is not
+// decoration: a stale answer and a bounded answer are both answers a reader would act on differently,
+// and bin/lib/codecov.mjs's header explains why a silently-capped list is the failure mode worth
+// spending two lines on.
+
+// `2026-09-02 03:24` - minutes, in UTC as the API returns it. The date is here because ordering
+// should be readable off the line itself: a reader holding two shas otherwise has to go and look up
+// which came first, which is exactly the cross-reference this whole command exists to remove.
+const stamp = (iso) => (iso ? String(iso).replace('T', ' ').slice(0, 16) : '                ')
+
+const cacheNote = (v) => (v.cached ? '  (cached - add --fresh to refetch)' : '')
+const truncNote = (v) => (v.truncated
+    ? '\n\nWARNING: hit the page bound - this is NOT the whole history, so an absence here proves nothing.'
+    : '')
+
+export function formatCoverage(v) {
+    const t = v.totals
+    const out = [`coverage ${t.coverage}% - ${t.hits}/${t.lines} lines across ${plural(t.files ?? 0, 'file')}`]
+    if (t.misses !== undefined) out.push(`  ${t.misses} missed, ${t.partials} partial, ${t.branches} branches`)
+    if (v.flagsFailed) {
+        out.push(`\nPER-FLAG COVERAGE UNAVAILABLE: ${v.flagsFailed}`)
+        out.push('That is a failed request, NOT a repository with no flags - the two used to print alike.')
+    }
+    if (v.flags.length) {
+        out.push('\nper flag, ON THE DEFAULT BRANCH:')
+        for (const f of v.flags) out.push(`  ${f.flag_name.padEnd(26)} ${Math.round((f.coverage ?? 0) * 100) / 100}%`)
+        out.push('\nA flag at 0% here is expected, not a broken upload: only the push-only `build` job')
+        out.push('runs on master, and it carries `default`. The per-suite flags are pull_request-only.')
+    }
+    return out.join('\n')
+}
+
+export function formatTimeline(v) {
+    if (v.matches.length === 0) {
+        return `no test matching /${v.query}/ in ${plural(v.corpus, 'recorded test')}.\n`
+            + 'Nothing is a result, but a WEAK one: Codecov only knows tests whose suite has uploaded\n'
+            + 'results since that upload was turned on. A test that never ran here has no history.'
+    }
+    if (v.matches.length > 6) {
+        const out = [`${plural(v.matches.length, 'test')} match /${v.query}/ - too many to be one question. Narrow it:\n`]
+        for (const m of v.matches.slice(0, 25)) out.push(`  ${m.name}`)
+        if (v.matches.length > 25) out.push(`  ... and ${v.matches.length - 25} more`)
+        return out.join('\n')
+    }
+    const out = []
+    for (const m of v.matches) {
+        out.push(`${m.name}${cacheNote(v)}`)
+        for (const o of m.observations) {
+            const secs = typeof o.seconds === 'number' ? `${o.seconds.toFixed(1)}s`.padStart(8) : '       -'
+            const mark = o.outcome === 'pass' ? ' ' : '!'
+            out.push(`  ${mark} ${String(o.outcome).padEnd(8)} ${secs}  ${stamp(o.at)}  ${o.sha}  ${o.branch ?? ''}`)
+            if (o.failure) out.push(`      ${String(o.failure).split('\n')[0].slice(0, 100)}`)
+        }
+        const outcomes = new Set(m.observations.map((o) => o.outcome))
+        out.push(outcomes.size > 1
+            ? '  -> outcome CHANGED across these commits. Which commit it changed AT is above;'
+            + '\n     whether that is a flake or a regression is not something this can tell you.'
+            : `  -> ${plural(m.observations.length, 'run')}, all ${[...outcomes][0]}.`)
+        out.push('')
+    }
+    return out.join('\n').trimEnd() + truncNote(v)
+}
+
+export function formatFlakes(v) {
+    if (v.candidates.length === 0) {
+        // truncNote ON THE NEGATIVE PATH TOO. It was only appended to the non-empty return, so a
+        // walk that hit the page bound and happened to find no varying outcome printed a clean
+        // negative with no hint that older history was never read - the one result someone might
+        // act on by REMOVING a quarantine.
+        return `no test has been recorded with more than one outcome.${cacheNote(v)}\n`
+            + 'That is not "no flakes": it is no flake VISIBLE in the uploaded history, which starts\n'
+            + 'when the test-results upload was turned on and covers only suites that upload.'
+            + truncNote(v)
+    }
+    const out = [`${plural(v.candidates.length, 'test')} recorded with more than one outcome:${cacheNote(v)}\n`]
+    for (const c of v.candidates) {
+        out.push(`  ${c.name}`)
+        const span = [c.observations[c.observations.length - 1], c.observations[0]].map((o) => stamp(o.at))
+        // THREE MARKERS, NOT TWO, and the BRANCH beside each. A skip rendered as `X` was
+        // indistinguishable from a failure, so the line showed more markers than the run count it
+        // sat under and overstated the evidence. And the default query spans every branch, so
+        // printing only outcome+sha made one master pass plus one PR-branch failure look exactly
+        // like a master-state flake - which is the distinction docs/quarantined-tests.md turns on.
+        const mark = (o) => (o.outcome === 'pass' ? '.' : o.outcome === 'skip' ? 's' : 'X')
+        out.push(`      ${c.failures} non-pass of ${plural(c.runs, 'run')}, ${span[0]} to ${span[1]}`
+            + `\n      ${c.observations.map((o) => `${mark(o)}${o.sha}@${o.branch ?? '?'}`).join(' ')}`
+            + '\n      . pass · X non-pass · s skipped (skips are excluded from the run count above)')
+    }
+    out.push('\nCANDIDATES, not a verdict. The same evidence fits a real regression, which is why')
+    out.push('docs/quarantined-tests.md will not quarantine on a rate. Next: inflight codecov test <name>')
+    return out.join('\n') + truncNote(v)
+}
+
+export function formatSlowest(v) {
+    const out = [`slowest of ${plural(v.tests, 'recorded test')}`
+        + ` (${Math.round(v.totalSeconds)}s total):${cacheNote(v)}\n`]
+    for (const r of v.rows) {
+        out.push(`  ${`${r.seconds.toFixed(1)}s`.padStart(8)}  ${r.name}`
+            + (r.flags.length ? `  [${r.flags.join(',')}]` : ''))
+    }
+    out.push('\nWall-clock on a shared runner, NOT a benchmark - see bin/lib/codecov.mjs. Never feed')
+    out.push('this to a throughput comparison; that is what bin/check-throughput-regression.mjs is for.')
+    return out.join('\n') + truncNote(v)
+}

@@ -170,6 +170,9 @@ const report = (ok, label) => {
 }
 
 /** Run a front door (real or mutant) as a subprocess - the CLI contract is a process-level fact. */
+/** A command that RAN, whatever it found - exit 0. `could not run` is 2. */
+const r0 = (r) => r.code === 0
+
 function invoke(binDir, args, opts = {}) {
     const r = spawnSync(process.execPath, [join(binDir, 'inflight.mjs'), ...args], { encoding: 'utf8', ...opts })
     return { code: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}` }
@@ -819,6 +822,166 @@ const CHECKS = [
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'perf.mjs'),
             '    e.n += 1', '    e.n = 1'),
+    },
+    {
+        id: 'a-flake-candidate-needs-two-different-outcomes',
+        why: 'a test that failed twice is not flaky, and calling it flaky is how a real regression gets quarantined',
+        run: async (binDir) => {
+            const cc = await import(pathToFileURL(join(binDir, 'lib', 'codecov.mjs')).href)
+            // Three tests, one of each shape the API can hand back. Fixture rather than network:
+            // an analysis only reachable through a live API is one nothing can check offline.
+            const rows = [
+                { computed_name: 'A::steady', commit_sha: 'aaa1111', outcome: 'pass', duration_seconds: 1, timestamp: '2026-09-01T01:00:00Z' },
+                { computed_name: 'A::steady', commit_sha: 'bbb2222', outcome: 'pass', duration_seconds: 1, timestamp: '2026-09-02T01:00:00Z' },
+                { computed_name: 'B::broke', commit_sha: 'aaa1111', outcome: 'pass', duration_seconds: 1, timestamp: '2026-09-01T01:00:00Z' },
+                { computed_name: 'B::broke', commit_sha: 'bbb2222', outcome: 'failure', duration_seconds: 1, timestamp: '2026-09-02T01:00:00Z' },
+                { computed_name: 'C::alwaysRed', commit_sha: 'aaa1111', outcome: 'failure', duration_seconds: 1, timestamp: '2026-09-01T01:00:00Z' },
+                { computed_name: 'C::alwaysRed', commit_sha: 'bbb2222', outcome: 'failure', duration_seconds: 1, timestamp: '2026-09-02T01:00:00Z' },
+            ]
+            const names = cc.flakesFrom(rows).map((c) => c.name)
+            // Only B changed outcome. A never failed; C never passed, so it is simply broken.
+            return names.length === 1 && names[0] === 'B::broke'
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'codecov.mjs'),
+            '        if (outcomes.size > 1) {', '        if (outcomes.size >= 1) {'),
+    },
+    {
+        id: 'a-timeline-is-newest-first-so-the-change-point-is-readable',
+        why: 'the whole question is WHICH commit it changed at, and an unordered list cannot answer it',
+        run: async (binDir) => {
+            const cc = await import(pathToFileURL(join(binDir, 'lib', 'codecov.mjs')).href)
+            // Deliberately fed oldest-first, so passing proves the sort ran rather than the input order.
+            const rows = [
+                { computed_name: 'X::t', commit_sha: 'old0000', outcome: 'pass', timestamp: '2026-09-01T01:00:00Z' },
+                { computed_name: 'X::t', commit_sha: 'mid0000', outcome: 'pass', timestamp: '2026-09-02T01:00:00Z' },
+                { computed_name: 'X::t', commit_sha: 'new0000', outcome: 'failure', timestamp: '2026-09-03T01:00:00Z' },
+            ]
+            const obs = cc.timelineFrom(rows, 'x::t').matches[0].observations
+            return obs[0].sha === 'new0000' && obs[2].sha === 'old0000'
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'codecov.mjs'),
+            'for (const obs of m.values()) obs.sort((a, b) => String(b.at).localeCompare(String(a.at)))',
+            'for (const obs of m.values()) obs.sort((a, b) => String(a.at).localeCompare(String(b.at)))'),
+    },
+    {
+        id: 'a-search-that-matched-nothing-is-not-a-search-that-failed',
+        why: 'this repo has been bitten repeatedly by a false negative wearing the authority of a completed check',
+        run: async (binDir) => {
+            const cc = await import(pathToFileURL(join(binDir, 'lib', 'codecov.mjs')).href)
+            const t = cc.timelineFrom([{ computed_name: 'Only::one', commit_sha: 'a', outcome: 'pass', timestamp: '2026-09-01T01:00:00Z' }], 'nothingmatchesthis')
+            // An empty match list, and a corpus size proving there WAS something to search.
+            return t.matches.length === 0 && t.corpus === 1
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'codecov.mjs'),
+            '    const hits = [...all.entries()].filter(([name]) => name.toLowerCase().includes(q))',
+            '    const hits = [...all.entries()]'),
+    },
+    {
+        id: 'codecov-is-reachable-from-the-front-door',
+        why: 'bin/inflight.mjs exists because a tool nobody can name is indistinguishable from one that does not exist',
+        run: async (binDir) => {
+            const names = await registeredNames(binDir)
+            return ['codecov', 'codecov test', 'codecov flaky', 'codecov slow'].every((n) => names.includes(n))
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+            "        name: 'codecov',", "        name: 'codecovv',"),
+    },
+    {
+        id: 'a-flag-value-is-not-the-search-term',
+        why: 'the flag VALUE does not start with -- either, so it was taken as the query - and the fix for THAT dropped the query whenever the flag was absent',
+        run: async (binDir) => {
+            // PURE, AND NOT THROUGH THE CLI. The first cut of this check ran `inflight codecov
+            // test` as a subprocess, which reaches api.codecov.io - in a file whose header says
+            // "Network: none" precisely so a rate limit or an outage cannot flake CI. It also only
+            // ever tried the --branch form, which is exactly why the sentinel bug below shipped.
+            const { cvOpts } = await front(binDir)
+            const bare = cvOpts(['ZZQuery'])
+            const first = cvOpts(['--branch', 'refs/heads/nope', 'ZZQuery'])
+            const last = cvOpts(['ZZQuery', '--branch', 'refs/heads/nope'])
+            const numeric = cvOpts(['3'])
+            return (
+                // -1 is a sentinel, not an index: with no flag, nothing may be excluded.
+                bare.rest[0] === 'ZZQuery' && bare.branch === undefined
+                && numeric.rest[0] === '3'
+                // the flag's VALUE is never the query, whichever side it sits on
+                && first.rest[0] === 'ZZQuery' && first.branch === 'refs/heads/nope'
+                && last.rest[0] === 'ZZQuery' && last.branch === 'refs/heads/nope'
+            )
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+            '    const branchValueAt = branchAt >= 0 ? branchAt + 1 : -1',
+            '    const branchValueAt = branchAt + 1'),
+    },
+    {
+        id: 'the-latest-timed-observation-wins-not-the-first-or-the-max',
+        why: 'slow answers "what owns the wall-clock NOW", so an old slow run or a recent untimed one must not decide it',
+        run: async (binDir) => {
+            const cc = await import(pathToFileURL(join(binDir, 'lib', 'codecov.mjs')).href)
+            // Newest observation carries NO duration; the next one down does. The answer must be
+            // 5s (the latest TIMED one), not 99s (the max) and not undefined (the latest).
+            const rows = [
+                { computed_name: 'T::x', commit_sha: 'c3', outcome: 'pass', timestamp: '2026-09-03T00:00:00Z' },
+                { computed_name: 'T::x', commit_sha: 'c2', outcome: 'pass', duration_seconds: 5, timestamp: '2026-09-02T00:00:00Z' },
+                { computed_name: 'T::x', commit_sha: 'c1', outcome: 'pass', duration_seconds: 99, timestamp: '2026-09-01T00:00:00Z' },
+            ]
+            const r = cc.slowestFrom(rows, 10)
+            return r.rows.length === 1 && r.rows[0].seconds === 5 && r.rows[0].sha === 'c2'
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'codecov.mjs'),
+            "        const latest = observations.find((o) => typeof o.seconds === 'number')",
+            '        const latest = observations[0]'),
+    },
+    {
+        id: 'a-skip-is-not-a-flake',
+        why: 'an assumption-skipped test alternating skip/pass is not flaky, and counting skips as failures also skewed the sort',
+        run: async (binDir) => {
+            const cc = await import(pathToFileURL(join(binDir, 'lib', 'codecov.mjs')).href)
+            const rows = [
+                { computed_name: 'S::skips', commit_sha: 'a', outcome: 'skip', timestamp: '2026-09-01T00:00:00Z' },
+                { computed_name: 'S::skips', commit_sha: 'b', outcome: 'pass', timestamp: '2026-09-02T00:00:00Z' },
+                { computed_name: 'R::real', commit_sha: 'a', outcome: 'pass', timestamp: '2026-09-01T00:00:00Z' },
+                { computed_name: 'R::real', commit_sha: 'b', outcome: 'failure', timestamp: '2026-09-02T00:00:00Z' },
+            ]
+            const names = cc.flakesFrom(rows).map((c) => c.name)
+            return names.length === 1 && names[0] === 'R::real'
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'codecov.mjs'),
+            "        const ran = observations.filter((o) => o.outcome !== 'skip')",
+            '        const ran = observations'),
+    },
+    {
+        id: 'an-empty-unfiltered-corpus-is-a-failure-not-a-finding',
+        why: 'a transient 200 with no rows made `flaky` exit 0 on a clean negative, in the one situation someone uses it to REMOVE a quarantine',
+        run: async (binDir) => {
+            const src = readFileSync(join(binDir, 'lib', 'codecov.mjs'), 'utf8')
+            // The guard has to be scoped to the UNFILTERED query: a branch-scoped miss is a real
+            // empty answer (that branch never uploaded), so guarding it too would break `--branch`.
+            return /results\.length === 0 && !branch/.test(src)
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'codecov.mjs'),
+            '    if (results.length === 0 && !branch) {',
+            '    if (false) {'),
+    },
+    {
+        id: 'a-bad-option-set-is-refused-not-answered',
+        why: '--branch with no value silently queried every branch, and --branch --fresh queried a branch named --fresh - both answered convincingly',
+        run: async (binDir) => {
+            const { cvOpts } = await front(binDir)
+            return (
+                cvOpts(['--branch']).error !== undefined
+                && cvOpts(['--branch', '--fresh', 'X']).error !== undefined
+                && cvOpts(['--nope']).error !== undefined
+                // and a VALID set still parses, or the guard has eaten the feature
+                && cvOpts(['Name', '--branch', 'master', '--fresh']).error === undefined
+                && cvOpts(['Name', '--branch', 'master']).branch === 'master'
+                // a REPEATED flag is ambiguous, not first-wins
+                && cvOpts(['--branch', 'a', '--branch', 'b']).error !== undefined
+                && cvOpts(['--fresh', '--fresh']).error !== undefined
+            )
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+            "    if (unknown.length) return { error: `unknown option(s): ${unknown.join(', ')} - known: --fresh, --branch <ref>` }",
+            '    if (false) return { error: 0 }'),
     },
     {
         id: 'a-narrow-fetch-cannot-look-fresh',
