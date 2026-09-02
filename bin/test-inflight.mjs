@@ -817,6 +817,33 @@ const CHECKS = [
         mutate: (binDir) => patch(join(binDir, 'lib', 'perf.mjs'),
             '    e.n += 1', '    e.n = 1'),
     },
+    {
+        id: 'the-pr-create-hook-recognises-a-command-behind-a-cd',
+        why: 'a prefix matcher missed every command shape it existed for, and the shell suite cannot prove recognition without hitting the network',
+        // The decision is tested here rather than in bin/test-check-agent-hooks.sh because deciding
+        // and acting are separate questions and only the first is cheap to assert. Once the hook
+        // calls cachePr, a test either reaches GitHub and rewrites the real cache, or uses a number
+        // that cannot exist - at which point "not recognised" and "recognised but the refresh
+        // failed" are both silence. That is the vacuous shape this suite refuses.
+        run: async (binDir) => {
+            const hook = await import(pathToFileURL(
+                join(binDir, '..', '.claude', 'hooks', 'after-pr-create-refresh-cache.mjs')).href)
+            const p = (command, stdout) => ({ tool_input: { command }, tool_response: { stdout } })
+            const url = 'https://github.com/astubbs/parallel-consumer/pull/412'
+
+            // The case the shell suite could only assert as "did not blow up".
+            if (hook.prNumberFrom(p('cd /w && gh pr create --title x', url)) !== 412) return false
+            if (hook.prNumberFrom(p('gh pr create', url)) !== 412) return false
+            // A create that made nothing, a dry run, and an unrelated command are all null.
+            if (hook.prNumberFrom(p('gh pr create', 'a pull request already exists')) !== null) return false
+            if (hook.prNumberFrom(p('gh pr create --dry-run', url)) !== null) return false
+            if (hook.prNumberFrom(p('git status', 'clean')) !== null) return false
+            return hook.prNumberFrom({}) === null
+        },
+        mutate: (binDir) => patch(join(binDir, '..', '.claude', 'hooks', 'after-pr-create-refresh-cache.mjs'),
+            "    if (!/\\bgh\\b.*\\bpr\\b.*\\bcreate\\b/.test(command)) return null",
+            "    if (!command.startsWith('gh pr create')) return null"),
+    },
 ]
 
 console.log('bin/test-inflight.mjs - front door and prior-art library self-test\n')
@@ -830,8 +857,14 @@ for (const c of CHECKS) {
 
 console.log('\nNEGATIVE CONTROLS - each mutant must make its own check go RED:')
 for (const c of CHECKS) {
-    const tmp = mkdtempSync(join(tmpdir(), 'inflight-selftest-'))
+    // THE MUTANT MIRRORS THE REPO LAYOUT, not just bin/. A hook now imports the library, so the
+    // unit under test spans `.claude/hooks/` too - and a flat copy of bin/ left the hook's own
+    // mutation with no file to patch. `binDir` still points at the bin directory, so every check
+    // that reaches for `lib/` or `inflight.mjs` is unchanged.
+    const root = mkdtempSync(join(tmpdir(), 'inflight-selftest-'))
+    const tmp = join(root, 'bin')
     cpSync(BIN, tmp, { recursive: true })
+    cpSync(join(BIN, '..', '.claude', 'hooks'), join(root, '.claude', 'hooks'), { recursive: true })
     try {
         c.mutate(tmp)
     } catch (e) {
