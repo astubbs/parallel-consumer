@@ -249,7 +249,7 @@ iterable was: [PC-DEADLINE-HEADROOM test=mockedTest() ... outcome=FAILED,
                PC-DEADLINE-HEADROOM test=mockedTest() ... outcome=PASSED]
 ```
 
-Five local runs: the full core suite passed once (646 tests, the baseline) and failed once (two
+Five local runs: the full core suite passed once (the baseline) and failed once (two
 cases); three classes together failed with three; the class alone failed with two; the control arm failed with three. **The shape is a capture that
 holds another test method's line** - the FAILED line belongs to a different mocked test than the one
 asserting - so the first suspect is an appender that outlives its method, or two methods sharing the

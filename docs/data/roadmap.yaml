@@ -185,7 +185,7 @@ entries:
     serves: [reliability]
     horizon: next-0x
     blocks_1_0: false
-    stage: in-progress
+    stage: poc
     stage_delivery: draft
     stage_detail: >-
       Implemented on astubbs#410 to the plan's Definition of Done: PC builds its own transactional producer

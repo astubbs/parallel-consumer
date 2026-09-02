@@ -2,7 +2,6 @@
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: crash -->
-<!-- inflight-state: open - the implementation has landed; what remains is reconciliation with two PRs that were open beside it -->
 
 
 <!-- post-merge: checked -->

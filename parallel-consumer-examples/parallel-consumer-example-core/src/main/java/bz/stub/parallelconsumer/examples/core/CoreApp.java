@@ -227,7 +227,7 @@ public class CoreApp {
         // tag::batching[]
         ParallelStreamProcessor.createEosStreamProcessor(ParallelConsumerOptions.<String, String>builder()
                 .consumer(getKafkaConsumer())
-                .producer(getKafkaProducer())
+                .producerConfig(getProducerConfig())
                 .maxConcurrency(100)
                 .batchSize(5) // <1>
                 .build());
