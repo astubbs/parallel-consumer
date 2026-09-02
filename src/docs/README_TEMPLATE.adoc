@@ -516,7 +516,7 @@ include::{project_root}/parallel-consumer-examples/parallel-consumer-example-cor
 This ensures maximum concurrency, while ensuring messages are processed and committed in `KEY` order, making sure no offset is committed unless all offsets before it in it's partition, are completed also.
 <3> The maximum number of concurrent processing operations to be performing at any given time.
 Also, because the library coordinates offsets, `enable.auto.commit` must be disabled in your consumer.
-<4> Producer configuration, only required if using the `produce` flows: PC builds the producer from it, and rebuilds it if the broker invalidates it - see <<producer-recovery>>.
+<4> Producer configuration, only required if using the `produce` flows: PC builds the producer from it through the factory on the next line (the default is `new KafkaProducer<>(config)`; override it to wrap or instrument the producer), and rebuilds it if the broker invalidates it - see <<producer-recovery>>.
 Handing PC a finished `Producer` instance still works, deprecated.
 <5> Subscribe to your topics
 

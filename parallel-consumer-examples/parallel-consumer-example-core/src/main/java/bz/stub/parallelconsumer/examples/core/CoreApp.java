@@ -7,6 +7,7 @@ package bz.stub.parallelconsumer.examples.core;
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelStreamProcessor;
+import bz.stub.parallelconsumer.ProducerFactory;
 import bz.stub.parallelconsumer.RecordContext;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
@@ -57,6 +58,15 @@ public class CoreApp {
         return new HashMap<>();
     }
 
+    /**
+     * How PC turns that configuration into a producer. The default is {@code new KafkaProducer<>(config)}; override it
+     * to wrap or instrument the producer - or, as the test for this example does, to substitute a mock - keeping
+     * every key of the configuration it is given.
+     */
+    ProducerFactory<String, String> getProducerFactory() {
+        return ProducerFactory.kafkaProducer();
+    }
+
     ParallelStreamProcessor<String, String> parallelConsumer;
 
     @SuppressWarnings("UnqualifiedFieldAccess")
@@ -86,6 +96,7 @@ public class CoreApp {
                 .maxConcurrency(1000) // <3>
                 .consumer(kafkaConsumer)
                 .producerConfig(getProducerConfig()) // <4>
+                .producerFactory(getProducerFactory())
                 .build();
 
         ParallelStreamProcessor<String, String> eosStreamProcessor =
