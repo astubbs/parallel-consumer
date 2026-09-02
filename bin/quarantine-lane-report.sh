@@ -26,6 +26,17 @@
 #      outcome CHANGES. The mechanics under that are .github/scripts/sticky-report-comment.js,
 #      shared with the throughput report.
 #
+#   4. AN EMPTY REGISTRY IS A REPORT, NOT A SILENCE. The run that empties the lane is the one that
+#      must RETRACT the previous push's "delete the annotation and the registry entry" comment, and
+#      this script used to exit before writing anything for it. The incident, and the class:
+#      docs/solutions/workflow-issues/the-run-that-had-to-retract-was-the-one-gated-silent-2026-09-02.md.
+#      It now writes a distinct LANE-EMPTIED report whose payload carries no outcomes, so the reader
+#      next door renders every remaining row as `left the lane` and retracts. The empty path
+#      deliberately stops before the lane-leak self-check: the workflow does not run maven at all
+#      when the registry is empty (and the registry gate has already proved no annotation survives
+#      it), so there are no reports to check and a check over nothing would certify more than it
+#      measured.
+#
 #      WHY THE POSTING LEFT THIS SCRIPT. It used to upsert the comment itself with `gh api`, and that
 #      copy had two of the three defects astubbs/parallel-consumer#407 fixed for the throughput
 #      comment: no author filter on the lookup, and - worse - a `gh api` failure under `set -e` took
@@ -57,6 +68,14 @@ source "${BASH_SOURCE[0]%/*}/lib/quarantine-common.sh" 2>/dev/null || source bin
 # on either side is caught by that module's end-to-end self-test rather than in production, but
 # `grep -rn quarantine-lane-data` is still the list to change.
 DATA_MARKER="quarantine-lane-data"
+# The `status` an EMPTY lane reports. A word, not the empty string: `statusChanged` in
+# .github/scripts/sticky-report-comment.js treats an unusable status as "unknown" rather than as
+# "unchanged", and "" is exactly the shape a truncated payload has - so a sentinel that cannot be
+# confused with damage is worth the four characters. A non-empty run's digest is a `;`-joined list
+# of `Class.method=OUTCOME`, so it can never collide with this. Read in
+# .github/scripts/quarantine-report-comment.js; `grep -rn EMPTY_STATUS` is the list to change, and
+# that module's end-to-end self-test is what fails if the two sides drift.
+EMPTY_STATUS="empty"
 REPORT_FILE="${QUARANTINE_REPORT_FILE:-target/quarantine-lane-report.md}"
 DRY_RUN="${DRY_RUN:-0}"
 PR_NUMBER="${PR_NUMBER:-}"
@@ -67,6 +86,21 @@ gh_do() {
     else
         gh "$@"
     fi
+}
+
+# The report file both shapes are written through - the per-test table, and the lane-emptied
+# retraction. One writer, because the workflow reads exactly one path and a second copy of the
+# mkdir/printf pair is how the two would come to disagree about where it lands.
+write_report() { # <body>
+    mkdir -p "$(dirname "$REPORT_FILE")"
+    printf '%s' "$1" > "$REPORT_FILE"
+}
+
+# The machine-readable payload both shapes embed, which is the contract the reader parses back off
+# the previous comment. One template for the same reason as write_report: the two bodies must agree
+# on its shape or the reader's delta silently goes blank.
+payload_marker() { # <status> <outcomes-json>
+    printf '<!-- %s: {"status":"%s","outcomes":%s} -->' "$DATA_MARKER" "$1" "$2"
 }
 
 # outcome <Class> <method>: FAILED / PASSED / NOT_RUN, from surefire+failsafe XML reports.
@@ -126,7 +160,28 @@ annotation_location() { # <Class> -> path:line of the @Quarantined( line
 }
 
 entries=$(registry_entries)
-[ -z "$entries" ] && { echo "Quarantine lane empty - nothing to report."; exit 0; }
+if [ -z "$entries" ]; then
+    # THE LANE EMPTIED - see item 4 in this file's header for why this path exists at all. The body
+    # is deliberately NOT a table with no rows: an empty table says "here is the lane" and leaves the
+    # reader to notice the absence, where the run that matters is the one that must RETRACT an
+    # instruction it gave on an earlier push. The reader in
+    # .github/scripts/quarantine-report-comment.js turns the outcome-less payload into
+    # `<test> left the lane` and, when there is nothing on the PR to retract, into silence.
+    write_report "## 🧪🔒 Quarantine Lane Report
+
+**The quarantine lane is empty** - no \`@Quarantined\` tests remain, so none ran.
+
+Any earlier row on this PR asking for a \`@Quarantined\` annotation or a \`docs/quarantined-tests.md\`
+entry to be deleted is **withdrawn** - there is nothing left to delete. A merge-blocking review
+thread, if one was opened for that row, still has to be resolved by hand.
+
+<sub>Lane: non-gating; rules: see the Quarantine Audit check.</sub>
+
+$(payload_marker "$EMPTY_STATUS" "{}")
+"
+    echo "Quarantine lane empty - lane-emptied report written to $REPORT_FILE (status: $EMPTY_STATUS)."
+    exit 0
+fi
 
 # --- lane-leak self-check: every executed testcase must match a registry entry ---
 leak=0
@@ -232,11 +287,10 @@ body="## 🧪🔒 Quarantine Lane Report
 $table
 <sub>🔴 expected while the owner PR is open · 🟡🎲 flapper, pass proves nothing · 🚨 a deterministic quarantined test passing means its fix landed: delete its \`@Quarantined\` annotation + \`docs/quarantined-tests.md\` entry (a merge-blocking review thread has been opened). Lane: non-gating; rules: see the Quarantine Audit check.</sub>
 
-<!-- $DATA_MARKER: {\"status\":\"$status_digest\",\"outcomes\":$outcomes_json} -->
+$(payload_marker "$status_digest" "$outcomes_json")
 "
 
-mkdir -p "$(dirname "$REPORT_FILE")"
-printf '%s' "$body" > "$REPORT_FILE"
+write_report "$body"
 echo "Lane report written to $REPORT_FILE (status digest: ${status_digest:-<empty>})."
 
 [ -z "$PR_NUMBER" ] && { echo "No PR context (push/dispatch run) - report logged only."; exit 0; }
