@@ -20,6 +20,7 @@ symptoms:
   - A CLI prints zero bytes and exits 0, and a control keyed on a non-zero exit reads that as success
   - A fixture step exits non-zero, nothing reads the status, and the assertion downstream is satisfied by the unprepared state
   - A pre-commit gate reports defects in files the commit never touched
+  - A hook says the command "did not say where it runs" when the command carried a `git -C "$VAR"`
 tags:
   - test-infrastructure
   - mutation-testing
@@ -39,7 +40,7 @@ is the case where a CHECK goes quiet. This is the case one level up: the HARNESS
 asked "did the mutation get caught?", the thing under test never executed at all, and the harness -
 seeing an answer that differs from the expected one - reports **caught**. Nothing was measured, and the
 report says it was. Three instances turned up in one day, in one file and its neighbour, and each was
-invisible in CI.
+invisible in CI; a fourth turned up the next day, inside the fix for the third.
 
 ## The shape
 
@@ -52,7 +53,7 @@ The control is not wrong about what it saw. It is wrong about what it did not ve
 system under test ran at all.** A control keyed only on "the output differed" is satisfied equally by
 a caught mutation and by an absent process.
 
-## Three instances
+## Four instances
 
 **1. A guard that never ran the CLI.** `bin/inflight.mjs` decided whether it was invoked directly by
 comparing `import.meta.url` to `pathToFileURL(process.argv[1])`. Node resolves the first through
@@ -80,6 +81,17 @@ it; it was simply not the tree being committed to. Fixed by refusing, with the r
 resolved tree has nothing to commit: git would reject that commit anyway, so the only thing a gate
 can do there is read the wrong files.
 
+**4. The fix for instance 3 had the same shape inside it.** The remedy it names is `git -C
+<worktree>`, and an agent that writes that as `git -C "$W" commit` hands the hook the literal text
+`$W` - the hook reads the command before the shell expands it. Joined onto the cwd, that is a path
+that does not exist, so `git status` there *errors* instead of answering "clean", and the clean-tree
+check reads the error as "cannot tell" and falls through. Bash then finds no such directory and gates
+`$CLAUDE_PROJECT_DIR` under a label saying the command did not say where it runs - when it did, in
+text nobody could read. A probe that never ran was scored the same as a probe that ran and found a
+dirty tree. Seen three times the day after the third instance shipped. Fixed by refusing, naming the
+value, whenever any commit's `-C` holds a `$`, a backtick or a leading `~` - before the resolver is
+asked to make sense of it.
+
 ## What separates these from ordinary flakes
 
 In every case the failing arm is the one that would **not** ship a defect - a macOS-only harness path,
@@ -103,10 +115,11 @@ passed with the guard fixed. The vacuous scoring was real; it was not masking a 
 
 - `bin/inflight.mjs` - `invokedDirectly()`, realpath on both sides, fails closed on an unresolvable `argv[1]`.
 - `bin/test-inflight.mjs` - `the-front-door-runs-through-a-symlinked-path`, and `utimesSync` in the freshness fixture.
-- `.claude/hooks/pre-commit-gate.sh` - the clean-tree refusal, exit code 3 from the resolver.
+- `.claude/hooks/pre-commit-gate.sh` - the clean-tree refusal, exit code 3 from the resolver; the
+  unexpanded-`-C` refusal, exit code 4.
 - `bin/test-check-agent-hooks.sh` - the refusal, its dirty-tree control, the `--allow-empty` and
   `--amend` exceptions, and the control that a flag named only inside the commit message exempts
-  nothing.
+  nothing; the `$W`, backtick and tilde refusals with their literal-path and leading-`cd` controls.
 
 ## Related
 
