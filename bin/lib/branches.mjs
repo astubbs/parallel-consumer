@@ -21,9 +21,8 @@
 
 import { cacheRead, cacheWrite } from './cache.mjs'
 
-const REPO = 'astubbs/parallel-consumer'
 import { baseline, exec, lines, refTips, treeEntries } from './git.mjs'
-import { NOTES_DIR } from './notes.mjs'
+import { NOTES_DIR, REPO } from './repo.mjs'
 
 /**
  * Every ref, its tip, its upstream, and the commits it carries that the baseline does not.

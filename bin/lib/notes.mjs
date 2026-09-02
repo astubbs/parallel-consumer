@@ -42,10 +42,11 @@
 
 
 import { cacheRead, cacheWrite } from './cache.mjs'
+import { NOTES_DIR, REPO } from './repo.mjs'
 import { baseline, blobDiffStat, blobsForPath, exec, lines, refTips, treeEntries } from './git.mjs'
 
-export const NOTES_DIR = 'docs/inflight'
-const REPO = 'astubbs/parallel-consumer'
+export { NOTES_DIR }
+
 /**
  * PR state moves without any ref moving, so this one key is time-based - and bounded, not trusted.
  *
@@ -150,7 +151,7 @@ export function prsByBranch({ cache = true } = {}) {
     const res = exec('gh', ['pr', 'list', '-R', REPO, '--state', 'all', '--limit', '500',
         // NOT `body`: adding it took this response from 56K to 2.3MB, for data used on the rare
         // branch that looks untracked. `baseRefName` is a few bytes and answers the common case
-        // exactly. The body question is asked per-branch, on a miss, by prSearch below.
+        // exactly. The per-branch question is asked on a miss, by prForBranch in branches.mjs.
         '--json', 'headRefName,baseRefName,number,title,state'])
     // UNAVAILABLE IS NOT "NO PR", and saying so needs a shape that can carry the difference. This
     // returned a bare Map, so an unauthenticated or rate-limited `gh` was indistinguishable from a

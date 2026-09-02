@@ -1083,6 +1083,26 @@ const CHECKS = [
             '                preserved: live.length === 0,',
             '                preserved: false,'),
     },
+    {
+        id: 'repository-facts-live-in-one-module',
+        why: 'REPO was declared three times while the note above it said it was a single constant, which is the drift class that already shipped one bug here',
+        // A copied constant is correct until exactly one copy changes, and nothing goes red at that
+        // moment. Asserted structurally rather than by value: what matters is that there is one
+        // declaration, not what it currently says.
+        run: async (binDir) => {
+            const r = await import(pathToFileURL(join(binDir, 'lib', 'repo.mjs')).href)
+            if (typeof r.REPO !== 'string' || !r.REPO.includes('/')) return false
+            if (r.NOTES_DIR !== 'docs/inflight') return false
+            const declarations = readdirSync(join(binDir, 'lib'))
+                .filter((f) => f.endsWith('.mjs'))
+                .filter((f) => /^(export )?const (REPO|NOTES_DIR) = '/m.test(readFileSync(join(binDir, 'lib', f), 'utf8')))
+            // repo.mjs, and nothing else.
+            return declarations.length === 1 && declarations[0] === 'repo.mjs'
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'branches.mjs'),
+            "import { NOTES_DIR, REPO } from './repo.mjs'",
+            "const REPO = 'astubbs/parallel-consumer'\nimport { NOTES_DIR } from './repo.mjs'"),
+    },
 ]
 
 console.log('bin/test-inflight.mjs - front door and prior-art library self-test\n')

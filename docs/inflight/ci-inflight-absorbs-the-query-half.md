@@ -33,6 +33,16 @@ that is not all of it"*. Over the corpus index it can be **corpus-scoped**: `str
 start would put the 42-note language-proxy cluster in front of an agent that currently cannot learn
 it exists.
 
+**One instance of the widened-corpus defect is still in bash, and this note owns it.**
+`.claude/hooks/inject-recorded-knowledge.sh` runs its own `git for-each-ref ... refs/heads
+refs/remotes/origin` - the exact narrow enumeration the tool has since dropped, so its cross-ref
+document count silently excludes tags and `refs/backup`. Found by the same-defect sweep at merge
+prep and deliberately not fixed there: widening it changes what the hook injects into every
+session, which needs its own before-and-after rather than a one-word edit ridden in on a tooling PR.
+It is the strongest argument in this note - the hook does not need widening, it needs to stop having
+its own enumeration.
+
+
 ## Also queued: the low-disk warner, which is not a query at all
 
 Antony's call, and it does not fit the table above - `.claude/hooks/warn-low-disk.sh` (471 lines)

@@ -110,7 +110,7 @@ export function formatStranded(clusters, index) {
 }
 
 export function formatBranch(v, gap) {
-    if (!v.ok) return `${v.reason}\nTry: git for-each-ref --format='%(refname:short)' refs/heads refs/remotes/origin`
+    if (!v.ok) return `${v.reason}\nTry: git for-each-ref --format='%(refname:short)'`
 
     const row = (k, val) => `  ${k.padEnd(12)}${val}`
     const out = [v.ref, '']
