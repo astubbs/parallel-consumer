@@ -118,6 +118,12 @@ refactors below, which are non-breaking and can land at any point in any line.
   (`public void setCommitInterval`, `private final Duration defaultMessageRetryDelay`,
   `isUsingTransactionalProducer`) **and retire the temporary Kafka-compat work-around flag**
   (`ignoreReflectiveAccessExceptionsForAutoCommitDisabledCheck`) - `ParallelConsumerOptions.java`.
+- **Remove the `producer` instance option**, once the configuration-plus-factory path deprecating it
+  has landed - `ParallelConsumerOptions.java`. Queued rather than left open-ended because the two
+  paths are not equivalent: only the PC-built one can build another producer from the same
+  configuration, so keeping both means every future change to producer handling is written twice.
+  Deprecated for astubbs#225; the deprecation javadoc names the major AFTER the release that ships
+  the deprecation, so the option is never removed in the release that deprecates it.
 - **Remove the JStream API** (deprecate first) - design ref
   `origin/refactor/deprecate-jstream` @8a8f6508.
 - **Rename the enum to the standard pattern** (public enum rename) -
