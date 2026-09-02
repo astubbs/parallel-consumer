@@ -270,7 +270,7 @@ merged as a no-op - `git ls-files | grep -c CLAUDE.md` returned **0**. The three
 negated individually rather than with a blanket `!CLAUDE.md`; the reasoning is in `.gitignore`
 itself, next to the rule.
 
-**`.claude/settings.json`** - sixteen hook scripts across nineteen registrations, and the file is
+**`.claude/settings.json`** - seventeen hook scripts across twenty registrations, and the file is
 **tracked**. The entries below are the ones whose design decisions are worth recording here;
 `remind-inflight-on-push.sh` and `check-history-rewrite.sh` carry theirs in their own headers.
 The count is stated because it drifted: this said "five" while the file registered seven, which is
@@ -463,6 +463,37 @@ what this one got wrong was not calling the tool but owning the tool's correctne
   context the agent's own grep does the rest, and a hook that injected bodies would cost per session
   what the whole corpus costs to read. It is the clearest case in this file of the distinction the
   whole harness turns on: the rule was there, was read, and was not run - so it became a mechanism.
+
+- `PreToolUse` on `Write|Edit|MultiEdit` runs
+  `.claude/hooks/inject-solutions-for-named-components.mjs`, which names the `docs/solutions/`
+  write-ups whose `related_components` appear in the text being written. It is the relevance half of
+  the entry above: session-start injection answers *does a document exist*, this answers *does one
+  apply to what I am writing now*, and the two fail differently. Once per write-up per session, and
+  it never blocks. **The corpus it reads is the tree the file is going into**, derived from the
+  write itself the way the pre-commit gate derives the commit's tree from its command -
+  `$CLAUDE_PROJECT_DIR` names the session's root, and a write into another worktree was matched
+  against the wrong tree's corpus before that ordering existed. Its self-test asserts the
+  never-blocks contract on every invocation - exit 0, nothing on stderr - because a helper that
+  mapped a crash to silence once passed a mutant that blocked every edit.
+
+  It exists because `related_components` and `applies_when` were **inert**. A majority of write-ups
+  carried an `applies_when`, and `grep -rln applies_when bin/ .claude/` returned nothing - retrieval
+  metadata written, reviewed, and read by no layer. Meanwhile
+  `docs/solutions/architecture-patterns/two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md`
+  records that three separate 2026 investigations each re-derived part of it before acting; a fourth
+  followed on astubbs#225, which proposed rejoining the consumer group while holding the very lock
+  `onPartitionsRevoked` spins on. A review round caught it. One paragraph would have.
+
+  **It matches the text, not the file path, and that was measured rather than assumed.** Against the
+  incident that produced it, path matching fires zero times - the whole episode was spent writing a
+  requirements document and no Java file was touched. Text matching fires five, including both
+  write-ups that would have prevented the defect. It reads `related_components` only:
+  `applies_when` is free prose, and a fuzzy match on it rebuilds the noise that makes a flat list
+  ineffective, so that field stays what a human reads once the write-up is in front of them.
+
+  Coverage is bounded by how many write-ups name a real Java type - a minority of the corpus, since
+  the field also carries concepts like `documentation` and `control-arm`, which match no filename
+  and are inert here by design rather than by accident.
 
 The checklist itself is a plain doc, not embedded in the hook, so Codex and anything else reading
 `AGENTS.md` gets the same words from the same file. Only the delivery is Claude-specific - and the

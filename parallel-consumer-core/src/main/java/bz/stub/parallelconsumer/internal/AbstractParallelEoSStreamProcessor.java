@@ -2133,20 +2133,43 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * offsets placed into the commit payload (offset map).
      * <p>
      * This runs in the {@code finally} of {@link #runUserFunction}, which is strictly after the whole batch has been
-     * added to the mailbox on the success path, after the failure handler's re-add on the error path, and is the only
-     * release for work handed to an external engine ({@link ExternalEngine}) that never reaches the mailbox here at
-     * all. Releasing per-{@link WorkContainer} instead would release after the *first* record of a batch, leaving the
-     * rest of it exposed to exactly the commit window this lock exists to close - and would owe one release per record
-     * against a lock acquired once per context.
+     * added to the mailbox on the success path and after the failure handler's re-add on the error path. Releasing
+     * per-{@link WorkContainer} instead would release after the *first* record of a batch, leaving the rest of it
+     * exposed to exactly the commit window this lock exists to close - and would owe one release per record against a
+     * lock acquired once per context.
+     * <p>
+     * An {@link ExternalEngine} never reaches here holding one: its constructor rejects
+     * {@link ParallelConsumerOptions.CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER} outright, so there is no produce lock
+     * in that path to release.
      * <p>
      * The lock is <b>taken</b> rather than read, so the context is left empty and a second release is a no-op instead
      * of an {@link IllegalMonitorStateException} on a read lock this thread no longer holds.
      */
     private void cleanUpContext(final PollContextInternal<K, V> context) {
-        context.takeProducingLock().ifPresent(lock -> producerManager
+        context.takeProducingLock().ifPresent(lock -> {
+            try {
                 // a lock can only exist because a ProducerManager handed it out
-                .orElseThrow(() -> new PCInternalRuntimeException("Produce lock held, but there is no producer manager to return it to"))
-                .finishProducing(lock));
+                producerManager
+                        .orElseThrow(() -> new PCInternalRuntimeException(
+                                "Produce lock held, but there is no producer manager to return it to"))
+                        .finishProducing(lock);
+            } catch (RuntimeException e) {
+                // Reported, never rethrown. This runs in runUserFunction's finally, and an exception thrown from a
+                // finally REPLACES the one the catch above is propagating - plain try/finally does not attach it as
+                // suppressed the way try-with-resources would. Throwing here would therefore destroy the user
+                // function's real failure and report this in its place, which is strictly worse: by this point the
+                // lock is already unrecoverable either way, because takeProducingLock has claimed it out of the
+                // context. So the log is the whole signal, and it has to carry everything - the more so because the
+                // alternative destination, WorkContainer#future, is read by nothing in main
+                // (docs/inflight/bug-worker-future-swallows-framework-exceptions.md).
+                // Offsets, not the whole context - PollContextInternal's toString traverses the wrapped records
+                // and includes their keys and values. PollContextInternal#setProducingLock avoids that for the
+                // same reason, and this path was added without matching it; Codex review on astubbs#262 caught the
+                // inconsistency.
+                log.error("Could not return the produce lock for {} - it cannot be released now, and the next "
+                        + "transaction commit will block on it", context.getOffsets(), e);
+            }
+        });
     }
 
     protected void addToMailBoxOnUserFunctionSuccess(PollContextInternal<K, V> context, WorkContainer<K, V> wc, List<?> resultsFromUserFunction) {
