@@ -26,6 +26,8 @@
 const sticky = require("./sticky-report-comment.js");
 
 const MARKER = "<!-- quarantine-lane-report -->";
+// Its superseded twin, spelled out rather than derived - see sticky-report-comment.js.
+const SUPERSEDED_MARKER = "<!-- quarantine-lane-report (superseded) -->";
 const DATA_MARKER = "quarantine-lane-data";
 
 // The five outcomes the reporter can record, in the reader's words. PASSED is split in two on
@@ -82,6 +84,7 @@ async function post({ github, context, core, body, now }) {
   return sticky.postStickyReport({
     github, context, core,
     marker: MARKER,
+    supersededMarker: SUPERSEDED_MARKER,
     dataMarker: DATA_MARKER,
     body,
     renderDelta,

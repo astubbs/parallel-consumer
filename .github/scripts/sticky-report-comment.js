@@ -196,7 +196,13 @@ function retiredBody({ body, marker, supersededMarker, headingRe, label, note })
 async function postStickyReport({
   github, context, core,
   marker,
-  supersededMarker = marker.replace(/\s*-->$/, " (superseded) -->"),
+  // REQUIRED, not derived. This used to default to `marker.replace(/\s*-->$/, ...)`, which CodeQL
+  // flags high as js/bad-tag-filter: that regex treats `-->` as THE html comment terminator when
+  // `--!>` is also one. Here `marker` is a literal we own, so it was not exploitable - but a marker
+  // and its superseded twin are two constants of a report, not one computed from the other, and
+  // deriving them by parsing html was the weak part regardless of reachability. The throughput
+  // consumer already passed both explicitly; now everyone does.
+  supersededMarker,
   dataMarker,
   body,
   renderDelta = () => "",
