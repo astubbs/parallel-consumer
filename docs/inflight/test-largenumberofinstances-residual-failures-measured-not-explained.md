@@ -289,3 +289,55 @@ One thing this run adds that earlier ones did not: the frozen-partition dump sho
 assignment stagnant with comparable lag** (roughly 520-570 across the partitions listed, all stagnant
 27 s), rather than one partition or shard lagging. That is consistent with a group-wide block rather
 than a per-shard wedge, which narrows where to look next.
+
+## 2026-09-02, on CI, on the FIXED tree: the third sighting, and the dwell keeps landing in the same place
+
+Third run of the enabled capacity profiles on CI, and the second failure.
+`largeNumberOfInstances` **ERRORED at 157.1 s** (suite 238.3 s), run `33579370081`, job
+`100090259660`, head `650a8236b` - the merge of master that brought the branch level. Signature
+matches the 2026-09-01 CI failure and the Linux one before it:
+
+```
+No progress beyond 489208 records after 11 rounds. [FLAT for 13s - it stopped rather than ran out
+                 of time | elapsed=155s | no consumer diagnostic supplied]
+ZOMBIE_MEMBER/REBALANCE_BLOCKED: group 'group-1-152534349' dwelling in PreparingRebalance for 15s
+                 (bound 15s) - a member is not answering the rebalance (protocol-unresponsive)  x7
+peaks: rebalanceDwell=15531ms lagStagnation=33120ms
+```
+
+Scenario: `expected: 500000 commit: PERIODIC_CONSUMER_ASYNCHRONOUS order: UNORDERED max poll: 500`.
+Frozen partitions: the whole assignment stagnant at 24 s with lag clustered 410-463.
+
+**There is no seed to record, and that is a property of this test rather than an omission.**
+`largeNumberOfInstances` is not a chaos scenario and never constructs a `ChaosSeed`, so nothing
+pins its interleaving and a replay is not available the way it is for the `bug-857-family.md`
+captures. What identifies this run instead, once the CI logs expire, is what is written above: the
+run and job ids, the head, and the group id `group-1-152534349` with topic
+`MultiInstanceRebalanceTest-input-163585785-1253452590`.
+
+**The rate on the fixed tree is now one pass and two failures in three runs.** Three runs is still
+not a rate, and this note's whole subject is that a rate is what the question needs. It is recorded
+because CI logs expire.
+
+### One new observation: the dwell peak is suspiciously repeatable
+
+Across the three failures the rebalance dwell peaks are **15441 ms, 15584 ms and 15531 ms** - a
+spread of under 150 ms on a measurement that is otherwise free to be anything. The stagnation peak
+is not tight in the same way (33032, 27500, 33120 ms), so this is not simply the whole run being
+deterministic.
+
+A dwell that always stops within a fifth of a second of the same value looks like a **timeout being
+hit rather than a wait being observed** - some bound at roughly 15.5 s ending the dwell every time.
+Worth identifying which one: if the coordinator is evicting the silent member on a fixed timer, the
+member's silence is the thing to measure and the dwell is just that timer read back. That would
+make `rebalanceDwell` far less informative than it looks, since it would report the bound rather
+than the member's actual response delay.
+
+Stated as an observation, not a finding - three points is enough to notice a pattern and not enough
+to attribute it, and the probe's own violation bound is also 15 s, which could be doing some of the
+work. Checking it costs reading the group's `rebalance.timeout.ms` against the probe's bound.
+
+**Unchanged:** the sharp question is still whether the unresponsive member is one the harness
+stopped or one still running, and the verdict still ends `no consumer diagnostic supplied` because
+`ProgressTracker.withDiagnostic(...)` is still never called. Two CI failures have now each been one
+wiring change away from saying what PC believed it was doing.
