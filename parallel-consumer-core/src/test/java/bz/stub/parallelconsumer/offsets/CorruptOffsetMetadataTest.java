@@ -97,7 +97,14 @@ class CorruptOffsetMetadataTest {
                 Arguments.of("RunLength, magic byte and no entries at all",
                         payload(OffsetEncoding.RunLength)),
                 Arguments.of("RunLengthV2, magic byte and no entries at all",
-                        payload(OffsetEncoding.RunLengthV2))
+                        payload(OffsetEncoding.RunLengthV2)),
+                // The one case with no magic byte, so it cannot go through payload(). It is also the one case
+                // decodeCompressedOffsets screens out before calling here - which is exactly why it is worth a test:
+                // the guard exists so a FUTURE caller that skips that screen meets the policy rather than an
+                // unhandled BufferUnderflowException, and a guard with no test is the invariant it was added to
+                // replace. Codecov reported these lines uncovered on astubbs/parallel-consumer#207 and was right.
+                Arguments.of("empty payload - not even a magic byte",
+                        new byte[0])
         );
     }
 

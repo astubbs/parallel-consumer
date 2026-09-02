@@ -39,10 +39,6 @@ public class UnknownOffsetMetadataMagicException extends EncodingNotSupportedExc
     @Getter
     private final byte magicByte;
 
-    public UnknownOffsetMetadataMagicException(byte magicByte) {
-        this(magicByte, "source unknown");
-    }
-
     /**
      * @param context where the payload came from, for diagnosis - see
      *                {@link EncodedOffsetPair#describeSource(org.apache.kafka.common.TopicPartition, long)}
