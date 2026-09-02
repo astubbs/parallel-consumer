@@ -918,6 +918,62 @@ const CHECKS = [
             "        return { at: statSync(`${commonDir}/packed-refs`).mtimeMs, refs: null, source: 'packed-refs' }",
             '        return null'),
     },
+    {
+        id: 'origin-head-is-not-a-branch-tip',
+        why: 'git shortens refs/remotes/origin/HEAD to plain "origin", so a /HEAD filter on the short name never fires',
+        // It entered the corpus as a ref named `origin` carrying a duplicate of origin/master's
+        // tip - so every count was one high, and `note find` could name "origin" as a branch
+        // carrying a note. The filter existed and looked right; it was reading the wrong string.
+        run: async (binDir) => {
+            const g = await gitlib(binDir)
+            const dir = buildFetchFixture()
+            const before = cwd()
+            try {
+                chdir(dir)
+                const tips = g.refTips()
+                if (!tips.ok) return false
+                // A clone always has refs/remotes/origin/HEAD, so this fixture always exercises it.
+                if (tips.tips.some((r) => r.ref === 'origin' || r.ref.endsWith('/HEAD'))) return false
+                // ...and the real branches must survive the filter, or it is just deleting refs.
+                return tips.tips.some((r) => r.ref === 'origin/master')
+            } finally { chdir(before) }
+        },
+        // Reverts to filtering the SHORT name - the actual pre-fix bug - rather than removing the
+        // filter, which would prove only that some filter ran.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'git.mjs'),
+            "            .filter(([, full]) => !full.endsWith('/HEAD'))\n            .map(([sha, , short]) => ({ sha, ref: short })),",
+            "            .map(([sha, , short]) => ({ sha, ref: short }))\n            .filter((r) => !r.ref.endsWith('/HEAD')),"),
+    },
+    {
+        id: 'freshness-reads-this-worktree-not-the-main-checkout',
+        why: 'FETCH_HEAD is per-worktree, so reading only the common dir answered with the main checkout - the one place AGENTS.md says never to work',
+        // The refs a fetch updates ARE shared, so a fetch in any worktree refreshes what this search
+        // reads; the answer is the newest FETCH_HEAD across all of them. Measured before the fix: a
+        // fetch in this worktree, and the check still reported the main checkout's, four hours older.
+        run: async (binDir) => {
+            const g = await gitlib(binDir)
+            const dir = buildFetchFixture()
+            const git = (where, ...args) => spawnSync('git', args, { cwd: where, encoding: 'utf8' })
+            const before = cwd()
+            try {
+                // The common dir fetches, then is aged past the one-hour threshold.
+                git(dir, 'fetch', '-q', 'origin')
+                spawnSync('touch', ['-d', '2020-01-01', join(dir, '.git', 'FETCH_HEAD')])
+                const wt = join(dir, 'wt')
+                git(dir, 'worktree', 'add', '-q', '-b', 'wt-branch', wt)
+                git(wt, 'fetch', '-q', 'origin')
+                chdir(wt)
+                const ids = g.freshnessWarnings(g.baseline(), g.refTips().tips.length).map((w) => w.id)
+                // This worktree fetched seconds ago; only the main checkout's copy is from 2020.
+                return !ids.includes('stale-fetch') && !ids.includes('never-fetched')
+            } finally { chdir(before) }
+        },
+        // Reverts to consulting the common dir alone - the actual pre-fix behaviour - by pointing
+        // the worktree scan at a directory that does not exist.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'git.mjs'),
+            'for (const w of readdirSync(`${commonDir}/worktrees`))',
+            'for (const w of readdirSync(`${commonDir}/no-such-worktrees-dir`))'),
+    },
 ]
 
 console.log('bin/test-inflight.mjs - front door and prior-art library self-test\n')

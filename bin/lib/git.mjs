@@ -22,7 +22,7 @@
 import { execFileSync } from 'node:child_process'
 
 import { perfRecord } from './perf.mjs'
-import { readFileSync, statSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
 
 /** Run a command; return {ok, out, status}. Never throws - callers decide what a failure means. */
 export function exec(cmd, args, opts = {}) {
@@ -54,7 +54,13 @@ export const lines = (s) => s.split('\n').filter((l) => l.length > 0)
  * @returns {{ref: string, sha: string}[]}
  */
 export function refTips() {
-    const res = exec('git', ['for-each-ref', '--format=%(objectname) %(refname:short)', 'refs/heads', 'refs/remotes/origin'])
+    // TAB-SEPARATED, AND CARRYING THE FULL REFNAME, because the short name cannot be filtered on.
+    // git shortens `refs/remotes/origin/HEAD` to plain `origin`, so a `/HEAD` test against the
+    // short name never fires for the one ref it exists to drop - and origin/HEAD entered the corpus
+    // as a ref named "origin" holding a duplicate of origin/master's tip. Measured: 436 refs, one
+    // of them that duplicate.
+    const res = exec('git', ['for-each-ref', '--format=%(objectname)\t%(refname)\t%(refname:short)',
+        'refs/heads', 'refs/remotes/origin'])
     // `{ok}` RATHER THAN AN EMPTY ARRAY. This returned `[]` on failure, so "this is not a git
     // repository" and "this repository has no branches" were the same answer - and three commands
     // rendered it as a clean empty result and exited 0, printing "nothing, across 0 refs" over a
@@ -63,8 +69,9 @@ export function refTips() {
     return {
         ok: true,
         tips: lines(res.out)
-            .map((l) => ({ sha: l.slice(0, l.indexOf(' ')), ref: l.slice(l.indexOf(' ') + 1) }))
-            .filter((r) => !r.ref.endsWith('/HEAD')),
+            .map((l) => l.split('\t'))
+            .filter(([, full]) => !full.endsWith('/HEAD'))
+            .map(([sha, , short]) => ({ sha, ref: short })),
     }
 }
 
@@ -189,10 +196,26 @@ export function blobDiffStat(a, b) {
  * @returns {{at: number, refs: number|null, source: string}|null}
  */
 function lastFetch(commonDir) {
+    // FETCH_HEAD IS PER-WORKTREE; THE REFS IT UPDATES ARE SHARED. Reading only the common dir's
+    // copy answered with the MAIN CHECKOUT's last fetch - the one place AGENTS.md says never to
+    // work - so every worktree, which is everywhere work actually happens, was told about someone
+    // else's fetch. Measured 2026-09-02: a fetch in this worktree, and the check still reported the
+    // main checkout's, four hours older. Because a fetch in ANY worktree refreshes the shared refs
+    // this search reads, the answer is the NEWEST across all of them, not this one's.
+    const candidates = [`${commonDir}/FETCH_HEAD`]
     try {
-        const refs = lines(readFileSync(`${commonDir}/FETCH_HEAD`, 'utf8')).length
-        return { at: statSync(`${commonDir}/FETCH_HEAD`).mtimeMs, refs, source: 'FETCH_HEAD' }
-    } catch { /* no FETCH_HEAD - fall through, it is not evidence of never having fetched */ }
+        for (const w of readdirSync(`${commonDir}/worktrees`)) candidates.push(`${commonDir}/worktrees/${w}/FETCH_HEAD`)
+    } catch { /* no worktrees dir - a plain clone, and the common dir copy is the only one */ }
+    let newest = null
+    for (const f of candidates) {
+        try {
+            const at = statSync(f).mtimeMs
+            if (!newest || at > newest.at) newest = { at, file: f }
+        } catch { /* this worktree has never fetched; another may have */ }
+    }
+    if (newest) {
+        return { at: newest.at, refs: lines(readFileSync(newest.file, 'utf8')).length, source: 'FETCH_HEAD' }
+    }
     // A FRESH CLONE HAS NO FETCH_HEAD, and was told "this clone may never have fetched" - the
     // opposite error, and the one that reads as most alarming on the newest corpus obtainable.
     // `packed-refs` is written by the clone itself, so its mtime dates the refs actually held.
