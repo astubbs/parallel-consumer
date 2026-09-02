@@ -300,3 +300,53 @@ hook_file_mtime() { # <path>
 hook_stamp_path() { # <prefix> <key>
     printf '%s/%s-%s' "${TMPDIR:-/tmp}" "$1" "$(printf '%s' "$2" | tr '/' '_')"
 }
+
+# WHICH EVENT FIRED, for a hook registered on more than one of them.
+#
+# Same argument as `hook_payload_cwd` above, and the same argument this whole file was written on:
+# check-branch-behind-its-own-remote.sh and remind-refactor-window.sh both branch on this, and the
+# second one arrived as a byte-identical copy of the first. A copy is correct until exactly one side
+# is fixed. Empty on anything unparseable, which every caller treats as "not the event I wanted".
+hook_event_name() { # <payload-json>
+    printf '%s' "$1" | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("hook_event_name") or "")
+except Exception:
+    pass' 2>/dev/null || true
+}
+
+# THE REPOSITORY A HOOK SHOULD ACT ON, derived from the COMMAND first and the session last.
+#
+# THE ORDER IS THE WHOLE POINT, and the first version of this had it backwards - it returned
+# $CLAUDE_PROJECT_DIR whenever it was set, which under the harness is always. That is the defect
+# docs/solutions/workflow-issues/a-hook-processes-own-directory-describes-the-session-not-the-command-2026-08-31.md
+# records and astubbs/parallel-consumer#382 fixed for two other guards: a hook process is a separate
+# process from the tool call it fires on, so anything it reads from its OWN environment describes
+# the SESSION. With a dozen worktrees checked out - routine here - and subagents having working
+# directories the session-level environment cannot see, that produces a confident wrong answer
+# rather than an error. The fix's derivation order, strongest source first:
+#
+#   1. the payload's own `cwd` - where a subagent's actual directory arrives
+#   2. $CLAUDE_PROJECT_DIR - the session's project root
+#   3. this process's own directory - pure last resort
+#
+# Something the command itself names (`git -C <path>`, a push refspec) is stronger still, but it is
+# per-command and belongs in the caller that already tokenises it, not here.
+#
+# Prints nothing when there is no answer, so a caller can fail open on the empty string rather than
+# acting on a guess. Pass the payload when you have one; without it this degrades to the old order.
+hook_project_root() { # [payload-json]
+    local cwd_from_payload root
+    if [ -n "${1:-}" ]; then
+        cwd_from_payload="$(hook_payload_cwd "$1")"
+        if [ -n "$cwd_from_payload" ] && [ -d "$cwd_from_payload" ]; then
+            root="$(git -C "$cwd_from_payload" rev-parse --show-toplevel 2>/dev/null || true)"
+            if [ -n "$root" ]; then printf '%s' "$root"; return 0; fi
+        fi
+    fi
+    if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+        printf '%s' "$CLAUDE_PROJECT_DIR"
+        return 0
+    fi
+    git rev-parse --show-toplevel 2>/dev/null || true
+}
