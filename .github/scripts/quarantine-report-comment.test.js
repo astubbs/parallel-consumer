@@ -396,7 +396,9 @@ for (const step of ["Classify lane outcomes (writes the report, opens threads on
   "Post the quarantine lane report to the PR"]) {
   test(`"${step.split(" (")[0]}" is reachable when the registry is empty`, () => {
     const gate = gateFor(step);
-    assert.ok(!gate.includes("steps.any.outputs.found"),
+    // Either spelling of the output is the regression - `outputs.found` or `outputs['found']` - and a
+    // substring match on the first would have let the second through green.
+    assert.ok(!/steps\.any\.outputs(\.found|\[)/.test(gate),
       `gated on the lane being non-empty, so the run that EMPTIES it cannot retract: ${gate}`);
     assert.ok(gate.includes("steps.any.outcome == 'success'"),
       `not gated on the emptiness check having run, so a rejected registry could still report: ${gate}`);
