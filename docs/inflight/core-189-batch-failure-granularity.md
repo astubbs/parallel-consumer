@@ -37,6 +37,13 @@ The line the reporter quotes, "There is no guarantee that the messages will be r
 same batch" (`src/docs/README_TEMPLATE.adoc`, and the generated `README.adoc`), is literally true and
 practically inverted: in steady state it is always the same batch.
 
+**The transactional claim register does not cover this, and the near-miss is worth naming.** `C3` in
+`parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/TransactionalClaim.java` records the
+same "composition may differ" promise, but for recombination across a **crash and replay** - a batch
+re-formed from re-read records. astubbs#189 is recombination on an in-process retry, a different path.
+So C3 reading `PROVED` says nothing about this issue, and the behaviour above is untested rather than
+verified.
+
 Nothing merged since the mirror was written has changed this. The merged PRs touching
 `AbstractParallelEoSStreamProcessor.java` or `WorkContainer.java` are the package rename, the
 issue-reference sweep, astubbs#177's commit-error reporting and astubbs#209's pool hardening.
