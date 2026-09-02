@@ -2,7 +2,6 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: ci -->
-<!-- inflight-state: parked - documentation is the whole fix for now; reopen if someone reports the docs did not land -->
 
 [astubbs#180](https://github.com/astubbs/parallel-consumer/issues/180) /
 [confluentinc#861](https://github.com/confluentinc/parallel-consumer/issues/861) -
@@ -12,6 +11,10 @@ enforcer's `reactorModuleConvergence` rule, and `-am` in `bin/build.sh`'s own us
 was previously the broken invocation. The **underlying build shape is unchanged**, so the trap can
 still be sprung; it is now just signposted. Recorded here so a future session does not re-triage it
 from scratch, and knows which fixes were considered and why they were not taken.
+
+**One of them IS being taken - the maintainer's ruling, 2026-09-02:** make `truth-generator-maven-plugin`
+clean only the `managed` tree, then flip `cleanTargetDir` here. That is the open item in this note;
+the other two bullets stay as recorded decisions, not work.
 
 ## To verify anything about a fresh clone, isolate the local repository
 
@@ -35,7 +38,9 @@ dependency. Two other traps found the same way: `-o` (offline) changes the error
   rejected for now: a `maven-enforcer` `requireFilesExist` on the generated directory (fires at
   `validate`, which the IDE also skips - so it would add a failure mode for CLI users while doing
   nothing for the people who need it), and checking the generated sources into git (defeats the
-  generator, and they drift silently against the classes they assert on). A real fix is probably an
+  generator, and they drift silently against the classes they assert on - **re-proposed and
+  rejected again by the maintainer on 2026-09-02**, so do not bring it a third time without a new
+  argument). A real fix is probably an
   IDE run configuration or an `.idea/` pre-build step, which is per-IDE and unverifiable in CI. Not
   worth it until someone reports the docs did not land.
 
@@ -45,10 +50,17 @@ dependency. Two other traps found the same way: `-o` (offline) changes the error
   `cannot find symbol` errors *inside the generated code* - `ManagedTruth.java` referencing
   `ParallelConsumerOptionsSubject`, `CommitModeSubject` and friends that were not regenerated.
   `./mvnw clean install -DskipTests` is fine. Documented as "don't hand-delete parts of `target/`"
-  rather than fixed, because flipping `cleanTargetDir` to `true` would wipe the
+  for now, because flipping `cleanTargetDir` to `true` as it stands would wipe the
   `truth-assertions-templates` output on every build, and the templates are the half a human is meant
-  to be able to extend. Wants a check of whether `truth-generator-maven-plugin` can clean only the
-  `managed` tree before anyone flips the flag.
+  to be able to extend.
+
+  **DECIDED, 2026-09-02 - this is the fix to make, and it is two steps in two repos.** (1) In
+  `truth-generator` (the maintainer's own project): a mode that cleans only the `managed` output
+  directory and leaves `templates` alone - the plugin already knows the two apart, since it writes
+  them to separate roots. (2) Here, once that ships: bump `truth-generator-maven-plugin.version` in
+  the root `pom.xml` and flip this module's `cleanTargetDir`. Then the partial-`target/` case
+  self-repairs and the "don't hand-delete" paragraph in `docs/building.md` comes out. This fixes only
+  this trap; the IDE path and the test-jar coupling are unchanged by it.
 
 - **The test-jar coupling itself** ([astubbs#132](https://github.com/astubbs/parallel-consumer/issues/132),
   [confluentinc#162](https://github.com/confluentinc/parallel-consumer/issues/162)) is untouched. That
