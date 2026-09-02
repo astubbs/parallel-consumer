@@ -96,6 +96,19 @@ check('flag bound is a 30% loss', WARN_BELOW, 0.70)
   // licence to print six digits at every reader.
   check('an ordinary ratio still prints three places', displayRatio(0.98042), '0.980')
   check('a value exactly on a bound is already consistent', displayRatio(0.5), '0.500')
+
+  // The ladder can be exhausted, and then the FALLBACK is the only thing keeping the promise. A ratio
+  // a hair under the bound rounds to "0.500..." at every rung of [3,4,5,6,9] - each one reading 'flag'
+  // against a raw 'fail' - so the loop returns nothing and `String(ratio)` has to carry it. That works
+  // because `String` yields the shortest representation that round-trips the double exactly, so the
+  // printed text always parses back into its own band. Pinned because it is the one path in this
+  // function no other case reaches, and a "tidy-up" replacing the fallback with a final `toFixed`
+  // would silently reintroduce the contradiction the rest of this block exists to prevent.
+  const hair = 0.5 - 1e-12
+  check('the raw value is a fail', bandOf(hair), 'fail')
+  check('every rung of the ladder disagrees with it', [3, 4, 5, 6, 9].map(dp => bandOf(Number(hair.toFixed(dp)))).join(), 'flag,flag,flag,flag,flag')
+  check('so the fallback prints it exactly', displayRatio(hair), String(hair))
+  check('and the printed value keeps the raw band', bandOf(Number(displayRatio(hair))), 'fail')
 }
 
 // --- the headline must disclose the noise floor it sits inside -------------------------------------
