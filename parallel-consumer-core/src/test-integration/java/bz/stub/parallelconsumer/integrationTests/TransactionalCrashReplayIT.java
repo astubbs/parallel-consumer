@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.integrationTests;
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.internal.utils.ThreadUtils;
 import bz.stub.parallelconsumer.ProvesClaim;
 import bz.stub.parallelconsumer.TransactionalClaim;
 import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils.GroupOption;
@@ -29,6 +30,7 @@ import org.junit.jupiter.api.Timeout;
 import pl.tlinkowski.unij.api.UniSets;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -168,6 +170,14 @@ class TransactionalCrashReplayIT extends BrokerIntegrationTest<String, String> {
     private static final Duration FENCING_TIMEOUT = ofSeconds(120);
 
     private static final Duration PROGRESS_TIMEOUT = ofSeconds(120);
+
+    /**
+     * How long a once-observed offset-without-records state is given to resolve before it counts as a violation.
+     * Generous against what it is absorbing - concurrent transaction-marker delivery and one consumer fetch - and
+     * far short of {@link #PROGRESS_TIMEOUT}, so a genuine one-sided commit still fails this arm rather than
+     * timing the whole test out with a vaguer message.
+     */
+    private static final Duration ONE_SIDED_GRACE = ofSeconds(15);
 
     /**
      * How long the output topic is watched for stragglers after the replay has demonstrably finished (every
@@ -340,17 +350,12 @@ class TransactionalCrashReplayIT extends BrokerIntegrationTest<String, String> {
                 userFunctionInvocations.computeIfAbsent(record.key(), ignored -> new AtomicInteger())
                         .incrementAndGet();
                 if (!workDelay.isZero()) {
-                    sleepQuietly(workDelay);
+                    ThreadUtils.sleepQuietly(workDelay);
                 }
                 results.add(new ProducerRecord<>(outputTopic, record.key(), resultValue(attemptTag, record.key())));
             }
             return results;
         });
-    }
-
-    @SneakyThrows
-    private static void sleepQuietly(Duration duration) {
-        Thread.sleep(duration.toMillis());
     }
 
     // The crash, and the replay
@@ -436,10 +441,9 @@ class TransactionalCrashReplayIT extends BrokerIntegrationTest<String, String> {
 
         start(replacement, ATTEMPT_TWO, workDelay);
 
-        committed.awaitAllVisible(expectedResults(ATTEMPT_TWO, payloadKeys), PROGRESS_TIMEOUT);
+        awaitResultsAndOffsetLandTogether(expectedResults(ATTEMPT_TWO, payloadKeys),
+                PRIMING_RECORDS + payloadRecords);
         Duration untilVisible = Duration.ofNanos(System.nanoTime() - fencedAt);
-
-        awaitSourceOffsetCommittedAt(PRIMING_RECORDS + payloadRecords);
 
         log.info("Replay complete: every result visible {} after the fencing, source offset committed at {}",
                 untilVisible, PRIMING_RECORDS + payloadRecords);
@@ -461,6 +465,116 @@ class TransactionalCrashReplayIT extends BrokerIntegrationTest<String, String> {
         OffsetAndMetadata offset = offsets.get(new TopicPartition(inputTopic, 0));
         return offset == null ? OptionalLong.empty() : OptionalLong.of(offset.offset());
     }
+
+    /**
+     * The atomicity assertion C4 actually rests on: sample the produced records and the committed source offset
+     * <b>together</b>, and fail the moment the offset is seen to have landed without them.
+     * <p>
+     * <b>Why the obvious version does not prove the claim.</b> This used to be two sequential awaits - wait until
+     * every result is visible, then wait until the offset reaches its target. An implementation that published the
+     * results and committed the offset separately, with an arbitrarily wide window between them, satisfies both:
+     * each eventually finishes inside its own timeout, and nothing ever looks at the pair. So the test could not
+     * reject the one-sided state that the claim forbids, and C4 read {@code PROVED} on evidence that could not
+     * fail. Codex review on astubbs#262 found that.
+     * <p>
+     * <b>The dangerous direction is offset-without-records</b>, and it is the only one asserted. A committed source
+     * offset with its results not yet visible is the shape of silent data loss: a consumer restarting from that
+     * offset skips work whose output nobody can see. Records-without-offset is the safe direction and is expected
+     * transiently, because the offset is read through the admin API's consumer-group view, which lags the
+     * transaction the records arrived in.
+     * <p>
+     * <b>A single observation of offset-without-records is NOT a violation, and an earlier revision of this helper
+     * failed on one - which would have accused correct implementations.</b> Committing a transaction makes the
+     * coordinator fan {@code WriteTxnMarkers} out concurrently to every partition it touched - the output topic's
+     * AND {@code __consumer_offsets} - on different brokers, in no defined order. The group coordinator
+     * materialises the offset when ITS marker lands; the output topic's last-stable-offset advances when ITS
+     * marker lands. Neither ordering is guaranteed, so offset-first is an ordinary broker state. On top of that,
+     * {@code consumed()} is what this verifier has POLLED, not what the broker has made visible, so one poll that
+     * fetches nothing proves nothing at all.
+     * <p>
+     * What separates the two is whether it RESOLVES. A marker skew or a slow fetch closes within a moment; an
+     * implementation that genuinely commits the offset without its records never does. So the first sighting opens
+     * a bounded grace window and only its expiry is the failure - which keeps every falsifying case and drops the
+     * false accusations. The read order is still offset-first, records-second, because that at least means the
+     * grace window starts from a state actually observed rather than one inferred across the gap.
+     * <p>
+     * Shared by every {@link #crashAndReplay} caller, not just C4's: the pairing has to hold on every replay, and a
+     * guard that only ran for the claim that names it would be the weaker instrument.
+     * <p>
+     * <b>What it does NOT check.</b> Only the TERMINAL pairing. The replay commits many transactions at
+     * {@link #REPLAY_COMMIT_INTERVAL}, and the predicate is the final expected offset, so an implementation that
+     * ran ahead on an intermediate transaction and then landed the last one correctly is not caught here. Nor is
+     * records-without-offset asserted: that is the safe direction, and the concurrent-marker behaviour above makes
+     * it indistinguishable from ordinary lag.
+     * <p>
+     * <b>Hand-rolled rather than awaitility, and that is not an oversight.</b> {@code await().untilAsserted(...)}
+     * RETRIES a failing assertion, so it would swallow the single observation this whole helper exists to make -
+     * the violation would be re-polled until it stopped being true, and the test would pass. Same reason
+     * {@code TransactionalBatchVisibilityIT#watchUntilAllVisible} writes its own loop.
+     */
+    private void awaitResultsAndOffsetLandTogether(List<String> expectedResults, long expectedOffset) {
+        Instant deadline = Instant.now().plus(PROGRESS_TIMEOUT);
+        boolean resultsLanded = false;
+        OptionalLong lastOffset = OptionalLong.empty();
+
+        while (Instant.now().isBefore(deadline)) {
+            // offset first, records second - see the javadoc; this ordering can only under-report
+            OptionalLong offset = committedSourceOffset();
+            committed.poll();
+            List<String> visible = committed.consumed();
+
+            boolean offsetLanded = offset.isPresent() && offset.getAsLong() == expectedOffset;
+            resultsLanded = visible.containsAll(expectedResults);
+            lastOffset = offset;
+
+            if (offsetLanded && !resultsLanded) {
+                // the grace window - see the javadoc; one sighting is marker skew until it fails to resolve
+                resultsLanded = resultsBecomeVisibleWithin(expectedResults, ONE_SIDED_GRACE);
+                if (!resultsLanded) {
+                    List<String> missing = missingFrom(committed.consumed(), expectedResults);
+                    assertWithMessage("the source offset reached %s and %s of its %s results were STILL invisible "
+                                    + "to a read_committed consumer %s later - the offset and the records it "
+                                    + "accounts for are supposed to land as one atomic set, and a consumer "
+                                    + "restarting here would skip work whose output nobody can see. Missing: %s",
+                            expectedOffset, missing.size(), expectedResults.size(), ONE_SIDED_GRACE, missing)
+                            .fail();
+                }
+            }
+
+            if (offsetLanded) {
+                return;
+            }
+            ThreadUtils.sleepQuietly(ofMillis(200));
+        }
+
+        committed.poll();
+        assertWithMessage("the replay never completed: source offset was %s, expected exactly %s; still missing %s "
+                        + "of %s results: %s",
+                lastOffset, expectedOffset, missingFrom(committed.consumed(), expectedResults).size(),
+                expectedResults.size(), missingFrom(committed.consumed(), expectedResults))
+                .fail();
+    }
+
+    /**
+     * @return whether every expected result became visible inside {@code grace}. Polls rather than sleeping, so a
+     *         resolution is seen as soon as it happens; used only to tell marker skew from a real one-sided commit.
+     */
+    private boolean resultsBecomeVisibleWithin(List<String> expectedResults, Duration grace) {
+        Instant graceDeadline = Instant.now().plus(grace);
+        while (Instant.now().isBefore(graceDeadline)) {
+            committed.poll();
+            if (committed.consumed().containsAll(expectedResults)) {
+                return true;
+            }
+            ThreadUtils.sleepQuietly(ofMillis(200));
+        }
+        return false;
+    }
+
+    private static List<String> missingFrom(List<String> visible, List<String> expected) {
+        return expected.stream().filter(e -> !visible.contains(e)).collect(Collectors.toList());
+    }
+
 
     private void awaitSourceOffsetCommittedAt(long expected) {
         await().atMost(PROGRESS_TIMEOUT)
@@ -606,7 +720,10 @@ class TransactionalCrashReplayIT extends BrokerIntegrationTest<String, String> {
      * <p>
      * Both halves are asserted at both ends of the crash. Before: no payload result visible AND the source offset
      * still on the priming record. After: every result visible AND the offset moved to the end of the input. A
-     * system that committed the offset without the records, or the records without the offset, fails one of the
+     * system that committed the offset without the records fails the pairing this asserts. The other direction,
+     * records without the offset, is deliberately not asserted - see
+     * {@link #awaitResultsAndOffsetLandTogether}, whose javadoc records why concurrent marker delivery makes it
+     * indistinguishable from ordinary lag. A system failing the remaining halves fails one of the
      * four.
      */
     @Test

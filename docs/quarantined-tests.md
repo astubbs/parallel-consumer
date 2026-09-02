@@ -40,6 +40,14 @@ Rules (full discipline in [`docs/testing.md`](testing.md), AGENTS.md, and the `@
    and what shows it is master-state rather than PR-state). What stays banned is quarantining on a
    hunch - "it's red sometimes" is not evidence, and a single failure is a sighting, not a ledger.
 
+   **A ledger does not have to be assembled by hand from logs that expire.**
+   `node bin/inflight.mjs codecov test <name>` prints that test's recorded outcome per commit, and
+   `codecov flaky` lists every test ever recorded with more than one outcome - Codecov keeps this far
+   longer than a CI log is retained. It reports **candidates and never a verdict**: two outcomes
+   across two commits fits a regression that landed between them just as well as a flake, which is
+   the distinction this rule exists to make, so it informs the ledger rather than writing it.
+   [`docs/inflight-tool.md`](inflight-tool.md) owns those commands.
+
    The rule used to demand a diagnosis outright. That was wrong in a way worth recording: it
    conflated *"we don't know the mechanism"* with *"we don't know whether it's ours"*, and only the
    second justifies blocking. A test with a sighting ledger **is** a finding - it is known
@@ -74,15 +82,17 @@ Rules (full discipline in [`docs/testing.md`](testing.md), AGENTS.md, and the `@
 
 ## Currently quarantined
 
-One entry, and it is an unreliable failure rather than a deterministic one, so it carries
-`flapping = true`: a pass proves nothing and the lane reports it without demanding action. It was
-never hidden by the surefire retry, because the test did not run in a gating lane until the PR that
-quarantines it.
+The one entry below is an unreliable failure rather than a deterministic one, so it carries
+`flapping = true`: a pass proves nothing and the lane reports it without demanding action. It was never
+hidden by the surefire retry astubbs#224 removed, because the test did not run in a gating lane until
+the PR that quarantines it.
 
-`ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` was master's other
-entry and is **deliberately not carried here**: astubbs#262, which this branch is built on, is that
-entry's own recorded owner and deletes the annotation and the entry together (rule 3 - annotation and
-entry go together). Master keeps both until astubbs#262 lands; nothing was dropped by lapse.
+**The other entry that stood here has gone, and not by a lapse.**
+`ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` is astubbs#262's rule-3
+re-enable: astubbs#265 deleted the wall-clock assertion that flaked, and astubbs#262, its owner,
+deletes the annotation and its entry together.
+(`OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` went
+earlier, diagnosed and fixed on master by astubbs#351 - it asserted an offset it had itself frozen.)
 
 - [ ] `MultiInstanceRebalanceTest.largeNumberOfInstances` - a rebalance stall whose mechanism is
   measured but not explained. The progress detector returns `FLAT` - the record count *stops* rather

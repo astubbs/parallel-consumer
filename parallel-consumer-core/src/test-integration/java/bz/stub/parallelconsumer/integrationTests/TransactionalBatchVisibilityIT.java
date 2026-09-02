@@ -453,7 +453,11 @@ class TransactionalBatchVisibilityIT extends BrokerIntegrationTest<String, Strin
      * on the claim.
      */
     @Test
-    @ProvesClaim(TransactionalClaim.PRODUCE_MANY_ALL_OR_NONE)
+    // C2 as well as C7, because this method's own javadoc says both rest on it: C2's other arms - the two in
+    // TransactionalVisibilityIT - never make a send FAIL, so deleting this one would leave C2 reading PROVED on
+    // evidence that cannot reach the failure that once falsified it. Naming only C7 made the coverage gate blind
+    // to exactly the rot it exists to catch. Codex review on astubbs#262.
+    @ProvesClaim({TransactionalClaim.PRODUCE_MANY_ALL_OR_NONE, TransactionalClaim.ALL_OR_NONE_PER_SOURCE_OFFSET})
     void aTerminallyFailedSendLeavesTheWholeTransactionInvisible() {
         prepare("failed-send");
 

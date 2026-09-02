@@ -189,8 +189,17 @@ control required before any claim counts as proved. That gate has now fired agai
 section is written down as the finding rather than as an aspiration:
 
 **Crash and replay, both batch sizes: the guarantee holds.** An abandoned transaction is invisible,
-the replay commits results and their source offset as one set, and the output topic holds each result
+the replay commits results and their source offset together, and the output topic holds each result
 exactly once. Proved with observed controls (`TransactionalCrashReplayIT`).
+
+Read the atomicity half precisely, because the test is narrower than the sentence. It samples the
+committed offset and the visible results together on every poll and fails when the offset lands
+without them - **in that direction only, and only for the terminal transaction.**
+Records-without-offset is not asserted: committing a transaction writes its markers concurrently to
+the output partitions and to `__consumer_offsets` with no ordering guarantee, so records-first is an
+ordinary broker state rather than a defect. An earlier version of this suite awaited the two
+*sequentially*, which any non-atomic implementation satisfies however wide the window between them;
+that was caught in review and is why the assertion now has its own observed control.
 
 That took a real defect out of the path first, which is the part worth telling honestly. At
 `batchSize >= 2` the consumer used to **stall outright** - the produce lock was taken once per poll
@@ -207,8 +216,18 @@ throws from `onCompletion`, which pre-empted Kafka's own `maybeTransitionToError
 transaction un-abortable. Both affected claims - C7 `PRODUCE_MANY_ALL_OR_NONE` and C2
 `ALL_OR_NONE_PER_SOURCE_OFFSET` - were `REFUTED` and now read `PROVED`.
 
-**So the headline is defensible unqualified: exactly-once, massively parallel, optionally
-key-ordered.** Every documented guarantee in the register is proved or attributed, none refuted.
+**So the headline is defensible: exactly-once, massively parallel, optionally key-ordered.** Every
+documented guarantee in the register is proved or attributed, and none is refuted - twelve `PROVED`
+with observed controls, one `KAFKA_GUARANTEE` that is Kafka's to keep, and one `COVERED_NO_CONTROL`
+(the commit-lock timeout failing fast) which is **attributed to an existing test rather than
+re-proved**. That last one is the difference between "defensible" and "unqualified", and it is why
+this section does not say the latter.
+
+**This is the first pass, not the finished job.** The suite covers the guarantees that are
+*documented* today; a chaos scenario for exactly-once under churn is deliberately deferred, and the
+`-Dexcluded.groups=transactions` gap - a supported invocation that runs zero claim proofs while the
+register still reports full coverage - is recorded rather than closed
+(`docs/inflight/next-transactional-register-hardening.md`).
 
 Two things to keep honest when using it. The claim is about Kafka's own topics: the README's existing
 warning that EoS does not prevent duplicate *replay* into external systems still stands, and this

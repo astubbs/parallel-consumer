@@ -190,11 +190,7 @@ class TransactionalBulkCommitTest {
                 // ParallelEoSStreamProcessor#processAndProduceResults does. Release is then deferred to
                 // AbstractParallelEoSStreamProcessor#cleanUpContext, so the offset cannot be committed before its produced
                 // record is inside the transaction.
-                try {
-                    context.setProducingLock(Optional.of(producerManager.beginProducing(context)));
-                } catch (TimeoutException e) {
-                    throw new RuntimeException(e);
-                }
+                ProduceLockHandover.acquireInto(producerManager, context);
 
                 workerThreadNames.add(Thread.currentThread().getName());
                 allWorkersStarted.countDown();

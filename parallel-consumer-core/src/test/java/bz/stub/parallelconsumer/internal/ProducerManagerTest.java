@@ -42,11 +42,14 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.ArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
 import static bz.stub.parallelconsumer.ManagedTruth.assertThat;
 import static bz.stub.parallelconsumer.ManagedTruth.assertWithMessage;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
 import static bz.stub.parallelconsumer.internal.ProducerWrapper.ProducerState.*;
 import static java.time.Duration.ofSeconds;
 import static java.util.Collections.emptyList;
@@ -57,9 +60,23 @@ import static org.mockito.Mockito.*;
 
 /**
  * Covers transaction state systems, and their blocking behaiviour towards sending records and the reverse.
+ * <p>
+ * <b>Including the produce lock's release, which used to live in its own class.</b> The read lock is acquired once
+ * per {@link PollContextInternal}, so exactly one release is owed however many records that context carries - and
+ * the acquire/store/release steps are spread across four classes, so a test of any one of them has to explain the
+ * whole lifecycle. Explaining it twice, in two classes, is what let the two halves drift; the merge is the cohesive
+ * answer until the mechanism gets a single owner
+ * ({@code docs/inflight/core-produce-lock-lifecycle-has-no-owner.md}).
+ * <p>
+ * Both release tests below used to fail <em>silently</em>. The release ran from two places against the one lock and
+ * every failure was swallowed: {@link ProducerManager.ProducingLock#unlock()} logs only <em>after</em> the unlock, so
+ * a throwing release left no trace, and the worker's {@link java.util.concurrent.Future} that carries the exception
+ * is read by nothing in main. Counting acquires against releases in the log therefore reported a clean 1:1 while
+ * every second release was blowing up.
  *
  * @author Antony Stubbs
  * @see ProducerManager
+ * @see AbstractParallelEoSStreamProcessor#cleanUpContext for the single sanctioned release point
  * @see bz.stub.parallelconsumer.integrationTests.TransactionTimeoutsTest for integration tests checking timeout
  *         behaiviour
  */
@@ -90,7 +107,7 @@ class ProducerManagerTest {
 
     // This class doesn't extend AbstractParallelEoSStreamProcessorTestBase, so
     // nothing else resets Awaitility between tests. Not closing pc here on purpose:
-    // buildModule() overrides close() as a no-op so each test manages its own pc
+    // PCModuleTestEnv.withHandDrivenProcessor overrides close() as a no-op so each test manages its own pc
     // lifecycle explicitly (by design, to inspect mid-commit state).
     @AfterEach
     void tearDown() {
@@ -98,61 +115,31 @@ class ProducerManagerTest {
     }
 
     private void setup(ParallelConsumerOptions.ParallelConsumerOptionsBuilder<String, String> optionsBuilder) {
+        setup(optionsBuilder, true);
+    }
+
+    /**
+     * @param alwaysTimeToCommit most tests here want a commit attempt on every control-loop pass. The produce-lock
+     *                          release tests do NOT - they drive the loop by hand to observe one context's lock, and
+     *                          a commit on every pass would be a second thing moving while they measure.
+     */
+    private void setup(ParallelConsumerOptions.ParallelConsumerOptionsBuilder<String, String> optionsBuilder,
+                       boolean alwaysTimeToCommit) {
         opts = optionsBuilder.build();
 
-        module = buildModule(opts);
+        module = PCModuleTestEnv.withHandDrivenProcessor(opts, alwaysTimeToCommit);
 
         mu = new ModelUtils(module);
 
         producerManager = module.producerManager();
     }
 
-    private PCModuleTestEnv buildModule(ParallelConsumerOptions<String, String> opts) {
-        return new PCModuleTestEnv(opts) {
-            @Override
-            protected AbstractParallelEoSStreamProcessor<String, String> pc() {
-                if (parallelEoSStreamProcessor == null) {
-                    // Exactly one processor is constructed against this module, and that is now enforced rather
-                    // than merely intended: astubbs#322 binds a module's memoised collaborators to one owner, so a
-                    // second ParallelEoSStreamProcessor here fails with "BrokerPollSystem is already bound to a
-                    // different ParallelConsumer". This block used to call super.pc() and spy() the result first,
-                    // and both were dead - the spy was overwritten by the next statement without ever being read -
-                    // so the only thing they contributed was that second processor.
-                    parallelEoSStreamProcessor = new ParallelEoSStreamProcessor<>(options(), this) {
-                        @Override
-                        protected boolean isTimeToCommitNow() {
-                            return true;
-                        }
-
-                        @Override
-                        public void close() {
-                        }
-                    };
-                }
-                return parallelEoSStreamProcessor;
-            }
-        };
-    }
-
 
     /**
-     * Acquires the produce lock against the <em>real</em> context and hands it to that context, exactly as
-     * {@link bz.stub.parallelconsumer.ParallelEoSStreamProcessor#pollAndProduce} does.
-     * <p>
-     * This is load-bearing, not tidying: the lock must not be released until the work has reached the
-     * controller's inbound queue - see {@link AbstractParallelEoSStreamProcessor#cleanUpContext},
-     * which states the invariant and is the <em>only</em> sanctioned release point since astubbs#257 removed the
-     * per-record release that used to run from {@code addToMailbox}. Releasing it inside the user function opens
-     * a window in which the controller can take the commit lock, drain a mailbox that does not yet contain this
-     * work, and commit an offset one behind - the ~1-in-6 flake written up in
-     * {@code docs/plans/2026-08-03-001-investigate-transactional-commit-flake.md} §11.
+     * @see ProduceLockHandover#acquireInto - which owns why this must not be released inside the user function
      */
     private void acquireProduceLockInto(PollContextInternal<String, String> context) {
-        try {
-            context.setProducingLock(Optional.of(producerManager.beginProducing(context)));
-        } catch (TimeoutException e) {
-            throw new RuntimeException(e);
-        }
+        ProduceLockHandover.acquireInto(producerManager, context);
     }
 
     /**
@@ -776,6 +763,199 @@ class ProducerManagerTest {
                         .allowEagerProcessingDuringTransactionCommit(true)
                         .build()
                         .validate());
+    }
+
+    /**
+     * A single record's produce lock was released twice - once from the mailbox hook and again from
+     * {@link AbstractParallelEoSStreamProcessor#runUserFunction}'s {@code finally} - and the second
+     * {@link java.util.concurrent.locks.ReentrantReadWriteLock.ReadLock#unlock()} threw
+     * {@link IllegalMonitorStateException} on a thread holding zero read locks. That happened on every transactional
+     * produce, unnoticed, because nothing reads the worker's future.
+     */
+    @SneakyThrows
+    @Test
+    void produceLockIsReleasedExactlyOnce() {
+        setupForHandDrivenRelease(1);
+
+        try (var pc = module.pc()) {
+            startWork(pc, 1);
+
+            pc.controlLoop(lockAcquiringUserFunction(), o -> {
+            });
+
+            var results = awaitWorkResults(pc, 1);
+
+            // released twice -> the worker future carries IllegalMonitorStateException
+            Truth.assertWithMessage("the worker must not fail: the produce lock is released exactly once per context")
+                    .that(results.get(0).getFuture().get(20, TimeUnit.SECONDS))
+                    .isNotNull();
+
+            // released zero times -> the read lock is still held and no transaction could ever commit
+            assertWithMessage("the produce lock must actually be given back, or commits would block forever")
+                    .that(producerManager)
+                    .hasNoProduceLockHolders();
+
+            Truth.assertWithMessage("record processed successfully")
+                    .that(results.get(0).isUserFunctionSucceeded())
+                    .isTrue();
+        }
+    }
+
+    /**
+     * The batch case was a live defect, not just silent noise. One lock is acquired for the whole context, but the
+     * release used to run per record: the second record found zero read holds, so
+     * {@code ProducerManager#ensureProduceStarted} threw {@code "Need to call #beginProducing first"}, which landed in
+     * {@link AbstractParallelEoSStreamProcessor#runUserFunction}'s failure handler and marked a record the user
+     * function had just processed successfully as FAILED - on every batch.
+     * <p>
+     * Whether that marking goes on to cause a redelivery is a race with the controller draining the mailbox, so it is
+     * covered end to end and at volume by {@code TransactionalBatchProduceTest}. This test asserts the state that race
+     * reads from, which is deterministic.
+     */
+    @SneakyThrows
+    @Test
+    void wholeBatchSucceedsWhenProducing() {
+        setupForHandDrivenRelease(2);
+
+        try (var pc = module.pc()) {
+            startWork(pc, 2);
+
+            pc.controlLoop(lockAcquiringUserFunction(), o -> {
+            });
+
+            var results = awaitWorkResults(pc, 2);
+
+            Truth.assertWithMessage("both records of the batch returned a result")
+                    .that(results)
+                    .hasSize(2);
+
+            for (var wc : results) {
+                Truth.assertWithMessage("offset %s: the user function succeeded, so it must not be recorded as failed",
+                                wc.offset())
+                        .that(wc.getNumberOfFailedAttempts())
+                        .isEqualTo(0);
+                Truth.assertWithMessage("offset %s: the user function succeeded", wc.offset())
+                        .that(wc.isUserFunctionSucceeded())
+                        .isTrue();
+            }
+
+            assertWithMessage("the produce lock must actually be given back, or commits would block forever")
+                    .that(producerManager)
+                    .hasNoProduceLockHolders();
+        }
+    }
+
+    /**
+     * The catch in {@link AbstractParallelEoSStreamProcessor#cleanUpContext} is not defensive decoration. It runs in
+     * {@code runUserFunction}'s {@code finally}, and <b>an exception thrown from a finally REPLACES the one
+     * propagating out of the catch above it</b> - plain try/finally does not attach it as suppressed the way
+     * try-with-resources would. A throwing release would therefore destroy the user function's real failure and
+     * report a produce-lock error in its place, which is strictly worse: by then the lock is unrecoverable either
+     * way, because {@code takeProducingLock} has already claimed it out of the context.
+     * <p>
+     * The release is made to fail with main's own mechanism rather than a mock: the context is handed a real lock
+     * and the read hold is then dropped behind its back, so {@code cleanUpContext} still finds a lock to return and
+     * {@code finishProducing}'s {@code ensureProduceStarted} check throws on zero holds. One term changed.
+     * <p>
+     * Found missing by codecov, which reported the catch block as the only uncovered lines this PR adds - a guard
+     * whose whole contract is "does not rethrow", with nothing proving it.
+     */
+    @SneakyThrows
+    @Test
+    void aFailedProduceLockReleaseMustNotReplaceTheUserFunctionsFailure() {
+        setupForHandDrivenRelease(1);
+
+        try (var pc = module.pc()) {
+            startWork(pc, 1);
+
+            var usersFailure = new RuntimeException("the user function's own failure");
+
+            pc.controlLoop(context -> {
+                ProduceLockHandover.acquireInto(producerManager, context);
+                // drop the hold while leaving the lock in the context, so the release is attempted and fails
+                context.getProducingLock().get().unlock();
+                throw usersFailure;
+            }, o -> {
+            });
+
+            var results = awaitWorkResults(pc, 1);
+
+            Truth.assertWithMessage("the record must be recorded as failed")
+                    .that(results.get(0).isUserFunctionSucceeded())
+                    .isFalse();
+
+            // THE ASSERTION THAT CARRIES IT, and it has to be the FUTURE rather than the recorded failure.
+            // runUserFunction marks the container failed inside its catch - onUserFunctionFailure runs BEFORE the
+            // finally - so lastFailureReason already holds the user's exception whether or not cleanUpContext
+            // rethrows. An earlier version of this test asserted that, passed, and passed just as happily with the
+            // catch replaced by a rethrow: vacuous. What the catch actually protects is the exception `throw e`
+            // sends out of runUserFunction, which is what lands in the worker's Future.
+            var thrown = assertThrows(java.util.concurrent.ExecutionException.class,
+                    () -> results.get(0).getFuture().get(20, TimeUnit.SECONDS));
+            Truth.assertWithMessage("THE POINT: the worker's future must carry the USER's failure. A throw out of "
+                            + "cleanUpContext's finally replaces the exception on its way out, so the real cause "
+                            + "would be gone and a produce-lock error reported in its place")
+                    .that(thrown.getCause())
+                    .isSameInstanceAs(usersFailure);
+        }
+    }
+
+    /**
+     * The release tests drive the control loop by hand, so they want a module that does not commit on every pass.
+     *
+     * @param batchSize 1 for the single-record release, 2 for the per-record-release defect
+     */
+    private void setupForHandDrivenRelease(int batchSize) {
+        setup(ParallelConsumerOptions.<String, String>builder()
+                .commitMode(PERIODIC_TRANSACTIONAL_PRODUCER)
+                // ModelUtils gives every record the same key, so KEY ordering would admit only one at a time
+                .ordering(UNORDERED)
+                .batchSize(batchSize)
+                // 10s: 2s is too tight on a CI JVM under PIT instrumentation
+                .commitLockAcquisitionTimeout(ofSeconds(10)), false);
+    }
+
+    /**
+     * Hands the produce lock to the real context and leaves it there, exactly as {@link ParallelEoSStreamProcessor}'s
+     * produce wrapper does - releasing it is the framework's job, not the user function's.
+     */
+    private Function<PollContextInternal<String, String>, List<Object>> lockAcquiringUserFunction() {
+        return context -> {
+            ProduceLockHandover.acquireInto(producerManager, context);
+            module.producerWrap().send(mock(ProducerRecord.class), (a, b) -> {
+            });
+            return UniLists.of();
+        };
+    }
+
+    private void startWork(AbstractParallelEoSStreamProcessor<String, String> pc, int recordCount) {
+        pc.subscribe(UniLists.of(mu.getTopic()));
+        pc.onPartitionsAssigned(mu.getPartitions());
+        pc.setState(State.RUNNING);
+
+        for (int i = 0; i < recordCount; i++) {
+            pc.registerWork(mu.createFreshWork());
+        }
+    }
+
+    /**
+     * Reads the work results back off the controller's inbound queue, which is where a completed record lands.
+     */
+    private List<WorkContainer<String, String>> awaitWorkResults(AbstractParallelEoSStreamProcessor<String, String> pc,
+                                                                 int expected) {
+        var seen = new ArrayList<WorkContainer<String, String>>();
+        await("work results reach the controller's inbound queue")
+                .atMost(ofSeconds(20))
+                .untilAsserted(() -> {
+                    for (var msg : pc.getWorkMailBox()) {
+                        var wc = msg.getWorkContainer();
+                        if (wc != null && !seen.contains(wc)) {
+                            seen.add(wc);
+                        }
+                    }
+                    Truth.assertThat(seen).hasSize(expected);
+                });
+        return seen;
     }
 
     /**

@@ -38,16 +38,16 @@ Blockers, collisions, and decisions someone is waiting on. Not a PR list - `gh` 
 <!-- post-merge: checked-begin - the chain is recorded as history and the outstanding item is stated
      against master rather than against a PR's live state, so nothing here turns false on a merge -->
 Three PRs, one dependency chain, declared with `depends on` in astubbs#262's body and enforced by the
-`Check PR Dependencies` required check. Both parents have merged - astubbs#261 on 2026-08-14, then
-astubbs#257 - so the chain is discharged and only astubbs#262 is still open. Kept because a reader who
-knows this work as a three-PR stack needs telling which parts are already master.
+`Check PR Dependencies` required check. **All three are master now** - astubbs#261, then astubbs#257,
+then astubbs#262, which was rebase-merged rather than squashed so its separable workstreams stayed
+separable in the log. Kept because a reader who knows this work as a three-PR stack needs telling that
+none of it is pending, and because the debt below outlived it.
 
-1. **astubbs#261**, merged - a terminally failed send left a partial result set visible at
-   `read_committed`.
-2. **astubbs#257**, merged - produce-lock double release. At `batchSize >= 2` the lock was taken per
-   poll context but released per record.
-3. **astubbs#262**, open - the battle test itself. **Rebase-merge, not squash**: it holds separable
-   workstreams, and squashing buries two real defect discoveries under one 5,000-line test commit.
+1. **astubbs#261** - a terminally failed send left a partial result set visible at `read_committed`.
+2. **astubbs#257** - produce-lock double release. At `batchSize >= 2` the lock was taken per poll
+   context but released per record.
+3. **astubbs#262** - the battle test itself, and the claim register that is now the standing gate on
+   the exactly-once headline.
 
 **The debt: astubbs#257's merged commit message understates the defect, and release notes are
 generated from the log.** It describes redelivery - "handed records back for a second delivery" - and
@@ -72,7 +72,10 @@ either an amended note in the release section when 0.6.0.0 is cut, or a follow-u
   assurance each item buys. The top one is not subtle: `-Dexcluded.groups=transactions` is a
   documented, supported invocation that runs **zero** claim proofs while the register reports every
   claim covered.
-- **Phase B, the transactional chaos scenario**, is deliberately deferred and should follow
-  **astubbs#29**. Calibrating its SLOs against a master that still carries the confluentinc#803
-  commit-lock deadlock would fold that defect into the baseline and then report the live bug as an
-  in-SLO event. This is the one place the transactional work and the astubbs#29 backlog actually meet.
+- **Phase B, the transactional chaos scenario, is now UNBLOCKED.** It was deferred behind
+  **astubbs#29** so its SLOs would not be calibrated against a master still carrying the
+  confluentinc#803 commit-lock deadlock, which would have folded that defect into the baseline and
+  then reported the live bug as an in-SLO event. astubbs#29 has merged, so that reason is spent and
+  the work is startable. What to check before starting: the fix closes the AB-BA cycle only in
+  `PERIODIC_CONSUMER_SYNC`, so a transactional scenario's baseline was never exposed to that edge -
+  do not assume the deferral bought this scenario anything it did not.

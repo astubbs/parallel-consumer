@@ -2249,8 +2249,12 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 // context. So the log is the whole signal, and it has to carry everything - the more so because the
                 // alternative destination, WorkContainer#future, is read by nothing in main
                 // (docs/inflight/bug-worker-future-swallows-framework-exceptions.md).
+                // Offsets, not the whole context - PollContextInternal's toString traverses the wrapped records
+                // and includes their keys and values. PollContextInternal#setProducingLock avoids that for the
+                // same reason, and this path was added without matching it; Codex review on astubbs#262 caught the
+                // inconsistency.
                 log.error("Could not return the produce lock for {} - it cannot be released now, and the next "
-                        + "transaction commit will block on it", context, e);
+                        + "transaction commit will block on it", context.getOffsets(), e);
             }
         });
     }

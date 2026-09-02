@@ -270,7 +270,7 @@ merged as a no-op - `git ls-files | grep -c CLAUDE.md` returned **0**. The three
 negated individually rather than with a blanket `!CLAUDE.md`; the reasoning is in `.gitignore`
 itself, next to the rule.
 
-**`.claude/settings.json`** - fourteen hook scripts across sixteen registrations, and the file is
+**`.claude/settings.json`** - seventeen hook scripts across twenty registrations, and the file is
 **tracked**. The entries below are the ones whose design decisions are worth recording here;
 `remind-inflight-on-push.sh` and `check-history-rewrite.sh` carry theirs in their own headers.
 The count is stated because it drifted: this said "five" while the file registered seven, which is
@@ -278,6 +278,26 @@ the same silent staleness the rest of this document exists to prevent. `.gitigno
 `/.claude/*` by contents rather than excluding the directory, with a comment anticipating exactly
 this; the negations `!/.claude/settings.json` and `!/.claude/hooks/**` open that door. Personal
 grants stay in `settings.local.json`, still ignored.
+
+**A HOOK NAMED FOR A TRIGGER IS A DESIGN SMELL, and `after-pr-create-refresh-cache.mjs` was the
+worked example - it is deleted.** It existed to reach into the in-flight tool's PR cache from
+outside and repair a staleness the cache would not admit to, and it is named for the event that
+repairs it rather than for anything it does. That framing hides the defect: it covered exactly ONE
+of the ways a pull request comes into existence - `gh pr create`, in a session that had the hook
+loaded - and none of the others, so a PR opened on the web, from another machine, or by another
+session still read as "no PR" until a TTL expired.
+
+**The fix was to give the cache a policy instead of an event.** `bin/lib/cache.mjs` now states
+per kind how long an answer lives and whether an ABSENCE may be stored at all, and refuses to store
+one where it may not - so "this branch has no PR" is re-asked rather than remembered, whoever
+created it and wherever. A cache that needs an external event to be correct is coupled to that
+event, and every path that does not fire it is silently wrong. **The rule that generalises: a hook
+may decide WHEN to act; it may not be load-bearing for whether another component is correct.**
+
+The direction that hook was reaching for is still right, and still wanted - hooks should CALL the
+in-flight tool rather than reimplement what it needs. That migration is
+[`docs/inflight/ci-inflight-absorbs-the-query-half.md`](inflight/ci-inflight-absorbs-the-query-half.md);
+what this one got wrong was not calling the tool but owning the tool's correctness.
 
 - `PreToolUse` on `Bash`, `if` `Bash(git commit *)`, runs `.claude/hooks/pre-commit-gate.sh`, a
   wrapper around the same pre-commit script. Belt-and-braces: it catches the agent even in a clone
@@ -443,6 +463,37 @@ grants stay in `settings.local.json`, still ignored.
   context the agent's own grep does the rest, and a hook that injected bodies would cost per session
   what the whole corpus costs to read. It is the clearest case in this file of the distinction the
   whole harness turns on: the rule was there, was read, and was not run - so it became a mechanism.
+
+- `PreToolUse` on `Write|Edit|MultiEdit` runs
+  `.claude/hooks/inject-solutions-for-named-components.mjs`, which names the `docs/solutions/`
+  write-ups whose `related_components` appear in the text being written. It is the relevance half of
+  the entry above: session-start injection answers *does a document exist*, this answers *does one
+  apply to what I am writing now*, and the two fail differently. Once per write-up per session, and
+  it never blocks. **The corpus it reads is the tree the file is going into**, derived from the
+  write itself the way the pre-commit gate derives the commit's tree from its command -
+  `$CLAUDE_PROJECT_DIR` names the session's root, and a write into another worktree was matched
+  against the wrong tree's corpus before that ordering existed. Its self-test asserts the
+  never-blocks contract on every invocation - exit 0, nothing on stderr - because a helper that
+  mapped a crash to silence once passed a mutant that blocked every edit.
+
+  It exists because `related_components` and `applies_when` were **inert**. A majority of write-ups
+  carried an `applies_when`, and `grep -rln applies_when bin/ .claude/` returned nothing - retrieval
+  metadata written, reviewed, and read by no layer. Meanwhile
+  `docs/solutions/architecture-patterns/two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md`
+  records that three separate 2026 investigations each re-derived part of it before acting; a fourth
+  followed on astubbs#225, which proposed rejoining the consumer group while holding the very lock
+  `onPartitionsRevoked` spins on. A review round caught it. One paragraph would have.
+
+  **It matches the text, not the file path, and that was measured rather than assumed.** Against the
+  incident that produced it, path matching fires zero times - the whole episode was spent writing a
+  requirements document and no Java file was touched. Text matching fires five, including both
+  write-ups that would have prevented the defect. It reads `related_components` only:
+  `applies_when` is free prose, and a fuzzy match on it rebuilds the noise that makes a flat list
+  ineffective, so that field stays what a human reads once the write-up is in front of them.
+
+  Coverage is bounded by how many write-ups name a real Java type - a minority of the corpus, since
+  the field also carries concepts like `documentation` and `control-arm`, which match no filename
+  and are inert here by design rather than by accident.
 
 The checklist itself is a plain doc, not embedded in the hook, so Codex and anything else reading
 `AGENTS.md` gets the same words from the same file. Only the delivery is Claude-specific - and the

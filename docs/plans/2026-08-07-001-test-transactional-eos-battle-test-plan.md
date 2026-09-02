@@ -177,6 +177,10 @@ output is recorded rather than lost.
 KTD1. **Do not re-implement the batch produce-lock fix.** astubbs#257
 (`fix/produce-lock-double-release`) already fixes it and ships `TransactionalBatchProduceTest` and
 `ProduceLockReleaseTest`. This plan consumes that PR as a calibration arm and adds neither test.
+(Citation repair: `ProduceLockReleaseTest` no longer exists as a class - its two tests were merged
+into `ProducerManagerTest` on astubbs#262, because explaining one lock lifecycle in two classes is
+what let the halves drift. Grep `produceLockIsReleasedExactlyOnce` to find them. The claim above is
+unchanged: astubbs#257 is still what shipped them.)
 Rationale: another worktree owns those files; duplicating them collides on merge and splits the
 diagnosis.
 
