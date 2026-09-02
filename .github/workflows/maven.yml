@@ -337,11 +337,38 @@ jobs:
       # months while Codecov could not read the repository at all - the action authenticates with a
       # token, which needs no repo access, so ingest "worked" while everything downstream did nothing.
       # Judge this by whether rates appear in the dashboard, never by a green step.
-      - name: Upload test results to Codecov
+      # The uploader's CLI does NOT expand `**` itself, and nothing passes these through a shell, so
+      # a glob handed to `files:` arrives literally and matches nothing. The first run proved it:
+      # `Some files were not found --- {"not_found_files": ["**/target/surefire-reports/TEST-*.xml", ...]}`
+      # followed by `Found 55 test_results files` - the config was inert and the CLI had silently
+      # fallen back to its own tree-wide `*test*.xml` search, which swept up 18 logback CONFIG files
+      # (logback-test.xml, logback-integration-test.xml, logback-temp-test.xml) alongside 39 genuine
+      # reports. The step was green throughout. Expanding here is what makes `files:` mean anything.
+      - name: Collect test report files for Codecov
         if: ${{ !cancelled() }}
-        uses: codecov/test-results-action@v1
+        id: testreports
+        run: |
+          files=$(find . -type f \
+            \( -path '*/target/surefire-reports/TEST-*.xml' \
+            -o -path '*/target/failsafe-reports/TEST-*.xml' \) | paste -sd, -)
+          echo "files=$files" >> "$GITHUB_OUTPUT"
+          if [ -z "$files" ]; then
+            echo "::warning::no surefire/failsafe reports found - skipping the test-results upload"
+          else
+            echo "found $(printf '%s' "$files" | tr ',' '\n' | wc -l) report file(s) to upload"
+          fi
+
+      - name: Upload test results to Codecov
+        # Skipped when the collector found nothing, rather than letting the CLI fall back to its
+        # tree-wide search - an empty `files:` is exactly what produced the junk sweep above.
+        if: ${{ !cancelled() && steps.testreports.outputs.files != '' }}
+        uses: codecov/codecov-action@v5
         with:
-          files: '**/target/surefire-reports/TEST-*.xml,**/target/failsafe-reports/TEST-*.xml'
+          report_type: test_results
+          files: ${{ steps.testreports.outputs.files }}
+          # The second lock on the junk sweep: even if `files` is somehow unusable, never let the
+          # CLI go looking for `*test*.xml` on its own again.
+          disable_search: true
           flags: ${{ matrix.suite }}
           token: ${{ secrets.CODECOV_TOKEN }}
 
