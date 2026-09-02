@@ -802,7 +802,7 @@ class ProducerManagerTest {
         committer.start();
 
         LatchTestUtils.awaitLatch(committerHoldsLock);
-        Truth.assertThat(producerManager.isTransactionCommittingInProgress()).isTrue();
+        assertThat(producerManager).isTransactionCommittingInProgress();
 
         // The whole point: this returns, rather than waiting out commitLockAcquisitionTimeout (5 minutes by
         // default) on a thread that is inside consumer.poll().
@@ -815,16 +815,16 @@ class ProducerManagerTest {
 
     @Test
     void revocationAcquiresWhenNoCommitIsRunning() {
-        Truth.assertThat(producerManager.isTransactionCommittingInProgress()).isFalse();
+        assertThat(producerManager).isNotTransactionCommittingInProgress();
 
         Truth.assertWithMessage("an uncontended revocation must be able to commit")
                 .that(producerManager.tryAcquireCommitLockForRevocation())
                 .isTrue();
-        Truth.assertThat(producerManager.isCommitLockHeldByCurrentThread()).isTrue();
+        assertThat(producerManager).isCommitLockHeldByCurrentThread();
 
         // Handed to the ordinary commit path, whose postCommit() releases it - the caller must not.
         producerManager.postCommit();
-        Truth.assertThat(producerManager.isTransactionCommittingInProgress()).isFalse();
+        assertThat(producerManager).isNotTransactionCommittingInProgress();
     }
 
     /**
@@ -833,10 +833,50 @@ class ProducerManagerTest {
      * which may already own the lock, so callers check {@code isCommitLockHeldByCurrentThread()} first and this
      * refuses loudly if one forgets.
      */
+    /**
+     * The leak this guards is not hypothetical. {@code AbstractOffsetCommitter#retrieveOffsetsAndCommit} calls
+     * {@code preAcquireOffsetsToCommit()} OUTSIDE its {@code try/finally}, and this class's implementation of
+     * that is {@code acquireCommitLock(); flush();} - so a {@code flush()} that throws escapes before the
+     * {@code finally} that would have called {@code postCommit()}. On the revocation path the callback catches
+     * and returns, so without an explicit release the write lock is stranded on a thread that has left.
+     */
+    @Test
+    void releasingAfterARevocationCommitFreesALockThePostCommitPathDidNot() {
+        Truth.assertWithMessage("a revocation must be able to take an uncontended lock")
+                .that(producerManager.tryAcquireCommitLockForRevocation()).isTrue();
+        assertThat(producerManager).isCommitLockHeldByCurrentThread();
+
+        // Stands in for "the commit threw before postCommit() could run".
+        producerManager.releaseCommitLockIfHeldByCurrentThread();
+
+        assertThat(producerManager).isNotCommitLockHeldByCurrentThread();
+        assertThat(producerManager).isNotTransactionCommittingInProgress();
+        Truth.assertWithMessage("a later revocation must not be permanently locked out by the stranded hold")
+                .that(producerManager.tryAcquireCommitLockForRevocation()).isTrue();
+        producerManager.releaseCommitLockIfHeldByCurrentThread();
+    }
+
+    /**
+     * Idempotence is what lets the caller put it in a {@code finally} without knowing whether the commit path
+     * already released - which is the happy path, and by far the common one.
+     */
+    @Test
+    void releasingWhenNothingIsHeldIsANoOp() {
+        assertThat(producerManager).isNotCommitLockHeldByCurrentThread();
+
+        producerManager.releaseCommitLockIfHeldByCurrentThread();
+        producerManager.releaseCommitLockIfHeldByCurrentThread();
+
+        assertThat(producerManager).isNotCommitLockHeldByCurrentThread();
+        Truth.assertWithMessage("the lock must still be usable after redundant releases")
+                .that(producerManager.tryAcquireCommitLockForRevocation()).isTrue();
+        producerManager.releaseCommitLockIfHeldByCurrentThread();
+    }
+
     @Test
     void revocationRefusesToReenterALockThisThreadAlreadyHolds() throws Exception {
         producerManager.preAcquireOffsetsToCommit();
-        Truth.assertThat(producerManager.isCommitLockHeldByCurrentThread()).isTrue();
+        assertThat(producerManager).isCommitLockHeldByCurrentThread();
 
         var thrown = assertThrows(IllegalStateException.class,
                 () -> producerManager.tryAcquireCommitLockForRevocation());

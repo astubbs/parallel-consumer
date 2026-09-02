@@ -679,15 +679,30 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                     "Uncommitted offsets will be re-delivered to the new assignee. See confluentinc#857.");
             return;
         }
+        // Tracked rather than inferred: only a lock THIS method took may be released here. On the close path the
+        // control thread may already own it, and releasing another owner's hold would be worse than leaking one.
+        boolean tookTransactionLock = false;
         try {
-            if (!tryTakeTransactionLockForRevoke(partitions)) {
-                return;
+            if (options.isUsingTransactionCommitMode()) {
+                //noinspection OptionalGetWithoutIsPresent - transactional mode implies a producer manager
+                var pm = producerManager.get();
+                // The close path reaches this callback on the control thread, which may already own the lock.
+                // Re-taking it would push the write hold count to 2, which postCommit() rejects outright.
+                if (!pm.isCommitLockHeldByCurrentThread()) {
+                    if (!pm.tryAcquireCommitLockForRevocation()) {
+                        log.warn("Declining the revocation commit for {} - a transaction commit is already in " +
+                                "progress. The uncommitted offsets stay dirty and travel to the partitions' new " +
+                                "assignee, which reprocesses them (at-least-once). Waiting here instead would " +
+                                "burn max.poll.interval.ms and evict this member - see " +
+                                "astubbs/parallel-consumer#44.", partitions);
+                        return;
+                    }
+                    tookTransactionLock = true;
+                }
             }
             log.info("Acquired commitLock on revoke without contention - committing offsets " +
                     "inline. See confluentinc#857.");
-            committer.retrieveOffsetsAndCommit();
-            clearCommitCommand();
-            this.lastCommitTime = Instant.now();
+            performCommit();
         } catch (Exception e) {
             // Restore the flag rather than swallowing the interrupt: this runs inside the poll
             // thread's rebalance callback, and dropping it strands whatever is waiting on it.
@@ -702,38 +717,30 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                     log.warn("Failed to commit offsets during revoke: {}",
                             ThrowableUtils.describeWithRootCause(e), e));
         } finally {
+            if (tookTransactionLock) {
+                // NOT redundant with postCommit(). retrieveOffsetsAndCommit() calls preAcquireOffsetsToCommit()
+                // OUTSIDE its try/finally, and that is where flush() runs - so a throwing flush escapes before
+                // the finally that would have released this. Leaking it here would be permanent: every later
+                // revocation declines forever and every control-thread commit throws
+                // ConcurrentModificationException. Idempotent, so the happy path costs nothing.
+                //noinspection OptionalGetWithoutIsPresent - guarded by tookTransactionLock
+                producerManager.get().releaseCommitLockIfHeldByCurrentThread();
+            }
             commitLock.unlock();
         }
     }
 
     /**
-     * The transactional half of the revocation gate - see {@link #tryCommitOffsetsOnRevoke}. A no-op returning
-     * {@code true} in the consumer-commit modes, where there is no producer transaction lock to contend for.
-     *
-     * @return true if the caller may proceed with the commit; false if a transaction commit is already running
-     *         and the caller must skip it
+     * The commit itself, shared by the control thread's {@link #commitOffsetsThatAreReady()} and the revocation
+     * path's {@link #tryCommitOffsetsOnRevoke}. Extracted so the two cannot drift: they differ in how they take
+     * the locks, never in what a commit is.
+     * <p>
+     * Callers hold {@link #commitLock}.
      */
-    private boolean tryTakeTransactionLockForRevoke(Collection<TopicPartition> partitions) {
-        if (!options.isUsingTransactionCommitMode()) {
-            return true;
-        }
-        //noinspection OptionalGetWithoutIsPresent - transactional mode implies a producer manager
-        var pm = producerManager.get();
-
-        // The close path reaches this callback on the control thread, which may already own the lock.
-        // Re-taking it would push the write hold count to 2, which postCommit() rejects outright.
-        if (pm.isCommitLockHeldByCurrentThread()) {
-            return true;
-        }
-        if (pm.tryAcquireCommitLockForRevocation()) {
-            // Handed to the commit path, whose postCommit() releases it in a finally - so this must not.
-            return true;
-        }
-        log.warn("Declining the revocation commit for {} - a transaction commit is already in progress. " +
-                "The uncommitted offsets stay dirty and travel to the partitions' new assignee, which " +
-                "reprocesses them (at-least-once). Waiting here instead would burn max.poll.interval.ms " +
-                "and evict this member - see astubbs/parallel-consumer#44.", partitions);
-        return false;
+    private void performCommit() throws TimeoutException, InterruptedException {
+        committer.retrieveOffsetsAndCommit();
+        clearCommitCommand();
+        this.lastCommitTime = Instant.now();
     }
 
     /**
@@ -2017,9 +2024,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         commitLock.lock();
         try {
             log.debug("Committing offsets that are ready...");
-            committer.retrieveOffsetsAndCommit();
-            clearCommitCommand();
-            this.lastCommitTime = Instant.now();
+            performCommit();
         } finally {
             commitLock.unlock();
         }

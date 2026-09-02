@@ -491,13 +491,41 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
      * max.poll.interval.ms"</i>), and the same one Kafka Streams falls back to when its own inline revoke
      * commit exhausts {@code max.block.ms}.
      * <p>
-     * <b>The caller must not release what this returns.</b> On success the lock is handed to the ordinary commit
-     * path, whose {@link #postCommit()} releases it in a {@code finally} - so a caller that also released would
-     * unlock a lock it no longer owns.
+     * <b>Release is the caller's responsibility, via {@link #releaseCommitLockIfHeldByCurrentThread()}.</b> On
+     * the happy path the ordinary commit path's {@link #postCommit()} gets there first and that call is a no-op;
+     * but {@code postCommit()} is NOT reached when a pre-commit step throws, so the caller must still make the
+     * call. See that method for why.
      *
      * @return true if the lock was acquired and the caller should proceed with the commit; false if a commit is
      *         already running and the caller must skip it
      */
+    /**
+     * Releases the commit lock if - and only if - this thread still holds it. Idempotent by design.
+     * <p>
+     * <b>Why the revocation path cannot simply trust {@link #postCommit()} to do this.</b>
+     * {@code AbstractOffsetCommitter#retrieveOffsetsAndCommit} calls {@code preAcquireOffsetsToCommit()}
+     * <em>outside</em> its {@code try/finally}, and this class's implementation of that is
+     * {@code acquireCommitLock(); flush();}. A {@code flush()} that throws - a live possibility during a
+     * rebalance, where a competing instance can fence this producer - therefore escapes before the
+     * {@code finally} that would have released the lock.
+     * <p>
+     * On the ordinary control-thread path that is survivable, because the exception kills the instance anyway.
+     * On the revocation path it is not: the callback catches, logs and returns, so a transient producer error
+     * would strand the write lock on a thread that has left, and from then on every revocation declines forever
+     * while every control-thread commit throws {@code ConcurrentModificationException}. That trades this issue's
+     * unbounded wait for a permanent commit deadlock, which is strictly worse.
+     * <p>
+     * After a successful commit the hold count is already zero and this is a no-op, so the caller may always
+     * call it in a {@code finally} without knowing which happened.
+     */
+    public void releaseCommitLockIfHeldByCurrentThread() {
+        if (producerTransactionLock.isWriteLockedByCurrentThread()) {
+            log.warn("Releasing a commit lock the commit path did not release - a pre-commit step threw. " +
+                    "See releaseCommitLockIfHeldByCurrentThread().");
+            producerTransactionLock.writeLock().unlock();
+        }
+    }
+
     public boolean tryAcquireCommitLockForRevocation() {
         // Re-entrant acquisition would take the hold count to 2, which postCommit() rejects outright
         // ("Lock held too many times"). The close path reaches the revoke callback on the control thread, which
