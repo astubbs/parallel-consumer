@@ -912,6 +912,33 @@ NOTE:: As with the `synchronous` processing mode, this will also block the proce
 
 CAUTION: This cannot be true for any externally integrated third party system, unless that system is __idempotent__.
 
+[[transaction-system-verified]]
+==== What is machine-checked, as of 2026-08-08
+
+The guarantees on this page are enumerated as a register (`TransactionalClaim`) and each one is tied to a test.
+A build fails if a claim recorded as covered has no test, and also if a claim's sentence here is edited without updating the register - so this section cannot quietly drift from what is actually verified.
+
+The distinction between the two lists below is deliberate, because it is what the evidence actually supports.
+
+*Verified against a real broker:* an open transaction is invisible at `read_committed` while a `read_uncommitted` reader sees it; a `read_committed` consumer is blocked at the first still-open transaction rather than filtering around it; an aborted or timed-out transaction never becomes visible; a crash before commit leaves neither the results nor the source offset, and the replay commits them together with each result present exactly once; and if one `send` in a `pollAndProduceMany` result set fails terminally - for example a record over `max.request.size` - none of that result set becomes visible.
+
+*Verified in-process, against the lock and options machinery with a mocked producer:* all parallel workers share one bulk transaction; no record is produced whose source offset is excluded from the transaction being committed; processing is blocked for the duration of the commit lock; and the commit interval default changes when transactional mode is selected.
+These are real proofs of PC's own logic, but no broker takes part in them - so read them as statements about what PC does, not about what a cluster observed.
+
+Each claim in both lists has a negative control that was observed to fail: the mechanism it guards was deliberately broken and the test went red for the stated reason.
+
+The terminally-failed-send case above used to leave a *partial* result set visible to a `read_committed` consumer, silently, because a producer callback threw and pre-empted the Kafka client's own transition of the transaction into an abortable state.
+It was found by these tests and fixed; the test that found it is now the regression test.
+
+*Known gap, not fixed:* the commit-interval default is applied by comparing your configured value against the default by reference identity, so explicitly setting `commitInterval(Duration.ofSeconds(5))` - the same value as the non-transactional default - is treated as "not set" and silently replaced with 100ms.
+Any other explicit value survives.
+See `docs/inflight/bug-commit-interval-identity-check.md`.
+
+One guarantee is attributed rather than re-proved here, and is marked as such in the register: the commit-lock timeout failing fast.
+It is covered by an existing test, but no negative control was observed for it, so it is not recorded as proved.
+The produce-lock timeout returning the record for retry started out the same way and no longer is: the eager-processing test holds the commit lock shut until a worker's acquisition is observed to time out, then watches that record's retry succeed, and removing the hold turns it red.
+It is recorded `PROVED`.
+
 For implementations details, see the <<Transactional System Architecture>> section.
 
 .From the Options Javadoc
@@ -1446,6 +1473,31 @@ docker container ls --filter 'label=org.testcontainers=true'
 
 See https://github.com/testcontainers/testcontainers-java/pull/1781[this testcontainers PR] for details on the reusable containers feature.
 
+=== Searching the repository across every branch
+
+Most of what this project knows about itself is not on `master`.
+Measured 2026-09-01: **580 of the 901 documents under `docs/` exist only on branches that have not merged**, because a note travels with the work that produced it and many of those branches never land.
+
+So `grep` in your checkout answers a narrower question than the one you asked, and returns a false negative carrying the authority of a completed check.
+
+`bin/inflight.mjs` is the front door for asking across every ref instead:
+
+[source,bash]
+----
+node bin/inflight.mjs help                                  # every command, and when to reach for it
+node bin/inflight.mjs prior-art --headings <term>           # before forming any hypothesis
+node bin/inflight.mjs note find <fuzzy-name>                # which note is this, and who carries it
+node bin/inflight.mjs note drift <path>                     # what other branches have that master does not
+node bin/inflight.mjs branch <ref>                          # what a branch is, and whether anything tracks it
+node bin/inflight.mjs stranded                              # work that will be lost if nobody acts
+----
+
+Every command exits `0` when it *ran* — whatever it found — and `2` when it could not run.
+That distinction is the point: "nothing, across 436 refs" is a result, and a search that never happened is not.
+
+Worked examples, including the CI failure that this tool diagnosed on its own pull request, are in link:docs/inflight-tool.md[`docs/inflight-tool.md`].
+It reads the repository only; it is not a task tracker and owns no schema of its own.
+
 == Implementation Details
 
 === Core Architecture
@@ -1492,6 +1544,81 @@ This is not an _exactly once guarantee_, as message replay cannot be prevented a
 CAUTION: Note that Kafka's Exactly Once Semantics (EoS) (transactional processing) also does not prevent _duplicate message replay_ - it *presents* an _effectively once_ result messages in Kafka topics.
 Messages may _still_ be replayed when using `EoS`.
 This is an important consideration when using it, especially when integrating with thrid party systems, which is a very common pattern for utilising this project.
+
+[[reducing-duplicate-replay]]
+==== Reducing duplicate replay: choose the cooperative assignor, and drain on close
+
+Two settings dominate how many messages get replayed when your consumer group changes membership, and
+neither is specific to this library -- they are ordinary Kafka consumer behaviour. They are called out
+here because the effect is large, it is easy to leave on the worse setting by accident, and the cost
+lands as duplicate work in *your* processing function.
+
+. *Use `CooperativeStickyAssignor`.* Under the default eager protocol, *any* membership change revokes
+*every* partition from *every* member, so all in-flight work everywhere is abandoned and redelivered --
+including on members that were not joining or leaving. Cooperative rebalancing keeps existing
+assignments and moves only what must move.
+. *Close by draining* (`closeDrainFirst()`), not `close()`. `close()` is
+`closeDontDrainFirst()`: it abandons in-flight work rather than finishing it, so that work is
+redelivered to whoever picks the partition up. Draining lets it finish and commit first.
+
+The ordering matters: the assignor is the larger effect by far, because it governs work abandoned on
+*every* member, while the close mode only governs the work of the instance actually shutting down.
+
+.Duplicate deliveries under deliberate rebalance churn, 250,000 records
+[cols="2,1,1", options="header"]
+|===
+| Configuration | Duplicates | Share of total
+
+| Eager assignor, `close()`
+| 2,421
+| ~1.0%
+
+| Eager assignor, `closeDrainFirst()`
+| 2,007
+| ~0.8%
+
+| `CooperativeStickyAssignor`, `close()`
+| 405
+| ~0.16%
+
+| `CooperativeStickyAssignor`, `closeDrainFirst()`
+| 369
+| ~0.15%
+|===
+
+CAUTION: *Where these numbers come from, and what they are not.* They were measured on 2026-08-19 by
+this project's *chaos test suite* -- `ChaosRevokeUnderWorkIT` and its cooperative and draining
+variants -- on a single seed, `4734674029169027864`, one run per configuration. That suite stops and
+restarts fleet members every few hundred milliseconds for a solid minute while deliberately slow
+records are in flight, and is built to be far more hostile than production precisely so effects like
+this are visible at all.
++
+So: *do not read these as rates you should expect.* A normally-operating deployment rebalances
+rarely and would see a small fraction of this, and one run per cell is a direction rather than a
+precise figure. The *relative* ordering between the four configurations is the part that carries
+over, and it is large enough that a single run establishes it.
++
+To regenerate them, run the four cells against the same seed and count deliveries beyond the
+expected record total:
++
+[source,bash]
+----
+./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+  -Dincluded.groups=chaos -Dexcluded.groups= \
+  -Dchaos.seed=4734674029169027864 \
+  -Dit.test='ChaosRevokeUnderWorkIT'                  # eager, close()
+# then ChaosRevokeUnderWorkDrainIT, ChaosRevokeUnderWorkCooperativeIT,
+# ChaosRevokeUnderWorkCooperativeDrainIT for the other three cells
+----
++
+NOTE: A forthcoming demonstration application will supersede this table by running these
+configurations interactively -- against your own topic and your own processing function, which
+answers the question a published table never can.
+
+None of this makes replay impossible, and nothing can: as stated above, replay across failure cannot
+be prevented, so a processing function that must not repeat side effects still needs to be idempotent
+or externally deduplicated. These settings reduce how often you pay that cost, not whether you must
+handle it.
 
 As mentioned previously, offsets are always committed in the correct order and only once all previous messages have been successfully processed; regardless of <<ordering-guarantees,ordering mode>> selected.
 We call this the "highest committable offset".

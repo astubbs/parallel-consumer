@@ -49,6 +49,7 @@ shutdown is a known limit rather than an accident.
 ## Why fixing the defect does not close this
 
 astubbs#177 is the reported *defect* - a commit timeout reporting the wrong cause, and the causes
+<!-- post-merge: checked -->
 behind it - addressed by astubbs#204 (reporting, retry budget) and astubbs#29 (the AB-BA deadlock).
 Even with a correct, honestly-reported commit failure, PC still terminates and the application still
 has no say. That is what `ndqvinh2109` was patching around, and it survives both fixes.

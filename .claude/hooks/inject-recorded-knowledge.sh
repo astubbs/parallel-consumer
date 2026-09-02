@@ -77,6 +77,48 @@ emit "you know what exists; grep the ones that look close. Skipping this is the 
 emit "skipped, and its failure is silent - you rediscover the problem and it feels like progress."
 emit ""
 
+# THIS INDEX IS BRANCH-SCOPED, AND SAYING SO IS THE POINT.
+#
+# Every enumeration in this file - `find docs/solutions`, `find docs/plans`, `grep -rl docs/inflight`
+# - reads the WORKING TREE, so it lists what the current branch carries and nothing else. Most of
+# this repo's documentation has never landed on master: notes, plans and write-ups are authored on
+# the branch that produced them and stay there until that branch merges, which many never do.
+#
+# An index that is silently partial is worse than no index, because it reads as complete. On
+# 2026-09-01 a session investigating astubbs/parallel-consumer#44 ran all six AGENTS.md checks from
+# master, got a plausible-looking set of hits, and missed a decomposition plan, an architecture
+# write-up on the exact seam under investigation, and a sibling-defect note - all of them
+# branch-only, none of them findable by any command the table gave it.
+#
+# So the block below states the gap in the same breath as the list, and names the one command that
+# closes it. Cost is one `git grep` across every ref, in a single process.
+branch_only_note=$(
+    set -uo pipefail
+    refs=$(git for-each-ref --format='%(refname:short)' refs/heads refs/remotes/origin 2>/dev/null \
+        | grep -v '/HEAD$') || exit 0
+    [ -n "$refs" ] || exit 0
+    baseline=origin/master
+    git rev-parse --verify --quiet "$baseline" >/dev/null 2>&1 || baseline=master
+    # shellcheck disable=SC2086 # word splitting is how the ref list reaches git grep
+    everywhere=$(git grep -l -I -E '.|^$' $refs -- 'docs/' 2>/dev/null | cut -d: -f2- | sort -u | wc -l) || exit 0
+    here=$(git ls-tree -r --name-only "$baseline" -- docs/ 2>/dev/null | wc -l) || exit 0
+    [ "$everywhere" -gt 0 ] && [ "$here" -gt 0 ] && [ "$everywhere" -gt "$here" ] || exit 0
+    echo "$((everywhere - here)) $everywhere"
+) || branch_only_note=""
+
+if [ -n "$branch_only_note" ]; then
+    set -- $branch_only_note
+    emit "**This list is what the CURRENT BRANCH carries, and that is not all of it.** \`$1\` of the"
+    emit "\`$2\` documents under \`docs/\` across every ref exist only on branches that have not merged,"
+    emit "so nothing below names them and no working-tree grep can reach them. To search all of it:"
+    emit ""
+    emit "    node bin/inflight.mjs prior-art <mechanism> [<mechanism>...]"
+    emit ""
+    emit "Run it before concluding \"no prior art\" - that conclusion is otherwise a false negative"
+    emit "wearing the authority of a completed check."
+    emit ""
+fi
+
 current=""
 while IFS= read -r f; do
     category=$(basename "$(dirname "$f")")

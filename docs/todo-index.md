@@ -186,6 +186,10 @@ that line, leave it in the code - it will show up here.
 
 - todo multi commit mode, multi partition count, multi instance count? 2,3,10,100? more instances than partitions, more partitions than instances
 
+**`parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/MultiInstanceRebalanceTest.java`**
+
+- TODO(refactor): settle the residual-failure attribution — see
+
 **`parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/MultiTopicTest.java`**
 
 - When consumer-interface #XXX is merged, could just poll PC directly (see commented out assertCommit below).

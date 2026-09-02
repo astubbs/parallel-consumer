@@ -42,7 +42,7 @@ import { readFileSync, writeFileSync, existsSync, globSync, mkdtempSync, rmSync,
 import { tmpdir } from 'node:os'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { verdictFor, FAIL_BELOW, WARN_BELOW } from './lib/throughput-verdict.mjs'
+import { verdictFor, displayRatio, headlineFor, FAIL_BELOW, WARN_BELOW } from './lib/throughput-verdict.mjs'
 
 // Anchored like the shell original's `cd "$ROOT"`. Without it the relative paths below resolve
 // against the caller's directory, and the gate reports "nothing in scope" - a clean tree - when what
@@ -95,9 +95,28 @@ const rateFrom = text =>
 // path, while the exit that actually fires in practice - the bootstrapping 404 below - returned
 // earlier and wrote nothing. Two exits, one reporting, and the silent one was the common case. If you
 // add an exit, it writes a report or it is the same bug again.
-const writeReport = body => {
+// EVERY report carries a machine-readable payload, and that is not decoration. The PR comment is
+// updated in place, so without it each push destroys the only record of what the previous push
+// measured, and the reader gets a number with nothing to compare it to. The workflow reads this back
+// off its own last comment to render a delta and to notice when the STATUS changed.
+//
+// THE `pc-throughput-data` MARKER IS WRITTEN HERE AND PARSED IN TWO OTHER PLACES, deliberately
+// unshared: the reader in `.github/workflows/maven.yml` is a YAML-embedded github-script that cannot
+// import this module, and the one in `bin/test-check-throughput-regression.mjs` is independent ON
+// PURPOSE - a test that parsed with the producer's own code would agree with it by construction,
+// which is the exact failure the runtime test replaced. Nothing enforces that the three agree, so if
+// you change the marker's shape, `grep -rn pc-throughput-data` is the list you must change.
+//
+// The status is set into `reportStatus` on the line before each call rather than passed as an
+// argument. That is deliberate: the report bodies are template literals containing escaped
+// backticks, and an earlier attempt to add a second argument landed the status INSIDE the prose of
+// all six messages, because the closing `) it matched was an escaped one in the text. A separate
+// assignment cannot go wrong that way.
+let reportStatus = 'unset'
+const writeReport = (body, data = {}) => {
   mkdirSync('target', { recursive: true })
-  writeFileSync(REPORT, body + '\n')
+  const payload = JSON.stringify({ status: reportStatus, ...data })
+  writeFileSync(REPORT, `${body}\n\n<!-- pc-throughput-data: ${payload} -->\n`)
   console.log(body.replace(/[|*#]/g, '').replace(/\n{2,}/g, '\n'))
 }
 
@@ -117,6 +136,7 @@ if (!(observedRate > 0)) {
   // A missing rate is a finding, not a quiet pass: the test did not run, or the emitter is no longer
   // reached, and both look identical to a clean lane otherwise.
   console.error(`check-throughput-regression: no usable rate for ${SUBJECT} in ${summaryFile}.`)
+  reportStatus = 'no-rate'
   writeReport(`### 🟠 Throughput — no rate to report
 
 The performance lane ran but produced no usable \`recordsPerSecond\` for \`${SUBJECT}\`. Either the test did not run, or \`ThroughputReport\` is no longer reached.
@@ -126,15 +146,41 @@ The performance lane ran but produced no usable \`recordsPerSecond\` for \`${SUB
 }
 if (!(observedControl > 0)) {
   console.error('check-throughput-regression: no control class ran, so machine speed cannot be cancelled.')
+  reportStatus = 'no-control'
   writeReport(`### 🟠 Throughput — no control ran
 
-| | |
+| What | Value |
 |---|---|
 | **This run** | ${observedRate} rec/s |
 
 None of the control classes (\`${CONTROLS.join(', ')}\`) produced a time, so machine speed cannot be cancelled and no comparison is possible. The raw number above is recorded but comparable to nothing.
 
 **Not a pass.**`)
+  process.exit(CANNOT)
+}
+// THE THIRD NOT-A-PASS GUARD, AND IT WAS THE ONLY ONE MISSING. `verdictFor` has a `no-subject`
+// sentinel that nothing between here and the call site could ever produce a report for: the
+// destructure below leaves `ratio` undefined, `${ratio.toFixed(3)}` throws while the template is
+// being built, and Node exits 1 - which is this file's own code for VIOLATION. A subject test that
+// did not run therefore read as a REGRESSION, and did it while writing no report at all, breaking
+// the "EVERY EXIT WRITES A REPORT" rule stated above by the one exit that never reached writeReport.
+//
+// Ordered AFTER the control guard, not before it as in `verdictFor`. When both are absent the
+// broader fact is the useful one - nothing in the lane produced per-method times - and naming the
+// subject alone would send the reader looking at one test.
+if (!(observedSubject > 0)) {
+  console.error(`check-throughput-regression: no per-method time for ${SUBJECT}, so there is nothing to compare.`)
+  reportStatus = 'no-subject'
+  writeReport(`### 🟠 Throughput — the subject test did not run
+
+| What | Value |
+|---|---|
+| **This run** | ${observedRate} rec/s |
+| Control tests took | ${observedControl.toFixed(1)}s |
+
+The control classes produced times but \`${SUBJECT}\` — the test this check exists to measure — produced none. Either it did not run in this lane, or its failsafe report did not reach the glob.
+
+**Not a pass.** A rate was reported without the test that earns it, and that looks identical to a clean lane from the outside.`)
   process.exit(CANNOT)
 }
 
@@ -153,9 +199,10 @@ try {
   // workflow therefore always failed its own check, blaming the wrong thing.
   const err = `${e?.stderr ?? ''}${e?.stdout ?? ''}${e?.message ?? ''}`
   if (/404|could not find any workflows|not found/i.test(err)) {
+    reportStatus = 'bootstrapping'
     writeReport(`### ⚪ Throughput — no reference yet (bootstrapping)
 
-| | |
+| What | Value |
 |---|---|
 | **This run** | ${observedRate} rec/s |
 | Subject time | ${observedSubject.toFixed(1)}s |
@@ -169,9 +216,10 @@ The numbers above are this run's, recorded here rather than left in a job log.`)
   const firstLine = err.trim().split('\n')[0]
   console.error('check-throughput-regression: could not list master baseline runs.')
   console.error(`  ${firstLine}`)
+  reportStatus = 'check-failed'
   writeReport(`### 🟠 Throughput — the check could not run
 
-| | |
+| What | Value |
 |---|---|
 | **This run** | ${observedRate} rec/s |
 | Subject time | ${observedSubject.toFixed(1)}s |
@@ -191,9 +239,10 @@ ${firstLine}
 // throughput reporting displayed no throughput report. A report saying "here are this run's numbers,
 // there is nothing to compare them against yet" is the useful thing to post, not silence.
 if (runs.length === 0) {
+  reportStatus = 'no-reference'
   writeReport(`### ⚪ Throughput — no reference yet
 
-| | |
+| What | Value |
 |---|---|
 | **This run** | ${observedRate} rec/s |
 | Subject time | ${observedSubject.toFixed(1)}s |
@@ -228,7 +277,10 @@ try {
     const missing = CONTROLS.filter(c => !classes.has(c))
     const caseSet = classes.get('__cases__')
     if (observedCases && caseSet && caseSet !== observedCases) {
-      mismatched.push(sha.slice(0, 9))
+      // Keep the READING, not just the sha. Refusing to compute a verdict is right; hiding the
+      // numbers is not - a reader wants to see roughly where this run sits even when nothing here
+      // can be a control, and withholding them sends them to the job logs to find out.
+      mismatched.push({ sha: sha.slice(0, 9), rate, subject, control })
       continue
     }
     if (subject > 0 && control > 0 && missing.length === 0) {
@@ -240,17 +292,33 @@ try {
 } finally { rmSync(work, { recursive: true, force: true }) }
 
 if (reference.length === 0) {
+  // "No comparable reference" has been read as "no baseline exists". Baselines usually DO exist here
+  // - they just ran a different set of tests, most often because the PR itself enabled or disabled
+  // some. Say how many were found and what this run's case set is, so the reader can tell a matrix
+  // change they made from one they did not.
   const why = mismatched.length
-    ? `every candidate ran a different set of test cases than this run (${mismatched.join(', ')}) - the test matrix changed, so the runs are not comparable`
+    ? `${mismatched.length} baseline run(s) were found and none ran the same set of test cases as this run, so none is comparable. This is usually the PR's own doing: enabling or disabling a test in this lane changes the matrix.`
     : 'master baseline runs exist but carry no usable artifact yet'
+
+  // SHOW THE NUMBERS ANYWAY, flagged. Refusing to compute a verdict from an incomparable run is the
+  // right call; refusing to SHOW it is a different decision that nobody asked for, and it sends the
+  // reader to the job logs to find out roughly where they stand. Every borrowed row carries the
+  // caveat beside it, so a number cannot be lifted out of this table without its warning.
+  const rows = mismatched.length
+    ? `\n\n| Run | Rate | Subject | Comparable? |\n|---|---|---|---|\n| **this run** | **${observedRate} rec/s** | ${observedSubject.toFixed(1)}s | — |\n` +
+      mismatched.map(m => `| \`${m.sha}\` | ${m.rate} rec/s | ${m.subject.toFixed(1)}s | ⚠️ different test set - not a control |`).join('\n') +
+      `\n\nThe baseline rows are shown for orientation only. They ran a different workload, so a difference between them and this run is not a measurement of anything - do not read one as a regression or an improvement.`
+    : ''
+
+  reportStatus = 'incomparable'
   writeReport(`### ⚪ Throughput — no comparable reference
 
-| | |
+| What | Value |
 |---|---|
 | **This run** | ${observedRate} rec/s |
 | Subject time | ${observedSubject.toFixed(1)}s |
 
-${why}.
+${why}${rows}
 
 Refusing to compare against a run whose workload differs, rather than averaging the difference in and calling the result a verdict.`)
   process.exit(NOTHING_IN_SCOPE)
@@ -264,20 +332,37 @@ const verdict = { icon, word, exit: v.failed ? VIOLATION : 0 }
 const shares = reference.map(r => (r.subject / r.control))
 const spread = `${Math.min(...shares).toFixed(3)} – ${Math.max(...shares).toFixed(3)}`
 
+// LEAD WITH THE ANSWER, IN WORDS. A reviewer read "Subject share, this run: 1.713" as "this build is
+// 1.7x faster than master" - a reasonable reading of those words, and wrong by a factor of twenty.
+// 1.713 is the subject's time divided by the CONTROLS' time in the SAME run; the only figure that
+// says anything about master is the comparison. The headline sentence exists so the common question
+// is answered before anyone reaches a number, and every row is now named in words rather than in the
+// vocabulary of the method. It lives in lib/throughput-verdict.mjs beside the noise floor it has to
+// disclose, so a bound and its caveat cannot drift apart, and so it can be asserted without a run.
+const headline = headlineFor(ratio)
+
 const report = `### ${icon} Throughput — ${word}
 
-| | |
-|---|---|
-| **Subject share, this run** | ${observedShare.toFixed(3)} |
-| **Reference share (median)** | ${referenceShare.toFixed(3)} |
-| **Ratio** | **${ratio.toFixed(3)}** |
-| Subject time | ${observedSubject.toFixed(1)}s |
-| Control time | ${observedControl.toFixed(1)}s |
-| Reported rate | ${observedRate} rec/s |
+${headline}
+
+| What | Value | Meaning |
+|---|---|---|
+| **Compared with master** | **${displayRatio(ratio)}** | above 1.00 is faster, below is slower |
+| Subject test took | ${observedSubject.toFixed(1)}s | the test under measurement |
+| Control tests took | ${observedControl.toFixed(1)}s | the other tests in this same run |
+| Subject ÷ controls, here | ${observedShare.toFixed(3)} | **not a speed** - a shape that cancels machine speed |
+| Subject ÷ controls, master | ${referenceShare.toFixed(3)} | median of recent master runs |
+| Reported rate | ${observedRate} rec/s | this machine only; not comparable across runners |
 
 **Allowable range** 🟢 ≥ ${WARN_BELOW.toFixed(2)} · 🟡 ${FAIL_BELOW.toFixed(2)}–${WARN_BELOW.toFixed(2)} (about a ${pct(1 - WARN_BELOW)} loss) · 🔴 < ${FAIL_BELOW.toFixed(2)} (about a ${pct(1 - FAIL_BELOW)} loss)
 
-<details><summary>How this is derived, and what it cannot tell you</summary>
+<details><summary>What the numbers mean, and what they cannot tell you</summary>
+
+**The one that gets misread.** \`Subject ÷ controls\` is a shape, not a speed. 1.7 means the subject took 1.7 times as long as the control tests **in the same run** - it says nothing about master on its own, and a reviewer has already read it as "1.7x faster than master". Only **Compared with master** answers that question.
+
+**Why a shape and not a rate.** A rate depends on which runner you drew. A shape does not: every test here processes a fixed number of records, so a runner twice as slow doubles the subject and the controls together and leaves their ratio alone. That is the whole trick, and it is why the reported rate is shown last and labelled as this machine only.
+
+**Reading the comparison.** \`master ÷ this run\`. Above 1.00 the subject is proportionally quicker here than on master; below 1.00 it is slower. 0.50 means it takes twice as long relative to its controls - that is the failing bound, not a small one.
 
 **By conservation, not by correction.** Every test in this lane processes a fixed number of records, so within one run the ratio of one test's time to another's is invariant under machine speed — a runner twice as slow doubles both terms and leaves the ratio alone. There is no machine-index correction to be wrong, because nothing needed correcting. \`share = subjectSeconds / controlSeconds\`, both from this same run.
 
@@ -290,6 +375,8 @@ const report = `### ${icon} Throughput — ${word}
 Runs used: ${reference.map(r => r.sha).join(', ')}
 </details>`
 
-writeReport(report)
+reportStatus = word
+writeReport(report, { ratio: Number(ratio.toFixed(3)), rate: observedRate,
+                      share: Number(observedShare.toFixed(3)), refs: reference.length })
 console.log(`\nreport written to ${REPORT}`)
 process.exit(verdict.exit)
