@@ -117,12 +117,16 @@ class ProducerManagerRecoveryTest {
         manager.releaseCommitLockAfterReplacement(); // the drain threw: replayCompleted was never reached
         assertThat(manager.isReplayOwed()).isTrue();
 
+        // the deadline the deferral sets is relative to the clock at the call, so ask about an instant taken BEFORE
+        // it rather than after: under a loaded parallel suite the 100 ms backoff can elapse between the call and
+        // the assertion, and "now" is then already past the deadline - seen once as a flake in a full run
+        Instant beforeTheAttempt = Instant.now();
         var deferred = manager.completeReplacement();
 
         assertThat(deferred.getKind()).isEqualTo(ProducerManager.ReplacementOutcome.Kind.DEFERRED);
         assertWithMessage("nothing was built").that(built).isEmpty();
         assertThat(manager.isReplacing()).isTrue();
-        assertWithMessage("paced like a failed build, not spun").that(manager.isRecoveryAttemptDue(Instant.now())).isFalse();
+        assertWithMessage("paced like a failed build, not spun").that(manager.isRecoveryAttemptDue(beforeTheAttempt)).isFalse();
 
         // the next pass re-enters the lock and replays; only then may it build
         assertThat(manager.beginReplacement()).isTrue();
