@@ -90,10 +90,15 @@ named with it.
    on the hot path locally, from delegated state. **The most load-bearing law here, and the one that
    had no live owner at all before this file took it.** Fleet coordination's *"every runtime decides
    locally, collectively one scheduler"* is this law at the fleet; delegated credits are it at a
-   resource; the line between advising-and-vending and deciding-per-call is it at the deployment.
+   resource; the line between forcing and offering a per-call decision is it at the deployment. Its
+   failure mode is the law with the global half removed: the local controller keeps discovering
+   alone, which is what a conventional adaptive limiter does, so losing the fleet degrades rather than
+   stalls - for participants that have a local controller to fall back to.
    [`core-fleet-capacity-coordination.md`](inflight/core-fleet-capacity-coordination.md) ·
    [`core-shared-execution-resources.md`](inflight/core-shared-execution-resources.md) ·
-   [`core-standalone-deployment.md`](inflight/core-standalone-deployment.md)
+   [`core-auto-scaling.md`](inflight/core-auto-scaling.md) ·
+   [`core-standalone-deployment.md`](inflight/core-standalone-deployment.md) ·
+   [`core-non-kafka-participants.md`](inflight/core-non-kafka-participants.md)
 
 4. **One implementation of intelligence. Many implementations of ergonomics.** Distributed
    correctness belongs in the shared runtime; language SDKs are native surfaces over it. This is the

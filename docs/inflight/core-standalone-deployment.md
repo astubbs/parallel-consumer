@@ -49,15 +49,23 @@ needs an answer, and the answer is that the positioning was never about process 
   delegation - the caller spends it locally, the way the Envoy shape requires and the way the
   in-process navigator already works. The standalone deployment is then a *slow-cadence agreement
   point*, which is what the coordination topic already is.
-- **Deciding per call does violate it.** An endpoint that answers "may I proceed?" once per request
-  puts a cluster in someone's hot path, pays the round trip the competitive line explicitly refuses
-  ("the acquire never waits"), and makes availability of the deployment a liveness dependency of
-  every caller.
+- **Forcing a per-call decision on a caller who wanted delegation does violate it.** An endpoint
+  that makes every caller ask "may I proceed?" once per request puts a cluster in a hot path the
+  caller never offered, pays the round trip the competitive line refuses ("the acquire never waits"),
+  and makes the deployment's availability a liveness dependency nobody signed up for.
+- **Offering it to a caller who asks to be paced does not.** Refined 2026-09-02: the paced persona in
+  [`core-non-kafka-participants.md`](core-non-kafka-participants.md) registers work and is told *go*,
+  per unit, by push. That is per-call decision, and the liveness dependency is *the product* - a
+  pacemaker you do not depend on is a paperweight. The caller handed over the hot path on purpose,
+  the same way a consumer depends on its broker; the round trip is pipelined away; and the shard
+  owner it depends on is embedded and fails over with Kafka ownership, so at worst it is the single
+  hop any remote call already costs.
 
-So the batch-of-one/batch-of-N dial that
-[`core-non-kafka-participants.md`](core-non-kafka-participants.md) leaves undecided is **not only a
-grant-semantics question - it decides whether the standalone form contradicts the positioning.**
-That is a second reason to hold the line at delegation.
+So the line is **forcing versus offering**, not one process versus two and not per-call versus
+delegated. The batch-of-one/batch-of-N dial that the participants note leaves undecided is then a
+choice between two customers rather than a positioning hazard: delegation for the caller who wants
+to own its spend, pacing for the one who wants to own nothing. Holding the *default* at delegation
+still stands, because it is the shape that costs the caller no dependency.
 
 [`web-control-plane.md`](web-control-plane.md) already drew the compatible shape one notch back: the
 control plane is a separate application that *may* run embedded in the PC instances. This is the same

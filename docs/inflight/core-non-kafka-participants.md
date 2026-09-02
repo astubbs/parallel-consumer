@@ -51,7 +51,9 @@ The variable that decides coverage is who has to do something. Ordered as the ow
 demo leads, the coverage engine follows.
 
 1. **Vend credits to external callers** over the sidecar's connection - the observable moment and
-   the sellable sentence. Exact accounting and real control, for whoever integrates.
+   the sellable sentence. Exact accounting and real control, for whoever integrates. Two client
+   shapes share it: one that *holds* credit and spends locally, and one that holds nothing and is
+   **paced** - the section below on the other customer.
 2. **Ingest what monitoring already knows** - the firehose. Rather than convincing fifty teams to
    adopt something, convince one to give us a socket onto the telemetry they already run. Broad
    coverage at near-zero integration cost, at whatever fidelity their metrics happen to carry;
@@ -116,6 +118,90 @@ And the transport for it already exists: a bidirectional stream with outstanding
 push-when-ready with no polling and no round trip. **"Long polling" is the wrong word for what this
 is** - it describes the semantics from the caller's side, not the mechanism.
 
+## The other customer: paced, not limited
+
+Added 2026-09-02, from the owner. The persona above reaches for us because they know they need a
+rate limiter. **A second persona never thinks that sentence.** They think *"I need more throughput"*
+- and, in the owner's framing, they are not handed credits at all. They register work, and they
+receive a **trigger**: *go now*. They never read a body, because to them it is not a business record;
+it is a technical signal. Speed-limit sign versus pacemaker. In house terms: **the scheduler's dispatch
+loop extended to a foreign caller.**
+
+Why it is the same mechanism, and not a second build: **it is the language-proxy's worker protocol
+with the payload removed.** The sidecar sends *records* to foreign workers under credit-on-ack flow
+control (KD9, above); this sends *permission* to foreign callers under the same. The per-record
+delivery token the sidecar's protocol already carries is exactly what a trigger carries - identity,
+nothing else. The body is not unread because it is uninteresting; it is unread because **the delivery
+is the message.**
+
+What differs, and it is mechanical:
+
+- **This client has no local spend, so the grant dial does not apply to it.** It is batch-of-one by
+  construction, delivered by push, and overshoot is impossible because there is nothing to overshoot
+  with. Throughput comes from **pipelining** outstanding registrations, not from delegation: the go
+  for item *k+1* arrives while item *k* runs, which is how "the acquire never waits" survives for a
+  client that owns no credit. **Batch-of-one now has a customer** - it did not when the dial was first
+  written down, and the correction is worth recording: an earlier draft of this session put the
+  throughput persona at the *delegation* end, which was backwards.
+- **They still owe one verb back.** A client that never says *done* leaves the flow control with no
+  feedback and the scheduler pacing blind, learning no cost. So the minimum protocol is two verbs -
+  `next` and `done` - and R23 already says those ride the same message. That is the whole client.
+- **Being thin has a price, and it is liveness.** A credit-holding client keeps going on what it has
+  when the shard owner is unreachable; a paced client *stops*. That is the dependency it accepted in
+  exchange for owning no semantics, and the endpoint's availability is therefore part of the product
+  for this persona in a way it is not for the other.
+
+**"Participate in global scheduling" is what they get, not what they ask for.** Nobody asks to
+participate in anything; they ask why they are slow, or how hard they can push. Coverage of the
+non-Kafka half arrives as a byproduct - the same shape as the firehose in mechanism 2.
+
+## Consult a gate, or be driven
+
+The competitive line above was written against rate limiters. The paced persona compares us against
+something else - **adaptive-concurrency libraries**, and the reference is Netflix's concurrency-limits,
+whose Gradient2 astubbs#333 already ported as the local controller.
+
+How that library is used, so the comparison is concrete: wrap a call site. `acquire` returns an
+optional listener; empty means *shed now* (return 429 / UNAVAILABLE), present means do the work and
+report `onSuccess` / `onDropped` / `onIgnore`. The limit is learned from round-trip times of
+successful calls - TCP congestion control applied to concurrency. Adapters for gRPC interceptors, a
+servlet filter and an executor wrapper; a blocking variant waits for a slot instead of rejecting; a
+partitioned variant gives named groups guaranteed shares. It is **entirely local**: every process
+discovers its own ceiling by probing and backing off, and never learns what anyone else is doing.
+
+**So the shape distinction is consult-a-gate versus be-driven.** bucket4j and concurrency-limits are
+both things you *ask* - "may I?" - and the answer is now, yes or no. Nothing in that set drives the
+caller. The paced client does not ask; it is told.
+
+The honest positioning, settled with the owner on 2026-09-02, is **"the next layer up", not "more
+powerful"**:
+
+- Hasten adds what a local library structurally cannot: a *named* resource shared across processes;
+  *telling* a caller its allocation rather than making it probe; distinguishing "downstream
+  saturated" from "I am slow"; holding and pacing rather than shedding; accounting across
+  applications; lineage on the decision. [`core-auto-scaling.md`](core-auto-scaling.md) already
+  states the relationship exactly - *the controller consumes ceilings as inputs*. Concurrency-limits
+  is what one instance discovers alone; this is what happens when the ceilings stop being discovered
+  and start being agreed.
+- **The cost is smaller than the word "coordination" implies, and the owner's correction here is the
+  point.** The coordination plane is embedded and sharded, failover follows Kafka ownership, and there
+  is nothing separate to run. Latency-wise: a credit-holding client makes *zero* hops on the hot path,
+  identical to concurrency-limits; a paced client makes one hop, pipelined - identical to any remote
+  call it already makes. What is genuinely left is that a non-Kafka caller gains one endpoint to
+  reach, which every non-local limiter also costs; concurrency-limits is the *only* option in the set
+  with no dependency at all, and a team that only needs to stop hammering one downstream is right to
+  pick it.
+- **The failure mode of the global half is the local library.** By dimension 1's design - it ships
+  with no fleet layer and treats ceilings as inputs when they arrive - an embedded participant that
+  loses the shard owner degrades to exactly what concurrency-limits does. The floor is the
+  conventional limiter; the ceiling is the global view. That holds for embedded participants only;
+  the paced client's floor is *stop*, as above.
+- **And the claim is untested, by our own rule.** The falsification staircase's first rung in
+  [`core-lighthouse-mvp.md`](core-lighthouse-mvp.md) is literally *a local admission A/B against a
+  conventional limiter*. "Beats concurrency-limits" is the precise sentence that rung exists to check,
+  and the risks register's frictionless-derivation warning is about sentences that arrive this
+  easily. Recorded here as the hypothesis rung 1 tests, not as a positioning line.
+
 ## What is deliberately not decided
 
 - **What a grant promises** - a hard ceiling versus bounded overshoot. The owner's position is that
@@ -124,7 +210,9 @@ is** - it describes the semantics from the caller's side, not the mechanism.
   per-request grant, and a batch of N is delegation with overshoot proportional to N. The
   hard-ceiling half stays inside the ring-fence the risks register put around it. That dial turns
   out to decide something larger too - see the embedded-not-cluster section of
-  [`core-standalone-deployment.md`](core-standalone-deployment.md).
+  [`core-standalone-deployment.md`](core-standalone-deployment.md). And the paced persona above
+  sits at the batch-of-one end by construction, so the dial is now a choice between two customers,
+  not a semantics question with no one on one side of it.
 - **Anything about which telemetry systems, which protocol, or what the endpoint looks like.**
 
 ## One collision to avoid
