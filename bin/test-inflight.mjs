@@ -710,7 +710,7 @@ const CHECKS = [
                 if (b.trackingGap(b.branchView(g, 'stranded-work', based))) return false
                 // A body mention is deliberately NOT checked here: carrying every PR body took the
                 // bulk fetch from 56K to 2.3MB to answer a question about the rare untracked
-                // branch. That question moved to prSearch, which asks GitHub about ONE name and
+                // branch. That question moved to prForBranch, which asks GitHub about ONE branch and
                 // only on a miss - so what this check owns is that the base-ref path works and
                 // that an unrelated PR does not silently explain anything.
                 const unrelated = new Map([['feature-a', {
@@ -787,28 +787,6 @@ const CHECKS = [
             '        if (false) return null'),
     },
     {
-        id: 'pr-search-cannot-report-a-failure-as-no-result',
-        why: 'the fallback exists to answer "is this branch mentioned anywhere"; a failed query rendered as "no" is the whole silent-miss class',
-        // ENVIRONMENT-INDEPENDENT BY CONSTRUCTION, after two goes at it. `gh` is authenticated on a
-        // developer machine and deliberately is not in the repo-hygiene workflow, so prSearch takes
-        // a different branch in each place - and a mutant aimed at either one proved nothing in the
-        // other. The first version mutated the failure branch and stayed green locally; the second
-        // mutated the success branch, passed locally, and went green in CI. Both were vacuous in
-        // exactly the environment that mattered.
-        //
-        // The contract is that EVERY return carries an explicit `ok`, which is what makes "GitHub
-        // could not answer" expressible at all. prSearch now builds every return through one
-        // constructor, so the mutation lands on whichever path runs.
-        run: async (binDir) => {
-            const b = await branches(binDir)
-            const r = b.prSearch('a-branch-name-that-cannot-exist-xyzzy', { cache: false })
-            return typeof r.ok === 'boolean' && Array.isArray(r.prs)
-        },
-        mutate: (binDir) => patch(join(binDir, 'lib', 'branches.mjs'),
-            '    const answer = (ok, prs, cached = false) => ({ ok, prs, cached })',
-            '    const answer = (ok, prs, cached = false) => ({ prs, cached })'),
-    },
-    {
         id: 'perf-reports-to-stderr-and-never-alters-stdout',
         why: 'a diagnostic flag that changes the answer is worse than no diagnostic, and callers pipe stdout',
         run: async (binDir) => {
@@ -841,33 +819,6 @@ const CHECKS = [
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'perf.mjs'),
             '    e.n += 1', '    e.n = 1'),
-    },
-    {
-        id: 'the-pr-create-hook-recognises-a-command-behind-a-cd',
-        why: 'a prefix matcher missed every command shape it existed for, and the shell suite cannot prove recognition without hitting the network',
-        // The decision is tested here rather than in bin/test-check-agent-hooks.sh because deciding
-        // and acting are separate questions and only the first is cheap to assert. Once the hook
-        // calls cachePr, a test either reaches GitHub and rewrites the real cache, or uses a number
-        // that cannot exist - at which point "not recognised" and "recognised but the refresh
-        // failed" are both silence. That is the vacuous shape this suite refuses.
-        run: async (binDir) => {
-            const hook = await import(pathToFileURL(
-                join(binDir, '..', '.claude', 'hooks', 'after-pr-create-refresh-cache.mjs')).href)
-            const p = (command, stdout) => ({ tool_input: { command }, tool_response: { stdout } })
-            const url = 'https://github.com/astubbs/parallel-consumer/pull/412'
-
-            // The case the shell suite could only assert as "did not blow up".
-            if (hook.prNumberFrom(p('cd /w && gh pr create --title x', url)) !== 412) return false
-            if (hook.prNumberFrom(p('gh pr create', url)) !== 412) return false
-            // A create that made nothing, a dry run, and an unrelated command are all null.
-            if (hook.prNumberFrom(p('gh pr create', 'a pull request already exists')) !== null) return false
-            if (hook.prNumberFrom(p('gh pr create --dry-run', url)) !== null) return false
-            if (hook.prNumberFrom(p('git status', 'clean')) !== null) return false
-            return hook.prNumberFrom({}) === null
-        },
-        mutate: (binDir) => patch(join(binDir, '..', '.claude', 'hooks', 'after-pr-create-refresh-cache.mjs'),
-            "    if (!/\\bgh\\b.*\\bpr\\b.*\\bcreate\\b/.test(command)) return null",
-            "    if (!command.startsWith('gh pr create')) return null"),
     },
     {
         id: 'a-narrow-fetch-cannot-look-fresh',
@@ -973,6 +924,78 @@ const CHECKS = [
         mutate: (binDir) => patch(join(binDir, 'lib', 'git.mjs'),
             'for (const w of readdirSync(`${commonDir}/worktrees`))',
             'for (const w of readdirSync(`${commonDir}/no-such-worktrees-dir`))'),
+    },
+    {
+        id: 'the-cache-layer-owns-freshness-not-its-callers',
+        why: 'a policy stated at each read site is a cache with several answers, and nothing reports the difference',
+        // This is the property that let an external hook be deleted. The layer refuses to store an
+        // absence for kinds whose policy says so, and it does it in cacheWrite - so a caller added
+        // later inherits the decision instead of having to remember it.
+        run: async (binDir) => {
+            const c = await import(pathToFileURL(join(binDir, 'lib', 'cache.mjs')).href)
+            const dir = mkdtempSync(join(tmpdir(), 'inflight-cachepolicy-'))
+            const envBefore = process.env.PC_INFLIGHT_CACHE_DIR
+            try {
+                process.env.PC_INFLIGHT_CACHE_DIR = dir
+                // A kind whose policy refuses empties: the write is dropped, so the read is a miss
+                // and the next call goes to the network - which is how a PR opened anywhere is seen.
+                if (c.policyFor('pr-branch.json').cacheEmpty !== false) return false
+                c.cacheWrite('pr-branch.json', [], 'head:some-branch')
+                if (c.cacheRead('pr-branch.json', { key: 'head:some-branch' }) !== null) return false
+                // ...and a real answer for the same kind IS stored, or the guard has just turned the
+                // cache off rather than shaped it.
+                c.cacheWrite('pr-branch.json', [{ number: 1 }], 'head:some-branch')
+                const back = c.cacheRead('pr-branch.json', { key: 'head:some-branch' })
+                if (!Array.isArray(back) || back.length !== 1) return false
+                // A kind whose policy allows empties is unaffected - the bulk listing legitimately
+                // caches "no PRs at all", and one policy must not silently become the other's.
+                return c.policyFor('prs.json').cacheEmpty === true
+            } finally {
+                if (envBefore === undefined) delete process.env.PC_INFLIGHT_CACHE_DIR
+                else process.env.PC_INFLIGHT_CACHE_DIR = envBefore
+            }
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'cache.mjs'),
+            "    if (!policyFor(name).cacheEmpty && Array.isArray(value) && value.length === 0) return",
+            '    // policy removed'),
+    },
+    {
+        id: 'absence-from-the-pr-snapshot-is-asked-again',
+        why: 'a branch missing from a 24h listing is not a branch without a PR, and treating them alike is what the deleted hook patched',
+        // Asserted on the SOURCE OF THE ANSWER rather than on a network result: branchView must not
+        // be able to return `pr: null` straight from a snapshot miss. Driven with a fake `gh` so
+        // both outcomes are reachable with no network and no dependence on gh being authed.
+        run: async (binDir) => {
+            const b = await branches(binDir)
+            const root = mkdtempSync(join(tmpdir(), 'inflight-fallthrough-'))
+            const fakeBin = join(root, 'fakebin')
+            mkdirSync(fakeBin, { recursive: true })
+            writeFileSync(join(fakeBin, 'gh'),
+                '#!/bin/sh\ncat <<\'JSON\'\n[{"headRefName":"diverged","baseRefName":"master","number":7,"title":"found by fall-through","state":"OPEN"}]\nJSON\n',
+                { mode: 0o755 })
+            const pathBefore = process.env.PATH
+            const envBefore = process.env.PC_INFLIGHT_CACHE_DIR
+            return inFixture(() => {
+                try {
+                    process.env.PATH = `${fakeBin}:${pathBefore}`
+                    process.env.PC_INFLIGHT_CACHE_DIR = join(root, 'cache')
+                    const graph = b.commitGraph()
+                    if (!graph.ok) return false
+                    // An EMPTY snapshot - the branch is absent from it, which is exactly the case
+                    // the deleted hook existed to paper over.
+                    const view = b.branchView(graph, 'diverged', new Map())
+                    return view.pr !== null && view.pr.number === 7
+                } finally {
+                    process.env.PATH = pathBefore
+                    if (envBefore === undefined) delete process.env.PC_INFLIGHT_CACHE_DIR
+                    else process.env.PC_INFLIGHT_CACHE_DIR = envBefore
+                }
+            })
+        },
+        // Reverts to reading the snapshot alone - the actual pre-fix behaviour.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'branches.mjs'),
+            "        pr: prs.get(ref.replace(/^origin\\//, '')) ?? prForBranch(ref).pr,",
+            "        pr: prs.get(ref.replace(/^origin\\//, '')) ?? null,"),
     },
 ]
 

@@ -193,7 +193,10 @@ export function branchView(graph, ref, prs) {
         baseline: graph.baseline,
         isRemote: ref.startsWith('origin/'),
         upstream: meta.upstream,
-        pr: prs.get(ref.replace(/^origin\//, '')) ?? null,
+        // ABSENCE FROM THE SNAPSHOT IS NOT "NO PR" - it is asked again, for this ref only. The
+        // relatives below stay on the snapshot deliberately: one network call each would turn a
+        // cheap view into a fan-out, and a stale PR on a related branch is context, not a verdict.
+        pr: prs.get(ref.replace(/^origin\//, '')) ?? prForBranch(ref).pr,
         commitsOffBaseline: graph.own.get(ref)?.size ?? 0,
         containedInBaseline: (graph.own.get(ref)?.size ?? 0) === 0,
         // Related branches carry their OWN PR state, because "what integrates this" is only half an
@@ -216,39 +219,43 @@ export function branchView(graph, ref, prs) {
 }
 
 /**
- * ASK GITHUB ABOUT ONE BRANCH, only when everything local came up empty.
+ * THE PULL REQUEST FOR ONE BRANCH, asked exactly and asked on a miss.
  *
- * Antony's design, and it replaces fetching every PR body: that took the bulk response from 56K to
- * 2.3MB to answer a question about the rare branch that looks untracked. This asks GitHub's search
- * API for one name instead - measured at 0.94s - and only on a miss.
+ * The bulk listing in `prsByBranch` is a 24-hour snapshot, so a branch ABSENT from it is not a
+ * branch without a PR - it is a branch that had no PR when the snapshot was taken. Treating those
+ * as the same fact is how `trackingGap` came to emit a remedy for branches that already had one,
+ * and it is what an external "refresh the cache after gh pr create" hook was invented to patch: a
+ * fix for one of the several ways a PR appears.
  *
- * The result is cached locally, but the REAL cache is the fix: the agent writes the tracking note,
- * the note merges, and every later run answers from the tree without asking GitHub at all. A
- * self-eliminating query is better than a warm cache.
- *
- * Returns `{ok, prs}` - `ok: false` means GitHub could not answer, which is not the same as "no PR
- * mentions this branch" and must never be rendered as though it were.
+ * This is the fall-through `prsByBranch` has always described in its comments and never had. It
+ * uses `--head`, so the answer is the PR whose head IS this branch rather than a text match, and
+ * `cache.mjs`'s policy for `pr-branch.json` refuses to store a miss - so a PR opened anywhere,
+ * by anyone, is visible on the next call.
  */
-export function prSearch(ref, { cache = true } = {}) {
+export function prForBranch(ref, { cache = true } = {}) {
     // EVERY RETURN GOES THROUGH ONE CONSTRUCTOR, so "did this answer, or fail to answer" cannot be
     // omitted from a path by accident - and so a self-test can break the contract in one place
     // rather than three. Which path runs here is decided by the ENVIRONMENT: `gh` is authenticated
     // on a developer machine and deliberately is not in the repo-hygiene workflow, so a check that
     // mutated only the success path passed locally and proved nothing in CI. It did exactly that.
-    const answer = (ok, prs, cached = false) => ({ ok, prs, cached })
+    const answer = (ok, pr, cached = false) => ({ ok, pr, cached })
 
     const bare = ref.replace(/^origin\//, '')
-    const key = `search:${bare}`
-    const hit = cache ? cacheRead('pr-search.json', { key, maxAgeMs: 6 * 60 * 60 * 1000 }) : null
-    if (hit) return answer(true, hit, true)
+    const key = `head:${bare}`
+    const hit = cache ? cacheRead('pr-branch.json', { key }) : null
+    if (hit) return answer(true, hit[0] ?? null, true)
 
-    const res = exec('gh', ['search', 'prs', '--repo', REPO, bare,
-        '--json', 'number,title,state', '--limit', '5'])
-    if (!res.ok) return answer(false, [])
+    // Naming the repo is not optional: `gh` resolves a bare command against `upstream` in this
+    // fork, and an answer for confluentinc reads exactly like "this branch has no PR".
+    const res = exec('gh', ['pr', 'list', '-R', REPO, '--head', bare, '--state', 'all',
+        '--json', 'headRefName,baseRefName,number,title,state', '--limit', '5'])
+    if (!res.ok) return answer(false, null)
     let rows = []
-    try { rows = JSON.parse(res.out) } catch { return answer(false, []) }
-    if (cache) cacheWrite('pr-search.json', rows, key)
-    return answer(true, rows)
+    try { rows = JSON.parse(res.out) } catch { return answer(false, null) }
+    // A miss is passed to the layer anyway; refusing to store it is the layer's decision, stated
+    // once in cache.mjs, rather than a condition repeated at each call site.
+    if (cache) cacheWrite('pr-branch.json', rows, key)
+    return answer(true, rows[0] ?? null)
 }
 
 /**

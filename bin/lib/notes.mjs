@@ -143,7 +143,7 @@ export function prsByBranch({ cache = true } = {}) {
     // field. Adding `baseRefName` did exactly that: the code read it, the cache had never stored it,
     // and every branch silently looked unexplained until the TTL expired.
     const shape = 'headRefName,baseRefName,number,title,state'
-    const cached = cache ? cacheRead('prs.json', { key: shape, maxAgeMs: PR_CACHE_TTL_MS }) : null
+    const cached = cache ? cacheRead('prs.json', { key: shape }) : null
     if (cached) return { ok: true, cached: true, map: new Map(cached) }
     // Naming the repo is not optional: `gh` resolves a bare command against `upstream` in this fork,
     // and an answer for confluentinc reads exactly like "this branch has no PR".
@@ -430,32 +430,3 @@ export function stranded(index) {
     return [...byKey.values()].sort((a, b) => b.paths.length - a.paths.length || b.refCount - a.refCount)
 }
 
-/**
- * Fold ONE pull request into the cached set, without refetching the other 284.
- *
- * The reason the TTL could go from thirty minutes to a day: the cache no longer relies on expiring
- * to become correct. A PR created here updates it as it is created, so the window in which the cache
- * can be wrong about our own work is the length of one `gh pr view` rather than the TTL.
- *
- * Returns `{ok, action, pr}` - `added` or `updated` - or `ok: false` with a reason. A refresh that
- * silently did nothing would leave the caller believing the cache is current when it is not, which
- * is the same shape as every other silent miss this tool exists to remove.
- */
-export function cachePr(number) {
-    const res = exec('gh', ['pr', 'view', String(number), '-R', REPO,
-        '--json', 'headRefName,baseRefName,number,title,state'])
-    if (!res.ok) return { ok: false, reason: `gh could not read PR #${number}` }
-    let row
-    try { row = JSON.parse(res.out) } catch { return { ok: false, reason: 'gh returned output that is not JSON' } }
-    if (!row?.headRefName) return { ok: false, reason: `PR #${number} has no head branch` }
-
-    const shape = 'headRefName,baseRefName,number,title,state'
-    const existing = cacheRead('prs.json', { key: shape, maxAgeMs: PR_CACHE_TTL_MS }) ?? []
-    const pairs = existing.filter(([head]) => head !== row.headRefName)
-    const action = pairs.length === existing.length ? 'added' : 'updated'
-    pairs.push([row.headRefName, {
-        number: row.number, title: row.title, state: row.state, baseRefName: row.baseRefName,
-    }])
-    cacheWrite('prs.json', pairs, shape)
-    return { ok: true, action, pr: row, total: pairs.length }
-}

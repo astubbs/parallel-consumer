@@ -1438,6 +1438,31 @@ docker container ls --filter 'label=org.testcontainers=true'
 
 See https://github.com/testcontainers/testcontainers-java/pull/1781[this testcontainers PR] for details on the reusable containers feature.
 
+=== Searching the repository across every branch
+
+Most of what this project knows about itself is not on `master`.
+Measured 2026-09-01: **580 of the 901 documents under `docs/` exist only on branches that have not merged**, because a note travels with the work that produced it and many of those branches never land.
+
+So `grep` in your checkout answers a narrower question than the one you asked, and returns a false negative carrying the authority of a completed check.
+
+`bin/inflight.mjs` is the front door for asking across every ref instead:
+
+[source,bash]
+----
+node bin/inflight.mjs help                                  # every command, and when to reach for it
+node bin/inflight.mjs prior-art --headings <term>           # before forming any hypothesis
+node bin/inflight.mjs note find <fuzzy-name>                # which note is this, and who carries it
+node bin/inflight.mjs note drift <path>                     # what other branches have that master does not
+node bin/inflight.mjs branch <ref>                          # what a branch is, and whether anything tracks it
+node bin/inflight.mjs stranded                              # work that will be lost if nobody acts
+----
+
+Every command exits `0` when it *ran* — whatever it found — and `2` when it could not run.
+That distinction is the point: "nothing, across 436 refs" is a result, and a search that never happened is not.
+
+Worked examples, including the CI failure that this tool diagnosed on its own pull request, are in link:docs/inflight-tool.md[`docs/inflight-tool.md`].
+It reads the repository only; it is not a task tracker and owns no schema of its own.
+
 == Implementation Details
 
 === Core Architecture
