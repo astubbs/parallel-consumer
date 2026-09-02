@@ -351,6 +351,36 @@ function buildGrowthFixture() {
     return dir
 }
 
+
+/** A branch that only DELETES, so a signal counting additions alone scores it at zero. */
+function buildDeletionFixture() {
+    const { dir, git, commit } = windowRepo()
+    mkdirSync(join(dir, 'src', 'io'), { recursive: true })
+    writeFileSync(join(dir, 'src', 'io', 'Big.java'), lines(20, 'base'))
+    commit('base')
+    git('checkout', '-q', '-b', 'deleter')
+    writeFileSync(join(dir, 'src', 'io', 'Big.java'), lines(12, 'base'))
+    commit('delete eight lines')
+    git('checkout', '-q', 'master')
+    return dir
+}
+
+/** One MEASURABLE ref safely under threshold, plus one unrelated ref nobody can measure. */
+function buildMixedFixture() {
+    const { dir, git, commit } = windowRepo()
+    mkdirSync(join(dir, 'src', 'io'), { recursive: true })
+    writeFileSync(join(dir, 'src', 'io', 'Big.java'), lines(20, 'base'))
+    commit('base')
+    git('checkout', '-q', '-b', 'small')
+    writeFileSync(join(dir, 'src', 'io', 'Big.java'), lines(20, 'base') + lines(1, 'one more'))
+    commit('add one line')
+    git('checkout', '-q', '--orphan', 'unrelated')
+    writeFileSync(join(dir, 'src', 'io', 'Big.java'), lines(300, 'unrelated history'))
+    commit('a huge version on an unrelated history')
+    git('checkout', '-q', 'master')
+    return dir
+}
+
 /** Run `fn` with the process inside `dir`, restoring the previous cwd whatever happens. */
 async function inDir(dir, fn) {
     const before = cwd()
@@ -392,7 +422,7 @@ const CHECKS = [
                 const c = r.candidates[0]
                 // `renamed` added five lines while moving the file; `plain` added three. The file is
                 // twenty-five lines long on `renamed`, and that number must appear nowhere.
-                return c.ok === true && c.largest !== null && c.largest.added === 5 && c.open === false
+                return c.ok === true && c.largest !== null && c.largest.churn === 5 && c.open === false
             })
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'refactor-window.mjs'),
@@ -429,7 +459,7 @@ const CHECKS = [
                 const c = r.candidates[0]
                 // The unrelated ref must be visible as unanswerable, and must not leave a verdict of
                 // "open" standing on a measurement that skipped it.
-                return c.unanswerableRefs >= 1 && c.open === false
+                return c.unanswerableRefs >= 1 && c.open === false && c.ok === false
             })
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'refactor-window.mjs'),
@@ -492,6 +522,43 @@ const CHECKS = [
             '    if (!mb.ok) return null', '    if (false) return null'),
     },
     {
+        id: 'a-deleting-branch-is-a-divergence-too',
+        why: 'the signal is conflict-producing divergence, not file growth - counting only added lines scored a branch that deletes or moves a large block at nearly zero, which is exactly the branch a decomposition collides with',
+        run: async (binDir) => {
+            const { refactorWindow } = await import(pathToFileURL(join(binDir, 'lib', 'refactor-window.mjs')).href)
+            const dir = buildDeletionFixture()
+            return inDir(dir, () => {
+                const cfg = windowConfig(dir, [{ id: 'big', paths: ['src/io/Big.java'], threshold: 3, hint: 'h' }])
+                const r = refactorWindow({ configPath: cfg, prs: NO_PRS })
+                if (!r.ok) return false
+                const c = r.candidates[0]
+                // Eight lines removed, none added. Counting additions alone reports 0 and opens.
+                return c.ok === true && c.largest !== null && c.largest.churn === 8 && c.open === false
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'refactor-window.mjs'),
+            '? d.added + d.removed', '? d.added'),
+    },
+    {
+        id: 'one-unmeasurable-ref-blocks-an-otherwise-open-verdict',
+        why: 'the fourth route to the false pass, and the one three earlier reviews walked past: when SOMETHING was measurable the verdict stopped consulting the unanswerable count, so a tiny measured divergence plus an unmeasured ref reported open',
+        run: async (binDir) => {
+            const { refactorWindow } = await import(pathToFileURL(join(binDir, 'lib', 'refactor-window.mjs')).href)
+            const dir = buildMixedFixture()
+            return inDir(dir, () => {
+                const cfg = windowConfig(dir, [{ id: 'big', paths: ['src/io/Big.java'], threshold: 50, hint: 'h' }])
+                const r = refactorWindow({ configPath: cfg, prs: NO_PRS })
+                if (!r.ok) return false
+                const c = r.candidates[0]
+                // largest is +1, far under the threshold of 50 - and one ref was never measured.
+                return c.largest !== null && c.largest.churn <= 2 && c.unanswerableRefs >= 1 && c.open === false
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'refactor-window.mjs'),
+            'out.open = out.unanswerableRefs === 0 && (out.largest === null || out.largest.churn <= c.threshold)',
+            'out.open = out.largest === null ? out.unanswerableRefs === 0 : out.largest.churn <= c.threshold'),
+    },
+    {
         id: 'the-threshold-boundary-is-inclusive',
         why: 'R8 says at-or-below the threshold is open, and an off-by-one at the boundary is the difference between a window that opens and one that never does',
         run: async (binDir) => {
@@ -507,7 +574,7 @@ const CHECKS = [
             })
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'refactor-window.mjs'),
-            'out.largest.added <= c.threshold', 'out.largest.added < c.threshold'),
+            'out.largest.churn <= c.threshold', 'out.largest.churn < c.threshold'),
     },
     {
         id: 'a-broken-refactor-config-is-not-an-empty-candidate-list',

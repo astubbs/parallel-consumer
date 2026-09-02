@@ -210,7 +210,14 @@ function addedForRef(ref, blob, mbByRef, mbBlobsByPath) {
     const key = `${at} ${blob}`
     if (!diffMemo.has(key)) {
         const d = blobDiffStat(at, blob)
-        diffMemo.set(key, d && !d.diffFailed && typeof d.added === 'number' ? d.added : null)
+        // ADDED **PLUS REMOVED**, because the question is how much of this file the branch has
+        // TOUCHED, not how much it has grown. Counting only additions scored a branch that deletes
+        // or moves a large block at nearly zero - and that is precisely the branch a decomposition
+        // collides with, since both sides are rewriting the same region. A pure 900-line move used
+        // to report +0 and could open the window on the most expensive merge available.
+        diffMemo.set(key, d && !d.diffFailed && typeof d.added === 'number' && typeof d.removed === 'number'
+            ? d.added + d.removed
+            : null)
     }
     return diffMemo.get(key)
 }
@@ -238,15 +245,24 @@ function addedForRef(ref, blob, mbByRef, mbBlobsByPath) {
  */
 const GROWTH_WINDOW_DAYS = 180
 
+/** Distinct from `null`: the query failed, as against the file genuinely not being there. */
+const FAILED = Symbol('lookup-failed')
+
 function growth(c, base) {
     const nowBlob = firstBlobAtAnyPath(base, c.paths)
-    if (!nowBlob) return null
+    if (nowBlob === FAILED || !nowBlob) return null
     const since = new Date(Date.now() - GROWTH_WINDOW_DAYS * 86400000).toISOString().slice(0, 10)
-    const then = exec('git', ['rev-list', '-1', `--before=${since}`, base]).out.trim()
+    // FIRST-PARENT ONLY. Unrestricted `rev-list --before` can land on a commit from a merged side
+    // branch whose date precedes the cutoff but whose tree was never the baseline's state, which
+    // fabricates a growth or shrink that never happened on the mainline.
+    const then = exec('git', ['rev-list', '-1', '--first-parent', `--before=${since}`, base]).out.trim()
     if (!then) return null
     const thenBlob = firstBlobAtAnyPath(then, c.paths)
     const now = countLines(nowBlob)
     if (typeof now !== 'number') return null
+    // A failed lookup drops the growth line entirely; only a genuine absence claims the file was
+    // not there.
+    if (thenBlob === FAILED) return null
     if (!thenBlob) return { days: GROWTH_WINDOW_DAYS, now, then: null, delta: null }
     const before = countLines(thenBlob)
     if (typeof before !== 'number') return null
@@ -263,7 +279,10 @@ function firstBlobAtAnyPath(rev, paths) {
         // Same shape as the two already fixed in notes.mjs and measure(); `null` means unanswerable
         // and the caller drops the growth line rather than inventing one.
         const found = blobsForPath([rev], path)
-        if (!found.ok) return null
+        // FAILED AND ABSENT ARE DIFFERENT ANSWERS, and returning `null` for both was an incomplete
+        // fix: the caller reads `null` as "no version at that revision", which the view renders as
+        // "did not exist then". A failed query would therefore still fabricate a historical fact.
+        if (!found.ok) return FAILED
         const hit = found.blobs.get(rev)
         if (hit) return hit
     }
@@ -316,9 +335,9 @@ function measure(c, live, base, pr, mbByRef) {
             // ref with an unrelated history carried a 400-line divergence and the report said there
             // was none. Being unable to measure a ref is a fact about the run, not an absence.
             if (typeof added !== 'number') { out.unanswerableRefs++; continue }
-            if (!out.largest || added > out.largest.added) {
+            if (!out.largest || added > out.largest.churn) {
                 const prRow = pr.map.get(ref.replace(/^origin\//, ''))
-                out.largest = { added, ref, path: c.paths[i], pr: prRow ? { number: prRow.number, state: prRow.state } : null }
+                out.largest = { churn: added, ref, path: c.paths[i], pr: prRow ? { number: prRow.number, state: prRow.state } : null }
             }
         }
     }
@@ -342,7 +361,20 @@ function measure(c, live, base, pr, mbByRef) {
     // A MEASUREMENT THAT FOUND NOTHING AND A MEASUREMENT THAT COULD NOT LOOK ARE DIFFERENT ANSWERS.
     // Without the second clause, a candidate whose every carrying ref was unanswerable reports
     // "no divergence, go ahead" - the false pass this whole feature exists to prevent.
-    out.open = out.largest === null ? out.unanswerableRefs === 0 : out.largest.added <= c.threshold
+    // NOTHING UNANSWERABLE MAY LEAVE AN OPEN VERDICT, whether or not something else was measured.
+    // The previous form only consulted `unanswerableRefs` when NO ref was measurable, so one
+    // connected branch at +1 alongside one unrelated branch produced `open: true` with a ref nobody
+    // had looked at - the fourth route to the false pass this whole design exists to prevent, and
+    // the one three earlier reviews walked past.
+    out.open = out.unanswerableRefs === 0 && (out.largest === null || out.largest.churn <= c.threshold)
+
+    // AND WHEN NOTHING AT ALL COULD BE MEASURED, that is a failed candidate rather than a quiet
+    // one. Left as `ok: true` it renders as neither open nor failed, so `--if-open` emits the empty
+    // string - the exact silence reserved for a completed measurement over a quiet tree.
+    if (out.largest === null && out.unanswerableRefs > 0) {
+        out.ok = false
+        out.reason = `every diverging ref carrying ${c.id} was unmeasurable (${out.unanswerableRefs} of them) - no merge-base with the baseline?`
+    }
     return out
 }
 

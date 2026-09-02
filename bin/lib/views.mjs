@@ -221,7 +221,7 @@ export function formatRefactorWindow(r, { ifOpen = false } = {}) {
     // for each; with a dozen nobody would. An open candidate has a ratio at or below 1 and therefore
     // sorts to the top by construction. A candidate that could not be measured has no distance at
     // all and goes last rather than being given a fabricated position.
-    const distance = (c) => (c.largest ? c.largest.added / c.threshold : 0)
+    const distance = (c) => (c.largest ? c.largest.churn / c.threshold : 0)
     const ordered = [...r.candidates].sort((a, b) => {
         if (a.ok !== b.ok) return a.ok ? -1 : 1
         return distance(a) - distance(b)
@@ -236,8 +236,10 @@ export function formatRefactorWindow(r, { ifOpen = false } = {}) {
     if (!ifOpen && measured.length > 1) {
         const near = measured[0]
         const far = measured[measured.length - 1]
+        // A measured candidate always has `largest` here: one with none is `ok: false` and is
+        // filtered out above, so this cannot dereference null while ranking.
         const say = (c) => (c.open ? `${c.id} (open now)`
-            : `${c.id} (${(c.largest.added / c.threshold).toFixed(1)}x over)`)
+            : `${c.id} (${(c.largest.churn / c.threshold).toFixed(1)}x over)`)
         out.push(`  nearest to workable: ${say(near)}`, `  furthest away:       ${say(far)}`, '')
     }
 
@@ -248,12 +250,12 @@ export function formatRefactorWindow(r, { ifOpen = false } = {}) {
             continue
         }
         const verdict = c.open ? 'OPEN' : 'BUSY'
-        const size = c.largest ? `+${c.largest.added}` : 'no divergence'
+        const size = c.largest ? `${c.largest.churn} touched` : 'no divergence'
         // The distance is the actionable half: "3.5x over" says how far off this one is, and
         // "180 to spare" says how much room an open one still has before it closes again.
         const gap = !c.largest ? 'no divergence at all'
-            : c.open ? `${c.threshold - c.largest.added} to spare`
-                : `${(c.largest.added / c.threshold).toFixed(1)}x over`
+            : c.open ? `${c.threshold - c.largest.churn} to spare`
+                : `${(c.largest.churn / c.threshold).toFixed(1)}x over`
         out.push(`  ${verdict.padEnd(7)} ${c.id.padEnd(width)}   largest ${size}, threshold ${c.threshold} - ${gap}`)
         if (c.largest) {
             const pr = c.largest.pr ? `PR #${c.largest.pr.number} (${c.largest.pr.state})` : 'no pull request'

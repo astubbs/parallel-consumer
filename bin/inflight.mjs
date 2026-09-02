@@ -476,8 +476,14 @@ full measurement would be unaffordable. Prints nothing for a file that is not a 
             // out of action in the one place the answer could be confidently wrong.
             const warnings = freshnessWarnings(r.baseline, r.liveRefs)
             const INVALIDATING = new Set(['no-baseline', 'never-fetched', 'shallow'])
-            emit(formatWarnings(ifOpen ? warnings.filter((w) => INVALIDATING.has(w.id)) : warnings))
-            emit(formatRefactorWindow(r, { ifOpen }))
+            // NEVER EMIT AN EMPTY STRING. `emit` is console.log, so `emit('')` writes a newline -
+            // and the documented silent form then produces two bytes rather than none, which is
+            // observable to any caller measuring stdout rather than using command substitution
+            // (which strips trailing newlines and hid this from the self-test that asserted it).
+            const warnText = formatWarnings(ifOpen ? warnings.filter((w) => INVALIDATING.has(w.id)) : warnings)
+            if (warnText) emit(warnText)
+            const body = formatRefactorWindow(r, { ifOpen })
+            if (body) emit(body)
             // A candidate that could not be measured is a failure of the RUN, not a quiet answer -
             // exit 2, so a caller can tell "nothing is open" from "this never looked".
             const failed = r.candidates.filter((c) => !c.ok)

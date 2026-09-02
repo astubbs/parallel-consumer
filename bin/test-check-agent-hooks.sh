@@ -3077,6 +3077,12 @@ assert "a command that only stages says nothing" "" "$out"
 
 # `git -C <path> push` put the path where the subcommand should be and silently defeated an earlier
 # hook; hook-common.sh's header records it. It is the form an agent uses most.
+#
+# CLEAR THE REPEAT STAMP FIRST. This asserts PUSH DETECTION, and the content throttle is a separate
+# property with its own cases below - without this the identical report from the session-start case
+# above silences this one and it fails for a reason that has nothing to do with what it tests. The
+# stamp lives in TMPDIR, so these cases were coupled through a file rather than through the code.
+rm -f "${TMPDIR:-/tmp}/pc-refactor-window-$(printf '%s' "$rw_tmp" | tr '/' '_')"
 out="$(printf '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git -C /somewhere push"}}' \
     | CLAUDE_PROJECT_DIR="$rw_tmp" "$HOOKS/remind-refactor-window.sh" 2>/dev/null)"
 case "$out" in *additionalContext*) got=fired ;; "") got=SILENT ;; *) got="$out" ;; esac
@@ -3152,6 +3158,30 @@ rw_stub "OPEN work-manager and abstract-parallel-eos-stream-processor" 0
 changed="$(printf '%s' "$rw_session" | CLAUDE_PROJECT_DIR="$rw_tmp" "$HOOKS/remind-refactor-window.sh" 2>/dev/null)"
 [ -n "$changed" ] && got=spoke || got=SILENT
 assert "a newly opened window is not delayed by the throttle" spoke "$got"
+rm -f "${TMPDIR:-/tmp}/pc-refactor-window-$(printf '%s' "$rw_tmp" | tr '/' '_')"
+
+
+# A REPEATED FAILURE MUST STAY LOUD. The throttle keys on content, so an identically-failing
+# measurement had the same digest and was silenced for twelve hours - handing the next session the
+# exact silence reserved for a completed run over a quiet tree.
+rm -f "${TMPDIR:-/tmp}/pc-refactor-window-$(printf '%s' "$rw_tmp" | tr '/' '_')"
+rw_stub "" 2
+f1="$(printf '%s' "$rw_session" | CLAUDE_PROJECT_DIR="$rw_tmp" "$HOOKS/remind-refactor-window.sh" 2>/dev/null)"
+f2="$(printf '%s' "$rw_session" | CLAUDE_PROJECT_DIR="$rw_tmp" "$HOOKS/remind-refactor-window.sh" 2>/dev/null)"
+[ -n "$f1" ] && [ -n "$f2" ] && got=still-loud || got="first=${#f1} second=${#f2}"
+assert "an identical failure is NOT throttled into silence" still-loud "$got"
+
+# The pre-push preamble must match the outcome: a failure-only report told the model a file was
+# "currently cheap to decompose" when no open candidate had been established at all.
+rw_stub "" 2
+out="$(printf '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git push"}}' \
+    | CLAUDE_PROJECT_DIR="$rw_tmp" "$HOOKS/remind-refactor-window.sh" 2>/dev/null)"
+case "$out" in
+    *"cheap to decompose"*) got=claims-open ;;
+    *UNKNOWN*) got=says-unknown ;;
+    *) got="$out" ;;
+esac
+assert "a failure-only report does not announce an open window" says-unknown "$got"
 rm -f "${TMPDIR:-/tmp}/pc-refactor-window-$(printf '%s' "$rw_tmp" | tr '/' '_')"
 
 rm -rf "$rw_tmp"

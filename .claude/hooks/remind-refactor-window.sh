@@ -85,6 +85,12 @@ fi
 # used to sit here was inert (the old ordering overrode it) AND load-bearing-looking, which is the
 # worst combination: with CLAUDE_PROJECT_DIR absent it let the payload choose which bin/inflight.mjs
 # ran. Resolving the root first and invoking by ABSOLUTE path removes that entirely.
+# KNOWN LIMIT, recorded rather than papered over: for `git -C /other/worktree push` this measures
+# the session's repository, not the one being pushed. The obvious fix - read the -C target from the
+# already-tokenised command - is not available: `hook_git_invocations` emits the subcommand and its
+# arguments, and -C is a git GLOBAL option that precedes the subcommand, so the helper drops it.
+# Getting it would mean widening that helper's output contract, which three other hooks consume.
+# Left as an open thread on the pull request rather than decided here.
 root="$(hook_project_root "$payload")"
 [ -n "$root" ] || exit 0
 inflight="$root/bin/inflight.mjs"
@@ -119,11 +125,15 @@ fi
 : "${REFACTOR_WINDOW_REPEAT_SECONDS:=43200}"
 stamp="$(hook_stamp_path pc-refactor-window "$root")"
 digest="$(printf '%s' "$report" | cksum | awk '{print $1}')"
-if [ -r "$stamp" ] && [ "$(cat "$stamp" 2>/dev/null)" = "$digest" ] \
+# ONLY A SUCCESSFUL REPORT IS ELIGIBLE. Throttling on content alone silenced a repeated
+# measurement FAILURE for twelve hours, and the second session then received the exact silence
+# reserved for a completed run over a quiet tree - reintroducing, in the throttle, the collapse of
+# "could not look" into "nothing to say" that the rest of this script is built to prevent.
+if [ "$rc" -eq 0 ] && [ -r "$stamp" ] && [ "$(cat "$stamp" 2>/dev/null)" = "$digest" ] \
    && ! hook_throttle_expired "$stamp" "$REFACTOR_WINDOW_REPEAT_SECONDS"; then
     exit 0
 fi
-printf '%s' "$digest" > "$stamp" 2>/dev/null || true
+[ "$rc" -eq 0 ] && printf '%s' "$digest" > "$stamp" 2>/dev/null || true
 
 if [ "$event" = "SessionStart" ]; then
     printf '%s\n' "$report"
@@ -132,14 +142,18 @@ fi
 
 # The pre-tool arm cannot just print: a PreToolUse hook reaches the model only through the
 # `additionalContext` envelope, which is the shape remind-inflight-on-push.sh demonstrates.
+# THE PREAMBLE MUST MATCH THE OUTCOME. Every non-empty report got the success wording, so a
+# failure-only report told the model a file "is currently cheap to decompose" when no open
+# candidate had been established at all.
 export REPORT_BODY="$report"
+if [ "$rc" -eq 0 ]; then
+    export REPORT_PREAMBLE="A file this repo has decided to decompose is currently cheap to decompose. This is a reminder while you are between pieces of work, not a blocker on this push - and it will keep appearing until the work is done or the entry leaves bin/refactor-candidates.json."
+else
+    export REPORT_PREAMBLE="The refactor-window check could not answer for everything, so the state of the files this repo means to decompose is UNKNOWN rather than quiet. Not a blocker on this push; reported because a measurement that failed must not read as one that found nothing."
+fi
 python3 -c '
 import json, os
 print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
-    "additionalContext": (
-        "A file this repo has decided to decompose is currently cheap to decompose. This is a "
-        "reminder while you are between pieces of work, not a blocker on this push - and it will "
-        "keep appearing until the work is done or the entry leaves bin/refactor-candidates.json.\n\n"
-        + os.environ["REPORT_BODY"])}}))
+    "additionalContext": os.environ["REPORT_PREAMBLE"] + "\n\n" + os.environ["REPORT_BODY"]}}))
 ' 2>/dev/null || true
 exit 0
