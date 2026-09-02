@@ -259,6 +259,36 @@ gate_rc() { # <project-dir> <bash-command>
 red=$(make_project 1)
 green=$(make_project 0)
 
+# WRONG-TREE REFUSAL. The payload cwd is the SESSION root, not a subagent worktree; a bare commit
+# resolved to a tree with nothing changed is a commit git would refuse anyway, so gating it can only
+# report another tree's defects. Three subagents hit this on 2026-09-02. The fixture must be a REAL,
+# COMMITTED git repo: an untracked .githooks/ would make it dirty and the check correctly would not fire.
+make_clean_repo() { # <gate-exit-code> -> a committed repo whose tree is clean
+    local dir; dir=$(make_project "$1")
+    git -C "$dir" init -q && git -C "$dir" add -A \
+        && git -C "$dir" -c user.email=t@t -c user.name=t commit -q -m init
+    echo "$dir"
+}
+gate_out() { # <project-dir> <cwd> <bash-command> -> stderr
+    local payload
+    payload=$(python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","cwd":sys.argv[1],"tool_input":{"command":sys.argv[2]}}))' "$2" "$3")
+    printf '%s' "$payload" | CLAUDE_PROJECT_DIR="$1" "$HOOKS/pre-commit-gate.sh" 2>&1 >/dev/null
+}
+cleanrepo=$(make_clean_repo 1)
+out=$(gate_out "$cleanrepo" "$cleanrepo" 'git commit -m x'); rc=$?
+assert "a bare commit resolved to a CLEAN tree is refused as the wrong tree" 2 "$rc"
+assert "...and the RED gate there was NOT run - refusing, not gating" 0 "$(printf '%s' "$out" | grep -c 'STUB GATE SPOKE')"
+assert "...and the refusal names git -C as the remedy" 1 "$(printf '%s' "$out" | grep -c 'git -C <your-worktree>')"
+# CONTROL: the same tree, dirtied, gates normally - so the refusal is keyed on cleanliness, not on cwd
+echo dirty > "$cleanrepo/f"
+out=$(gate_out "$cleanrepo" "$cleanrepo" 'git commit -m x'); rc=$?
+assert "control: the same tree once dirty goes to the gate, which blocks" 2 "$rc"
+assert "control: ...and the gate actually spoke" 1 "$(printf '%s' "$out" | grep -c 'STUB GATE SPOKE')"
+# and --allow-empty on a clean tree is the one honest case, so it must reach the gate too
+rm "$cleanrepo/f"
+out=$(gate_out "$cleanrepo" "$cleanrepo" 'git commit --allow-empty -m x')
+assert "--allow-empty against a clean tree reaches the gate rather than being refused" 1 "$(printf '%s' "$out" | grep -c 'STUB GATE SPOKE')"
+
 assert "green gate lets the commit through" 0 \
     "$(gate_rc "$green" 'git commit -m "ordinary"')"
 

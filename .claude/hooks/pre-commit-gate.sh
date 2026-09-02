@@ -53,9 +53,10 @@
 #   4. `$CLAUDE_PROJECT_DIR`, then this process's directory - the labelled last resorts.
 #
 # The gate script and its working directory both come from that answer, so a gate added on one
-# branch and absent on another behaves correctly in each. `.githooks/pre-commit` remains the primary
-# mechanism: git runs it inside the target repository by construction, which is the property this
-# hook now has to derive.
+# branch and absent on another behaves correctly in each. `.githooks/pre-commit` WOULD be the primary
+# mechanism - git runs it inside the target repository by construction - but `core.hooksPath` is not
+# set in this clone, so git never invokes it and this hook is the only gate that actually fires. That
+# is why the wrong-tree case below REFUSES rather than failing open: there is nothing behind it.
 #
 # FAIL OPEN ON OUR OWN BUG. If the payload does not parse, or the gate script is missing, this exits
 # 0. The git hook and CI both still gate the same commit.
@@ -106,7 +107,7 @@ command -v python3 >/dev/null 2>&1 || exit 0
 # disagreeing - the argument .claude/hooks/check-history-rewrite.sh makes for the same pairing.
 scan_rc=0
 commit_dir="$(python3 - "$payload_file" <<'PYGATE'
-import json, os, re, shlex, sys
+import json, os, re, shlex, subprocess, sys
 
 OPERATORS = {"&&", "||", ";", ";;", "|", "&", "(", ")"}
 # An unquoted NEWLINE separates statements exactly like `;`, but shlex's default whitespace
@@ -310,6 +311,23 @@ if not bypass:
         target = cd_dir
     if not target:
         target = payload_cwd
+    # A COMMIT AGAINST A CLEAN TREE MEANS THIS IS THE WRONG TREE. Rule 3 above trusts the payload
+    # `cwd` to be the directory a subagent runs in. It is not: it is the launch directory of the SESSION. On
+    # 2026-09-02 three subagents, each committing in its own worktree after a `cd` in an EARLIER tool
+    # call, were all gated against the main checkout - which had nothing changed - while their real
+    # trees went unchecked. Nothing-to-commit is the signature: git would refuse this commit anyway,
+    # so the only thing a gate can do here is read the wrong files and report their defects as yours.
+    # `--allow-empty` is the one honest commit against a clean tree, and is let through to the gate.
+    # (No apostrophes in these comments: Apple bash 3.2 quote-counts a heredoc inside $( ) naively.)
+    if not bypass and target and "--allow-empty" not in cmd:
+        try:
+            st = subprocess.run(["git", "-C", target, "status", "--porcelain"],
+                                capture_output=True, text=True, timeout=10)
+            if st.returncode == 0 and not st.stdout.strip():
+                print(target)
+                sys.exit(3)              # wrong tree - bash prints the remedy and refuses
+        except Exception:
+            pass                         # cannot tell; fall through to gating as before
     print(target)
 
 sys.exit(0 if bypass else 1)
@@ -317,6 +335,15 @@ PYGATE
 )" || scan_rc=$?
 if [ "$scan_rc" -eq 0 ]; then
     exit 0
+fi
+if [ "$scan_rc" -eq 3 ]; then
+    printf 'pre-commit gate: this commit resolved to\n    %s\nand that tree has NO changes - nothing staged, unstaged or untracked - so it is not the tree\n' "$commit_dir" >&2
+    printf 'you are committing to. The payload cwd is the SESSION root, not a subagent worktree, and a\n' >&2
+    printf 'gate run there would report the defects of another tree as yours. Name the tree instead:\n\n' >&2
+    printf '    git -C <your-worktree> commit ...\n\n' >&2
+    printf 'Refusing rather than guessing, because .githooks/pre-commit is not wired (core.hooksPath\n' >&2
+    printf 'is unset), so this hook is the only gate there is.\n' >&2
+    exit 2
 fi
 
 # THE LAST RESORTS ARE LABELLED, and they are the pre-fix behaviour: `$CLAUDE_PROJECT_DIR` is the
