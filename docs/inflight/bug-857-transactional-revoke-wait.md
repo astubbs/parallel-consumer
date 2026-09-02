@@ -157,12 +157,23 @@ bound.
 InvalidProducerEpochException` rethrow in `tryCommitOffsetsOnRevoke` is gone: on the PC-built path
 the commit path converts those into `ProducerInvalidatedException`, which the generic catch logs and
 the control thread recovers from on its next pass, and on the deprecated producer-instance path
-nothing is recorded and the raw condition is logged the same way - that path keeps its pre-recovery
-behaviour by astubbs#410's design (its R19). The rethrow had only ever fired for a raw fence from
-`commitTransaction` - master already wrapped a fenced `sendOffsetsToTransaction` as an internal error
-at that site - so it was narrower than its comment claimed, and nothing pinned it. The other side of
-the reconciliation is recorded in
-[`core-recoverable-producer-fencing.md`](core-recoverable-producer-fencing.md).
+nothing is recorded and the raw condition is logged the same way. The rethrow had only ever fired for
+a raw fence from `commitTransaction`, and nothing pinned it. **A correction to what this branch said
+about it earlier:** the rethrow was added on this branch on the claim that master failed the instance
+loudly at this site. It did not - master's revoke catch was already the generic WARN, and master's
+`commitTransaction` threw raw into it - so deleting the rethrow restores master exactly, and the
+instance path's "keeps its pre-recovery behaviour" is master's behaviour, which astubbs#410 defers by
+design (its R19). Found by the code review's validator on 2026-09-02.
+
+**The reconciliation was half true until a test was written for it.** Record-and-decline held. "The
+control thread recovers on its next pass" did not: the revoke path produces no mailbox event, so
+nothing woke the control loop, which sat out the rest of its commit-interval wait with every worker
+parked on the produce lock - invisible at the 100ms transactional default, an hour at an hour. The
+revoke path now calls `notifySomethingToDo()` after releasing both locks when the manager reports it
+is replacing. Pinned by
+`ProducerRecoveryTest.fencedDuringTheRevokePathCommitIsRecordedAndDeclinedThenRecoveredByTheControlThread`,
+which failed on exactly that wait before the call existed. The other side of the reconciliation is
+recorded in [`core-recoverable-producer-fencing.md`](core-recoverable-producer-fencing.md).
 <!-- post-merge: checked-end -->
 
 ## Decision, settled 2026-09-01: decline, do not deadline

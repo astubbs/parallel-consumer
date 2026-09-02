@@ -39,10 +39,14 @@ rethrow `ProducerFencedException | InvalidProducerEpochException` from the revok
 fencing stayed fatal; with recovery in place that became record-and-decline, and astubbs#408 removed
 the rethrow when it merged this branch: `ProducerManager.commitOffsets` records the condition and
 unwinds with `ProducerInvalidatedException`, `tryCommitOffsetsOnRevoke`'s catch logs it, and the
-control thread recovers on its next pass. Its three `ProducerManager` lock helpers coexist with the
-waiting entry `beginReplacement` uses. The bounded wait and holder-deadlining that recovery makes
-viable are named in the plan's KTD11 and deliberately not taken; `RebalanceEoSDeadlockTest` on that
-branch asserts the decline.
+control thread recovers on its next pass - and that branch had to add the wake for that pass: the
+revoke path produces no mailbox event, so unlike the produce path (KTD4) nothing woke the control loop,
+and it sat out the rest of its commit-interval wait first. The revoke path now calls
+`notifySomethingToDo()` after releasing both locks when the manager is replacing, pinned by
+`ProducerRecoveryTest.fencedDuringTheRevokePathCommitIsRecordedAndDeclinedThenRecoveredByTheControlThread`.
+Its three `ProducerManager` lock helpers coexist with the waiting entry `beginReplacement` uses. The
+bounded wait and holder-deadlining that recovery makes viable are named in the plan's KTD11 and
+deliberately not taken; `RebalanceEoSDeadlockTest` on that branch asserts the decline.
 <!-- post-merge: checked-end -->
 
 ## Still outside this work
