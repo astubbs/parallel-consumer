@@ -14,6 +14,7 @@ import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.clients.producer.Producer;
+import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.internals.TransactionManager;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.ProducerFencedException;
@@ -22,8 +23,10 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.time.Duration;
 import java.util.Map;
+import java.util.Optional;
 
 import static bz.stub.parallelconsumer.internal.ProducerWrapper.ProducerState.*;
+import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
 /**
  * Our extension of the standard Producer to mostly add some introspection functions and state tracking.
@@ -66,10 +69,49 @@ public class ProducerWrapper<K, V> implements Producer<K, V> {
     @Delegate(excludes = Excludes.class)
     private final Producer<K, V> producer;
 
+    /**
+     * The producer-instance path: wraps the caller's finished producer and discovers whether it is transactional.
+     */
+    @SuppressWarnings("deprecation") // the instance option is deprecated, and this is the one place that reads it
     public ProducerWrapper(ParallelConsumerOptions<K, V> options) {
+        this(options, options.getProducer(), Optional.empty());
+    }
+
+    /**
+     * The PC-built path: wraps a producer the {@link bz.stub.parallelconsumer.ProducerFactory} built from
+     * configuration PC resolved, so whether it is transactional is already known - and checked. Discovery still runs
+     * against a {@link KafkaProducer}, and a producer whose discovered flag disagrees with the configuration PC handed
+     * the factory is rejected here, at construction, rather than failing at its first transactional call.
+     *
+     * @param expectedTransactional whether the configuration the factory received carried a {@code transactional.id}
+     * @throws IllegalArgumentException when a {@link KafkaProducer} was not built from that configuration
+     */
+    public static <K, V> ProducerWrapper<K, V> forPcBuilt(ParallelConsumerOptions<K, V> options,
+                                                          Producer<K, V> producer,
+                                                          boolean expectedTransactional) {
+        return new ProducerWrapper<>(options, producer, Optional.of(expectedTransactional));
+    }
+
+    private ProducerWrapper(ParallelConsumerOptions<K, V> options, Producer<K, V> producer, Optional<Boolean> expectedTransactional) {
         this.options = options;
-        producer = options.getProducer();
-        this.producerIsConfiguredForTransactions = discoverIfProducerIsConfiguredForTransactions();
+        this.producer = producer;
+        boolean discovered = discoverIfProducerIsConfiguredForTransactions();
+        if (expectedTransactional.isPresent() && producer instanceof KafkaProducer && discovered != expectedTransactional.get()) {
+            throw new IllegalArgumentException(msg("The ProducerFactory returned a KafkaProducer that is {} " +
+                            "transactional, but the configuration PC handed it {} a {}. A factory must build the " +
+                            "producer from the map it is given, with {} unaltered: dropping or changing it disables " +
+                            "the fencing a replacement producer relies on and voids the TransactionalId ACL prefix.",
+                    discovered ? "" : "not",
+                    expectedTransactional.get() ? "carried" : "did not carry",
+                    ProducerConfig.TRANSACTIONAL_ID_CONFIG,
+                    ProducerConfig.TRANSACTIONAL_ID_CONFIG));
+        }
+        // a KafkaProducer's discovery is authoritative and already agrees with the expectation; for any other type
+        // discovery is a guess (MockProducer defers to the options, unknown types report false), so the configuration
+        // PC handed the factory is the better answer where one was given
+        this.producerIsConfiguredForTransactions = expectedTransactional.isPresent() && !(producer instanceof KafkaProducer)
+                ? expectedTransactional.get()
+                : discovered;
     }
 
     public boolean isMockProducer() {

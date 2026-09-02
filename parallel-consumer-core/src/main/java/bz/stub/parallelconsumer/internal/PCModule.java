@@ -11,11 +11,19 @@ import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.state.ShardManager;
 import bz.stub.parallelconsumer.state.WorkManager;
+import bz.stub.parallelconsumer.ProducerFactory;
 import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.producer.Producer;
 
+import java.lang.ref.WeakReference;
 import java.time.Clock;
+import java.time.Duration;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.function.Supplier;
 
 /**
  * Minimum dependency injection system, modled on how Dagger works.
@@ -24,6 +32,7 @@ import java.time.Clock;
  *
  * @author Antony Stubbs
  */
+@Slf4j
 public class PCModule<K, V> {
 
     protected ParallelConsumerOptions<K, V> optionsInstance;
@@ -57,11 +66,80 @@ public class PCModule<K, V> {
 
     private ProducerWrapper<K, V> producerWrapper;
 
+    /**
+     * The suffix of every {@code transactional.id} this module derives: generated once, so the producer PC builds at
+     * start-up and every replacement it builds after a recovery share one id, and re-initialising a replacement
+     * fences exactly the producer it replaces.
+     */
+    private final UUID producerInstanceId = UUID.randomUUID();
+
+    /**
+     * The last producer the factory handed back, held weakly: a factory returning the same instance twice is a
+     * caching factory, which breaks the contract {@link ProducerFactory} states, and consecutive calls are where it
+     * shows. Weak, so a discarded producer is not kept alive by the check that rejected its successor.
+     */
+    private WeakReference<Producer<K, V>> lastProducerFromFactory = new WeakReference<>(null);
+
+    /**
+     * The wrapper around the producer PC starts with - the caller's instance on the deprecated path, or the first
+     * producer built from configuration through the factory.
+     */
     protected ProducerWrapper<K, V> producerWrap() {
         if (this.producerWrapper == null) {
-            this.producerWrapper = new ProducerWrapper<>(options());
+            this.producerWrapper = options().isProducerInstanceSupplied()
+                    ? new ProducerWrapper<>(options())
+                    : buildProducerWrapperFromConfiguration();
         }
         return producerWrapper;
+    }
+
+    /**
+     * How a replacement producer is built after the broker invalidates the current one: present only where PC built
+     * the producer itself, because a caller's finished instance carries no configuration to rebuild from. Each call of
+     * the supplier resolves the same configuration - the same derived {@code transactional.id} included - and asks
+     * the factory for a new producer.
+     */
+    public Optional<Supplier<ProducerWrapper<K, V>>> replacementProducerWrap() {
+        if (options().isProducerInstanceSupplied()) {
+            return Optional.empty();
+        }
+        return Optional.of(this::buildProducerWrapperFromConfiguration);
+    }
+
+    private ProducerWrapper<K, V> buildProducerWrapperFromConfiguration() {
+        boolean transactional = options().isUsingTransactionCommitMode();
+        Map<String, Object> resolved = TransactionalIdDerivation.resolve(options().getProducerConfig(), transactional, groupIdForDerivation(), producerInstanceId);
+        Producer<K, V> producer = options().getProducerFactory().create(resolved);
+        if (producer == null) {
+            throw new IllegalStateException("The ProducerFactory returned null; every call must return a new Producer");
+        }
+        if (lastProducerFromFactory.get() == producer) {
+            throw new IllegalStateException("The ProducerFactory returned the producer it had already returned; every " +
+                    "call must return a new Producer, because PC discards the previous one when the broker invalidates it");
+        }
+        lastProducerFromFactory = new WeakReference<>(producer);
+        try {
+            ProducerWrapper<K, V> wrapper = ProducerWrapper.forPcBuilt(options(), producer, transactional);
+            log.info("Built producer from configuration (transactional: {}): {}", transactional, ProducerConfigRedaction.render(resolved));
+            return wrapper;
+        } catch (RuntimeException rejected) {
+            // the producer failed the construction check and will never be used - do not leak its threads
+            try {
+                producer.close(Duration.ZERO);
+            } catch (RuntimeException closeFailed) {
+                log.debug("Closing a rejected producer failed", closeFailed);
+            }
+            throw rejected;
+        }
+    }
+
+    private String groupIdForDerivation() {
+        var metadata = consumerManager().groupMetadata();
+        if (metadata == null || metadata.groupId() == null) {
+            throw new IllegalArgumentException("Cannot derive a transactional.id without the consumer's group.id - the " +
+                    "consumer must be configured with a group.id before PC can build a producer");
+        }
+        return metadata.groupId();
     }
 
     private ProducerManager<K, V> producerManager;
