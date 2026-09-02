@@ -163,8 +163,14 @@ class ParallelConsumerOptionsProducerConfigTest {
         } finally {
             logger.detachAppender(appender);
         }
+        // The options logger is shared, and the suite runs test classes concurrently: any other test building
+        // options around a producer instance logs the same WARN at the same moment, into this appender. The line is
+        // logged synchronously on the validating thread, so the thread name is what separates ours from theirs -
+        // seen as "expected 1 but was 2", the same message twice, in a full parallel run only.
+        String ownThread = Thread.currentThread().getName();
         return appender.list.stream()
                 .filter(event -> event.getLevel().isGreaterOrEqual(Level.WARN))
+                .filter(event -> ownThread.equals(event.getThreadName()))
                 .collect(Collectors.toList());
     }
 }
