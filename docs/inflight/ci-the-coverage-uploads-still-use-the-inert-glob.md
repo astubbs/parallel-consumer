@@ -38,6 +38,6 @@ clean per-flag comparison to be that proof.
 The first diagnosis recorded here was wrong in the opposite direction - it claimed the PR lane
 uploaded BOTH halves under one flag while master uploaded one file per flag. The upload logs say the
 reverse. It was corrected before this note left the branch, and the wrong version is noted because
-the evidence that settles it (`Found 13 coverage files` against a one-file glob, and master's two
+the evidence that settles it (a `Found N coverage files` line far exceeding what a one-file glob could match, and master's two
 flags reporting the same number) was available the whole time and was explained away as an unrelated
 API quirk.

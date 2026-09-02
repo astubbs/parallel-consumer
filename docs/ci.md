@@ -880,8 +880,8 @@ Measured, from the upload logs rather than inferred:
 
 | Lane | Flag | Declared `files:` | What the CLI actually uploaded |
 |---|---|---|---|
-| `build` (master) | `unit` | `jacoco/jacoco.xml` | **13 reports - both halves** (`not_found` on the glob, then tree-wide fallback) |
-| `build` (master) | `integration` | `jacoco-it/jacoco.xml` | the same 13 |
+| `build` (master) | `unit` | `jacoco/jacoco.xml` | **every jacoco report in the tree - both halves** (`not_found` on the glob, then tree-wide fallback) |
+| `build` (master) | `integration` | `jacoco-it/jacoco.xml` | the same set |
 | `test` (PR) | `integration` | both globs | 4 reports, all `jacoco-it` - the unit half does not exist in that job |
 <!-- file-refs: N/A - jacoco paths are generated build output under target/, and which files reach
      which flag IS the defect described here -->
