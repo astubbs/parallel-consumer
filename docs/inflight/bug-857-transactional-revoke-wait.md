@@ -105,6 +105,40 @@ make this issue unique. It was re-triaged off
 astubbs#29 and onto this block on 2026-08-18; its `pr-available` label was removed, because no open
 PR addresses it.
 
+## SUPERSEDED BY SEQUENCING, 2026-09-02: wait for astubbs#225, then reconsider
+
+<!-- post-merge: checked - states an ordering between two pieces of work, and reads the same once
+     both have landed -->
+**The decision below is on hold, and the reason is that its central premise expired.** "Decline, do
+not deadline" rested on two legs: a per-transaction bound cannot fix starvation (measured, and still
+true), *and* deadlining means aborting a transaction while `ProducerFencedException` is fatal.
+astubbs#225 removes the second leg, and it is being finished now.
+
+**With astubbs#225 in place, the bounded wait is the better design, for two independent reasons:**
+
+- **`RebalanceEoSDeadlockTest` already encodes it.** That test passes on master *because* of the
+  unbounded spin - it waits the control-thread commit out, which then succeeds and advances offsets.
+  Its own failure message offers both options: *"either by waiting out the in-flight pc-control
+  commit, or by committing itself"*. A bounded wait satisfies it; declining cannot. Measured control
+  arm: 5/5 pass on base, 5/5 fail with the decline, same machine, one term different.
+- **It is Kafka Streams' actual shape.** Streams commits inline in the revoke callback, bounds it
+  with `max.block.ms`, and on expiry falls back to `closeDirtyAndRevive` - abandon and rejoin. That
+  fallback *is* `TaskMigratedException`, which is astubbs#225's model. Streams is **bounded wait +
+  recoverable migration**; PC can only have the second half once astubbs#225 lands.
+
+<!-- post-merge: checked - names the PR that widened the rule, which reads the same once merged -->
+**A trap for whoever builds the bounded version.** The ArchUnit widening on astubbs#408 adds
+`Lock.tryLock(long, TimeUnit)` and siblings to `BLOCKING_CALLS`, so a bounded wait will trip the
+rule. It cannot distinguish a 2s bound from the 5-minute one that caused confluentinc#803 - a
+duration is invisible to a static walk - so the site needs an explicit exemption with a "bounded well
+under max.poll.interval.ms" justification, or the rule needs a way to see the bound.
+
+**What survives the redesign either way:** the ArchUnit widening (it found three pre-existing
+blocking reaches, one the confluentinc#857 AB-BA edge, that the walk could not see through an
+interface hop); `RemovedPartitionState.onOffsetCommitSuccess`; the probe, which measures callback
+duration and is valid against either design. **What does not:** the fencing rethrow, which astubbs#225
+replaces with a migration signal.
+
 ## Decision, settled 2026-09-01: decline, do not deadline
 
 **The revoke path takes the producer write lock with a bare `tryLock()` and skips the commit when it
