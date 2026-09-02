@@ -106,7 +106,8 @@ check('flag bound is a 30% loss', WARN_BELOW, 0.70)
   // would silently reintroduce the contradiction the rest of this block exists to prevent.
   const hair = 0.5 - 1e-12
   check('the raw value is a fail', bandOf(hair), 'fail')
-  check('every rung of the ladder disagrees with it', [3, 4, 5, 6, 9].map(dp => bandOf(Number(hair.toFixed(dp)))).join(), 'flag,flag,flag,flag,flag')
+  const rungs = [3, 4, 5, 6, 9].map(dp => bandOf(Number(hair.toFixed(dp))))
+  check('every rung of the ladder disagrees with it', rungs.join(), 'flag,flag,flag,flag,flag')
   check('so the fallback prints it exactly', displayRatio(hair), String(hair))
   check('and the printed value keeps the raw band', bandOf(Number(displayRatio(hair))), 'fail')
 }
@@ -225,6 +226,28 @@ check('flag bound is a 30% loss', WARN_BELOW, 0.70)
       check('and its payload names the status', sm ? JSON.parse(sm[1]).status : null, 'no-subject')
       check('and the status did not land inside the message',
         subjText.split('<!-- pc-throughput-data:')[0].includes('no-subject'), false)
+
+      // THIRD RUNTIME PATH: no-rate - and it is the LAST one reachable without a test seam, which is
+      // the useful part. The reporter has eight `writeReport` exits; exactly three of them are decided
+      // from local files before any network call (`no-rate`, `no-control`, `no-subject`), and the other
+      // five - `bootstrapping`, `check-failed`, `no-reference`, `incomparable`, and the verdict itself
+      // - sit behind `gh run list` and an artifact download. So this one costs nothing, and the open
+      // seam question is about those five specifically rather than about "the rest of them".
+      //
+      // The case is a summary that EXISTS and is non-blank but carries no usable `recordsPerSecond`.
+      // A missing or blank summary exits NOTHING_IN_SCOPE several lines earlier - a different
+      // contract, and conflating the two would assert the wrong exit code here.
+      rmSync(report, { force: true })
+      writeFileSync(summary,
+        'PC-THROUGHPUT test=MultiInstanceHighVolumeTest processed=0 expected=3 elapsedMs=1 recordsPerSecond=0 outcome=FAILED\n')
+      const noRate = spawnSync(process.execPath, [join(root, 'bin/check-throughput-regression.mjs')], { encoding: 'utf8' })
+      check('the reporter exited CANNOT for no-rate', noRate.status, 2)
+      const rateText = existsSync(report) ? readFileSync(report, 'utf8') : ''
+      const rateM = /<!-- pc-throughput-data: (.*?) -->/.exec(rateText)
+      check('the no-rate exit wrote a report at all', Boolean(rateM), true)
+      check('and its payload names the status', rateM ? JSON.parse(rateM[1]).status : null, 'no-rate')
+      check('and the status did not land inside the message',
+        rateText.split('<!-- pc-throughput-data:')[0].includes('no-rate'), false)
     }
   } finally {
     for (const sig of ['SIGINT', 'SIGTERM']) process.removeListener(sig, onSignal)
