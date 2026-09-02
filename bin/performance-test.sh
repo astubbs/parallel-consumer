@@ -32,13 +32,23 @@ SUMMARY="$ROOT/target/performance-throughput.txt"
 # Do not let a test failure skip the summary - a failing run is exactly when the number is wanted,
 # and `set -e` would otherwise exit before it is printed. The maven status is preserved and
 # re-raised at the end, so the lane still fails when the suite fails.
+#
+# WHY `-Dexcluded.groups=quarantined` RATHER THAN EMPTY. An override REPLACES the pom's default list
+# (see pom.xml, `excluded.groups`), so the empty value this used to pass excluded NOTHING - which was
+# correct for `performance` (the whole point of this lane is to run it) and silently wrong for
+# `quarantined`. Because this lane is a REQUIRED check, a quarantined performance test would have
+# kept gating merges: the annotation would compile, the registry would list it, the lane report
+# would describe it, and none of that would stop it blocking a PR. That is precisely the silent
+# no-op the @Quarantined javadoc records having already happened once, when the exclusion was not
+# wired for unit tests. bin/chaos-test.sh pairs its own `included.groups` with this same exclusion;
+# this lane was the one that had not.
 rc=0
 ./mvnw --batch-mode \
   -Pci \
   clean verify \
   -DskipUTs=true \
   -Dincluded.groups=performance \
-  -Dexcluded.groups= \
+  -Dexcluded.groups=quarantined \
   "$@" 2>&1 | tee "$LOG" || rc=${PIPESTATUS[0]}
 
 mkdir -p "$(dirname "$SUMMARY")"

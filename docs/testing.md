@@ -63,6 +63,15 @@ truncate, and check the log you did fetch is complete before diagnosing from it:
 [`docs/solutions/workflow-issues/gh-run-view-log-truncation.md`](solutions/workflow-issues/gh-run-view-log-truncation.md)
 **owns those routes** and the completeness check.
 
+**Locally there is no artifact, and the confirming re-run destroys the evidence.** CI uploads the
+failsafe XML, so a failure's report survives being looked at; on a developer box the re-run writes
+over `target/*-reports/TEST-<class>.xml` in place, taking the autopsy, the seed and the assertion's
+actual-versus-expected with it. **Copy the report aside before you re-run** - `cp
+parallel-consumer-core/target/*-reports/TEST-<class>.xml /tmp/`. The re-run that proves "it passes in
+isolation" is precisely the one that overwrites the failure it is being compared against: on
+2026-08-19 a `PCMetricsTest` sighting lost its actual-versus-expected that way, leaving only a
+timing the ledger already had, and so could not be told apart from ordinary load.
+
 **A failing chaos test's autopsy carries its own replay.** `chaos seed:` and `chaos replay:` sit
 directly under the failure line, the replay command complete - the `chaos` tag is excluded by
 default, so the seed alone does not select the test. **First move on a chaos failure is to run that
@@ -171,6 +180,11 @@ protocol-invisible per-partition lag stagnation (Class 2), drain overruns, and r
 duplication. Tagged `@Tag("chaos")` and excluded from all default and gating suites via `pom.xml`'s
 `excluded.groups` default.
 
+W1 and W4 make no ordering claim and record no history: they run `UNORDERED` over a unique key
+per record, so `KeyOrderLedger` is W5's instrument alone. `KafkaTestUtils.checkExactOrdering` is
+the no-redelivery equivalent for mock-consumer tests and must not be reached for from a
+rebalance test.
+
 **What it can assert, so you know whether a question is already answerable.** Reach for an existing
 capability before building one - the calibration behind each of these is the expensive part, not the
 code:
@@ -263,6 +277,12 @@ is why the chaos job summary prints the peak rather than a verdict - read it as 
 - **A RED run is investigation food, not flake noise.** The probes are calibrated against the real
   historical drain-zombie defect (RED on pre-fix compositions, GREEN on fixed; thresholds sit in
   measured gaps). **Never loosen a probe to go green** - tune the workload or conductor instead.
+- **A workload artifact reads exactly like a defect, and the tuning is the finding.** W5's calibration
+  produced a 154s `CLASS2_STALL/LAG_STAGNATION` that was neither a stall nor probe noise: its heavy
+  tail is spaced on the record index, so with `HEAVY_EVERY` a multiple of `KEY_SPACE` every heavy
+  record landed on one key, and KEY ordering serialised the whole tail onto one shard. Its scenario
+  javadoc carries the arithmetic, and `heavyRecordsMustNotAllShareOneKey` is the check - the pattern to
+  copy is turning the conclusion into an assertion rather than a comment.
 
 ## Lincheck lane (`@Tag("lincheck")`) - scheduler-controlled concurrency testing, never gates
 
