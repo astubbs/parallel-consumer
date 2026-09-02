@@ -863,30 +863,41 @@ restructuring lost that, and this section is where it now lives.
 endpoint reports default-branch coverage, and on master only `build` runs. A reader who does not know
 that files a bug against the uploader; this is the third time that has nearly happened.
 
-### The per-flag gates, and the open question about them
+### The per-flag gates, and why they fail
 
 `codecov.yml` gates on `unit` and `integration` per flag, at `target: auto, threshold: 1%`, and makes
 the overall project number informational. Its reasoning is sound and worth reading in place: a total
 that compares five flags on a PR against two on master cannot be made honest by tuning a threshold.
 
-**Those gates began failing the moment they first had a base to compare against**, and the cause is
-not settled. Before astubbs/parallel-consumer#400 landed they reported *"No coverage information
-found on base report"* and passed - a vacuous green. With a base present they report large negative
-deltas on `unit` and `integration` while the overall number RISES and patch coverage is unaffected,
-which is not the shape of a real regression in a subset.
+**The gates fail because the two lanes upload different file SETS, and the cause is the inert `**`
+glob.** The uploader's CLI does not expand `**`, and nothing routes `files:` through a shell, so the
+pattern arrives literally, matches nothing, and the CLI falls back to its own tree-wide search. On
+master's full build that search finds EVERY jacoco report - both halves, every module - so `unit` and
+`integration` each receive the whole tree and report the same number. On a pull request each suite job
+has produced only its own half, so the same fallback finds only that half.
 
-What is established:
+Measured, from the upload logs rather than inferred:
 
-- The two lanes upload different FILE SETS per flag (the table above), which `codecov.yml`'s own
-  claim that both sides come from "the same pom executions" does not account for.
-- The deltas are stable across heads, and appear on commits that change no Java at all.
+| Lane | Flag | Declared `files:` | What the CLI actually uploaded |
+|---|---|---|---|
+| `build` (master) | `unit` | `jacoco/jacoco.xml` | **13 reports - both halves** (`not_found` on the glob, then tree-wide fallback) |
+| `build` (master) | `integration` | `jacoco-it/jacoco.xml` | the same 13 |
+| `test` (PR) | `integration` | both globs | 4 reports, all `jacoco-it` - the unit half does not exist in that job |
+<!-- file-refs: N/A - jacoco paths are generated build output under target/, and which files reach
+     which flag IS the defect described here -->
 
-What is **not** established: the arithmetic from that asymmetry to the specific figures. The API's
-`report/?flag=` parameter is ignored - a per-flag query returns the overall total - so per-flag line
-counts could not be compared. Do not repeat that as a dead end.
+So a PR's `integration` flag is compared against a master `integration` flag that silently contains
+the unit half as well. The delta measures that difference, not the branch. The confirming detail: on
+master both flags report an identical figure, which only makes sense if both hold the same data.
 
-Anyone fixing this should make the PR lane upload one file per flag, as `build` already does, and
-expect the first green comparison to be the proof rather than the reasoning above.
+**This is the same defect as the one fixed for the test-results upload in this repository's history -
+a `files:` line that reads as configuration and does nothing.** The fix is the same: expand the globs
+before handing them over, and set `disable_search: true` so the fallback cannot silently re-widen the
+set.
+
+It is deliberately not fixed in the change that diagnosed it: altering what a required coverage gate
+measures should be the only thing in its own diff, so the before/after is legible. Expect the first
+clean comparison to be the proof.
 
 ### Reading it without a browser
 
