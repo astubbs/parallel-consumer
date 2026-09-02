@@ -46,8 +46,8 @@
 
 import { baseline as baselineRef, exec, freshnessWarnings, lines, refTips } from './git.mjs'
 import { formatWarnings } from './views.mjs'
+import { REPO } from './repo.mjs'
 
-const REPO = 'astubbs/parallel-consumer'
 
 /**
  * The jq filter that matches a search pattern against a GitHub item's title and body.

@@ -16,7 +16,45 @@ import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const CACHE_DIR = join(tmpdir(), `pc-inflight-cache-${process.getuid?.() ?? 0}`)
+const cacheDir = () => process.env.PC_INFLIGHT_CACHE_DIR
+    || join(tmpdir(), `pc-inflight-cache-${process.getuid?.() ?? 0}`)
+
+/**
+ * FRESHNESS IS THIS LAYER'S JOB, NOT THE CALLER'S - and it is the reason a hook was deleted.
+ *
+ * Every caller used to pass its own `maxAgeMs`, so the policy for a cache lived at each of its
+ * read sites and nowhere authoritative. The visible consequence was a hook named for a TRIGGER,
+ * `after-pr-create-refresh-cache`, whose entire job was to reach in from outside and repair a
+ * staleness the layer would not admit to - which covered exactly one way a PR can come into
+ * existence (`gh pr create`, in a session that had the hook loaded) and none of the others: the
+ * web, another machine, another session. A cache that needs an external event to be correct is
+ * coupled to that event, and every path that does not fire it is silently wrong.
+ *
+ * `cacheEmpty: false` is the half that made the hook unnecessary. ABSENCE IS THE ANSWER THAT GOES
+ * STALE IN THE DANGEROUS DIRECTION - "this branch has no PR" is a false negative the moment someone
+ * opens one, and opening one is what people do next. Presence is safe to keep: PRs are not
+ * un-created, and a stale title is cosmetic where a wrong "no PR" is not.
+ */
+const POLICY = {
+    'prs.json': { maxAgeMs: 24 * 60 * 60 * 1000, cacheEmpty: true },
+    'pr-branch.json': { maxAgeMs: 6 * 60 * 60 * 1000, cacheEmpty: false },
+}
+const DEFAULT_POLICY = { maxAgeMs: 60 * 60 * 1000, cacheEmpty: false }
+
+/** The policy for a cache kind. Exported so a self-test asserts the policy, not a magic number. */
+export function policyFor(name) {
+    return POLICY[name] ?? DEFAULT_POLICY
+}
+
+/**
+ * THE CACHES THIS CODE ACTUALLY USES, derived from the policy rather than listed a second time.
+ *
+ * It WAS listed a second time, in the front door, and the two had already drifted: renaming a cache
+ * kind here left the other copy naming the retired one, so `cache` reported the live file as an
+ * ORPHAN and the dead file as live - inverting the one thing that view exists to tell you. Anything
+ * with a policy is known; anything else is a leftover, by construction.
+ */
+export const knownCaches = () => Object.keys(POLICY)
 
 /**
  * ONE FILE PER KIND, with the key INSIDE it - never one file per key.
@@ -25,19 +63,24 @@ const CACHE_DIR = join(tmpdir(), `pc-inflight-cache-${process.getuid?.() ?? 0}`)
  * before that was fixed. A mismatched key read back is simply a miss, so exactness is unchanged and
  * the file self-cleans by being overwritten.
  */
-export function cacheRead(name, { key, maxAgeMs } = {}) {
+export function cacheRead(name, { key } = {}) {
     try {
-        const raw = JSON.parse(readFileSync(join(CACHE_DIR, name), 'utf8'))
+        const raw = JSON.parse(readFileSync(join(cacheDir(), name), 'utf8'))
         if (key !== undefined && raw.key !== key) return null
-        if (maxAgeMs && Date.now() - raw.at > maxAgeMs) return null
+        // THE TTL COMES FROM THE POLICY, never from the caller. Two read sites disagreeing about
+        // how old is too old is a cache with two answers, and nothing would report the difference.
+        if (Date.now() - raw.at > policyFor(name).maxAgeMs) return null
         return raw.value
     } catch { return null }
 }
 
 export function cacheWrite(name, value, key) {
+    // AN EMPTY ANSWER IS REFUSED where the policy says so, at the layer rather than at each caller
+    // - a guard written at the call site is one an added caller does not inherit.
+    if (!policyFor(name).cacheEmpty && Array.isArray(value) && value.length === 0) return
     try {
-        mkdirSync(CACHE_DIR, { recursive: true, mode: 0o700 })
-        writeFileSync(join(CACHE_DIR, name), JSON.stringify({ at: Date.now(), key, value }))
+        mkdirSync(cacheDir(), { recursive: true, mode: 0o700 })
+        writeFileSync(join(cacheDir(), name), JSON.stringify({ at: Date.now(), key, value }))
     } catch { /* a cache that cannot be written must not break the answer */ }
 }
 
@@ -55,27 +98,27 @@ export function cacheWrite(name, value, key) {
  * the point: an unreadable leftover is indistinguishable from a live cache by looking at the
  * directory, and `corpus.json` sat there at 2.5MB after its cache was deleted.
  */
-export function cacheStatus(known = ['prs.json', 'pr-search.json']) {
+export function cacheStatus(known = knownCaches()) {
     let names = []
-    try { names = readdirSync(CACHE_DIR) } catch { return { dir: CACHE_DIR, exists: false, entries: [] } }
+    try { names = readdirSync(cacheDir()) } catch { return { dir: cacheDir(), exists: false, entries: [] } }
     const entries = names.map((name) => {
         let bytes = 0
         let at = null
-        try { bytes = statSync(join(CACHE_DIR, name)).size } catch { /* raced with a writer */ }
-        try { at = JSON.parse(readFileSync(join(CACHE_DIR, name), 'utf8')).at ?? null } catch { /* not ours */ }
+        try { bytes = statSync(join(cacheDir(), name)).size } catch { /* raced with a writer */ }
+        try { at = JSON.parse(readFileSync(join(cacheDir(), name), 'utf8')).at ?? null } catch { /* not ours */ }
         return { name, bytes, at, ageMs: at ? Date.now() - at : null, orphan: !known.includes(name) }
     })
-    return { dir: CACHE_DIR, exists: true, entries: entries.sort((a, b) => b.bytes - a.bytes) }
+    return { dir: cacheDir(), exists: true, entries: entries.sort((a, b) => b.bytes - a.bytes) }
 }
 
 /** Delete cached files. Orphans only by default, because dropping a live cache is a separate ask. */
-export function cacheClear({ all = false, known = ['prs.json', 'pr-search.json'] } = {}) {
+export function cacheClear({ all = false, known = knownCaches() } = {}) {
     const status = cacheStatus(known)
     if (!status.exists) return { removed: [], bytes: 0 }
     const doomed = status.entries.filter((e) => all || e.orphan)
     let bytes = 0
     for (const e of doomed) {
-        try { rmSync(join(CACHE_DIR, e.name)); bytes += e.bytes } catch { /* already gone */ }
+        try { rmSync(join(cacheDir(), e.name)); bytes += e.bytes } catch { /* already gone */ }
     }
     return { removed: doomed.map((e) => e.name), bytes }
 }

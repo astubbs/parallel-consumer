@@ -47,8 +47,8 @@ import { pathToFileURL } from 'node:url'
 import { perfReport, perfStart } from './lib/perf.mjs'
 
 import { baseline, freshnessWarnings, refTips } from './lib/git.mjs'
-import { cacheClear, cacheStatus } from './lib/cache.mjs'
-import { cachePr, corpusIndex, drift, findNotes, prsByBranch, stranded } from './lib/notes.mjs'
+import { cacheClear, cacheStatus, knownCaches } from './lib/cache.mjs'
+import { corpusIndex, drift, findNotes, prsByBranch, stranded } from './lib/notes.mjs'
 import { branchView, commitGraph, trackingGap } from './lib/branches.mjs'
 import {
     formatBranch, formatCache, formatCoverage, formatDrift, formatFind, formatFlakes,
@@ -221,39 +221,25 @@ reported as what it is.
     },
     {
         name: 'cache',
-        summary: 'what is cached, how old it is, and folding one PR in without refetching the rest',
-        when: 'after creating a PR, or when you want to know whether an answer came from the network',
+        summary: 'what is cached, how old each kind is, and what policy decides that',
+        when: 'you want to know whether an answer came from the network, or why a stale one persisted',
         usage: `Usage: bin/inflight.mjs cache            what is cached and how old
-       bin/inflight.mjs cache pr <n>    fold one PR in, without refetching the others
        bin/inflight.mjs cache clear     delete orphans (add --all for live caches too)
 
 Only network answers are cached. Git data never is: git is already a cache, and a corpus cache that
 lived here was deleted precisely because it hid a design mistake rather than paying for itself.
 
-The PR set is held for 24 hours rather than the 30 minutes it started at. Thirty was right when
-expiry was the ONLY way the cache became correct; it no longer is - \`cache pr <n>\` folds a single
-PR in for one \`gh pr view\`, and a PostToolUse hook runs it the moment a PR is created here. The TTL
-is now a backstop for changes made OUTSIDE this machine, not the primary path.
+Each cache kind's freshness is stated once, in \`bin/lib/cache.mjs\`, and never by a caller. The
+bulk PR listing is held for 24 hours; a per-branch answer for 6. The half that matters is that an
+ABSENCE is not stored at all for the per-branch kind: "this branch has no PR" is the answer that
+goes stale in the dangerous direction, so it is re-asked instead of remembered. That is what let a
+hook whose whole job was to refresh this cache after \`gh pr create\` be deleted - it covered one
+of the ways a PR appears and none of the others.
 
 Freshness is stored inside each file, not in its name. A timestamped filename would show age in
 \`ls\` and create a new file per write - the orphan accumulation that once left 7.4MB here in a
 single session.`,
         sub: [
-            {
-                name: 'pr',
-                summary: 'fold one PR into the cached set, without refetching the others',
-                when: 'immediately after creating or updating a PR - the hook does this for you',
-                usage: `Usage: bin/inflight.mjs cache pr <number>`,
-                run: (args, emit) => {
-                    const n = args[0]
-                    if (!n || !/^\d+$/.test(n)) return { ok: false, reason: 'cache pr: give a PR number' }
-                    const r = cachePr(Number(n))
-                    if (!r.ok) return { ok: false, reason: `cache pr: ${r.reason}` }
-                    emit(`  ${r.action} astubbs/parallel-consumer#${r.pr.number} ${r.pr.state} `
-                        + `(${r.pr.headRefName}) - ${r.total} PRs cached`)
-                    return { ok: true }
-                },
-            },
             {
                 name: 'clear',
                 summary: 'delete orphaned cache files, or everything with --all',
@@ -272,7 +258,7 @@ because the next run then pays full price, so it takes --all.`,
             },
         ],
         run: (args, emit) => {
-            const known = ['prs.json', 'pr-search.json']
+            const known = knownCaches()
             emit(formatCache(cacheStatus(known), known))
             return { ok: true }
         },

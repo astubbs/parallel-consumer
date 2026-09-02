@@ -128,6 +128,31 @@ function buildFixture() {
     return dir
 }
 
+/**
+ * A CLONE WITH A REAL REMOTE, because freshness is a statement about fetching and the fixture above
+ * has nothing to fetch from. Returns the clone's path; what gets fetched is left to the caller,
+ * because the width of that fetch is the variable under test.
+ */
+function buildFetchFixture() {
+    const root = mkdtempSync(join(tmpdir(), 'inflight-fetch-'))
+    const run = (where, ...args) => {
+        const r = spawnSync('git', args, { cwd: where, encoding: 'utf8' })
+        if (r.status !== 0) throw new Error(`fetch fixture: git ${args.join(' ')} failed: ${r.stderr}`)
+        return r.stdout.trim()
+    }
+    const up = join(root, 'up')
+    mkdirSync(up, { recursive: true })
+    run(up, 'init', '-q', '-b', 'master')
+    writeFileSync(join(up, 'f'), 'one\n')
+    run(up, 'add', '-A')
+    run(up, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'one')
+    // Enough refs that ONE of them is unambiguously a narrow fetch of the set.
+    for (let i = 0; i < 12; i += 1) run(up, 'branch', `b${i}`)
+    const down = join(root, 'down')
+    run(root, 'clone', '-q', up, down)
+    return down
+}
+
 let FIXTURE = null
 const fixture = () => (FIXTURE ??= buildFixture())
 
@@ -685,7 +710,7 @@ const CHECKS = [
                 if (b.trackingGap(b.branchView(g, 'stranded-work', based))) return false
                 // A body mention is deliberately NOT checked here: carrying every PR body took the
                 // bulk fetch from 56K to 2.3MB to answer a question about the rare untracked
-                // branch. That question moved to prSearch, which asks GitHub about ONE name and
+                // branch. That question moved to prForBranch, which asks GitHub about ONE branch and
                 // only on a miss - so what this check owns is that the base-ref path works and
                 // that an unrelated PR does not silently explain anything.
                 const unrelated = new Map([['feature-a', {
@@ -760,28 +785,6 @@ const CHECKS = [
         mutate: (binDir) => patch(join(binDir, 'lib', 'cache.mjs'),
             '        if (key !== undefined && raw.key !== key) return null',
             '        if (false) return null'),
-    },
-    {
-        id: 'pr-search-cannot-report-a-failure-as-no-result',
-        why: 'the fallback exists to answer "is this branch mentioned anywhere"; a failed query rendered as "no" is the whole silent-miss class',
-        // ENVIRONMENT-INDEPENDENT BY CONSTRUCTION, after two goes at it. `gh` is authenticated on a
-        // developer machine and deliberately is not in the repo-hygiene workflow, so prSearch takes
-        // a different branch in each place - and a mutant aimed at either one proved nothing in the
-        // other. The first version mutated the failure branch and stayed green locally; the second
-        // mutated the success branch, passed locally, and went green in CI. Both were vacuous in
-        // exactly the environment that mattered.
-        //
-        // The contract is that EVERY return carries an explicit `ok`, which is what makes "GitHub
-        // could not answer" expressible at all. prSearch now builds every return through one
-        // constructor, so the mutation lands on whichever path runs.
-        run: async (binDir) => {
-            const b = await branches(binDir)
-            const r = b.prSearch('a-branch-name-that-cannot-exist-xyzzy', { cache: false })
-            return typeof r.ok === 'boolean' && Array.isArray(r.prs)
-        },
-        mutate: (binDir) => patch(join(binDir, 'lib', 'branches.mjs'),
-            '    const answer = (ok, prs, cached = false) => ({ ok, prs, cached })',
-            '    const answer = (ok, prs, cached = false) => ({ prs, cached })'),
     },
     {
         id: 'perf-reports-to-stderr-and-never-alters-stdout',
@@ -881,31 +884,287 @@ const CHECKS = [
             "        name: 'codecov',", "        name: 'codecovv',"),
     },
     {
-        id: 'the-pr-create-hook-recognises-a-command-behind-a-cd',
-        why: 'a prefix matcher missed every command shape it existed for, and the shell suite cannot prove recognition without hitting the network',
-        // The decision is tested here rather than in bin/test-check-agent-hooks.sh because deciding
-        // and acting are separate questions and only the first is cheap to assert. Once the hook
-        // calls cachePr, a test either reaches GitHub and rewrites the real cache, or uses a number
-        // that cannot exist - at which point "not recognised" and "recognised but the refresh
-        // failed" are both silence. That is the vacuous shape this suite refuses.
+        id: 'a-narrow-fetch-cannot-look-fresh',
+        why: 'a one-ref fetch resets FETCH_HEAD mtime, silencing the staleness warning over a corpus that is still stale',
+        // MEASURED BEFORE IT WAS WRITTEN: mtime forced to 2020, `git fetch origin master`, mtime
+        // now. The check read age alone, so the commonest fetch an agent runs - one branch, to
+        // update the base - silenced the only warning that says this corpus is old. A full fetch
+        // lists every ref it covered even when none of them moved, so width is readable from the
+        // same file rather than guessed.
         run: async (binDir) => {
-            const hook = await import(pathToFileURL(
-                join(binDir, '..', '.claude', 'hooks', 'after-pr-create-refresh-cache.mjs')).href)
-            const p = (command, stdout) => ({ tool_input: { command }, tool_response: { stdout } })
-            const url = 'https://github.com/astubbs/parallel-consumer/pull/412'
-
-            // The case the shell suite could only assert as "did not blow up".
-            if (hook.prNumberFrom(p('cd /w && gh pr create --title x', url)) !== 412) return false
-            if (hook.prNumberFrom(p('gh pr create', url)) !== 412) return false
-            // A create that made nothing, a dry run, and an unrelated command are all null.
-            if (hook.prNumberFrom(p('gh pr create', 'a pull request already exists')) !== null) return false
-            if (hook.prNumberFrom(p('gh pr create --dry-run', url)) !== null) return false
-            if (hook.prNumberFrom(p('git status', 'clean')) !== null) return false
-            return hook.prNumberFrom({}) === null
+            const g = await gitlib(binDir)
+            const dir = buildFetchFixture()
+            const before = cwd()
+            try {
+                chdir(dir)
+                const ids = () => g.freshnessWarnings(g.baseline(), g.refTips().tips.length).map((w) => w.id)
+                spawnSync('git', ['fetch', '-q', 'origin', 'master'], { cwd: dir })
+                if (!ids().includes('narrow-fetch')) return false
+                // ...and a FULL fetch of the same repo must not, or the warning is only noise.
+                spawnSync('git', ['fetch', '-q', 'origin'], { cwd: dir })
+                return !ids().includes('narrow-fetch')
+            } finally { chdir(before) }
         },
-        mutate: (binDir) => patch(join(binDir, '..', '.claude', 'hooks', 'after-pr-create-refresh-cache.mjs'),
-            "    if (!/\\bgh\\b.*\\bpr\\b.*\\bcreate\\b/.test(command)) return null",
-            "    if (!command.startsWith('gh pr create')) return null"),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'git.mjs'),
+            'if (last.refs !== null && last.refs * 4 < refCount) {',
+            'if (false && last.refs !== null && last.refs * 4 < refCount) {'),
+    },
+    {
+        id: 'a-fresh-clone-is-not-a-never-fetched-clone',
+        why: 'the newest corpus obtainable was told it may never have fetched - the opposite error, and the loudest one',
+        // `git clone` writes no FETCH_HEAD at all, so keying "never fetched" on that file's absence
+        // fires hardest on the freshest possible checkout. packed-refs is written BY the clone, so
+        // its mtime dates the refs actually held.
+        run: async (binDir) => {
+            const g = await gitlib(binDir)
+            const dir = buildFetchFixture()
+            const before = cwd()
+            try {
+                chdir(dir)
+                const ids = g.freshnessWarnings(g.baseline(), g.refTips().tips.length).map((w) => w.id)
+                // A clone this new is neither never-fetched nor stale - both claims it used to make.
+                return !ids.includes('never-fetched') && !ids.includes('stale-fetch')
+            } finally { chdir(before) }
+        },
+        // Reverts to keying on FETCH_HEAD alone - the actual pre-fix behaviour - rather than
+        // deleting the fallback, which would prove only that some fallback existed.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'git.mjs'),
+            "        return { at: statSync(`${commonDir}/packed-refs`).mtimeMs, refs: null, source: 'packed-refs' }",
+            '        return null'),
+    },
+    {
+        id: 'origin-head-is-not-a-branch-tip',
+        why: 'git shortens refs/remotes/origin/HEAD to plain "origin", so a /HEAD filter on the short name never fires',
+        // It entered the corpus as a ref named `origin` carrying a duplicate of origin/master's
+        // tip - so every count was one high, and `note find` could name "origin" as a branch
+        // carrying a note. The filter existed and looked right; it was reading the wrong string.
+        run: async (binDir) => {
+            const g = await gitlib(binDir)
+            const dir = buildFetchFixture()
+            const before = cwd()
+            try {
+                chdir(dir)
+                const tips = g.refTips()
+                if (!tips.ok) return false
+                // A clone always has refs/remotes/origin/HEAD, so this fixture always exercises it.
+                if (tips.tips.some((r) => r.ref === 'origin' || r.ref.endsWith('/HEAD'))) return false
+                // ...and the real branches must survive the filter, or it is just deleting refs.
+                return tips.tips.some((r) => r.ref === 'origin/master')
+            } finally { chdir(before) }
+        },
+        // Reverts to filtering the SHORT name - the actual pre-fix bug - rather than removing the
+        // filter, which would prove only that some filter ran.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'git.mjs'),
+            "            .filter(([, , full]) => !full.endsWith('/HEAD') && full !== 'refs/stash')",
+            "            .filter((r) => true)"),
+    },
+    {
+        id: 'freshness-reads-this-worktree-not-the-main-checkout',
+        why: 'FETCH_HEAD is per-worktree, so reading only the common dir answered with the main checkout - the one place AGENTS.md says never to work',
+        // The refs a fetch updates ARE shared, so a fetch in any worktree refreshes what this search
+        // reads; the answer is the newest FETCH_HEAD across all of them. Measured before the fix: a
+        // fetch in this worktree, and the check still reported the main checkout's, four hours older.
+        run: async (binDir) => {
+            const g = await gitlib(binDir)
+            const dir = buildFetchFixture()
+            const git = (where, ...args) => spawnSync('git', args, { cwd: where, encoding: 'utf8' })
+            const before = cwd()
+            try {
+                // The common dir fetches, then is aged past the one-hour threshold.
+                git(dir, 'fetch', '-q', 'origin')
+                spawnSync('touch', ['-d', '2020-01-01', join(dir, '.git', 'FETCH_HEAD')])
+                const wt = join(dir, 'wt')
+                git(dir, 'worktree', 'add', '-q', '-b', 'wt-branch', wt)
+                git(wt, 'fetch', '-q', 'origin')
+                chdir(wt)
+                const ids = g.freshnessWarnings(g.baseline(), g.refTips().tips.length).map((w) => w.id)
+                // This worktree fetched seconds ago; only the main checkout's copy is from 2020.
+                return !ids.includes('stale-fetch') && !ids.includes('never-fetched')
+            } finally { chdir(before) }
+        },
+        // Reverts to consulting the common dir alone - the actual pre-fix behaviour - by pointing
+        // the worktree scan at a directory that does not exist.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'git.mjs'),
+            'for (const w of readdirSync(`${commonDir}/worktrees`))',
+            'for (const w of readdirSync(`${commonDir}/no-such-worktrees-dir`))'),
+    },
+    {
+        id: 'the-cache-layer-owns-freshness-not-its-callers',
+        why: 'a policy stated at each read site is a cache with several answers, and nothing reports the difference',
+        // This is the property that let an external hook be deleted. The layer refuses to store an
+        // absence for kinds whose policy says so, and it does it in cacheWrite - so a caller added
+        // later inherits the decision instead of having to remember it.
+        run: async (binDir) => {
+            const c = await import(pathToFileURL(join(binDir, 'lib', 'cache.mjs')).href)
+            const dir = mkdtempSync(join(tmpdir(), 'inflight-cachepolicy-'))
+            const envBefore = process.env.PC_INFLIGHT_CACHE_DIR
+            try {
+                process.env.PC_INFLIGHT_CACHE_DIR = dir
+                // A kind whose policy refuses empties: the write is dropped, so the read is a miss
+                // and the next call goes to the network - which is how a PR opened anywhere is seen.
+                if (c.policyFor('pr-branch.json').cacheEmpty !== false) return false
+                c.cacheWrite('pr-branch.json', [], 'head:some-branch')
+                if (c.cacheRead('pr-branch.json', { key: 'head:some-branch' }) !== null) return false
+                // ...and a real answer for the same kind IS stored, or the guard has just turned the
+                // cache off rather than shaped it.
+                c.cacheWrite('pr-branch.json', [{ number: 1 }], 'head:some-branch')
+                const back = c.cacheRead('pr-branch.json', { key: 'head:some-branch' })
+                if (!Array.isArray(back) || back.length !== 1) return false
+                // A kind whose policy allows empties is unaffected - the bulk listing legitimately
+                // caches "no PRs at all", and one policy must not silently become the other's.
+                return c.policyFor('prs.json').cacheEmpty === true
+            } finally {
+                if (envBefore === undefined) delete process.env.PC_INFLIGHT_CACHE_DIR
+                else process.env.PC_INFLIGHT_CACHE_DIR = envBefore
+            }
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'cache.mjs'),
+            "    if (!policyFor(name).cacheEmpty && Array.isArray(value) && value.length === 0) return",
+            '    // policy removed'),
+    },
+    {
+        id: 'absence-from-the-pr-snapshot-is-asked-again',
+        why: 'a branch missing from a 24h listing is not a branch without a PR, and treating them alike is what the deleted hook patched',
+        // Asserted on the SOURCE OF THE ANSWER rather than on a network result: branchView must not
+        // be able to return `pr: null` straight from a snapshot miss. Driven with a fake `gh` so
+        // both outcomes are reachable with no network and no dependence on gh being authed.
+        run: async (binDir) => {
+            const b = await branches(binDir)
+            const root = mkdtempSync(join(tmpdir(), 'inflight-fallthrough-'))
+            const fakeBin = join(root, 'fakebin')
+            mkdirSync(fakeBin, { recursive: true })
+            writeFileSync(join(fakeBin, 'gh'),
+                '#!/bin/sh\ncat <<\'JSON\'\n[{"headRefName":"diverged","baseRefName":"master","number":7,"title":"found by fall-through","state":"OPEN"}]\nJSON\n',
+                { mode: 0o755 })
+            const pathBefore = process.env.PATH
+            const envBefore = process.env.PC_INFLIGHT_CACHE_DIR
+            return inFixture(() => {
+                try {
+                    process.env.PATH = `${fakeBin}:${pathBefore}`
+                    process.env.PC_INFLIGHT_CACHE_DIR = join(root, 'cache')
+                    const graph = b.commitGraph()
+                    if (!graph.ok) return false
+                    // An EMPTY snapshot - the branch is absent from it, which is exactly the case
+                    // the deleted hook existed to paper over.
+                    const view = b.branchView(graph, 'diverged', new Map())
+                    return view.pr !== null && view.pr.number === 7
+                } finally {
+                    process.env.PATH = pathBefore
+                    if (envBefore === undefined) delete process.env.PC_INFLIGHT_CACHE_DIR
+                    else process.env.PC_INFLIGHT_CACHE_DIR = envBefore
+                }
+            })
+        },
+        // Reverts to reading the snapshot alone - the actual pre-fix behaviour.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'branches.mjs'),
+            "        pr: prs.get(ref.replace(/^origin\\//, '')) ?? prForBranch(ref).pr,",
+            "        pr: prs.get(ref.replace(/^origin\\//, '')) ?? null,"),
+    },
+    {
+        id: 'the-known-cache-list-is-derived-not-repeated',
+        why: 'it was listed twice and the copies drifted, so `cache` called the live file an orphan and the dead file live',
+        // The inverted report is the whole failure: that view exists to tell a leftover from a live
+        // cache, and a stale second copy made it confidently wrong in both directions at once.
+        run: async (binDir) => {
+            const c = await import(pathToFileURL(join(binDir, 'lib', 'cache.mjs')).href)
+            const known = c.knownCaches()
+            if (!Array.isArray(known) || known.length === 0) return false
+            // Every known name must carry a policy - that is what "derived" means here.
+            if (!known.every((n) => c.policyFor(n) && typeof c.policyFor(n).maxAgeMs === 'number')) return false
+            // The front door must not carry its own copy: a literal list of cache filenames there
+            // is the duplication this replaced, whatever its variable is called.
+            const front = readFileSync(join(binDir, 'inflight.mjs'), 'utf8')
+            return !/\[\s*'[a-z-]+\.json'\s*,/.test(front)
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+            '            const known = knownCaches()',
+            "            const known = ['prs.json', 'pr-search.json']"),
+    },
+    {
+        id: 'the-corpus-looks-everywhere-not-just-at-branches',
+        why: 'tags and refs/backup were outside it while the help text said "every branch tip", and that is where work is parked before a re-cut',
+        // Nothing was ever blacklisted - `for-each-ref` was simply given two patterns. The fixture
+        // grows a tag and a refs/backup ref holding content no branch has, which is the shape of
+        // the 12 tags in this repository that point at commits reachable from nothing else.
+        run: async (binDir) => {
+            const g = await gitlib(binDir)
+            return inFixture((dir) => {
+                const git = (...a) => spawnSync('git', a, { cwd: dir, encoding: 'utf8' })
+                git('tag', 'backup/pre-recut-probe', 'diverged')
+                git('update-ref', 'refs/backup/probe', 'stranded-work')
+                const tips = g.refTips()
+                if (!tips.ok) return false
+                const kinds = new Map(tips.tips.map((t) => [t.ref, t]))
+                const tag = kinds.get('backup/pre-recut-probe')
+                const backup = [...kinds.values()].find((t) => t.full === 'refs/backup/probe')
+                if (!tag || !backup) return false
+                // Present AND labelled - the label is what stops preserved work being reported as
+                // stranded, so finding them without it would be the wrong fix.
+                return tag.kind === 'tag' && tag.archival === true
+                    && backup.kind === 'archive' && backup.archival === true
+                    && kinds.get('master')?.archival === false
+            })
+        },
+        // Reverts to the two patterns this replaced - the actual pre-fix enumeration.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'git.mjs'),
+            "        '--format=%(objectname)\\t%(*objectname)\\t%(refname)\\t%(refname:short)'])",
+            "        '--format=%(objectname)\\t%(*objectname)\\t%(refname)\\t%(refname:short)',\n        'refs/heads', 'refs/remotes/origin'])"),
+    },
+    {
+        id: 'archive-only-work-is-not-reported-as-stranded',
+        why: 'a note parked in a tag before a re-cut is preserved on purpose; a remedy telling someone to rescue it is a wrong answer',
+        // The half that makes widening safe. Without it, looking everywhere turns every preserved
+        // ref into a finding, and the report gets less trustworthy for having more data in it.
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            return inFixture((dir) => {
+                const git = (...a) => spawnSync('git', a, { cwd: dir, encoding: 'utf8' })
+                // `stranded-work` carries two notes master has never had. Park a copy in an archive
+                // ref and delete nothing: the live branch still has them, so the cluster stays live.
+                git('update-ref', 'refs/backup/parked', 'stranded-work')
+                const clusters = n.stranded(n.corpusIndex())
+                const live = clusters.find((c) => c.paths.includes('docs/inflight/never-landed.md'))
+                if (!live || live.preserved !== false) return false
+                if (!live.liveRefs.includes('stranded-work')) return false
+                // Now a ref that exists ONLY in the archive space, carrying a note nothing else has.
+                git('checkout', '-q', '-b', 'to-be-archived', 'master')
+                mkdirSync(join(dir, 'docs', 'inflight'), { recursive: true })
+                writeFileSync(join(dir, 'docs', 'inflight', 'parked-only.md'),
+                    '# Parked\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\nz\n')
+                git('add', '-A')
+                git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'park it')
+                git('update-ref', 'refs/backup/only-here', 'to-be-archived')
+                git('checkout', '-q', 'master')
+                git('branch', '-q', '-D', 'to-be-archived')
+                const after = n.stranded(n.corpusIndex())
+                const parked = after.find((c) => c.paths.includes('docs/inflight/parked-only.md'))
+                // Found - because the corpus looks everywhere - and marked preserved, not stranded.
+                return !!parked && parked.preserved === true && parked.liveRefs.length === 0
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
+            '                preserved: live.length === 0,',
+            '                preserved: false,'),
+    },
+    {
+        id: 'repository-facts-live-in-one-module',
+        why: 'REPO was declared three times while the note above it said it was a single constant, which is the drift class that already shipped one bug here',
+        // A copied constant is correct until exactly one copy changes, and nothing goes red at that
+        // moment. Asserted structurally rather than by value: what matters is that there is one
+        // declaration, not what it currently says.
+        run: async (binDir) => {
+            const r = await import(pathToFileURL(join(binDir, 'lib', 'repo.mjs')).href)
+            if (typeof r.REPO !== 'string' || !r.REPO.includes('/')) return false
+            if (r.NOTES_DIR !== 'docs/inflight') return false
+            const declarations = readdirSync(join(binDir, 'lib'))
+                .filter((f) => f.endsWith('.mjs'))
+                .filter((f) => /^(export )?const (REPO|NOTES_DIR) = '/m.test(readFileSync(join(binDir, 'lib', f), 'utf8')))
+            // repo.mjs, and nothing else.
+            return declarations.length === 1 && declarations[0] === 'repo.mjs'
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'branches.mjs'),
+            "import { NOTES_DIR, REPO } from './repo.mjs'",
+            "const REPO = 'astubbs/parallel-consumer'\nimport { NOTES_DIR } from './repo.mjs'"),
     },
 ]
 

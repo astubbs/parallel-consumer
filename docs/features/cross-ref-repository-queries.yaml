@@ -39,9 +39,17 @@ opt_in:
 boundaries:
   - >
     It is not a tracker and does not try to be. Backlog (the markdown-file tracker) is the one
-    surveyed tool that keeps task state in the working tree and reconciles it across branches; this
-    reads a repository rather than owning a schema. What no surveyed tracker does - making a forge's own graph queryable from the
-    repo - is recorded as unbuilt in docs/inflight/ci-inflight-next-commands.md.
+    surveyed tool that keeps task state in the working tree and reconciles it across branches - and
+    reconciling is the opposite of what this does, since it resolves every branch disagreement to a
+    single winner rather than reporting it; driven and recorded in
+    docs/plans/2026-09-02-001-investigate-adopt-or-build-re-run.md. This reads a repository rather
+    than owning a schema. What no surveyed tracker does - making a forge's own graph queryable from
+    the repo - is recorded as unbuilt in docs/inflight/ci-inflight-next-commands.md.
+  - >
+    It reads EVERY ref - tags and refs/backup included, not only branches - and says which of them
+    are archives. A note held only by a tag is preserved on purpose rather than stranded, so the
+    enumeration is wide and the answer carries the distinction; reporting preserved work as lost is
+    the error that sends someone to rescue something nobody lost.
   - >
     Answers are only as fresh as the refs. Every command reports staleness it can detect - a stale
     fetch, a shallow clone, a HEAD behind the baseline, the main checkout - because a complete search
@@ -52,8 +60,10 @@ boundaries:
     198 of 274 carrying refs. Reporting it would bury the versions that actually carry new content.
   - >
     Git data is never cached, deliberately - git is already a cache, and a corpus cache that lived
-    here was deleted because it hid a design mistake rather than paying for itself. Only the GitHub
-    PR set is held, for a day, and a PostToolUse hook folds a newly created PR in as it happens.
+    here was deleted because it hid a design mistake rather than paying for itself. Only GitHub
+    answers are held, and the cache layer states its own policy per kind rather than being kept
+    correct from outside: an ABSENCE is never stored, because "this branch has no PR" is the answer
+    that goes stale in the dangerous direction.
   - >
     The tracking-gap detector reports a branch nothing explains, and it can be wrong in the
     direction that gets a detector ignored: an integration branch and a stack base both looked

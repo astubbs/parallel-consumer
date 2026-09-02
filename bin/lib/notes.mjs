@@ -42,10 +42,11 @@
 
 
 import { cacheRead, cacheWrite } from './cache.mjs'
+import { NOTES_DIR, REPO } from './repo.mjs'
 import { baseline, blobDiffStat, blobsForPath, exec, lines, refTips, treeEntries } from './git.mjs'
 
-export const NOTES_DIR = 'docs/inflight'
-const REPO = 'astubbs/parallel-consumer'
+export { NOTES_DIR }
+
 /**
  * PR state moves without any ref moving, so this one key is time-based - and bounded, not trusted.
  *
@@ -143,14 +144,14 @@ export function prsByBranch({ cache = true } = {}) {
     // field. Adding `baseRefName` did exactly that: the code read it, the cache had never stored it,
     // and every branch silently looked unexplained until the TTL expired.
     const shape = 'headRefName,baseRefName,number,title,state'
-    const cached = cache ? cacheRead('prs.json', { key: shape, maxAgeMs: PR_CACHE_TTL_MS }) : null
+    const cached = cache ? cacheRead('prs.json', { key: shape }) : null
     if (cached) return { ok: true, cached: true, map: new Map(cached) }
     // Naming the repo is not optional: `gh` resolves a bare command against `upstream` in this fork,
     // and an answer for confluentinc reads exactly like "this branch has no PR".
     const res = exec('gh', ['pr', 'list', '-R', REPO, '--state', 'all', '--limit', '500',
         // NOT `body`: adding it took this response from 56K to 2.3MB, for data used on the rare
         // branch that looks untracked. `baseRefName` is a few bytes and answers the common case
-        // exactly. The body question is asked per-branch, on a miss, by prSearch below.
+        // exactly. The per-branch question is asked on a miss, by prForBranch in branches.mjs.
         '--json', 'headRefName,baseRefName,number,title,state'])
     // UNAVAILABLE IS NOT "NO PR", and saying so needs a shape that can carry the difference. This
     // returned a bare Map, so an unauthenticated or rate-limited `gh` was indistinguishable from a
@@ -421,41 +422,28 @@ export function stranded(index) {
         survivors.push({ path, refs: [...refs].sort() })
     }
 
+    // ARCHIVAL REFS ARE CARRIED, THEN LABELLED. The corpus looks everywhere - tags and
+    // `refs/backup` included - because that is where this repository parks work before a re-cut,
+    // and 12 tags hold commits reachable from nothing else. But a note held ONLY there is preserved
+    // on purpose, not stranded, and telling someone to go rescue it is a wrong answer dressed as a
+    // finding. So the enumeration stays wide and the CLUSTER says where its refs live.
+    const archival = new Map(index.refs.map((r) => [r.ref, r.archival === true]))
     const byKey = new Map()
     for (const s of survivors) {
         const key = s.refs.join(' ')
-        if (!byKey.has(key)) byKey.set(key, { refs: s.refs, refCount: s.refs.length, paths: [] })
+        if (!byKey.has(key)) {
+            const live = s.refs.filter((r) => !archival.get(r))
+            byKey.set(key, {
+                refs: s.refs,
+                refCount: s.refs.length,
+                liveRefs: live,
+                // Only-in-an-archive is the distinction that changes what a reader should DO.
+                preserved: live.length === 0,
+                paths: [],
+            })
+        }
         byKey.get(key).paths.push(s.path)
     }
     return [...byKey.values()].sort((a, b) => b.paths.length - a.paths.length || b.refCount - a.refCount)
 }
 
-/**
- * Fold ONE pull request into the cached set, without refetching the other 284.
- *
- * The reason the TTL could go from thirty minutes to a day: the cache no longer relies on expiring
- * to become correct. A PR created here updates it as it is created, so the window in which the cache
- * can be wrong about our own work is the length of one `gh pr view` rather than the TTL.
- *
- * Returns `{ok, action, pr}` - `added` or `updated` - or `ok: false` with a reason. A refresh that
- * silently did nothing would leave the caller believing the cache is current when it is not, which
- * is the same shape as every other silent miss this tool exists to remove.
- */
-export function cachePr(number) {
-    const res = exec('gh', ['pr', 'view', String(number), '-R', REPO,
-        '--json', 'headRefName,baseRefName,number,title,state'])
-    if (!res.ok) return { ok: false, reason: `gh could not read PR #${number}` }
-    let row
-    try { row = JSON.parse(res.out) } catch { return { ok: false, reason: 'gh returned output that is not JSON' } }
-    if (!row?.headRefName) return { ok: false, reason: `PR #${number} has no head branch` }
-
-    const shape = 'headRefName,baseRefName,number,title,state'
-    const existing = cacheRead('prs.json', { key: shape, maxAgeMs: PR_CACHE_TTL_MS }) ?? []
-    const pairs = existing.filter(([head]) => head !== row.headRefName)
-    const action = pairs.length === existing.length ? 'added' : 'updated'
-    pairs.push([row.headRefName, {
-        number: row.number, title: row.title, state: row.state, baseRefName: row.baseRefName,
-    }])
-    cacheWrite('prs.json', pairs, shape)
-    return { ok: true, action, pr: row, total: pairs.length }
-}

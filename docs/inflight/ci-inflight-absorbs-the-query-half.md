@@ -33,6 +33,40 @@ that is not all of it"*. Over the corpus index it can be **corpus-scoped**: `str
 start would put the 42-note language-proxy cluster in front of an agent that currently cannot learn
 it exists.
 
+**One instance of the widened-corpus defect is still in bash, and this note owns it.**
+`.claude/hooks/inject-recorded-knowledge.sh` runs its own `git for-each-ref ... refs/heads
+refs/remotes/origin` - the exact narrow enumeration the tool has since dropped, so its cross-ref
+document count silently excludes tags and `refs/backup`. Found by the same-defect sweep at merge
+prep and deliberately not fixed there: widening it changes what the hook injects into every
+session, which needs its own before-and-after rather than a one-word edit ridden in on a tooling PR.
+It is the strongest argument in this note - the hook does not need widening, it needs to stop having
+its own enumeration.
+
+
+## Also queued: the low-disk warner, which is not a query at all
+
+Antony's call, and it does not fit the table above - `.claude/hooks/warn-low-disk.sh` (471 lines)
+reads *the machine*, not the corpus. It belongs here for the other reason this note exists: it is
+several hundred lines of bash doing structured work that Node does natively.
+
+- **What it actually is**: two filesystem readings (`df -Pk` plus an `awk` column parse) and, on
+  macOS, a sparse-image size read through `stat -f` and a settings-JSON scrape. The `awk` programs
+  exist to parse fields and JSON - both free in Node - and `bin/AGENTS.md` already rules that a bash
+  script reaching for a second language is the signal to change language.
+- **What must survive the move**: it is a `PreToolUse` hook on *every* `Bash` call, so its cost is
+  the design constraint, not an afterthought. Its header commits to a measured budget - seven
+  short-lived processes on the healthy Linux path, 8-10ms - and **any port has to re-measure that
+  and publish the new number**, because the whole argument for running it unfiltered is that it is
+  cheap. Node's own startup is the risk that argument has not had to face before.
+- **Its open items travel with it**, and one is a portability bug the move would delete outright:
+  [`ci-low-disk-warner-open-items.md`](ci-low-disk-warner-open-items.md) records a `df` with no
+  timeout (a hung NFS mount freezes the session; `timeout` is GNU-only, which is why it is still
+  open), a hardcoded `/var/lib/docker` that ignores `daemon.json`'s `data-root`, and no supported
+  way for a user to turn the warner down.
+- **Sequencing**: after the query migrations above, not before. Those subtract duplicated *reading*
+  from scripts that keep their policy; this is a whole-script port, and it is the one place in the
+  harness where a regression is measured in milliseconds on every single tool call.
+
 ## What does NOT migrate
 
 Copyright, CVE, OSS Index, shell hazards, source patterns, the rename tooling, mutation and the build

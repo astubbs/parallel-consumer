@@ -41,24 +41,20 @@ and to whether the nearest neighbour composes with us is recorded in
 which owns those findings - including that `sd0xdev/sd0x-dev-flow` is closer to this repo's thesis
 than anything named above.
 
+**Re-run 2026-09-02 against a running binary, and the tracker half is now answered.**
+[`docs/plans/2026-09-02-001-investigate-adopt-or-build-re-run.md`](../plans/2026-09-02-001-investigate-adopt-or-build-re-run.md)
+owns it: **build, do not adopt Backlog.md for the query layer**, because its cross-branch feature
+reconciles to one winner where this repo's contract requires the disagreement to be reported. That
+verdict is entered here, and it covers the tracker and query layer ONLY. **The hooks question above
+is untouched and still deferred** - nothing in that pass re-examined `sd0x-harness` (the renamed
+`sd0x-dev-flow`) or `karanb192/claude-code-hooks`, and the reasons for deferring below still hold.
+
 ## What adoption would cost us, honestly
 
 - **The conventions are not in the code.** The tag vocabulary, the weight-axis boundary between
   `docs/inflight/` and `docs/refactoring.md`, "a filename carries no status", "deferred is a schedule
   and all non-deferred work happens first" - none of that ships with anyone's hooks. Adopting the
   tooling without them gets gates enforcing rules nobody agreed to, which is worse than no gates.
-- **~~The self-test density is unmatched~~ - CORRECTED 2026-09-01, and it was never true.**
-  `karanb192/claude-code-hooks` ships tests for every hook, run in CI across three Node versions,
-  plus a benchmark harness - so the claim is contradicted by the very project the survey above
-  named. The research literature asks for *more* than we do, too:
-  [GENESIS](https://arxiv.org/pdf/2605.27360) makes a negative control an **admission rule**, and
-  its version has three gates where ours has one - a checker must fail on the unsolved state, pass
-  on the reference solution, and fail again on a known-bad mutation.
-
-  What survives is narrower and worth keeping on its own merits: **every gate here is paired
-  one-to-one with a self-test, each verified red against a deliberately broken copy.** That is a
-  real discipline. It is not a differentiator, and treating it as one was how a comfortable claim
-  went three weeks unchecked.
 - **Migration is not free**, and the harness is what every agent session depends on. Doing it during
   a release run would churn the one thing that has to stay reliable.
 

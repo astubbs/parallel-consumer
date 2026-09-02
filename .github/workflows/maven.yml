@@ -855,10 +855,37 @@ jobs:
             setup-java-Linux-x64-maven-
       - name: Build and Test
         run: bin/ci-build.sh
-      - name: Upload coverage to Codecov
+      # PER-SUITE FLAGS, MATCHING THE PR LANE - because the base and the head have to be measured
+      # the same way for a coverage COMPARISON to mean anything, and they were not.
+      #
+      # This job is `push`-only and uploaded everything under one `default` flag, while a PR runs the
+      # `test` matrix and uploads `unit`, `integration`, `performance`, `lincheck`, `chaos` - and no
+      # `default` at all. So codecov compared a PR total built from the suite flags against a base
+      # total built from `default`: disjoint measurement sets, differing by more than `codecov.yml`'s
+      # 1% threshold, on identical code. Observed on astubbs/parallel-consumer#400, a docs-and-tooling
+      # PR touching ZERO Java: Files 90 -> 90, Lines 4822 -> 4822, Branches 463 -> 463, and a reported
+      # -3.53%. Nothing had changed; the two sides were counting different things.
+      #
+      # NOT CARRYFORWARD FLAGS, which is the reflexive fix. Carrying master's `default` into a PR's
+      # total merges a STALE master measurement of the same code, so a genuine drop in any line that
+      # measurement covered is masked. That trades a noisy false positive for a silent false negative,
+      # and this repository has spent too long removing the second kind to add one back here.
+      #
+      # `clean verify` passes through both `test` and `post-integration-test`, so the pom's `report`
+      # and `report-integration` executions both run: jacoco/ is the surefire (unit) half and
+      # jacoco-it/ the failsafe (integration) half, which is exactly the split the PR lane makes with
+      # two separate jobs.
+      - name: Upload unit coverage to Codecov
         if: always()
         uses: codecov/codecov-action@v5
         with:
-          files: '**/target/site/jacoco/jacoco.xml,**/target/site/jacoco-it/jacoco.xml'
-          flags: default
+          files: '**/target/site/jacoco/jacoco.xml'
+          flags: unit
+          token: ${{ secrets.CODECOV_TOKEN }}
+      - name: Upload integration coverage to Codecov
+        if: always()
+        uses: codecov/codecov-action@v5
+        with:
+          files: '**/target/site/jacoco-it/jacoco.xml'
+          flags: integration
           token: ${{ secrets.CODECOV_TOKEN }}

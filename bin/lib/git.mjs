@@ -22,7 +22,7 @@
 import { execFileSync } from 'node:child_process'
 
 import { perfRecord } from './perf.mjs'
-import { statSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
 
 /** Run a command; return {ok, out, status}. Never throws - callers decide what a failure means. */
 export function exec(cmd, args, opts = {}) {
@@ -54,7 +54,18 @@ export const lines = (s) => s.split('\n').filter((l) => l.length > 0)
  * @returns {{ref: string, sha: string}[]}
  */
 export function refTips() {
-    const res = exec('git', ['for-each-ref', '--format=%(objectname) %(refname:short)', 'refs/heads', 'refs/remotes/origin'])
+    // LOOK EVERYWHERE. Nothing was ever blacklisted - this listed `refs/heads` and
+    // `refs/remotes/origin` and simply stopped there, so 64 tags and 44 `refs/backup` refs were
+    // outside the corpus while the help text said "every branch tip". Measured 2026-09-02: 12 of
+    // those tags point at commits reachable from nothing else, named `backup/pre-recut-324` and
+    // `recut-baseline-342` - which is exactly where this repository preserves work before a re-cut,
+    // so the excluded space was a LIKELY home for stranded knowledge rather than an unlikely one.
+    //
+    // `*objectname` IS THE DEREFERENCED TARGET, empty for anything but an annotated tag. Without it
+    // an annotated tag contributes its TAG object's sha, which is not a commit, and every read of
+    // that "tip" fails in a way that looks like an empty branch.
+    const res = exec('git', ['for-each-ref',
+        '--format=%(objectname)\t%(*objectname)\t%(refname)\t%(refname:short)'])
     // `{ok}` RATHER THAN AN EMPTY ARRAY. This returned `[]` on failure, so "this is not a git
     // repository" and "this repository has no branches" were the same answer - and three commands
     // rendered it as a clean empty result and exited 0, printing "nothing, across 0 refs" over a
@@ -63,9 +74,32 @@ export function refTips() {
     return {
         ok: true,
         tips: lines(res.out)
-            .map((l) => ({ sha: l.slice(0, l.indexOf(' ')), ref: l.slice(l.indexOf(' ') + 1) }))
-            .filter((r) => !r.ref.endsWith('/HEAD')),
+            .map((l) => l.split('\t'))
+            // `refs/remotes/<name>/HEAD` is a symbolic pointer at another ref in this same list, so
+            // it contributes a duplicate tip under a name that reads like a branch. `refs/stash` is
+            // this checkout's scratch, not a line of work, and its second parent is the index.
+            .filter(([, , full]) => !full.endsWith('/HEAD') && full !== 'refs/stash')
+            .map(([sha, deref, full, short]) => ({ sha: deref || sha, ref: short, full, ...refKind(full) })),
     }
+}
+
+/**
+ * WHERE A REF LIVES, because "found in a tag" and "found on a branch" are different findings.
+ *
+ * Widening the corpus without this would report preserved history as in-flight work: a note held
+ * only by `refs/backup/pre-rename-merge/...` is not stranded, it is archived on purpose, and a
+ * remedy telling someone to go rescue it is wrong. So the corpus looks everywhere and the ANSWER
+ * carries the distinction, rather than the enumeration deciding it in advance.
+ */
+export function refKind(full) {
+    if (full.startsWith('refs/heads/')) return { kind: 'local', archival: false }
+    if (full.startsWith('refs/remotes/origin/')) return { kind: 'remote', archival: false }
+    if (full.startsWith('refs/remotes/')) return { kind: 'other-remote', archival: false }
+    if (full.startsWith('refs/tags/')) return { kind: 'tag', archival: true }
+    // refs/backup/**, refs/notes/**, and anything else a person or a script parked outside the
+    // usual spaces. Unknown is treated as archival deliberately: over-reporting preserved work as
+    // live is the error that sends someone to rescue something nobody lost.
+    return { kind: 'archive', archival: true }
 }
 
 /**
@@ -177,6 +211,47 @@ export function blobDiffStat(a, b) {
 }
 
 /**
+ * When the last fetch was, and HOW MUCH OF THE CORPUS it covered.
+ *
+ * FETCH_HEAD's mtime dates a fetch of ANY width, so `git fetch origin master` - one ref of 292 -
+ * resets the freshness clock without refreshing anything else, and the staleness warning below goes
+ * quiet over a corpus exactly as stale as it was. Measured 2026-09-02: mtime forced to 2020, one
+ * single-ref fetch, mtime now. The file also LISTS what that fetch brought, one line per ref, so
+ * the width is readable rather than guessable - and a full fetch lists every ref it covered even
+ * when none of them moved.
+ *
+ * @returns {{at: number, refs: number|null, source: string}|null}
+ */
+function lastFetch(commonDir) {
+    // FETCH_HEAD IS PER-WORKTREE; THE REFS IT UPDATES ARE SHARED. Reading only the common dir's
+    // copy answered with the MAIN CHECKOUT's last fetch - the one place AGENTS.md says never to
+    // work - so every worktree, which is everywhere work actually happens, was told about someone
+    // else's fetch. Measured 2026-09-02: a fetch in this worktree, and the check still reported the
+    // main checkout's, four hours older. Because a fetch in ANY worktree refreshes the shared refs
+    // this search reads, the answer is the NEWEST across all of them, not this one's.
+    const candidates = [`${commonDir}/FETCH_HEAD`]
+    try {
+        for (const w of readdirSync(`${commonDir}/worktrees`)) candidates.push(`${commonDir}/worktrees/${w}/FETCH_HEAD`)
+    } catch { /* no worktrees dir - a plain clone, and the common dir copy is the only one */ }
+    let newest = null
+    for (const f of candidates) {
+        try {
+            const at = statSync(f).mtimeMs
+            if (!newest || at > newest.at) newest = { at, file: f }
+        } catch { /* this worktree has never fetched; another may have */ }
+    }
+    if (newest) {
+        return { at: newest.at, refs: lines(readFileSync(newest.file, 'utf8')).length, source: 'FETCH_HEAD' }
+    }
+    // A FRESH CLONE HAS NO FETCH_HEAD, and was told "this clone may never have fetched" - the
+    // opposite error, and the one that reads as most alarming on the newest corpus obtainable.
+    // `packed-refs` is written by the clone itself, so its mtime dates the refs actually held.
+    try {
+        return { at: statSync(`${commonDir}/packed-refs`).mtimeMs, refs: null, source: 'packed-refs' }
+    } catch { return null }
+}
+
+/**
  * Reasons the answers below may be stale, as data.
  *
  * A complete search of a stale corpus is still a false negative, and it reads exactly like a
@@ -215,15 +290,25 @@ export function freshnessWarnings(base, refCount) {
             'SHALLOW clone - any commit search covers only the fetched depth.',
             'Run: git fetch --unshallow')
     }
-    try {
-        const ageSeconds = (Date.now() - statSync(`${commonDir}/FETCH_HEAD`).mtimeMs) / 1000
+    const last = lastFetch(commonDir)
+    if (!last) {
+        warn('never-fetched', 'no FETCH_HEAD and no packed-refs - this clone may never have fetched.',
+            "Run 'git fetch origin'.")
+    } else {
+        const ageSeconds = (Date.now() - last.at) / 1000
         if (ageSeconds > 3600) {
             warn('stale-fetch',
-                `last fetch was ${Math.floor(ageSeconds / 3600)}h ago, so '${base}' and the ${refCount} refs`,
-                "are that stale. Run 'git fetch origin' and re-run.")
+                `last fetch was ${Math.floor(ageSeconds / 3600)}h ago (by ${last.source}), so '${base}'`,
+                `and the ${refCount} refs are that stale. Run 'git fetch origin' and re-run.`)
         }
-    } catch {
-        warn('never-fetched', "no FETCH_HEAD - this clone may never have fetched. Run 'git fetch origin'.")
+        // WIDTH, NOT JUST AGE. A fetch narrower than a quarter of the corpus dates that ref and
+        // nothing else, so its recency says nothing about the refs this search actually reads.
+        if (last.refs !== null && last.refs * 4 < refCount) {
+            warn('narrow-fetch',
+                `the last fetch covered ${last.refs} ref(s) against ${refCount} in this search, so its`,
+                'timestamp dates THOSE refs only - the rest are as old as they were, and the age above',
+                "is measuring the wrong thing. Run 'git fetch origin' for the whole set.")
+        }
     }
     const behind = Number(exec('git', ['rev-list', '--count', `HEAD..${base}`]).out.trim() || '0')
     if (behind > 0) {
