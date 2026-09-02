@@ -76,15 +76,29 @@ export const cvOpts = (args) => {
     // -1 IS A SENTINEL, NOT AN INDEX. Filtering on `i !== branchAt + 1` reads correctly and is
     // wrong when the flag is absent: indexOf returns -1, so branchAt + 1 is 0 and the filter drops
     // the FIRST POSITIONAL - the query itself. `codecov test <name>` then answered "give part of a
-    // test name" and `codecov slow 3` silently printed 20 rows. Resolve the value's index to a
-    // value no index can equal when there is no flag.
+    // test name" and `codecov slow 3` silently printed 20 rows.
     const branchValueAt = branchAt >= 0 ? branchAt + 1 : -1
+    const branch = branchAt >= 0 ? args[branchValueAt] : undefined
+
+    // VALIDATE, BECAUSE EVERY BAD FORM HERE FAILS QUIETLY AND PLAUSIBLY. `--branch` with nothing
+    // after it left branch undefined and silently queried EVERY branch; `--branch --fresh` took
+    // the next flag as a branch name and returned a convincing empty result for a branch that
+    // cannot exist; and an unknown flag was dropped by the startsWith('--') filter, so a typo ran
+    // a different query than the one that was typed. None of those errored - they answered.
+    const KNOWN = new Set(['--fresh', '--branch'])
+    const unknown = args.filter((a) => a.startsWith('--') && !KNOWN.has(a))
+    if (unknown.length) return { error: `unknown option(s): ${unknown.join(', ')} - known: --fresh, --branch <ref>` }
+    if (branchAt >= 0 && (branch === undefined || branch.startsWith('--'))) {
+        return { error: '--branch needs a ref after it' }
+    }
+
     return {
         fresh: args.includes('--fresh'),
-        branch: branchAt >= 0 ? args[branchValueAt] : undefined,
+        branch,
         rest: args.filter((a, i) => !a.startsWith('--') && i !== branchValueAt),
     }
 }
+
 
 /**
  * The registry.
@@ -317,6 +331,7 @@ fully-qualified one. Several matches are listed rather than guessed at: resolvin
 here produces a confident answer to a question nobody asked.`,
                 run: (args, emit) => {
                     const opts = cvOpts(args)
+                    if (opts.error) return { ok: false, reason: `codecov test: ${opts.error}` }
                     const q = opts.rest[0]
                     if (!q) return { ok: false, reason: 'codecov test: give part of a test name' }
                     const r = testTimeline(q, opts)
@@ -334,7 +349,9 @@ here produces a confident answer to a question nobody asked.`,
 A candidate list. The same evidence fits a real regression that landed between two commits, which is
 exactly why docs/quarantined-tests.md refuses to quarantine on a rate alone.`,
                 run: (args, emit) => {
-                    const r = flakeCandidates(cvOpts(args))
+                    const opts = cvOpts(args)
+                    if (opts.error) return { ok: false, reason: `codecov flaky: ${opts.error}` }
+                    const r = flakeCandidates(opts)
                     if (!r.ok) return { ok: false, reason: `codecov flaky: ${r.reason}` }
                     emit(formatFlakes(r.value))
                     return { ok: true }
@@ -350,6 +367,7 @@ Wall-clock on a shared GitHub runner. Good for "this test owns four minutes of e
 benchmark, and never an input to a throughput comparison.`,
                 run: (args, emit) => {
                     const opts = cvOpts(args)
+                    if (opts.error) return { ok: false, reason: `codecov slow: ${opts.error}` }
                     const n = opts.rest.find((a) => /^\d+$/.test(a))
                     const r = slowest(n ? Number(n) : 20, opts)
                     if (!r.ok) return { ok: false, reason: `codecov slow: ${r.reason}` }

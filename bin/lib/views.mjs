@@ -207,6 +207,10 @@ export function formatCoverage(v) {
     const t = v.totals
     const out = [`coverage ${t.coverage}% - ${t.hits}/${t.lines} lines across ${plural(t.files ?? 0, 'file')}`]
     if (t.misses !== undefined) out.push(`  ${t.misses} missed, ${t.partials} partial, ${t.branches} branches`)
+    if (v.flagsFailed) {
+        out.push(`\nPER-FLAG COVERAGE UNAVAILABLE: ${v.flagsFailed}`)
+        out.push('That is a failed request, NOT a repository with no flags - the two used to print alike.')
+    }
     if (v.flags.length) {
         out.push('\nper flag, ON THE DEFAULT BRANCH:')
         for (const f of v.flags) out.push(`  ${f.flag_name.padEnd(26)} ${Math.round((f.coverage ?? 0) * 100) / 100}%`)
@@ -249,16 +253,28 @@ export function formatTimeline(v) {
 
 export function formatFlakes(v) {
     if (v.candidates.length === 0) {
+        // truncNote ON THE NEGATIVE PATH TOO. It was only appended to the non-empty return, so a
+        // walk that hit the page bound and happened to find no varying outcome printed a clean
+        // negative with no hint that older history was never read - the one result someone might
+        // act on by REMOVING a quarantine.
         return `no test has been recorded with more than one outcome.${cacheNote(v)}\n`
             + 'That is not "no flakes": it is no flake VISIBLE in the uploaded history, which starts\n'
             + 'when the test-results upload was turned on and covers only suites that upload.'
+            + truncNote(v)
     }
     const out = [`${plural(v.candidates.length, 'test')} recorded with more than one outcome:${cacheNote(v)}\n`]
     for (const c of v.candidates) {
         out.push(`  ${c.name}`)
         const span = [c.observations[c.observations.length - 1], c.observations[0]].map((o) => stamp(o.at))
+        // THREE MARKERS, NOT TWO, and the BRANCH beside each. A skip rendered as `X` was
+        // indistinguishable from a failure, so the line showed more markers than the run count it
+        // sat under and overstated the evidence. And the default query spans every branch, so
+        // printing only outcome+sha made one master pass plus one PR-branch failure look exactly
+        // like a master-state flake - which is the distinction docs/quarantined-tests.md turns on.
+        const mark = (o) => (o.outcome === 'pass' ? '.' : o.outcome === 'skip' ? 's' : 'X')
         out.push(`      ${c.failures} non-pass of ${plural(c.runs, 'run')}, ${span[0]} to ${span[1]}`
-            + `\n      ${c.observations.map((o) => `${o.outcome === 'pass' ? '.' : 'X'}${o.sha}`).join(' ')}`)
+            + `\n      ${c.observations.map((o) => `${mark(o)}${o.sha}@${o.branch ?? '?'}`).join(' ')}`
+            + '\n      . pass · X non-pass · s skipped (skips are excluded from the run count above)')
     }
     out.push('\nCANDIDATES, not a verdict. The same evidence fits a real regression, which is why')
     out.push('docs/quarantined-tests.md will not quarantine on a rate. Next: inflight codecov test <name>')

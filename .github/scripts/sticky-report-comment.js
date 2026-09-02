@@ -102,7 +102,15 @@ async function findExisting({ github, owner, repo, issue_number, marker }) {
  * ordinary in-place update is right.
  */
 function statusChanged(prev, cur) {
-  return Boolean(cur) && (!prev || prev.status !== cur.status);
+  // A USABLE STATUS IS A SCALAR, and an unusable one is not evidence of "unchanged". A payload that
+  // parses but carries no `status` - `{}`, or a truncation that happens to stay valid JSON - left
+  // both sides `undefined`, which compared EQUAL and suppressed the fresh announcement this whole
+  // mechanism exists to make. The failure was silent and in the safe-looking direction: the engine
+  // edited a comment in place while holding no verdict it could have compared.
+  const usable = (p) => p != null && (typeof p.status === "string" || typeof p.status === "number");
+  if (!usable(cur)) return false;          // nothing to announce, and nothing to claim
+  if (!usable(prev)) return true;          // cannot prove it is unchanged -> announce, do not hide
+  return prev.status !== cur.status;
 }
 
 /**

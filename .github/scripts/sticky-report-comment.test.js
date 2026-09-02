@@ -402,4 +402,17 @@ asyncTest("test() rejects an async body, because its assertion would reject afte
   assert.match(out, /use asyncTest, or it can never fail/);
 });
 
+section("\na payload that parses but carries no status");
+
+test("statusChanged treats an unusable payload as unknown, not as unchanged", () => {
+  // {} parses, and a truncation can leave valid JSON without `status`. Both sides then read
+  // undefined, which compared EQUAL and suppressed the announcement this mechanism exists to make
+  // - a silent failure in the safe-looking direction.
+  assert.strictEqual(statusChanged({}, { status: "green" }), true, "no prior status -> announce");
+  assert.strictEqual(statusChanged({ status: "green" }, {}), false, "no current status -> nothing to claim");
+  assert.strictEqual(statusChanged({}, {}), false, "neither usable -> no announcement invented");
+  assert.strictEqual(statusChanged({ status: "a" }, { status: "b" }), true, "a real change still announces");
+  assert.strictEqual(statusChanged({ status: "a" }, { status: "a" }), false, "unchanged stays unchanged");
+});
+
 runAll();

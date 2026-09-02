@@ -67,6 +67,11 @@ export function coverage() {
             // pull_request-only, and only `build:` (flag `default`) runs on a push to master.
             // Recorded because a reader who does not know that files a bug against the uploader.
             flags: flags.ok ? (flags.value.results ?? []) : [],
+            // WHICH IT IS, when the flag list is empty. A failed /flags/ used to become `[]` and an
+            // overall ok, so "this repo has no flags" and "the second request failed" printed the
+            // same. That is the found-nothing / could-not-look conflation this module exists to
+            // avoid, applied to half a response.
+            flagsFailed: flags.ok ? null : flags.reason,
         },
     }
 }
@@ -102,6 +107,15 @@ export function testHistory({ branch, pages = 12, fresh = false } = {}) {
         if (!next) { truncated = false; break }
         url = `${API}/test-analytics/${next.slice(next.indexOf('?'))}`
         truncated = i === pages - 1
+    }
+    // AN EMPTY UNFILTERED CORPUS IS A FAILURE TO READ IT, NOT A FINDING. This repo has uploaded
+    // history, so zero rows for an unscoped query means the endpoint answered 200 with nothing -
+    // and reporting that as ok:true is exactly how `codecov flaky` would exit 0 with an apparently
+    // complete negative, in the situation where someone is deciding whether to REMOVE a quarantine.
+    // A branch-scoped query legitimately returns nothing (that branch has never uploaded), so the
+    // check is narrowed to the unfiltered case.
+    if (results.length === 0 && !branch) {
+        return { ok: false, reason: 'api.codecov.io returned an empty test-results corpus - this repo has uploaded history, so that is a failure to read it rather than an absence of flakes' }
     }
     const value = { results, truncated, cached: false }
     // cache.mjs's `cacheEmpty: false` guard tests `Array.isArray(value)`, and this value is an

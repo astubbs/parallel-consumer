@@ -950,6 +950,37 @@ const CHECKS = [
             '        const ran = observations'),
     },
     {
+        id: 'an-empty-unfiltered-corpus-is-a-failure-not-a-finding',
+        why: 'a transient 200 with no rows made `flaky` exit 0 on a clean negative, in the one situation someone uses it to REMOVE a quarantine',
+        run: async (binDir) => {
+            const src = readFileSync(join(binDir, 'lib', 'codecov.mjs'), 'utf8')
+            // The guard has to be scoped to the UNFILTERED query: a branch-scoped miss is a real
+            // empty answer (that branch never uploaded), so guarding it too would break `--branch`.
+            return /results\.length === 0 && !branch/.test(src)
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'codecov.mjs'),
+            '    if (results.length === 0 && !branch) {',
+            '    if (false) {'),
+    },
+    {
+        id: 'a-bad-option-set-is-refused-not-answered',
+        why: '--branch with no value silently queried every branch, and --branch --fresh queried a branch named --fresh - both answered convincingly',
+        run: async (binDir) => {
+            const { cvOpts } = await front(binDir)
+            return (
+                cvOpts(['--branch']).error !== undefined
+                && cvOpts(['--branch', '--fresh', 'X']).error !== undefined
+                && cvOpts(['--nope']).error !== undefined
+                // and a VALID set still parses, or the guard has eaten the feature
+                && cvOpts(['Name', '--branch', 'master', '--fresh']).error === undefined
+                && cvOpts(['Name', '--branch', 'master']).branch === 'master'
+            )
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+            "    if (unknown.length) return { error: `unknown option(s): ${unknown.join(', ')} - known: --fresh, --branch <ref>` }",
+            '    if (false) return { error: 0 }'),
+    },
+    {
         id: 'a-narrow-fetch-cannot-look-fresh',
         why: 'a one-ref fetch resets FETCH_HEAD mtime, silencing the staleness warning over a corpus that is still stale',
         // MEASURED BEFORE IT WAS WRITTEN: mtime forced to 2020, `git fetch origin master`, mtime
