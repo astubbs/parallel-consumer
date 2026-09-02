@@ -57,6 +57,26 @@ thread**, not at this one's siblings - which is a cheaper thing to falsify than 
 suggests.
 <!-- post-merge: checked-end -->
 
+## Third sighting - on MASTER, and it is holding up somebody else's fix
+
+<!-- post-merge: checked-begin - a dated observation about master's own build; independent of any
+     branch, so it stays true whatever lands -->
+2026-09-02, master's own `full build (master)` job at `ebd8bcb19`: **581 tests, 1 failure**, this
+method, this assertion. That ends the master-state argument - no branch attribution is needed for a
+failure on master itself, and the two branch sightings above are corroboration rather than the case.
+
+**It is not only a red build, it is blocking a fix that is already merged.** The `build` job is the
+only one that uploads coverage on master. It fails here, so nothing uploads; astubbs/parallel-consumer#414
+landed the corrected coverage globs and its own stated proof - master's `unit` and `integration` flags
+no longer reporting one identical figure - **has not happened**, because the job that would produce it
+has not completed since. `node bin/inflight.mjs codecov` still shows both flags at the same number.
+Every PR therefore keeps comparing against a base assembled the old way and keeps seeing red per-flag
+gates, which reads as each PR's own fault.
+
+So the cost of this test is no longer "one confusing red in a suite". It is: master red, no coverage
+upload, a merged fix that cannot take effect, and a misleading gate on every open PR.
+<!-- post-merge: checked-end -->
+
 ## The hypothesis, and it is NOT yet established
 
 `@AfterEach` already calls `MDC.clear()`, so this is not a missing teardown. The candidate mechanism is
@@ -84,7 +104,7 @@ base that calls `MDC.setContextMap(...)`.
 ## Deliberately not quarantined
 
 Rule 1 of [`docs/quarantined-tests.md`](../quarantined-tests.md) wants a diagnosis or a sighting
-ledger, and this has two sightings and an untested hypothesis. Quarantining now would hide a test that
+ledger, and this has three sightings - one of them master's own build - and an untested hypothesis. Quarantining now would hide a test that
 may be catching a real product-side asymmetry, and the registry is currently empty - putting the first
 entry back on a guess is the wrong trade. Diagnose it first.
 
