@@ -39,9 +39,10 @@ import { pathToFileURL } from 'node:url'
 import { perfReport, perfStart } from './lib/perf.mjs'
 
 import { baseline, freshnessWarnings, refTips } from './lib/git.mjs'
-import { corpusIndex, drift, findNotes, prsByBranch, stranded } from './lib/notes.mjs'
+import { cacheClear, cacheStatus } from './lib/cache.mjs'
+import { cachePr, corpusIndex, drift, findNotes, prsByBranch, stranded } from './lib/notes.mjs'
 import { branchView, commitGraph, trackingGap } from './lib/branches.mjs'
-import { formatBranch, formatDrift, formatFind, formatStranded, formatWarnings } from './lib/views.mjs'
+import { formatBranch, formatCache, formatDrift, formatFind, formatStranded, formatWarnings } from './lib/views.mjs'
 import {
     format, formatHeader, formatSection, formatTail,
     priorArt, summary as priorArtSummary, usage as priorArtUsage,
@@ -201,6 +202,64 @@ reported as what it is.
         },
     },
     {
+        name: 'cache',
+        summary: 'what is cached, how old it is, and folding one PR in without refetching the rest',
+        when: 'after creating a PR, or when you want to know whether an answer came from the network',
+        usage: `Usage: bin/inflight.mjs cache            what is cached and how old
+       bin/inflight.mjs cache pr <n>    fold one PR in, without refetching the others
+       bin/inflight.mjs cache clear     delete orphans (add --all for live caches too)
+
+Only network answers are cached. Git data never is: git is already a cache, and a corpus cache that
+lived here was deleted precisely because it hid a design mistake rather than paying for itself.
+
+The PR set is held for 24 hours rather than the 30 minutes it started at. Thirty was right when
+expiry was the ONLY way the cache became correct; it no longer is - \`cache pr <n>\` folds a single
+PR in for one \`gh pr view\`, and a PostToolUse hook runs it the moment a PR is created here. The TTL
+is now a backstop for changes made OUTSIDE this machine, not the primary path.
+
+Freshness is stored inside each file, not in its name. A timestamped filename would show age in
+\`ls\` and create a new file per write - the orphan accumulation that once left 7.4MB here in a
+single session.`,
+        sub: [
+            {
+                name: 'pr',
+                summary: 'fold one PR into the cached set, without refetching the others',
+                when: 'immediately after creating or updating a PR - the hook does this for you',
+                usage: `Usage: bin/inflight.mjs cache pr <number>`,
+                run: (args, emit) => {
+                    const n = args[0]
+                    if (!n || !/^\d+$/.test(n)) return { ok: false, reason: 'cache pr: give a PR number' }
+                    const r = cachePr(Number(n))
+                    if (!r.ok) return { ok: false, reason: `cache pr: ${r.reason}` }
+                    emit(`  ${r.action} astubbs/parallel-consumer#${r.pr.number} ${r.pr.state} `
+                        + `(${r.pr.headRefName}) - ${r.total} PRs cached`)
+                    return { ok: true }
+                },
+            },
+            {
+                name: 'clear',
+                summary: 'delete orphaned cache files, or everything with --all',
+                when: 'an orphan is holding space, or you want the next run to go to the network',
+                usage: `Usage: bin/inflight.mjs cache clear [--all]
+
+Orphans only by default - a file no current code reads. Dropping a LIVE cache is a separate ask,
+because the next run then pays full price, so it takes --all.`,
+                run: (args, emit) => {
+                    const r = cacheClear({ all: args.includes('--all') })
+                    emit(r.removed.length === 0
+                        ? '  nothing to clear'
+                        : `  removed ${r.removed.length} file(s), ${Math.round(r.bytes / 1024)}K: ${r.removed.join(', ')}`)
+                    return { ok: true }
+                },
+            },
+        ],
+        run: (args, emit) => {
+            const known = ['prs.json', 'pr-search.json']
+            emit(formatCache(cacheStatus(known), known))
+            return { ok: true }
+        },
+    },
+    {
         name: 'stranded',
         summary: 'notes that exist on a branch and have never reached master',
         when: 'looking for knowledge that will be lost if nobody acts - the stranded-work impact',
@@ -284,11 +343,13 @@ function dispatch(argv, emit) {
     if (!top.sub) return top.run(rest, emit)
 
     const child = top.sub.find((c) => c.name === rest[0])
-    if (!child) {
-        const which = rest[0] ? `'${name} ${rest[0]}'` : `'${name}' on its own`
-        return { ok: false, reason: `inflight: no such command ${which}\n\n${top.usage}` }
-    }
-    return child.run(rest.slice(1), emit)
+    if (child) return child.run(rest.slice(1), emit)
+    // A PARENT MAY ALSO BE A COMMAND. `cache` with no subcommand reports status; `note` alone does
+    // not mean anything, so it has no `run` and still falls through to its usage. Without this a
+    // parent's own run was unreachable, which is how `cache` printed its help instead of answering.
+    if (!rest.length && top.run) return top.run(rest, emit)
+    const which = rest[0] ? `'${name} ${rest[0]}'` : `'${name}' on its own`
+    return { ok: false, reason: `inflight: no such command ${which}\n\n${top.usage}` }
 }
 
 // Guarded so this file can be imported for its registry without running a command. It remains the

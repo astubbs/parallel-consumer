@@ -152,3 +152,27 @@ export function formatBranch(v, gap) {
     }
     return out.join('\n')
 }
+
+export function formatCache(status, known) {
+    if (!status.exists) return `no cache directory yet at ${status.dir} - nothing has been cached.`
+    const age = (ms) => (ms === null ? '-' : ms < 60000 ? `${Math.round(ms / 1000)}s`
+        : ms < 3600000 ? `${Math.round(ms / 60000)}m` : `${Math.round(ms / 3600000)}h`)
+    const size = (b) => (b < 1024 ? `${b}B` : b < 1048576 ? `${Math.round(b / 1024)}K` : `${(b / 1048576).toFixed(1)}M`)
+
+    const out = [status.dir, '']
+    const width = Math.max(...status.entries.map((e) => e.name.length), 12)
+    for (const e of status.entries) {
+        out.push(`  ${e.name.padEnd(width)}  ${size(e.bytes).padStart(7)}  ${age(e.ageMs).padStart(5)} old`
+            + (e.orphan ? '   ORPHAN - nothing reads this any more' : ''))
+    }
+    const orphans = status.entries.filter((e) => e.orphan)
+    out.push('')
+    out.push(`  live: ${known.join(', ')}`)
+    if (orphans.length) {
+        out.push(`  ${orphans.length} orphan(s) holding ${size(orphans.reduce((t, e) => t + e.bytes, 0))}`
+            + ` - clear with: bin/inflight.mjs cache clear`)
+    }
+    // Freshness is read from inside each file, because an mtime can be rewritten by anything that
+    // touches it - and a cache that LOOKS fresh is worse than one that admits it is old.
+    return out.join('\n')
+}

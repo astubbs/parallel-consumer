@@ -749,7 +749,10 @@ const CHECKS = [
         // so. The key is the field set, so a widened query is a miss rather than a wrong answer.
         run: async (binDir) => {
             const c = await import(pathToFileURL(join(binDir, 'lib', 'cache.mjs')).href)
-            const name = `selftest-${process.pid}.json`
+            // A FIXED name, not one per pid: keying the file by process id left one 52-byte orphan
+            // per suite run - thirteen of them before this was noticed, by the very status command
+            // this check exists alongside. The self-test must not litter the thing it tests.
+            const name = 'selftest.json'
             c.cacheWrite(name, [1, 2, 3], 'shape-a')
             if (JSON.stringify(c.cacheRead(name, { key: 'shape-a' })) !== '[1,2,3]') return false
             return c.cacheRead(name, { key: 'shape-b' }) === null
