@@ -18,11 +18,13 @@ import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 
-import java.lang.ref.WeakReference;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.WeakHashMap;
+import java.util.Set;
+import java.util.Collections;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -75,11 +77,14 @@ public class PCModule<K, V> {
     private final UUID producerInstanceId = UUID.randomUUID();
 
     /**
-     * The last producer the factory handed back, held weakly: a factory returning the same instance twice is a
-     * caching factory, which breaks the contract {@link ProducerFactory} states, and consecutive calls are where it
-     * shows. Weak, so a discarded producer is not kept alive by the check that rejected its successor.
+     * Every producer the factory has handed back, held weakly and compared by identity: a factory returning any of
+     * them again is a caching or pooling factory, which breaks the contract {@link ProducerFactory} states. All of
+     * them, not the last one: a pool alternating two instances would pass a last-only check on its third call,
+     * then fail {@code initTransactions()} on a producer PC had already closed - and retry that forever as if it
+     * were transient. Weak, so a discarded producer is not kept alive by the check that rejects its return.
+     * Written on the constructing thread and, after that, only by the control thread's recovery pass.
      */
-    private WeakReference<Producer<K, V>> lastProducerFromFactory = new WeakReference<>(null);
+    private final Set<Producer<K, V>> producersHandedOut = Collections.newSetFromMap(new WeakHashMap<>());
 
     /**
      * The caller's producer configuration with the {@code transactional.id} PC derives set (or, in a non-transactional
@@ -135,11 +140,11 @@ public class PCModule<K, V> {
         if (producer == null) {
             throw new ProducerFactoryContractException("The ProducerFactory returned null; every call must return a new Producer");
         }
-        if (lastProducerFromFactory.get() == producer) {
-            throw new ProducerFactoryContractException("The ProducerFactory returned the producer it had already returned; every " +
+        if (producersHandedOut.contains(producer)) {
+            throw new ProducerFactoryContractException("The ProducerFactory returned a producer it had already returned; every " +
                     "call must return a new Producer, because PC discards the previous one when the broker invalidates it");
         }
-        lastProducerFromFactory = new WeakReference<>(producer);
+        producersHandedOut.add(producer);
         try {
             ProducerWrapper<K, V> wrapper = ProducerWrapper.forPcBuilt(options(), producer, transactional);
             log.info("Built producer from configuration (transactional: {}): {}", transactional, ProducerConfigRedaction.render(resolved));
@@ -168,7 +173,24 @@ public class PCModule<K, V> {
 
     protected ProducerManager<K, V> producerManager() {
         if (producerManager == null) {
-            this.producerManager = new ProducerManager<>(producerWrap(), consumerManager(), workManager(), options(), replacementProducerWrap());
+            ProducerWrapper<K, V> wrapper = producerWrap();
+            try {
+                this.producerManager = new ProducerManager<>(wrapper, consumerManager(), workManager(), options(), replacementProducerWrap());
+            } catch (RuntimeException | Error constructionFailed) {
+                // The manager's constructor registers a gauge and initialises transactions, either of which can
+                // throw (a coordinator that is not there yet, say). On the configuration path the producer it was
+                // handed is PC's own, nobody else holds it, and the processor that failed to construct is never
+                // returned to the caller - so without this, every failed start-up leaks a producer and its network
+                // thread. The caller's own instance is the caller's to close.
+                if (!options().isProducerInstanceSupplied()) {
+                    try {
+                        wrapper.close(Duration.ZERO);
+                    } catch (RuntimeException closeFailed) {
+                        log.debug("Closing the producer built for a manager that failed to construct also failed", closeFailed);
+                    }
+                }
+                throw constructionFailed;
+            }
         }
         return producerManager;
     }

@@ -4,6 +4,12 @@ package bz.stub.parallelconsumer.internal;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import org.apache.kafka.common.KafkaException;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.spy;
+import static org.mockito.ArgumentMatchers.any;
+import java.time.Duration;
+import static org.mockito.Mockito.verify;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ProducerFactory;
@@ -19,6 +25,7 @@ import pl.tlinkowski.unij.api.UniMaps;
 import pl.tlinkowski.unij.api.UniSets;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -165,6 +172,43 @@ class PcBuiltProducerTest {
 
         assertThat(thrown).hasMessageThat().contains("ProducerFactory");
         assertThat(thrown).hasMessageThat().contains("new");
+    }
+
+    /**
+     * A pool alternating two instances passes a last-only identity check on its third call, then fails
+     * initTransactions on a producer PC has already closed - forever, as a retriable failure. Every instance the
+     * factory ever returned is remembered.
+     */
+    @Test
+    void aFactoryReturningAnEarlierInstanceAgainIsRejectedNotOnlyTheImmediatelyPreviousOne() {
+        var a = new MockProducer<>(true, new StringSerializer(), new StringSerializer());
+        var b = new MockProducer<>(true, new StringSerializer(), new StringSerializer());
+        var pool = new ArrayList<>(Arrays.asList(a, b, a));
+        ProducerFactory<String, String> poolingFactory = config -> pool.remove(0);
+        var module = moduleWith(poolingFactory, minimalConfig(), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
+        var ignoredFirst = module.producerWrap(); // a
+        var ignoredSecond = module.replacementProducerWrap().get().build(); // b - legitimate
+
+        var thrown = assertThrows(ProducerFactoryContractException.class, () -> module.replacementProducerWrap().get().build());
+
+        assertThat(thrown).hasMessageThat().contains("already returned");
+    }
+
+    /**
+     * The manager's constructor initialises transactions; when that throws at start-up, the producer PC built for it
+     * belongs to nobody - the processor is never returned to the caller - so it is closed rather than leaked one per
+     * start-up attempt.
+     */
+    @Test
+    void aProducerBuiltForAManagerThatFailsToConstructIsClosed() {
+        var producer = spy(new MockProducer<>(true, new StringSerializer(), new StringSerializer()));
+        doThrow(new KafkaException("coordinator not available")).when(producer).initTransactions();
+        ProducerFactory<String, String> factory = config -> producer;
+        var module = moduleWith(factory, minimalConfig(), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
+
+        assertThrows(KafkaException.class, module::producerManager);
+
+        verify(producer).close(any(Duration.class));
     }
 
     @Test

@@ -648,4 +648,35 @@ class ProducerRecoveryTest {
         assertWithMessage("no replacement was built").that(factoryCallTimes).hasSize(1);
         assertThat(producers).hasSize(1);
     }
+
+    /**
+     * While a replacement is deferred, the only thing that wakes the control thread is its own deadline; the sleep
+     * it chose used to skip that cap on the path taken when a failed record sits in the retry queue, so a long
+     * retry delay and commit interval slept straight through the attempt. Both are set long here; a record is left
+     * waiting to be retried; the first replacement build is made to fail so the second is scheduled by backoff; the
+     * second must arrive on the backoff's timescale, not the retry delay's.
+     */
+    @Test
+    void aDeferredReplacementIsRetriedOnItsOwnScheduleEvenWhileARecordWaitsInTheRetryQueue() {
+        insideUserFunction = context -> {
+            if (context.offset() == 1 && seen.get(1L).get() == 1) {
+                throw new RuntimeException("fail offset 1 once, so it waits in the retry queue");
+            }
+        };
+        beforeBuild.put(1, () -> {
+            throw new RuntimeException("first replacement build fails, so the second is scheduled by backoff");
+        });
+        start(optionsBuilder()
+                .commitInterval(Duration.ofSeconds(30))
+                .defaultMessageRetryDelay(Duration.ofSeconds(30))
+                .build());
+        producerManager().recoveryBackoffInitial = Duration.ofMillis(200);
+        producerManager().recoveryBackoffMax = Duration.ofMillis(200);
+        fenceAtFirstCommit(producers.get(0));
+        addRecords(0, 1);
+
+        await().atMost(Duration.ofSeconds(8)).untilAsserted(() ->
+                assertWithMessage("the replacement was built on the backoff's timescale, not after the 30 s retry delay")
+                        .that(producers.size()).isAtLeast(2));
+    }
 }
