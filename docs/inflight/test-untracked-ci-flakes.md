@@ -202,6 +202,12 @@ The ambient probe said `probe clean` and, unusually, said why that is worth litt
 UNKNOWN - this test declares no @Timeout`**, so nothing in the autopsy says the long-bound detectors had time
 to fire. Take the clean verdict as unproven rather than as evidence.
 
+**Control arm: not always red.** The next head was a one-file markdown delta - this note itself - and its
+integration lane ran the same code and passed. That separates *always red* from *not always red*, and nothing
+more; it is not a rate and it does not identify which of the sleeps lost. The prior run had been *cancelled*
+by that push rather than completing, which is worth saying because the cancelled run's absence from a failure
+list reads exactly like a pass.
+
 Not quarantined: quarantine is master-state and needs evidence, and one sighting is not a rate.
 <!-- post-merge: checked-end -->
 
