@@ -20,7 +20,7 @@ Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutio
 |---|---|---|
 <!-- post-merge: checked - the row states the fix and the lift as things that happened -->
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. **Fixed by astubbs#265**, which deleted the wall-clock assertion rather than repairing it. astubbs#262, its owner, lifted the quarantine and deleted the registry entry - see below |
-| `AmbientProbeExtensionTest.headroomIsReportedOnAPassingTestToo`, `headroomOutcomeComesFromTheWatcherPhaseNotTheEndOfTheTestMethod`, `headroomIsSilentWithoutADeadlineAndWithoutAMeasurement` | 4 of 5 local runs (2026-09-02) | Found on astubbs#410, whose diff does not touch the class. UNDIAGNOSED - see below |
+| `AmbientProbeExtensionTest.headroomIsReportedOnAPassingTestToo`, `headroomOutcomeComesFromTheWatcherPhaseNotTheEndOfTheTestMethod`, `headroomIsSilentWithoutADeadlineAndWithoutAMeasurement` | 4 of 5 local runs (2026-09-02) | Found while verifying the producer-recovery work (astubbs#225) locally; that change does not touch the class. UNDIAGNOSED - see below |
 | `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 4 seen (2026-08-18, 2026-08-19, 2026-08-25, 2026-09-01) | Not from the original scan - each found while babysitting a branch. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third and fourth sightings independently carry the **same three-way key collision** in the failing batch contents, which points at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
 | `RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed` | 1 seen (2026-09-01) | Not from the original scan - found while babysitting astubbs#257. Failed its **saturation/pause-point setup guard**, not the confluentinc#909 signature assertion, so it proves nothing about the defect it reproduces - see below <!-- post-merge: checked --> |
 | `ParallelEoSStreamProcessorTest.processInKeyOrder` | 2 seen locally (2026-09-01), 1 in 3 isolated runs | **Two DIFFERENT failures under one test name, and the documented fix is already in the tree.** See below - this one is not a fresh flake, it is a solved one still firing |
@@ -216,8 +216,8 @@ whole value of the sighting.
 
 ### `AmbientProbeExtensionTest` headroom cases - a captured line from a neighbouring test method
 
-Seen 2026-09-02 while verifying astubbs#410 locally, on a branch whose diff does not touch
-`AmbientProbeExtensionTest` or the extension it tests. Rule 2 (master-state, not PR-state) was
+Seen 2026-09-02 while verifying the producer-recovery work (astubbs#225) locally, whose diff does not
+touch `AmbientProbeExtensionTest` or the extension it tests. Rule 2 (master-state, not PR-state) was
 settled by a control arm rather than a rate: the same class was run on the branch tip *before* that
 day's two new commits (a detached worktree at the merge commit) and failed there too.
 
