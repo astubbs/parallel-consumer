@@ -577,7 +577,9 @@ Nothing lints commit messages, so all of this is on you.
 root is shared mutable state - several agent sessions run against it at once, so its HEAD can move
 between two of *your own* commands. Work only under `.claude/worktrees/<name>`, and reach a task by
 `cd`-ing into its worktree. `git worktree list` tells you which one holds a branch; create one if
-none does.
+none does. Commit with `git -C <worktree> commit ...` spelled as a **literal path, not a variable**:
+the pre-commit hook reads the command before the shell expands it, and refuses a `-C "$W"` rather
+than gating a tree the command never named (`.claude/hooks/pre-commit-gate.sh` owns the why).
 
 **Reaching for `git checkout <branch>` is the tell that you are in the wrong directory** - and it is
 how the rule gets broken silently. Git refuses to check out a branch another worktree already holds,
