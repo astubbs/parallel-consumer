@@ -616,6 +616,7 @@ assert "a REJECTED push is silent - no CI started" silent \
 
 assert "a malformed payload never breaks the tool call" silent \
     "$(fired 'not json at all')"
+
 # ---------------------------------------------------------------------------------------------
 # warn-low-disk.sh
 #
@@ -1137,12 +1138,17 @@ registered = {h["command"].rsplit("/", 1)[-1].rstrip('"')
 # have pushed the next author to satisfy the assertion rather than the property.
 # A LEADING-COMMENT MENTION DOES NOT COUNT: `# Self-test for .claude/hooks/foo.sh` is prose, and
 # accepting it would let a hook buy coverage with a sentence. The path must appear in code.
-covered = set(re.findall(r"\$HOOKS/([a-z0-9-]+\.sh)",
+# BOTH EXTENSIONS, because a hook is no longer necessarily shell. This matched `.sh` only, so the
+# first Node hook was reported as untested however thoroughly it was tested - the assertion pinning
+# the old shape rather than the property, which is the same failure its own comment above warns
+# about one paragraph earlier. Node became the default for new scripts by operator ruling on
+# 2026-09-01; this is that ruling reaching the harness that polices it.
+covered = set(re.findall(r"\$HOOKS/([a-z0-9-]+\.(?:sh|mjs))",
                          (root / "bin/test-check-agent-hooks.sh").read_text()))
-for selftest in sorted((root / "bin").glob("test-*.sh")):
+for selftest in sorted((root / "bin").glob("test-*.sh")) + sorted((root / "bin").glob("test-*.mjs")):
     code = "\n".join(l for l in selftest.read_text().splitlines()
-                     if not l.lstrip().startswith("#"))
-    covered |= set(re.findall(r"\.claude/hooks/([a-z0-9-]+\.sh)", code))
+                     if not l.lstrip().startswith("#") and not l.lstrip().startswith("//"))
+    covered |= set(re.findall(r"\.claude/hooks/([a-z0-9-]+\.(?:sh|mjs))", code))
 disk = [h for g in cfg["hooks"].get("PreToolUse", []) for h in g["hooks"]
         if h["command"].rstrip('"').endswith("warn-low-disk.sh")]
 problems = []

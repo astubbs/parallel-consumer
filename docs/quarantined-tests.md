@@ -40,6 +40,14 @@ Rules (full discipline in [`docs/testing.md`](testing.md), AGENTS.md, and the `@
    and what shows it is master-state rather than PR-state). What stays banned is quarantining on a
    hunch - "it's red sometimes" is not evidence, and a single failure is a sighting, not a ledger.
 
+   **A ledger does not have to be assembled by hand from logs that expire.**
+   `node bin/inflight.mjs codecov test <name>` prints that test's recorded outcome per commit, and
+   `codecov flaky` lists every test ever recorded with more than one outcome - Codecov keeps this far
+   longer than a CI log is retained. It reports **candidates and never a verdict**: two outcomes
+   across two commits fits a regression that landed between them just as well as a flake, which is
+   the distinction this rule exists to make, so it informs the ledger rather than writing it.
+   [`docs/inflight-tool.md`](inflight-tool.md) owns those commands.
+
    The rule used to demand a diagnosis outright. That was wrong in a way worth recording: it
    conflated *"we don't know the mechanism"* with *"we don't know whether it's ours"*, and only the
    second justifies blocking. A test with a sighting ledger **is** a finding - it is known

@@ -18,7 +18,7 @@ baseline for comparison is 15/20 runs fully clean, zero stall-class failures.
 | `PartitionStateCommittedOffsetIT.committedOffsetRemoved[3] none` | 1 sighting (2026-08-05) | `RebalanceInProgressException` out of the test's own setup |
 | `ParallelEoSStreamProcessorTest.inFlightMessagesCommittedIfProcessedDuringShutdown[1]` | 1/15 (2026-08-07) | `assertCommits(of(1))`, "1 record completed during shutdown", in the transactional arm |
 | `PartitionStateCommittedOffsetIT.committedOffsetRemoved[2] earliest` | 1 sighting (2026-08-25, astubbs#353, [job 97859037375](https://github.com/astubbs/parallel-consumer/actions/runs/32865269364/job/97859037375)) | `checkHowManyRecordsWithKeyPresent` expected 2 got 1 - the `[1] latest` assertion signature (solved 2026-08-05 as a nudge race) appearing on the `earliest` parameter; `probe clean` autopsy (test-side, not consumer-group progress), on a branch with no Java <!-- post-merge: checked --> |
-| `PartitionStateCommittedOffsetIT.committedOffsetRemoved[1] latest` | 2 sightings (both 2026-09-01, astubbs#407 [job 100057065090](https://github.com/astubbs/parallel-consumer/actions/runs/33568429332/job/100057065090) and astubbs#207 [job 99717308477](https://github.com/astubbs/parallel-consumer/actions/runs/33462670308/job/99717308477)) | `checkHowManyRecordsWithKeyPresent` expected 2 got 1, `probe clean`, `forkCount=4` on both. The astubbs#407 sighting captured WHICH record survived and it rules out the 2026-08-05 mechanism - see below; the astubbs#207 one did not, and its log has since expired, so it cannot be classified either way <!-- post-merge: checked --> |
+| `PartitionStateCommittedOffsetIT.committedOffsetRemoved[1] latest` | 3 sightings (2026-09-01, astubbs#407, [job 100057065090](https://github.com/astubbs/parallel-consumer/actions/runs/33568429332/job/100057065090); 2026-09-01, astubbs#207, [job 99717308477](https://github.com/astubbs/parallel-consumer/actions/runs/33462670308/job/99717308477); 2026-09-02, astubbs#409, [job 100174428838](https://github.com/astubbs/parallel-consumer/actions/runs/33607276956/job/100174428838)) | `checkHowManyRecordsWithKeyPresent` expected 2 got 1, `probe clean`, `forkCount=4` on all three. astubbs#407 captured WHICH record survived - the compactor, not the original - which rules out the 2026-08-05 mechanism; astubbs#409 attached a RATE; astubbs#207 captured neither and its log has expired, so it cannot be classified either way. Both sections below <!-- post-merge: checked --> |
 | `TransactionTimeoutsTest.commitTimeout[2]` | 1 sighting (2026-08-06, astubbs#204) | incompletes `[8]` where the parameter pins `[8, 12]` |
 
 **`committedOffsetRemoved[1] latest` has its own section below**, which owns what the two 2026-09-01 sightings
@@ -32,6 +32,11 @@ sighting was written up here as a *recurrence* of the mechanism
 records as SOLVED - same test, same parameter, same `expected 2 got 1`, same clean probe. The section below
 then established from the astubbs#407 sighting that the surviving record is the one the solved mechanism
 cannot leave behind, so the signature was never evidence of a recurrence. That reading is withdrawn.
+
+**The recovery was attempted and does not reach it.** `node bin/inflight.mjs codecov test
+committedOffsetRemoved` arrived with astubbs#400 and records per-commit outcomes that outlive a CI log - but
+its history for this test covers only the branch astubbs#409 ran on, so the astubbs#207 sighting stays
+unclassifiable. Recorded so the next reader does not repeat the query hoping for a different answer.
 
 Two things survive it. The astubbs#207 branch is still ruled out **on mechanism**: it changes offset
 *decoding*, and this test removes the committed offset entirely, so there is no metadata for its paths to
@@ -157,6 +162,34 @@ Java at all, so nothing in it is reachable from the code under test.
 same `probe clean` autopsy, but on the other parameter, and whether the two share a cause is precisely
 what is open. Two sightings on two parameters is not yet a rate on either.
 
+<!-- post-merge: checked-end -->
+
+## `committedOffsetRemoved[1] latest` again, and the first sighting with a RATE attached (2026-09-02)
+
+<!-- post-merge: checked-begin - names astubbs#409 in the past tense as the branch the sighting came
+     from; the claim survives that branch merging -->
+Same parameter, same assertion as the 2026-09-01 row: `checkHowManyRecordsWithKeyPresent` expected 2,
+got 1. Seen on astubbs/parallel-consumer#409, a branch carrying no Java changes at all.
+
+**What is new is not the sighting, it is that a rate came with it.** Every earlier row here records
+one job, because a CI log is all anyone had and it expires. This test's per-commit outcome is now
+readable from Codecov, and it says:
+
+    inflight codecov test committedOffsetRemoved
+
+    [1]  ! failure  27.5s  770d6f4     <- this sighting
+         pass  x6, 47-59s, six earlier commits on the same branch
+    [2]  pass x7
+
+**One failure in seven runs on one branch, and the commit it failed at deletes a `.bak` file and
+changes nothing else.** A pure file deletion cannot alter a Kafka integration test, so the run-to-run
+position of the failure is the evidence, not the commit's content. That is the shape the note above
+has been asking for on this family: a rate rather than a verdict from one log.
+
+It does not settle the mechanism. `[1]`'s 2026-09-01 sighting recorded that the record which SURVIVED
+was the compactor rather than the original, which the 2026-08-05 nudge-race mechanism cannot produce;
+nothing here contradicts or confirms that. What it does settle is that `[1]` is not deterministic on
+this branch, which one job could never show.
 <!-- post-merge: checked-end -->
 
 ## `commitTimeout[2]`, for whoever picks it up (seen 2026-08-06 on astubbs#204)
