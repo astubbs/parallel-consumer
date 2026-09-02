@@ -54,13 +54,18 @@ export const lines = (s) => s.split('\n').filter((l) => l.length > 0)
  * @returns {{ref: string, sha: string}[]}
  */
 export function refTips() {
-    // TAB-SEPARATED, AND CARRYING THE FULL REFNAME, because the short name cannot be filtered on.
-    // git shortens `refs/remotes/origin/HEAD` to plain `origin`, so a `/HEAD` test against the
-    // short name never fires for the one ref it exists to drop - and origin/HEAD entered the corpus
-    // as a ref named "origin" holding a duplicate of origin/master's tip. Measured: 436 refs, one
-    // of them that duplicate.
-    const res = exec('git', ['for-each-ref', '--format=%(objectname)\t%(refname)\t%(refname:short)',
-        'refs/heads', 'refs/remotes/origin'])
+    // LOOK EVERYWHERE. Nothing was ever blacklisted - this listed `refs/heads` and
+    // `refs/remotes/origin` and simply stopped there, so 64 tags and 44 `refs/backup` refs were
+    // outside the corpus while the help text said "every branch tip". Measured 2026-09-02: 12 of
+    // those tags point at commits reachable from nothing else, named `backup/pre-recut-324` and
+    // `recut-baseline-342` - which is exactly where this repository preserves work before a re-cut,
+    // so the excluded space was a LIKELY home for stranded knowledge rather than an unlikely one.
+    //
+    // `*objectname` IS THE DEREFERENCED TARGET, empty for anything but an annotated tag. Without it
+    // an annotated tag contributes its TAG object's sha, which is not a commit, and every read of
+    // that "tip" fails in a way that looks like an empty branch.
+    const res = exec('git', ['for-each-ref',
+        '--format=%(objectname)\t%(*objectname)\t%(refname)\t%(refname:short)'])
     // `{ok}` RATHER THAN AN EMPTY ARRAY. This returned `[]` on failure, so "this is not a git
     // repository" and "this repository has no branches" were the same answer - and three commands
     // rendered it as a clean empty result and exited 0, printing "nothing, across 0 refs" over a
@@ -70,9 +75,31 @@ export function refTips() {
         ok: true,
         tips: lines(res.out)
             .map((l) => l.split('\t'))
-            .filter(([, full]) => !full.endsWith('/HEAD'))
-            .map(([sha, , short]) => ({ sha, ref: short })),
+            // `refs/remotes/<name>/HEAD` is a symbolic pointer at another ref in this same list, so
+            // it contributes a duplicate tip under a name that reads like a branch. `refs/stash` is
+            // this checkout's scratch, not a line of work, and its second parent is the index.
+            .filter(([, , full]) => !full.endsWith('/HEAD') && full !== 'refs/stash')
+            .map(([sha, deref, full, short]) => ({ sha: deref || sha, ref: short, full, ...refKind(full) })),
     }
+}
+
+/**
+ * WHERE A REF LIVES, because "found in a tag" and "found on a branch" are different findings.
+ *
+ * Widening the corpus without this would report preserved history as in-flight work: a note held
+ * only by `refs/backup/pre-rename-merge/...` is not stranded, it is archived on purpose, and a
+ * remedy telling someone to go rescue it is wrong. So the corpus looks everywhere and the ANSWER
+ * carries the distinction, rather than the enumeration deciding it in advance.
+ */
+export function refKind(full) {
+    if (full.startsWith('refs/heads/')) return { kind: 'local', archival: false }
+    if (full.startsWith('refs/remotes/origin/')) return { kind: 'remote', archival: false }
+    if (full.startsWith('refs/remotes/')) return { kind: 'other-remote', archival: false }
+    if (full.startsWith('refs/tags/')) return { kind: 'tag', archival: true }
+    // refs/backup/**, refs/notes/**, and anything else a person or a script parked outside the
+    // usual spaces. Unknown is treated as archival deliberately: over-reporting preserved work as
+    // live is the error that sends someone to rescue something nobody lost.
+    return { kind: 'archive', archival: true }
 }
 
 /**

@@ -892,8 +892,8 @@ const CHECKS = [
         // Reverts to filtering the SHORT name - the actual pre-fix bug - rather than removing the
         // filter, which would prove only that some filter ran.
         mutate: (binDir) => patch(join(binDir, 'lib', 'git.mjs'),
-            "            .filter(([, full]) => !full.endsWith('/HEAD'))\n            .map(([sha, , short]) => ({ sha, ref: short })),",
-            "            .map(([sha, , short]) => ({ sha, ref: short }))\n            .filter((r) => !r.ref.endsWith('/HEAD')),"),
+            "            .filter(([, , full]) => !full.endsWith('/HEAD') && full !== 'refs/stash')",
+            "            .filter((r) => true)"),
     },
     {
         id: 'freshness-reads-this-worktree-not-the-main-checkout',
@@ -1016,6 +1016,72 @@ const CHECKS = [
         mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
             '            const known = knownCaches()',
             "            const known = ['prs.json', 'pr-search.json']"),
+    },
+    {
+        id: 'the-corpus-looks-everywhere-not-just-at-branches',
+        why: 'tags and refs/backup were outside it while the help text said "every branch tip", and that is where work is parked before a re-cut',
+        // Nothing was ever blacklisted - `for-each-ref` was simply given two patterns. The fixture
+        // grows a tag and a refs/backup ref holding content no branch has, which is the shape of
+        // the 12 tags in this repository that point at commits reachable from nothing else.
+        run: async (binDir) => {
+            const g = await gitlib(binDir)
+            return inFixture((dir) => {
+                const git = (...a) => spawnSync('git', a, { cwd: dir, encoding: 'utf8' })
+                git('tag', 'backup/pre-recut-probe', 'diverged')
+                git('update-ref', 'refs/backup/probe', 'stranded-work')
+                const tips = g.refTips()
+                if (!tips.ok) return false
+                const kinds = new Map(tips.tips.map((t) => [t.ref, t]))
+                const tag = kinds.get('backup/pre-recut-probe')
+                const backup = [...kinds.values()].find((t) => t.full === 'refs/backup/probe')
+                if (!tag || !backup) return false
+                // Present AND labelled - the label is what stops preserved work being reported as
+                // stranded, so finding them without it would be the wrong fix.
+                return tag.kind === 'tag' && tag.archival === true
+                    && backup.kind === 'archive' && backup.archival === true
+                    && kinds.get('master')?.archival === false
+            })
+        },
+        // Reverts to the two patterns this replaced - the actual pre-fix enumeration.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'git.mjs'),
+            "        '--format=%(objectname)\\t%(*objectname)\\t%(refname)\\t%(refname:short)'])",
+            "        '--format=%(objectname)\\t%(*objectname)\\t%(refname)\\t%(refname:short)',\n        'refs/heads', 'refs/remotes/origin'])"),
+    },
+    {
+        id: 'archive-only-work-is-not-reported-as-stranded',
+        why: 'a note parked in a tag before a re-cut is preserved on purpose; a remedy telling someone to rescue it is a wrong answer',
+        // The half that makes widening safe. Without it, looking everywhere turns every preserved
+        // ref into a finding, and the report gets less trustworthy for having more data in it.
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            return inFixture((dir) => {
+                const git = (...a) => spawnSync('git', a, { cwd: dir, encoding: 'utf8' })
+                // `stranded-work` carries two notes master has never had. Park a copy in an archive
+                // ref and delete nothing: the live branch still has them, so the cluster stays live.
+                git('update-ref', 'refs/backup/parked', 'stranded-work')
+                const clusters = n.stranded(n.corpusIndex())
+                const live = clusters.find((c) => c.paths.includes('docs/inflight/never-landed.md'))
+                if (!live || live.preserved !== false) return false
+                if (!live.liveRefs.includes('stranded-work')) return false
+                // Now a ref that exists ONLY in the archive space, carrying a note nothing else has.
+                git('checkout', '-q', '-b', 'to-be-archived', 'master')
+                mkdirSync(join(dir, 'docs', 'inflight'), { recursive: true })
+                writeFileSync(join(dir, 'docs', 'inflight', 'parked-only.md'),
+                    '# Parked\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\nz\n')
+                git('add', '-A')
+                git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'park it')
+                git('update-ref', 'refs/backup/only-here', 'to-be-archived')
+                git('checkout', '-q', 'master')
+                git('branch', '-q', '-D', 'to-be-archived')
+                const after = n.stranded(n.corpusIndex())
+                const parked = after.find((c) => c.paths.includes('docs/inflight/parked-only.md'))
+                // Found - because the corpus looks everywhere - and marked preserved, not stranded.
+                return !!parked && parked.preserved === true && parked.liveRefs.length === 0
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
+            '                preserved: live.length === 0,',
+            '                preserved: false,'),
     },
 ]
 

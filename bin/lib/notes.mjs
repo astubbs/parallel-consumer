@@ -421,10 +421,26 @@ export function stranded(index) {
         survivors.push({ path, refs: [...refs].sort() })
     }
 
+    // ARCHIVAL REFS ARE CARRIED, THEN LABELLED. The corpus looks everywhere - tags and
+    // `refs/backup` included - because that is where this repository parks work before a re-cut,
+    // and 12 tags hold commits reachable from nothing else. But a note held ONLY there is preserved
+    // on purpose, not stranded, and telling someone to go rescue it is a wrong answer dressed as a
+    // finding. So the enumeration stays wide and the CLUSTER says where its refs live.
+    const archival = new Map(index.refs.map((r) => [r.ref, r.archival === true]))
     const byKey = new Map()
     for (const s of survivors) {
         const key = s.refs.join(' ')
-        if (!byKey.has(key)) byKey.set(key, { refs: s.refs, refCount: s.refs.length, paths: [] })
+        if (!byKey.has(key)) {
+            const live = s.refs.filter((r) => !archival.get(r))
+            byKey.set(key, {
+                refs: s.refs,
+                refCount: s.refs.length,
+                liveRefs: live,
+                // Only-in-an-archive is the distinction that changes what a reader should DO.
+                preserved: live.length === 0,
+                paths: [],
+            })
+        }
         byKey.get(key).paths.push(s.path)
     }
     return [...byKey.values()].sort((a, b) => b.paths.length - a.paths.length || b.refCount - a.refCount)

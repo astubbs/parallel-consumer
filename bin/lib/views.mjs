@@ -91,8 +91,17 @@ export function formatStranded(clusters, index) {
         "notes the baseline's history once had - those landed and were `git rm`d when their work closed.",
         '',
     ]
+    const preserved = clusters.filter((c) => c.preserved).length
+    if (preserved > 0) {
+        out.push(`${preserved === 1 ? 'One cluster sits' : `${preserved} clusters sit`} ONLY in an archive - a tag or a \`refs/backup\` ref,`,
+            'which is where this repository parks work before a re-cut. Preserved, not lost; marked below.', '')
+    }
     for (const c of clusters) {
-        out.push(`  ${plural(c.paths.length, 'note')} on ${plural(c.refCount, 'ref')} - e.g. ${c.refs[0]}`)
+        // The example ref is a LIVE one where the cluster has any, because an archival ref name is
+        // not somewhere a reader can go and continue the work.
+        const eg = (c.liveRefs?.length ? c.liveRefs[0] : c.refs[0])
+        out.push(`  ${plural(c.paths.length, 'note')} on ${plural(c.refCount, 'ref')} - e.g. ${eg}`
+            + (c.preserved ? '   [ARCHIVE ONLY - preserved, not stranded]' : ''))
         for (const p of c.paths.slice(0, 5)) out.push(`      ${p}`)
         if (c.paths.length > 5) out.push(`      ... and ${c.paths.length - 5} more`)
         out.push('')
