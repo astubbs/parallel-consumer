@@ -600,11 +600,17 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
     }
 
     /**
-     * @return true where PC built the producer and so can build another; false on the deprecated producer-instance
-     *         path, where every condition keeps its pre-recovery behaviour
+     * @return true where PC built the producer and so can build another, and the commit mode is the transactional
+     *         one whose control loop performs the recovery; false on the deprecated producer-instance path, and in
+     *         the consumer-commit modes, where every condition keeps its pre-recovery behaviour
      */
     public boolean canRecover() {
-        return replacementProducerSource.isPresent();
+        // Both halves, because detection runs on every produce and commit path while recovery runs only from the
+        // transactional commit loop. With the first half alone, a PC-built producer in a consumer-commit mode that
+        // met a recoverable condition (an idempotent producer's OutOfOrderSequenceException, say) was recorded as
+        // REPLACING, nothing ever replaced it, and every worker parked on the produce lock for the life of the
+        // instance. Found by the simplify pass's efficiency reviewer as a poll that could never converge.
+        return replacementProducerSource.isPresent() && options.isUsingTransactionCommitMode();
     }
 
     /**

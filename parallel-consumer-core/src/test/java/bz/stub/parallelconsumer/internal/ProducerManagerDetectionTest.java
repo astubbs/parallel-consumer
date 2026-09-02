@@ -16,6 +16,7 @@ import pl.tlinkowski.unij.api.UniMaps;
 import java.time.Duration;
 import java.util.Optional;
 
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_SYNC;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
@@ -140,6 +141,30 @@ class ProducerManagerDetectionTest {
      * Inherited from astubbs#262: a throwing abort used to skip closing the producer, leaking one per fenced
      * shutdown. Abort is swallowed and the close happens regardless.
      */
+    /**
+     * A PC-built producer in a consumer-commit mode is rebuildable but never recovered: recovery runs from the
+     * transactional commit loop only. If detection recorded the condition anyway, the manager sat in REPLACING with
+     * nothing to replace it and every worker parked on the produce lock for the life of the instance. So on that path
+     * a condition is not a recovery signal at all - it propagates exactly as it did before recovery existed.
+     */
+    @Test
+    void inAConsumerCommitModeAPcBuiltProducerIsNotRecoveredSoNothingIsRecorded() {
+        module = new PCModuleTestEnv(ParallelConsumerOptions.<String, String>builder()
+                .commitMode(PERIODIC_CONSUMER_SYNC)
+                .commitLockAcquisitionTimeout(Duration.ofSeconds(5))
+                .build());
+        // the test env's wrapper is always transactional, which this mode rejects; a consumer-commit-mode PC-built
+        // producer carries no transactional id, so neither does its replacement source
+        var nonTransactional = new ProducerWrapper<>(module.options(), false, module.producer());
+        var replacement = new ReplacementProducerSource<String, String>(() -> nonTransactional, null);
+        var manager = new ProducerManager<>(nonTransactional, module.consumerManager(), module.workManager(), module.options(), Optional.of(replacement));
+
+        assertThat(manager.canRecover()).isFalse();
+        assertThat(manager.recordIfRecoverable(new ProducerFencedException("fenced"))).isEmpty();
+        assertWithMessage("a condition on a path that cannot recover must not be recorded, or the manager waits forever")
+                .that(manager.pendingInvalidation()).isEmpty();
+    }
+
     @Test
     void closeStillClosesTheProducerWhenAbortThrows() {
         doReturn(false).when(wrapper).isTransactionReady();
