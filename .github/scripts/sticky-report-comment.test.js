@@ -432,12 +432,18 @@ section("\npostWhenAbsent - a body that is a CORRECTION rather than a report");
 // The quarantine lane's emptied-lane body is the case: on a PR whose earlier push said "delete the
 // annotation and the registry entry" it is the retraction and must be posted, but on a PR that never
 // carried a report it is an announcement that nothing is quarantined - noise on every PR forever.
+
+// Every correction in the sections below is the same call - our marker pair, `postWhenAbsent: false`,
+// a fixed clock - against a different fake store and body. `options` overrides any of it, so a test
+// that needs its own `core` or a `renderDelta` still reads as the one thing it varies.
+const correction = (gh, body, options = {}) => postStickyReport({
+  github: gh, context: fakeContext, core: fakeCore(), marker: MARKER, supersededMarker: SUPERSEDED,
+  dataMarker: DATA, body, postWhenAbsent: false, now: new Date("2026-09-02T03:05:05Z"), ...options,
+});
+
 asyncTest("no previous comment and postWhenAbsent false: nothing is written at all", async () => {
   const gh = fakeGithub({ comments: [] });
-  const result = await postStickyReport({
-    github: gh, context: fakeContext, core: fakeCore(), marker: MARKER, dataMarker: DATA,
-    body: bodyWith("green"), postWhenAbsent: false, now: new Date("2026-09-02T03:04:05Z"),
-  });
+  const result = await correction(gh, bodyWith("green"));
   assert.strictEqual(result.action, "skipped");
   assert.strictEqual(gh.calls.filter(c => c.op === "createComment").length, 0);
   assert.strictEqual(gh.calls.filter(c => c.op === "updateComment").length, 0);
@@ -447,10 +453,7 @@ asyncTest("no previous comment and postWhenAbsent false: nothing is written at a
 // exactly what it waits for.
 asyncTest("postWhenAbsent false still corrects a comment we already posted", async () => {
   const gh = fakeGithub({ comments: [botComment(7, "green")] });
-  const result = await postStickyReport({
-    github: gh, context: fakeContext, core: fakeCore(), marker: MARKER, dataMarker: DATA,
-    body: bodyWith("regression"), postWhenAbsent: false, now: new Date("2026-09-02T03:04:05Z"),
-  });
+  const result = await correction(gh, bodyWith("regression"));
   assert.strictEqual(result.action, "superseded");
   assert.strictEqual(gh.calls.filter(c => c.op === "createComment").length, 1);
 });
@@ -459,10 +462,7 @@ asyncTest("postWhenAbsent false still corrects a comment we already posted", asy
 // author filter and this flag have to agree, or the bot answers a person's comment.
 asyncTest("a human comment carrying the marker does not count as ours to correct", async () => {
   const gh = fakeGithub({ comments: [{ id: 3, user: { type: "User" }, body: `${MARKER}\nis this right?` }] });
-  const result = await postStickyReport({
-    github: gh, context: fakeContext, core: fakeCore(), marker: MARKER, dataMarker: DATA,
-    body: bodyWith("green"), postWhenAbsent: false, now: new Date("2026-09-02T03:04:05Z"),
-  });
+  const result = await correction(gh, bodyWith("green"));
   assert.strictEqual(result.action, "skipped");
   assert.strictEqual(gh.store.find(c => c.id === 3).body, `${MARKER}\nis this right?`);
 });
@@ -477,18 +477,13 @@ section("\npostWhenAbsent false after a retire whose create FAILED - the gap tha
 // comment. RED-PROOF: make `unreplaced` always undefined and this test goes red on `action`.
 const twoRuns = async ({ secondBody = bodyWith("empty"), secondOptions = {} } = {}) => {
   const gh = fakeGithub({ comments: [botComment(7, "green")], failCreate: true });
-  const supersededMarker = "<!-- pc-test-report (superseded) -->";
   await assert.rejects(() => postStickyReport({
-    github: gh, context: fakeContext, core: fakeCore(), marker: MARKER, supersededMarker, dataMarker: DATA,
-    body: bodyWith("regression"), what: "report", now: new Date("2026-09-02T03:04:05Z"),
+    github: gh, context: fakeContext, core: fakeCore(), marker: MARKER, supersededMarker: SUPERSEDED,
+    dataMarker: DATA, body: bodyWith("regression"), what: "report", now: new Date("2026-09-02T03:04:05Z"),
   }));
   gh.faults.failCreate = false;
   const core = fakeCore();
-  const result = await postStickyReport({
-    github: gh, context: fakeContext, core, marker: MARKER, supersededMarker, dataMarker: DATA,
-    body: secondBody, what: "report", postWhenAbsent: false, now: new Date("2026-09-02T03:05:05Z"),
-    ...secondOptions,
-  });
+  const result = await correction(gh, secondBody, { core, what: "report", ...secondOptions });
   return { gh, core, result };
 };
 
@@ -505,7 +500,7 @@ asyncTest("the retired comment is then linked forward to it, as the normal path 
   const retired = gh.store.find(c => c.id === 7).body;
   assert.ok(retired.includes(`Superseded by [a newer report](${result.url}).`), `no forward link: ${retired}`);
   assert.ok(!retired.includes("should follow for this push"), `the place-less note was left in place: ${retired}`);
-  assert.ok(retired.startsWith("<!-- pc-test-report (superseded) -->"), "the retired marker was disturbed");
+  assert.ok(retired.startsWith(SUPERSEDED), "the retired marker was disturbed");
 });
 
 asyncTest("the retired comment's payload is the previous state, so the correction can render its delta", async () => {
@@ -521,18 +516,14 @@ asyncTest("the retired comment's payload is the previous state, so the correctio
 // only one carrying the live marker, so losing the link must not fail the step.
 asyncTest("a failed forward link on the recovery path warns rather than throwing", async () => {
   const gh = fakeGithub({ comments: [botComment(7, "green")], failCreate: true });
-  const supersededMarker = "<!-- pc-test-report (superseded) -->";
   await assert.rejects(() => postStickyReport({
-    github: gh, context: fakeContext, core: fakeCore(), marker: MARKER, supersededMarker, dataMarker: DATA,
-    body: bodyWith("regression"), now: new Date("2026-09-02T03:04:05Z"),
+    github: gh, context: fakeContext, core: fakeCore(), marker: MARKER, supersededMarker: SUPERSEDED,
+    dataMarker: DATA, body: bodyWith("regression"), now: new Date("2026-09-02T03:04:05Z"),
   }));
   gh.faults.failCreate = false;
   gh.faults.failForwardLink = true;
   const core = fakeCore();
-  const result = await postStickyReport({
-    github: gh, context: fakeContext, core, marker: MARKER, supersededMarker, dataMarker: DATA,
-    body: bodyWith("empty"), postWhenAbsent: false, now: new Date("2026-09-02T03:05:05Z"),
-  });
+  const result = await correction(gh, bodyWith("empty"), { core });
   assert.strictEqual(result.action, "recovered");
   assert.strictEqual(core.warnings.length, 1, core.warnings.join("; "));
 });
@@ -541,11 +532,7 @@ asyncTest("a failed forward link on the recovery path warns rather than throwing
 // PR - live or retired - the correction stays silent.
 asyncTest("CONTROL: with no retired comment either, the correction is still skipped", async () => {
   const gh = fakeGithub({ comments: [{ id: 3, user: { type: "User" }, body: "unrelated" }] });
-  const result = await postStickyReport({
-    github: gh, context: fakeContext, core: fakeCore(), marker: MARKER,
-    supersededMarker: "<!-- pc-test-report (superseded) -->", dataMarker: DATA,
-    body: bodyWith("empty"), postWhenAbsent: false, now: new Date("2026-09-02T03:05:05Z"),
-  });
+  const result = await correction(gh, bodyWith("empty"));
   assert.strictEqual(result.action, "skipped");
   assert.strictEqual(gh.calls.filter(c => c.op === "createComment").length, 0);
 });
@@ -555,16 +542,12 @@ asyncTest("CONTROL: with no retired comment either, the correction is still skip
 // retirement, and posting for it would be the "empty lane on every PR" noise, once per PR that ever
 // had a report. RED-PROOF: pick with `where: () => true` and this goes red.
 asyncTest("a retired comment that ALREADY has a forward link does not trigger a post", async () => {
-  const supersededMarker = "<!-- pc-test-report (superseded) -->";
   const linked = retiredBody({
-    body: `${MARKER}\n${bodyWith("green")}`, marker: MARKER, supersededMarker, headingRe: /^### /m,
+    body: `${MARKER}\n${bodyWith("green")}`, marker: MARKER, supersededMarker: SUPERSEDED, headingRe: /^### /m,
     label: "l", note: "Superseded by [a newer report](https://example.test/c/901).",
   });
   const gh = fakeGithub({ comments: [{ id: 7, user: { type: "Bot" }, body: linked }] });
-  const result = await postStickyReport({
-    github: gh, context: fakeContext, core: fakeCore(), marker: MARKER, supersededMarker, dataMarker: DATA,
-    body: bodyWith("empty"), postWhenAbsent: false, now: new Date("2026-09-02T03:05:05Z"),
-  });
+  const result = await correction(gh, bodyWith("empty"));
   assert.strictEqual(result.action, "skipped");
   assert.strictEqual(gh.calls.filter(c => c.op === "createComment").length, 0);
   assert.strictEqual(gh.store.find(c => c.id === 7).body, linked, "a fully retired comment was edited");
@@ -572,13 +555,9 @@ asyncTest("a retired comment that ALREADY has a forward link does not trigger a 
 
 // A human quoting the SUPERSEDED marker is no more ours than one quoting the live marker.
 asyncTest("a human comment carrying the superseded marker and the pending note is not ours to repair", async () => {
-  const supersededMarker = "<!-- pc-test-report (superseded) -->";
   const gh = fakeGithub({ comments: [{ id: 3, user: { type: "User" },
-    body: `${supersededMarker}\nwhy does it say <sub>Superseded - a fresh report should follow for this push.</sub>?` }] });
-  const result = await postStickyReport({
-    github: gh, context: fakeContext, core: fakeCore(), marker: MARKER, supersededMarker, dataMarker: DATA,
-    body: bodyWith("empty"), postWhenAbsent: false, now: new Date("2026-09-02T03:05:05Z"),
-  });
+    body: `${SUPERSEDED}\nwhy does it say <sub>Superseded - a fresh report should follow for this push.</sub>?` }] });
+  const result = await correction(gh, bodyWith("empty"));
   assert.strictEqual(result.action, "skipped");
 });
 
@@ -586,16 +565,12 @@ asyncTest("a human comment carrying the superseded marker and the pending note i
 // the NEWEST is the one whose replacement never existed; each older one was superseded by the comment
 // retired after it. RED-PROOF: drop `newest: true` and this picks id 5.
 asyncTest("of several unlinked retired comments, the NEWEST is the one repaired", async () => {
-  const supersededMarker = "<!-- pc-test-report (superseded) -->";
   const pending = id => ({ id, user: { type: "Bot" }, body: retiredBody({
-    body: `${MARKER}\n${bodyWith(`s${id}`)}`, marker: MARKER, supersededMarker, headingRe: /^### /m,
+    body: `${MARKER}\n${bodyWith(`s${id}`)}`, marker: MARKER, supersededMarker: SUPERSEDED, headingRe: /^### /m,
     label: "l", note: "Superseded - a fresh report should follow for this push.",
   }) });
   const gh = fakeGithub({ comments: [pending(5), pending(9)] });
-  const result = await postStickyReport({
-    github: gh, context: fakeContext, core: fakeCore(), marker: MARKER, supersededMarker, dataMarker: DATA,
-    body: bodyWith("empty"), what: "report", postWhenAbsent: false, now: new Date("2026-09-02T03:05:05Z"),
-  });
+  const result = await correction(gh, bodyWith("empty"), { what: "report" });
   assert.strictEqual(result.action, "recovered");
   assert.deepStrictEqual(result.prev, { status: "s9" });
   assert.ok(gh.store.find(c => c.id === 9).body.includes("Superseded by ["), "the newest was not linked");
@@ -619,9 +594,8 @@ asyncTest("every path paginates the comment list exactly once", async () => {
   ]) {
     const gh = fakeGithub({ comments });
     const result = await postStickyReport({
-      github: gh, context: fakeContext, core: fakeCore(), marker: MARKER,
-      supersededMarker: "<!-- pc-test-report (superseded) -->", dataMarker: DATA,
-      body: bodyWith("regression"), postWhenAbsent, now: new Date("2026-09-02T03:05:05Z"),
+      github: gh, context: fakeContext, core: fakeCore(), marker: MARKER, supersededMarker: SUPERSEDED,
+      dataMarker: DATA, body: bodyWith("regression"), postWhenAbsent, now: new Date("2026-09-02T03:05:05Z"),
     });
     assert.strictEqual(result.action, expected);
     assert.strictEqual(gh.calls.filter(c => c.op === "paginate").length, 1,
@@ -635,11 +609,7 @@ section("\na correction COLLAPSES the comment it retires; an ordinary status cha
 // RED-PROOF: pass `collapse: false` (or nothing) from postStickyReport and the first goes red.
 asyncTest("postWhenAbsent false folds the retired body under its heading", async () => {
   const gh = fakeGithub({ comments: [botComment(7, "green")] });
-  await postStickyReport({
-    github: gh, context: fakeContext, core: fakeCore(), marker: MARKER,
-    supersededMarker: "<!-- pc-test-report (superseded) -->", dataMarker: DATA,
-    body: bodyWith("empty"), postWhenAbsent: false, now: new Date("2026-09-02T03:05:05Z"),
-  });
+  await correction(gh, bodyWith("empty"));
   const retired = gh.store.find(c => c.id === 7).body;
   assert.ok(retired.includes("<details><summary>"), `the wrong report is still fully visible: ${retired}`);
   assert.ok(retired.indexOf("[superseded - ") < retired.indexOf("<details>"), "the heading is inside the block");
@@ -649,9 +619,8 @@ asyncTest("postWhenAbsent false folds the retired body under its heading", async
 asyncTest("an ordinary status change leaves the retired body readable", async () => {
   const gh = fakeGithub({ comments: [botComment(7, "green")] });
   await postStickyReport({
-    github: gh, context: fakeContext, core: fakeCore(), marker: MARKER,
-    supersededMarker: "<!-- pc-test-report (superseded) -->", dataMarker: DATA,
-    body: bodyWith("regression"), now: new Date("2026-09-02T03:05:05Z"),
+    github: gh, context: fakeContext, core: fakeCore(), marker: MARKER, supersededMarker: SUPERSEDED,
+    dataMarker: DATA, body: bodyWith("regression"), now: new Date("2026-09-02T03:05:05Z"),
   });
   assert.ok(!gh.store.find(c => c.id === 7).body.includes("<details>"), "an older report was hidden as if it were wrong");
 });
