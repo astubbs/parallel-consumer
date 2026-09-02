@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.integrationTests;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.Quarantined;
 import bz.stub.parallelconsumer.internal.utils.ProgressBarUtils;
 import bz.stub.parallelconsumer.internal.utils.ProgressTracker;
 import bz.stub.parallelconsumer.internal.utils.TrimListRepresentation;
@@ -423,6 +424,21 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
      */
     @Tag("performance")
     @Test
+    @Quarantined(
+            reason = "Rebalance stall, mechanism unexplained. The detector returns FLAT - the record count "
+                    + "stops rather than slows - and the ambient probe autopsy reports "
+                    + "ZOMBIE_MEMBER/REBALANCE_BLOCKED with the group dwelling in PreparingRebalance because a "
+                    + "member stopped answering, the whole assignment frozen at comparable lag. Measured at one "
+                    + "failure in ten consecutive runs on an idle Linux box, plus repeated CI failures, always "
+                    + "that same signature. It reproduces on the tree carrying this branch's log-argument fix, so "
+                    + "it is neither the confluentinc#857 revoke deadlock nor the SLF4J argument-evaluation "
+                    + "defect - it is a third thing. QUARANTINED PRE-EMPTIVELY, and the evidence tension is "
+                    + "deliberate rather than overlooked: the ledger was measured while this test was PR-state, "
+                    + "because on master the test is @Disabled and cannot fail there. This PR enables it into a "
+                    + "required lane, so on merge master inherits a gating check that fails about one run in ten. "
+                    + "The quarantine is applied at exactly the moment the failure becomes master-state.",
+            tracking = "docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md",
+            flapping = true)
     void largeNumberOfInstances() {
 
         numPartitions = scaled(80);
