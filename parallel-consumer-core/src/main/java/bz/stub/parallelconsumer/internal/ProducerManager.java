@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.internal;
  * Modifications Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.internal.utils.ThrowableUtils;
 import bz.stub.parallelconsumer.*;
 import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
@@ -570,15 +571,32 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
      * @return the exception to throw; never null
      */
     private RuntimeException invalidatedOrRethrow(RuntimeException failure, boolean wrapFencedAsInternal) {
-        Optional<Throwable> condition = RecoverableProducerCondition.find(failure);
-        if (condition.isPresent() && canRecover()) {
-            recordInvalidation(condition.get());
-            return new ProducerInvalidatedException(condition.get());
+        Optional<ProducerInvalidatedException> invalidated = recordIfRecoverable(failure);
+        if (invalidated.isPresent()) {
+            return invalidated.get();
         }
         if (wrapFencedAsInternal && failure instanceof ProducerFencedException) {
             return new PCInternalRuntimeException(failure);
         }
         return failure;
+    }
+
+    /**
+     * The one detect-and-record step both entry points share - the produce path in
+     * {@link bz.stub.parallelconsumer.ParallelEoSStreamProcessor} and the commit path here. A recoverable condition
+     * found in {@code failure}'s cause chain, on a producer PC can rebuild, is recorded and handed back as the
+     * exception that unwinds the caller; anything else is the caller's to treat as before.
+     *
+     * @return the exception to unwind with, or empty when {@code failure} is not a recoverable condition or this
+     *         producer cannot be recovered
+     */
+    public Optional<ProducerInvalidatedException> recordIfRecoverable(Throwable failure) {
+        Optional<Throwable> condition = RecoverableProducerCondition.find(failure);
+        if (condition.isPresent() && canRecover()) {
+            recordInvalidation(condition.get());
+            return Optional.of(new ProducerInvalidatedException(condition.get()));
+        }
+        return Optional.empty();
     }
 
     /**
@@ -827,17 +845,8 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
     }
 
     private static boolean isTerminalBuildFailure(Throwable failure) {
-        Throwable current = failure;
-        for (int depth = 0; current != null && depth < 32; depth++) {
-            if (current instanceof AuthorizationException || current instanceof UnsupportedVersionException) {
-                return true;
-            }
-            if (current.getCause() == current) {
-                break;
-            }
-            current = current.getCause();
-        }
-        return false;
+        return ThrowableUtils.anyInCauseChain(failure,
+                f -> f instanceof AuthorizationException || f instanceof UnsupportedVersionException);
     }
 
     /**

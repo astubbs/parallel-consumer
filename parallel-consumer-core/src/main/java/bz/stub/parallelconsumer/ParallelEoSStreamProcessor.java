@@ -11,7 +11,6 @@ import bz.stub.parallelconsumer.internal.PCInternalRuntimeException;
 import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.internal.ProducerInvalidatedException;
 import bz.stub.parallelconsumer.internal.ProducerManager;
-import bz.stub.parallelconsumer.internal.RecoverableProducerCondition;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -19,6 +18,7 @@ import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.errors.InvalidPidMappingException;
 import pl.tlinkowski.unij.api.UniLists;
 
+import java.util.Optional;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Future;
@@ -157,10 +157,9 @@ public class ParallelEoSStreamProcessor<K, V> extends AbstractParallelEoSStreamP
      * they were.
      */
     private RuntimeException produceFailureFor(ProducerManager<K, V> pm, Exception failure) {
-        var condition = RecoverableProducerCondition.find(failure);
-        if (condition.isPresent() && pm.canRecover()) {
-            pm.recordInvalidation(condition.get());
-            return new ProducerInvalidatedException(condition.get());
+        Optional<ProducerInvalidatedException> invalidated = pm.recordIfRecoverable(failure);
+        if (invalidated.isPresent()) {
+            return invalidated.get();
         }
         if (failure instanceof InvalidPidMappingException) {
             log.error("Closing parallel Consumer due to InvalidPidMappingException - PC cannot rebuild a producer it " +

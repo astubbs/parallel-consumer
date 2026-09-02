@@ -7,10 +7,9 @@ package bz.stub.parallelconsumer.internal;
 import lombok.experimental.UtilityClass;
 import org.apache.kafka.clients.CommonClientConfigs;
 import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.config.SaslConfigs;
+import pl.tlinkowski.unij.api.UniSets;
 
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
@@ -36,7 +35,7 @@ public class ProducerConfigRedaction {
      * Keys whose values are safe to render: addresses, sizes, timeouts, class names and mode switches. Nothing here
      * is a credential, a key store, a JAAS string or a Schema Registry user-info pair.
      */
-    public static final Set<String> ALLOW_LISTED_KEYS = Collections.unmodifiableSet(new LinkedHashSet<>(Arrays.asList(
+    public static final Set<String> ALLOW_LISTED_KEYS = UniSets.of(
             CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG,
             CommonClientConfigs.CLIENT_ID_CONFIG,
             ProducerConfig.TRANSACTIONAL_ID_CONFIG,
@@ -52,8 +51,8 @@ public class ProducerConfigRedaction {
             ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
             ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
             CommonClientConfigs.SECURITY_PROTOCOL_CONFIG,
-            "sasl.mechanism"
-    )));
+            SaslConfigs.SASL_MECHANISM
+    );
 
     /**
      * @return the configuration as {@code {key=value, key=<redacted>, ...}} in key order, {@code "null"} for a null

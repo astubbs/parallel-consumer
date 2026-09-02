@@ -149,6 +149,9 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         producerManagerField.set(pc, Optional.of(producerManager));
         when(producerManager.beginProducing(any())).thenReturn(mock(ProducerManager.ProducingLock.class));
         when(producerManager.canRecover()).thenReturn(canRecover);
+        // the detect-and-record step is the real one, so the tests below see the mock's canRecover() and can verify
+        // recordInvalidation() the way they always did
+        when(producerManager.recordIfRecoverable(any())).thenCallRealMethod();
         return producerManager;
     }
 

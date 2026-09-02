@@ -4,6 +4,7 @@ package bz.stub.parallelconsumer.internal;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.internal.utils.ThrowableUtils;
 import lombok.experimental.UtilityClass;
 import org.apache.kafka.clients.consumer.CommitFailedException;
 import org.apache.kafka.common.errors.InvalidPidMappingException;
@@ -36,29 +37,11 @@ import java.util.Optional;
 public class RecoverableProducerCondition {
 
     /**
-     * Bounds the cause walk. Cause chains are short in practice; the bound is against a malformed or cyclic one, and
-     * the walk also stops on a cycle it can see.
-     */
-    private static final int MAX_DEPTH = 32;
-
-    /**
      * @return the innermost throwable in {@code failure}'s cause chain that is one of the recoverable conditions,
      *         or empty when none is - including for a null failure
      */
     public static Optional<Throwable> find(Throwable failure) {
-        Throwable current = failure;
-        Throwable found = null;
-        for (int depth = 0; current != null && depth < MAX_DEPTH; depth++) {
-            if (isCondition(current)) {
-                found = current; // keep walking: the innermost match is the one the broker actually raised
-            }
-            Throwable next = current.getCause();
-            if (next == current) {
-                break;
-            }
-            current = next;
-        }
-        return Optional.ofNullable(found);
+        return ThrowableUtils.innermostInCauseChain(failure, RecoverableProducerCondition::isCondition);
     }
 
     private static boolean isCondition(Throwable throwable) {
