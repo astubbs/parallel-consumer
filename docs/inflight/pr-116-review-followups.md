@@ -1,5 +1,8 @@
 # astubbs#116 - what the multi-agent review left open
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: stranded-work -->
+
 <!-- post-merge: exempt-file -->
 <!-- This note IS the PR-116 follow-up list, so every mention of astubbs#116 in it names the note's
      own subject rather than making a present-tense claim about an open branch. It is deleted when

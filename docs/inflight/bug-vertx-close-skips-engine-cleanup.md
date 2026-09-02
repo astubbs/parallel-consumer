@@ -1,5 +1,8 @@
 # `close()` and `closeDrainFirst()` never release the Vert.x engine
 
+<!-- inflight-type: bug -->
+<!-- inflight-impact: crash -->
+
 `VertxParallelEoSStreamProcessor` overrides only `close(Duration, DrainingMode)` - the one place
 `webClient.close()` and `vertx.close()` are called. Every no-argument shutdown (`close()`,
 `closeDrainFirst()`, `closeDontDrainFirst()`) routes through `close(DrainingMode)` instead and never
