@@ -2,12 +2,12 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: config-lie -->
-<!-- inflight-state: parked - the keep-or-delete call is the maintainer's, and astubbs/parallel-consumer#200 takes the sibling first -->
+<!-- inflight-state: parked - the keep-or-delete call is the maintainer's; the sibling is gone, so this note is now about one file -->
 
-**Half of this is already done, on a branch that reached it independently.**
-`bin/build-parallel-consumer-core-without-tests.sh` is DELETED by `e7b1dda88` on
-astubbs/parallel-consumer#200, which is open and unmerged. Do not redo that work; what is left here
-is its sibling.
+**Half of this is already done, on a branch that reached it independently.** The module-scoped
+sibling is DELETED by `e7b1dda88` on astubbs/parallel-consumer#200 - read it at <!-- post-merge: checked -->
+`git show e7b1dda88^:bin/build-parallel-consumer-core-without-tests.sh`, since the path no longer
+resolves in the working tree. Do not redo that work; what is left here is the survivor below.
 
 **`bin/build-without-tests.sh`** - the whole-tree variant - survives, and breaks several of this
 project's stated build rules at once. Nothing runs it, nothing references it, and nothing goes red.
@@ -32,7 +32,7 @@ mvn clean install -Dmaven.test.skip=true
   degrade-loudly rule in [`bin/AGENTS.md`](../../bin/AGENTS.md) is written against precisely this shape.
 - **No `set -euo pipefail`**, so the failed `java_home` does not stop the maven run either.
 
-**A fourth defect, found by astubbs/parallel-consumer#200 and NOT by this note, applies only to the
+**A fourth defect, found by astubbs/parallel-consumer#200 and NOT by this note, applies only to the <!-- post-merge: checked -->
 deleted sibling** - worth recording because it is the sharper finding of the two. That script ran a
 bare `mvn -pl parallel-consumer-core` with no `-am`, which cannot succeed against this tree at all:
 the enforcer's `ReactorModuleConvergence` rule fails it with "Module parents have been found which
@@ -57,7 +57,7 @@ answers - everything else on that list is a self-test, which `bin/check-all.sh -
 and therefore finds by construction.
 
 **Two independent routes reached the same pair on the same day**, from opposite directions: a
-discoverability audit here, and a defect-class sweep on astubbs/parallel-consumer#200 looking for
+discoverability audit here, and a defect-class sweep on astubbs/parallel-consumer#200 looking for <!-- post-merge: checked -->
 other instances of a bare `-pl`. That is worth noting rather than tidying away - it is the argument
 for doing the sweep, and it means the survivor is not an oversight by either party but a file whose
 fate simply has not been decided.
@@ -75,7 +75,7 @@ bin/build.sh -pl parallel-consumer-core -Dmaven.test.skip=true # one module
 ## The decision, which is the maintainer's
 
 **Deleting it is the honest option** and needs no replacement, since `bin/build.sh` already covers
-it - and astubbs/parallel-consumer#200 has already made that call for the sibling, which is a
+it - and astubbs/parallel-consumer#200 has already made that call for the sibling, which is a <!-- post-merge: checked -->
 precedent rather than a decision here. Two things to weigh first, neither blocking:
 
 - It is an upstream file with a Confluent header, so removal is a deliberate fork divergence rather
@@ -85,10 +85,10 @@ precedent rather than a decision here. Two things to weigh first, neither blocki
   `./mvnw` in the same change - a kept script that cannot work is the state this note exists to end,
   and keeping it unfixed just moves the note.
 
-**Ordering, if the answer is delete:** astubbs/parallel-consumer#200 merges first and takes the
-sibling with it. Deleting this one on a different branch beforehand risks two branches editing
-neighbouring lines of the same directory for the same reason, which is a conflict bought for
-nothing.
+**Ordering is no longer a consideration:** astubbs/parallel-consumer#200 has taken the sibling, so <!-- post-merge: checked -->
+this note now covers a single file and whichever branch answers the question can simply delete it.
+The conflict this paragraph used to warn about was between that PR and a second branch, and there is
+no longer a second edit to collide with.
 
 Parked deliberately - the tag above carries the same disposition, so the index agrees with this
 paragraph: the finding is cheap and certain, the decision is not urgent, and it was not the
