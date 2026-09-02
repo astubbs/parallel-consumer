@@ -43,7 +43,7 @@
 
 import { cacheRead, cacheWrite } from './cache.mjs'
 import { NOTES_DIR, REPO } from './repo.mjs'
-import { baseline, blobDiffStat, blobsForPath, exec, lines, refTips, treeEntries } from './git.mjs'
+import { baseline, blobDiffStat, blobsForPath, exec, lines, mergeBaseBlobs, mergeBases, refTips, treeEntries } from './git.mjs'
 
 export { NOTES_DIR }
 
@@ -148,11 +148,15 @@ export function prsByBranch({ cache = true } = {}) {
     if (cached) return { ok: true, cached: true, map: new Map(cached) }
     // Naming the repo is not optional: `gh` resolves a bare command against `upstream` in this fork,
     // and an answer for confluentinc reads exactly like "this branch has no PR".
+    // BOUNDED, because this became reachable from every session start and every push when the
+    // refactor-window hooks landed. `execFileSync` has no default timeout, so a stalled connection
+    // to GitHub hung the hook - and therefore the push - indefinitely. `exec` merges caller opts
+    // straight into execFileSync, so this needs no new machinery and no `timeout(1)` binary.
     const res = exec('gh', ['pr', 'list', '-R', REPO, '--state', 'all', '--limit', '500',
         // NOT `body`: adding it took this response from 56K to 2.3MB, for data used on the rare
         // branch that looks untracked. `baseRefName` is a few bytes and answers the common case
         // exactly. The per-branch question is asked on a miss, by prForBranch in branches.mjs.
-        '--json', 'headRefName,baseRefName,number,title,state'])
+        '--json', 'headRefName,baseRefName,number,title,state'], { timeout: 20000 })
     // UNAVAILABLE IS NOT "NO PR", and saying so needs a shape that can carry the difference. This
     // returned a bare Map, so an unauthenticated or rate-limited `gh` was indistinguishable from a
     // branch that genuinely has no PR - and the caller silently fell through to guessing a theme
@@ -231,9 +235,22 @@ export function baselineHistoryBlobs(base, path) {
  * history filter already removed the branches that are merely behind.
  */
 export function addedSinceMergeBase(base, ref, path, blob) {
-    const mb = exec('git', ['merge-base', base, ref]).out.trim()
-    if (!mb) return null
-    const at = exec('git', ['rev-parse', '--verify', '--quiet', `${mb}:${path}`]).out.trim()
+    // Through git.mjs's primitives rather than its own `merge-base` + `rev-parse` pair, which is what
+    // this was: a second private implementation of two calls that file already owns.
+    //
+    // NOT quite the same answers, and the comment that claimed they were has been corrected rather
+    // than kept: `blobsForPath` splits its `--batch-check` input at the first whitespace, so a path
+    // containing a space resolves to nothing where `rev-parse --verify` resolved it correctly. No
+    // note path has whitespace and `versions()` filters on the same primitive before reaching here,
+    // so this is unreachable today - but it is a real difference and stating it wrongly is how it
+    // would have stayed invisible.
+    const mbByRef = mergeBases(base, [ref])
+    if (!mbByRef.has(ref)) return null
+    const mb = mergeBaseBlobs(mbByRef, path)
+    // A FAILED QUERY IS NOT AN ABSENCE. Without this the branch below reports `newFile: true` for a
+    // note that exists, purely because git could not be asked.
+    if (!mb.ok) return null
+    const at = mb.blobs.get(mbByRef.get(ref))
     if (!at) return { added: null, removed: null, newFile: true } // the branch created it after diverging
     return blobDiffStat(at, blob)
 }

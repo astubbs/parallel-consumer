@@ -119,6 +119,13 @@ jobs:
           # docs/solutions/best-practices/reverting-half-a-fix-is-not-a-control-2026-09-01.md before
           # concluding a quiet inverted arm means its bug is still there.
           #
+          # EXCEPT LincheckToolchainProbeTest, which may NEVER be demoted to advisory. It is the lane's
+          # positive control - its whole job is to say whether Lincheck instrumented anything - so an
+          # advisory probe means every other zero in this lane is uninterpretable and the lane reports
+          # green having proved nothing. That is the failure astubbs#347's unwired harnesses were, one
+          # layer along. If the probe stops firing, the lane is broken and must go red until it is fixed;
+          # docs/solutions/best-practices/a-stress-probe-is-an-instrument-you-built-not-a-test.md owns why.
+          #
           # 7m42s measured on ubuntu-latest (about 2m50s locally), nearly all of it
           # WorkManagerLincheckTest, whose inverted arm cannot stop early and always pays its full
           # bound. bin/lincheck-test.sh's header owns the five flags that each fail silently on their
