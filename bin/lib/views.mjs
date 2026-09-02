@@ -274,5 +274,5 @@ export function formatSlowest(v) {
     }
     out.push('\nWall-clock on a shared runner, NOT a benchmark - see bin/lib/codecov.mjs. Never feed')
     out.push('this to a throughput comparison; that is what bin/check-throughput-regression.mjs is for.')
-    return out.join('\n')
+    return out.join('\n') + truncNote(v)
 }

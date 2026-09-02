@@ -212,7 +212,7 @@ done
 status_digest=$(printf '%s' "$outcome_pairs" | paste -sd ';' -)
 
 # The payload is assembled with printf rather than jq, so this script keeps working on a runner that
-# has no jq - and every key has already been through json_key while every value is one of five enum
+# has no jq - and every key has already been through json_key while every value is one of four enum
 # words, so there is nothing here that needs escaping.
 #
 # NO `grep -v` IN EITHER PIPELINE. Under `set -euo pipefail` a grep that matches nothing exits 1,
@@ -252,11 +252,20 @@ while IFS= read -r t; do
         echo "DRY-RUN would ensure review thread for $t anchored near $loc"
         continue
     fi
-    already=$(gh api "repos/{owner}/{repo}/pulls/$PR_NUMBER/comments" --paginate \
-        -q ".[] | select(.body | contains(\"$marker\")) | .id" | head -1 || true)
+    # $ENV, not string splicing. jq's `env` is the documented way to pass a value into a filter;
+    # interpolating it built a filter out of data, which is the same asymmetry json_key() exists to
+    # avoid on the JSON sink a few lines below - sanitised on one path, raw on the other.
+    already=$(QLANE_MARKER="$marker" gh api "repos/{owner}/{repo}/pulls/$PR_NUMBER/comments" --paginate \
+        -q '.[] | select(.body | contains($ENV.QLANE_MARKER)) | .id' | head -1 || true)
     [ -n "$already" ] && { echo "Thread for $t already exists ($already)."; continue; }
     # anchor at the annotation's file when the PR touches it, else the first changed file
-    changed=$(gh api "repos/{owner}/{repo}/pulls/$PR_NUMBER/files" --paginate -q '.[].filename')
+    # `|| true` like its sibling two lines up. Under this script's `set -euo pipefail` a
+    # transient gh failure here killed the whole run, and the workflow step that calls it carries
+    # no continue-on-error - so a rate limit reddened a job whose lane had run fine. That is the
+    # defect this file's own header says was fixed for the comment-upsert path; this neighbour
+    # still had it.
+    changed=$(gh api "repos/{owner}/{repo}/pulls/$PR_NUMBER/files" --paginate -q '.[].filename' || true)
+    [ -n "$changed" ] || { echo "Could not list PR files (transient gh failure) - skipping the review thread for $t; the report itself is unaffected."; continue; }
     target="$anchor_path"
     # Herestrings: a SIGPIPE here would take the `||` branch, silently retargeting.
     grep -qx "$anchor_path" <<<"$changed" || target=$(head -1 <<<"$changed")

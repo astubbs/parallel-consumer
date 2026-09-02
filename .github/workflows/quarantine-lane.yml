@@ -21,6 +21,17 @@ permissions:
   contents: read
   pull-requests: write  # sticky lane report comment + merge-blocking unexpected-pass threads
 
+# ONE RUN PER PR. Without this, two pushes close together run this workflow concurrently, and
+# postStickyReport has no server-side lock between reading the existing comment and writing. Before
+# this PR that race lost an edit; now that a status change POSTS A FRESH COMMENT it can leave two
+# live markers, and the lookup takes the first match oldest-first - so the newer one is orphaned and
+# every later update writes to a comment nobody reads. maven.yml already guards its consumer of the
+# same module this way.
+concurrency:
+  group: quarantine-lane-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+
 jobs:
   # Quarantine LANE RUN: actually executes the @Quarantined tests - known-failing-on-master tests
   # excluded from the gating suites - so we still see when they start passing (their fixes landed),

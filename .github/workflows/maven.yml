@@ -351,7 +351,14 @@ jobs:
           files=$(find . -type f \
             \( -path '*/target/surefire-reports/TEST-*.xml' \
             -o -path '*/target/failsafe-reports/TEST-*.xml' \) | paste -sd, -)
-          echo "files=$files" >> "$GITHUB_OUTPUT"
+          # HEREDOC DELIMITER, not `echo`. `find` output is filenames, and a filename may
+          # legally contain a newline - which in the plain form injects an extra step-output
+          # line. GitHub documents this delimiter form for exactly that reason.
+          {
+            echo "files<<__CE_FILES__"
+            printf '%s\n' "$files"
+            echo "__CE_FILES__"
+          } >> "$GITHUB_OUTPUT"
           if [ -z "$files" ]; then
             echo "::warning::no surefire/failsafe reports found - skipping the test-results upload"
           else

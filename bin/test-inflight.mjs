@@ -888,21 +888,66 @@ const CHECKS = [
     },
     {
         id: 'a-flag-value-is-not-the-search-term',
-        why: 'the flag VALUE does not start with -- either, so it was taken as the query and the bisect answered about the branch ref',
+        why: 'the flag VALUE does not start with -- either, so it was taken as the query - and the fix for THAT dropped the query whenever the flag was absent',
         run: async (binDir) => {
-            // The whole point is the ORDER: with `--branch` last this always worked, so a test
-            // that only tried that order would have passed against the bug.
-            const bad = invoke(binDir, ['codecov', 'test', '--branch', 'refs/heads/nope', 'ZZQuery'])
-            const good = invoke(binDir, ['codecov', 'test', 'ZZQuery', '--branch', 'refs/heads/nope'])
-            // Both must ask about ZZQuery. Neither may report on the branch ref. The corpus is
-            // empty for a bogus branch, so the wording is the only observable - which is exactly
-            // how the defect hid: exit 0, plausible sentence, wrong question.
-            const asksForQuery = (r) => r.out.includes('ZZQuery') && !r.out.includes('refs/heads/nope')
-            return r0(bad) && r0(good) && asksForQuery(bad) && asksForQuery(good)
+            // PURE, AND NOT THROUGH THE CLI. The first cut of this check ran `inflight codecov
+            // test` as a subprocess, which reaches api.codecov.io - in a file whose header says
+            // "Network: none" precisely so a rate limit or an outage cannot flake CI. It also only
+            // ever tried the --branch form, which is exactly why the sentinel bug below shipped.
+            const { cvOpts } = await front(binDir)
+            const bare = cvOpts(['ZZQuery'])
+            const first = cvOpts(['--branch', 'refs/heads/nope', 'ZZQuery'])
+            const last = cvOpts(['ZZQuery', '--branch', 'refs/heads/nope'])
+            const numeric = cvOpts(['3'])
+            return (
+                // -1 is a sentinel, not an index: with no flag, nothing may be excluded.
+                bare.rest[0] === 'ZZQuery' && bare.branch === undefined
+                && numeric.rest[0] === '3'
+                // the flag's VALUE is never the query, whichever side it sits on
+                && first.rest[0] === 'ZZQuery' && first.branch === 'refs/heads/nope'
+                && last.rest[0] === 'ZZQuery' && last.branch === 'refs/heads/nope'
+            )
         },
         mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
-            "        rest: args.filter((a, i) => !a.startsWith('--') && i !== branchAt + 1),",
-            "        rest: args.filter((a) => !a.startsWith('--')),"),
+            '    const branchValueAt = branchAt >= 0 ? branchAt + 1 : -1',
+            '    const branchValueAt = branchAt + 1'),
+    },
+    {
+        id: 'the-latest-timed-observation-wins-not-the-first-or-the-max',
+        why: 'slow answers "what owns the wall-clock NOW", so an old slow run or a recent untimed one must not decide it',
+        run: async (binDir) => {
+            const cc = await import(pathToFileURL(join(binDir, 'lib', 'codecov.mjs')).href)
+            // Newest observation carries NO duration; the next one down does. The answer must be
+            // 5s (the latest TIMED one), not 99s (the max) and not undefined (the latest).
+            const rows = [
+                { computed_name: 'T::x', commit_sha: 'c3', outcome: 'pass', timestamp: '2026-09-03T00:00:00Z' },
+                { computed_name: 'T::x', commit_sha: 'c2', outcome: 'pass', duration_seconds: 5, timestamp: '2026-09-02T00:00:00Z' },
+                { computed_name: 'T::x', commit_sha: 'c1', outcome: 'pass', duration_seconds: 99, timestamp: '2026-09-01T00:00:00Z' },
+            ]
+            const r = cc.slowestFrom(rows, 10)
+            return r.rows.length === 1 && r.rows[0].seconds === 5 && r.rows[0].sha === 'c2'
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'codecov.mjs'),
+            "        const latest = observations.find((o) => typeof o.seconds === 'number')",
+            '        const latest = observations[0]'),
+    },
+    {
+        id: 'a-skip-is-not-a-flake',
+        why: 'an assumption-skipped test alternating skip/pass is not flaky, and counting skips as failures also skewed the sort',
+        run: async (binDir) => {
+            const cc = await import(pathToFileURL(join(binDir, 'lib', 'codecov.mjs')).href)
+            const rows = [
+                { computed_name: 'S::skips', commit_sha: 'a', outcome: 'skip', timestamp: '2026-09-01T00:00:00Z' },
+                { computed_name: 'S::skips', commit_sha: 'b', outcome: 'pass', timestamp: '2026-09-02T00:00:00Z' },
+                { computed_name: 'R::real', commit_sha: 'a', outcome: 'pass', timestamp: '2026-09-01T00:00:00Z' },
+                { computed_name: 'R::real', commit_sha: 'b', outcome: 'failure', timestamp: '2026-09-02T00:00:00Z' },
+            ]
+            const names = cc.flakesFrom(rows).map((c) => c.name)
+            return names.length === 1 && names[0] === 'R::real'
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'codecov.mjs'),
+            "        const ran = observations.filter((o) => o.outcome !== 'skip')",
+            '        const ran = observations'),
     },
     {
         id: 'a-narrow-fetch-cannot-look-fresh',

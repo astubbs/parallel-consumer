@@ -71,12 +71,18 @@ import {
  * silent-wrong-answer shape bin/lib/codecov.mjs's header is written against, in the one command
  * whose whole value is being trusted during a bisect.
  */
-const cvOpts = (args) => {
+export const cvOpts = (args) => {
     const branchAt = args.indexOf('--branch')
+    // -1 IS A SENTINEL, NOT AN INDEX. Filtering on `i !== branchAt + 1` reads correctly and is
+    // wrong when the flag is absent: indexOf returns -1, so branchAt + 1 is 0 and the filter drops
+    // the FIRST POSITIONAL - the query itself. `codecov test <name>` then answered "give part of a
+    // test name" and `codecov slow 3` silently printed 20 rows. Resolve the value's index to a
+    // value no index can equal when there is no flag.
+    const branchValueAt = branchAt >= 0 ? branchAt + 1 : -1
     return {
         fresh: args.includes('--fresh'),
-        branch: branchAt >= 0 ? args[branchAt + 1] : undefined,
-        rest: args.filter((a, i) => !a.startsWith('--') && i !== branchAt + 1),
+        branch: branchAt >= 0 ? args[branchValueAt] : undefined,
+        rest: args.filter((a, i) => !a.startsWith('--') && i !== branchValueAt),
     }
 }
 
@@ -279,7 +285,7 @@ because the next run then pays full price, so it takes --all.`,
     },
     {
         name: 'codecov',
-        summary: 'the recorded outcome and wall-clock of every test, per commit - the history git has not got',
+        summary: 'coverage now; and per SUBCOMMAND, the recorded outcome and wall-clock of every test per commit',
         when: 'asking WHEN a test started failing, whether it is flaky, or what the coverage is now',
         usage: `Usage: bin/inflight.mjs codecov                    coverage totals, and per-flag
        bin/inflight.mjs codecov test <fuzzy>      one test's outcome per commit - the bisect

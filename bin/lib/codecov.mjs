@@ -177,10 +177,14 @@ export function testTimeline(query, opts = {}) {
 export function flakesFrom(rows) {
     const out = []
     for (const [name, observations] of byTest(rows)) {
-        const outcomes = new Set(observations.map((o) => o.outcome))
+        // SKIP IS NEITHER PASS NOR FAILURE. An assumption-skipped test alternating skip/pass is
+        // not a flake, and `!== 'pass'` counted every skip as a failure - which both admitted such
+        // tests to this list and drove the sort with a number that was not failures.
+        const ran = observations.filter((o) => o.outcome !== 'skip')
+        const outcomes = new Set(ran.map((o) => o.outcome))
         if (outcomes.size > 1) {
-            const bad = observations.filter((o) => o.outcome !== 'pass')
-            out.push({ name, runs: observations.length, failures: bad.length, observations })
+            const bad = ran.filter((o) => o.outcome !== 'pass')
+            out.push({ name, runs: ran.length, failures: bad.length, observations })
         }
     }
     out.sort((a, b) => b.failures - a.failures || b.runs - a.runs)
@@ -213,5 +217,11 @@ export function slowestFrom(raw, limit = 20) {
 export function slowest(limit = 20, opts = {}) {
     const h = testHistory(opts)
     if (!h.ok) return h
-    return { ok: true, value: { ...slowestFrom(h.value.results, limit), cached: h.value.cached } }
+    // `truncated` travels with this one too. It was the only analysis that dropped it, so past the
+    // page bound the slowest list was partial and printed as complete - which contradicts this
+    // module's own promise that the caller is TOLD when the bound was hit.
+    return {
+        ok: true,
+        value: { ...slowestFrom(h.value.results, limit), truncated: h.value.truncated, cached: h.value.cached },
+    }
 }

@@ -18,6 +18,7 @@
 "use strict";
 
 const sticky = require("./sticky-report-comment.js");
+const { sanitiseForHeading } = sticky;
 
 const MARKER = "<!-- pc-throughput-report -->";
 // Spelled out rather than left to sticky-report-comment.js's default. The default derives the same
@@ -43,7 +44,11 @@ const DATA_MARKER = "pc-throughput-data";
 function renderDelta(prev, cur) {
   if (!prev || !cur) return "";
   const bits = [];
-  if (prev.status !== cur.status) bits.push(`status **${prev.status} -> ${cur.status}**`);
+  if (prev.status !== cur.status) {
+      // BOTH sides sanitised. `cur.status` went through the shared helper and `prev.status`
+      // did not - and prev comes from a previous COMMENT body, which is the untrusted half.
+      bits.push(`status **${sanitiseForHeading(prev.status)} -> ${sanitiseForHeading(cur.status)}**`)
+    };
   if (typeof prev.ratio === "number" && typeof cur.ratio === "number") {
     bits.push(`ratio ${prev.ratio} -> ${cur.ratio}`);
   }

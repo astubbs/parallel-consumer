@@ -374,4 +374,32 @@ asyncTest("a caller's supersededLabel is what the retired heading says", async (
 });
 
 // =================================================================================================
+section("\nthe harness's own guard against a test that can never fail");
+
+asyncTest("test() rejects an async body, because its assertion would reject after 'ok' was logged", async () => {
+  // DRIVEN IN A SUBPROCESS, against the real harness. The first cut of this re-implemented the
+  // guard inline and asserted on the copy - which would have passed with the real guard deleted,
+  // making it precisely the never-fail test the guard exists to prevent.
+  const { execFileSync } = require("child_process");
+  const { mkdtempSync, writeFileSync, rmSync } = require("fs");
+  const { tmpdir } = require("os");
+  const { join } = require("path");
+  const dir = mkdtempSync(join(tmpdir(), "harness-guard-"));
+  const probe = join(dir, "probe.js");
+  writeFileSync(probe, `
+    const h = require(${JSON.stringify(require.resolve("./report-comment-test-harness.js"))});
+    const { test, runAll } = h.makeRunner();
+    test("an async body handed to the sync runner", async () => { throw new Error("lands too late"); });
+    runAll();
+  `);
+  let status = 0, out = "";
+  try {
+    out = execFileSync(process.execPath, [probe], { encoding: "utf8" });
+  } catch (e) { status = e.status; out = `${e.stdout || ""}${e.stderr || ""}`; }
+  rmSync(dir, { recursive: true, force: true });
+  // The guard must turn a silently-passing test into a REPORTED FAILURE.
+  assert.strictEqual(status, 1, "the probe suite must exit non-zero");
+  assert.match(out, /use asyncTest, or it can never fail/);
+});
+
 runAll();

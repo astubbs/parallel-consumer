@@ -30,7 +30,7 @@ const MARKER = "<!-- quarantine-lane-report -->";
 const SUPERSEDED_MARKER = "<!-- quarantine-lane-report (superseded) -->";
 const DATA_MARKER = "quarantine-lane-data";
 
-// The five outcomes the reporter can record, in the reader's words. PASSED is split in two on
+// The four outcomes the reporter can record, in the reader's words. PASSED is split in two on
 // purpose: a flapping test passing proves nothing, a deterministic one passing demands action, and a
 // row moving between those two says something a reader needs. Collapsing them would make an
 // annotation gaining `flapping = true` invisible here.

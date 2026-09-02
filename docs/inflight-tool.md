@@ -154,8 +154,9 @@ already produced a confidently wrong answer:
   check that needs the network is a check that gets deleted the first time CI is offline - and every
   check there carries a negative control proving the mutant goes red.
 
-**Migrate the shell scripts into it as you go.** There are 69 scripts in `bin/` against 17 Node
-modules, and the split is not a design - it is chronology. The rule is opportunistic, not a project:
+**Migrate the shell scripts into it as you go.** `bin/` is overwhelmingly shell against a handful of
+Node modules (`ls bin/*.sh | wc -l` against `ls bin/*.mjs bin/lib/*.mjs | wc -l`), and the split is
+not a design - it is chronology. The rule is opportunistic, not a project:
 when you are already working on a script that ANSWERS A QUESTION - `worktree-status.sh`,
 `issue-index.sh`, `todo-index.sh`, `quarantined-test.sh` - move it behind the front door rather than
 extending it in place. Do not migrate the ones that *do* something: `build.sh`, `deploy.sh`,
