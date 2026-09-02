@@ -4,7 +4,7 @@ type: feat
 date: 2026-09-02
 topic: recoverable-producer-fencing
 artifact_contract: ce-unified-plan/v1
-artifact_readiness: requirements-only
+artifact_readiness: implementation-ready
 product_contract_source: ce-brainstorm
 execution: code
 ---
@@ -17,9 +17,13 @@ execution: code
 
 **Product authority.** `STRATEGY.md` > `AGENTS.md` > this plan > implementer judgement. The recovery shape is modelled on Kafka Streams' `TaskMigratedException` handling, but Streams is a reference and not a constraint: where PC can do better, it does.
 
-**Open blockers.** None that stop planning starting. R13 and R14 state outcomes rather than mechanisms because every concrete mechanism proposed so far failed against PC's locking and thread confinement; planning must validate a mechanism for each before other units are committed, and a failed candidate reopens the recovery shape rather than merely the requirement.
+**Open blockers.** None. The two mechanisms the requirements left open are now validated against the code: R13 by KTD5 (a completed-but-uncommitted ledger replayed through the poll-batch registration route) and R14 by KTD6 (no explicit rejoin; the poll thread already refreshes membership and group metadata, and recovery orders itself before any revoke-path commit by holding the commit lock). Both KTDs cite the identifiers they rest on.
 
-**Execution profile.** Public API change to `ParallelConsumerOptions` with a deprecation, plus core changes in `ProducerManager`, `ProducerWrapper` and `ParallelEoSStreamProcessor`. Reverses one shipped behaviour (confluentinc#839).
+**Stop conditions.** Stop and report rather than improvise if any of these is found false while implementing: `ShardManager.addWorkContainer` cannot be reached from `PartitionState` for a record the partition still owns (KTD5); the revoke-path commit can run while the control thread holds the producer write lock (KTD6); a rebalance callback would become reachable to a blocking call, which `ArchitectureTest.rebalanceCallbacksMustNotBlock` forbids (KTD4); or the `@GuardedBy` build check rejects the ledger's monitor (KTD5).
+
+**Execution profile.** Public API change to `ParallelConsumerOptions` with a deprecation, plus core changes in `ProducerManager`, `ProducerWrapper`, `PartitionState`, `ParallelEoSStreamProcessor` and `AbstractParallelEoSStreamProcessor`. Reverses one shipped behaviour (confluentinc#839). Critical-path code: transactional commit and produce. Local verification is the implementer's; the push and PR tail belong to the caller.
+
+**Product Contract preservation.** Product Contract unchanged. The `Outstanding Questions` subsection is resolved in place: each deferred question now names the KTD that answers it.
 
 ---
 
@@ -185,16 +189,19 @@ flowchart TB
 - Sequenced after astubbs/parallel-consumer#352, which merges first and unchanged. That PR's R6 — a fenced transactional producer stays immediately fatal without consulting its handler — is a true statement of the behaviour it was written against, held by `producerFencedOnSendOffsetsStaysFatalAndNeverReachesTheCommitLoop` and `recoveryAbortFailureStaysFatalAndHandlerFree` in `ProducerManagerCommitBudgetTest`. This work makes it untrue and therefore rewrites both, along with that PR's own R6 line and the corresponding statements in its commit-failure-seam feature file and README section. Every "R6" elsewhere in this plan is this plan's own R6, the derived-prefix requirement. Per `AGENTS.md`, the reasoning being overridden is recorded where it is overridden, so the change does not read as an oversight. Both PRs edit `ProducerManager` and `ProducerWrapper`, so textual conflicts are expected independently of this.
 - The two remain complementary in what they own: astubbs/parallel-consumer#352 decides who chooses when a commit exhausts its budget; this decides what PC does when the producer itself is unusable. Only the fencing branch inside `ProducerManager.commitOffsets` is shared.
 
+
 ### Outstanding Questions
 
-**Deferred to planning**
+Every question deferred to planning is now answered by a Key Technical Decision in the Planning Contract; none blocks implementation.
 
-- Whether the recoverable condition is represented as an internal exception type, a state on `ProducerManager`, or a signal on the existing commit-response channel. R8 fixes what is detected; how it travels is a build decision.
-- How a worker signals the control thread on the produce path without adding a second wait with its own deadline.
-- What state PC retains so a record whose output was discarded can run again (R13) — retaining each `WorkContainer` until the commit covering it succeeds, versus a seek-based re-fetch — and what bounds its memory, given shard back-pressure accounting.
-- How R14's group-membership outcome is reached: whether an explicit rejoin is needed at all once R13's restoration exists, which thread issues it, and what channel carries the request. Note that `enforceRebalance` is a no-op under the KIP-848 consumer protocol, so a caller on that protocol would silently get nothing.
-- Whether `State` gains a member for the window in which the producer is being replaced, or whether the write lock alone is sufficient to make that window invisible.
-- The exact `transactional.id` derivation, given that the integration harness in `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/utils/KafkaClientUtils.java` already invents random ids to stop tests fencing each other, and that workaround becomes product behaviour. No plain prefix-plus-`group.id`-plus-delimiter scheme satisfies R6, since group ids may contain the delimiter and `app` then yields a literal prefix of `app-x`; a prefix-free encoding such as a length-prefixed or digested group id is required, at the cost of the raw id's greppability.
+- How the recoverable condition is represented and travels: KTD3 (a classifier plus one internal signal exception; a pending-condition field on `ProducerManager` carries it across threads).
+- How a worker signals the control thread without a second deadline: KTD4 (the worker records the condition, fails its record, and the record's return to the mailbox is what wakes the control thread).
+- What state PC retains so discarded work runs again, and its memory bound: KTD5.
+- How R14's membership outcome is reached, which thread acts, and the KIP-848 `enforceRebalance` no-op: KTD6 (no rejoin is issued, so no protocol-specific call is involved).
+- Whether `State` gains a member for the replacement window: KTD7 (no; availability is a `ProducerManager` state and the write lock hides the window).
+- The exact `transactional.id` derivation: KTD2.
+
+The one question still open is recorded under Open Questions in the Planning Contract.
 
 ### Sources / Research
 
@@ -207,3 +214,281 @@ flowchart TB
 - `TransactionManager`'s `TxnOffsetCommit` handler in kafka-clients 3.9.2 is where four of the broker error codes behind R8's conditions diverge in the client: `UNKNOWN_MEMBER_ID` and `ILLEGAL_GENERATION` become an abortable `CommitFailedException`, while `INVALID_PRODUCER_EPOCH` and `PRODUCER_FENCED` become a fatal `ProducerFencedException`. PC catches only the latter today.
 - No test exercises producer fencing, transaction abort, or recovery. One test does pin the behaviour R18 replaces: `ParallelEoSStreamProcessorTest.closePCWhenInvalidPidMappingException` asserts the produce-path shutdown, and must be rewritten under R18 — though it mocks a synchronous throw from the produce call rather than the wrapped failure the field report shows, so it does not cover the reported path. The only other occurrence of the concept in the test tree is the comment in `KafkaClientUtils` explaining why test producers are given random transactional ids.
 - The defect class does not recur outside the core module: `produceMessages` is referenced only in `parallel-consumer-core`, and the vertx, reactor and mutiny processors inherit the core produce path through `ExternalEngine` rather than duplicating it.
+
+---
+
+## Planning Contract
+
+### Key Technical Decisions
+
+- KTD1. **Producer configuration is a `Map<String, Object>` option, and construction goes through a small public `ProducerFactory<K, V>` interface with a `KafkaProducer` default.** `ParallelConsumerOptions` gains `producerConfig` and `producerFactory`; the factory receives the resolved map, `transactional.id` included, and must return a new producer on every call (R1, R2, R3). A named interface rather than a bare `Function` so the builder reads as intent and the javadoc has a home. `ArchitectureTest.noRawProducerFieldsOutsideWrapper` stays satisfied: the option holds a factory and a map, never a `Producer`; only `ProducerWrapper` holds one. Instantiates the session-settled Key Decision that PC builds its own producer (governs R1, R2, R3, R7).
+- KTD2. **The derived `transactional.id` is `pc-<L>-<group.id>-<uuid>`, where `<L>` is the decimal length of `group.id`, the UUID is generated once per PC instance, and the documented ACL prefix is `pc-<L>-<group.id>-`.** The length field makes the prefix set prefix-free: two group ids of the same length yield equal-length prefixes, so one is a prefix of the other only if they are equal; two of different lengths differ inside the length field, because the field is decimal digits closed by a `-` that is not a digit. This is what R6 asks for and what the plain `prefix-groupId-` scheme cannot give (`app` versus `app-x`). The group id is read from `ConsumerManager.groupMetadata().groupId()`, which `ConsumerManager.init()` primes before any PC thread exists and which `checkGroupIdConfigured` has already validated by the time the producer is built. A caller-set `transactional.id` in `producerConfig` is replaced, and one WARN names both values (R5). In a non-transactional commit mode no id is derived and a caller-set one is removed with the same WARN, because `ProducerManager.initProducer` rejects a transactional producer there. Instantiates the session-settled Key Decision that PC derives the id (governs R4, R5, R6, R20).
+- KTD3. **Detection is a stateless classifier, `RecoverableProducerCondition.find(Throwable)`, and the signal is one internal exception, `ProducerInvalidatedException`.** The classifier walks the cause chain with a depth guard, unwrapping `ExecutionException` and every `KafkaException` wrapper, and returns the first throwable matching R8's set: `ProducerFencedException`, `InvalidProducerEpochException`, `InvalidPidMappingException`, `OutOfOrderSequenceException` (so `UnknownProducerIdException`), `CommitFailedException`. It is called at every transactional client call in `ProducerManager` (`beginTransaction`, `sendOffsetsToTransaction`, `commitTransaction`) and at the produce-and-ack block in `ParallelEoSStreamProcessor.processAndProduceResults` (R8, R9, R11). A match on the PC-built path records the condition on `ProducerManager` and throws `ProducerInvalidatedException`; a match on the producer-instance path changes nothing (R19). `ProducerInvalidatedException` extends `PCInternalRuntimeException` so the existing `retrieveOffsetsAndCommit` finally-release still runs, and the control loop catches it before `commitOffsetsReportingPollerDeath` would treat it as fatal. Instantiates the session-settled single-condition Key Decision (governs R8, R9, R10, R13, R14).
+- KTD4. **Recovery runs on the control thread only, at the top of `controlLoop`, under the producer write lock.** Any thread may detect - a worker from a send future, the control thread from `commitOffsets`, the poll thread from `tryCommitOffsetsOnRevoke` - but only records the condition. A worker then throws, so its record fails and returns to the mailbox; that mailbox arrival is what wakes the blocked control thread, so no second wait or deadline is added. The revoke path's existing catch logs and continues, and nothing added on that path blocks, which keeps `ArchitectureTest.rebalanceCallbacksMustNotBlock` green and keeps producer construction (network calls under `max.block.ms`) out of a rebalance callback. Recovery steps, in order: acquire the write lock through `ProducerManager.acquireCommitLock`; abort the open transaction, swallowing the throw (Dependencies / Assumptions records why); close the discarded producer under a bounded timeout, tolerating failure; drain the mailbox with `processWorkCompleteMailBox(Duration.ZERO)`; replay the ledger (KTD5); build and initialise the replacement (KTD7); release the lock (R10, R11). Governs R10, R11, R14.
+- KTD5. **R13's mechanism: a per-partition ledger of completed-but-uncommitted records in `PartitionState`, replayed through the route a fresh poll batch already takes.** `PartitionState.onSuccess` appends `(offset, ConsumerRecord)` when the commit mode is transactional; `onOffsetCommitSuccess` clears it; the replay calls `ShardManager.addWorkContainer(epoch, record)` then `addNewIncompleteRecord(record)` for each entry, the same pair and order `maybeRegisterNewPollBatchAsWork` uses, then marks the partition dirty. Why this is valid against the code: `addWorkContainer` builds a new `WorkContainer` at the partition's current assignment epoch and `compute()`s it into its shard, and `ProcessingShard.addWorkContainer` tolerates a resident; `addNewIncompleteRecord` puts `Optional.of(record)` back into `incompleteOffsets`, so `isRecordPreviouslyCompleted` reports false and `getOffsetHighestSequentialSucceeded` drops below the restored offsets, so no offset from the aborted transaction can be committed and a redelivered duplicate is dropped by the shard's resident check. `offsetHighestSucceeded` is left as it is - it is an upper bound for the encoder, and incompletes below it are the normal encoded case. Why the drain-then-replay order in KTD4 is exact: while the write lock is held no worker is between `beginProducing` and `cleanUpContext`, so every record produced into the aborted transaction has been mailboxed, and the drain lands each in the ledger (success) or the retry queue (failure) before the replay; a `WorkContainer` completing after the replay therefore never targets a restored offset, so `onSuccess`'s remove-assertion holds. Thread safety: `onSuccess` and the replay run on the control thread, but `onOffsetCommitSuccess` also runs on the poll thread through `tryCommitOffsetsOnRevoke`, so the ledger is a plain map behind a private monitor annotated `@GuardedBy`, never a `ReadWriteLock` (the engine's `AGENTS.md` records that `@GuardedBy` is inert on those). Memory bound: one commit interval of completions (`DEFAULT_COMMIT_INTERVAL_FOR_TRANSACTIONS` is 100 ms), and during an outage KTD7 stops distributing work so it stops growing. Records completed without producing anything (the `poll` flow in transactional mode) are replayed too; that is the same over-reprocessing an instance death causes today and Kafka Streams' close-dirty causes, and it is recorded as an accepted cost rather than tracked per record. Rejected: seek-based re-fetch, because `seek` is a consumer call confined to the poll thread and would need the partition state rebuilt as on assignment. Governs R13.
+- KTD6. **R14's mechanism: no explicit rejoin; membership and metadata are refreshed by the poll thread as they are today, and recovery orders itself before any revoke-path commit by holding the write lock.** `ConsumerManager.poll` calls `updateCache()` after every `consumer.poll()`, and `AbstractOffsetCommitter.retrieveOffsetsAndCommit` reads `consumerMgr.groupMetadata()` at each commit, so the first commit after recovery carries the generation the poll thread last observed. A lost generation is repaired by kafka-clients itself: `ConsumerCoordinator.poll(Timer, boolean)` calls `ensureActiveGroup()` when `rejoinNeededOrPending()`, and `AbstractCoordinator`'s heartbeat handler requests a rejoin on `ILLEGAL_GENERATION` and `UNKNOWN_MEMBER_ID`. A commit that still carries a stale generation is answered by `TransactionManager.TxnOffsetCommitHandler` with an abortable `CommitFailedException`, which is in R8's set, so recovery runs again (R12) until a poll has refreshed the cache; the same handler maps `INVALID_PRODUCER_EPOCH` and `PRODUCER_FENCED` to a fatal `ProducerFencedException`, which is why both must be in the set. Ordering: `onPartitionsRevoked` spins on `isTransactionCommittingInProgress()`, which is the producer write lock recovery holds, so the ledger replay always completes before `tryCommitOffsetsOnRevoke` can commit. `enforceRebalance` is never called, so the KIP-848 no-op is irrelevant. Boundary, unchanged by this work: eviction reaches `onPartitionsLost`, which calls `closeDontDrainFirst()` before any producer condition is observed, so R14 holds for every case short of eviction. Governs R14.
+- KTD7. **Availability is a state on `ProducerManager`, not on `State`; while no usable producer exists, work distribution pauses and the produce lock waits instead of timing out.** `ProducerManager` holds `AVAILABLE`, `REPLACING` and `TERMINAL` behind a monitor. A replacement that fails to build or initialise leaves the manager `REPLACING`, records the next attempt time with exponential backoff (1 s doubling to a 30 s cap), and the next control-loop pass whose time has come retries; `AuthorizationException` and `UnsupportedVersionException` are terminal and the failure names the `transactional.id` (R15). While `REPLACING`: `retrieveAndDistributeNewWork` hands out no new work in transactional mode, so the ledger and the retry queue stop growing; `maybeAcquireCommitLock` attempts no commit; `acquireProduceLock` re-waits rather than throwing `TimeoutException` when its bounded wait elapses, and a worker that gets the read lock while the producer is unavailable releases it and waits on the monitor; the transition to `TERMINAL` (a terminal build failure, or `close`) wakes every waiter with `ProducerInvalidatedException` so shutdown does not wait on records that can never be produced (R15). The state is `ProducerManager`'s because the window is invisible to everything outside the produce and commit paths, and the two `pause`/`resume` public methods belong to the user (governs R15).
+- KTD8. **The producer-instance path keeps `ProducerWrapper` around the caller's instance and gets no replacement supplier.** `PCModule.producerWrap()` builds the initial wrapper from whichever path the options carry; a second hook, `PCModule.replacementProducerWrap()`, builds a fresh wrapper from the factory and is `Optional.empty()` on the instance path. `ProducerManager.canRecover()` is the presence of that supplier, and it is the single gate every detection site consults (R16, R19). `ProducerWrapper` becomes one wrapper per producer generation - its `producer` field stays `final` and `@Delegate`d; `ProducerManager.producerWrapper` becomes the volatile reference that is swapped. Reflection discovery of the transactional flag is bypassed on the PC-built path, where the flag is known; the `isCompleting` / `isReady` reflection stays for both paths. Instantiates the session-settled Key Decision that the instance option stays, deprecated (governs R16, R17, R19, R21).
+- KTD9. **Configuration is rendered only through an allow-list.** A `ProducerConfigRedaction` helper renders the allow-listed keys (`bootstrap.servers`, `client.id`, `transactional.id`, `acks`, `enable.idempotence`, `compression.type`, `linger.ms`, `batch.size`, `max.block.ms`, `delivery.timeout.ms`, `request.timeout.ms`, `transaction.timeout.ms`, `key.serializer`, `value.serializer`, `security.protocol`, `sasl.mechanism`) and prints every other key as `<redacted>`. `ParallelConsumerOptions` excludes the raw map from `@ToString` and includes the redacted rendering under the same name, so the constructor's `Options: {}` INFO line is covered without a second log call (R7). Kafka's `Password` typing is not used as the discriminator because it does not cover serializer, interceptor or Schema Registry secrets.
+- KTD10. **This lands against master; the reconciliation with astubbs/parallel-consumer#352 happens at merge time, by whichever PR lands second.** The Product Contract sequences this after that PR, but it is still open and this branch does not contain its `ProducerManagerCommitBudgetTest`. Both edit `ProducerManager`, so a textual conflict is expected either way, and the rewrite of that PR's two fencing tests and its R6 line is a merge-time task recorded in `docs/inflight/core-recoverable-producer-fencing.md`, not something this branch can do to tests it does not have. The reasoning being overridden - that PR's R6, "a fenced transactional producer stays immediately fatal" - is recorded there and in the commit that changes `commitOffsets`, so the change does not read as an oversight.
+
+### High-Level Technical Design
+
+The two arrival paths, the single recovery site, and the order of the steps inside it.
+
+```mermaid
+sequenceDiagram
+  participant W as worker thread
+  participant C as pc-control
+  participant P as pc-broker-poll
+  participant PM as ProducerManager
+  participant PS as PartitionState
+
+  Note over W,P: detection - any thread, never blocks
+  W->>PM: send future failed: find() matches, recordInvalidation()
+  W-->>C: record fails, returns via mailbox (wakes control)
+  C->>PM: commitOffsets: find() matches, recordInvalidation(), throw ProducerInvalidatedException
+  P->>PM: tryCommitOffsetsOnRevoke: same, caught and logged
+
+  Note over C: recovery - control thread only, next controlLoop pass
+  C->>PM: acquireCommitLock (write lock; revoke callback spins on it)
+  C->>PM: abort (swallow), close discarded producer (bounded)
+  C->>C: processWorkCompleteMailBox(ZERO) - every result of the aborted tx is now in the ledger or the retry queue
+  C->>PS: replay ledger: addWorkContainer + addNewIncompleteRecord, setDirty
+  C->>PM: build replacement via factory, initTransactions
+  alt build or init fails
+    PM-->>C: stay REPLACING, backoff, retry next pass; terminal on authorization
+  end
+  C->>PM: releaseCommitLock
+  Note over P: poll thread refreshes membership and metaCache on its own poll cadence
+```
+
+Availability, and what each state gates:
+
+```mermaid
+stateDiagram-v2
+  [*] --> AVAILABLE: constructor initTransactions
+  AVAILABLE --> REPLACING: recovery begins (abort, close)
+  REPLACING --> AVAILABLE: replacement initialised
+  REPLACING --> REPLACING: build or init failed, backoff
+  REPLACING --> TERMINAL: AuthorizationException or UnsupportedVersionException
+  AVAILABLE --> TERMINAL: close()
+  REPLACING --> TERMINAL: close()
+  note right of REPLACING
+    no new work distributed (tx mode)
+    no commit attempted
+    produce lock waits, never times out
+  end note
+  note right of TERMINAL
+    waiters released with ProducerInvalidatedException
+  end note
+```
+
+### Assumptions
+
+Decisions made without a user in the loop; each is reversible and named so a reviewer can object to it directly.
+
+- The factory is a named `ProducerFactory<K, V>` interface rather than `Function<Map<String, Object>, Producer<K, V>>` (KTD1).
+- The id format is `pc-<L>-<group.id>-<uuid>` (KTD2); the plan only requires a prefix-free encoding.
+- Backoff constants (1 s doubling to 30 s) and the discarded-producer close timeout (10 s) are package constants with javadoc, not new options (KTD7, KTD4). Adding options for them is a follow-up if anyone asks.
+- Work distribution pauses in transactional mode while the producer is unavailable, which also covers the `poll` flow (KTD7).
+- Records completed without output are replayed with everything else (KTD5).
+- A worker's failed produce counts as an ordinary failure of that record, so its retry delay applies before it runs again.
+- The core example application moves to the configuration path so the README's included snippet shows the recommended path (U8).
+
+### Open Questions
+
+- Deferred to implementation: whether `ProducerManager.acquireCommitLock`'s pre-existing `ConcurrentModificationException` arm (write lock held by another thread) is reachable from the recovery entry when the revoke-path commit holds the lock at that instant. It is the same window the control thread's own commit already has; if a probe shows it, recovery should wait on the lock rather than reuse the guard. Not blocking.
+
+### Sequencing
+
+U1 → U2 → U3 → U4 → U5 → U6 → U7; U8 last. U3 and U4 are independent of each other and may be built in either order. U7 needs Docker.
+
+---
+
+## Implementation Units
+
+### U1. Producer configuration and factory options
+
+- **Goal:** `ParallelConsumerOptions` accepts producer configuration and a factory, validates the combinations, deprecates the instance option, and never renders configuration values.
+- **Requirements:** R1, R2, R3, R7, R16, R17, R19, R21; KTD1, KTD9.
+- **Dependencies:** none.
+- **Files:** `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java`, new `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ProducerFactory.java`, new `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/ProducerConfigRedaction.java`, `docs/refactoring.md` (the entry exists; only re-check the release it names), tests in new `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/ParallelConsumerOptionsProducerConfigTest.java` and new `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/internal/ProducerConfigRedactionTest.java`.
+- **Approach:**
+  1. Add `producerConfig` (`Map<String, Object>`) and `producerFactory` (`ProducerFactory<K, V>`, `@Builder.Default` to a `KafkaProducer` constructor) fields; `isProducerSupplied()` becomes "instance or configuration present".
+  2. `validate()`: both `producer` and `producerConfig` set fails with a message naming `Fields.producer` and `Fields.producerConfig` (R17); transactional mode with neither fails as today; `producer` set alone logs the single R19 WARN naming `producerConfig` plus `producerFactory`, the absence of recovery, and the removal release.
+  3. Deprecate `producer` with javadoc naming the major after the one that ships this (R21) and pointing at the replacement; do not remove it.
+  4. `@ToString.Exclude` the raw map; `@ToString.Include(name = "producerConfig")` a method returning `ProducerConfigRedaction.render(map)`.
+- **Patterns to follow:** the existing `transactionsValidation()` message style with `Fields.*` constants; `isUsingTransactionalProducer()` for how a deprecation is annotated here.
+- **Test scenarios:**
+  - Covers AE6. Both `producer` and `producerConfig` set: `validate()` throws `IllegalArgumentException` whose message contains both field names.
+  - Covers AE5 (validation half). `producer` set, transactional mode: exactly one WARN captured (Logback `ListAppender`, as `AmbientProbeExtensionTest` does) naming `producerConfig`, `producerFactory`, "recovery" and the removal release; a second `validate()` on a fresh options object logs again, but no condition later adds one (asserted in U3).
+  - `producerConfig` set alone, transactional mode: validation passes; `isProducerSupplied()` is true.
+  - Neither set, transactional mode: fails as today with the existing message.
+  - Covers AE7. `producerConfig` carrying `sasl.jaas.config`, `ssl.keystore.password`, `basic.auth.user.info` and `bootstrap.servers`: `toString()` contains `bootstrap.servers`' value, contains `<redacted>` for each secret key, and contains none of the secret values.
+  - `ProducerConfigRedaction.render` on an empty map and on a map with only unknown keys renders keys with `<redacted>` and no values.
+  - Default factory: invoking it with a minimal config returns a `KafkaProducer` (constructed, then closed).
+- **Verification:** the two new test classes pass; `ArchitectureTest.noRawProducerFieldsOutsideWrapper` still passes; `bin/check-issue-refs.sh` and `bin/check-copyright-headers.sh` are clean for the new files.
+
+### U2. PC-built producer with a derived transactional id
+
+- **Goal:** on the configuration path PC builds the producer through the factory with a derived, prefix-free `transactional.id`, and can build another one identically.
+- **Requirements:** R2, R4, R5, R6; KTD2, KTD8.
+- **Dependencies:** U1.
+- **Files:** `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/PCModule.java`, `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/ProducerWrapper.java`, new `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/TransactionalIdDerivation.java`, `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/internal/PCModuleTestEnv.java` (constructor change follow-through), tests in new `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/internal/TransactionalIdDerivationTest.java` and new `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/internal/PcBuiltProducerTest.java`.
+- **Approach:**
+  1. `TransactionalIdDerivation`: `prefixFor(groupId)` returns `pc-<L>-<groupId>-`; `derive(groupId, instanceUuid)` appends the UUID; `resolve(producerConfig, commitMode, groupId, uuid)` returns a copy of the config with the id set (transactional mode) or removed (otherwise), emitting the R5 WARN when the caller had set one.
+  2. `PCModule`: one `UUID` per module instance; `producerWrap()` builds from the instance when present, otherwise resolves the config and calls the factory; new `replacementProducerWrap()` returns `Optional<Supplier<ProducerWrapper<K, V>>>`, present only on the configuration path, each call resolving the same config and calling the factory again.
+  3. `ProducerWrapper`: a static factory for a PC-built producer that takes the known transactional flag and still installs the `isCompleting` / `isReady` reflection when the instance is a `KafkaProducer`; the existing constructors stay for the instance path and tests.
+  4. Log one INFO when a producer is built, rendering the config through `ProducerConfigRedaction`.
+- **Patterns to follow:** `PCModule.consumerManager()` for lazy construction with init; `KafkaClientUtils.createNewProducer` for what a transactional config carries.
+- **Test scenarios:**
+  - Covers AE4. `prefixFor("app")` is `pc-3-app-`; `derive` starts with it; for the pairs (`app`, `app-x`), (`a`, `abcdefghij`), (`app`, `apq`) neither prefix is a string prefix of the other.
+  - Covers AE4. Two `PCModule` instances built from the same options derive different ids; one module's `producerWrap()` and two `replacementProducerWrap()` calls derive the same id.
+  - Covers AE4. A caller-set `transactional.id` is absent from the map the factory receives, the derived one is present, and one WARN names both values.
+  - Non-transactional commit mode: the map the factory receives has no `transactional.id`, and a caller-set one produces the WARN.
+  - The factory is invoked once per `producerWrap()` and once per replacement; a factory returning the same instance twice is rejected with a message naming R2's contract.
+  - Instance path: `replacementProducerWrap()` is empty; `producerWrap()` wraps the caller's instance and reflection discovery still runs for a `KafkaProducer`.
+- **Verification:** the new tests pass; `ProducerManagerTest` and `PCModuleTestEnv`-based tests still pass unchanged.
+
+### U3. Detection on both paths, unchanged behaviour on the instance path
+
+- **Goal:** every transactional client call recognises R8's conditions through R9's unwrapping and, on the PC-built path, records them and raises the internal signal; the instance path behaves as today.
+- **Requirements:** R8, R9, R11, R18 (detection half), R19; KTD3, KTD8.
+- **Dependencies:** U2.
+- **Files:** new `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/RecoverableProducerCondition.java`, new `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/ProducerInvalidatedException.java`, `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/ProducerManager.java`, `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelEoSStreamProcessor.java`, tests in new `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/internal/RecoverableProducerConditionTest.java` and `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/ParallelEoSStreamProcessorTest.java`.
+- **Approach:**
+  1. `RecoverableProducerCondition.find(Throwable)`: cause-chain walk, depth-guarded, unwrapping `ExecutionException` and any `KafkaException`; returns the matching throwable.
+  2. `ProducerManager.commitOffsets`: replace the `ProducerFencedException` catch around `sendOffsetsToTransaction` with a `RuntimeException` catch that consults the classifier; wrap `commitTransaction()` and `beginTransaction()` the same way. Match and `canRecover()`: record the condition, throw `ProducerInvalidatedException`. Match and not `canRecover()`: today's outcome (`PCInternalRuntimeException` from the send-offsets site, raw propagation from the others).
+  3. `ParallelEoSStreamProcessor.processAndProduceResults`: in the produce-and-ack `catch`, consult the classifier first. Match and `canRecover()`: record, throw `ProducerInvalidatedException` so the record fails and returns through the mailbox. Otherwise keep the existing arms verbatim - the synchronous `InvalidPidMappingException` close and the generic `PCInternalRuntimeException` wrap - so the instance path is byte-for-byte today's behaviour, spin included.
+  4. Rewrite `closePCWhenInvalidPidMappingException` into two tests: the instance-path variant keeps its current assertions; the PC-built variant asserts R18 once U5 lands (until then it asserts the condition is recorded and the record fails rather than the instance closing). Add a comment that both mock the synchronous throw and that the wrapped shape is covered by `RecoverableProducerConditionTest` and U5's AE2 test.
+- **Patterns to follow:** `ThrowableUtils.describeWithRootCause` for a cause walk that cannot throw; the `sendCallback` javadoc in `ProducerManager` for the tone of a recorded cleared suspicion.
+- **Test scenarios:**
+  - Classifier: each of the five R8 types bare, wrapped in `ExecutionException`, wrapped in `KafkaException("...previous error...")`, and double-wrapped, is found; `UnknownProducerIdException` is found through its supertype; `TimeoutException`, `IllegalStateException` and a plain `RuntimeException` are not; a self-caused cycle terminates.
+  - Commit path, PC-built: `sendOffsetsToTransaction` throwing `ProducerFencedException` records the condition and raises `ProducerInvalidatedException`; the write lock is released afterwards (`isTransactionCommittingInProgress()` false).
+  - Commit path, instance: the same throw still surfaces as `PCInternalRuntimeException` and the instance closes; no WARN beyond the validation-time one (AE5, condition half).
+  - Produce path, PC-built, wrapped: a `MockProducer` with `errorNext(new InvalidPidMappingException(..))` makes the send future fail; the record is marked failed, the condition is recorded, the instance is not closed.
+  - Produce path, instance, synchronous: the existing `closePCWhenInvalidPidMappingException` behaviour, kept as its own test.
+  - Produce path, instance, wrapped: documents today's outcome - the record fails and is retried, the instance stays open - as a pinned test named for `docs/inflight/bug-411-wrapped-send-failure-spins-forever.md`, so the deferred defect is visible rather than silent.
+- **Verification:** `ParallelEoSStreamProcessorTest`, `ProducerManagerTest` and the new classifier test pass; `ArchitectureTest.rebalanceCallbacksMustNotBlock` passes (the revoke path now reaches the classifier, which does not block).
+
+### U4. The completed-but-uncommitted ledger and its replay
+
+- **Goal:** `PartitionState` retains what an aborted transaction would discard and can put it back into processing.
+- **Requirements:** R13; KTD5.
+- **Dependencies:** none (independent of U3).
+- **Files:** `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/PartitionState.java`, `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/PartitionStateManager.java`, `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/WorkManager.java`, tests in new `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/state/PartitionStateAbortedTransactionReplayTest.java`.
+- **Approach:**
+  1. `PartitionState`: a monitor-guarded `Map<Long, ConsumerRecord<K, V>>` ledger, appended in a new `onSuccess(WorkContainer)` overload (the `onSuccess(long)` signature stays for its existing test callers and delegates with no record), cleared in `onOffsetCommitSuccess`, maintained only when `options.isUsingTransactionCommitMode()`.
+  2. `restoreCompletedButUncommittedWork()`: under the monitor take and clear the ledger; outside it, for each entry call `getShardManager().addWorkContainer(getPartitionsAssignmentEpoch(), record)` then `addNewIncompleteRecord(record)`; then `setDirty()`; return the count.
+  3. `PartitionStateManager.onSuccess` passes the container through; `WorkManager.restoreWorkDiscardedByAbortedTransaction()` sums the count across assigned partitions and logs it at INFO.
+  4. Annotate the ledger `@GuardedBy` on its monitor, and record in the method javadoc the cleared suspicion that a late-completing container could target a restored offset (discriminator: the drain-then-replay order in KTD4; what would reopen it: replaying outside the write lock).
+- **Patterns to follow:** `maybeRegisterNewPollBatchAsWork` for the registration pair; `clearCommitCommand()`'s javadoc for the cleared-suspicion entry format; `WorkClaimStateMachineTest` for driving `PartitionState` directly.
+- **Test scenarios:**
+  - Covers AE8. Offsets 0..4 registered and completed, none committed: after replay the incompletes are exactly 0..4, each shard holds a fresh container at those offsets with the current epoch, `getOffsetToCommit()` is 0, and the partition is dirty.
+  - Completed then committed, then more completed: replay restores only the post-commit completions.
+  - Replay on an empty ledger is a no-op returning 0 and leaves dirtiness unchanged.
+  - Non-transactional commit mode: `onSuccess` retains nothing and replay returns 0.
+  - Under KEY ordering, a shard removed as empty after the success is recreated by the replay.
+  - Mutation check: with the `addNewIncompleteRecord` call removed, the AE8 test fails on `getOffsetToCommit()`; with the `addWorkContainer` call removed it fails on the shard contents.
+- **Verification:** the new test passes; `PartitionStateCommittedOffsetIT`-adjacent unit tests (`PartitionStateCommitShiftCompounding894Test`, `WorkManagerOffsetMapCodecManagerTest`) pass unchanged; the build's `GuardedBy` check accepts the annotation.
+
+### U5. Recovery on the control thread, replacement with backoff, and produce suspension
+
+- **Goal:** a recorded condition leads, on the next control-loop pass, to abort, discard, replay, replacement and resumption, with the outage window invisible to the user function.
+- **Requirements:** R10, R11, R12, R14, R15, R18; KTD4, KTD6, KTD7, KTD8.
+- **Dependencies:** U3, U4.
+- **Files:** `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/ProducerManager.java`, `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java`, `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/ParallelEoSStreamProcessorTest.java`, tests in new `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/ProducerRecoveryTest.java` and `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/internal/ProducerManagerTest.java`.
+- **Approach:**
+  1. `ProducerManager`: the availability state and monitor (KTD7); `recordInvalidation(Throwable)`; `isRecoveryDue()`; `beginReplacement()` (acquire the write lock, abort swallowing any throw, close under the bounded timeout tolerating failure, drop the wrapper, state `REPLACING`); `completeReplacement()` (build through the supplier, `initTransactions`, state `AVAILABLE`, notify waiters; on failure classify terminal versus retriable and set the backoff); `acquireProduceLock` re-waits while `REPLACING` and waits on the monitor after acquiring; `flush()` and `close()` tolerate an absent producer; `close()` moves to `TERMINAL` and wakes waiters.
+  2. `AbstractParallelEoSStreamProcessor.controlLoop`: a first step `maybeRecoverProducer()` that runs when a condition is recorded or a retry is due: `beginReplacement()` (or, on a retry, only the write lock), `processWorkCompleteMailBox(Duration.ZERO)`, `wm.restoreWorkDiscardedByAbortedTransaction()` (first attempt only), `completeReplacement()`, release. Catch `ProducerInvalidatedException` around the commit call so it is not treated as a control-thread failure. Gate `maybeAcquireCommitLock` and `retrieveAndDistributeNewWork` on availability in transactional mode. A terminal outcome calls `closeOnException` with a cause naming the `transactional.id`.
+  3. Write the `@GuardedBy` annotation on the availability state with the fix, per the engine's `AGENTS.md`; the write lock itself stays unannotated.
+- **Execution note:** build the AE1 test first against a factory that returns a `MockProducer` which is fenced after its first commit; it fails on master's behaviour (the instance closes) and is the proof the recovery arm executed. Confirm each recovery log line appears in the captured output, so a green run cannot be one where the arm never ran.
+- **Patterns to follow:** `commitOffsetsReportingPollerDeath` for catching a specific failure at the commit site; `notifySomethingToDo` for how availability reads lock state; `ProducerManagerTest.buildModule` for a module with a controllable producer.
+- **Test scenarios:**
+  - Covers AE1. Factory returns `MockProducer`s; the first is `fenceProducer()`-ed after records 0..4 complete: the instance stays running, the second producer's committed offsets include 0..4, the user function saw offsets 0..4 twice, and `sendOffsetsToTransaction` on the second producer was called with the consumer's current `groupMetadata()` (a spied producer, generation raised on the mock consumer after the fence).
+  - Covers AE2 / R18. First producer built with `autoComplete=false` and `errorNext(new InvalidPidMappingException(..))` on the first send: the record fails, a replacement is built, the record's offset is committed on the replacement within a bounded number of commit cycles, and the instance is not closed.
+  - Covers AE3 / R12. Three consecutive producers fenced at their first commit, the fourth healthy: three recoveries, one committed set, instance running.
+  - Covers AE9. Second producer's `initTransactionException` is a `TimeoutException` for two invocations then null: attempts are spaced by the backoff (invocation timestamps at least the backoff apart), no attempt happens inline in the same pass, and processing resumes. Then: `initTransactionException = new TransactionalIdAuthorizationException(..)`: the instance closes, `getFailureCause()` names the derived `transactional.id`.
+  - R15. While `REPLACING` (replacement blocked on a latch inside the factory), a worker reaching `beginProducing` does not throw `TimeoutException` after `produceLockAcquisitionTimeout` (set short); it proceeds once the latch opens. A `close()` during the same window releases the worker with `ProducerInvalidatedException` and the close completes.
+  - R15. While `REPLACING`, no new work is distributed (`getNumberRecordsOutForProcessing()` does not rise) and no commit is attempted on the absent producer.
+  - Abort on the fenced producer throws `ProducerFencedException` (`MockProducer.verifyNotFenced`): swallowed, recovery continues.
+  - `close(Duration)` on the discarded producer throwing (`closeException` set): tolerated, recovery continues.
+  - Instance path: a fenced `MockProducer` supplied as `producer` still closes the instance with the fencing cause (R19).
+- **Verification:** `ProducerRecoveryTest`, `ProducerManagerTest`, `ParallelEoSStreamProcessorTest` pass; the transactional unit selection (`*Transaction*,*ProducerManager*,ParallelEoSStreamProcessorTest`) passes; `ArchitectureTest` passes.
+
+### U6. Observability: recovery logs, counters, and the consecutive-recovery signal
+
+- **Goal:** each recovery is visible in logs and metrics, and an instance that recovers without ever committing is distinguishable from one that recovered once.
+- **Requirements:** R22, R23, R24.
+- **Dependencies:** U5.
+- **Files:** `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/metrics/PCMetricsDef.java`, `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/ProducerManager.java`, tests in `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/ProducerRecoveryTest.java` and the existing metrics test that pins `PCMetricsDef` rendering.
+- **Approach:**
+  1. `PCMetricsDef`: `PRODUCER_RECOVERIES` counter tagged `condition` (the matched exception's simple name), `PRODUCER_CONSECUTIVE_RECOVERIES` gauge, under a new `PRODUCER_MANAGER("producer")` subsystem.
+  2. `ProducerManager`: increment on each recovery; a consecutive counter reset when `commitOffsets` returns normally; the recovery log line carries the condition, the outcome, the attempt number and the consecutive count, at WARN for the first consecutive recovery and ERROR from the second.
+- **Patterns to follow:** `WorkManager.initMetrics` for counter registration through `PCMetrics.getCounterFromMetricDef`; the `PC_STATUS` gauge for a gauge bound to a live object.
+- **Test scenarios:**
+  - Covers AE10. Three recoveries with no successful commit between them: the gauge reads 3, the first log is WARN and the second and third are ERROR, and a successful commit resets the gauge to 0 with the next recovery back at WARN.
+  - Covers R23. The counter tagged `condition=ProducerFencedException` reads 1 after one fencing recovery, and ordinary commit failures (a `TimeoutException` retry) do not move it.
+  - Covers R22. The recovery log line names the condition and the outcome (`replaced`, `deferred`, `terminal`).
+- **Verification:** the metrics documentation gate in `bin/` (whichever renders `PCMetricsDef`) is clean; `ProducerRecoveryTest` passes.
+
+### U7. Recovery on a real broker
+
+- **Goal:** prove the whole path against a real transaction coordinator, including a real `ProducerFencedException`, with a control arm that shows the fence actually landed.
+- **Requirements:** R4, R8, R10, R12, R13, R14 (AE1, AE3 on the wire).
+- **Dependencies:** U6.
+- **Files:** new `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/ProducerFencingRecoveryIT.java`, `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/utils/KafkaClientUtils.java` (a helper that returns the transactional producer *config* the harness builds, so the IT can hand PC configuration rather than an instance).
+- **Approach:**
+  1. Build PC with `producerConfig` from the harness and a factory that captures the resolved `transactional.id`.
+  2. After some records commit, create a rogue `KafkaProducer` with the captured id and call `initTransactions()`: the broker fences PC's producer.
+  3. Assert PC keeps running, every source record's output appears exactly once under `read_committed`, the committed offsets reach the end, and the rogue producer is in turn fenced by PC's replacement (its next transactional call throws `ProducerFencedException`) - that last assertion is the control that proves the replacement re-initialised under the same id.
+  4. Repeat the fence twice more for AE3.
+- **Execution note:** run with `-Dpc.log.level=info` once and confirm the recovery log line from U6 appears; a green run without it is a run in which the fence never landed.
+- **Patterns to follow:** `TransactionalPartialResultSetIT` for the `read_committed` verifier and its `proveVerifierIsActuallyReading` control; `BrokerIntegrationTest` for the broker.
+- **Test scenarios:**
+  - Covers AE1. One fence: instance alive, no duplicate output under `read_committed`, offsets committed past the fence.
+  - Covers AE3. Three fences: same assertions, three recovery log lines.
+  - Control: the rogue producer's next transactional call fails with `ProducerFencedException`.
+- **Verification:** `bin/ci-integration-test.sh` scoped to core, or the IT run alone, is green with Docker.
+
+### U8. Upgrade notes, example, and records
+
+- **Goal:** the move from a `Producer` instance to configuration plus factory is documented where users look, the example demonstrates the recommended path, and the repo's records reflect what landed.
+- **Requirements:** R20, R21; KTD10.
+- **Dependencies:** U1, U2 (content); lands last.
+- **Files:** `src/docs/README_TEMPLATE.adoc` and the generated `README.adoc`, `parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/CoreApp.java`, `docs/inflight/core-recoverable-producer-fencing.md`, `docs/data/roadmap.yaml` (`survive-producer-fencing` stage), `CONCEPTS.md` (a `Producer recovery` entry under Transactional commit, and `Completed but uncommitted` beside `Dirty`).
+- **Approach:**
+  1. README: a subsection under the transactional section covering `producerConfig` and `producerFactory`, the derived id and its ACL prefix (KTD2), what recovery does and does not do, the metrics, and the instance option's deprecation; the upgrade section gains the migration including re-granting a prefixed TransactionalId ACL and the loss of a caller-set id.
+  2. `CoreApp`'s transactional example uses `producerConfig`; the non-transactional example may stay on the instance path to show it still works, with its deprecation visible.
+  3. The in-flight note shrinks to what stays open: the merge-time reconciliation with astubbs/parallel-consumer#352 (KTD10) and the pointer to the instance-path spin note. The roadmap entry advances its stage and rewrites `stage_detail` to say both mechanisms are validated and where.
+- **Test expectation:** none - documentation and records; `bin/check-docs-data.sh` and the citation gates are the verification.
+- **Verification:** `bin/check-all.sh` clean; the README regenerates from the template without diff beyond the intended section.
+
+---
+
+## Verification Contract
+
+| Gate | Command | Applies to |
+|---|---|---|
+| Quick build, compile and unit tests | `bin/build.sh` | every unit |
+| Transactional unit selection | `./mvnw -pl parallel-consumer-core -q test -Dtest='*Transaction*,*ProducerManager*,ParallelEoSStreamProcessorTest,ProducerRecovery*,RecoverableProducerCondition*,TransactionalIdDerivation*,PartitionStateAbortedTransactionReplay*,ParallelConsumerOptionsProducerConfig*,ProducerConfigRedaction*,PcBuiltProducer*' -DfailIfNoTests=true` | U1-U6 |
+| Architecture rules | `./mvnw -pl parallel-consumer-core -q test -Dtest='ArchitectureTest,*ArchTest'` | U1, U3, U5 |
+| Integration, with Docker | `./mvnw -pl parallel-consumer-core -Pci verify -DskipUTs=true -Dit.test=ProducerFencingRecoveryIT` (or `bin/ci-integration-test.sh` scoped to core) | U7 |
+| Repo gates | `bin/check-all.sh` | before every push |
+| Mutation check on new assertions | delete the guard each new assertion pins, watch the test fail, restore (`docs/testing.md`) | U3, U4, U5, U6 |
+
+Every build is scoped with `-pl parallel-consumer-core`; a root `-am` build cleans sibling modules' output that other sessions may be using.
+
+---
+
+## Definition of Done
+
+- All R1-R24 are implemented or explicitly deferred in Scope Boundaries; the deferred ones are R19's instance-path spin (owned by `docs/inflight/bug-411-wrapped-send-failure-spins-forever.md`) and the astubbs/parallel-consumer#352 reconciliation (KTD10).
+- Every acceptance example maps to a passing test: AE1, AE2, AE3, AE9 in `ProducerRecoveryTest`; AE1 and AE3 again in `ProducerFencingRecoveryIT`; AE4 in `TransactionalIdDerivationTest` and `PcBuiltProducerTest`; AE5 across `ParallelConsumerOptionsProducerConfigTest` and `ParallelEoSStreamProcessorTest`; AE6 and AE7 in `ParallelConsumerOptionsProducerConfigTest` and `ProducerConfigRedactionTest`; AE8 in `PartitionStateAbortedTransactionReplayTest`; AE10 in `ProducerRecoveryTest`.
+- `closePCWhenInvalidPidMappingException` is rewritten, not weakened: the PC-built variant asserts recovery, the instance variant asserts the close, and both say they mock the synchronous throw.
+- No test's timeout, assertion or retry was loosened to go green; where a test is flaky the cause is diagnosed and stated.
+- Every field added to the engine carries `@GuardedBy` or a recorded reason it needs none.
+- The Verification Contract gates are green locally, integration included, and the results are recorded in the commit messages.
+- Abandoned attempts are removed from the diff; the in-flight note and roadmap entry describe the state after this branch, not before it.
+- Per unit: its test scenarios exist and pass, its files carry the header `docs/copyright.md` prescribes, and its commit subject is `type(scope) astubbs#225: subject`.
