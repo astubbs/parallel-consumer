@@ -184,7 +184,7 @@ flowchart TB
 
 ### Outstanding Questions
 
-**Deferred to Planning:** none remain; each was settled in the Planning Contract below.
+**Deferred to Planning:** none remain; each was settled in the Planning Contract below, including search scope (KTD17) and title sourcing (KTD16).
 
 ### Sources / Research
 
@@ -205,21 +205,23 @@ flowchart TB
 
 ### Key Technical Decisions
 
-- KTD1. **Hooks are Node and import `bin/lib/` directly; none spawns the CLI.** One Node start per hook firing and no second process; the libraries never exit, and `.claude/hooks/inject-solutions-for-named-components.mjs` already imports a library this way. Governs R3, R19, R20.
-- KTD2. **The path query has two tiers on one function.** `drift` gains a `detail` option: `summary` resolves which refs carry which blob and the baseline's history (no merge-base, no branch facts, no PR lookup, no preview) and is what the read-time hook calls; `full` adds added size, branch facts from the PR cache, and the added-headings preview, and is what `docs show` and `docs header` render. One function, two costs, so the header and the hook cannot drift apart. Governs R5, R6, R7, R19.
+- KTD1. **The Node hooks import `bin/lib/` directly; none spawns the CLI.** One Node start per hook firing and no second process (the bash session-start wrapper in KTD8 is the one caller of the CLI, because it is bash); the libraries never exit, and `.claude/hooks/inject-solutions-for-named-components.mjs` already imports a library this way. Governs R3, R19, R20.
+- KTD2. **The path query has two tiers on one function.** `drift` gains a `detail` option: `summary` resolves which refs carry which blob and the baseline's history, plus the added size of the copy at hand only (one merge-base and one numstat for HEAD's ref, no other cluster; no branch facts, no PR lookup, no preview), and is what the read-time hook calls; `full` adds added size, branch facts from the PR cache, and the added-headings preview, and is what `docs show` and `docs header` render. One function, two costs, so the header and the hook cannot drift apart. Governs R5, R6, R7, R19.
 - KTD3. **Read-time delivery is a `PostToolUse` hook, one registration matching `Read|Bash`, self-filtering.** Context arrives with the tool result, before the agent's next action, which is the same moment a pre-read hook would reach, without putting the query's latency in front of the read and without the fail-closed shape `docs/agent-harness.md` warns against. Chosen over `PreToolUse` allow-with-context. The Read-tool half is verified live on the installed version before anything else in U2 is written. Governs R6, R20.
 - KTD4. **Once per session per state.** The hook remembers, per session, the path plus the sorted set of divergent blobs it reported; a repeat read is silent unless that set changed. The prompt hook remembers injected paths the same way. The seen-store and the tree-derivation helpers move out of the solutions hook into `.claude/hooks/lib/hook-common.mjs` so there is one copy. Governs R9, R24.
-- KTD5. **No corpus cache; budgets are cold.** The header uses the narrow per-path query and needs no index. The prompt hook runs `git grep` across refs and no cache can absorb a read that is the grep. Bare `inflight docs` and the session index build the index once per call. Budgets (configured bounds, re-measured and published in each hook's header before it ships): read-time header 500 ms; per-prompt injection 1500 ms when it fires and 100 ms on the silent path; session start and bare `inflight docs` 8 s. Revisit caching only if a measurement breaches a budget. Governs R19.
-- KTD6. **Term extraction and matching order.** Terms are identifier-shaped tokens only: CamelCase with two humps or more, tokens with an underscore, hyphen or dot, backticked spans, fully qualified issue references and bare `#NNN`, each at least four characters and not on a stop list; a prompt yielding no terms is silent before any git call. Matching order per R10 is frontmatter fields, then headings, then body text with a per-term hit cap; the injected block is capped at twelve titles with a `prior-art --headings` pointer for the rest. Headings alone never justify an empty result, per the title-grep solution. Governs R9, R10, R12.
-- KTD7. **One `DOC_AREAS` constant in `bin/lib/repo.mjs`.** It lists the three corpus areas and their display names; `corpusIndex` takes its pathspecs from it, `prior-art`'s `SECTIONS` are derived from it, and the docs shape and the session index group by it. This is the lift `docs/inflight/ci-inflight-next-commands.md` names before the list spreads. Governs R1, R3, R13, R17.
-- KTD8. **The session index is a Node rendering plus a thin bash wrapper.** `inflight docs index` renders the three corpus areas corpus-scoped; `.claude/hooks/inject-recorded-knowledge.sh` keeps the framing text, the sections outside the corpus (ideation, test-hardening, registers), and calls the command for the rest. The impact order, type and state vocabulary move to `bin/lib/inflight-tags.mjs` with a parity self-test that parses `bin/lib/inflight-tags.sh` and fails on any difference, so the bash gate and the Node index cannot disagree until the gate migrates. An equivalence test asserts every title the old hook lists for the checked-out branch appears in the new index. Governs R16, R17, R18.
+- KTD5. **No corpus cache; budgets are cold.** The header uses the narrow per-path query and needs no index. The prompt hook runs one `git grep` across live refs and no cache can absorb a read that is the grep. Bare `inflight docs` and the session index build the index once per call; the three-area index alone measures about five seconds on this repository, so the session-start budget has little headroom and every title read is batched (KTD16). Budgets (configured bounds, re-measured on the slowest developer host and published in each hook's header before it ships): read-time header 500 ms; per-prompt injection 2500 ms when it fires and 100 ms on the silent path, which imports only the term extractor and the hook library and loads the git-touching modules dynamically once a term survives; session start and bare `inflight docs` 8 s. Revisit caching only if a measurement breaches a budget. Governs R19.
+- KTD6. **Term extraction and matching order.** Terms are identifier-shaped tokens only: CamelCase with two humps or more, tokens with an underscore, hyphen or dot, backticked spans, fully qualified issue references and bare `#NNN`, each at least four characters and not on a stop list; a prompt yielding no terms is silent before any git call. Matching is one `git grep -n` over the corpus areas on live refs, never a corpus-index build; R10's order is derived from each hit line's shape and position: a frontmatter field or list item inside the leading frontmatter block, a line starting with `#`, else body, with the per-term cap applied to the body tier. The injected block is capped at twelve titles with a `prior-art --headings` pointer for the rest. Headings alone never justify an empty result, per the title-grep solution. Governs R9, R10, R12.
+- KTD7. **One `DOC_AREAS` constant in `bin/lib/repo.mjs`.** It lists the three corpus areas and their display names; `corpusIndex` gains an `areas` option defaulting to it (`note find` passes the notes area only, so its output does not change; the `stranded` command states in its usage which scope it reports), `prior-art`'s `SECTIONS` are derived from it, and the docs shape and the session index group by it. This is the lift `docs/inflight/ci-inflight-next-commands.md` names before the list spreads. Governs R1, R3, R13, R17.
+- KTD8. **The session index is a Node rendering plus a thin bash wrapper.** `inflight docs index` renders the three corpus areas corpus-scoped; `.claude/hooks/inject-recorded-knowledge.sh` keeps the framing text, the sections outside the corpus (ideation, test-hardening, registers), and calls the command for the rest. The impact order, type and state vocabulary move to `bin/lib/inflight-tags.mjs` with a parity self-test that sources `bin/lib/inflight-tags.sh` under bash, prints its variables, and fails on any difference (its impact sets are built by shell expansion, so a regex over the file would not see them), so the bash gate and the Node index cannot disagree until the gate migrates. An equivalence test materialises the pre-migration hook at a pinned commit SHA with `git worktree add --detach` so it runs from its own path beside its bash library, points it at the current checkout through `CLAUDE_PROJECT_DIR`, asserts as a positive control that its output carries the open-work and dated-plans headings, and then asserts every title it lists appears in the new index. Governs R16, R17, R18.
 - KTD9. **Every injected block opens with a fixed source label and ends with the command that prints more.** One render helper in `bin/lib/views.mjs` produces the frame for all four sources (`docs context: divergence header for <path>`, `docs context: prompt terms <a, b>`, and so on), so an agent can tell a fresh signal from a repeat and always knows the next command. Governs R7, R9, R13.
 - KTD10. **Every header states its scope and treats archival refs as preserved.** The ref set searched comes from `refTips` and the header prints its size and the archival split, reusing `refKind`; `freshnessWarnings` output is included when it fires. Governs R5, R21, R23.
 - KTD11. **`docs show` selection.** Baseline first; else the first carrying live ref in sorted ref order; `--ref <ref>` overrides; `--header-only` prints the header alone (the same output as `docs header`). The ref shown is always named in the first line. Governs R15.
 - KTD12. **Bash path detection.** A Bash command is inspected only when one of its whitespace-split tokens, resolved against the tree the command names (leading `cd <path> &&`, else the payload's `cwd`, else the session root as last resort per the 2026-08-31 solution), is an existing file under a corpus area. Variables, globs and pipelines are not resolved. Governs R6.
-- KTD13. **Failure record.** A delivery that catches an error writes `<cache dir>/delivery-failures.json` (delivery, reason, ISO time) through `bin/lib/cache.mjs` with its own policy row; bare `inflight docs` and `docs index` print a one-line notice from it; a successful run of the same delivery clears its entry. Governs R20, R26.
+- KTD13. **Failure record.** A delivery that catches an error writes `<cache dir>/delivery-failures.json` (delivery, reason, ISO time) through `bin/lib/cache.mjs` with its own policy row; bare `inflight docs` and `docs index` print a one-line notice from it; a successful run of the same delivery clears its entry, and the policy row's age limit is set to seven days so a stale record does not outlive the session that could act on it. Governs R20, R26.
 - KTD14. **Non-Claude hosts.** `AGENTS.md`'s "Before you investigate" table gains a row for `inflight docs header <path>` and `inflight docs`, so an `AGENTS.md`-only agent has the pull form of every delivery. Governs R27.
 - KTD15. **The comparison subject is the committed blob at HEAD.** The hook resolves `HEAD:<path>` in the tree derived per KTD12; if the working-tree file's content differs, the header says so and reports on the committed blob. Governs R24.
+- KTD16. **Titles are read in one batch.** Off-baseline documents' titles come from their blobs through one `git cat-file --batch` subprocess (a primitive beside `blobsForPath`), never one `cat-file -p` per blob; on-baseline documents' titles come from the baseline blob the same way, so an index built on a checkout behind the baseline is not wrong. Governs R13, R17, R19.
+- KTD17. **Search scope is live refs; preservation is reported from all refs.** The prompt grep and the read-time divergent set run over live refs only (R9 marks off-baseline and divergent-elsewhere documents, which archival copies are not); the header's preserved line (R23) comes from the archival carriers `refKind` names. Governs R5, R9, R23.
 
 ### High-Level Technical Design
 
@@ -313,41 +315,43 @@ U1 → U2 → U3 ship as the header, in that order and before anything else (R4)
 - **Goal:** One function answers the path question at two costs, over a corpus that spans all three areas and every ref, with archival refs split from live ones and a preview of what a divergent version adds.
 - **Requirements:** R1, R2, R3, R5, R7, R8, R23, R24; KTD2, KTD5, KTD7, KTD9, KTD10, KTD15.
 - **Dependencies:** none.
-- **Files:** `bin/lib/repo.mjs` (add `DOC_AREAS`), `bin/lib/notes.mjs` (`corpusIndex` over `DOC_AREAS`; `drift` gains `detail`, archival split, copy state, preview), `bin/lib/git.mjs` (added-lines-of-a-blob-diff primitive beside `blobDiffStat`), `bin/lib/prior-art.mjs` (derive `SECTIONS` from `DOC_AREAS`), `bin/lib/views.mjs` (`formatHeader`, the source-frame helper), `bin/test-inflight.mjs`, `docs/inflight/ci-inflight-next-commands.md` (correct the stale corpus-scope section).
+- **Files:** `bin/lib/repo.mjs` (add `DOC_AREAS`), `bin/lib/notes.mjs` (`corpusIndex` over `DOC_AREAS`; `drift` gains `detail`, archival split, copy state, preview), `bin/lib/git.mjs` (added-lines-of-a-blob-diff primitive beside `blobDiffStat`; a batched blob-title primitive beside `blobsForPath`), `bin/lib/prior-art.mjs` (derive `SECTIONS` from `DOC_AREAS`), `bin/lib/views.mjs` (`formatHeader`, the source-frame helper), `bin/test-inflight.mjs`, `docs/inflight/ci-inflight-next-commands.md` (correct the stale corpus-scope section).
 - **Approach:**
-  1. Add `DOC_AREAS` and make `corpusIndex` and `prior-art` read it; keep the existing section numbering and headings so `prior-art` output does not change.
-  2. Extend `drift` with `detail: 'summary' | 'full'` (default `full`, so `note drift` is unchanged). Summary stops after the divergent-blob clustering and the baseline-history filter. Full adds what it does today plus the preview: the added headings of the version's diff against its merge-base blob, else its first added line.
+  1. Add `DOC_AREAS`; give `corpusIndex` an `areas` option defaulting to it and pass the notes area alone from `note find`; derive `prior-art`'s `SECTIONS` from it, keeping the existing section numbering and headings so `prior-art` output does not change; state in `stranded`'s usage which scope it reports.
+  2. Extend `drift` with `detail: 'summary' | 'full'` (default `full`, so `note drift` is unchanged). Summary stops after the divergent-blob clustering, the baseline-history filter and the copy-at-hand added size (KTD2), over live refs (KTD17). Full adds what it does today plus the preview: the added headings of the version's diff against its merge-base blob, else its first added line.
   3. Split carriers by `refKind`: archival-only versions go to a `preserved` list and are excluded from `divergent` counts.
   4. Report the copy state for a given ref or blob: baseline, this-branch-divergent (with added size), or branch-only.
-  5. Add `formatHeader` for both tiers and the source-frame helper every delivery will use.
+  5. Add the batched title primitive (KTD16) and make `blobTitle` callers use it where more than one title is needed.
+  6. Add `formatHeader` for both tiers and the source-frame helper every delivery will use.
 - **Patterns to follow:** `stranded`'s live/archival split; `blobDiffStat` for the diff primitive; `formatDrift` for the header's rendering; every library function returns `{ok, ...}` and never exits.
 - **Test scenarios:** (in `bin/test-inflight.mjs`, each with a mutant that must go red)
-  - Summary tier on a note with divergent versions returns the same divergent blob set as the full tier and performs no `merge-base` call (count subprocesses through `--perf` or a stubbed `exec`).
+  - Summary tier on a note with divergent versions returns the same divergent blob set as the full tier and performs exactly one `merge-base` call, for the copy at hand (count subprocesses through `--perf` or a stubbed `exec`).
   - Full tier's preview lists the added headings of a divergent version; a version that added no heading yields its first added line.
   - A version carried only by a tag appears under `preserved` and is not counted in `divergent`. Covers AE9.
   - Copy state is `baseline` for the baseline blob, `own-divergent` with an added size for a branch's own edit, `branch-only` for a path absent from the baseline. Covers AE3, AE8.
-  - `corpusIndex` lists a solution and a plan, not only notes; `prior-art` output for a fixed term is byte-identical before and after `SECTIONS` derives from `DOC_AREAS`.
+  - `corpusIndex` with the default areas lists a solution and a plan; `note find` on the fixture still returns notes only; `prior-art` output for a fixed term is byte-identical before and after `SECTIONS` derives from `DOC_AREAS`.
+  - Titles for a set of blobs come back from one `cat-file --batch` subprocess, and match what `blobTitle` returns for each.
   - The source-frame helper puts the label first and the "more" command last for each delivery kind.
   - Negative control per the repo rule: every check asserts non-empty output as well as `ok`.
-- **Verification:** `node bin/test-inflight.mjs` passes with every mutant red; `node bin/inflight.mjs note drift docs/inflight/bug-857-family.md` output is unchanged; `--perf` on the summary tier shows no `merge-base` or `diff` calls.
+- **Verification:** `node bin/test-inflight.mjs` passes with every mutant red; `note drift`, `note find` and `stranded` output on the fixture is unchanged; `--perf` on the summary tier shows one `merge-base` and one `diff` call.
 
 ### U2. The read-time divergence header hook
 
 - **Goal:** Reading a corpus file through the Read tool or a Bash command naming its path delivers the header's summary line, once per session per divergence state, failing open, within budget.
 - **Requirements:** R4, R6, R8, R19, R20, R23, R24, R26; KTD1, KTD3, KTD4, KTD12, KTD13, KTD15.
 - **Dependencies:** U1.
-- **Files:** `.claude/hooks/inject-docs-divergence.mjs` (new), `.claude/hooks/lib/hook-common.mjs` (new: `repoRoot`, `treeContaining`, seen-store helpers extracted from the solutions hook), `.claude/hooks/inject-solutions-for-named-components.mjs` (import the extracted helpers), `bin/lib/cache.mjs` (`delivery-failures` policy row and writer), `.claude/settings.json` (one `PostToolUse` entry, matcher `Read|Bash`), `bin/test-check-docs-hooks.mjs` (new), `bin/test-check-agent-hooks.sh` (one case naming the new hook path so the registered-hook audit sees it), `docs/agent-harness.md`.
+- **Files:** `.claude/hooks/inject-docs-divergence.mjs` (new), `.claude/hooks/lib/hook-common.mjs` (new: `repoRoot`, `treeContaining`, seen-store helpers extracted from the solutions hook), `.claude/hooks/inject-solutions-for-named-components.mjs` (import the extracted helpers), `bin/lib/cache.mjs` (`delivery-failures` policy row and writer), `.claude/settings.json` (one `PostToolUse` entry, matcher `Read|Bash`), `bin/test-check-docs-hooks.mjs` (new, naming the hook path literally so the registered-hook audit credits it), `bin/test-check-agent-hooks.sh` (its registration-count check accepts hyphenated number words above twenty), `docs/agent-harness.md` (the new entry, and the counted sentence of hook scripts and registrations updated).
 - **Approach:**
   1. Verify first, on the installed Claude Code version, that a `PostToolUse` hook on the Read tool delivers `additionalContext` the way `after-push-check-ci.sh` does for Bash: plant a marker, read a file with `claude -p`, and confirm the model reports the marker. Record the version and result in `docs/agent-harness.md`. If it does not deliver, switch the Read half to `PreToolUse` allow-with-context (KTD3's fallback) and record why.
   2. Payload handling: read stdin whole; for Read take `tool_input.file_path`; for Bash apply KTD12 to `tool_input.command`; ignore anything not under a corpus area before any git call.
-  3. Resolve the committed blob at HEAD for the path in the derived tree (KTD15); call `drift(path, {detail: 'summary'})`; build the seen key from the sorted divergent blob set.
+  3. Resolve `file_path` relative to the derived tree and `process.chdir` to that tree before any `bin/lib` call; resolve the committed blob at HEAD for the path (KTD15); call `drift(path, {detail: 'summary'})`; build the seen key from the sorted divergent blob set.
   4. Emit the JSON envelope with the summary line framed per KTD9, naming `inflight docs header <path>` for the full header.
   5. Wrap the whole body in a catch that records the failure (KTD13) and exits 0 with no output.
 - **Execution note:** Measure the cold cost on this repository before registering the hook and publish it in the header comment; the budget is the first thing the header states.
 - **Patterns to follow:** `inject-solutions-for-named-components.mjs` for payload reading, `repoRoot`, the seen-store, the envelope and the never-block posture; `after-push-check-ci.sh` for the `PostToolUse` envelope; the 2026-08-31 wrong-directory solution for tree derivation.
 - **Test scenarios:** (in `bin/test-check-docs-hooks.mjs`, driving the hook as the harness does, JSON on stdin)
   - A Read of a corpus note with a divergent branch version emits an envelope whose context names the path, the divergent count and the header command. Covers AE1's summary form.
-  - A Bash `cat docs/inflight/<note>.md` emits the same; `cat "$f"` emits nothing; `cd <worktree> && cat docs/inflight/<note>.md` resolves against the worktree. Covers AE2.
+  - A Bash `cat docs/inflight/<note>.md` emits the same; `cat "$f"` emits nothing; `cd <worktree> && cat docs/inflight/<note>.md` resolves against the worktree, and so does a Read whose session root is the main checkout while the file is in a worktree. Covers AE2.
   - A Read of a file outside the corpus areas emits nothing and makes no git call.
   - A second Read of the same path in the same session emits nothing; after the divergent set changes (fixture branch adds a version) it emits again.
   - A branch-only note reports branch-only; a note carried only elsewhere on a tag reports preserved and zero divergent. Covers AE3, AE9.
@@ -380,12 +384,12 @@ U1 → U2 → U3 ship as the header, in that order and before anything else (R4)
 
 - **Goal:** Each prompt that names a mechanism injects the matching titles across every ref, capped, deduplicated per session, silent when nothing matches.
 - **Requirements:** R9, R10, R12, R19, R20, R21, R26; KTD1, KTD4, KTD6, KTD9, KTD13.
-- **Dependencies:** U1.
-- **Files:** `bin/lib/terms.mjs` (new: `termsFromPrompt`, `matchDocs` over `priorArt` results and frontmatter fields), `.claude/hooks/inject-docs-for-prompt.mjs` (new), `.claude/settings.json` (`UserPromptSubmit` entry), `bin/test-inflight.mjs` (library cases), `bin/test-check-docs-hooks.mjs` (hook cases), `bin/test-check-agent-hooks.sh` (registration case), `docs/agent-harness.md`.
+- **Dependencies:** U1, U2 (for `hook-common.mjs`).
+- **Files:** `bin/lib/terms.mjs` (new: `termsFromPrompt`, `matchDocs` over `priorArt` results and frontmatter fields), `.claude/hooks/inject-docs-for-prompt.mjs` (new), `.claude/settings.json` (`UserPromptSubmit` entry), `bin/test-inflight.mjs` (library cases), `bin/test-check-docs-hooks.mjs` (hook cases), `bin/test-check-agent-hooks.sh` (registration count), `docs/agent-harness.md` (entry and counted sentence).
 - **Approach:**
   1. `termsFromPrompt` is pure and tested on its own: the token shapes in KTD6, minimum length, a stop list, and the fully qualified issue forms.
-  2. `matchDocs` runs `priorArt(terms, {headings: true, github: false})` for the heading pass, and a frontmatter pass over the corpus index's blobs for the retrieval fields; body text is a capped third pass; results carry the off-baseline and divergent-elsewhere marks from U1.
-  3. The hook reads `prompt` from stdin, returns immediately with no output when no terms survive, applies the session seen-store by path, frames the block per KTD9 with the `prior-art --headings` pointer, and fails open with a failure record.
+  2. `matchDocs` runs one `git grep -n -i -E` over the corpus areas on live refs (KTD6, KTD17) and classifies each hit line into frontmatter, heading or body by its shape and position; it never builds the corpus index; results carry the off-baseline and divergent-elsewhere marks from U1.
+  3. The hook reads `prompt` from stdin, returns immediately with no output when no terms survive (importing only `terms.mjs` and `hook-common.mjs` on that path, loading the git-touching modules dynamically afterwards), applies the session seen-store by path, frames the block per KTD9 with the `prior-art --headings` pointer, and fails open with a failure record.
 - **Execution note:** Measure both the firing path and the silent path cold; publish both in the header.
 - **Patterns to follow:** `inject-merge-checklist.sh` for the `UserPromptSubmit` envelope; `priorArt`'s `headings` option; the solutions hook's `render(fresh, CAP)` cap-and-tail shape.
 - **Test scenarios:**
@@ -395,7 +399,8 @@ U1 → U2 → U3 ship as the header, in that order and before anything else (R4)
   - The same prompt twice in one session injects once. Covers AE4.
   - A term matching more titles than the cap injects the cap and a pointer line naming the count left.
   - A forced query failure yields exit 0, no output, and a failure record.
-- **Verification:** both suites green; measured costs within the 1500 ms firing and 100 ms silent budgets.
+  - The firing path performs exactly one `git grep` and no `ls-tree`.
+- **Verification:** both suites green; measured costs within the 2500 ms firing and 100 ms silent budgets.
 
 ### U5. `inflight docs` bare and `docs list`
 
@@ -405,7 +410,7 @@ U1 → U2 → U3 ship as the header, in that order and before anything else (R4)
 - **Files:** `bin/lib/inflight-tags.mjs` (new: type, impact order, state vocabulary), `bin/lib/docs-shape.mjs` (new: grouping over the widened index and `stranded`), `bin/lib/views.mjs` (`formatDocsShape`, `formatDocsList`), `bin/inflight.mjs` (`docs` bare `run`, `docs list <area> [<group>]`), `bin/test-inflight.mjs` (including the parity check that parses `bin/lib/inflight-tags.sh`), `AGENTS.md` (investigate-table row), `docs/inflight-tool.md`.
 - **Approach:**
   1. Port the vocabulary and the ordering rules from `bin/lib/inflight-tags.sh` and the session hook: impact order, type set, the deferred-or-parked disposition regex, the title fallback chain.
-  2. `docs-shape` groups the widened index by area, then by category directory (solutions), impact order (notes) or date (plans), with per-group counts and off-baseline counts from `stranded`'s ref-set clusters.
+  2. `docs-shape` groups the widened index by area, then by category directory (solutions), impact order (notes) or date (plans), with per-group counts and off-baseline counts from `stranded`'s ref-set clusters; every title it needs comes from the batched primitive (KTD16).
   3. Bare `docs` prints the shape, then every `docs` subcommand with its `when` sentence, then the failure notice when the record exists.
   4. `docs list` prints one level with the commands for the next; the leaf prints titles with paths and the off-baseline marker and the `docs show` command.
 - **Patterns to follow:** `help()`'s rendering of `when` lines; `formatStranded` for ref-set clusters; the solutions block of the session hook for category grouping.
@@ -415,6 +420,7 @@ U1 → U2 → U3 ship as the header, in that order and before anything else (R4)
   - `docs list inflight` prints impact groups in order with the `docs list inflight <group>` commands; the leaf prints titles and `docs show` commands. Covers AE5.
   - A note marked deferred appears in the deferred group, not among open notes; a note whose prose merely mentions the state marker stays open.
   - An empty area prints its heading with a zero count and the refs searched, exit 0.
+  - `docs index` on the fixture performs one `cat-file --batch` for titles, not one per blob.
 - **Verification:** `node bin/test-inflight.mjs` green; walking from bare `docs` to one `docs show` by copying printed commands takes no other input; measured cold cost within the 8 s budget.
 
 ### U6. `inflight docs index` and the session-start migration
@@ -426,14 +432,14 @@ U1 → U2 → U3 ship as the header, in that order and before anything else (R4)
 - **Approach:**
   1. `docs index` renders the markdown the hook used to emit for the three areas, with the same headings and ordering, off-baseline documents grouped by ref set under each area, and a line cap after which groups collapse to a count and a `docs list` command.
   2. The hook keeps its opening text, replaces the "branch-scoped" caveat with the corpus-scoped statement and the refs searched, calls `node bin/inflight.mjs docs index`, then renders ideation, test-hardening and the registers as it does today; on a failed call it prints the failure notice and nothing else for those areas.
-  3. Equivalence: a test runs the pre-migration hook (from git history at the merge-base) and the new one on the same checkout and asserts the old title set is a subset of the new for the three areas.
+  3. Equivalence, per KTD8: materialise the pre-migration hook at a pinned SHA with `git worktree add --detach`, run it against the current checkout through `CLAUDE_PROJECT_DIR`, assert the positive control (its open-work and dated-plans headings are present), then assert the old title set is a subset of the new for the three areas.
 - **Execution note:** Measure session start cold before and after; publish both in the hook header.
 - **Patterns to follow:** the current hook's section order and its `emit` helper; `formatStranded` for ref-set headings.
 - **Test scenarios:**
   - `docs index` on the fixture corpus lists an off-baseline workstream as one heading naming its branch set. Covers AE6.
   - With `--max-lines` below the fixture's size, the tail collapses to a count and a command; the count equals the groups omitted.
   - The hook's output contains the ideation and register sections unchanged from before the migration.
-  - Equivalence: every title the old hook listed for the current branch appears in the new output.
+  - Equivalence: the pinned old hook's output carries its area headings (positive control), and every title it lists appears in the new output.
   - The hook with `node` absent prints the framing and the non-corpus sections and exits 0.
 - **Verification:** both suites green; session start measured within the 8 s budget; `AGENTS.md` no longer calls the index branch-scoped.
 
