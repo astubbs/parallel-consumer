@@ -89,7 +89,11 @@ export function baseline() {
  * A ref where the path does not exist comes back `missing` and is simply absent from the Map -
  * "this branch does not carry that note" is a finding, not an error.
  *
- * @returns {Map<string, string>} ref -> blob SHA, for refs that carry the path
+ * `{ok, blobs}`, for the reason refTips and treeEntries carry a flag: a failed cat-file produced an
+ * empty Map, and drift read that as "no note at that path on ANY ref" - the same silent-miss shape
+ * as the two P0s this file already fixed at the enumeration layer, one function further down.
+ *
+ * @returns {{ok: boolean, blobs: Map<string, string>}} ref -> blob SHA, for refs that carry the path
  */
 export function blobsForPath(refs, path) {
     // EACH QUERY CARRIES ITS OWN REF as a trailing `%(rest)` token, so every output line says which
@@ -107,14 +111,16 @@ export function blobsForPath(refs, path) {
     const res = exec('git', ['cat-file', '--batch-check=%(objectname) %(rest)'], { input: `${query}\n` })
     const outLines = lines(res.out)
     const out = new Map()
+    if (!res.ok) return { ok: false, blobs: out }
 
     if (!selfDescribing) {
-        if (outLines.length !== refs.length) return out // a short answer is not a set of misses
+        // A short answer is not a set of misses - it means git stopped early.
+        if (outLines.length !== refs.length) return { ok: false, blobs: out }
         outLines.forEach((line, i) => {
             const [sha, second] = [line.slice(0, line.indexOf(' ')), line.slice(line.indexOf(' ') + 1)]
             if (line.indexOf(' ') > 0 && second !== 'missing') out.set(refs[i], sha)
         })
-        return out
+        return { ok: true, blobs: out }
     }
 
     for (const line of outLines) {
@@ -129,7 +135,7 @@ export function blobsForPath(refs, path) {
         if (!/^[0-9a-f]{40}$/.test(first) || rest === '') continue
         out.set(rest, first)
     }
-    return out
+    return { ok: true, blobs: out }
 }
 
 /** Every (blob, path) pair under a pathspec on one ref. */

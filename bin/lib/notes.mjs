@@ -314,7 +314,9 @@ export function drift(path, { prs = new Map(), maxBranchesPerCluster = 6, all = 
     if (tips.length === 0) return { path, ok: false, reason: 'no branch refs found - nothing to search' }
     if (!base) return { path, ok: false, reason: 'neither origin/master nor master resolves - no baseline' }
     const refs = tips.map((r) => r.ref)
-    const blobs = blobsForPath(refs, path)
+    const lookup = blobsForPath(refs, path)
+    if (!lookup.ok) return { path, ok: false, reason: `cannot read ${path} across refs - the object lookup failed` }
+    const blobs = lookup.blobs
     if (blobs.size === 0) return { path, ok: true, found: false }
 
     const versions = new Map()

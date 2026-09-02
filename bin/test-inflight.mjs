@@ -362,7 +362,9 @@ const CHECKS = [
                 const tips = g.refTips()
                 if (!tips.ok) return false
                 const refs = tips.tips.map((r) => r.ref)
-                const m = g.blobsForPath(refs, 'docs/inflight/shared.md')
+                const lookup = g.blobsForPath(refs, 'docs/inflight/shared.md')
+                if (!lookup.ok) return false
+                const m = lookup.blobs
                 const known = new Set(refs)
                 if (m.size === 0 || ![...m.keys()].every((k) => known.has(k))) return false
                 const base = g.baseline()
