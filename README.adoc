@@ -1061,6 +1061,33 @@ NOTE:: As with the `synchronous` processing mode, this will also block the proce
 
 CAUTION: This cannot be true for any externally integrated third party system, unless that system is __idempotent__.
 
+[[transaction-system-verified]]
+==== What is machine-checked, as of 2026-08-08
+
+The guarantees on this page are enumerated as a register (`TransactionalClaim`) and each one is tied to a test.
+A build fails if a claim recorded as covered has no test, and also if a claim's sentence here is edited without updating the register - so this section cannot quietly drift from what is actually verified.
+
+The distinction between the two lists below is deliberate, because it is what the evidence actually supports.
+
+*Verified against a real broker:* an open transaction is invisible at `read_committed` while a `read_uncommitted` reader sees it; a `read_committed` consumer is blocked at the first still-open transaction rather than filtering around it; an aborted or timed-out transaction never becomes visible; a crash before commit leaves neither the results nor the source offset, and the replay commits them together with each result present exactly once; and if one `send` in a `pollAndProduceMany` result set fails terminally - for example a record over `max.request.size` - none of that result set becomes visible.
+
+*Verified in-process, against the lock and options machinery with a mocked producer:* all parallel workers share one bulk transaction; no record is produced whose source offset is excluded from the transaction being committed; processing is blocked for the duration of the commit lock; and the commit interval default changes when transactional mode is selected.
+These are real proofs of PC's own logic, but no broker takes part in them - so read them as statements about what PC does, not about what a cluster observed.
+
+Each claim in both lists has a negative control that was observed to fail: the mechanism it guards was deliberately broken and the test went red for the stated reason.
+
+The terminally-failed-send case above used to leave a *partial* result set visible to a `read_committed` consumer, silently, because a producer callback threw and pre-empted the Kafka client's own transition of the transaction into an abortable state.
+It was found by these tests and fixed; the test that found it is now the regression test.
+
+*Known gap, not fixed:* the commit-interval default is applied by comparing your configured value against the default by reference identity, so explicitly setting `commitInterval(Duration.ofSeconds(5))` - the same value as the non-transactional default - is treated as "not set" and silently replaced with 100ms.
+Any other explicit value survives.
+See `docs/inflight/bug-commit-interval-identity-check.md`.
+
+One guarantee is attributed rather than re-proved here, and is marked as such in the register: the commit-lock timeout failing fast.
+It is covered by an existing test, but no negative control was observed for it, so it is not recorded as proved.
+The produce-lock timeout returning the record for retry started out the same way and no longer is: the eager-processing test holds the commit lock shut until a worker's acquisition is observed to time out, then watches that record's retry succeed, and removing the hold turns it red.
+It is recorded `PROVED`.
+
 For implementations details, see the <<Transactional System Architecture>> section.
 
 .From the Options Javadoc
@@ -1697,6 +1724,31 @@ docker container ls --filter 'label=org.testcontainers=true'
 > NOTE: `testcontainers-clean` removes **all** docker containers on your system with the `io.testcontainers=true` label > (including the most recent container which may be reusable).
 
 See https://github.com/testcontainers/testcontainers-java/pull/1781[this testcontainers PR] for details on the reusable containers feature.
+
+=== Searching the repository across every branch
+
+Most of what this project knows about itself is not on `master`.
+Measured 2026-09-01: **580 of the 901 documents under `docs/` exist only on branches that have not merged**, because a note travels with the work that produced it and many of those branches never land.
+
+So `grep` in your checkout answers a narrower question than the one you asked, and returns a false negative carrying the authority of a completed check.
+
+`bin/inflight.mjs` is the front door for asking across every ref instead:
+
+[source,bash]
+----
+node bin/inflight.mjs help                                  # every command, and when to reach for it
+node bin/inflight.mjs prior-art --headings <term>           # before forming any hypothesis
+node bin/inflight.mjs note find <fuzzy-name>                # which note is this, and who carries it
+node bin/inflight.mjs note drift <path>                     # what other branches have that master does not
+node bin/inflight.mjs branch <ref>                          # what a branch is, and whether anything tracks it
+node bin/inflight.mjs stranded                              # work that will be lost if nobody acts
+----
+
+Every command exits `0` when it *ran* — whatever it found — and `2` when it could not run.
+That distinction is the point: "nothing, across 436 refs" is a result, and a search that never happened is not.
+
+Worked examples, including the CI failure that this tool diagnosed on its own pull request, are in link:docs/inflight-tool.md[`docs/inflight-tool.md`].
+It reads the repository only; it is not a task tracker and owns no schema of its own.
 
 == Implementation Details
 

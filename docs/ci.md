@@ -80,14 +80,19 @@ document. This section is the detail behind it.
 - **`quarantine-lane.yml`** - runs the `@Quarantined` tests on every PR push, every push to master,
   and on dispatch. Its job is the **required** check `tests`, so the job name is an API here too -
   but the test-running step is `continue-on-error`, so red quarantined tests cannot block a merge.
-  See [`docs/testing.md`](testing.md).
+  Reporting is **two steps, and the split is the point**: `bin/quarantine-lane-report.sh` classifies
+  and *may* fail the job (its lane-leak self-check is what proves the lane ran only quarantined
+  tests), then a separate `continue-on-error` step posts the comment, so a rate limit while
+  commenting cannot red a healthy lane. See [`docs/testing.md`](testing.md).
 - **`pr-checklist.yml`** - hosts the PR-body gates: the template checklist (rule in AGENTS.md, PR
   Discipline), the changelog-citation gate (`changelog-ref-gate.js`, see
   [`docs/releasing.md`](releasing.md)), the issue-reference gate (`issue-ref-gate.js`, see
   [`docs/issue-references.md`](issue-references.md)) and the file-reference gate
   (`file-ref-gate.js`, see [`docs/citations.md`](citations.md)), which fails a cited repo path that
   does not exist - whole tree, so a deletion that strands a citation fails the PR that made it. Each gate's logic is a unit-tested module and its self-test runs first, so a
-  broken rule fails loudly rather than passing - or failing - every PR silently.
+  broken rule fails loudly rather than passing - or failing - every PR silently. The self-test step
+  **discovers** `.github/scripts/*.test.js` rather than naming them, so a module added there is
+  covered without an edit here or in the workflow.
 - **`check-dependencies.yml`** - "PR Dependency Check". Reads `depends on
   astubbs/parallel-consumer#N` lines from the PR body and blocks the child until every parent has
   merged. Produces the **required** check `Check PR Dependencies`, so a stacked PR cannot merge out
@@ -160,6 +165,36 @@ document. This section is the detail behind it.
     skipped for fork PRs and dies early on a token expiry, so the list would go unwatched exactly
     when it matters most. **`deps: CVE exclusion expiry` is a new job name and is NOT yet a required
     status check** - adding it to the master ruleset is a separate, deliberate act.
+
+### The PR report comments share one module - `sticky-report-comment.js`
+
+Three steps post a comment on every PR: the **throughput report** and the **SpotBugs summary** in
+`maven.yml`, and the **quarantine lane report** in `quarantine-lane.yml`. They share
+`.github/scripts/sticky-report-comment.js`, which owns five behaviours that are not domain-specific:
+
+- find our own last comment by marker - **paginated**, and filtered to `user.type === 'Bot'`
+- read a machine-readable payload back out of it, so a run can render a **delta**
+- **update in place** normally, but post a **fresh comment when the status changed**
+- **retire the old comment before creating the new one**, then link it forward
+- stamp the head sha, a PR-context commit link, the run, and the time
+
+Every one of them was written for the throughput comment in astubbs/parallel-consumer#407 and every
+one of them had been WRONG in production. They live in a module rather than in three copies of the
+YAML because copying them is how the original defects reached two steps at once. The module's header
+carries the reasoning and the measurements behind each; `sticky-report-comment.test.js` pins each
+against the defect it replaced, and the PR Checklist job runs it.
+
+**What a "status change" means is the caller's, and only that.** The throughput report's status is
+its verdict; the quarantine lane's is a sorted digest of every quarantined test's outcome, so a test
+going from failing to passing - which means its fix landed and the annotation plus the registry entry
+should be deleted - posts a new comment instead of silently editing one thirty scrolls up. Each
+producer writes its own payload: `pc-throughput-data` from `bin/check-throughput-regression.mjs`,
+`quarantine-lane-data` from `bin/quarantine-lane-report.sh`. Nothing enforces that a producer and its
+reader agree on the marker's name, so `grep -rn <marker-name>` is the list to change if one moves.
+
+The SpotBugs step uses the module's lookup and stamp but keeps its own update-or-create: whether a
+clean-to-dirty SpotBugs transition deserves a new comment is a judgement nobody has made, and adding
+the stamp needs no such decision.
 
 ### `CodeQL` is a required check that no workflow file produces
 
@@ -802,6 +837,81 @@ It is deliberately a second job rather than a second step in `claude-review`, so
 *which* half is missing without opening anything - and so `claude-review`, a required check matched by
 name in the master ruleset, did not have to be renamed. It is **not head-sensitive**, matching the
 automated half: an LGTM on any commit counts for the whole PR, permanently.
+
+## Codecov
+
+Two different Codecov products run here, from the same workflow, and confusing them is the first
+mistake to avoid.
+
+**Coverage** is jacoco XML. **Test Analytics** is the JUnit XML surefire and failsafe already write;
+it gives per-test outcome and wall-clock per commit, and is what `bin/inflight.mjs codecov` reads.
+They upload separately, are configured separately, and a failure in one says nothing about the other.
+
+`CODECOV_TOKEN` is a repository secret. `7894373cc` added it and documented it in `AGENTS.md`; the
+restructuring lost that, and this section is where it now lives.
+
+### Two lanes upload coverage, and they are NOT symmetric
+
+| Lane | Runs on | Uploads |
+|---|---|---|
+| `build` | push to master only | `jacoco/jacoco.xml` as flag `unit`; `jacoco-it/jacoco.xml` as flag `integration` - one file per flag |
+| `test` matrix | pull requests only | **both** files, under one flag per suite (`flags: ${{ matrix.suite }}`) |
+<!-- file-refs: N/A - jacoco paths are generated build output under target/, named because the
+     asymmetry between the two lanes IS which file goes to which flag -->
+
+**A per-suite flag reading 0% on the default branch is correct, not a broken upload.** The flags
+endpoint reports default-branch coverage, and on master only `build` runs. A reader who does not know
+that files a bug against the uploader; this is the third time that has nearly happened.
+
+### The per-flag gates, and why they fail
+
+`codecov.yml` gates on `unit` and `integration` per flag, at `target: auto, threshold: 1%`, and makes
+the overall project number informational. Its reasoning is sound and worth reading in place: a total
+that compares five flags on a PR against two on master cannot be made honest by tuning a threshold.
+
+**The gates fail because the two lanes upload different file SETS, and the cause is the inert `**`
+glob.** The uploader's CLI does not expand `**`, and nothing routes `files:` through a shell, so the
+pattern arrives literally, matches nothing, and the CLI falls back to its own tree-wide search. On
+master's full build that search finds EVERY jacoco report - both halves, every module - so `unit` and
+`integration` each receive the whole tree and report the same number. On a pull request each suite job
+has produced only its own half, so the same fallback finds only that half.
+
+Measured, from the upload logs rather than inferred:
+
+| Lane | Flag | Declared `files:` | What the CLI actually uploaded |
+|---|---|---|---|
+| `build` (master) | `unit` | `jacoco/jacoco.xml` | **every jacoco report in the tree - both halves** (`not_found` on the glob, then tree-wide fallback) |
+| `build` (master) | `integration` | `jacoco-it/jacoco.xml` | the same set |
+| `test` (PR) | `integration` | both globs | 4 reports, all `jacoco-it` - the unit half does not exist in that job |
+<!-- file-refs: N/A - jacoco paths are generated build output under target/, and which files reach
+     which flag IS the defect described here -->
+
+So a PR's `integration` flag is compared against a master `integration` flag that silently contains
+the unit half as well. The delta measures that difference, not the branch. The confirming detail: on
+master both flags report an identical figure, which only makes sense if both hold the same data.
+
+**This is the same defect as the one fixed for the test-results upload in this repository's history -
+a `files:` line that reads as configuration and does nothing.** The fix is the same: expand the globs
+before handing them over, and set `disable_search: true` so the fallback cannot silently re-widen the
+set.
+
+It is deliberately not fixed in the change that diagnosed it: altering what a required coverage gate
+measures should be the only thing in its own diff, so the before/after is legible. Expect the first
+clean comparison to be the proof.
+
+### Reading it without a browser
+
+The API answers **unauthenticated** because this repository is public, which is what makes it usable
+from CI and from a fresh agent sandbox:
+
+```
+https://api.codecov.io/api/v2/github/astubbs/repos/parallel-consumer/...
+```
+
+`totals/`, `flags/`, `commits/`, `branches/`, `coverage/` and `test-analytics/` all answer. `branch`
+and `commit_sha` filter server-side; `flags`, `interval` and `outcome` are accepted and **ignored**,
+which is the failure mode where a filter that does nothing reads as one that matched everything.
+[`docs/inflight-tool.md`](inflight-tool.md) owns the commands built on this.
 
 ## Self-hosted lanes
 

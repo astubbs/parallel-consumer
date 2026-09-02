@@ -55,6 +55,14 @@ public class ThreadUtils {
         sleepQuietly((int) ms);
     }
 
+    /**
+     * The {@link Duration} form, so a caller holding one does not hand-roll its own three-line wrapper. Two already
+     * had, in test source roots that can both see this class - which is the drift this overload exists to stop.
+     */
+    public static void sleepQuietly(Duration duration) {
+        sleepQuietly(duration.toMillis());
+    }
+
     public static void sleepSecondsLog(int seconds) {
         sleepLog(seconds * 1000);
     }
