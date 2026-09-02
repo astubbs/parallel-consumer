@@ -349,6 +349,8 @@ invented a fix, so it cost one investigation rather than 33 divergent resolution
 
 Counts are out of the 37 branches attempted.
 
+<!-- post-merge: checked-begin -->
+
 | | What | Branches | Resolution |
 |---|---|---|---|
 | A | `asyncconsumer` javadoc has no rule | all | verbatim replacement, already in the procedure |
@@ -357,6 +359,8 @@ Counts are out of the 37 branches attempted.
 | D | the README regen inlines the frozen CHANGELOG | 4 | apply astubbs#113's replacement; verified on astubbs#105 |
 | E | the accelerators URL reads as a package path | 2 | delete the line |
 | F | a prose guard whose sentence the branch never had | 2 attempted, ~121 repo-wide | **fixed in the tooling** |
+
+<!-- post-merge: checked-end -->
 
 A fifth instance of the same shape turned up in the tail, and it is worth naming because it is the one
 that does **not** announce itself as a refusal. On the four oldest branches — the same four as class D —
@@ -382,6 +386,7 @@ those same files and stamps the line in, so it healed the debt rather than hidin
 finding the content commit as the one that added the line. Expect this on any branch carrying that debt,
 and check which commit added the line before believing either story.
 
+<!-- post-merge: checked-begin -->
 **C is the one that will bite again outside this project.** `git checkout <ref> -- <file>` is a
 whole-file overwrite, so a branch that had registered its own file provenance in
 `bin/check-copyright-headers.sh` lost it. The failure then surfaces four steps downstream — copyright
@@ -389,6 +394,7 @@ fails, so `mvnw` fails, so the README regen is skipped, so the README keeps its 
 completeness check fails — and reads as "the rename broke something". astubbs#202 traced the whole
 cascade back to one deleted line. The procedure warned about taking too few files; it did not warn that
 taking them is destructive to what the branch had added.
+<!-- post-merge: checked-end -->
 
 **F was a genuine tool defect and was fixed rather than worked around**, because it does not scale: the
 orphan refusal sat before the `--defer-prose` check, so the flag meaning "prose is master's problem"

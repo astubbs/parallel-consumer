@@ -42,7 +42,8 @@
 // EXIT CODES: 0 ran (whatever it found), 2 cannot run - including a usage error. Self-test:
 // bin/test-inflight.mjs.
 
-import { pathToFileURL } from 'node:url'
+import { realpathSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 import { perfReport, perfStart } from './lib/perf.mjs'
 
@@ -560,10 +561,40 @@ function dispatch(argv, emit) {
     return { ok: false, reason: `inflight: no such command ${which}\n\n${top.usage}` }
 }
 
+/**
+ * Was this file run, rather than imported?
+ *
+ * COMPARE REALPATHS, NEVER THE SPELLINGS. Node resolves `import.meta.url` through symlinks while
+ * `process.argv[1]` is the path exactly as the caller typed it, so the two disagree whenever ANY
+ * component of the path is a link - a symlinked checkout, a worktree behind one, a `/tmp` that is
+ * one. On macOS `os.tmpdir()` is `/var/folders/...`, itself a link to `/private/var/folders/...`,
+ * which is how this was found: bin/test-inflight.mjs builds every mutant under `mkdtempSync`, the
+ * comparison was false in all of them, and the CLI body never executed. `inflight.mjs help` then
+ * printed nothing and exited 0 whatever the mutation had done - so the one control asserting exit 0
+ * failed, and every other invoke()-driven control was scored as "went red" without the mutation
+ * having been exercised at all. Linux `/tmp` is not a link, so CI saw none of it.
+ *
+ * FAILS CLOSED. `argv[1]` need not name an existing file (`node --eval`, a deleted script), and
+ * realpathSync throws on one that does not; deciding whether to run is not a thing to crash over,
+ * so an unresolvable path means "not invoked directly".
+ *
+ * The guard itself has a negative control - `the-front-door-runs-through-a-symlinked-path` in
+ * bin/test-inflight.mjs - which asserts exit 0 AND non-empty output, because exit 0 on its own is
+ * exactly what the broken guard produced.
+ */
+function invokedDirectly() {
+    if (!process.argv[1]) return false
+    try {
+        return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+    } catch {
+        return false
+    }
+}
+
 // Guarded so this file can be imported for its registry without running a command. It remains the
 // only file here permitted to exit the process; being importable is what lets the self-test assert
 // on the registry rather than on a regex over the source.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (invokedDirectly()) {
     const argv = process.argv.slice(2)
     // Stripped before dispatch, so no command has to know the flag exists.
     const perf = argv.includes('--perf')

@@ -8,6 +8,7 @@ component: test-infrastructure / MDC
 symptoms:
   - "MdcContextPropagationTest.anEmptyCallerContextIsHandledAndNothingLeaks:194 expected: null but was : {}"
   - "Fails 2 of 2 full core runs on one tree, 0 of 3 on another, with identical MDC code - CI and local disagree at the same test count"
+  - "Two consecutive heads of astubbs#416 (a branch with no Java) red on CI at the same :194, then green on the next head - jobs 100271906271 and 100274796081"
   - "Passes every time alone, and every time with its own class on one thread"
 root_cause: precondition_on_shared_thread_state_the_test_did_not_establish
 tags: [mdc, logback, junit, order-dependent, fork-distribution, precondition]
@@ -39,6 +40,12 @@ run of astubbs#201 passed. Same MDC code everywhere.
   class, one fork, one thread, alphabetical: passes.
 - **`ManagedPCInstance`**, which does `MDC.remove(MDC_INSTANCE_ID)` on its caller's thread - lives in
   `src/test-integration`, and no surefire test uses it. Out of the fork.
+
+Master's note, extended on astubbs#416 while this was being bisected, reached the same shape
+independently from the CI record: no `MethodOrderer`, no JUnit parallelism under `-Pci`, so a
+sibling alone would make it red every time or never - what varies per run is which fork the class
+lands in and which earlier class touched the MDC there. That was its hypothesis; the bisect below
+is the confirmation, with the two classes named.
 
 ## Mechanism
 
