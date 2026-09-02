@@ -89,7 +89,17 @@ export function corpusIndex() {
     if (!ok) return { ok: false, reason: 'cannot list refs - is this a git repository?' }
     if (refs.length === 0) return { ok: false, reason: 'no branch refs found - nothing to search' }
     if (!base) return { ok: false, reason: 'neither origin/master nor master resolves - no baseline to compare against' }
-    const entries = refs.map(({ ref }) => [ref, treeEntries(ref, NOTES_DIR).map((e) => [e.blob, e.path])])
+    // AGGREGATED, not swallowed. A single ref's ls-tree failing used to read as "that branch
+    // carries no notes"; if it were the baseline, every landed note would have reported as stranded.
+    const unreadable = []
+    const entries = refs.map(({ ref }) => {
+        const t = treeEntries(ref, NOTES_DIR)
+        if (!t.ok) unreadable.push(ref)
+        return [ref, t.entries.map((e) => [e.blob, e.path])]
+    })
+    if (unreadable.includes(base)) {
+        return { ok: false, reason: `cannot read ${base}'s notes - every comparison would be against an empty baseline` }
+    }
 
     const byPath = new Map()
     const blobPaths = new Map()
@@ -131,7 +141,7 @@ export function corpusIndex() {
     ).map((l) => l.split('\t')[1]).filter(Boolean))
 
     return {
-        ok: true,
+        ok: true, unreadableRefs: unreadable,
         baseline: base, refs, byPath, byRef, basePaths, baseBlobs, baseEverPaths,
         blobPaths: new Map([...blobPaths].map(([b, s]) => [b, [...s]])),
     }
@@ -229,7 +239,7 @@ export function addedSinceMergeBase(base, ref, path, blob) {
 const baselinePathsCache = new Map()
 function baselineNotePaths(base) {
     if (!baselinePathsCache.has(base)) {
-        baselinePathsCache.set(base, new Set(treeEntries(base, NOTES_DIR).map((e) => e.path)))
+        baselinePathsCache.set(base, new Set(treeEntries(base, NOTES_DIR).entries.map((e) => e.path)))
     }
     return baselinePathsCache.get(base)
 }
@@ -251,7 +261,7 @@ export function branchFacts(ref, prs, base) {
     if (pr) return { ref, pr, theme: pr.title, themeFrom: 'pr-title' }
 
     const onBase = baselineNotePaths(base)
-    const own = treeEntries(ref, NOTES_DIR)
+    const own = treeEntries(ref, NOTES_DIR).entries
         .filter((e) => !onBase.has(e.path))
         .sort((a, b) => a.path.localeCompare(b.path))
     for (const o of own) {
@@ -299,6 +309,9 @@ export function drift(path, { prs = new Map(), maxBranchesPerCluster = 6, all = 
     const base = baseline()
     const { ok, tips } = refTips()
     if (!ok) return { path, ok: false, reason: 'cannot list refs - is this a git repository?' }
+    // The guard corpusIndex has and this did not: zero refs fell through to an empty blobsForPath
+    // and rendered as a confident "no note at that path on any ref".
+    if (tips.length === 0) return { path, ok: false, reason: 'no branch refs found - nothing to search' }
     if (!base) return { path, ok: false, reason: 'neither origin/master nor master resolves - no baseline' }
     const refs = tips.map((r) => r.ref)
     const blobs = blobsForPath(refs, path)
@@ -372,30 +385,35 @@ export function drift(path, { prs = new Map(), maxBranchesPerCluster = 6, all = 
  * @returns {{refs: string[], paths: string[], refCount: number}[]} largest cluster first
  */
 export function stranded(index) {
+    // PER VERSION, NOT PER PATH - and getting this wrong was a real bug, not merely an untested one.
+    // Both filters were `versions.some(...)`, so ONE version being finished work excluded the whole
+    // path: a branch carrying genuinely new content at a recycled filename was swallowed by another
+    // branch still carrying the old, closed content at that same path. That is the exact collision
+    // the blob-aware filter was added to catch, reintroduced one level up. A path is stranded when
+    // ANY of its versions is content the baseline has never held, and the refs reported are only
+    // those carrying such a version.
+    //
+    // Why the path filter is not enough on its own: filenames get reused. Once master closes and
+    // `git rm`s a note, a DIFFERENT note later created at the same path on a branch was silently
+    // dropped - the tool that exists to surface work that will be lost, losing it. The short
+    // `<category>-<slug>` names make that collision ordinary rather than exotic.
     const survivors = []
     for (const [path, versions] of index.byPath) {
         if (index.basePaths.has(path)) continue
-
-        const landed = [...versions.keys()].some((blob) =>
-            index.baseBlobs.has(blob) && (index.blobPaths.get(blob) ?? []).some((p) => index.basePaths.has(p)))
-        if (landed) continue
-
-        // THE PATH FILTER IS NOT ENOUGH ON ITS OWN, because a filename gets reused. This was
-        // `if (baseEverPaths.has(path)) continue`, so once master had closed and `git rm`d a note,
-        // a DIFFERENT note later created at the same path on a branch was silently dropped - the
-        // tool that exists to surface work that will be lost, losing it. Reproduced: master lands
-        // and removes `ci-flaky.md`; a branch independently creates an unrelated `ci-flaky.md`;
-        // stranded returned nothing. The short `<category>-<slug>` names make collisions ordinary.
-        //
-        // So the path must have been on the baseline AND the branch must be carrying content the
-        // baseline actually held there. New content at a recycled name is still stranded.
-        if (index.baseEverPaths.has(path)) {
-            const heldHere = baselineHistoryBlobs(index.baseline, path)
-            if ([...versions.keys()].some((blob) => heldHere.has(blob))) continue
-        }
+        const heldHere = index.baseEverPaths.has(path)
+            ? baselineHistoryBlobs(index.baseline, path)
+            : new Set()
 
         const refs = new Set()
-        for (const rs of versions.values()) for (const r of rs) refs.add(r)
+        for (const [blob, carrying] of versions) {
+            // This version reached the baseline under another name - a rename, proven exactly.
+            if (index.baseBlobs.has(blob)
+                && (index.blobPaths.get(blob) ?? []).some((p) => index.basePaths.has(p))) continue
+            // The baseline itself once held THIS content at THIS path, then removed it: finished.
+            if (heldHere.has(blob)) continue
+            for (const r of carrying) refs.add(r)
+        }
+        if (refs.size === 0) continue
         survivors.push({ path, refs: [...refs].sort() })
     }
 

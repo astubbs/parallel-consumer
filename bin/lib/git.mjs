@@ -122,7 +122,11 @@ export function blobsForPath(refs, path) {
         if (cut < 0) continue
         const first = line.slice(0, cut)
         const rest = line.slice(cut + 1)
-        if (rest === 'missing' || rest === '') continue // absence is a finding, recorded by omission
+        // A HIT IS IDENTIFIED BY ITS OBJECT NAME, not by the second field not saying "missing".
+        // The miss line is `<spec> missing`, so testing the second field mis-read a genuine hit on
+        // a branch literally named `missing` as an absence, silently dropping that ref's version.
+        // A 40-hex object name cannot be produced by the miss format, so this is unambiguous.
+        if (!/^[0-9a-f]{40}$/.test(first) || rest === '') continue
         out.set(rest, first)
     }
     return out
@@ -130,13 +134,23 @@ export function blobsForPath(refs, path) {
 
 /** Every (blob, path) pair under a pathspec on one ref. */
 export function treeEntries(ref, pathspec) {
-    const res = exec('git', ['ls-tree', '-r', ref, '--', pathspec])
-    if (!res.ok) return []
-    return lines(res.out).map((l) => {
-        const [meta, path] = l.split('\t')
+    // `-z`, because git C-QUOTES a path containing non-ASCII or special characters unless told
+    // otherwise - wrapping it in quotes with octal escapes. Splitting the default output on tab
+    // would hand back that quoted string as if it were the path, corrupting the entry everywhere
+    // downstream with nothing to surface it. NUL-terminated records cannot be quoted at all.
+    //
+    // `{ok, entries}` rather than a bare array, for the same reason refTips carries a flag: a
+    // failed ls-tree returned `[]`, which corpusIndex read as "this branch carries no notes". If
+    // the failing ref were the BASELINE, basePaths would empty and every landed note would report
+    // as stranded - a plumbing failure feeding a headline number, unreported.
+    const res = exec('git', ['ls-tree', '-r', '-z', ref, '--', pathspec])
+    if (!res.ok) return { ok: false, entries: [] }
+    const entries = res.out.split('\0').filter((r) => r.length > 0).map((rec) => {
+        const [meta, path] = rec.split('\t')
         const cols = meta.split(/\s+/)
         return { blob: cols[2], path }
     }).filter((e) => e.blob && e.path)
+    return { ok: true, entries }
 }
 
 /** Line-level size of the difference between two blobs, without checking anything out. */

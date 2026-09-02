@@ -384,15 +384,28 @@ const CHECKS = [
                 if (!index.ok || index.baseEverPaths.size === 0) return false
                 // closed.md WAS on master and was git rm'd, and the `behind` branch does not carry
                 // it - so it must not be reported. The `reuse` branch's different closed.md must be.
-                const reported = new Set(n.stranded(index).flatMap((c) => c.paths))
-                // `stale-closed` carries the exact content master had at closed.md before removing
-                // it - finished work, must be excluded. `never-landed.md` never reached master at
-                // all - must be reported. Both directions, so the filter cannot pass by doing nothing.
-                return !reported.has('docs/inflight/closed.md') && reported.has('docs/inflight/never-landed.md')
+                // THE COLLISION CASE, which the previous assertion could not see. `closed.md`
+                // exists on two branches: `stale-closed` carries the exact content master held
+                // before removing it (finished work), and `reuse` carries unrelated new content at
+                // the recycled name (stranded). The path must be reported, and reported for `reuse`
+                // ALONE. The naive path-level filter this replaced excluded the whole path, which
+                // an "is any historical path ever reported" assertion satisfies perfectly - so that
+                // assertion stayed green against the exact bug it was written for.
+                const clusters = n.stranded(index)
+                const closed = clusters.find((c) => c.paths.includes('docs/inflight/closed.md'))
+                if (!closed) return false
+                if (closed.refs.includes('stale-closed')) return false
+                if (!closed.refs.includes('reuse')) return false
+                const reported = new Set(clusters.flatMap((c) => c.paths))
+                return reported.has('docs/inflight/never-landed.md')
             })
         },
+        // Reverts to the PATH-level exclusion - the actual pre-fix bug - rather than deleting the
+        // filter outright. Deleting it proved only that a filter existed; this proves it is
+        // per-version, which is the property that catches the collision.
         mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
-            '        if (index.baseEverPaths.has(path)) {', '        if (false) {'),
+            '            if (heldHere.has(blob)) continue',
+            '            if (heldHere.size > 0) continue'),
     },
     {
         id: 'stranded-is-clustered-not-listed',
@@ -542,6 +555,32 @@ const CHECKS = [
         mutate: (binDir) => patch(join(binDir, 'lib', 'prior-art.mjs'),
             'test(${JSON.stringify(pattern)}; "i")',
             'test("${pattern.replace(/"/g, \'\\\\"\')}"; "i")'),
+    },
+    {
+        id: 'baseline-history-blobs-sees-every-version-the-baseline-held',
+        why: 'this is the discriminator; a gap here silently reclassifies real divergence as merely behind and drops it from view',
+        // Tested DIRECTLY, not through drift(). Every other check reaches this function through
+        // drift's output, so a bug that widened or narrowed the history set could be masked by the
+        // clustering above it - and this is the one place a bug produces the worst outcome the tool
+        // has: content that exists only on a branch, reported as "already on master, just behind".
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            const g = await gitlib(binDir)
+            return inFixture(() => {
+                const base = g.baseline()
+                const held = n.baselineHistoryBlobs(base, 'docs/inflight/shared.md')
+                // master held exactly v1 and v2 at this path.
+                if (held.size !== 2) return false
+                const v1 = g.exec('git', ['rev-parse', 'behind:docs/inflight/shared.md']).out.trim()
+                const v2 = g.exec('git', ['rev-parse', `${base}:docs/inflight/shared.md`]).out.trim()
+                const diverged = g.exec('git', ['rev-parse', 'diverged:docs/inflight/shared.md']).out.trim()
+                // Both baseline versions in; the branch-only version out. Narrower OR wider fails.
+                return held.has(v1) && held.has(v2) && !held.has(diverged)
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
+            "exec('git', ['rev-list', '--full-history', base, '--', path])",
+            "exec('git', ['rev-list', '--max-count=1', base, '--', path])"),
     },
 ]
 
