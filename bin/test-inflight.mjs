@@ -110,6 +110,16 @@ function buildFixture() {
     note('closed.md', '# A DIFFERENT topic at a recycled filename\n\n<!-- inflight-type: bug -->\n<!-- inflight-impact: stall -->\ntopic B\n')
     commit('reuse the closed filename for unrelated work')
 
+    // A REAL PARENT/CHILD PAIR, both off master. `behind` cannot serve: it points at a commit the
+    // baseline already contains, so it has no work of its own and is not a meaningful parent - the
+    // first version of these checks used it and failed, which is the fixture earning its keep.
+    git('checkout', '-q', '-b', 'feature-a', 'master')
+    note('feature-a.md', '# Feature A\n\n<!-- inflight-type: feature -->\n<!-- inflight-impact: ci -->\na\n')
+    commit('feature a')
+    git('checkout', '-q', '-b', 'feature-int', 'feature-a')
+    note('feature-b.md', '# Feature B\n\n<!-- inflight-type: feature -->\n<!-- inflight-impact: ci -->\nb\n')
+    commit('integrate a, add b')
+
     git('checkout', '-q', 'master')
     return dir
 }
@@ -140,6 +150,7 @@ const lib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'prior-art.mjs'
 const notes = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'notes.mjs')).href)
 const gitlib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'git.mjs')).href)
 const front = (binDir) => import(pathToFileURL(join(binDir, 'inflight.mjs')).href)
+const branches = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'branches.mjs')).href)
 
 /**
  * Source with comments removed, so a check about CODE is not answered by prose. The first cut of
@@ -608,6 +619,47 @@ const CHECKS = [
         mutate: (binDir) => patch(join(binDir, 'lib', 'prior-art.mjs'),
             'const grepPattern = opts.headings ? `^#{1,6}[[:space:]].*(${pattern})` : pattern',
             'const grepPattern = pattern'),
+    },
+    {
+        id: 'relatedness-is-containment-not-a-guess',
+        why: 'an integration branch reported as an orphan is the detector being confidently wrong',
+        // The fixture's `diverged` branches from v1 and adds a commit, so it fully contains
+        // `behind`, which still sits at v1. That is a parent/child pair with a known right answer.
+        run: async (binDir) => {
+            const b = await branches(binDir)
+            return inFixture(() => {
+                const g = b.commitGraph()
+                if (!g.ok) return false
+                const child = b.relatives(g, 'feature-int')
+                const parent = b.relatives(g, 'feature-a')
+                // Containment is directional: feature-int has feature-a's work, never the reverse.
+                return child.parents.includes('feature-a') && parent.children.includes('feature-int')
+                    && !child.children.includes('feature-a') && !parent.parents.includes('feature-int')
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'branches.mjs'),
+            'if (mine.has(other.sha)) parents.push(other.ref)',
+            'if (!mine.has(other.sha)) parents.push(other.ref)'),
+    },
+    {
+        id: 'a-branch-nothing-tracks-gets-a-remedy-not-a-finding',
+        why: 'a report gets skimmed; an instruction gets acted on, and this is how work goes missing',
+        run: async (binDir) => {
+            const b = await branches(binDir)
+            return inFixture(() => {
+                const g = b.commitGraph()
+                if (!g.ok) return false
+                // `stranded-work` has no PR, is named in no note on the baseline, and integrates
+                // nothing - the shape that loses work. The remedy must name the file to write.
+                const orphan = b.trackingGap(b.branchView(g, 'stranded-work', new Map()))
+                if (!orphan || !orphan.remedy.includes('docs/inflight/branch-stranded-work.md')) return false
+                // `feature-int` contains another branch, so it is an integration branch, not an orphan.
+                const integ = b.trackingGap(b.branchView(g, 'feature-int', new Map()))
+                return integ !== null && integ.kind === 'integration'
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'branches.mjs'),
+            '    if (view.parents.length > 0) {', '    if (false) {'),
     },
 ]
 

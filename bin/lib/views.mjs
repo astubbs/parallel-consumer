@@ -99,3 +99,53 @@ export function formatStranded(clusters, index) {
     }
     return out.join('\n')
 }
+
+export function formatBranch(v, gap) {
+    if (!v.ok) return `${v.reason}\nTry: git for-each-ref --format='%(refname:short)' refs/heads refs/remotes/origin`
+
+    const row = (k, val) => `  ${k.padEnd(12)}${val}`
+    const out = [v.ref, '']
+
+    out.push(row('PR', v.pr
+        ? `astubbs/parallel-consumer#${v.pr.number} ${v.pr.state}  ${v.pr.title}`
+        : 'none'))
+    out.push(row('pushed', v.isRemote ? '(this IS the remote ref)'
+        : v.upstream ? v.upstream
+            : 'NOWHERE - this branch exists only on this disk'))
+    // Two records, two questions - saying which is which is the point.
+    out.push(row('session', v.session ? `${v.session}   (produced it; from a Claude-Session commit trailer)` : 'unknown'))
+    if (v.holder) out.push(row('holding', `${v.holder}   (right now; from .worktree-owner, this machine only)`))
+    out.push(row('commits', v.containedInBaseline
+        ? `none the baseline lacks - fully contained in ${v.baseline}, safe to delete`
+        : `${v.commitsOffBaseline} the baseline does not have`))
+    out.push(row('notes', v.notesOnly.length === 0
+        ? `none the baseline lacks`
+        : `${v.notesOnly.length} that ${v.baseline} has never had`))
+    for (const p of v.notesOnly.slice(0, 5)) out.push(`                  ${p}`)
+    if (v.notesOnly.length > 5) out.push(`                  ... and ${v.notesOnly.length - 5} more`)
+
+    // Each related branch shows its own PR, and says "no PR" rather than leaving a gap - absent and
+    // unknown are different facts, and a blank column reads as neither.
+    const rel = (r) => `                  ${r.ref.padEnd(52)} ${r.pr
+        ? `astubbs/parallel-consumer#${r.pr.number} ${r.pr.state}`
+        : 'no PR'}`
+    if (v.parents.length) {
+        out.push('', row('integrates', `${v.parents.length} branch(es) it fully contains`))
+        for (const p of v.parents.slice(0, 10)) out.push(rel(p))
+        if (v.parents.length > 10) out.push(`                  ... and ${v.parents.length - 10} more`)
+    }
+    if (v.children.length) {
+        out.push('', row('absorbed by', `${v.children.length} branch(es) that contain it`))
+        for (const c of v.children.slice(0, 10)) out.push(rel(c))
+    }
+
+    out.push('')
+    if (v.mentions.length) out.push(row('tracked', `named in ${v.mentions.join(', ')}`))
+    if (gap) {
+        out.push(row('TRACKED', 'NOWHERE - no PR, no branch note, named in no note on the baseline'))
+        out.push(row('FIX', gap.remedy))
+    } else if (!v.mentions.length && v.pr) {
+        out.push(row('tracked', `by its PR`))
+    }
+    return out.join('\n')
+}

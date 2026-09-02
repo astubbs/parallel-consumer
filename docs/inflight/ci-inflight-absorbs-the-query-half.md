@@ -112,6 +112,12 @@ A helper for the first was written into `bin/lib/git.mjs` and removed unused bef
 function nobody calls is documentation with a maintenance cost. The knowledge belongs here until
 something needs it.
 
+## Not this note
+
+What the tool should *grow* - a per-branch view, Claude session ownership, the tracking-gap detector
+and branch relationships - is [`ci-inflight-next-commands.md`](ci-inflight-next-commands.md). This
+note owns only the migration of query logic out of the bash scripts listed above.
+
 ## Delete when
 
 Each row above has either migrated or been ruled out in writing, and the `.github/scripts` decision

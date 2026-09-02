@@ -38,7 +38,8 @@ import { pathToFileURL } from 'node:url'
 
 import { baseline, freshnessWarnings, refTips } from './lib/git.mjs'
 import { corpusIndex, drift, findNotes, prsByBranch, stranded } from './lib/notes.mjs'
-import { formatDrift, formatFind, formatStranded, formatWarnings } from './lib/views.mjs'
+import { branchView, commitGraph, trackingGap } from './lib/branches.mjs'
+import { formatBranch, formatDrift, formatFind, formatStranded, formatWarnings } from './lib/views.mjs'
 import {
     format, formatHeader, formatSection, formatTail,
     priorArt, summary as priorArtSummary, usage as priorArtUsage,
@@ -160,6 +161,42 @@ carries that the baseline does not, else the branch name. Nothing is summarised 
                 },
             },
         ],
+    },
+    {
+        name: 'branch',
+        summary: 'what one branch IS - its PR, its session, what it integrates, and whether anything tracks it',
+        when: 'you found a branch and do not know what it is, who owns it, or whether it is safe to delete',
+        usage: `Usage: bin/inflight.mjs branch <ref>
+
+Everything one branch is, in one place:
+
+  PR and state; whether it is pushed anywhere at all; the Claude session that PRODUCED it (from the
+  commit trailer, which travels with the branch) and separately who is HOLDING its worktree right now
+  (from .worktree-owner, which is local and uncommitted); the notes it carries that the baseline has
+  never had; and - from the commit graph, exactly - what it integrates and what integrates it.
+
+RELATEDNESS IS CONTAINMENT, not a heuristic: a branch is a parent when this one already contains its
+tip. One rev-list per ref builds the whole map, then every relationship is a set lookup.
+
+It also answers whether ANYTHING tracks this branch - a PR, a docs/inflight/branch-*.md, or a mention
+in any note on the baseline. When nothing does, it prints the remedy rather than a finding, because a
+report gets skimmed and an instruction gets acted on. An integration branch is not an orphan and is
+reported as what it is.
+
+  bin/inflight.mjs branch origin/feats/ks-streams-reconciled`,
+        run: (args, emit) => {
+            const ref = args[0]
+            if (!ref) return { ok: false, reason: 'branch: give a ref (e.g. origin/feats/ks-streams-reconciled)' }
+            const graph = commitGraph()
+            if (!graph.ok) return { ok: false, reason: `branch: ${graph.reason}` }
+            emit(formatWarnings(freshnessWarnings(graph.baseline, graph.refs.length)))
+            const prs = prsByBranch()
+            if (!prs.ok) emit(`  WARNING: ${prs.reason} - PR state below is UNKNOWN, not absent.\n`)
+            const view = branchView(graph, ref, prs.map)
+            if (!view.ok) return { ok: false, reason: `branch: ${view.reason}` }
+            emit(formatBranch(view, trackingGap(view)))
+            return { ok: true }
+        },
     },
     {
         name: 'stranded',
