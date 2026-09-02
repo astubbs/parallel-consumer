@@ -516,7 +516,7 @@ include::{project_root}/parallel-consumer-examples/parallel-consumer-example-cor
 This ensures maximum concurrency, while ensuring messages are processed and committed in `KEY` order, making sure no offset is committed unless all offsets before it in it's partition, are completed also.
 <3> The maximum number of concurrent processing operations to be performing at any given time.
 Also, because the library coordinates offsets, `enable.auto.commit` must be disabled in your consumer.
-<4> Producer configuration, only required if using the `produce` flows: PC builds the producer from it through the factory on the next line (the default is `new KafkaProducer<>(config)`; override it to wrap or instrument the producer), and rebuilds it if the broker invalidates it - see <<producer-recovery>>.
+<4> Producer configuration, only required if using the `produce` flows: PC builds the producer from it through the factory on the next line (the default is `new KafkaProducer<>(config)`; override it to wrap or instrument the producer, keeping every key it is given), and rebuilds it if the broker invalidates it - see <<producer-ownership>> and <<producer-recovery>>.
 Handing PC a finished `Producer` instance still works, deprecated.
 <5> Subscribe to your topics
 
@@ -952,13 +952,23 @@ It is covered by an existing test, but no negative control was observed for it, 
 The produce-lock timeout returning the record for retry started out the same way and no longer is: the eager-processing test holds the commit lock shut until a worker's acquisition is observed to time out, then watches that record's retry succeed, and removing the hold turns it red.
 It is recorded `PROVED`.
 
-For implementations details, see the <<Transactional System Architecture>> section.
-
-[[producer-recovery]]
-=== Producer ownership and recovery
+[[producer-ownership]]
+=== Producer ownership
 
 Supply the producer as configuration - `producerConfig`, the map you would hand `new KafkaProducer<>(config)` - and PC builds the producer itself, through `producerFactory` (default: exactly that constructor; override it to wrap or instrument the producer, keeping every key it is given).
-Owning the producer is what makes recovery possible.
+PC sets the `transactional.id` where it builds the producer: `pc-<L>-<group.id>-<uuid>`, where `<L>` is the decimal length of the consumer's `group.id`.
+The prefix `pc-<L>-<group.id>-` is stable for the group, so one prefixed TransactionalId ACL authorises every id PC derives for it, and the length field keeps one group's prefix from being a prefix of another's (`app` versus `app-x`).
+A `transactional.id` set in `producerConfig` does not take effect there, and PC says so at WARN naming the value it derived instead.
+Configuration values are never rendered into logs: PC's own log lines and `toString()` show an allow-list of non-secret keys and redact the rest.
+A factory must return a new producer on every call - PC may discard one and build another from the same configuration - and a factory that returns one it already returned, or drops the `transactional.id` it was given, is rejected at construction naming that contract.
+
+Supplying a finished `Producer` instance still works for every flow it worked for, and is deprecated: PC cannot read a finished producer's configuration back out, so it can never build another from it.
+PC logs one WARN at start-up naming the remedy.
+The instance option's removal is queued for `0.7.0.0`.
+
+[[producer-recovery]]
+=== Producer recovery
+
 Where PC built the producer, a producer the broker reports invalid is replaced and the work its aborted transaction discarded is processed again, so processing continues instead of the instance stopping.
 Recovery is a transactional-mode mechanism: it runs from the transactional commit loop, so in the consumer-commit modes a PC-built producer is not recovered and these conditions surface as the produce failures they were before.
 To make the replay possible, transactional mode keeps every completed record until the commit that carries it succeeds - on both producer paths - so memory held per partition grows with `commitInterval`; the default interval keeps it to a fraction of a second of throughput.
@@ -966,15 +976,9 @@ The conditions PC treats this way are `ProducerFencedException`, `InvalidProduce
 Recovery repeats as often as the condition recurs; consecutive recoveries with no successful commit between them are paced by an exponential backoff, logged at ERROR, and visible on the `pc.producer.consecutive.recoveries` gauge, so an instance that is alive but not progressing is distinguishable from one that recovered once.
 A replacement that cannot be built yet is retried on a later cycle; one that can never be built - an authorization failure - ends the instance, naming the `transactional.id` that was refused.
 
-PC sets the `transactional.id` where it builds the producer: `pc-<L>-<group.id>-<uuid>`, where `<L>` is the decimal length of the consumer's `group.id`.
-The prefix `pc-<L>-<group.id>-` is stable for the group, so one prefixed TransactionalId ACL authorises every id PC derives for it, and the length field keeps one group's prefix from being a prefix of another's (`app` versus `app-x`).
-A `transactional.id` set in `producerConfig` does not take effect there, and PC says so at WARN naming the value it derived instead.
-Configuration values are never rendered into logs: PC's own log lines and `toString()` show an allow-list of non-secret keys and redact the rest.
-
-Supplying a finished `Producer` instance still works for every flow it worked for, is deprecated, and does not recover: PC cannot read a finished producer's configuration back out, so it cannot build a replacement, and on that path the broker-reported conditions stay fatal as before.
 One thing did change there: an `InvalidPidMappingException` on the produce path still closes the instance, but the batch is now failed and its offsets are not committed, where previously the close swallowed the exception and offsets were published for output that was never produced.
-PC logs one WARN at start-up naming the remedy.
-The instance option's removal is queued for `0.7.0.0`.
+
+For implementations details, see the <<Transactional System Architecture>> section.
 
 .From the Options Javadoc
 [source,java,indent=0]
@@ -1214,6 +1218,7 @@ Total number of times the transactional producer was replaced after the broker r
 Gauge `pc.producer.consecutive.recoveries{subsystem=producer}`
 
 Producer recoveries since the last successful commit - non-zero for a moment after any recovery, rising while the instance is alive but not progressing
+
 
 === Example Metrics setup steps
 Meter registry that metrics should be bound has to be set using Parallel Consumer Options along with any common tags that identify the PC instance.
