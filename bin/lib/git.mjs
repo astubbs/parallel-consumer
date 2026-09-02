@@ -22,7 +22,7 @@
 import { execFileSync } from 'node:child_process'
 
 import { perfRecord } from './perf.mjs'
-import { statSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 
 /** Run a command; return {ok, out, status}. Never throws - callers decide what a failure means. */
 export function exec(cmd, args, opts = {}) {
@@ -177,6 +177,31 @@ export function blobDiffStat(a, b) {
 }
 
 /**
+ * When the last fetch was, and HOW MUCH OF THE CORPUS it covered.
+ *
+ * FETCH_HEAD's mtime dates a fetch of ANY width, so `git fetch origin master` - one ref of 292 -
+ * resets the freshness clock without refreshing anything else, and the staleness warning below goes
+ * quiet over a corpus exactly as stale as it was. Measured 2026-09-02: mtime forced to 2020, one
+ * single-ref fetch, mtime now. The file also LISTS what that fetch brought, one line per ref, so
+ * the width is readable rather than guessable - and a full fetch lists every ref it covered even
+ * when none of them moved.
+ *
+ * @returns {{at: number, refs: number|null, source: string}|null}
+ */
+function lastFetch(commonDir) {
+    try {
+        const refs = lines(readFileSync(`${commonDir}/FETCH_HEAD`, 'utf8')).length
+        return { at: statSync(`${commonDir}/FETCH_HEAD`).mtimeMs, refs, source: 'FETCH_HEAD' }
+    } catch { /* no FETCH_HEAD - fall through, it is not evidence of never having fetched */ }
+    // A FRESH CLONE HAS NO FETCH_HEAD, and was told "this clone may never have fetched" - the
+    // opposite error, and the one that reads as most alarming on the newest corpus obtainable.
+    // `packed-refs` is written by the clone itself, so its mtime dates the refs actually held.
+    try {
+        return { at: statSync(`${commonDir}/packed-refs`).mtimeMs, refs: null, source: 'packed-refs' }
+    } catch { return null }
+}
+
+/**
  * Reasons the answers below may be stale, as data.
  *
  * A complete search of a stale corpus is still a false negative, and it reads exactly like a
@@ -215,15 +240,25 @@ export function freshnessWarnings(base, refCount) {
             'SHALLOW clone - any commit search covers only the fetched depth.',
             'Run: git fetch --unshallow')
     }
-    try {
-        const ageSeconds = (Date.now() - statSync(`${commonDir}/FETCH_HEAD`).mtimeMs) / 1000
+    const last = lastFetch(commonDir)
+    if (!last) {
+        warn('never-fetched', 'no FETCH_HEAD and no packed-refs - this clone may never have fetched.',
+            "Run 'git fetch origin'.")
+    } else {
+        const ageSeconds = (Date.now() - last.at) / 1000
         if (ageSeconds > 3600) {
             warn('stale-fetch',
-                `last fetch was ${Math.floor(ageSeconds / 3600)}h ago, so '${base}' and the ${refCount} refs`,
-                "are that stale. Run 'git fetch origin' and re-run.")
+                `last fetch was ${Math.floor(ageSeconds / 3600)}h ago (by ${last.source}), so '${base}'`,
+                `and the ${refCount} refs are that stale. Run 'git fetch origin' and re-run.`)
         }
-    } catch {
-        warn('never-fetched', "no FETCH_HEAD - this clone may never have fetched. Run 'git fetch origin'.")
+        // WIDTH, NOT JUST AGE. A fetch narrower than a quarter of the corpus dates that ref and
+        // nothing else, so its recency says nothing about the refs this search actually reads.
+        if (last.refs !== null && last.refs * 4 < refCount) {
+            warn('narrow-fetch',
+                `the last fetch covered ${last.refs} ref(s) against ${refCount} in this search, so its`,
+                'timestamp dates THOSE refs only - the rest are as old as they were, and the age above',
+                "is measuring the wrong thing. Run 'git fetch origin' for the whole set.")
+        }
     }
     const behind = Number(exec('git', ['rev-list', '--count', `HEAD..${base}`]).out.trim() || '0')
     if (behind > 0) {

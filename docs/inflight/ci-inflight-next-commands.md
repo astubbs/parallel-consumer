@@ -249,6 +249,92 @@ The verdict still belongs to
 [`process-adopt-external-harness.md`](process-adopt-external-harness.md), which owns the
 adopt-or-build decision and keeps it deferred until after v6.
 
+## The principle the comparison exposed: flow with git, do not suppress it
+
+Antony's framing, and it is the design axis for everything below rather than a comment on
+Backlog.md: **state in git is statistical, not binary.** "25% of branches show this as fixed" is the
+true answer to a question about a note; one status is a summary that has thrown away the shape of
+the disagreement. A tool that reconciles is answering a question nobody asked here.
+
+- **It is already how this tool is built**, not a new direction: `note drift` clusters by blob and
+  reports every version, and `stranded` reports a ref-set. Neither has a notion of a winner. What
+  the re-run supplied is the *reason* - a comparison against a tool that took the opposite position
+  and made the difference visible.
+- **The gap is in the OUTPUT, not the model.** The corpus is already a distribution; nothing reports
+  it as one. There is no command that answers "of the refs carrying this note, what proportion say
+  what", and the shape it would print - proportions, with the outliers named - is the natural next
+  view given the data already collected.
+- **Antony's precedent** is Hasten - another of his projects, not in this tree, so nothing here
+  verifies it - where features with novel advantages *fell out of* the architecture rather than
+  being designed in. The bet is the same: commit to git's model all the way down, and the
+  distinguishing features arrive as consequences.
+- **Backlog.md remains worth reading for ideas**, translated rather than adopted. Its board and its
+  branch-scan loader solve real presentation problems; only its reconciliation step is wrong here.
+
+## The corpus is not every ref, and the tool says it is
+
+Measured 2026-09-02 in the development clone. `refTips()` enumerates `refs/heads` and
+`refs/remotes/origin`, which is 436 refs - and the help text calls that "every branch tip", which is
+true and is read as "everything".
+
+| Ref space | Count | In the corpus? |
+|---|---|---|
+| `refs/heads`, `refs/remotes/origin` | 436 | yes |
+| `refs/tags` | 64 | **no** |
+| `refs/backup` | 44 | **no** |
+| `refs/remotes/upstream` and three stray remotes | 3 | no, and correctly so |
+
+**What that costs, measured rather than assumed** - both findings came from checking, and most of
+the excluded refs turned out to be duplicates:
+
+- **41 of 44 `refs/backup` tips are already commits inside the visible history**, so excluding them
+  costs nothing. Of the remaining three, one - `pre-rename-merge/heads/264-rename` - holds a version
+  of `branch-package-rename.md` that exists at no visible ref. One note, but `stranded` exists
+  precisely to find that class, and it cannot see it.
+- **12 of 64 tags point at commits outside the visible set**, named `backup/pre-recut-324`,
+  `recut-baseline-342`, `archive/presentation` and so on. Tags are how this repo preserves work
+  before a re-cut, which makes them a *likely* home for stranded knowledge rather than an unlikely
+  one. Antony named tags explicitly.
+
+The fix is not simply widening the glob: `refs/backup` and `refs/tags` are archival, so a version
+found only there is a different finding from one on a live branch - preserved, not in flight - and
+the output has to say which. Scope first, then widen.
+
+## Fetch completeness, not just fetch age
+
+Antony works across machines, so the corpus is only as complete as the last fetch on *this* one. Two
+<!-- post-merge: checked-begin -->
+defects in the freshness check were found and fixed in astubbs/parallel-consumer#400; the remaining
+work is the part that acts rather than warns.
+<!-- post-merge: checked-end -->
+
+**Fixed** (`freshnessWarnings` in `bin/lib/git.mjs`, both negative-controlled in
+`bin/test-inflight.mjs`):
+
+- **A narrow fetch silenced the staleness warning.** FETCH_HEAD's mtime dates a fetch of any width,
+  so `git fetch origin master` - one ref of 292 - reset the clock over a corpus exactly as stale as
+  before. Measured: mtime forced to 2020, one single-ref fetch, mtime now. The file lists what the
+  fetch brought, one line per ref, and a full fetch lists every ref it covered even when none moved
+  - so width is readable rather than guessable. `narrow-fetch` now fires below a quarter of the
+  corpus.
+- **A fresh clone was told it may never have fetched.** `git clone` writes no FETCH_HEAD at all, so
+  keying "never fetched" on that file's absence fired hardest on the newest corpus obtainable.
+  `packed-refs` is written by the clone, so its mtime dates the refs actually held.
+
+**Still queued:**
+
+- **Fetch in the background rather than telling the user to.** Antony: accept that the odd action
+  takes a few seconds longer. The shape is a fetch kicked off when the corpus is older than a
+  threshold, with the current run answering from what it has and *saying so* - never a silent wait,
+  because a command that sometimes blocks on the network is a command agents learn to distrust.
+- **Prune and tags are not configured.** `fetch.prune` and `remote.origin.tagOpt` are both unset in
+  the development clone, so deleted remote branches linger as remote-tracking refs - the opposite
+  error to staleness, and one that makes `stranded` report work on a branch that no longer exists.
+  Nothing has measured how many of the 292 origin refs are already dead this way.
+- **Completeness is a claim the tool should test, not assume.** The clone-level facts it already
+  reads - shallow, single-ref, baseline missing - are the same class as "this remote has refs you do
+  not have", and that one needs the network to answer.
+
 ## Delete when
 
 Each command above has shipped or been ruled out in writing, and the branch index has been

@@ -17,6 +17,21 @@ may not be rewritten is a second copy that drifts from the first.
 **What this note owns is the part that is still OPEN, and it is now only the Beads half.** Backlog.md
 has been driven; `bd` has not, so every probe below is untouched.
 
+## Why run `bd` at all, when the decision is "build"?
+
+Antony asked, and the answer has to survive being asked again. **Not to reconsider adopting it -
+the 2026-09-02 re-run settled that - but because Beads is the only surveyed tool whose storage
+model might not reconcile.** It appends to a log and merges it with git, rather than resolving to
+one row per task, and that is the same bet as
+[`ci-inflight-next-commands.md`](ci-inflight-next-commands.md)'s "flow with git, do not suppress
+it". If `bd` reports disagreement instead of resolving it, it is the one piece of prior art on the
+model this tool is committing to, and worth reading closely. If it reconciles like Backlog.md does,
+the class result is confirmed and this whole line is closed with evidence.
+
+Either outcome is worth one probe; neither is worth an evaluation. **It blocks nothing** - not the
+in-flight tool, not v6. It is a cheap measurement kept open because it is cheap, and it should be
+deleted rather than carried if it stops being either.
+
 ## What is left, and it needs `bd` to have run
 
 Deferring a decision is not a reason to defer the measurement it will be made on - by the time v6

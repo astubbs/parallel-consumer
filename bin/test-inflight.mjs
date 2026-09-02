@@ -128,6 +128,31 @@ function buildFixture() {
     return dir
 }
 
+/**
+ * A CLONE WITH A REAL REMOTE, because freshness is a statement about fetching and the fixture above
+ * has nothing to fetch from. Returns the clone's path; what gets fetched is left to the caller,
+ * because the width of that fetch is the variable under test.
+ */
+function buildFetchFixture() {
+    const root = mkdtempSync(join(tmpdir(), 'inflight-fetch-'))
+    const run = (where, ...args) => {
+        const r = spawnSync('git', args, { cwd: where, encoding: 'utf8' })
+        if (r.status !== 0) throw new Error(`fetch fixture: git ${args.join(' ')} failed: ${r.stderr}`)
+        return r.stdout.trim()
+    }
+    const up = join(root, 'up')
+    mkdirSync(up, { recursive: true })
+    run(up, 'init', '-q', '-b', 'master')
+    writeFileSync(join(up, 'f'), 'one\n')
+    run(up, 'add', '-A')
+    run(up, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'one')
+    // Enough refs that ONE of them is unambiguously a narrow fetch of the set.
+    for (let i = 0; i < 12; i += 1) run(up, 'branch', `b${i}`)
+    const down = join(root, 'down')
+    run(root, 'clone', '-q', up, down)
+    return down
+}
+
 let FIXTURE = null
 const fixture = () => (FIXTURE ??= buildFixture())
 
@@ -843,6 +868,55 @@ const CHECKS = [
         mutate: (binDir) => patch(join(binDir, '..', '.claude', 'hooks', 'after-pr-create-refresh-cache.mjs'),
             "    if (!/\\bgh\\b.*\\bpr\\b.*\\bcreate\\b/.test(command)) return null",
             "    if (!command.startsWith('gh pr create')) return null"),
+    },
+    {
+        id: 'a-narrow-fetch-cannot-look-fresh',
+        why: 'a one-ref fetch resets FETCH_HEAD mtime, silencing the staleness warning over a corpus that is still stale',
+        // MEASURED BEFORE IT WAS WRITTEN: mtime forced to 2020, `git fetch origin master`, mtime
+        // now. The check read age alone, so the commonest fetch an agent runs - one branch, to
+        // update the base - silenced the only warning that says this corpus is old. A full fetch
+        // lists every ref it covered even when none of them moved, so width is readable from the
+        // same file rather than guessed.
+        run: async (binDir) => {
+            const g = await gitlib(binDir)
+            const dir = buildFetchFixture()
+            const before = cwd()
+            try {
+                chdir(dir)
+                const ids = () => g.freshnessWarnings(g.baseline(), g.refTips().tips.length).map((w) => w.id)
+                spawnSync('git', ['fetch', '-q', 'origin', 'master'], { cwd: dir })
+                if (!ids().includes('narrow-fetch')) return false
+                // ...and a FULL fetch of the same repo must not, or the warning is only noise.
+                spawnSync('git', ['fetch', '-q', 'origin'], { cwd: dir })
+                return !ids().includes('narrow-fetch')
+            } finally { chdir(before) }
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'git.mjs'),
+            'if (last.refs !== null && last.refs * 4 < refCount) {',
+            'if (false && last.refs !== null && last.refs * 4 < refCount) {'),
+    },
+    {
+        id: 'a-fresh-clone-is-not-a-never-fetched-clone',
+        why: 'the newest corpus obtainable was told it may never have fetched - the opposite error, and the loudest one',
+        // `git clone` writes no FETCH_HEAD at all, so keying "never fetched" on that file's absence
+        // fires hardest on the freshest possible checkout. packed-refs is written BY the clone, so
+        // its mtime dates the refs actually held.
+        run: async (binDir) => {
+            const g = await gitlib(binDir)
+            const dir = buildFetchFixture()
+            const before = cwd()
+            try {
+                chdir(dir)
+                const ids = g.freshnessWarnings(g.baseline(), g.refTips().tips.length).map((w) => w.id)
+                // A clone this new is neither never-fetched nor stale - both claims it used to make.
+                return !ids.includes('never-fetched') && !ids.includes('stale-fetch')
+            } finally { chdir(before) }
+        },
+        // Reverts to keying on FETCH_HEAD alone - the actual pre-fix behaviour - rather than
+        // deleting the fallback, which would prove only that some fallback existed.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'git.mjs'),
+            "        return { at: statSync(`${commonDir}/packed-refs`).mtimeMs, refs: null, source: 'packed-refs' }",
+            '        return null'),
     },
 ]
 
