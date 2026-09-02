@@ -491,9 +491,16 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
         private final ReentrantReadWriteLock.ReadLock produceLock;
 
         /**
-         * Unlocks the produce lock
+         * Unlocks the produce lock.
+         * <p>
+         * Public rather than protected because a rejected hand-over has to release the hold it is refusing:
+         * {@link PollContextInternal#setProducingLock} throws when a context already owns a lock, and no caller
+         * releases the hold it was passing in on that throw path. Without a release reachable from there, the guard
+         * would swap a silently orphaned first hold for a loudly orphaned second one - the same permanent block on
+         * the next commit's write-lock acquisition, which is exactly what that guard exists to prevent. Reported by
+         * Codex review on astubbs#262.
          */
-        protected void unlock() {
+        public void unlock() {
             produceLock.unlock();
             log.debug("Unlocking produce lock (context: {}).", context.getOffsets());
         }

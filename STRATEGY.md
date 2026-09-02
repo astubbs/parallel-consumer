@@ -10,8 +10,9 @@ last_updated: 2026-08-18
 Teams processing Kafka records where concurrency is welded to partition count, and one slow
 record blocks everything behind it in its partition. Adding partitions is often prohibitive and
 still doesn't remove the head-of-line block - and a single-partition topic can't be sped up at
-all. Share Groups decouple scaling from partitions but deliver out of order, so nothing gives
-low latency and guaranteed per-key ordering at the same time.
+all. Share Groups decouple scaling from partitions but deliver out of order, *and* cannot
+acknowledge inside a transaction - so nothing else gives low latency, guaranteed per-key
+ordering, and exactly-once at the same time.
 
 And even where parallelism is unlocked, teams must fix concurrency and instance counts at
 deploy time - quantities only the runtime data can answer. The guess is wrong in both
@@ -151,3 +152,85 @@ application does not. This is where the backflips are.
 ## Marketing
 
 **One-liner:** Like a client-side sub-broker that can do backflips.
+
+**Lead with the combination nothing else has: exactly-once, massively parallel, and optionally
+key-ordered.**
+
+Each half is unremarkable alone. Kafka has had exactly-once since KIP-98, and KIP-932 Share Groups
+now scale consumers past the partition count. Having both at the same time is not available
+anywhere else, and that is the line to put in talks, posts and the README's opening rather than
+leaving it as a row two screens down a comparison table.
+
+It holds because the broker-native answer to parallelism gives up exactly-once **by protocol, not by
+omission**. [KIP-932](https://cwiki.apache.org/confluence/display/KAFKA/KIP-932%3A+Queues+for+Kafka):
+
+> "Although it is possible to read transactionally written records, the current protocol does not
+> include the ability to acknowledge message delivery within an atomic transaction."
+
+> "This means that the delivery behavior is at-least-once."
+
+The mechanism: exactly-once processing needs the consumer's *offset* commit to join the producer's
+transaction, and a share group has no offset to contribute - its state is per-record acknowledgement
+state held broker-side, which nothing can enlist in a transaction. The KIP lists exactly-once only as
+possible future work. Two details worth keeping straight when writing about this: isolation level is
+a **group-level** setting (`share.isolation.level`), not per-consumer; and the delivery counts behind
+poison-message protection are themselves not exactly-once, so the KIP says they "cannot be relied
+upon to be precise".
+
+### Verified - and the verification found two real defects on the way
+
+**Say it exactly as loudly as it is verified.** This is a promise about delivery semantics, and the
+README already warns that EoS does not prevent duplicate *replay*. An overstated headline here is the
+kind of claim that costs trust rather than winning it.
+
+The validation is `docs/plans/2026-08-07-001-test-transactional-eos-battle-test-plan.md`, which
+enumerates every documented transactional guarantee and proves or refutes each one, with a negative
+control required before any claim counts as proved. That gate has now fired against us, so this
+section is written down as the finding rather than as an aspiration:
+
+**Crash and replay, both batch sizes: the guarantee holds.** An abandoned transaction is invisible,
+the replay commits results and their source offset together, and the output topic holds each result
+exactly once. Proved with observed controls (`TransactionalCrashReplayIT`).
+
+Read the atomicity half precisely, because the test is narrower than the sentence. It samples the
+committed offset and the visible results together on every poll and fails when the offset lands
+without them - **in that direction only, and only for the terminal transaction.**
+Records-without-offset is not asserted: committing a transaction writes its markers concurrently to
+the output partitions and to `__consumer_offsets` with no ordering guarantee, so records-first is an
+ordinary broker state rather than a defect. An earlier version of this suite awaited the two
+*sequentially*, which any non-atomic implementation satisfies however wide the window between them;
+that was caught in review and is why the assertion now has its own observed control.
+
+That took a real defect out of the path first, which is the part worth telling honestly. At
+`batchSize >= 2` the consumer used to **stall outright** - the produce lock was taken once per poll
+context but released per record, the failed release failed the whole batch, and because only a
+*success* marks a partition dirty, no commit was ever attempted. The source offset froze at 3 of 201.
+That was found by this suite before the fix landed, so astubbs#257 is not a fix we assumed works: the
+same test went from RED 5/5 to GREEN 5/5 across it.
+
+A second defect was found the same way and fixed in astubbs#261. When one send in a
+`pollAndProduceMany` result set failed terminally, the records already accepted stayed in the
+transaction and the next commit published them, so a `read_committed` consumer saw a **partial**
+result set for one source offset - 2 of 5. `ProducerManager` installed a producer `Callback` that
+throws from `onCompletion`, which pre-empted Kafka's own `maybeTransitionToErrorState` and left the
+transaction un-abortable. Both affected claims - C7 `PRODUCE_MANY_ALL_OR_NONE` and C2
+`ALL_OR_NONE_PER_SOURCE_OFFSET` - were `REFUTED` and now read `PROVED`.
+
+**So the headline is defensible: exactly-once, massively parallel, optionally key-ordered.** Every
+documented guarantee in the register is proved or attributed, and none is refuted - twelve `PROVED`
+with observed controls, one `KAFKA_GUARANTEE` that is Kafka's to keep, and one `COVERED_NO_CONTROL`
+(the commit-lock timeout failing fast) which is **attributed to an existing test rather than
+re-proved**. That last one is the difference between "defensible" and "unqualified", and it is why
+this section does not say the latter.
+
+**This is the first pass, not the finished job.** The suite covers the guarantees that are
+*documented* today; a chaos scenario for exactly-once under churn is deliberately deferred, and the
+`-Dexcluded.groups=transactions` gap - a supported invocation that runs zero claim proofs while the
+register still reports full coverage - is recorded rather than closed
+(`docs/inflight/next-transactional-register-hardening.md`).
+
+Two things to keep honest when using it. The claim is about Kafka's own topics: the README's existing
+warning that EoS does not prevent duplicate *replay* into external systems still stands, and this
+work does not touch it. And the register - not this section - is the gate. If a claim is ever refuted
+again, this section is the first thing to revisit, exactly as it was the first thing revisited when
+one was.

@@ -39,7 +39,7 @@ import static org.awaitility.Awaitility.await;
  * regardless), but only volume makes the duplicate reliably observable.
  *
  * @author Antony Stubbs
- * @see bz.stub.parallelconsumer.internal.ProduceLockReleaseTest for unit-level cover of the release itself
+ * @see bz.stub.parallelconsumer.internal.ProducerManagerTest for unit-level cover of the release itself
  */
 @Tag("transactions")
 @Timeout(60)
