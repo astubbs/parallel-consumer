@@ -1,4 +1,4 @@
-# Draft response to astubbs#411 (`confluentinc#830`) - posted by the pre-release sweep, not by this PR
+# Draft responses for astubbs#411 and its upstream original `confluentinc#830` - posted by the pre-release sweep, not by this PR
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: coordination -->
@@ -6,8 +6,14 @@
 <!-- post-merge: exempt-file - a drafted issue reply, held until the sweep posts it. It deliberately
      outlives the PR that wrote it, so it cannot be written in post-merge terms. -->
 
-Not posted. Post only on explicit instruction; delete this file when it is posted, not when its PR
-merges.
+Not posted. Post only on explicit instruction; delete this file when BOTH drafts are posted, not when its
+PR merges. Two drafts here, because they go to two repositories:
+
+1. **The mirror reply**, for astubbs#411 - below.
+2. **The upstream backlink**, for `confluentinc#830` - at the end. That issue was mirrored on demand
+   this session and has never carried a backlink, so this is its FIRST upstream comment and the
+   "one backlink per issue, never a second" rule in `docs/upstream.md` does not bite. Operator
+   ruling 2026-09-02: hold it and post with the release sweep, all at once, rather than now.
 
 ---
 
@@ -51,3 +57,22 @@ Two honest caveats:
 
 Thanks for the original report and for the fix attempt. The diagnosis in it was right; it was the
 interception point that was off by one layer.
+
+---
+
+## Draft 2 - upstream backlink for `confluentinc/parallel-consumer#830`
+
+Format per `docs/upstream.md` -> "Backlinking upstream": hidden idempotency marker first, plain
+cross-repo references only, never `Fixes`/`Closes`, and check for the marker before posting.
+
+> <!-- pc-mirror:issue-411 -->
+> This issue is mirrored in the community fork as astubbs/parallel-consumer#411, where discussion
+> continues - this repository is no longer maintained and may be archived.
+>
+> One thing worth knowing if you are still running into this: the fix in
+> confluentinc/parallel-consumer#839 catches `InvalidPidMappingException` around the produce call,
+> but the reported failure arrives from the ack wait wrapped in an `ExecutionException` - which is
+> exactly the stack trace in this issue - so the typed catch does not see it. The mirror has the
+> full reading, and the fork is building the remedy this issue originally asked for: replace the
+> producer rather than retry against the invalid one.
+
