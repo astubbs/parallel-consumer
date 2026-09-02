@@ -397,6 +397,50 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      * If we are currently processing too many records, we must stop polling for more from the broker. But we must also
      * make sure we maintain the keep alive with the broker so as not to cause a rebalance.
      */
+    /**
+     * <b>Diagnostic observation of Kafka's pause state. NOTHING READS THIS TO DECIDE ANYTHING, and
+     * nothing may start.</b>
+     *
+     * <p>Read the comment inside {@link #managePauseOfSubscription()} before touching this. A
+     * {@code volatile} field holding pause state is precisely the mirror confluentinc#857's
+     * back-pressure work deleted, on the grounds that it is a copy of a fact Kafka owns whose
+     * upkeep contract was written nowhere. This is not that, and the difference is not the type - it
+     * is that <b>this value has no consumer</b>. The moment a control path branches on it, it stops
+     * being an observation and becomes the mirror again, with all of that mirror's rebalance-protocol
+     * problems back.
+     *
+     * <p><b>Staleness is expected and is why the timestamp is here.</b> A mirror has to be right; an
+     * observation only has to say when it was taken. A reader seeing "observed 40s ago" knows to
+     * distrust it, which is the property the mirror could never offer.
+     *
+     * <p>It exists because "the consumer is idle" has two opposite causes - paused, or not being
+     * given work - and no instrument could tell them apart. {@code consumer.paused()} cannot be
+     * called from a diagnostic on another thread: {@code KafkaConsumer} is not thread-safe and
+     * {@code ThreadConfinedConsumer}'s guard rejects it, correctly. So the answer has to be recorded
+     * BY the poll thread, and this is the one place per pass that already has it in hand at no extra
+     * consumer call.
+     *
+     * <p>{@code -1} means never observed - distinct from zero, which means observed and none paused.
+     */
+    private volatile int diagnosticPausedPartitionCount = -1;
+
+    /** Wall clock of the observation above; meaningless while the count is {@code -1}. */
+    private volatile long diagnosticPausedObservedAtMs = 0L;
+
+    /**
+     * One line describing what the poll thread last saw of Kafka's pause state, for an assertion
+     * message or a stall report. Safe to call from any thread - it reads the two fields above and
+     * makes no consumer call.
+     */
+    public String describePauseObservation() {
+        int count = diagnosticPausedPartitionCount;
+        if (count < 0) {
+            return "pausedPartitions=NEVER-OBSERVED (poll thread has not completed a pause pass)";
+        }
+        long ageMs = System.currentTimeMillis() - diagnosticPausedObservedAtMs;
+        return "pausedPartitions=" + count + " (observed " + ageMs + "ms ago)";
+    }
+
     private void managePauseOfSubscription() {
         // Read Kafka's pause state ONCE per pass and hand it down, rather than each check asking
         // again. Deriving the answer from the consumer instead of mirroring it in a field is what
@@ -409,6 +453,10 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
         // exactly the failure mode of the mirror this replaced. It is also strictly fewer calls than
         // before in the resume path, which used to fetch the set a second time to act on it.
         Set<TopicPartition> pausedNow = consumerManager.paused();
+        // Diagnostic only - see diagnosticPausedPartitionCount. Recorded here because this is the one
+        // place per pass that already holds the set, so observing it costs no extra consumer call.
+        diagnosticPausedPartitionCount = pausedNow.size();
+        diagnosticPausedObservedAtMs = System.currentTimeMillis();
         boolean shouldThrottle = shouldThrottle();
         if (log.isTraceEnabled()) {
             log.trace("Need to throttle: {}, pausedForBackPressure={}", shouldThrottle, !pausedNow.isEmpty());
