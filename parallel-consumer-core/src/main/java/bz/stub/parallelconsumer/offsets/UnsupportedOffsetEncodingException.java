@@ -32,10 +32,8 @@ public class UnsupportedOffsetEncodingException extends EncodingNotSupportedExce
 
     public UnsupportedOffsetEncodingException(OffsetEncoding encoding, String context) {
         super(msg("Offset encoding ({}) is known to this version of Parallel Consumer but cannot be decoded by it ({})." +
-                        " Upgrade Parallel Consumer, or set ParallelConsumerOptions#invalidOffsetMetadataPolicy to IGNORE to" +
-                        " discard the metadata and continue from the committed offset (replaying anything already completed" +
-                        " but not yet committed).",
-                encoding.description(), context));
+                        " Upgrade Parallel Consumer, or {}",
+                encoding.description(), context, IGNORE_POLICY_ADVICE));
         this.encoding = encoding;
     }
 

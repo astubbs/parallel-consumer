@@ -30,9 +30,8 @@ public class UnknownOffsetMetadataMagicException extends EncodingNotSupportedExc
 
     private static final String ADVICE = "This metadata was most likely written by a NEWER version of Parallel " +
             "Consumer using an encoding this version does not know, or the consumer group is being shared with " +
-            "another application. Upgrade Parallel Consumer, use a consumer group unique to this application, or set " +
-            "ParallelConsumerOptions#invalidOffsetMetadataPolicy to IGNORE to discard the metadata and continue from " +
-            "the committed offset (replaying anything already completed but not yet committed).";
+            "another application. Upgrade Parallel Consumer, use a consumer group unique to this application, or " +
+            IGNORE_POLICY_ADVICE;
 
     /**
      * The magic byte that could not be resolved to an {@link OffsetEncoding}.

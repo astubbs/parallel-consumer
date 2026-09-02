@@ -39,10 +39,8 @@ public class CorruptOffsetMetadataException extends InternalException {
 
     public CorruptOffsetMetadataException(String problem, String context) {
         super(msg("Offset metadata is not a payload this build could have written: {} ({})." +
-                        " The metadata field of a committed offset is free-form, so this is most likely not ours - set" +
-                        " ParallelConsumerOptions#invalidOffsetMetadataPolicy to IGNORE to discard it and continue from the" +
-                        " committed offset (replaying anything already completed but not yet committed).",
-                problem, context));
+                        " The metadata field of a committed offset is free-form, so this is most likely not ours - {}",
+                problem, context, EncodingNotSupportedException.IGNORE_POLICY_ADVICE));
     }
 
     public CorruptOffsetMetadataException(String problem) {
