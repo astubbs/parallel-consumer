@@ -8,6 +8,7 @@ import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.MDC;
 
@@ -58,9 +59,21 @@ class MdcContextPropagationTest extends ParallelEoSStreamProcessorTestBase {
 
     private final List<Observation> observations = new CopyOnWriteArrayList<>();
 
+    /**
+     * Before AND after, not only after - the shape its sibling {@code MdcPropagationTest} already had. The runner
+     * thread is shared with every other class in the fork, and two of them - {@code ProducerManagerTest} and
+     * {@code TransactionalBulkCommitTest} - drive {@code AbstractParallelEoSStreamProcessor#processWorkCompleteMailBox}
+     * on it, whose {@code MDC.put(...); MDC.remove(...)} pair leaves logback holding an EMPTY map rather than none: on
+     * logback 1.6.1, {@code remove} of the last key gives {@code {}} where {@code clear()} gives {@code null}, measured
+     * against the build's own jars. A test may only assert a precondition it has established itself, and which class
+     * ran before this one is decided by fork placement, not by this class - so
+     * {@link #anEmptyCallerContextIsHandledAndNothingLeaks()} gets its clear BEFORE it runs. Without it that
+     * precondition was a per-run coin: it failed 2 of 2 full runs on one tree and 0 of 3 on another, same code.
+     */
+    @BeforeEach
     @AfterEach
     void clearCallersContext() {
-        // JUnit reuses its runner thread, so context set by one test must not be inherited by the next
+        // JUnit reuses its runner thread, so context set by one test must not be inherited by (or from) the next
         MDC.clear();
     }
 
@@ -190,13 +203,13 @@ class MdcContextPropagationTest extends ParallelEoSStreamProcessorTestBase {
         int recordCount = 3;
         ktu.sendRecords(recordCount);
 
-        // deliberately NO MDC.put here - the caller has no diagnostic context at all. That is null on a thread that
-        // has never touched the MDC and {} on one that has put and removed a key: logback keeps the emptied map. PC
-        // treats both as "no context", so both are legal here. Insisting on null made this test's outcome depend on
-        // which class ran before it in the same fork - a sibling that drives controlLoop() on the test thread
-        // (ProducerManagerTest, TransactionalBulkCommitTest) leaves {} behind through the control loop's own
-        // put-then-remove of the work descriptor, and nothing clears it. Reproduced by class order alone; see
-        // docs/solutions/test-flakiness/.
+        // deliberately NO MDC.put here - the caller has no diagnostic context at all. clearCallersContext() has just
+        // run, so on logback that reads null; a binding that keeps an emptied map reads {}. PC treats both as "no
+        // context", so both are legal here - asserting null alone was asserting the logging binding, not PC, and it
+        // went red whenever an earlier class in the same fork had put and removed a key on this thread (the javadoc
+        // on clearCallersContext() names them). Belt and braces on purpose: the @BeforeEach establishes the state,
+        // this accepts either spelling of it. Reproduced by class order alone; docs/solutions/test-flakiness/ has the
+        // experiment.
         Map<String, String> callerContextOnEntry = MDC.getCopyOfContextMap();
         if (callerContextOnEntry != null) {
             assertThat(callerContextOnEntry).isEmpty();
