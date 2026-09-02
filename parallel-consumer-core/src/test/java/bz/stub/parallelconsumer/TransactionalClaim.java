@@ -292,7 +292,21 @@ public enum TransactionalClaim {
             + "astubbs#257 fixes it and is merged into this branch: that arm now passes, whole class 5/5 in 72s "
             + "where it previously took 178s to fail. The defect IS the negative control - it was found before the "
             + "fix landed, not injected afterwards. Write-up in "
-            + "docs/solutions/test-issues/transactional-batching-stall-produce-lock-released-per-record-2026-08-08.md");
+            + "docs/solutions/test-issues/transactional-batching-stall-produce-lock-released-per-record-2026-08-08.md"),
+    /**
+     * C15 - the recovery guarantee astubbs#225 added: where PC built the producer, a producer the broker reports
+     * invalid is replaced rather than ending the instance, and the work its aborted transaction discarded runs again.
+     */
+    PRODUCER_INVALIDATION_RECOVERED(Source.README_TEMPLATE,
+            "Where PC built the producer, a producer the broker reports invalid is replaced and the work its aborted transaction discarded is processed again, so processing continues instead of the instance stopping.",
+            Status.PROVED, "ProducerFencingRecoveryIT#aFencedProducerIsReplacedAndEveryResultIsStillVisibleExactlyOnce: a "
+            + "rogue producer initialised under PC's own derived transactional.id fences PC's producer three times on a "
+            + "real coordinator; each time the recovery counter moves, every source record's result is visible exactly "
+            + "once at read_committed, and the control - the rogue's next transactional call throwing "
+            + "ProducerFencedException - shows the replacement re-initialised under the same id. Negative control "
+            + "observed at the unit level: ProducerRecoveryTest's fenced-during-commit case was RED before recovery "
+            + "existed (no replacement was ever built) and GREEN after; at the broker level, with canRecover() "
+            + "forced false the IT fails because the instance closes on the first fence");
 
     /**
      * Where a claim is published, and how to find the text that must still contain it.

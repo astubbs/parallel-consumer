@@ -39,6 +39,15 @@ Both widen `ProducerManager`'s contract with the controller, which is why astubb
 them on. Whichever is chosen, it should be settled alongside the retry/DLQ work below rather than
 in isolation - the three answers interact.
 
+## Partly answered by astubbs#225, 2026-09-02
+
+Shape 1 above - record the failure and have the controller abort the open transaction - is what
+`docs/plans/2026-09-02-001-feat-recoverable-producer-fencing-plan.md` builds, for the conditions the
+broker reports against the producer (fencing and its relatives), with a replacement producer and a
+replay of the discarded work on top. The send-side poison record this note is about is outside that
+set by a settled decision there, so this note stays open; when it is taken up, that plan's detection
+and recovery path is the seam to extend rather than a second one to build.
+
 ## The workaround users have today
 
 Wrap the user function so a record that can never be sent never reaches the producer: validate or

@@ -29,6 +29,10 @@ const MARKER = "<!-- quarantine-lane-report -->";
 // Its superseded twin, spelled out rather than derived - see sticky-report-comment.js.
 const SUPERSEDED_MARKER = "<!-- quarantine-lane-report (superseded) -->";
 const DATA_MARKER = "quarantine-lane-data";
+// The `status` bin/quarantine-lane-report.sh writes when the registry has no entries at all. WRITTEN
+// THERE AND READ HERE, with nothing enforcing the pair but this module's end-to-end self-test, which
+// drives the real script against an empty registry - `grep -rn EMPTY_STATUS` is the list to change.
+const EMPTY_STATUS = "empty";
 
 // The four outcomes the reporter can record, in the reader's words. PASSED is split in two on
 // purpose: a flapping test passing proves nothing, a deterministic one passing demands action, and a
@@ -73,14 +77,37 @@ function renderDelta(prev, cur) {
   return `\n\n_Since the previous push: ${bits.join("; ")}._`;
 }
 
+/** Whether this run's payload is the lane-emptied one: the registry has no entries at all. */
+function laneEmptied(payload) {
+  return payload?.status === EMPTY_STATUS && Object.keys(payload.outcomes ?? {}).length === 0;
+}
+
 /**
  * Post or update the lane's sticky comment for this run.
  *
  * `body` is the file bin/quarantine-lane-report.sh wrote. The marker is UNCHANGED from the one that
  * script used to post under itself, so comments already live on open PRs are found and updated rather
  * than orphaned beside a fresh one.
+ *
+ * THE EMPTIED LANE IS A RETRACTION, AND IT IS TREATED AS ONE IN TWO PLACES.
+ *
+ * It POSTS FRESH rather than editing in place, because the same machinery already decides that: an
+ * outcome digest of `empty` differs from any previous one, so the status changed. That is the right
+ * answer here and not merely the incidental one. The comment being retracted told a reader to go and
+ * delete an annotation and a registry entry, and it NOTIFIED them when it said so; withdrawing it by
+ * silently rewriting a comment thirty scrolls up is exactly the failure astubbs/parallel-consumer#409
+ * removed, and it would land on the one PR where the instruction has already been carried out. The
+ * old comment is retired the way every superseded one is - live marker renamed, heading prefixed,
+ * forward link - and, because this body is a correction, its table is folded under that heading: a
+ * reader who arrives at the merged PR and lands on it is told it is stale before they can read the
+ * instruction it withdrew, rather than being sent to delete something that is gone.
+ *
+ * It STAYS SILENT when there is nothing to retract. An empty lane is the healthy steady state, and a
+ * comment on every PR announcing that nothing is quarantined is noise the stickiness exists to
+ * prevent. `postWhenAbsent: false` is the one knob that distinguishes the two.
  */
 async function post({ github, context, core, body, now }) {
+  const emptied = laneEmptied(sticky.readPayload(body, DATA_MARKER));
   return sticky.postStickyReport({
     github, context, core,
     marker: MARKER,
@@ -91,11 +118,15 @@ async function post({ github, context, core, body, now }) {
     // This report's own heading is `## `, where the throughput report's is `### `.
     headingRe: /^## /m,
     // Not the generic "status changed to <digest>": the digest is every test's outcome joined, which
-    // is unreadable in a heading and says nothing a reader can act on.
-    supersededLabel: () => "a quarantined test changed outcome",
+    // is unreadable in a heading and says nothing a reader can act on. The emptied lane gets its own
+    // wording because the retired comment's HEADING is all a reader sees before deciding whether to
+    // act on its body - "a quarantined test changed outcome" would leave them reading an ACTION
+    // REQUIRED table to find out it no longer applies.
+    supersededLabel: () => emptied ? "the quarantine lane is now empty" : "a quarantined test changed outcome",
     what: "quarantine lane report",
+    postWhenAbsent: !emptied,
     ...(now ? { now } : {}),
   });
 }
 
-module.exports = { MARKER, DATA_MARKER, LABELS, label, renderDelta, post };
+module.exports = { MARKER, DATA_MARKER, EMPTY_STATUS, LABELS, label, renderDelta, laneEmptied, post };

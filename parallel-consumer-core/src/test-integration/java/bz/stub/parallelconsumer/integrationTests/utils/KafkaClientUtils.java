@@ -36,6 +36,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -307,6 +309,21 @@ public class KafkaClientUtils implements AutoCloseable {
 
     public <K, V> KafkaProducer<K, V> createNewProducer(ProducerMode mode) {
         return createNewProducer(mode, new Properties());
+    }
+
+    /**
+     * The configuration this harness would build a transactional producer from, for handing to
+     * {@code ParallelConsumerOptions#producerConfig} so that PC builds - and can rebuild - the producer itself. No
+     * {@code transactional.id}: PC derives one, and it would be replaced (with a WARN) if set here.
+     */
+    public Map<String, Object> transactionalProducerConfig(Properties overrides) {
+        var props = new Properties();
+        props.putAll(setupProducerProps());
+        props.put(ProducerConfig.TRANSACTION_TIMEOUT_CONFIG, (int) ofSeconds(10).toMillis()); // speed things up
+        props.putAll(overrides);
+        Map<String, Object> config = new HashMap<>();
+        props.forEach((key, value) -> config.put(key.toString(), value));
+        return config;
     }
 
     public <K, V> KafkaProducer<K, V> createNewProducer(ProducerMode mode, Properties overrides) {

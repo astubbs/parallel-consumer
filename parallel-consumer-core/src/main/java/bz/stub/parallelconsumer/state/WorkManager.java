@@ -93,6 +93,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     private final Map<TopicPartition, Counter> succeededRecordsCounters = new ConcurrentHashMap<>();
     private final Map<TopicPartition, Counter> failedRecordsCounters = new ConcurrentHashMap<>();
 
+    @Getter
     private final PCMetrics pcMetrics;
 
     public WorkManager(PCModule<K, V> module,
@@ -246,6 +247,21 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      */
     public void onOffsetCommitSuccess(Map<TopicPartition, OffsetAndMetadata> committed) {
         pm.onOffsetCommitSuccess(committed);
+    }
+
+    /**
+     * After a transaction was aborted, puts back every record whose output it discarded (R13). Control thread only,
+     * under the producer write lock and after the mailbox has been drained - the ordering
+     * {@link PartitionState#restoreCompletedButUncommittedWork()} explains.
+     *
+     * @return how many records were put back
+     */
+    public int restoreWorkDiscardedByAbortedTransaction() {
+        int restored = pm.restoreCompletedButUncommittedWork();
+        if (restored > 0) {
+            log.info("Restored {} record(s) to processing whose output an aborted transaction discarded; they will be processed again", restored);
+        }
+        return restored;
     }
 
     public void onFailureResult(WorkContainer<K, V> wc) {
