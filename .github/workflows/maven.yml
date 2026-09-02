@@ -381,19 +381,29 @@ jobs:
               // The forward link costs a third write, so it is best-effort and last: by the time it
               // runs, the marker state is already correct whether or not it succeeds. Losing it strands
               // a reader on a comment that still says, in words, that it was superseded.
-              const retiredBody = pointer => `${existing.body
+              //
+              // The note is passed WHOLE rather than as a noun slotted into a fixed "Superseded by X"
+              // sentence, because the two writes cannot honestly promise the same thing. The first runs
+              // BEFORE the create, and the create can fail - `continue-on-error` on this step swallows
+              // it by design - so the report it points at may never exist. It must therefore not name a
+              // PLACE: a retired comment reading "further down this conversation" when nothing was
+              // posted sends a reader looking for a report that is not there, and does so permanently,
+              // because the retired marker no longer matches the lookup above and no later run ever
+              // revisits this comment to correct it. Only the second note, written once `created`
+              // demonstrably exists, may point at it.
+              const retiredBody = note => `${existing.body
                 .replace(marker, '<!-- pc-throughput-report (superseded) -->')
                 .replace(/^### /m, `### [superseded - status changed to ${String(cur?.status ?? 'unknown').replace(/[^a-zA-Z-]/g, '')}] `)
-                }\n\n<sub>Superseded by ${pointer}.</sub>`
+                }\n\n<sub>${note}</sub>`
               if (existing) {
                 await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id,
-                  body: retiredBody('a newer report further down this conversation') })
+                  body: retiredBody('Superseded - a fresh report should follow for this push.') })
               }
               const created = await github.rest.issues.createComment({ owner, repo, issue_number, body: payload })
               if (existing) {
                 try {
                   await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id,
-                    body: retiredBody(`[a newer report](${created.data.html_url})`) })
+                    body: retiredBody(`Superseded by [a newer report](${created.data.html_url}).`) })
                 } catch (e) {
                   core.warning(`could not link the retired throughput comment forward: ${e.message}`)
                 }
