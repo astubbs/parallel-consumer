@@ -3021,6 +3021,194 @@ assert "...and a second start inside the floor is throttled" throttled "$got"
 
 rm -rf "$bbr_tmp"
 
+
+# ---------------------------------------------------------------------------------------------
+# remind-refactor-window.sh and nudge-refactor-candidate.sh
+#
+# BOTH ARE DRIVEN AGAINST A STUB `bin/inflight.mjs`, not the real one. What is under test here is
+# the HOOK: does it decide to run, does it stay silent when it should, and - the one that matters -
+# does it stay loud when the command failed. The measurement itself is the command's job and is
+# covered by bin/test-inflight.mjs. Pointing these at the real tool would make every assertion a
+# function of whatever the repository's branches happen to look like today, which is a flake, and
+# would cost ~3.4s per case.
+#
+# THE ASYMMETRY IS THE POINT. A hook whose correct output is silence cannot be told from a hook that
+# is broken, so "quiet tree" and "could not look" must not produce the same bytes. Three cases below
+# pin that: clean-and-nothing-open is empty, command-failed is not, and hook-cannot-start is empty
+# again - the last being the one silence an advisory hook is allowed, since a dead hook cannot
+# announce itself and blocking the tool call would be worse than the miss.
+
+rw_tmp="$(mktemp -d)"
+mkdir -p "$rw_tmp/bin"
+
+# <stdout> <exit-code> - rewrite the stub the hooks will call.
+rw_stub() {
+    printf 'process.stdout.write(%s); process.exit(%s);\n' "$(node -e 'process.stdout.write(JSON.stringify(process.argv[1]))' "$1")" "$2" \
+        > "$rw_tmp/bin/inflight.mjs"
+}
+
+rw_session='{"hook_event_name":"SessionStart","source":"startup"}'
+
+rw_stub "" 0
+out="$(printf '%s' "$rw_session" | CLAUDE_PROJECT_DIR="$rw_tmp" "$HOOKS/remind-refactor-window.sh" 2>/dev/null)"
+assert "a quiet tree produces no session-start output at all" "" "$out"
+
+rw_stub "OPEN work-manager" 0
+out="$(printf '%s' "$rw_session" | CLAUDE_PROJECT_DIR="$rw_tmp" "$HOOKS/remind-refactor-window.sh" 2>/dev/null)"
+[ "$out" = "OPEN work-manager" ] && got=reported || got="$out"
+assert "an open window reaches the session start" reported "$got"
+
+# The negative control for the case above: same hook, same open answer, but the command FAILED.
+# Reporting these identically is the defect the whole feature exists to prevent.
+rw_stub "" 2
+out="$(printf '%s' "$rw_session" | CLAUDE_PROJECT_DIR="$rw_tmp" "$HOOKS/remind-refactor-window.sh" 2>/dev/null)"
+case "$out" in *"could not answer"*) got=loud ;; "") got=SILENT ;; *) got="$out" ;; esac
+assert "a failed measurement is LOUD, never the silence that means all-quiet" loud "$got"
+
+rw_stub "OPEN work-manager" 0
+rm -f "$rw_tmp/bin/inflight.mjs"
+out="$(printf '%s' "$rw_session" | CLAUDE_PROJECT_DIR="$rw_tmp" "$HOOKS/remind-refactor-window.sh" 2>/dev/null)"
+assert "a hook that cannot start stays silent rather than jamming the session" "" "$out"
+
+rw_stub "OPEN work-manager" 0
+out="$(printf '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git add -A"}}' \
+    | CLAUDE_PROJECT_DIR="$rw_tmp" "$HOOKS/remind-refactor-window.sh" 2>/dev/null)"
+assert "a command that only stages says nothing" "" "$out"
+
+# `git -C <path> push` put the path where the subcommand should be and silently defeated an earlier
+# hook; hook-common.sh's header records it. It is the form an agent uses most.
+#
+# CLEAR THE REPEAT STAMP FIRST. This asserts PUSH DETECTION, and the content throttle is a separate
+# property with its own cases below - without this the identical report from the session-start case
+# above silences this one and it fails for a reason that has nothing to do with what it tests. The
+# stamp lives in TMPDIR, so these cases were coupled through a file rather than through the code.
+rm -f "${TMPDIR:-/tmp}/pc-refactor-window-$(printf '%s' "$rw_tmp" | tr '/' '_')"
+out="$(printf '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git -C /somewhere push"}}' \
+    | CLAUDE_PROJECT_DIR="$rw_tmp" "$HOOKS/remind-refactor-window.sh" 2>/dev/null)"
+case "$out" in *additionalContext*) got=fired ;; "") got=SILENT ;; *) got="$out" ;; esac
+assert "git -C <path> push is still recognised as a push" fired "$got"
+
+# --- nudge-refactor-candidate.sh -------------------------------------------------------------
+# The stub echoes the path it was handed, so these assert what the HOOK extracted, which is its job.
+printf 'process.stdout.write(process.argv[process.argv.length - 1]);\n' > "$rw_tmp/bin/inflight.mjs"
+
+out="$(printf '{"hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":"/a/WorkManager.java"}}' \
+    | REFACTOR_NUDGE_SECONDS=0 CLAUDE_PROJECT_DIR="$rw_tmp" "$HOOKS/nudge-refactor-candidate.sh" 2>/dev/null)"
+case "$out" in *"/a/WorkManager.java"*) got=passed-through ;; "") got=SILENT ;; *) got="$out" ;; esac
+assert "an edited file_path reaches the hint lookup" passed-through "$got"
+
+# NotebookEdit carries `notebook_path`, not `file_path`. Reading only the latter would leave one of
+# the three registered tools silently never firing, with nothing to show it.
+out="$(printf '{"hook_event_name":"PreToolUse","tool_name":"NotebookEdit","tool_input":{"notebook_path":"/a/Nb.ipynb"}}' \
+    | REFACTOR_NUDGE_SECONDS=0 CLAUDE_PROJECT_DIR="$rw_tmp" "$HOOKS/nudge-refactor-candidate.sh" 2>/dev/null)"
+case "$out" in *"/a/Nb.ipynb"*) got=passed-through ;; "") got=SILENT ;; *) got="$out" ;; esac
+assert "a notebook edit is read from its own path field" passed-through "$got"
+
+# Nothing to say is the common case - every edit to a non-candidate goes through here.
+printf 'process.exit(0);\n' > "$rw_tmp/bin/inflight.mjs"
+out="$(printf '{"hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":"/a/Ordinary.java"}}' \
+    | REFACTOR_NUDGE_SECONDS=0 CLAUDE_PROJECT_DIR="$rw_tmp" "$HOOKS/nudge-refactor-candidate.sh" 2>/dev/null)"
+assert "a file that is not a candidate produces nothing" "" "$out"
+
+out="$(printf 'file_path but not json at all' \
+    | REFACTOR_NUDGE_SECONDS=0 CLAUDE_PROJECT_DIR="$rw_tmp" "$HOOKS/nudge-refactor-candidate.sh" 2>/dev/null; echo "rc=$?")"
+assert "an unparseable payload never blocks the edit" "rc=0" "$out"
+
+
+# A FULL OR READ-ONLY TMPDIR must not convert a failed measurement into the silence that means
+# all-quiet. The loud case above only ever ran with a working TMPDIR, so this regression - the
+# failure-reporting machinery creating its own second silence - was untested.
+rw_stub "" 2
+out="$(printf '%s' "$rw_session" | TMPDIR=/nonexistent-dir-for-the-self-test \
+    CLAUDE_PROJECT_DIR="$rw_tmp" "$HOOKS/remind-refactor-window.sh" 2>/dev/null)"
+case "$out" in *"could not answer"*) got=loud ;; "") got=SILENT ;; *) got="$out" ;; esac
+assert "an unusable TMPDIR still leaves a failed measurement LOUD" loud "$got"
+
+# The command reports per candidate AND exits non-zero when any one of them failed, so the hook must
+# append its loud line rather than replacing the report - overwriting threw away the candidates that
+# did answer, reinstating the all-or-nothing behaviour the library is written against.
+rw_stub "OPEN work-manager" 2
+out="$(printf '%s' "$rw_session" | CLAUDE_PROJECT_DIR="$rw_tmp" "$HOOKS/remind-refactor-window.sh" 2>/dev/null)"
+case "$out" in *"could not answer"*"OPEN work-manager"*) got=both ;; *"could not answer"*) got=lost-the-good-half ;; *) got="$out" ;; esac
+assert "a partly-failed run keeps the candidates that did answer" both "$got"
+
+# The nudge is throttled per candidate now, so a second edit inside the window must be silent - and
+# the first must not be. A reminder that fires on every edit trains its reader to skip it.
+printf 'process.stdout.write("work-manager: hint");\n' > "$rw_tmp/bin/inflight.mjs"
+nudge_payload='{"hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":"/a/WorkManager.java"}}'
+rm -f "${TMPDIR:-/tmp}/pc-refactor-nudge-work-manager"
+first="$(printf '%s' "$nudge_payload" | CLAUDE_PROJECT_DIR="$rw_tmp" "$HOOKS/nudge-refactor-candidate.sh" 2>/dev/null)"
+second="$(printf '%s' "$nudge_payload" | CLAUDE_PROJECT_DIR="$rw_tmp" "$HOOKS/nudge-refactor-candidate.sh" 2>/dev/null)"
+[ -n "$first" ] && [ -z "$second" ] && got=throttled || got="first=${#first} second=${#second}"
+assert "the nudge speaks once per candidate, not once per edit" throttled "$got"
+rm -f "${TMPDIR:-/tmp}/pc-refactor-nudge-work-manager"
+
+
+# THE REPEAT THROTTLE IS ON CONTENT, so identical news goes quiet and CHANGED news gets through
+# immediately. A plain timer would pass the first assertion and fail the second - which is the whole
+# reason the stamp holds a digest rather than just a timestamp.
+rm -f "${TMPDIR:-/tmp}/pc-refactor-window-$(printf '%s' "$rw_tmp" | tr '/' '_')"
+rw_stub "OPEN work-manager" 0
+first="$(printf '%s' "$rw_session" | CLAUDE_PROJECT_DIR="$rw_tmp" "$HOOKS/remind-refactor-window.sh" 2>/dev/null)"
+again="$(printf '%s' "$rw_session" | CLAUDE_PROJECT_DIR="$rw_tmp" "$HOOKS/remind-refactor-window.sh" 2>/dev/null)"
+[ -n "$first" ] && [ -z "$again" ] && got=quiet || got="first=${#first} again=${#again}"
+assert "the same report twice is said once" quiet "$got"
+
+rw_stub "OPEN work-manager and abstract-parallel-eos-stream-processor" 0
+changed="$(printf '%s' "$rw_session" | CLAUDE_PROJECT_DIR="$rw_tmp" "$HOOKS/remind-refactor-window.sh" 2>/dev/null)"
+[ -n "$changed" ] && got=spoke || got=SILENT
+assert "a newly opened window is not delayed by the throttle" spoke "$got"
+rm -f "${TMPDIR:-/tmp}/pc-refactor-window-$(printf '%s' "$rw_tmp" | tr '/' '_')"
+
+
+# A REPEATED FAILURE MUST STAY LOUD. The throttle keys on content, so an identically-failing
+# measurement had the same digest and was silenced for twelve hours - handing the next session the
+# exact silence reserved for a completed run over a quiet tree.
+rm -f "${TMPDIR:-/tmp}/pc-refactor-window-$(printf '%s' "$rw_tmp" | tr '/' '_')"
+rw_stub "" 2
+f1="$(printf '%s' "$rw_session" | CLAUDE_PROJECT_DIR="$rw_tmp" "$HOOKS/remind-refactor-window.sh" 2>/dev/null)"
+f2="$(printf '%s' "$rw_session" | CLAUDE_PROJECT_DIR="$rw_tmp" "$HOOKS/remind-refactor-window.sh" 2>/dev/null)"
+[ -n "$f1" ] && [ -n "$f2" ] && got=still-loud || got="first=${#f1} second=${#f2}"
+assert "an identical failure is NOT throttled into silence" still-loud "$got"
+
+# The pre-push preamble must match the outcome: a failure-only report told the model a file was
+# "currently cheap to decompose" when no open candidate had been established at all.
+rw_stub "" 2
+out="$(printf '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git push"}}' \
+    | CLAUDE_PROJECT_DIR="$rw_tmp" "$HOOKS/remind-refactor-window.sh" 2>/dev/null)"
+case "$out" in
+    *"cheap to decompose"*) got=claims-open ;;
+    *UNKNOWN*) got=says-unknown ;;
+    *) got="$out" ;;
+esac
+assert "a failure-only report does not announce an open window" says-unknown "$got"
+rm -f "${TMPDIR:-/tmp}/pc-refactor-window-$(printf '%s' "$rw_tmp" | tr '/' '_')"
+
+
+# `git -C /other push` PUBLISHES THAT REPOSITORY, so the hook must measure it and not the session's.
+# Two real repos: the session's stub says SESSION, the pushed one says TARGET. Before hook_git_dash_c
+# the -C value was parsed and discarded, so this answered about the wrong tree - silently, which is
+# the whole failure class (a hook process does not run where its guarded command runs).
+rw_sess="$(mktemp -d)"; rw_push="$(mktemp -d)"
+for d in "$rw_sess" "$rw_push"; do ( cd "$d" && git init -q -b master . && mkdir -p bin ); done
+printf 'process.stdout.write("SESSION-REPO");\n' > "$rw_sess/bin/inflight.mjs"
+printf 'process.stdout.write("TARGET-REPO");\n'  > "$rw_push/bin/inflight.mjs"
+rm -f "${TMPDIR:-/tmp}/pc-refactor-window-$(printf '%s' "$rw_push" | tr '/' '_')"
+out="$(printf '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git -C %s push"}}' "$rw_push" \
+    | CLAUDE_PROJECT_DIR="$rw_sess" "$HOOKS/remind-refactor-window.sh" 2>/dev/null)"
+case "$out" in *TARGET-REPO*) got=pushed-repo ;; *SESSION-REPO*) got=session-repo ;; *) got="${out:-EMPTY}" ;; esac
+assert "a push naming another repo measures THAT repo" pushed-repo "$got"
+
+# And a push naming no -C still falls back to the session, which is the ordinary case.
+rm -f "${TMPDIR:-/tmp}/pc-refactor-window-$(printf '%s' "$rw_sess" | tr '/' '_')"
+out="$(printf '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git push"}}' \
+    | CLAUDE_PROJECT_DIR="$rw_sess" "$HOOKS/remind-refactor-window.sh" 2>/dev/null)"
+case "$out" in *SESSION-REPO*) got=session-repo ;; *) got="${out:-EMPTY}" ;; esac
+assert "a push naming no repo still measures the session" session-repo "$got"
+rm -rf "$rw_sess" "$rw_push"
+
+rm -rf "$rw_tmp"
+
 if [ "$failures" -eq 0 ]; then
     echo "All .claude/hooks self-tests passed"
     exit 0
