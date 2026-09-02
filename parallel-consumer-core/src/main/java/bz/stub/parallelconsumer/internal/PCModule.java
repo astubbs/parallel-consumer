@@ -146,7 +146,7 @@ public class PCModule<K, V> {
 
     protected ProducerManager<K, V> producerManager() {
         if (producerManager == null) {
-            this.producerManager = new ProducerManager<>(producerWrap(), consumerManager(), workManager(), options());
+            this.producerManager = new ProducerManager<>(producerWrap(), consumerManager(), workManager(), options(), replacementProducerWrap());
         }
         return producerManager;
     }

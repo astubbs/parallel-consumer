@@ -9,7 +9,9 @@ import bz.stub.parallelconsumer.internal.utils.TimeUtils;
 import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.internal.PCInternalRuntimeException;
 import bz.stub.parallelconsumer.internal.PCModule;
+import bz.stub.parallelconsumer.internal.ProducerInvalidatedException;
 import bz.stub.parallelconsumer.internal.ProducerManager;
+import bz.stub.parallelconsumer.internal.RecoverableProducerCondition;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -134,13 +136,39 @@ public class ParallelEoSStreamProcessor<K, V> extends AbstractParallelEoSStreamP
                 }
                 return null; // return from timer function
             });
-        } catch (InvalidPidMappingException invalidPidMappingException) {
-            log.error("Closing parallel Consumer due to InvalidPidMappingException", invalidPidMappingException);
-            this.closeOnException(invalidPidMappingException);
         } catch (Exception e) {
-            throw new PCInternalRuntimeException("Error while waiting for produce results", e);
+            throw produceFailureFor(pm, e);
         }
         return results;
+    }
+
+    /**
+     * The produce path as a detection site (R8, R9, R11, R18, R19). Where PC can recover, a recoverable condition
+     * anywhere in the failure's cause chain - the send future raises it inside {@code ExecutionException}, which is
+     * the shape the field report (astubbs#411, confluentinc#830) actually has - is recorded on the
+     * {@link ProducerManager} and this record fails, returning through the mailbox for retry; the control thread
+     * recovers on its next pass. Where PC cannot recover, the deprecated producer-instance path, the outcome is what
+     * confluentinc#839 made it: a synchronous {@link InvalidPidMappingException} closes the instance, and anything
+     * else is an ordinary produce failure of this record.
+     * <p>
+     * One thing does change on the instance path, inherited from astubbs#262: the close used to swallow the
+     * exception, so every record in the batch was marked succeeded and the close-time commit published offsets for
+     * output that was never produced. The close now rethrows, so the batch is failed and those offsets stay where
+     * they were.
+     */
+    private RuntimeException produceFailureFor(ProducerManager<K, V> pm, Exception failure) {
+        var condition = RecoverableProducerCondition.find(failure);
+        if (condition.isPresent() && pm.canRecover()) {
+            pm.recordInvalidation(condition.get());
+            return new ProducerInvalidatedException(condition.get());
+        }
+        if (failure instanceof InvalidPidMappingException) {
+            log.error("Closing parallel Consumer due to InvalidPidMappingException - PC cannot rebuild a producer it " +
+                    "did not build; supply producerConfig instead of a producer instance and it recovers", failure);
+            this.closeOnException(failure);
+            return new PCInternalRuntimeException("Producer id mapping invalid, and no recovery is possible on the producer-instance path", failure);
+        }
+        return new PCInternalRuntimeException("Error while waiting for produce results", failure);
     }
 
     @Override

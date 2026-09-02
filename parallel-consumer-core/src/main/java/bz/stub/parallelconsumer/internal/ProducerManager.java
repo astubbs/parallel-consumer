@@ -30,6 +30,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.Future;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -100,13 +103,35 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
     //  Detail, including why the subclass alone is not enough: docs/refactoring.md, internal/ProducerManager.java.
     private final Callback sendCallback;
 
+    /**
+     * How a replacement producer is built, present only where PC built the producer itself. Its presence is
+     * {@link #canRecover()}: the single gate every detection site consults before recording a condition.
+     */
+    private final Optional<Supplier<ProducerWrapper<K, V>>> replacementProducerSupplier;
+
+    /**
+     * The first recoverable condition observed since the last recovery, from whichever thread observed it. Only the
+     * first is kept: recovery answers all of them the same way, and the first is the one that names the cause.
+     * Cleared by the recovery that consumes it.
+     */
+    private final AtomicReference<Throwable> pendingInvalidation = new AtomicReference<>();
+
     public ProducerManager(ProducerWrapper<K, V> newProducer,
                            ConsumerManager<K, V> newConsumer,
                            WorkManager<K, V> wm,
                            ParallelConsumerOptions<K, V> options) {
+        this(newProducer, newConsumer, wm, options, Optional.empty());
+    }
+
+    public ProducerManager(ProducerWrapper<K, V> newProducer,
+                           ConsumerManager<K, V> newConsumer,
+                           WorkManager<K, V> wm,
+                           ParallelConsumerOptions<K, V> options,
+                           Optional<Supplier<ProducerWrapper<K, V>>> replacementProducerSupplier) {
         super(newConsumer, wm);
         this.producerWrapper = newProducer;
         this.options = options;
+        this.replacementProducerSupplier = replacementProducerSupplier;
 
         boolean usingTransactions = producerWrapper.isConfiguredForTransactions();
         this.sendCallback = (RecordMetadata metadata, Exception exception) -> {
@@ -271,13 +296,19 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
         ensureCommitLockHeld();
 
         //
-        lazyMaybeBeginTransaction(); // if not using a produce flow or if no records sent yet, a tx will need to be started here (as no records are being produced)
+        try {
+            lazyMaybeBeginTransaction(); // if not using a produce flow or if no records sent yet, a tx will need to be started here (as no records are being produced)
+        } catch (RuntimeException e) {
+            throw invalidatedOrRethrow(e, false);
+        }
         try {
             producerWrapper.sendOffsetsToTransaction(offsetsToSend, groupMetadata);
         } catch (ProducerFencedException e) {
             // todo consider wrapping all client calls with a catch and new exception in the ProducerWrapper, so can get stack traces
             //  see APIException#fillInStackTrace
-            throw new PCInternalRuntimeException(e);
+            throw invalidatedOrRethrow(e, true);
+        } catch (RuntimeException e) {
+            throw invalidatedOrRethrow(e, false);
         }
 
         // see {@link KafkaProducer#commit} this can be interrupted and is safe to retry
@@ -355,7 +386,65 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
     }
 
     private void commitTransaction() {
-        producerWrapper.commitTransaction();
+        try {
+            producerWrapper.commitTransaction();
+        } catch (RuntimeException e) {
+            throw invalidatedOrRethrow(e, false);
+        }
+    }
+
+    /**
+     * The commit path as a detection site (the produce path has its own, in
+     * {@code ParallelEoSStreamProcessor#processAndProduceResults}, and the revoke-path commit arrives here too).
+     * <p>
+     * Where PC can recover, a recoverable condition found anywhere in {@code failure}'s cause chain is recorded and
+     * the operation unwinds with {@link ProducerInvalidatedException}. Where it cannot - the caller supplied a
+     * finished {@link Producer} instance - the outcome is what it was before recovery existed:
+     * {@link ProducerFencedException} from {@code sendOffsetsToTransaction} wrapped as an internal error, everything
+     * else propagating as it arrived. That includes {@code TimeoutException}, which the commit retry loop must still
+     * see raw.
+     *
+     * @param wrapFencedAsInternal the pre-recovery treatment at the send-offsets site only
+     * @return the exception to throw; never null
+     */
+    private RuntimeException invalidatedOrRethrow(RuntimeException failure, boolean wrapFencedAsInternal) {
+        Optional<Throwable> condition = RecoverableProducerCondition.find(failure);
+        if (condition.isPresent() && canRecover()) {
+            recordInvalidation(condition.get());
+            return new ProducerInvalidatedException(condition.get());
+        }
+        if (wrapFencedAsInternal && failure instanceof ProducerFencedException) {
+            return new PCInternalRuntimeException(failure);
+        }
+        return failure;
+    }
+
+    /**
+     * @return true where PC built the producer and so can build another; false on the deprecated producer-instance
+     *         path, where every condition keeps its pre-recovery behaviour
+     */
+    public boolean canRecover() {
+        return replacementProducerSupplier.isPresent();
+    }
+
+    /**
+     * Records that the broker has reported the producer invalid. Any thread may call this - a worker from a send
+     * future, the control thread from a commit, the poll thread from the revoke-path commit - and none of them
+     * blocks: recovery is the control thread's, on its next pass. Only the first condition since the last recovery is
+     * kept.
+     */
+    public void recordInvalidation(Throwable condition) {
+        boolean recorded = pendingInvalidation.compareAndSet(null, condition);
+        if (recorded) {
+            log.debug("Recorded producer invalidation for recovery: {}", condition.toString());
+        }
+    }
+
+    /**
+     * @return the condition recovery is owed, if any
+     */
+    public Optional<Throwable> pendingInvalidation() {
+        return Optional.ofNullable(pendingInvalidation.get());
     }
 
     private void beginTransaction() {
@@ -391,6 +480,11 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
             try {
                 // close started after tx began, but before work was done, otherwise a tx wouldn't have been started
                 abortTransaction();
+            } catch (RuntimeException e) {
+                // Inherited from astubbs#262: a fenced producer's abort always throws, and letting it escape here
+                // skipped closeProducer and leaked a producer per fenced shutdown. The broker has already aborted
+                // the transaction in that case, so there is nothing the throw protects.
+                log.warn("Aborting the transaction on close failed; closing the producer regardless: {}", e.toString());
             } finally {
                 releaseCommitLock();
             }

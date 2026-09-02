@@ -14,6 +14,7 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.*;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.InvalidPidMappingException;
 import org.apache.kafka.common.serialization.Deserializer;
@@ -35,7 +36,9 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -131,26 +134,50 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         assertCommits(of(), "All erroring, so nothing committed except initial");
     }
 
-    @Test
-    @SneakyThrows
-    public void closePCWhenInvalidPidMappingException() {
-        setupParallelConsumerInstance(PERIODIC_CONSUMER_ASYNCHRONOUS);
-
-        MockitoAnnotations.openMocks(this);
-        final ParallelEoSStreamProcessor<String, String> pcSpy = spy(parallelConsumer);
-        final InvalidPidMappingException invalidPidMappingException = new InvalidPidMappingException("InvalidPidMappingException exception");
-
-        // use mocked producer manager
+    /**
+     * The four produce-path shapes of an invalid producer (R9, R18, R19), all driven through a mocked
+     * {@link ProducerManager}. Every variant here mocks either the SYNCHRONOUS throw from
+     * {@link ProducerManager#produceMessages} or the send future failing; the real wrapped shape - kafka-clients'
+     * {@code FutureRecordMetadata.valueOrError} raising {@code ExecutionException} - is what the future variants
+     * reproduce, and {@code RecoverableProducerConditionTest} pins the unwrapping itself.
+     */
+    private ProducerManager<String, String> mockProducerManagerInto(ParallelEoSStreamProcessor<String, String> pc,
+                                                                    boolean canRecover) throws Exception {
         ProducerManager<String, String> producerManager = mock(ProducerManager.class);
         Field producerManagerField = AbstractParallelEoSStreamProcessor.class.getDeclaredField("producerManager");
         producerManagerField.setAccessible(true);
-        producerManagerField.set(pcSpy, Optional.of(producerManager));
-
+        producerManagerField.set(pc, Optional.of(producerManager));
         when(producerManager.beginProducing(any())).thenReturn(mock(ProducerManager.ProducingLock.class));
+        when(producerManager.canRecover()).thenReturn(canRecover);
+        return producerManager;
+    }
+
+    private static List<ParallelConsumer.Tuple<ProducerRecord<String, String>, Future<RecordMetadata>>> aSendFutureFailingWith(Exception failure) {
+        var future = new CompletableFuture<RecordMetadata>();
+        future.completeExceptionally(failure); // get() raises ExecutionException(failure), as FutureRecordMetadata does
+        return of(ParallelConsumer.Tuple.pairOf(new ProducerRecord<>("outputTopic", "k", "v"), future));
+    }
+
+    private State stateOf(ParallelEoSStreamProcessor<String, String> pc) throws Exception {
+        Field state = AbstractParallelEoSStreamProcessor.class.getDeclaredField("state");
+        state.setAccessible(true);
+        return (State) state.get(pc);
+    }
+
+    /**
+     * Covers AE5, the produce-path half: the deprecated instance path still closes on a synchronous
+     * {@link InvalidPidMappingException}, as confluentinc#839 made it.
+     */
+    @Test
+    @SneakyThrows
+    public void instancePathClosesOnASynchronousInvalidPidMappingException() {
+        setupParallelConsumerInstance(PERIODIC_CONSUMER_ASYNCHRONOUS);
+        final ParallelEoSStreamProcessor<String, String> pcSpy = spy(parallelConsumer);
+        final InvalidPidMappingException invalidPidMappingException = new InvalidPidMappingException("InvalidPidMappingException exception");
+        var producerManager = mockProducerManagerInto(pcSpy, false);
         when(producerManager.produceMessages(any())).thenThrow(invalidPidMappingException);
 
         CountDownLatch latch = new CountDownLatch(1);
-        // count down latch if close is invoked
         Mockito.doAnswer(invocation -> {
             Object result = invocation.callRealMethod();
             latch.countDown();
@@ -161,14 +188,102 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
 
         latch.await();
 
-        //check failure cause
         Assertions.assertThat(pcSpy.getFailureCause().equals(invalidPidMappingException)).isTrue();
+        Assertions.assertThat(State.CLOSED.equals(stateOf(pcSpy))).isTrue();
+        verify(producerManager, never()).recordInvalidation(any());
+    }
 
-        //check state is CLOSED
-        Field state = AbstractParallelEoSStreamProcessor.class.getDeclaredField("state");
-        state.setAccessible(true);
-        Assertions.assertThat(State.CLOSED.equals(state.get(pcSpy))).isTrue();
+    /**
+     * Inherited from astubbs#262: the close used to swallow the exception, so every record in the batch was marked
+     * succeeded and its offset could be committed for output that was never produced. The batch is now failed. The
+     * close itself is stubbed out here so the batch's fate is observable on its own: a failed record is retried (the
+     * produce call happens again) and nothing is committed; a swallowed one would be marked succeeded, produced once,
+     * and committed.
+     */
+    @Test
+    @SneakyThrows
+    public void instancePathFailsTheBatchOnASynchronousInvalidPidMappingExceptionRatherThanMarkingItSucceeded() {
+        setupParallelConsumerInstance(getBaseOptions(PERIODIC_CONSUMER_ASYNCHRONOUS).toBuilder()
+                .defaultMessageRetryDelay(Duration.ofMillis(50))
+                .build());
+        primeFirstRecord(); // created a new client above, so the prime record has to be sent again
+        final ParallelEoSStreamProcessor<String, String> pcSpy = spy(parallelConsumer);
+        final InvalidPidMappingException invalidPidMappingException = new InvalidPidMappingException("pid mapping gone");
+        var producerManager = mockProducerManagerInto(pcSpy, false);
+        when(producerManager.produceMessages(any())).thenThrow(invalidPidMappingException);
+        doNothing().when(pcSpy).closeOnException(any());
 
+        pcSpy.pollAndProduceMany((record) -> of(new ProducerRecord<>("outputTopic", record.key(), record.value())));
+
+        verify(pcSpy, timeout(10_000).atLeastOnce()).closeOnException(invalidPidMappingException);
+        verify(producerManager, timeout(10_000).atLeast(2)).produceMessages(any());
+        awaitForSomeLoopCycles(2);
+        assertCommits(of(), "the batch whose output was never produced is failed, so nothing is committed");
+        verify(producerManager, never()).recordInvalidation(any());
+    }
+
+    /**
+     * Covers R18 at the detection seam: on the PC-built path the same synchronous throw is recorded for recovery and
+     * the instance stays up; the record fails and returns through the mailbox. Recovery itself is U5's.
+     */
+    @Test
+    @SneakyThrows
+    public void pcBuiltPathRecordsASynchronousInvalidPidMappingExceptionInsteadOfClosing() {
+        setupParallelConsumerInstance(PERIODIC_CONSUMER_ASYNCHRONOUS);
+        final InvalidPidMappingException invalidPidMappingException = new InvalidPidMappingException("pid mapping gone");
+        var producerManager = mockProducerManagerInto(parallelConsumer, true);
+        when(producerManager.produceMessages(any())).thenThrow(invalidPidMappingException);
+
+        parallelConsumer.pollAndProduceMany((record) -> of(new ProducerRecord<>("outputTopic", record.key(), record.value())));
+
+        verify(producerManager, timeout(10_000).atLeastOnce()).recordInvalidation(invalidPidMappingException);
+        awaitForSomeLoopCycles(2);
+        Assertions.assertThat(parallelConsumer.getFailureCause()).isNull();
+        Assertions.assertThat(stateOf(parallelConsumer)).isEqualTo(State.RUNNING);
+    }
+
+    /**
+     * Covers R9 and R18: the shape the field report (astubbs#411, confluentinc#830) actually has - the condition
+     * arrives from the send future, wrapped in ExecutionException - is recognised on the PC-built path.
+     */
+    @Test
+    @SneakyThrows
+    public void pcBuiltPathRecordsAWrappedInvalidPidMappingExceptionFromTheSendFuture() {
+        setupParallelConsumerInstance(PERIODIC_CONSUMER_ASYNCHRONOUS);
+        final InvalidPidMappingException invalidPidMappingException = new InvalidPidMappingException("pid mapping gone");
+        var producerManager = mockProducerManagerInto(parallelConsumer, true);
+        when(producerManager.produceMessages(any())).thenReturn(aSendFutureFailingWith(invalidPidMappingException));
+
+        parallelConsumer.pollAndProduceMany((record) -> of(new ProducerRecord<>("outputTopic", record.key(), record.value())));
+
+        verify(producerManager, timeout(10_000).atLeastOnce()).recordInvalidation(invalidPidMappingException);
+        awaitForSomeLoopCycles(2);
+        Assertions.assertThat(parallelConsumer.getFailureCause()).isNull();
+        Assertions.assertThat(stateOf(parallelConsumer)).isEqualTo(State.RUNNING);
+    }
+
+    /**
+     * Pins today's outcome on the instance path for the wrapped shape, so the deferred defect is visible rather than
+     * silent: the record fails, is retried against the same invalid producer, and the instance stays open - the spin
+     * that confluentinc#839 did not close. Owned by docs/inflight/bug-411-wrapped-send-failure-spins-forever.md.
+     */
+    @Test
+    @SneakyThrows
+    public void instancePathWrappedSendFailureStaysAliveAndRetriesAgainstTheSameProducer() {
+        setupParallelConsumerInstance(getBaseOptions(PERIODIC_CONSUMER_ASYNCHRONOUS).toBuilder()
+                .defaultMessageRetryDelay(Duration.ofMillis(50))
+                .build());
+        primeFirstRecord(); // created a new client above, so the prime record has to be sent again
+        final InvalidPidMappingException invalidPidMappingException = new InvalidPidMappingException("pid mapping gone");
+        var producerManager = mockProducerManagerInto(parallelConsumer, false);
+        when(producerManager.produceMessages(any())).thenAnswer(ignored -> aSendFutureFailingWith(invalidPidMappingException));
+
+        parallelConsumer.pollAndProduceMany((record) -> of(new ProducerRecord<>("outputTopic", record.key(), record.value())));
+
+        verify(producerManager, timeout(10_000).atLeast(3)).produceMessages(any());
+        verify(producerManager, never()).recordInvalidation(any());
+        Assertions.assertThat(parallelConsumer.getFailureCause()).isNull();
+        Assertions.assertThat(stateOf(parallelConsumer)).isEqualTo(State.RUNNING);
     }
 
 
