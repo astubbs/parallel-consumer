@@ -152,11 +152,41 @@ Antony, thinking out loud, and worth keeping because the bootstrap problem is th
   download. The 90-day retention is the expiry, so a project nobody is working on loses its cache
   without anyone deciding to.
 
-  **What must be tested before it is built, not assumed** (`docs/agent-harness.md`'s standing rule):
-  whether a fork PR can read base-repo artifacts at all, what auth a download needs outside Actions,
-  and whether the per-artifact size cap bites once the graph is more than edges.
+  **DECIDED NOT NOW, 2026-09-02.** The whole GitHub node set is 123 issues and 285 PRs - about 2MB
+  with bodies, and 56K without - so a client can simply fetch it. Sharing a bootstrap is a fix for a
+  cost that does not exist yet, and it is one person on this repository today. Revisit if that
+  changes; the mechanics above are recorded so nobody has to re-derive them.
+
+  **What would need testing then, and was not** (`docs/agent-harness.md`'s standing rule): whether a
+  fork PR can read base-repo artifacts at all, what auth a download needs outside Actions, and
+  whether the per-artifact size cap bites once the graph is more than edges.
 
 Neither is a decision. Both are recorded because the alternative was losing them.
+
+## The graph store: JSON in memory, and no database
+
+**Decided 2026-09-02, from measurements rather than taste.** The graph is 123 issues and 285 PRs -
+**408 nodes**. With edges that is about **48KB of JSON, 1ms to build, and a full two-hop traversal in
+under a millisecond**. This repository already runs the same shape at sixty times the scale:
+`commitGraph` holds 27,775 commits across 436 Sets, `corpusIndex` holds 26,539 rows.
+
+- **JSON, not YAML.** `gh` already emits JSON, so there is no conversion step at all, and `JSON.parse`
+  is built in. Node has no YAML parser and this repository has **no `package.json` anywhere** - zero
+  npm dependencies, deliberately. YAML's advantage is human editing, which does not apply to a
+  machine-written throwaway cache.
+- **Not Neo4j embedded**, and not for taste: it takes an **exclusive store lock, one process per
+  store**. There are 131 worktrees here and agent sessions run concurrently - they would block each
+  other on a cache. It is also JVM, against a Node tool, for 48KB of data.
+- **Not Titan** - it became JanusGraph in 2017 and needs Cassandra, HBase or BerkeleyDB behind it.
+- **`node:sqlite` is the escape hatch, named so nobody re-derives it.** Node 24 ships it, so it stays
+  dependency-free. It earns its place when the graph stops fitting comfortably in memory or a query
+  should not load all of it - think 100k nodes, three orders of magnitude from here. Its cost is a
+  binary file that does not diff, does not merge, and cannot be reviewed in a PR: fine for a cache,
+  wrong for anything committed.
+
+**The layering that falls out:** what is committed and human-facing stays markdown, as
+`docs/inflight/issue-index.md` already is; the graph is a throwaway JSON cache loaded into Maps. No
+new storage technology is involved.
 
 ## Prior art to mine: Antony's own Gerrit fork
 

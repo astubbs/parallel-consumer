@@ -780,6 +780,40 @@ const CHECKS = [
             '    const answer = (ok, prs, cached = false) => ({ ok, prs, cached })',
             '    const answer = (ok, prs, cached = false) => ({ prs, cached })'),
     },
+    {
+        id: 'perf-reports-to-stderr-and-never-alters-stdout',
+        why: 'a diagnostic flag that changes the answer is worse than no diagnostic, and callers pipe stdout',
+        run: async (binDir) => {
+            const plain = spawnSync(process.execPath, [join(binDir, 'inflight.mjs'), 'help'], { encoding: 'utf8' })
+            const perf = spawnSync(process.execPath, [join(binDir, 'inflight.mjs'), '--perf', 'help'], { encoding: 'utf8' })
+            // Same answer, same exit code - the flag is stripped before any command sees it.
+            if (plain.stdout !== perf.stdout || plain.status !== perf.status) return false
+            // The report goes to stderr, and only when asked.
+            return perf.stderr.includes('perf:') && !plain.stderr.includes('perf:')
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+            "    if (perf) console.error(perfReport())",
+            "    if (perf) console.log(perfReport())"),
+    },
+    {
+        id: 'perf-counts-subprocesses-rather-than-guessing',
+        why: 'the cost here is the call COUNT, so a report that does not count calls answers the wrong question',
+        run: async (binDir) => {
+            const perf = await import(pathToFileURL(join(binDir, 'lib', 'perf.mjs')).href)
+            const g = await import(pathToFileURL(join(binDir, 'lib', 'git.mjs')).href)
+            // Reset first: the recorder is module state shared with every earlier check, so without
+            // this the counts asserted below are whatever those checks left behind.
+            perf.perfReset()
+            return inFixture(() => {
+                g.refTips(); g.refTips(); g.baseline()
+                const report = perf.perfReport()
+                // Two for-each-ref calls must be counted as two, not one and not three.
+                return /git for-each-ref\s+2 call/.test(report) && report.includes('git rev-parse')
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'perf.mjs'),
+            '    e.n += 1', '    e.n = 1'),
+    },
 ]
 
 console.log('bin/test-inflight.mjs - front door and prior-art library self-test\n')

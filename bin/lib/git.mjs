@@ -20,17 +20,21 @@
 // bin/test-inflight.mjs asserts that no library under bin/lib/ contains a process exit at all.
 
 import { execFileSync } from 'node:child_process'
+
+import { perfRecord } from './perf.mjs'
 import { statSync } from 'node:fs'
 
 /** Run a command; return {ok, out, status}. Never throws - callers decide what a failure means. */
 export function exec(cmd, args, opts = {}) {
+    // Timed on both paths: a command that FAILS still cost its time, and the failures are exactly
+    // where an unexpected cost hides - a retry loop, a command dying slowly on a huge input.
+    const t0 = Date.now()
     try {
-        return {
-            ok: true,
-            out: execFileSync(cmd, args, { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, ...opts }),
-            status: 0,
-        }
+        const out = execFileSync(cmd, args, { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, ...opts })
+        perfRecord(`${cmd} ${args[0] ?? ''}`.trim(), Date.now() - t0)
+        return { ok: true, out, status: 0 }
     } catch (e) {
+        perfRecord(`${cmd} ${args[0] ?? ''}`.trim(), Date.now() - t0)
         return { ok: false, out: e.stdout ?? '', status: e.status ?? -1 }
     }
 }

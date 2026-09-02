@@ -36,6 +36,8 @@
 
 import { pathToFileURL } from 'node:url'
 
+import { perfReport, perfStart } from './lib/perf.mjs'
+
 import { baseline, freshnessWarnings, refTips } from './lib/git.mjs'
 import { corpusIndex, drift, findNotes, prsByBranch, stranded } from './lib/notes.mjs'
 import { branchView, commitGraph, trackingGap } from './lib/branches.mjs'
@@ -245,8 +247,12 @@ function help() {
     return [
         "bin/inflight.mjs - the front door for this repo's in-flight tooling.",
         '',
-        'Usage: bin/inflight.mjs <command> [args...]',
+        'Usage: bin/inflight.mjs [--perf] <command> [args...]',
         '       bin/inflight.mjs help [<command>]',
+        '',
+        '--perf reports where the time went, to stderr: how many subprocesses of each kind, their',
+        'total time, and the slowest single one. The cost here is almost always the COUNT rather',
+        'than any one call - one `git ls-tree` is nothing, 436 of them is over a second.',
         '',
         'Commands:',
         ...ALL.flatMap((c) => [
@@ -289,7 +295,14 @@ function dispatch(argv, emit) {
 // only file here permitted to exit the process; being importable is what lets the self-test assert
 // on the registry rather than on a regex over the source.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-    const { ok, reason } = dispatch(process.argv.slice(2), (s) => console.log(s))
+    const argv = process.argv.slice(2)
+    // Stripped before dispatch, so no command has to know the flag exists.
+    const perf = argv.includes('--perf')
+    if (perf) perfStart()
+
+    const { ok, reason } = dispatch(argv.filter((a) => a !== '--perf'), (s) => console.log(s))
     if (reason) (ok ? console.log : console.error)(reason)
+    // stderr, so a caller piping stdout gets exactly what it would without the flag.
+    if (perf) console.error(perfReport())
     process.exit(ok ? 0 : 2)
 }
