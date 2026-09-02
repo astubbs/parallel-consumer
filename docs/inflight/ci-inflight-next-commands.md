@@ -139,6 +139,23 @@ Antony, thinking out loud, and worth keeping because the bootstrap problem is th
   store - and one that **TTLs naturally when nobody is working on the project**, which is the right
   behaviour for a cache of a repository's live state rather than a defect in it
 
+  **The mechanics check out, probed 2026-09-02 rather than read off documentation.** An artifact
+  belongs to a workflow RUN, and the run carries the commit it was built at, so **the artifact's
+  identity is a master SHA** - which is exactly the comparison key a client needs. Listing artifact
+  metadata costs **one API call, 0.42s, and no download**: `repos/{owner}/{repo}/actions/artifacts`
+  returns `workflow_run.head_sha`, `size_in_bytes` and `expires_at` per entry. This repository
+  already holds 4601 of them at mixed retentions.
+
+  So the sync is Antony's: compare the newest artifact's SHA with the one your cache was built at;
+  equal means there is nothing to do and nothing was transferred. Different means **ask git locally
+  whether the intervening range touched anything the cache covers** - free, offline - and only then
+  download. The 90-day retention is the expiry, so a project nobody is working on loses its cache
+  without anyone deciding to.
+
+  **What must be tested before it is built, not assumed** (`docs/agent-harness.md`'s standing rule):
+  whether a fork PR can read base-repo artifacts at all, what auth a download needs outside Actions,
+  and whether the per-artifact size cap bites once the graph is more than edges.
+
 Neither is a decision. Both are recorded because the alternative was losing them.
 
 ## Before this merges
