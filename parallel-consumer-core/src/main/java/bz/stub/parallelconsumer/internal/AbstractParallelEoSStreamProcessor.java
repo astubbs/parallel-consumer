@@ -710,9 +710,10 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             // A producer the broker has invalidated arrives here too, as ProducerInvalidatedException: the
             // commit path has already recorded the condition, and the control thread replaces the producer
             // on its next pass (astubbs#225, KTD11 in its plan). This path only declines - it never waits
-            // for the replacement and never rethrows as fatal, which is what kept fencing fatal here
-            // before recovery existed. On the deprecated producer-instance path nothing is recorded and the
-            // raw condition lands here as well; that path keeps its pre-recovery behaviour by design.
+            // for the replacement, and it no longer rethrows: the rethrow that used to sit here kept fencing
+            // fatal while a fenced instance had no way back. On the deprecated producer-instance path
+            // nothing is recorded and the raw condition lands here as well; that path keeps its
+            // pre-recovery behaviour by design.
             // Restore the flag rather than swallowing the interrupt: this runs inside the poll
             // thread's rebalance callback, and dropping it strands whatever is waiting on it.
             if (e instanceof InterruptedException) {

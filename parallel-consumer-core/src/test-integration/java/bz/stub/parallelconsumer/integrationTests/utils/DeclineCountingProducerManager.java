@@ -81,9 +81,24 @@ public class DeclineCountingProducerManager<K, V> extends ProducerManager<K, V> 
         @Override
         protected ProducerManager<K, V> producerManager() {
             if (manager == null) {
-                manager = new DeclineCountingProducerManager<>(producerWrap(), consumerManager(), workManager(), options(), replacementProducerWrap());
+                manager = newManager(producerWrap(), consumerManager(), workManager(), options(),
+                        replacementProducerWrap());
             }
             return manager;
+        }
+
+        /**
+         * The one thing a subclass varies: which counting manager PC gets. The lazy construction above and
+         * {@link #manager()} are shared, so a variant does not re-implement the module wiring.
+         */
+        protected DeclineCountingProducerManager<K, V> newManager(
+                ProducerWrapper<K, V> producerWrapper,
+                ConsumerManager<K, V> consumerManager,
+                WorkManager<K, V> workManager,
+                ParallelConsumerOptions<K, V> options,
+                Optional<ReplacementProducerSource<K, V>> replacementProducerSource) {
+            return new DeclineCountingProducerManager<>(producerWrapper, consumerManager, workManager, options,
+                    replacementProducerSource);
         }
 
         /** Null until PC first asks for the producer manager, which it does during construction. */

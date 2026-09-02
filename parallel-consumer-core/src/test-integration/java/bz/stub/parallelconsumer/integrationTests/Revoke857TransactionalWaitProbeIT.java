@@ -7,8 +7,8 @@ package bz.stub.parallelconsumer.integrationTests;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.integrationTests.utils.DeclineCountingProducerManager;
+import bz.stub.parallelconsumer.integrationTests.utils.DeclineCountingProducerManager.DeclineCountingModule;
 import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
-import bz.stub.parallelconsumer.internal.PCModule;
 import bz.stub.parallelconsumer.internal.ConsumerManager;
 import bz.stub.parallelconsumer.internal.ProducerManager;
 import bz.stub.parallelconsumer.internal.ProducerWrapper;
@@ -53,8 +53,8 @@ import static org.awaitility.Awaitility.await;
  * branch, so it is now the <b>regression test</b> for it: both arms are expected to pass, and the
  * defect arm going red again means the callback has started waiting on the transaction lock once more.
  * <p>
- * <b>A green run is only meaningful alongside a nonzero {@link DwellingProducerManager#revocationDeclines()}</b> - see that
- * field.
+ * <b>A green run is only meaningful alongside a nonzero {@link DwellingProducerManager#revocationDeclines()}</b> - the
+ * class javadoc of {@link DeclineCountingProducerManager} says why.
  * <p>
  * <b>Known blind spot, stated rather than implied:</b> {@code tryCommitOffsetsOnRevoke} declines at TWO gates -
  * {@code commitLock.tryLock()} first, then the producer transaction lock - and only the second is observable
@@ -283,30 +283,29 @@ class Revoke857TransactionalWaitProbeIT extends BrokerIntegrationTest<String, St
     }
 
     /**
-     * Exists only to hand {@link DwellingProducerManager} to PC in place of the real one. The
-     * components are read here rather than inside {@link DwellingProducerManager} because
-     * {@code PCModule}'s accessors are protected: they are reachable through {@code this} in a
-     * subclass, but not through another instance from a different package.
+     * Hands {@link DwellingProducerManager} to PC in place of the real one; the module wiring itself is the
+     * shared {@link DeclineCountingModule}.
      */
-    static class DwellingModule<K, V> extends PCModule<K, V> {
-
-        private DwellingProducerManager<K, V> dwelling;
+    static class DwellingModule<K, V> extends DeclineCountingModule<K, V> {
 
         DwellingModule(ParallelConsumerOptions<K, V> options) {
             super(options);
         }
 
         @Override
-        protected ProducerManager<K, V> producerManager() {
-            if (dwelling == null) {
-                dwelling = new DwellingProducerManager<>(producerWrap(), consumerManager(), workManager(), options(), replacementProducerWrap());
-            }
-            return dwelling;
+        protected DeclineCountingProducerManager<K, V> newManager(
+                ProducerWrapper<K, V> producerWrapper,
+                ConsumerManager<K, V> consumerManager,
+                WorkManager<K, V> workManager,
+                ParallelConsumerOptions<K, V> options,
+                Optional<ReplacementProducerSource<K, V>> replacementProducerSource) {
+            return new DwellingProducerManager<>(producerWrapper, consumerManager, workManager, options,
+                    replacementProducerSource);
         }
 
         /** Null until PC first asks for the producer manager, which it does during construction. */
         DwellingProducerManager<K, V> dwellingManager() {
-            return dwelling;
+            return (DwellingProducerManager<K, V>) manager();
         }
     }
 
