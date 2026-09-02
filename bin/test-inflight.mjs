@@ -36,7 +36,10 @@
 
 import { spawnSync } from 'node:child_process'
 import { chdir, cwd } from 'node:process'
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import {
+    cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, symlinkSync, utimesSync,
+    writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { mkdtempSync as mkTmp } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -379,6 +382,32 @@ const CHECKS = [
         mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
             '        if (!rest.length) return { ok: true, reason: help() }',
             '        if (!rest.length) return { ok: false, reason: help() }'),
+    },
+    {
+        id: 'the-front-door-runs-through-a-symlinked-path',
+        why: 'the was-I-invoked-directly guard compared a resolved URL to an unresolved argv, so under a symlink the CLI body never ran - and every mutant here is built under one',
+        // THE NON-EMPTY HALF IS THE LOAD-BEARING HALF. A front door that never executed exits 0 with
+        // nothing on either stream, so a control asserting only the code passes against the exact
+        // bug it exists to catch - which is how this survived: `explicit-help-succeeds` asserts
+        // `code === 0` and was the ONE check that could see the fault, while every other
+        // invoke()-driven mutant was scored "went red" without its mutation ever being exercised.
+        //
+        // The symlink is made HERE rather than relied on from the environment. macOS `os.tmpdir()`
+        // is already one (`/var/folders/...` -> `/private/var/...`), which is why the fault showed
+        // up locally and never in CI, where `/tmp` is a real directory - so a control that leaned on
+        // the temp root would assert nothing on Linux, the only place this gates a merge.
+        run: async (binDir) => {
+            const link = join(mkdtempSync(join(tmpdir(), 'inflight-symlink-')), 'linked-bin')
+            symlinkSync(realpathSync(binDir), link, 'dir')
+            const r = invoke(link, ['help'])
+            return r.code === 0 && r.out.trim().length > 0
+        },
+        // Drops the realpath from the argv side ONLY - the original defect exactly, rather than
+        // deleting the guard, which would prove only that some guard ran. Both names stay imported,
+        // so the mutant fails by comparing a spelling to a resolved path and not by throwing.
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+            '        return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))',
+            '        return process.argv[1] === realpathSync(fileURLToPath(import.meta.url))'),
     },
     {
         id: 'dispatch-reaches-the-library',
@@ -1072,7 +1101,15 @@ const CHECKS = [
             try {
                 // The common dir fetches, then is aged past the one-hour threshold.
                 git(dir, 'fetch', '-q', 'origin')
-                spawnSync('touch', ['-d', '2020-01-01', join(dir, '.git', 'FETCH_HEAD')])
+                // AGED IN NODE, NOT BY `touch -d`. `-d 2020-01-01` is a GNU spelling; BSD touch -
+                // macOS - rejects it as "illegal time specification" and exits 1, and nothing here
+                // read that status. The file kept its real mtime, the common dir looked freshly
+                // fetched, and the mutant below - which reverts to reading the common dir alone -
+                // reported no staleness and stayed GREEN. Same class as the guard this commit
+                // fixes: a step that did not run, scored as one that ran and agreed. utimesSync is
+                // cross-platform and throws rather than exiting into a status nobody checks.
+                const aged = new Date('2020-01-01T00:00:00Z')
+                utimesSync(join(dir, '.git', 'FETCH_HEAD'), aged, aged)
                 const wt = join(dir, 'wt')
                 git(dir, 'worktree', 'add', '-q', '-b', 'wt-branch', wt)
                 git(wt, 'fetch', '-q', 'origin')
