@@ -30,6 +30,18 @@ Blockers, collisions, and decisions someone is waiting on. Not a PR list - `gh` 
   astubbs#80 reshaped. Pick parallel work accordingly - and check `gh pr list` for which of these
   are still open, since a merged one's files are simply master's again.
 <!-- post-merge: checked-end -->
+<!-- post-merge: checked-begin -->
+- **`LogCapture` is the only supported way to capture a log line in this suite.**
+  `bz.stub.parallelconsumer.internal.utils.LogCapture` is an `AutoCloseable` appender plus level
+  override, and its javadoc owns the two hazards of raising a JVM-shared logger - reading someone
+  else's lines, and flooding everyone with `DEBUG` - along with the different fix each one takes.
+  Read it before writing a capture; do not open a second way to do this. Still un-converted:
+  `SubmitWorkToPoolShutdownRaceTest`'s two inline `(Logger) LoggerFactory.getLogger(...)` +
+  `ListAppender` blocks (`grep -n ListAppender` finds them). The astubbs#201 / astubbs#203 collision
+  this bullet used to record is settled - astubbs#203's branch is merged into astubbs#201's and the
+  inline copy in `LoadFactorCeilingReportingTest` is converted, so no rival implementation can reach
+  master.
+<!-- post-merge: checked-end -->
 - **astubbs#8 (`features/retry-dlq`, 2022) is an abandoned draft**, kept only because it is the sole
   DLQ code that exists. Close or finish it; it is not in flight.
 

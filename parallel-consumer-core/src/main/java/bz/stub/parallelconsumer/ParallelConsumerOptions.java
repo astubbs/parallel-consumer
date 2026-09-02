@@ -386,35 +386,40 @@ public class ParallelConsumerOptions<K, V> {
     public static final Duration SASL_AUTHENTICATION_EXCEPTION_RETRY_BACKOFF = Duration.ofSeconds(5);
 
     /**
-     * Error handling strategy to use when <em>recognisably Kafka Streams</em> offset metadata is encountered. This could
-     * happen accidentally or deliberately if the user attempts to reuse an existing consumer group id.
+     * Error handling strategy to use when PC is assigned a partition whose committed offset metadata this build cannot
+     * read - a consumer group previously owned by Kafka Streams, by another framework, by operator tooling, or written
+     * by a <em>newer</em> PC using an encoding that did not exist when this version was built.
      * <p>
-     * This policy applies only to metadata PC can positively identify as Kafka Streams'. Metadata it cannot decode at
-     * all - written by some other framework, by operator tooling, or simply corrupt - is never fatal under either
-     * policy: PC logs it, drops the offset map, and resumes from the committed offset.
+     * The policy governs <em>every</em> such case uniformly. It previously governed only bytes PC could positively
+     * identify as Kafka Streams'; anything else bypassed it, which is what made the option unreachable for the
+     * forward-compatibility case it exists to handle (astubbs#197, release-ledger item 5).
      */
     public enum InvalidOffsetMetadataHandlingPolicy {
         /**
-         * Fails and shuts down the application. This is the default.
+         * Fail and shut down rather than silently discard the offset map. Dropping the map replays records that were
+         * completed but not yet committed, so this is the choice for a deployment that would rather stop than
+         * reprocess. Opt in: it is no longer the default - see {@link #invalidOffsetMetadataPolicy}.
          */
         FAIL,
         /**
-         * Ignore the error, logs a warning message and continue processing from the last committed offset.
+         * Log a warning, discard the unreadable metadata and resume from the last committed offset. The default.
          */
         IGNORE
     }
 
     /**
-     * Controls the error handling behaviour to use when Kafka Streams offset metadata from a pre-existing consumer group
-     * is encountered - the scenario where a consumer group id from a Kafka Streams application is reused.
+     * Controls what happens when PC is assigned a partition whose committed offset metadata it cannot read. See
+     * {@link InvalidOffsetMetadataHandlingPolicy}.
      * <p>
-     * Note this does not govern metadata PC cannot decode at all; that is always recovered from rather than being fatal.
-     * See {@link InvalidOffsetMetadataHandlingPolicy}.
-     * <p>
-     * Default is {@link InvalidOffsetMetadataHandlingPolicy#FAIL}
+     * <b>Default is {@link InvalidOffsetMetadataHandlingPolicy#IGNORE}, changed from {@code FAIL}.</b> Pointing PC at a
+     * consumer group that already has metadata in it is the first thing anyone adopting PC does, and dying during the
+     * rebalance callback is the reported failure of astubbs#118 / confluentinc#326. That was previously survivable only
+     * because undecodable metadata bypassed this option entirely; now that the option genuinely governs every
+     * unreadable path, leaving the default at {@code FAIL} would make that report's exact scenario fatal again for
+     * anyone who configures nothing. {@code FAIL} remains available and now means what it says.
      */
     @Builder.Default
-    private final InvalidOffsetMetadataHandlingPolicy invalidOffsetMetadataPolicy = InvalidOffsetMetadataHandlingPolicy.FAIL;
+    private final InvalidOffsetMetadataHandlingPolicy invalidOffsetMetadataPolicy = InvalidOffsetMetadataHandlingPolicy.IGNORE;
     /**
      * When a message fails, how long the system should wait before trying that message again. Note that this will not
      * be exact, and is just a target.
@@ -529,6 +534,7 @@ public class ParallelConsumerOptions<K, V> {
 
         producerSourceValidation();
         transactionsValidation();
+        loadFactorValidation();
     }
 
     /**
@@ -576,6 +582,29 @@ public class ParallelConsumerOptions<K, V> {
                         Fields.commitMode,
                         commitMode));
             }
+        }
+    }
+
+    /**
+     * The load factor bounds have only one meaningful ordering: {@link #initialLoadFactor} is where the dynamic load
+     * factor starts, and {@link #maximumLoadFactor} is the ceiling it is allowed to step up to. An inverted pair can
+     * never step, so it is a typo rather than a request. Unchecked it is accepted and pinned at the initial value,
+     * surfacing at best as an inverted {@code 100/10} inside the rate-limited saturation warning - which only fires
+     * under load, and reads as a capacity signal rather than as the misconfiguration it is.
+     * <p>
+     * Checked whether or not {@link #messageBufferSize} is set. A buffer size makes the pair <em>unused</em>, not
+     * sensible, and accepting a nonsensical value is how it survives to the configuration change that starts reading
+     * it again.
+     */
+    private void loadFactorValidation() {
+        if (initialLoadFactor > maximumLoadFactor) {
+            throw new IllegalArgumentException(msg("Cannot set {} ({}) above {} ({}) - the initial load factor is "
+                            + "where the dynamic load factor starts and the maximum is the ceiling it may step up "
+                            + "to, so an inverted pair can never step",
+                    Fields.initialLoadFactor,
+                    initialLoadFactor,
+                    Fields.maximumLoadFactor,
+                    maximumLoadFactor));
         }
     }
 

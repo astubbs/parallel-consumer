@@ -25,9 +25,12 @@ Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutio
 <!-- post-merge: checked - the row states the fix and the lift as things that happened -->
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. **Fixed by astubbs#265**, which deleted the wall-clock assertion rather than repairing it. astubbs#262, its owner, lifted the quarantine and deleted the registry entry - see below |
 | `AmbientProbeExtensionTest.headroomIsReportedOnAPassingTestToo`, `headroomOutcomeComesFromTheWatcherPhaseNotTheEndOfTheTestMethod`, `headroomIsSilentWithoutADeadlineAndWithoutAMeasurement` | 4 of 5 local runs (2026-09-02) | Found while verifying the producer-recovery work (astubbs#225) locally; that change does not touch the class. UNDIAGNOSED - see below |
+| `JStreamParallelEoSStreamProcessorTest.testConsumeAndProduce` and `.testFlatMapProduce` | 1 seen (2026-09-01) | Not from the original scan - found in a **local** core unit run on a parallel re-cut of astubbs#207, not on astubbs#207 itself. Both failed together on produced-record count (`Expected size: 1/2 but was: 0`), i.e. the returned stream carried nothing. **Mechanism now known and owned by astubbs#116** - see below | <!-- post-merge: checked -->
 | `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 5 seen (2026-08-18, 2026-08-19, 2026-08-25, 2026-09-01, 2026-09-02) | Not from the original scan - each found while babysitting a branch. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third, fourth and fifth sightings independently carry the **same three-way key collision** in the failing batch contents, which points at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
+| `Mutation Tests (PIT, PR-scoped)` lane | 1 seen (2026-09-02, astubbs#207, [run 33610711974](https://github.com/astubbs/parallel-consumer/actions/runs/33610711974)) | Not a test - the LANE hit its `timeout-minutes: 30` cap and was cancelled, on a **markdown-only** delta from a head where it had scored in 19m18s with the same class set. The cap has about a third headroom over a normal run, so it will flap on a slow runner. `continue-on-error: true`, so it never gates a merge - but a cancelled row reads like a failure <!-- post-merge: checked --> |
+| `ManagedPCInstanceLifecycleTest.rapidToggleShouldNotCreateDuplicateInstances` | 1 seen (2026-09-02, astubbs#207, [job 100175277225](https://github.com/astubbs/parallel-consumer/actions/runs/33607572165/job/100175277225)) | Not from the original scan - **arrived on master with astubbs#29 and failed on the first PR to merge it**. `consumeCount` 0, repetition 1 of 5, `forkCount=4`, `probe clean`. Every wait in the test is a fixed sleep, and its assertion names a cause it cannot discriminate - see below <!-- post-merge: checked --> |
 | `RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed` | 1 seen (2026-09-01) | Not from the original scan - found while babysitting astubbs#257. Failed its **saturation/pause-point setup guard**, not the confluentinc#909 signature assertion, so it proves nothing about the defect it reproduces - see below <!-- post-merge: checked --> |
-| `ParallelEoSStreamProcessorTest.processInKeyOrder` | 2 seen locally (2026-09-01), 1 in 3 isolated runs; the input-data failure separately 1 of 8 on **unmodified `master`** | **Two DIFFERENT failures under one test name, and the documented fix is already in the tree.** See below - this one is not a fresh flake, it is a solved one still firing. The second failure now has a control arm and a source-level lead, so classify from those rather than re-measuring |
+| `ParallelEoSStreamProcessorTest.processInKeyOrder` | 8 seen locally (2026-09-01) across three branches, 1 in 3 isolated runs; the input-data failure separately **1 of 8 on unmodified `master`** | **Two DIFFERENT failures under one test name, and the documented fix is already in the tree.** See below - this one is not a fresh flake, it is a solved one still firing. The second failure now has a control arm on master and a source-level lead, so classify from those rather than re-measuring |
 
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
 door, and for the same reason: two of that family turned out to be real product bugs, and the third
@@ -112,6 +115,61 @@ nothing size (0, never 3 or 7), and it predicts the load dependence.
 **Classify before touching it**, per this ledger's rule. The cheap experiment: replace the
 `awaitForOneLoopCycle()` with an await on `polled` reaching nine and predict it goes deterministic;
 if it still fails, the poll genuinely is not happening and that is a product question.
+
+<!-- post-merge: checked-begin - names astubbs/parallel-consumer#207 in the past tense as the branch
+     the arms were measured on, which stays true once that PR has landed -->
+**Three further load arms, from a fourth branch, agreeing with the control above.** Measured on
+astubbs/parallel-consumer#207 while it ran the full core suite:
+
+| Arm | Result |
+|---|---|
+| Full suite, fresh worktree, machine otherwise idle | green 559/0, at two consecutive commits |
+| Full suite, machine also running CI and a second build | 2 failures, twice running |
+| `ParallelEoSStreamProcessorTest` alone, machine loaded | green 68/68 |
+
+The failing parameters differed between those runs (`[2]`, then `[1]` and `[3]`), which is what rules out
+a deterministic break from any one branch - and the isolated green agrees with the class-alone result
+above rather than contradicting it, because isolation removes the load the failure needs.
+<!-- post-merge: checked-end -->
+
+<!-- post-merge: checked-begin -->
+
+### `JStreamParallelEoSStreamProcessorTest` - both produce tests, empty stream, seen once
+
+Seen once, locally, in the middle of a full `parallel-consumer-core` unit run. `testConsumeAndProduce`
+and `testFlatMapProduce` failed in the same execution, both because the returned stream held nothing
+at the point the assertion ran.
+
+**Recorded here rather than lost, but it was not seen on astubbs#207.** It surfaced in a second
+session that was independently re-cutting astubbs#207 onto master (branch
+`recut/207-offset-policy-bypass`, since stood down); the offsets change that run carried was that
+re-cut's, not the one astubbs#207 now ships. The sighting is carried across because the ledger's job
+is to stop a flake going unrecorded, and a branch that no longer exists cannot hold it.
+
+What is established, and it is only elimination: the same full suite was then run once on unmodified
+master and twice with that change, all green, and this class passes in isolation on both sides. So no
+offsets change is implicated and the failure did not reproduce - which also means nothing here is
+diagnosed.
+
+**The mechanism is astubbs#116's, and this sighting is evidence for it.** That PR - *"a result stream
+that ends before the results arrive"*, fixing astubbs#122 / confluentinc#912 - found that the bridge
+from the result queue to the returned `Stream` returned `false` from `Spliterator#tryAdvance` the
+first time the queue polled empty. `tryAdvance` has no way to say "nothing right now": `false` means
+*no more, ever*. So a momentary gap ended the stream permanently.
+
+Its own description says eight tests across core and vertx "collected the stream on the calling
+thread and asserted a size" and "passed **only because the stream quit early** - they encoded the
+defect". `testConsumeAndProduce` and `testFlatMapProduce` are two of them, and they assert exactly
+the sizes seen empty here. So this is not a test-infrastructure flake: it is the product defect
+astubbs#116 fixes, observed racing the other way for once, and it explains why both failed together
+and why the class passes in isolation.
+
+**Do not diagnose or quarantine this separately - it goes away with astubbs#116**, whose
+`JStreamLiveResultStreamTest` covers the behaviour directly. Recorded anyway rather than dropped,
+because a sighting that confirms a fix is already written is worth more than one nobody wrote down.
+Whoever merges astubbs#116 owns retiring this entry, per the four outcomes in this directory's
+`AGENTS.md` - the sighting's value is that it corroborates that fix, so it migrates into the fix
+rather than being deleted.
 <!-- post-merge: checked-end -->
 
 ### `RegistrationRaceStaleResidentIT` - the setup guard timed out, which is not the 909 assertion
@@ -147,6 +205,47 @@ frozen partitions observed`. Worth weighing against the probe's own thresholds b
 it points away from broker contention and toward the test's own 30s timing budget - which is
 `forkCount=4` on a shared runner, waiting on a hand-orchestrated race between a paused registration
 loop and a forced eager rebalance.
+<!-- post-merge: checked-end -->
+
+### `ManagedPCInstanceLifecycleTest` - a sleep-timed test that names one cause for a symptom with several
+
+<!-- post-merge: checked-begin - names astubbs#29 and astubbs#207 in the past tense as, respectively, the
+     change that introduced the test and the branch the sighting came from; both stay true once landed -->
+Seen 2026-09-02 on astubbs#207's CI, one failure in 187 integration tests, at repetition 1 of 5.
+
+**Provenance first, because it decides who owns it.** `git log --diff-filter=A` on the file shows this class
+was **added by astubbs#29**, the confluentinc#857 revoke-path fix, and astubbs#207 merged that commit hours
+earlier. astubbs#207 does not touch the test, and it is cleared on mechanism rather than on timing: the test
+runs `PERIODIC_CONSUMER_ASYNCHRONOUS` + `UNORDERED` against a freshly created topic and never puts foreign
+metadata in a commit, so there is no offset metadata for an offset-*decoding* change to reach.
+
+Master's own CI was green at `a6941020f` (astubbs#29's merge) and at the head after it. One green run per
+commit cannot rule out a low-rate flake, so that is corroboration, not proof - the mechanism above is what
+clears the branch.
+
+**Every wait in it is a fixed sleep standing in for an event**, which is the defect class this repo has
+already met twice (`processInKeyOrder`'s `awaitForOneLoopCycle`, and what astubbs#265 removed elsewhere).
+Read the method: 2s to join the group, 10 toggle cycles at 100ms, 3s to settle, then produce 10 records and
+sleep 5s before asserting `consumeCount > 0`. Under `forkCount=4` on a shared runner with a Testcontainers
+broker, 5 seconds is not a guaranteed window for a rejoin, an assignment, a poll and ten records.
+
+**The assertion attributes a cause it cannot discriminate**, and that is the part worth fixing rather than
+the timing. Its message is *"if 0, the PC died from CME during rapid toggles"* - but a count of zero is also
+what starvation looks like, and the test has no way to tell the two apart. So a failure here does not
+establish the defect it was written for, and the honest fix is to assert on the thing that distinguishes
+them (a CME actually observed) and to wait on the consume rather than on a clock.
+
+The ambient probe said `probe clean` and, unusually, said why that is worth little here: **`detector reach:
+UNKNOWN - this test declares no @Timeout`**, so nothing in the autopsy says the long-bound detectors had time
+to fire. Take the clean verdict as unproven rather than as evidence.
+
+**Control arm: not always red.** The next head was a one-file markdown delta - this note itself - and its
+integration lane ran the same code and passed. That separates *always red* from *not always red*, and nothing
+more; it is not a rate and it does not identify which of the sleeps lost. The prior run had been *cancelled*
+by that push rather than completing, which is worth saying because the cancelled run's absence from a failure
+list reads exactly like a pass.
+
+Not quarantined: quarantine is master-state and needs evidence, and one sighting is not a rate.
 <!-- post-merge: checked-end -->
 
 ### `simpleBatchTest` - three modules, one shared helper, and a lead nobody has tested

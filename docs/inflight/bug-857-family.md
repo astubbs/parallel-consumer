@@ -2221,6 +2221,112 @@ still records its verification status as Unproven. **A seventh capture of this s
 less than one replay of any of the six**, and this entry exists only because the seed would
 otherwise expire with the log.
 
+## 2026-09-02, `INSTANCE_STALL` fires a second time - and the first seed replay in this file comes back clean
+
+**The gating detector, not the timing proxy.** `Chaos Pain Suite`,
+`ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger`, killed by
+`INSTANCE_STALL/NO_WORK_COMPLETED`: *instance 42 holds work (queued=212, outForProcessing=80) but
+has returned no work result for 150s (bound 150s) at 28251 results returned*, at `t=+150797ms`. The
+24 autopsy observations were all `CLASS2_STALL/LAG_STAGNATION` and non-gating; as with the first
+firing, the interesting line is in the run log, not the autopsy list. Instance 42 was in the initial
+fleet (`PERIODIC_CONSUMER_ASYNCHRONOUS`, `UNORDERED`), never touched by the conductor - no
+STOP/RESTART event names it - and at close ten of its worker threads did not answer interrupt
+(*Clean execution pool termination failed ... Threads still not done count: 10*). No thread dump is
+taken on this path, so the log says nothing about what they were in.
+<!-- post-merge: checked-begin - a dated sighting against a job id and a sha, both durable -->
+Seen on astubbs/parallel-consumer#203's CI
+([run 33643246412](https://github.com/astubbs/parallel-consumer/actions/runs/33643246412), job
+100291589476), at head `a615560bc`, a GitHub-hosted runner.
+<!-- post-merge: checked-end -->
+
+**Seed `4088857311712263252`**, and the replay line as the log printed it:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=4088857311712263252
+
+To run only this scenario add `-Dit.test=ChaosChurnStormIT -Dfailsafe.failIfNoSpecifiedTests=false`
+- the *failsafe* property, not surefire's; the `-am` pulls the parent in first and it has nothing
+matching, so without that flag the replay dies before the test starts.
+
+**Replayed the same hour, on the same tree, and it was CLEAN** - the first replay of any seed in this
+file. Same seed, same scenario, a 32-core box at load 0.2 with nothing else running: zero violations,
+zero observations, `consumed=100322`, 102s against CI's 172s. So this seed does not reproduce off the
+runner, which is the reading the first firing's own caveat gives - `INSTANCE_STALL` is re-armed by
+any returned result, so an instance that is merely starved can trip it - and one clean replay does
+not prove that reading either, because a load-shaped stall by definition needs the load. What it
+does establish is that the seed is not a deterministic reproducer, which the first firing left open.
+
+<!-- post-merge: checked-begin - describes the branch's diff and its earlier runs in the past tense -->
+**Not attributable to that branch, on mechanism.** Its main-code diff is log-line formatting behind
+`isDebugEnabled()` guards, a summary type, and comment changes; the chaos suite runs at INFO, so none
+of it executes. Two earlier heads of the same branch passed this suite the same day carrying the same
+astubbs#29 fix, and the head after it - a merge of master and a ledger edit - is the one that fired.
+<!-- post-merge: checked-end -->
+
+**Two corrections to earlier sections, dated rather than edited in.** First, the 2026-08-25 section
+above says `Chaos Pain Suite` is *not* in master's required-checks ruleset and so a red here blocks
+no merge. As of 2026-09-02 it is in the ruleset (`gh api repos/astubbs/parallel-consumer/rules/branches/master`
+lists it), and this firing held a merge until a re-run - so "each red is an asset, not noise" now has
+a cost attached that the section did not have to weigh. Second, the standing prediction asks for
+the Class 2 rate after astubbs#29 and the backlog land; this run had 24 Class 2 observations on the
+tree that carries astubbs#29, which is the rate continuing as predicted, not dropping off.
+
+## 2026-09-02, an `INSTANCE_STALL` firing on astubbs#201's CI - a separate seed, and a control arm that rules the branch out on evidence rather than on mechanism <!-- post-merge: checked -->
+
+**Distinct from the firing recorded in the section above, not a second write-up of it.** That one was
+`ChaosChurnStormIT` on astubbs#203's CI at head `a615560bc`; this one is the same test and the same
+gating detector on astubbs#201's CI at a different head, and it carries its own seed. Neither was a <!-- post-merge: checked -->
+replay of the other, and the ordinal in that section's title is left as written rather than renumbered
+around this one.
+
+The gating violation, as the run log printed it: `INSTANCE_STALL/NO_WORK_COMPLETED: instance 42 holds
+work (queued=873, outForProcessing=140) but has returned no work result for 151s (bound 150s) at 24545
+results returned`. Every autopsy entry was `CLASS2_STALL/LAG_STAGNATION` and non-gating, so again the
+line that matters is in the run log rather than in the autopsy list. Instance 42 is the same instance
+number as the sibling firing, which is a coincidence of fleet numbering and not a shared identity.
+
+<!-- post-merge: checked-begin - a dated sighting against a job id and a sha, both durable -->
+Seen on astubbs/parallel-consumer#201's CI
+([run 33640843680](https://github.com/astubbs/parallel-consumer/actions/runs/33640843680), job
+100283528158), at head `0c5820fae`.
+<!-- post-merge: checked-end -->
+
+**Seed `8458454974018113374`** - the perishable part, recorded because the log and artifact expire:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=8458454974018113374
+
+Add `-Dit.test=ChaosChurnStormIT -Dfailsafe.failIfNoSpecifiedTests=false` to run only this scenario,
+per the sibling section - the *failsafe* property, not surefire's.
+
+**Not attributable to astubbs#201, and the argument here is a control arm rather than a mechanism <!-- post-merge: checked -->
+argument.** The head that fired differs from the immediately preceding head of the same branch by no
+Java at all: `git diff --name-only 976623b86..0c5820fae` names only agent hooks, `bin/` scripts, docs,
+`pom.xml` and `.github/workflows/maven.yml`. The chaos suite passed on that preceding head and failed
+here with library and chaos-test code byte-identical between the two runs, and the workflow edit is a
+post-test Codecov upload step gated `if: always()`, so it cannot reach test timing.
+
+The mechanism argument holds independently and is the weaker of the two only because it needs reading:
+`DynamicLoadFactor`'s `staticFactor` is `initial == maximum`, the defaults are
+`DEFAULT_INITIAL_LOADING_FACTOR` and `DEFAULT_MAX_LOADING_FACTOR` and they differ, and the chaos
+harness configures neither those bounds nor `messageBufferSize` - so `isStaticFactor()` is false
+throughout this suite and `maybeStepUp()` keeps its original path.
+
+**What the control arm cannot do**, stated so nobody reads it as more than it is: a chaos run draws a
+fresh seed each time, so identical code passing on the previous head does not establish that *this*
+seed would have passed there. It establishes that the branch did not introduce the firing, which is a
+narrower claim than the branch being unable to provoke it.
+
+**Replayed the same afternoon, on the tree that fired it, and CLEAN** - the second seed replay in this
+file, and the second clean one. Same seed, same scenario, the same idle 32-core box as the sibling
+replay: zero violations, zero observations, `consumed=100412`, 165.8s. Two firings of the gating
+detector in one afternoon, on sibling trees carrying astubbs#29, and neither seed reproduces off a
+GitHub-hosted runner. That is now the pattern rather than a single data point, and it points the same
+way the first firing's caveat did: `INSTANCE_STALL` is re-armed by any returned result, so what it is
+measuring on those runners is starvation. What would move it back toward a wedge is a firing whose
+seed replays red on an idle box - and both of today's are now known not to be that seed.
+
+
 ## Delete when
 
 The `CLASS2_STALL` entries above are superseded by this section and kept only as the record of how a
