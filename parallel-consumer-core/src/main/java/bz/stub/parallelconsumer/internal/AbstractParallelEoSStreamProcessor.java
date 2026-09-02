@@ -2015,10 +2015,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 Duration effectiveRetryDelay = lowestScheduled.toMillis() < retryDelay.toMillis() ? retryDelay : lowestScheduled;
                 Duration result = timeBetweenCommits.toMillis() < effectiveRetryDelay.toMillis() ? timeBetweenCommits : effectiveRetryDelay;
                 log.debug("Not enough work in flight, while work is waiting to be retried - so will only sleep until next retry time of {} (lowestScheduled = {})", result, lowestScheduled);
-                // capped like the commit path below: a deferred replacement is still due on its own schedule, and
-                // while it is deferred nothing else wakes this loop - a long retry delay or commit interval would
-                // otherwise sleep straight through the attempt
-                return capAtNextRecoveryAttempt(result);
+                return capAtNextRecoveryAttempt(result); // same cap as the commit path below, for the same reason
             }
         }
 
