@@ -53,3 +53,10 @@ confluentinc#28 (tracing), confluentinc#40 (per-record transactions), confluenti
 offsets), confluentinc#154 (proxy). For those four, absence was easy to establish (no dependency, no
 module, no enum value) and little else was checked, so the *fork status* is sound while the
 *design notes* are the least examined. Re-read them before planning any of that work.
+
+**One of the four has since gained an input it did not have.** confluentinc#40 (per-record
+transactions, mirrored as astubbs#232) asks to replace the periodic bulk transaction, and the
+transactional claim register - `TransactionalClaim` and `TransactionalClaimCoverageTest` under
+`parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/` - now states machine-checked what the
+*bulk* model does and does not guarantee. That is the baseline any per-record design has to beat, so
+read it before re-reading the thin design note.

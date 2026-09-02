@@ -122,9 +122,7 @@ bounded_fetch() { git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=20 fetch "
 # ------------------------------------------------------------------------------------------------
 # SessionStart: fetch everything, once per throttle window
 # ------------------------------------------------------------------------------------------------
-if [ "$(printf '%s' "$payload" | python3 -c 'import json,sys
-try: print(json.load(sys.stdin).get("hook_event_name",""))
-except Exception: pass' 2>/dev/null || true)" = "SessionStart" ]; then
+if [ "$(hook_event_name "$payload")" = "SessionStart" ]; then
     # ABSOLUTE, ALWAYS. `--git-common-dir` answers a RELATIVE `.git` from a main checkout and an
     # absolute path from a linked worktree, so keying on it raw put every clone on this machine
     # onto one stamp - one clone's session start then suppressed another's fetch for the whole

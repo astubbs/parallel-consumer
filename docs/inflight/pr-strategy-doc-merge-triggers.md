@@ -25,9 +25,10 @@ approach") and the README's Share Groups table both rest on PC being the only wa
 `batchSize >= 2` the consumer stalled outright - and both read `PROVED` again with that fix merged in,
 so the headline stands rather than moves. `STRATEGY.md` already says so; the standing trigger is the
 register, not this note - a claim refuted later still moves the README table's `Exactly-once` row. The
-issue map is
-[`branch-transactional-battle-test.md`](branch-transactional-battle-test.md), which records what the
-work proved against each reported transactional issue.
+register is `TransactionalClaim` and `TransactionalClaimCoverageTest` under
+`parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/`, which fail the build when a claim is
+recorded as covered with no test behind it, or when a recorded sentence leaves the file it was quoted
+from.
 <!-- post-merge: checked-end -->
 
 <!-- post-merge: checked-begin -->

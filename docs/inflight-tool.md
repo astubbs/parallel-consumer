@@ -72,6 +72,63 @@ node bin/inflight.mjs note find 857
 Substring match over every note path that exists on any ref - including the ones that never reached
 master, which is most of them. Use it to get the path that `note drift` wants.
 
+## Deciding whether now is the moment to break up an oversized class
+
+```
+node bin/inflight.mjs refactor-window
+```
+
+`docs/refactoring.md` says its entries are to be picked up "when things are quiet", and until this
+command nothing could evaluate that. The entries aged instead: its `AbstractParallelEoSStreamProcessor`
+entry records the class at 1533 lines, and the command reports what it is now.
+
+<!-- issue-refs: exempt-begin - verbatim command output; the tool prints the bare number GitHub gives it -->
+
+```
+  nearest to workable: work-manager (1.9x over)
+  furthest away:       work-container (3.5x over)
+
+  BUSY    abstract-parallel-eos-stream-processor   largest +1047, threshold 480 - 2.2x over
+          on origin/feats/hasten-micro-mvp - PR #392 (OPEN)
+          land that branch first, or wait
+          2406 lines, up 872 over the last 180 days
+          live refs carrying it under none of its 2 configured paths: 28
+          live refs carrying it that could not be measured (no merge-base with the baseline?): 1
+```
+
+<!-- issue-refs: exempt-end -->
+
+Four things in that output are the whole design.
+
+**The number is the largest single divergence, not how many branches touch the file.** Measured
+2026-09-02: `PartitionState` had dozens of live branches with an open pull request diverging from it
+and the largest of those divergences was **eight lines**. A count calls that file blocked with
+nothing in its way. A maximum is also immune to two artefacts a count is not - a branch counted
+twice as `feats/x` and `origin/feats/x`, and a stack of branches sharing a base.
+
+**It names the branch, because waiting is not the only option.** When the window is shut, the line
+above says which single branch to land in order to open it. That is the difference between a verdict
+and a lead.
+
+**The last line is the one that stops this lying to you.** A candidate is configured with every path
+it is known by, and that count is the live refs carrying it under *none* of them. It is not
+decoration: this fork's package rename is in flight, so a candidate genuinely lives at
+`bz/stub/...` and `io/confluent/...` at the same time, and a path the config was never told about
+would otherwise read as quiet - the exact false negative the rest of this tool exists to prevent.
+
+**The ordering is the answer to "what next".** Candidates are listed by distance to open, nearest
+first, so the top row is the one to start and the bottom is the one furthest from ever being
+startable. The growth line beside each says whether the problem is getting worse while nobody takes
+the moment - derived from git on every run, never recorded, so it cannot rot the way the 1533 above
+did.
+
+A working-tree answer cannot be given at all here. The question is about other branches by
+definition, and 160 of the refs carrying that class carry it only under its pre-rename path.
+
+`--if-open` prints nothing when the signal ran and nothing is open - the form the two hooks use. It
+still prints when anything **failed**, because a hook whose correct output is silence cannot be told
+from a hook that is broken. Thresholds are per candidate, live in `bin/refactor-candidates.json`,
+and retuning one is an ordinary commit.
 ## Asking when a test started failing, without re-running anything
 
 `bin/inflight.mjs codecov` reads Codecov's API, which holds the **outcome and wall-clock of every

@@ -22,7 +22,7 @@ Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutio
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. **Fixed by astubbs#265**, which deleted the wall-clock assertion rather than repairing it. astubbs#262, its owner, lifted the quarantine and deleted the registry entry - see below |
 | `ParallelEoSStreamProcessorTest.processInKeyOrder` | 6 seen locally (2026-09-01) across two branches, 1 in 3 isolated runs | **Two DIFFERENT failures under one test name, and the documented fix is already in the tree.** See below - a solved flake still firing, plus a fast-failing `[sanity check input data]` precondition that has only ever been seen under load |
 | `JStreamParallelEoSStreamProcessorTest.testConsumeAndProduce` and `.testFlatMapProduce` | 1 seen (2026-09-01) | Not from the original scan - found in a **local** core unit run on a parallel re-cut of astubbs#207, not on astubbs#207 itself. Both failed together on produced-record count (`Expected size: 1/2 but was: 0`), i.e. the returned stream carried nothing. **Mechanism now known and owned by astubbs#116** - see below | <!-- post-merge: checked -->
-| `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 4 seen (2026-08-18, 2026-08-19, 2026-08-25, 2026-09-01) | Not from the original scan - each found while babysitting a branch. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third and fourth sightings independently carry the **same three-way key collision** in the failing batch contents, which points at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
+| `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 5 seen (2026-08-18, 2026-08-19, 2026-08-25, 2026-09-01, 2026-09-02) | Not from the original scan - each found while babysitting a branch. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third, fourth and fifth sightings independently carry the **same three-way key collision** in the failing batch contents, which points at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
 | `Mutation Tests (PIT, PR-scoped)` lane | 1 seen (2026-09-02, astubbs#207, [run 33610711974](https://github.com/astubbs/parallel-consumer/actions/runs/33610711974)) | Not a test - the LANE hit its `timeout-minutes: 30` cap and was cancelled, on a **markdown-only** delta from a head where it had scored in 19m18s with the same class set. The cap has about a third headroom over a normal run, so it will flap on a slow runner. `continue-on-error: true`, so it never gates a merge - but a cancelled row reads like a failure <!-- post-merge: checked --> |
 | `ManagedPCInstanceLifecycleTest.rapidToggleShouldNotCreateDuplicateInstances` | 1 seen (2026-09-02, astubbs#207, [job 100175277225](https://github.com/astubbs/parallel-consumer/actions/runs/33607572165/job/100175277225)) | Not from the original scan - **arrived on master with astubbs#29 and failed on the first PR to merge it**. `consumeCount` 0, repetition 1 of 5, `forkCount=4`, `probe clean`. Every wait in the test is a fixed sleep, and its assertion names a cause it cannot discriminate - see below <!-- post-merge: checked --> |
 | `RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed` | 1 seen (2026-09-01) | Not from the original scan - found while babysitting astubbs#257. Failed its **saturation/pause-point setup guard**, not the confluentinc#909 signature assertion, so it proves nothing about the defect it reproduces - see below <!-- post-merge: checked --> |
@@ -328,6 +328,28 @@ prior: the collision is now the leading reading rather than one of three equals,
 that failed to reproduce under a forced collision would be a genuinely surprising result. Recorded
 while the CI log carrying the payload still existed - those logs expire, and the payload is the
 whole value of the sighting.
+<!-- post-merge: checked-end -->
+
+<!-- post-merge: checked-begin - a dated sighting against a PR number and a sha, both durable -->
+#### The 2026-09-02 sighting: the same shape a third time, on a branch with no Java at all
+
+`ReactorBatchTest`, KEY ordering (`simpleBatchTest(ProcessingOrder)[3]` again), on the Unit Tests
+lane of astubbs/parallel-consumer#414 at `36cd68593`. Same `Expected size: 3 but was: 4`, the alias
+timing out at 30.53s. That branch's diff was workflow YAML and docs - no Java of any kind - so the
+master-state argument needs no restating: nothing in it can reach a batch boundary in any module.
+
+**The payload is the 2026-08-25 and 2026-09-01 shape for the third time.** Keys by offset
+`49, 74, 74, 74, 59` - a **three-way collision on key 74** - arriving as `{o0, o1}`, `{o4}`, `{o2}`,
+`{o3}`: the two singletons paired, the three colliding records one to a batch, four batches against
+an expectation of three. Three independent draws, two modules between them, three different
+collided keys, one shape.
+
+What it changes is not the diagnosis - that is still the unrun pin-the-keys experiment above, and a
+third collision-shaped payload moves the prior very little past where the second left it. What it
+changes is the cost: this is the second day running that the flake failed a PR's required Unit Tests
+lane outright, each time on a branch that could not have caused it, so it now charges a CI round to
+work that has nothing to do with it. That is the condition under which a cheap unrun experiment
+stops being deferrable.
 <!-- post-merge: checked-end -->
 
 ### `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` - a helper defect, not a test defect
