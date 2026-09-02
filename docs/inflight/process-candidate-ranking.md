@@ -52,8 +52,9 @@ named on each line owns it.
 
 **What is NOT on this list, from the same triage, and why:** astubbs#139 is a 1.0 blocker with a
 four-step definition of done in `core-139-public-api-thread-safety-contract.md` - real work, not a
-call. astubbs#175 has no decision left in it; its one live strand is the AB-BA wedge owned by
-astubbs#29. astubbs#155, astubbs#169 and astubbs#170 have their fixes written and correctly linked -
+call. astubbs#175 has no decision left in it; its one live strand is the AB-BA wedge that
+<!-- post-merge: checked - names that PR as the work the strand belonged to, in the past tense, so it reads the same once it has landed -->
+astubbs/parallel-consumer#29 carried. astubbs#155, astubbs#169 and astubbs#170 have their fixes written and correctly linked -
 what they need is the three draft PRs de-conflicted and merged, which is scheduling.
 
 ## Ready picks

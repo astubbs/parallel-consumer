@@ -191,7 +191,12 @@ them, do not copy them back.
   (extract-controller's base - MockConsumer-with-PC demonstration; missed by every earlier
   catalogue, added by the 2026-08-17 branch audit), `origin/refactor/infinite-retry` @80feb470
   (move timeout-retry into the controller; poller just forwards the error),
-  `origin/refactor/function-runner` @3fd8caac, `origin/massive-refactor` @f96e0bc4 (the umbrella attempt).
+  `origin/refactor/function-runner` @3fd8caac, `origin/massive-refactor` @f96e0bc4 (the umbrella attempt),
+  `origin/move-cons-to-pc` @9dc92e51c ("Move consumer back to PC wrapped for thread safety, so commits
+  are in line with control" - 2020-12-03, **the earliest attempt**, three weeks after the mode split;
+  comments out `BrokerPollSystem`'s `committer`, `maybeCloseConsumer` and `isResponsibleForCommits` so
+  control commits directly. Surfaced by the 2026-08-18 archaeology; missed by the 2026-08-17 branch
+  audit. The record does not say why it stopped).
   Registered in the manifest as `refactor-thread-model-god-class` (this doc stays the editorial owner).
 
 ### Annotate every fixed race with `@GuardedBy`, as you fix it
@@ -211,6 +216,28 @@ them, do not copy them back.
   happens-before edge. Found by RacerD 2026-08-25; **not previously in any ledger**. The poll thread
   can read a stale value and mis-time a commit, on a codebase that already tracks commit-timeout
   flakes. Not diagnosed further. Fix it with `@GuardedBy` per the policy above.
+
+### Make the commit/close ownership polymorphism official - an interface, not a rename (SMALL, do any time)
+*Independent of the thread-model work below/above. No behaviour change, but do not file this as
+cosmetic - see the last bullet.*
+- `isResponsibleForCommits()` exists on **both** `BrokerPollSystem` and
+  `AbstractParallelEoSStreamProcessor`, with identical javadoc, and they are an **XOR over commit
+  mode**: `committer.isPresent()` is true iff consumer-commit mode, `committer instanceof
+  ProducerManager` is true iff transactional. Exactly one thread closes the consumer.
+- **Both ask the same question** - "am I the component that commits, and therefore closes the
+  consumer?" - and only the answer differs per component. That is polymorphism, expressed as two
+  unrelated private methods that happen to share a name. Nothing declares them halves of one decision.
+- **Fix: give them a common interface** - one method, one javadoc, two implementors - so the
+  relationship is declared rather than inferred. A rename alone only documents the trap more loudly.
+- **Then enforce the invariant instead of describing it**: with a shared type, "exactly one
+  implementor returns true for a given configuration" becomes assertable at construction. Today it is
+  a property nobody can state, which is precisely how it survived unexamined since 2020.
+- **Why this is not cosmetic.** A 2026 investigation read the two as contradictory, concluded the
+  subsystems disagreed, and proposed "reconciling" them - a fix to a non-bug. They have never
+  disagreed and neither has been edited since 2020. Names are the interface that humans *and coding
+  agents* read to infer intent; a misleading one produced a wrong plan before any code was touched.
+- Background and the full commit record:
+  `docs/solutions/architecture-patterns/two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md`.
 
 ### Decompose the God class - `AbstractParallelEoSStreamProcessor` (1533 lines)
 - Control loop + lifecycle/state machine + commit orchestration + threading +
@@ -282,6 +309,36 @@ them, do not copy them back.
   - `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` (3) - primitive written in one thread may not
     be visible to another: `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled`,
     `ConsumerManager.commitRequested`, `RetryQueue.closed`.
+  - **`AT_STALE_THREAD_WRITE` on an OBJECT reference, which no detector fired on - FIXED 2026-08-18
+    on the astubbs#119 branch:**
+    `ConsumerManager.metaCache` (`private ConsumerGroupMetadata metaCache;`) is written by the poll
+    thread in `updateCache()` and read from other threads via `groupMetadata()`, with **no `volatile`
+    and no other happens-before edge**. Its two neighbours in the same class *are* volatile
+    (`pausedPartitionSizeCache`, and `assignmentSizeCache` which astubbs#29 adds), so the omission
+    reads as an oversight rather than a decision. The SpotBugs entry above is
+    `AT_STALE_THREAD_WRITE_OF_**PRIMITIVE**`, which cannot fire on an object reference - which is
+    exactly why this one was never listed.
+    **Why it matters more than the primitives:** `ConsumerGroupMetadata` carries the generation and
+    member IDs, and the control thread passes it to `producer.sendOffsetsToTransaction(...)`, where
+    the broker uses it for **zombie fencing**. A stale generation is the wrong answer to "is this
+    member still legitimate?". In practice the two threads synchronise incidentally through the
+    commit queues and locks, so an edge usually exists - but it is not guaranteed by design.
+    Pre-existing on `master` (from `a3378ed58`, 2021, the AK 2.7 concurrent-access fix); **not**
+    introduced by astubbs#29. Fix is one `volatile`; worth its own small change rather than riding
+    an unrelated PR.
+  - **No SpotBugs rule can be turned on to catch the object-reference case - checked, not assumed.**
+    The full `AT_*` family in spotbugs 4.10.3 is `AT_NONATOMIC_OPERATIONS_ON_SHARED_VARIABLE`,
+    `AT_OPERATION_SEQUENCE_ON_CONCURRENT_ABSTRACTION`, `AT_UNSAFE_RESOURCE_ACCESS_IN_THREAD` and
+    `AT_STALE_THREAD_WRITE_OF_PRIMITIVE`; there is no `..._OF_REFERENCE`. `IS2_INCONSISTENT_SYNC`
+    needs the field to be synchronised *some* of the time (it never is here, so there is no
+    inconsistency to find) and `UG_SYNC_SET_UNSYNC_GET` needs a synchronised setter. Raising
+    `<threshold>` from `Medium` to `Low` cannot surface a detector that does not exist, and
+    `<effort>` is already `Max`. For object references SpotBugs cannot separate "shared across
+    threads, unsynchronised" from an ordinary single-threaded field without escape analysis.
+    **Enforcement option that would work here: an ArchUnit rule** - e.g. every non-final instance
+    field of a class whose values are published for cross-thread reads must be `volatile`, `final`,
+    or an atomic type. The repo already runs ArchUnit (`ArchitectureTest`, `TestConventionRules`), so
+    this is the cheap way to make the invariant fire instead of documenting it.
 - Fix = `AtomicInteger`/`AtomicLong` for the counters and `volatile` for the flags -
   **or** let the thread-model rework above absorb them, since several sit in exactly
   the poll/control-thread coordination it reshapes. Fixing piecemeal now may conflict.

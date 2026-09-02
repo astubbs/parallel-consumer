@@ -31,7 +31,7 @@ on a fleet-wide `NO_PROGRESS` stall - while the cited test had actually finished
 `probe violations=[]`. The error was caught only because a second session re-pulled the log through a
 different route before writing the ledger entry. The full account, including both seeds and the job
 run link, is recorded as the fifth sighting in
-[`docs/inflight/bug-857-family.md`](../../inflight/bug-857-family.md), under the heading
+[`docs/inflight/test-857-churn-storm-async-stalls.md`](../../inflight/test-857-churn-storm-async-stalls.md), under the heading
 **"Correction worth recording: a truncated log misattributed this sighting before it was written."**
 
 **It happened again the same day, to someone who had this document available and did not read it**,
@@ -155,7 +155,7 @@ wrong.
 - When `docs/testing.md`'s ambient-probe section is the next thing you'd check for a broker
   integration-test failure. It used to state that every such failure **log** includes the
   `AMBIENT PROBE AUTOPSY` block; both truncation incidents in this repo (fourth and fifth sightings
-  of `docs/inflight/bug-857-family.md`) showed that needed a scope correction rather than a
+  of `docs/inflight/test-857-churn-storm-async-stalls.md`) showed that needed a scope correction rather than a
   retraction - the autopsy is reliably **emitted** on failure, but the console **log** you fetch it
   from is not a reliable place to find it; the artifact and archive routes above are. **That
   correction has landed**: the section now says "emits" and defers the retrieval routes to this
@@ -201,7 +201,7 @@ implicated.
 
 ## Related
 
-- [`docs/inflight/bug-857-family.md`](../../inflight/bug-857-family.md) - fourth sighting
+- [`docs/inflight/test-857-churn-storm-async-stalls.md`](../../inflight/test-857-churn-storm-async-stalls.md) - fourth sighting
   (`**Retrieval note`, server-side stream truncation, artifact recovery) and fifth sighting
   (`**Correction worth recording`, this incident, archive-zip recovery, both seeds).
 - [`docs/testing.md`](../../testing.md) - ambient-probe section (`AMBIENT PROBE AUTOPSY`), which

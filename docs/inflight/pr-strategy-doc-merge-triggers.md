@@ -17,12 +17,18 @@ titles, or divergence, ask `gh` and `git`.
 
 ## Can falsify a claim already published
 
-**`test/transactional-mode-battle-test`** - proves or falsifies every documented transactional
-guarantee. `STRATEGY.md` ("Our approach") and the README's Share Groups table both rest on PC being
-the only way to get exactly-once *together with* parallelism. If that suite falsified any documented
-guarantee, the strongest claim in the comparison is the one that has to move, and the README table's
-`Exactly-once` row moves with it. Read the branch's own inflight note mapping reported transactional
-issues against what it proved.
+<!-- post-merge: checked-begin - names the PR rather than the branch, which is deleted on merge, and
+     states the suite's arrival in the past tense -->
+**astubbs#262** - proves or falsifies every documented transactional guarantee. `STRATEGY.md` ("Our
+approach") and the README's Share Groups table both rest on PC being the only way to get exactly-once
+*together with* parallelism. It refuted two of them against a master that lacked astubbs#257 - at
+`batchSize >= 2` the consumer stalled outright - and both read `PROVED` again with that fix merged in,
+so the headline stands rather than moves. `STRATEGY.md` already says so; the standing trigger is the
+register, not this note - a claim refuted later still moves the README table's `Exactly-once` row. The
+issue map is
+[`branch-transactional-battle-test.md`](branch-transactional-battle-test.md), which records what the
+work proved against each reported transactional issue.
+<!-- post-merge: checked-end -->
 
 <!-- post-merge: checked-begin -->
 Same family, same section: **`fix/transactional-produce-callback-abort`**, still open, and the

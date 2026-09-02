@@ -243,7 +243,12 @@ echo
 echo "================================================================================================"
 echo "BOT COMMENTS ON THIS PR - read these, they carry counts the annotations do not"
 echo "================================================================================================"
-gh api "repos/${REPO}/issues/${PR}/comments?per_page=100" --jq \
+# `--paginate`, not just `per_page=100`. The API returns comments OLDEST FIRST, so a page cap does
+# not truncate the boring end - it truncates the NEWEST comments, which are the ones a reader of this
+# surface came for. Same defect class as the unpaginated sticky-comment lookups
+# .github/scripts/sticky-report-comment.js was extracted to fix; found by sweeping for it, and it is
+# a read rather than a write, so the failure was a silently short report rather than a duplicate.
+gh api "repos/${REPO}/issues/${PR}/comments?per_page=100" --paginate --jq \
     '.[] | select(.user.type == "Bot" or .user.login == "github-actions") | "  \(.created_at)  \(.user.login)\n    \(.body | split("\n")[0:2] | join(" ") | .[0:150])"' \
     2>/dev/null || echo "  (could not read comments)"
 

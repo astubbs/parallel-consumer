@@ -24,22 +24,32 @@ at every log level. Removing and restoring that one line changes throughput and 
 changes, no config changes, no rebase. That makes it a **positive control** in the strict sense: the
 only variable is the defect.
 
-Its fix, the write-up of the mechanism, and the sweep that found no second instance are on
-`handoff/enable-large-number-of-instances`; the defect itself is still live on
-astubbs/parallel-consumer#29, which is where the performance lane that fails is.
+<!-- post-merge: checked-begin -->
+Its fix, the write-up of the mechanism, and the sweep that found no second instance came from
+`handoff/enable-large-number-of-instances`.
 
-## The sequence, which is the whole reason this is a note rather than a line
+## The sequence this note planned - and why it can no longer be run as written
 
-Four steps, each blocked on the one before, spanning three branches and two owners:
+Four steps were planned, each blocked on the one before:
 
-1. **Land the monitoring** - artifact retention, the master-side lane, and the check itself - on
-   master, so it exists somewhere both other branches can reach.
-2. **astubbs/parallel-consumer#29 merges master**, picking the check up. Note it must NOT also pick up
-   the control-loop fix at this point, or there is nothing left to detect.
-3. **Red/black on astubbs/parallel-consumer#29**: run its performance lane with the offending line
-   present, then with it removed, and compare what the check says.
-4. **Read the result against the prediction below**, and either tighten the threshold or record why
-   the design does not work.
+1. **Land the monitoring** - artifact retention, the master-side lane, and the check itself.
+2. **astubbs/parallel-consumer#29 picks the check up**, and must NOT also pick up the control-loop
+   fix at that point, or there is nothing left to detect.
+3. **Red/black on that branch**: run its performance lane with the offending line present, then
+   removed, and compare what the check says.
+4. **Read the result against the prediction below.**
+
+**Step 2's precondition is now spent.** That branch merged the control-loop fix in `5ed885612` and
+the check in a later merge, so it holds both. Its lane can no longer produce the RED arm from its own
+tree - only the black one, which is the weaker half. Nothing was lost by accident here: the threshold
+had already been settled from recovered history (see the update below), which is what demoted this
+experiment from *source of the threshold* to *confirmation of the detector* before the ordering
+mattered.
+
+**What a red arm now costs**, if somebody still wants one: a throwaway branch that reverts the single
+log line, pushed as a PR so the performance lane runs. That is the whole experiment - the line's
+removal is still the only variable, which is what made it a positive control in the first place.
+<!-- post-merge: checked-end -->
 
 ## What the run should say, and why the prediction matters more than the result
 
@@ -83,8 +93,8 @@ So `FAIL_BELOW` is 0.70, derived rather than guessed, and the defect this note i
 note could not justify. `bin/test-check-throughput-regression.mjs` pins those real observations as
 cases, so the thresholds cannot drift away from the evidence they came from without a red test.
 
-**astubbs/parallel-consumer#29 ran the control arm on the fix**, after merging the branch carrying it
-(`5ed885612`). Calling that an independent rediscovery, as an earlier draft here did, was wrong and
+<!-- post-merge: checked -->
+**The control arm on the fix was run**, on the branch that merged it (`5ed885612`). Calling that an independent rediscovery, as an earlier draft here did, was wrong and
 inflates the evidence: it is one team measuring one change, not two arriving at the same mechanism
 separately. What it IS: 43,552 rec/s failing at `b42ab61d7`, 76,950 passing at `92c5d5b70`, a single
 main-code term changed, neighbour classes within 1-3%, and the lane-composition confound moved the

@@ -230,7 +230,7 @@ was scoped to cover and needs no edit when that happens. `gh pr list` answers wh
 
 | PR | head ref | PR | head ref |
 |---|---|---|---|
-| 29 | `bugs/857-paused-consumption-multi-consumers-bug` | 226 | `feats/health-check-api` |
+| 29 | `bugs/857-paused-consumption-multi-consumers-bug` | 226 | `feats/health-check-api` | <!-- post-merge: checked -->
 | 31 | `fix/909-stale-container-replacement` | 256 | `ci/issue-first-response` |
 | 38 | `dependabot/maven/junit.version-6.0.3` | 257 | `fix/produce-lock-double-release` |
 | 51 | `features/enable-virtual-threads` | 260 | `test/commit-assertion-repeat-tolerance` |
