@@ -130,8 +130,9 @@ rules and each covers a case the other does not:
    this reads `null` on logback, so the relaxation looks redundant there - it is not, on a binding that
    returns an empty map for an empty context - a hazard `MdcPropagation`'s class javadoc already names
    from the other direction ("The zero is a property of the binding, not of this class"), where the
-   retired inflight note that first recorded it migrated its content. The comment above the assertion points at the class
-   javadoc that names the arming classes, so the next reader does not rediscover them.
+   retired inflight note that first recorded it migrated its content. The comment above the assertion
+   points at the class javadoc that names the arming classes, so the next reader does not rediscover
+   them.
 
 Also corrected: `MdcPropagation.capture()`'s comment claimed it returns `null`, never an empty map, for
 an empty context. It returns `{}` on a thread that has put-and-removed. Both readers (`enter`, `adopt`)
