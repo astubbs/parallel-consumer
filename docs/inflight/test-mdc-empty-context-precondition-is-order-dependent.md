@@ -14,6 +14,23 @@ MdcContextPropagationTest.anEmptyCallerContextIsHandledAndNothingLeaks:194
    but was : {}
 ```
 
+<!-- post-merge: checked-begin - a second dated sighting, attributed to the PR it was seen on -->
+**Second sighting, and the first on CI: 2026-09-02, `Unit Tests` on astubbs#416's head `ab2621107`**
+([job 100271906271](https://github.com/astubbs/parallel-consumer/actions/runs/33637396137/job/100271906271)),
+the identical three lines at the same `:194`, in 0.006s. That branch changes a shell hook, two Node
+scripts and documentation, and no Java. `inflight codecov test anEmptyCallerContextIsHandledAndNothingLeaks`
+at the time of recording showed this as the only failure in the 14 runs it could see, across nine
+branches in the surrounding forty minutes, the same branch's heads either side of it among the
+passes. One in fourteen on CI is a rate, and it narrows the hypothesis below: the class sets no
+`MethodOrderer` and the suite runs no JUnit parallelism, so method order inside the class is the same
+every run, and a map left behind by a *sibling* alone would make this red every time or never. What
+does vary between runs is the fork: the ci profile runs surefire at `forkCount=1C` with
+`reuseForks`, so which JVM this class lands in - and which earlier class already touched the MDC on
+that JVM's main thread - is decided per run. That fits one-in-fourteen and is still a hypothesis, not a
+diagnosis; the falsification below is unchanged, with "a sibling" widened to "any earlier test in the
+same fork".
+<!-- post-merge: checked-end -->
+
 **It is the test's own PRECONDITION that failed, not its subject.** Line 194 is the first assertion in
 the method, before any PC involvement:
 
@@ -65,7 +82,7 @@ base that calls `MDC.setContextMap(...)`.
 ## Deliberately not quarantined
 
 Rule 1 of [`docs/quarantined-tests.md`](../quarantined-tests.md) wants a diagnosis or a sighting
-ledger, and this has one sighting and an untested hypothesis. Quarantining now would hide a test that
+ledger, and this has two sightings and an untested hypothesis. Quarantining now would hide a test that
 may be catching a real product-side asymmetry, and the registry is currently empty - putting the first
 entry back on a guess is the wrong trade. Diagnose it first.
 
