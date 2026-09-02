@@ -531,7 +531,105 @@ assert "...labelled as the session's root in the refusal" labelled "$got"
 wt_out=$(wt_fire "$session_green" "$commit_red" 'git commit --no-verify -m "I have a reason"')
 assert "--no-verify bypasses the OTHER tree's red gate too" 0 "${wt_out%%|*}"
 
-rm -rf "$session_green" "$commit_red" "$session_red" "$commit_green"
+# 7. A CLEAN TREE IS THE WRONG TREE. The payload cwd is the SESSION root, not a subagent worktree; a
+# bare commit resolved to a tree with nothing changed is one git would refuse anyway, so gating it can
+# only report another tree's defects. Three subagents hit this on 2026-09-02. The fixture must be
+# COMMITTED: `make_worktree` leaves .githooks/ untracked, which is dirty, and the check correctly does
+# not fire on a dirty tree - which is how the first version of this test passed for the wrong reason.
+clean_red=$(make_worktree clean-red 1)
+git -C "$clean_red" add -A && git -C "$clean_red" -c user.email=t@t -c user.name=t commit -q -m init
+wt_out=$(wt_fire "$clean_red" "$clean_red" 'git commit -m x')
+assert "a bare commit resolved to a CLEAN tree is refused as the wrong tree" 2 "${wt_out%%|*}"
+case "$wt_out" in *"GATE OF clean-red"*) got="gated it: ${wt_out#*|}" ;; *) got=refused_without_gating ;; esac
+assert "...and the RED gate there was NOT run - refusing, not gating" refused_without_gating "$got"
+case "$wt_out" in *"git -C <your-worktree>"*) got=named_the_remedy ;; *) got="${wt_out#*|}" ;; esac
+assert "...and the refusal names git -C as the remedy" named_the_remedy "$got"
+# CONTROL: the same tree, dirtied, gates normally - so the refusal is keyed on cleanliness, not on cwd.
+echo dirty > "$clean_red/f"
+wt_out=$(wt_fire "$clean_red" "$clean_red" 'git commit -m x')
+assert "control: the same tree once dirty goes to the gate, which blocks" 2 "${wt_out%%|*}"
+case "$wt_out" in *"GATE OF clean-red"*) got=gated ;; *) got="did not gate: ${wt_out#*|}" ;; esac
+assert "control: ...and the gate actually spoke" gated "$got"
+# And --allow-empty on a clean tree is the one honest case, so it must reach the gate too.
+rm "$clean_red/f"
+wt_out=$(wt_fire "$clean_red" "$clean_red" 'git commit --allow-empty -m x')
+assert "--allow-empty against a clean tree reaches the gate, which blocks" 2 "${wt_out%%|*}"
+case "$wt_out" in *"GATE OF clean-red"*) got=gated ;; *) got="refused: ${wt_out#*|}" ;; esac
+assert "--allow-empty against a clean tree reaches the gate rather than being refused" gated "$got"
+# --amend rewrites a commit and legitimately needs no working-tree change, so it must reach the gate
+# too. The first version refused it with a message naming a condition that did not hold and a remedy
+# (git -C the same tree) that reproduced the refusal - found three ways in review of
+# astubbs/parallel-consumer#416.
+wt_out=$(wt_fire "$clean_red" "$clean_red" 'git commit --amend -m x')
+case "$wt_out" in *"GATE OF clean-red"*) got=gated ;; *) got="refused: ${wt_out#*|}" ;; esac
+assert "--amend against a clean tree reaches the gate rather than being refused" gated "$got"
+# ...and the exemption is keyed on the flag the COMMIT carries, not on the text of the command. A
+# message that mentions --allow-empty is still a bare commit against a clean tree - the same
+# distinction commit_bypass_counts already draws for --no-verify.
+wt_out=$(wt_fire "$clean_red" "$clean_red" 'git commit -m "document --allow-empty"')
+assert "--allow-empty inside the message does not exempt a clean-tree commit" 2 "${wt_out%%|*}"
+case "$wt_out" in *"git -C <your-worktree>"*) got=refused_as_wrong_tree ;; *) got="${wt_out#*|}" ;; esac
+assert "...and it is the wrong-tree refusal, not the gate" refused_as_wrong_tree "$got"
+# WHEN CLEANLINESS CANNOT BE READ - the resolved target is not a git repository - the check says
+# nothing and the hook falls through to its pre-existing path: no gate found there, exit 0, the
+# documented fail-open on our own bug. Pinned so a change to that direction is a decision, not a
+# side effect (Codex raised it in review of astubbs/parallel-consumer#416 and it predates the check).
+nogit="$TMP/nogit-$RANDOM$RANDOM"; mkdir -p "$nogit"
+wt_out=$(wt_fire "$nogit" "$nogit" 'git commit -m x')
+assert "a target that is not a git repo is not refused as clean - it falls through" 0 "${wt_out%%|*}"
+case "$wt_out" in *"NO changes"*) got="refused: ${wt_out#*|}" ;; *) got=fell_through ;; esac
+assert "...without the wrong-tree message" fell_through "$got"
+rm -rf "$nogit"
+
+# 8. AN UNEXPANDED SHELL EXPRESSION IN -C IS REFUSED, NOT RESOLVED. The hook reads the command
+# before the shell expands it, so `git -C "$W" commit` arrives with the literal text `$W`, which
+# joined onto the cwd is a path that does not exist. `git status` there ERRORS rather than reporting
+# clean, so case 7 cannot fire; bash then finds no directory and drops to $CLAUDE_PROJECT_DIR - here
+# a RED tree, so pre-fix the wrong gate spoke, under a label claiming the command never said where it
+# runs. Observed three times on 2026-09-03. wt_fire single-quotes the command, so `$W` reaches the
+# hook unexpanded exactly as Claude Code hands it over.
+wt_out=$(wt_fire "$commit_red" "$clean_red" 'git -C "$W" commit -m x')
+assert "git -C with an unexpanded variable is refused" 2 "${wt_out%%|*}"
+case "$wt_out" in *"Literal paths only"*) got=named_the_rule ;; *) got="${wt_out#*|}" ;; esac
+assert "...and the refusal says literal paths only" named_the_rule "$got"
+case "$wt_out" in *'$W'*) got=named_the_value ;; *) got="${wt_out#*|}" ;; esac
+assert "...and names the offending value" named_the_value "$got"
+case "$wt_out" in *"GATE OF"*) got="a gate ran: ${wt_out#*|}" ;; *) got=no_gate_ran ;; esac
+assert "...and NO gate ran - not the session tree it used to fall through to" no_gate_ran "$got"
+# A command substitution is the same class: the shell would run it, the hook only sees its text.
+wt_out=$(wt_fire "$commit_red" "$clean_red" 'git -C `pwd` commit -m x')
+assert "git -C with a backtick substitution is refused" 2 "${wt_out%%|*}"
+case "$wt_out" in *'`pwd`'*) got=named_the_value ;; *) got="${wt_out#*|}" ;; esac
+assert "...and names the substitution" named_the_value "$got"
+# So is a leading tilde - the shell expands it, and the hook refuses rather than guessing HOME.
+wt_out=$(wt_fire "$commit_red" "$clean_red" 'git -C ~/wt commit -m x')
+assert "git -C with a leading tilde is refused" 2 "${wt_out%%|*}"
+case "$wt_out" in *"Literal paths only"*) got=named_the_rule ;; *) got="${wt_out#*|}" ;; esac
+assert "...with the same literal-paths remedy" named_the_rule "$got"
+# CONTROL: a LITERAL absolute -C still resolves and reaches that tree's own gate, with the session
+# tree and the payload cwd both pointing elsewhere - so the refusal is keyed on the value's shape.
+wt_out=$(wt_fire "$session_green" "$clean_red" "git -C $commit_red commit -m x")
+assert "control: a literal absolute -C still reaches the gate" 2 "${wt_out%%|*}"
+case "$wt_out" in *"GATE OF commit-red"*) got=gated_the_named_tree ;; *) got="${wt_out#*|}" ;; esac
+assert "control: ...of the tree it names" gated_the_named_tree "$got"
+# CONTROL: a leading cd that names the right tree does not rescue an unreadable -C. git -C beats cd
+# at run time, and the -C is the part the hook cannot read, so it refuses and says so.
+wt_out=$(wt_fire "$session_green" "$clean_red" "cd $commit_red && git -C \"\$W\" commit -m x")
+assert "control: -C \$W is refused even behind a cd that names the right tree" 2 "${wt_out%%|*}"
+case "$wt_out" in *"even when a cd"*) got=said_why ;; *) got="${wt_out#*|}" ;; esac
+assert "control: ...and the refusal says the cd does not help" said_why "$got"
+case "$wt_out" in *"GATE OF"*) got="a gate ran: ${wt_out#*|}" ;; *) got=no_gate_ran ;; esac
+assert "control: ...and the cd tree was not gated in its place" no_gate_ran "$got"
+# The check is scoped to the COMMIT: an unexpanded -C on a neighbouring status is not the commit's,
+# so the bare commit beside it is answered by case 7 (clean cwd), not by this refusal.
+wt_out=$(wt_fire "$commit_red" "$clean_red" 'git -C "$W" status && git commit -m x')
+case "$wt_out" in *"NO changes"*) got=clean_tree_refusal ;; *"Literal paths only"*) got=literal_refusal ;; *) got="${wt_out#*|}" ;; esac
+assert "an unexpanded -C on a NON-commit does not trip the refusal" clean_tree_refusal "$got"
+# And a bypass is still a bypass: a commit that gates nothing has no tree to resolve.
+wt_out=$(wt_fire "$commit_red" "$clean_red" 'git -C "$W" commit --no-verify -m x')
+assert "--no-verify with an unexpanded -C is still honoured" 0 "${wt_out%%|*}"
+
+rm -rf "$session_green" "$commit_red" "$session_red" "$commit_green" "$clean_red"
 
 # ---------------------------------------------------------------------------------------------
 # inject-merge-checklist.sh

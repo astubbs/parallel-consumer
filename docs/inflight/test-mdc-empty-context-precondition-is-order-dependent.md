@@ -14,6 +14,31 @@ MdcContextPropagationTest.anEmptyCallerContextIsHandledAndNothingLeaks:194
    but was : {}
 ```
 
+<!-- post-merge: checked-begin - a second dated sighting, attributed to the PR it was seen on -->
+**Second and third sightings, the first on CI: 2026-09-02, `Unit Tests` on astubbs#416, on two
+consecutive heads** - `ab2621107`
+([job 100271906271](https://github.com/astubbs/parallel-consumer/actions/runs/33637396137/job/100271906271)),
+0.006s, and `eb11739ed`
+([job 100274796081](https://github.com/astubbs/parallel-consumer/actions/runs/33638062127/job/100274796081)),
+0.024s - the identical three lines at the same `:194` both times. That branch changes a shell hook,
+two Node scripts and documentation, and no Java; its next head, `ed4fe802a`, which adds this note and
+a merge of master, passed. `inflight codecov test anEmptyCallerContextIsHandledAndNothingLeaks` around
+the pair showed no other failure across the eight other branches in the surrounding forty minutes (the
+two other red `Unit Tests` jobs in that window were `PcBuiltProducerTest`, a different test on a
+different branch), and every one of those jobs ran on a GitHub-hosted `ubuntu-latest` runner, so
+runner shape is not the variable. Two consecutive on one branch and none elsewhere is what the record
+shows. With no Java in the diff it is also what a per-run coin gives about one time in two hundred -
+luck, or a branch-correlated cause nobody has named - and this note does not pick. What the CI
+sightings do narrow is the hypothesis below: the class sets no
+`MethodOrderer` and the suite runs no JUnit parallelism, so method order inside the class is the same
+every run, and a map left behind by a *sibling* alone would make this red every time or never. What
+does vary between runs is the fork: the ci profile runs surefire at `forkCount=1C` with
+`reuseForks`, so which JVM this class lands in - and which earlier class already touched the MDC on
+that JVM's main thread - is decided per run. That fits a per-run rate and is still a hypothesis, not a
+diagnosis; the falsification below is unchanged, with "a sibling" widened to "any earlier test in the
+same fork".
+<!-- post-merge: checked-end -->
+
 **It is the test's own PRECONDITION that failed, not its subject.** Line 194 is the first assertion in
 the method, before any PC involvement:
 
@@ -104,7 +129,8 @@ base that calls `MDC.setContextMap(...)`.
 ## Deliberately not quarantined
 
 Rule 1 of [`docs/quarantined-tests.md`](../quarantined-tests.md) wants a diagnosis or a sighting
-ledger, and this has three sightings - one of them master's own build - and an untested hypothesis. Quarantining now would hide a test that
+ledger, and this has five sightings - two on CI, two local, and one master's own build - and an
+untested hypothesis. Quarantining now would hide a test that
 may be catching a real product-side asymmetry, and the registry is currently empty - putting the first
 entry back on a guess is the wrong trade. Diagnose it first.
 
