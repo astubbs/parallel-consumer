@@ -64,19 +64,26 @@ jobs:
           echo "compile-checked $found Node script(s)"
           [ "$found" -gt 0 ] || { echo "no Node scripts matched - the glob is wrong" >&2; exit 1; }
 
-      # The gate's own logic is subtle enough to have shipped two real misjudgements already, so it
-      # is unit tested and the tests run before the gate does.
-      - name: Self-test the changelog gate logic
-        run: node .github/scripts/changelog-ref-gate.test.js
-
-      - name: Self-test the issue-reference gate logic
-        run: node .github/scripts/issue-ref-gate.test.js
-
-      - name: Self-test the file-reference gate logic
-        run: node .github/scripts/file-ref-gate.test.js
-
-      - name: Self-test the roadmap stage gate logic
-        run: node .github/scripts/roadmap-stage-gate.test.js
+      # The gates' own logic is subtle enough to have shipped two real misjudgements already, so each
+      # is unit tested and the tests run before the gates do.
+      #
+      # DISCOVERED, NOT LISTED - the same property bin/check-all.sh exists to hold, for the same
+      # reason. This was four named steps, one per gate, so a module added to .github/scripts/ with a
+      # `.test.js` sibling ran nowhere until somebody remembered to wire it here, and its gate looked
+      # tested. `sticky-report-comment.test.js` was the fifth and would have been the first to find
+      # out. The count assertion is the other half, copied from the compile-check above: a loop that
+      # matched nothing exits 0 and is indistinguishable from a clean pass.
+      - name: Self-test every gate module in .github/scripts
+        run: |
+          set -euo pipefail
+          found=0
+          while IFS= read -r t; do
+            found=$((found + 1))
+            echo "--- $t"
+            node "$t"
+          done < <(git ls-files '.github/scripts/*.test.js')
+          echo "ran $found gate self-test(s)"
+          [ "$found" -gt 0 ] || { echo "no gate self-tests matched - the glob is wrong" >&2; exit 1; }
 
       # The local mirror (bin/check-issue-refs.sh) fetches the PR body via gh to honour the
       # `issue-refs: N/A` opt-out the way this workflow does; that plumbing is shell, not gate

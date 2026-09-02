@@ -80,14 +80,19 @@ document. This section is the detail behind it.
 - **`quarantine-lane.yml`** - runs the `@Quarantined` tests on every PR push, every push to master,
   and on dispatch. Its job is the **required** check `tests`, so the job name is an API here too -
   but the test-running step is `continue-on-error`, so red quarantined tests cannot block a merge.
-  See [`docs/testing.md`](testing.md).
+  Reporting is **two steps, and the split is the point**: `bin/quarantine-lane-report.sh` classifies
+  and *may* fail the job (its lane-leak self-check is what proves the lane ran only quarantined
+  tests), then a separate `continue-on-error` step posts the comment, so a rate limit while
+  commenting cannot red a healthy lane. See [`docs/testing.md`](testing.md).
 - **`pr-checklist.yml`** - hosts the PR-body gates: the template checklist (rule in AGENTS.md, PR
   Discipline), the changelog-citation gate (`changelog-ref-gate.js`, see
   [`docs/releasing.md`](releasing.md)), the issue-reference gate (`issue-ref-gate.js`, see
   [`docs/issue-references.md`](issue-references.md)) and the file-reference gate
   (`file-ref-gate.js`, see [`docs/citations.md`](citations.md)), which fails a cited repo path that
   does not exist - whole tree, so a deletion that strands a citation fails the PR that made it. Each gate's logic is a unit-tested module and its self-test runs first, so a
-  broken rule fails loudly rather than passing - or failing - every PR silently.
+  broken rule fails loudly rather than passing - or failing - every PR silently. The self-test step
+  **discovers** `.github/scripts/*.test.js` rather than naming them, so a module added there is
+  covered without an edit here or in the workflow.
 - **`check-dependencies.yml`** - "PR Dependency Check". Reads `depends on
   astubbs/parallel-consumer#N` lines from the PR body and blocks the child until every parent has
   merged. Produces the **required** check `Check PR Dependencies`, so a stacked PR cannot merge out
@@ -160,6 +165,36 @@ document. This section is the detail behind it.
     skipped for fork PRs and dies early on a token expiry, so the list would go unwatched exactly
     when it matters most. **`deps: CVE exclusion expiry` is a new job name and is NOT yet a required
     status check** - adding it to the master ruleset is a separate, deliberate act.
+
+### The PR report comments share one module - `sticky-report-comment.js`
+
+Three steps post a comment on every PR: the **throughput report** and the **SpotBugs summary** in
+`maven.yml`, and the **quarantine lane report** in `quarantine-lane.yml`. They share
+`.github/scripts/sticky-report-comment.js`, which owns five behaviours that are not domain-specific:
+
+- find our own last comment by marker - **paginated**, and filtered to `user.type === 'Bot'`
+- read a machine-readable payload back out of it, so a run can render a **delta**
+- **update in place** normally, but post a **fresh comment when the status changed**
+- **retire the old comment before creating the new one**, then link it forward
+- stamp the head sha, a PR-context commit link, the run, and the time
+
+Every one of them was written for the throughput comment in astubbs/parallel-consumer#407 and every
+one of them had been WRONG in production. They live in a module rather than in three copies of the
+YAML because copying them is how the original defects reached two steps at once. The module's header
+carries the reasoning and the measurements behind each; `sticky-report-comment.test.js` pins each
+against the defect it replaced, and the PR Checklist job runs it.
+
+**What a "status change" means is the caller's, and only that.** The throughput report's status is
+its verdict; the quarantine lane's is a sorted digest of every quarantined test's outcome, so a test
+going from failing to passing - which means its fix landed and the annotation plus the registry entry
+should be deleted - posts a new comment instead of silently editing one thirty scrolls up. Each
+producer writes its own payload: `pc-throughput-data` from `bin/check-throughput-regression.mjs`,
+`quarantine-lane-data` from `bin/quarantine-lane-report.sh`. Nothing enforces that a producer and its
+reader agree on the marker's name, so `grep -rn <marker-name>` is the list to change if one moves.
+
+The SpotBugs step uses the module's lookup and stamp but keeps its own update-or-create: whether a
+clean-to-dirty SpotBugs transition deserves a new comment is a judgement nobody has made, and adding
+the stamp needs no such decision.
 
 ### `CodeQL` is a required check that no workflow file produces
 

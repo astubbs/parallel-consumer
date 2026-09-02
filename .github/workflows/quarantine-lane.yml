@@ -87,13 +87,55 @@ jobs:
         env:
           QUARANTINE_SKIP_CHECKS: "1"  # the fail-fast steps above already ran them as gating checks
         run: bin/quarantined-test.sh -DforkCount=4 -DreuseForks=true
-      - name: Report lane outcomes to the PR (sticky comment + merge-blocking threads on unexpected passes)
-        if: always() && steps.any.outputs.found == 'true' && github.event_name == 'pull_request'
+      # Two steps, and the split is deliberate. This one CLASSIFIES: it writes
+      # target/quarantine-lane-report.md and opens the merge-blocking review threads, and it must be
+      # able to fail the job - its lane-leak self-check exits 1 when a non-quarantined test ran, which
+      # is the proof that the lane runs ONLY quarantined tests. The step below POSTS, and must NOT be
+      # able to fail the job. Running both under one `continue-on-error` would have swallowed the
+      # leak check; running both without one lets a rate limit while commenting red a healthy lane.
+      # IT ALSO RUNS ON PUSH-TO-MASTER NOW, where it used to be gated to `pull_request`. Two things
+      # follow, both wanted: the master-state record lands in the job log instead of nowhere, and the
+      # lane-leak self-check - the proof that this lane runs ONLY quarantined tests - runs against
+      # master rather than only against PR heads, which is where a regressed `<groups>` binding would
+      # actually live.
+      - name: Classify lane outcomes (writes the report, opens threads on unexpected passes)
+        if: always() && steps.any.outputs.found == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          # Empty on a push-to-master run, which is the log-only path: the report file is still
+          # written and no comment or thread is attempted.
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: bin/quarantine-lane-report.sh
+      - name: Post the quarantine lane report to the PR
+        if: always() && steps.any.outputs.found == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        # SAME-REPOSITORY PRs ONLY, and A COMMENT WRITE MUST NOT FAIL THE JOB - both for the reasons
+        # the throughput step in maven.yml states at length. On a fork PR the token is read-only and
+        # the write 403s; the report is still in the job log either way.
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs')
+            const path = 'target/quarantine-lane-report.md'
+            if (!fs.existsSync(path)) return
+            const body = fs.readFileSync(path, 'utf8')
+
+            // SHARED WITH THE THROUGHPUT REPORT, deliberately and not by copying.
+            // .github/scripts/quarantine-report-comment.js carries what is this report's own - the
+            // marker, the outcome vocabulary, and the delta that names which test moved - and
+            // configures .github/scripts/sticky-report-comment.js, which owns the mechanics every
+            // report needs. Both were written and measured for the throughput comment in
+            // astubbs/parallel-consumer#407 and now live in one place with their own self-tests.
+            //
+            // WHAT A "STATUS CHANGE" MEANS HERE: any row's OUTCOME moving. The one that matters is a
+            // test going from failing to PASSING, because a deterministic quarantined test that
+            // starts passing means its fix landed and the annotation plus the registry entry are now
+            // wrong. That transition used to happen by silently editing a comment nobody was looking
+            // at. Rows entering or leaving the lane count too - a PR that quarantines a test, or
+            // deletes a quarantine, has changed what this report is about.
+            const report = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/quarantine-report-comment.js`)
+            await report.post({ github, context, core, body })
       - name: Summarize quarantine lane
         if: steps.any.outputs.found == 'true'
         run: |
