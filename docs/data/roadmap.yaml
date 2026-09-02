@@ -185,13 +185,15 @@ entries:
     serves: [reliability]
     horizon: next-0x
     blocks_1_0: false
-    stage: requirements-drafted
+    stage: in-progress
     stage_delivery: draft
     stage_detail: >-
-      Requirements plan on astubbs#410, survived three review rounds; it decides the what, not the how.
-      Two mechanisms stay open by design - how work whose output an abort discarded is made processable
-      again, and how group membership is refreshed - because every concrete candidate so far failed
-      against PC's produce/commit locking and consumer thread confinement.
+      Implemented on astubbs#410 to the plan's Definition of Done: PC builds its own transactional producer
+      from configuration, detects the broker-reported conditions on both paths, aborts, replays the
+      completed-but-uncommitted ledger, and rebuilds under the same derived id; proven at the unit level
+      (fenced-during-commit was red before the change) and on a real coordinator by ProducerFencingRecoveryIT,
+      with the recovery guarantee registered as a transactional claim. Not yet run in anger, so not
+      "implemented"; the producer-instance path keeps its old behaviour and is deprecated.
     why_now: >-
       Fencing is an ordinary consequence of a rebalance under transactions, and a broker can expire an
       idle producer id outright; either way PC dies on the commit path and spins on the produce path.

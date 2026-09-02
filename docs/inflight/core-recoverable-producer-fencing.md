@@ -1,50 +1,49 @@
-# Next: make producer fencing recoverable instead of fatal
+# Recoverable producer fencing: what is still open after astubbs#410
 
 <!-- inflight-type: feature -->
 <!-- inflight-impact: crash -->
-<!-- inflight-state: deferred - after v6, nothing breaks by shipping without it -->
+<!-- inflight-state: open - the implementation is on astubbs#410; what remains is merge-time reconciliation -->
 
 
-Scoped. `docs/plans/2026-09-02-001-feat-recoverable-producer-fencing-plan.md` owns the requirements,
-the decisions and their rationale; this note keeps only what a reader needs before opening it.
-Tracked as astubbs#225.
+The feature is implemented on astubbs/parallel-consumer#410 against the plan
+`docs/plans/2026-09-02-001-feat-recoverable-producer-fencing-plan.md`, which owns the requirements, the
+decisions and the mechanisms (its "Inherited from astubbs#262" section records what the merge brought).
+Tracked as astubbs#225. This note keeps only what a later PR has to do, because it depends on which of
+two open PRs lands second.
 
-## Read the plan, not this note's history
+## Merge-time reconciliation with astubbs/parallel-consumer#352 (KTD10)
 
-This note previously carried the proposal from astubbs#225 verbatim: raise a recoverable exception,
-abort the transaction, let the consumer rejoin. **Two of those three steps do not work**, and the
-plan replaces them. Anyone designing from the older shape will build the wrong thing, which is why
-the corrections are named here rather than left in the plan alone:
+That PR's R6 - a fenced transactional producer stays immediately fatal without consulting its handler -
+was true of the code it was written against and is untrue once recovery exists. Whichever of the two
+lands second rewrites, in that PR's own terms:
 
-- **Abort is not available on a fenced producer.** `KafkaProducer#abortTransaction` documents
-  `ProducerFencedException` as a fatal `@throws`, exactly as `commitTransaction` does. Kafka Streams
-  calls it anyway and swallows the throw, because the broker has already aborted.
-- **Rejoin is not the hard part.** Recovery needs a *new producer*, and PC cannot build one:
-  `ParallelConsumerOptions` holds a finished instance, `ProducerWrapper` assigns it once from
-  `options.getProducer()`, and a `KafkaProducer`'s configuration cannot be read back out. The plan's
-  first requirement is therefore an ownership change, not an exception swap.
-- **"Whether rejoin is expressible in PC's lifecycle" is answered, and the answer is yes.** No
-  state-machine addition is needed on the commit path: the produce/commit lock pair already gives
-  the control thread exclusive access at the moment fencing is detected. Only the produce path needs
-  a worker-to-controller escalation.
+- the two fencing tests in its `ProducerManagerCommitBudgetTest`
+  (`producerFencedOnSendOffsetsStaysFatalAndNeverReachesTheCommitLoop` and
+  `recoveryAbortFailureStaysFatalAndHandlerFree`) - on the PC-built path a fencing condition now
+  unwinds with `ProducerInvalidatedException` and is recovered; on the producer-instance path it is
+  still fatal, which those tests can keep asserting if they pin that path;
+- its R6 line, the matching statements in its commit-failure-seam feature file, and its README section.
 
-## Two things this note is the only home for
+Both PRs edit `ProducerManager.commitOffsets`; a textual conflict in the fencing branch there is
+expected. The reasoning being overridden is recorded in astubbs#410's commit that changed
+`commitOffsets` (`feat(core) astubbs#225: recognise an invalidated producer on both paths`), so the
+change does not read as an oversight.
 
-- **The trigger with a real user report is on the produce path, not the commit path.** astubbs#411
-  (`confluentinc#830`) hit `InvalidPidMappingException` after two days of producer inactivity and
-  asked for precisely this feature; `confluentinc#839` answered it by shutting the instance down,
-  which is the behaviour the plan reverses. The mirror was created on demand: the 2026-08-05 bulk
-  import covered open upstream issues and the 2023 sweep cohort, and an issue closed in 2024 by a
-  genuinely merged fix was in neither. `confluentinc#839` gets no mirror and no manifest entry - it
-  is an upstream PR already carried in this fork's history, and the manifest keys on *fork* work.
-- **It sequences after astubbs/parallel-consumer#352**, which merges first and unchanged. That PR's
-  R6 is true of the behaviour it was written against; this work makes it untrue and owns the update,
-  including the two fencing tests in its `ProducerManagerCommitBudgetTest`.
+## Merge-time reconciliation with astubbs/parallel-consumer#408 (KTD11)
 
-## Related, and not duplicated here
+That PR makes the revoke path decline both locks with `tryLock` instead of spinning, and rethrows
+`ProducerFencedException | InvalidProducerEpochException` from the revoke-path commit so fencing stays
+fatal. Under astubbs#410 that rethrow becomes record-and-decline: `ProducerManager.commitOffsets` already
+records the condition and unwinds with `ProducerInvalidatedException`, which `tryCommitOffsetsOnRevoke`'s
+catch logs, and the control thread recovers on its next pass. Its three `ProducerManager` lock helpers
+coexist with the waiting entry `beginReplacement` uses. The bounded wait and holder-deadlining that
+recovery makes viable are named in the plan's KTD11 and deliberately not taken.
 
-- `bug-857-transactional-revoke-wait.md` owns the unbounded wait in `onPartitionsRevoked`. It
-  reduces how often the commit path reaches a fencing condition; it does not remove it, and the two
-  are independent.
-- `core-241-tx-commit-failure-taxonomy.md` owns the wider classification of transaction commit
-  failures. This work adds one recoverable condition and deliberately does not widen further.
+## Still outside this work
+
+- The wrapped-send-future spin on the producer-instance path:
+  `bug-411-wrapped-send-failure-spins-forever.md`, now pinned by
+  `ParallelEoSStreamProcessorTest#instancePathWrappedSendFailureStaysAliveAndRetriesAgainstTheSameProducer`.
+- A transaction poisoned by a cause outside the recoverable set (a `RecordTooLargeException`):
+  `bug-poisoned-transaction-not-aborted-while-running.md`.
+- The unbounded revoke wait itself: `bug-857-transactional-revoke-wait.md`.

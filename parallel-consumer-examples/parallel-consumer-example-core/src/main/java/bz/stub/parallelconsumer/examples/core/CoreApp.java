@@ -20,6 +20,7 @@ import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -48,6 +49,14 @@ public class CoreApp {
         return new KafkaProducer<>(new Properties());
     }
 
+    /**
+     * The configuration PC builds its own producer from - what you would otherwise have handed to
+     * {@code new KafkaProducer<>(config)}. No {@code transactional.id}: PC derives one.
+     */
+    Map<String, Object> getProducerConfig() {
+        return new HashMap<>();
+    }
+
     ParallelStreamProcessor<String, String> parallelConsumer;
 
     @SuppressWarnings("UnqualifiedFieldAccess")
@@ -71,19 +80,18 @@ public class CoreApp {
     ParallelStreamProcessor<String, String> setupParallelConsumer() {
         // tag::exampleSetup[]
         Consumer<String, String> kafkaConsumer = getKafkaConsumer(); // <1>
-        Producer<String, String> kafkaProducer = getKafkaProducer();
 
         var options = ParallelConsumerOptions.<String, String>builder()
                 .ordering(KEY) // <2>
                 .maxConcurrency(1000) // <3>
                 .consumer(kafkaConsumer)
-                .producer(kafkaProducer)
+                .producerConfig(getProducerConfig()) // <4>
                 .build();
 
         ParallelStreamProcessor<String, String> eosStreamProcessor =
                 ParallelStreamProcessor.createEosStreamProcessor(options);
 
-        eosStreamProcessor.subscribe(of(inputTopic)); // <4>
+        eosStreamProcessor.subscribe(of(inputTopic)); // <5>
 
         return eosStreamProcessor;
         // end::exampleSetup[]
