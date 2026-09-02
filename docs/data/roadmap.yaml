@@ -181,7 +181,7 @@ entries:
     related: astubbs#116
 
   - id: survive-producer-fencing
-    title: Abort and rejoin when the producer is fenced, rather than dying
+    title: Recover the producer when the broker invalidates it, rather than dying
     serves: [reliability]
     horizon: next-0x
     blocks_1_0: false
