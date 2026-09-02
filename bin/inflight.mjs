@@ -88,6 +88,11 @@ export const cvOpts = (args) => {
     const KNOWN = new Set(['--fresh', '--branch'])
     const unknown = args.filter((a) => a.startsWith('--') && !KNOWN.has(a))
     if (unknown.length) return { error: `unknown option(s): ${unknown.join(', ')} - known: --fresh, --branch <ref>` }
+    // A REPEATED FLAG IS AMBIGUOUS, so it is refused rather than silently resolved. `--branch a
+    // --branch b` took the FIRST and folded `b` into the positionals as a stray query term - the
+    // same answer-a-different-question shape the guards above exist to stop, one level in.
+    const repeated = [...KNOWN].filter((f) => args.filter((a) => a === f).length > 1)
+    if (repeated.length) return { error: `${repeated.join(', ')} given more than once - which one did you mean?` }
     if (branchAt >= 0 && (branch === undefined || branch.startsWith('--'))) {
         return { error: '--branch needs a ref after it' }
     }

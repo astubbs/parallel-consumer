@@ -974,6 +974,9 @@ const CHECKS = [
                 // and a VALID set still parses, or the guard has eaten the feature
                 && cvOpts(['Name', '--branch', 'master', '--fresh']).error === undefined
                 && cvOpts(['Name', '--branch', 'master']).branch === 'master'
+                // a REPEATED flag is ambiguous, not first-wins
+                && cvOpts(['--branch', 'a', '--branch', 'b']).error !== undefined
+                && cvOpts(['--fresh', '--fresh']).error !== undefined
             )
         },
         mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
