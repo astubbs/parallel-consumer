@@ -17,7 +17,7 @@ execution: code
 
 **Product authority.** `STRATEGY.md` > `AGENTS.md` > this plan > implementer judgement. The recovery shape is modelled on Kafka Streams' `TaskMigratedException` handling, but Streams is a reference and not a constraint: where PC can do better, it does.
 
-**Open blockers.** One: whether removal of the deprecated producer-instance option is queued for the major currently being cut. Everything else in Outstanding Questions is a build decision deferred to planning.
+**Open blockers.** None. Everything remaining in Outstanding Questions is a build decision deferred to planning.
 
 **Execution profile.** Public API change to `ParallelConsumerOptions` with a deprecation, plus core changes in `ProducerManager`, `ProducerWrapper` and `ParallelEoSStreamProcessor`. Reverses one shipped behaviour (confluentinc#839).
 
@@ -51,11 +51,11 @@ The reason PC cannot recover today is structural rather than incidental. `Parall
 
 - **PC builds its own producer from configuration, through an overridable factory.** (session-settled: user-directed — chosen over adding recovery around a user-supplied `Producer` instance: PC cannot read a finished producer's configuration, so it cannot build a replacement, and recovery is impossible without one.) Governs R1, R2, R3, R7.
 - **PC derives the `transactional.id` wherever PC builds the producer.** (session-settled: user-directed — chosen over letting the user set it on the PC-owned path: a `transactional.id` shared by two live instances makes re-initialisation fence the other holder, which re-initialises and fences back.) Governs R4, R5, R6, R19.
-- **The producer-instance option stays, deprecated, without recovery.** (session-settled: user-directed — chosen over removing it outright: it lowers the barrier for existing users, and the path that cannot recover is honest about it rather than absent.) Governs R15, R16, R18.
+- **The producer-instance option stays, deprecated, without recovery, and its removal is queued for the next major.** (session-settled: user-directed — chosen over removing it outright now: keeping it lowers the barrier for existing users, while queueing the removal stops producer handling being written twice indefinitely.) Governs R15, R16, R18, R20.
 - **One recoverable condition, not a per-exception taxonomy.** (session-settled: user-approved — chosen over classifying each transaction failure separately: Kafka Streams collapses the same four exceptions into a single migration signal, and the response PC needs is identical for all of them.) Governs R8, R9, R10.
 - **The produce-path case is absorbed rather than left to a separate change.** (session-settled: user-directed — chosen over scoping this to the commit path: it is the only trigger with a real user report, and recovery is better than both behaviours it replaces.) Governs R11, R17.
 - **Recovery attempts are unbounded.** (session-settled: user-approved — chosen over a bounded attempt count: Kafka Streams has no migration counter at all, and PC owning the `transactional.id` removes the failure mode a bound would guard against.) Governs R12, R14.
-- **Recovery is not observable to the application beyond logs and metrics.** (session-settled: user-approved — chosen over a public exception, a listener callback, or reuse of the commit-failure handler surface: recovery is PC's own business, like a retry, and nothing here forecloses adding a hook later.) Governs R20, R21, R22.
+- **Recovery is not observable to the application beyond logs and metrics.** (session-settled: user-approved — chosen over a public exception, a listener callback, or reuse of the commit-failure handler surface: recovery is PC's own business, like a retry, and nothing here forecloses adding a hook later.) Governs R21, R22, R23.
 - **This work supersedes astubbs/parallel-consumer#352's R6 rather than amending it.** (session-settled: user-directed — chosen over rewording R6 before that PR merges: R6 was true of the behaviour when written, and a later change making an earlier true statement untrue is the ordinary order, not an error to correct pre-emptively.) Governs R17.
 - **Kafka Streams is the reference, not the specification.** Its shape is copied where it fits and diverged from where PC can do better; every divergence is named at the requirement it affects.
 
@@ -88,12 +88,13 @@ The reason PC cannot recover today is structural rather than incidental. `Parall
 - R17. On the PC-built path, `InvalidPidMappingException` on the produce path recovers rather than closing the instance, replacing the behaviour `confluentinc#839` intended.
 - R18. On the producer-instance path, every condition in R8 keeps its current terminal behaviour, and PC logs at WARN, once, naming the recovery unavailable and what enables it.
 - R19. Adopting the PC-built path requires re-granting any TransactionalId ACL against the prefix in R6, and the upgrade notes say so.
+- R20. The `Producer`-instance option's deprecation javadoc names the release its removal is queued for, matching the entry in `docs/refactoring.md`.
 
 **Observability**
 
-- R20. Each recovery emits a log record identifying the triggering condition and the outcome.
-- R21. Recoveries are counted in the metrics surface, distinguishably from ordinary commit failures.
-- R22. Consecutive recoveries with no successful commit between them are counted separately and raise the log level, so an instance that is alive but not progressing is distinguishable from one that recovered once.
+- R21. Each recovery emits a log record identifying the triggering condition and the outcome.
+- R22. Recoveries are counted in the metrics surface, distinguishably from ordinary commit failures.
+- R23. Consecutive recoveries with no successful commit between them are counted separately and raise the log level, so an instance that is alive but not progressing is distinguishable from one that recovered once.
 
 ### Actors
 
@@ -152,7 +153,7 @@ flowchart TB
 - AE7. **Covers R7.** Given producer configuration carrying SASL and TLS secrets, when PC starts and logs its options, then no credential material appears in the output.
 - AE8. **Covers R13.** Given a record completed successfully earlier in a transaction that is then aborted by recovery, when the next commit runs, then that record's offset is not committed and the record is processed again.
 - AE9. **Covers R14.** Given the replacement producer cannot reach the transaction coordinator, when recovery runs, then PC retries on a later cycle with backoff rather than looping inline; and given the `transactional.id` is not authorised, then PC fails terminally naming that id.
-- AE10. **Covers R22.** Given recovery fires repeatedly with no successful commit between attempts, when the pattern continues, then the consecutive count is observable and the log level rises above the single-recovery case.
+- AE10. **Covers R23.** Given recovery fires repeatedly with no successful commit between attempts, when the pattern continues, then the consecutive count is observable and the log level rises above the single-recovery case.
 
 ### Scope Boundaries
 
@@ -162,6 +163,7 @@ flowchart TB
 - The consumer remains a caller-supplied instance. The same argument for configuration-plus-factory applies to it, and is not this problem.
 - The unbounded wait at `onPartitionsRevoked` for an in-flight transaction to finish, owned by `docs/inflight/bug-857-transactional-revoke-wait.md`. astubbs#29 bounded the `PERIODIC_CONSUMER_SYNC` revoke path by declining the commit lock; the transactional wait is untouched. It reduces how often the commit path reaches a fencing condition without removing it.
 - The commit-failure seam in astubbs/parallel-consumer#352, which gives the application a decision when a commit exhausts its retry budget. Dependencies / Assumptions owns the relationship and the sequencing.
+- Actually removing the `Producer`-instance option. R20 only requires the deprecation to name its release; the removal is queued in `docs/refactoring.md` under the next-major section and lands there, not here.
 - The remaining reflection in `ProducerWrapper` for transaction state (`isCompleting`, `isReady`). Owning the configuration removes the need to *discover* whether the producer is transactional; it does not remove these.
 
 **Outside this work**
@@ -179,10 +181,6 @@ flowchart TB
 - The two remain complementary in what they own: astubbs/parallel-consumer#352 decides who chooses when a commit exhausts its budget; this decides what PC does when the producer itself is unusable. Only the fencing branch inside `ProducerManager.commitOffsets` is shared.
 
 ### Outstanding Questions
-
-**Resolve before planning**
-
-- Should removal of the deprecated `Producer`-instance option be queued as a breaking change for the major currently being cut, rather than left with no end date? `docs/refactoring.md` already carries "Remove the accreting deprecated `ParallelConsumerOptions` fields" with its release gate open, so this deprecation has a home; leaving it unqueued means every future change to producer handling is built twice, once per path.
 
 **Deferred to planning**
 
