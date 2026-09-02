@@ -128,8 +128,9 @@ rules and each covers a case the other does not:
    precondition was asserting an implementation detail of the logging binding and calling it PC's
    behaviour. It now reads the map and, if non-null, asserts it is empty. With the `@BeforeEach` in place
    this reads `null` on logback, so the relaxation looks redundant there - it is not, on a binding that
-   returns an empty map for an empty context, which `branch-mdc-context-propagation.md` had already
-   named as a hazard from the other direction. The comment above the assertion points at the class
+   returns an empty map for an empty context - a hazard `MdcPropagation`'s class javadoc already names
+   from the other direction ("The zero is a property of the binding, not of this class"), where the
+   retired inflight note that first recorded it migrated its content. The comment above the assertion points at the class
    javadoc that names the arming classes, so the next reader does not rediscover them.
 
 Also corrected: `MdcPropagation.capture()`'s comment claimed it returns `null`, never an empty map, for
