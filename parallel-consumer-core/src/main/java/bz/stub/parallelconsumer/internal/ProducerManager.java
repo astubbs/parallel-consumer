@@ -209,6 +209,30 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
      */
     private final AtomicReference<Throwable> pendingInvalidation = new AtomicReference<>();
 
+    /**
+     * Whether the replay of the work the aborted transaction discarded (KTD5) is still owed: set by
+     * {@link #beginReplacement()} in the same step that consumes the pending condition, cleared by
+     * {@link #replayCompleted(int)} only after the drain and the replay have returned normally. Between the two the
+     * ledger is intact but nothing else records that it has not been replayed; without this flag a listener
+     * throwing inside the drain left the next pass to build the replacement straight away, and the next commit
+     * trimmed the ledger for output the broker never saw.
+     * <p>
+     * Written by the control thread only - both writers run inside the recovery pass. Volatile rather than
+     * monitor-guarded so a reader on another thread (a test, an operator's diagnostic) sees the current value
+     * without an ordering to reason about; no decision is made on it from any thread but the writer's.
+     */
+    private volatile boolean replayOwed;
+
+    /**
+     * How many replays have put discarded work back into the shards. A worker dispatched before a replay and
+     * reaching the produce lock after it would produce its record ahead of the restored, lower offsets in the same
+     * ordered shard, so {@link #acquireProduceLock} refuses it and the batch re-queues behind them (the review of
+     * astubbs#410, finding 5). Stamped on every batch at dispatch by the control thread, the thread that also runs the
+     * replay, so the two are totally ordered; compared under the monitor, where the replay increments it.
+     */
+    @GuardedBy("availabilityMonitor")
+    private long replayGeneration;
+
     public ProducerManager(ProducerWrapper<K, V> newProducer,
                            ConsumerManager<K, V> newConsumer,
                            WorkManager<K, V> wm,
@@ -358,6 +382,17 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
                         "Commit taking too long? Try increasing the produce lock timeout.", produceLockTimeout));
             }
             if (isProducerAvailable()) {
+                java.util.OptionalLong dispatchedAt = context.replayGenerationAtDispatch();
+                if (dispatchedAt.isPresent() && dispatchedAt.getAsLong() != replayGeneration()) {
+                    // dispatched before a replay put lower offsets back into its shard: producing now would put this
+                    // record ahead of them in the replacement's transaction. Release the hold this method took -
+                    // the lock is never handed out, so nothing else would - and fail the batch so it re-queues
+                    // behind the restored work; ordered selection then takes the lower offset first.
+                    readLock.unlock();
+                    throw new ProducerInvalidatedException("The producer was replaced and the work its aborted transaction " +
+                            "discarded was put back into processing while this record was on its way to the produce lock: " +
+                            "it re-queues behind that work so ordered shards produce the earlier offset first", conditionUnderRecovery);
+                }
                 log.debug("Produce lock acquired (context: {}).", context.getOffsets());
                 return new ProducingLock(context, readLock);
             }
@@ -625,6 +660,47 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
     }
 
     /**
+     * @return the current replay generation, for the control thread to stamp on a batch at dispatch
+     */
+    public long replayGeneration() {
+        synchronized (availabilityMonitor) {
+            return replayGeneration;
+        }
+    }
+
+    /**
+     * @return true between {@link #beginReplacement()} and {@link #replayCompleted(int)}: the aborted transaction's
+     *         work has not yet been put back, and no replacement may be built until it has
+     */
+    public boolean isReplayOwed() {
+        return replayOwed;
+    }
+
+    /**
+     * The caller's drain and replay returned normally. Control thread only, under the write lock still.
+     *
+     * @param restored how many records the replay put back; a replay that put back none moved no offset below any
+     *                 record in flight, so the generation - and with it every parked worker - is left alone
+     */
+    public void replayCompleted(int restored) {
+        replayOwed = false;
+        if (restored > 0) {
+            synchronized (availabilityMonitor) {
+                replayGeneration++;
+            }
+        }
+    }
+
+    /**
+     * A recovery pass failed outside the replacement build - in the drain or the replay - and will be retried:
+     * paced by the same backoff a failed build gets, so a listener that throws on every drain does not spin the
+     * control loop.
+     */
+    public void deferAfterFailedPass(String why) {
+        scheduleRetry(why);
+    }
+
+    /**
      * @return true while the broker has reported the producer invalid and its replacement has not yet been published
      */
     public boolean isReplacing() {
@@ -734,8 +810,12 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
             return false;
         }
         try {
-            conditionUnderRecovery = condition;
+            if (condition != null) {
+                // absent on a pass that re-enters only to finish an owed replay: keep the label of the condition it answers
+                conditionUnderRecovery = condition;
+            }
             pendingInvalidation.set(null); // consumed: a condition recorded from here on belongs to the next recovery
+            replayOwed = true; // and stays owed until the caller's drain and replay have returned normally
             ProducerWrapper<K, V> discarded = producerWrapper;
             producerWrapper = null;
             if (discarded != null) {
@@ -800,6 +880,13 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
     public ReplacementOutcome completeReplacement() {
         ReplacementProducerSource<K, V> source = replacementProducerSource.orElseThrow(() ->
                 new IllegalStateException("Bug: recovery attempted on the producer-instance path, where canRecover() is false"));
+        if (replayOwed) {
+            // the caller's drain or replay threw after beginReplacement consumed the condition; building now would
+            // let the next commit trim a ledger that was never put back. The next pass re-enters the lock and
+            // replays first.
+            scheduleRetry("the replay of the work the aborted transaction discarded is still owed; it runs first on the next pass");
+            return new ReplacementOutcome(ReplacementOutcome.Kind.DEFERRED, null);
+        }
         int attempt;
         synchronized (availabilityMonitor) {
             attempt = failedReplacementAttempts + 1;
