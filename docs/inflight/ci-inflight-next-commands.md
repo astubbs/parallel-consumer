@@ -188,25 +188,53 @@ under a millisecond**. This repository already runs the same shape at sixty time
 `docs/inflight/issue-index.md` already is; the graph is a throwaway JSON cache loaded into Maps. No
 new storage technology is involved.
 
-## Prior art to mine: Antony's own Gerrit fork
+## Prior art, read: Antony's 2010 Gerrit-based issue tracker
 
-**Antony built distributed issue tracking on a Gerrit fork around 2008**, as a company that never
-went public, and still has the code. He has asked that it be read for ideas before this goes much
-further, and it is worth more than a courtesy look: it is the same problem, attempted by the person
-now specifying this one, with the benefit of knowing which parts did not survive contact.
+**Read 2026-09-02. It changes nothing at this stage** - Antony's call, and the right one - so this is
+a record rather than an input to any decision. Kept because the next person to reach for a graph
+store should see it first.
 
-The timing is the interesting part. Everything in that generation - ditz, Bugs Everywhere, ticgit,
-git-issue - shared one failure: the tooling assumed a human would maintain the state by hand, and
-humans did not. What has changed is not the idea but who maintains it. An agent will, and there is
-now a reason to read the state that did not exist then.
+**Where it is:** `project-gittybits`, a private repository on Antony's own git server. It is the only
+copy: nothing Gittybits-shaped exists on GitHub under that account, and nothing public anywhere. Ask
+him for access; how a non-Mac host reaches that server is his homelab repository's business, not
+this one's.
 
-**And the field is still open**, which the 2026-09-01 survey establishes rather than assumes:
-[`../plans/2026-09-01-001-investigate-beads-comparison.md`](../plans/2026-09-01-001-investigate-beads-comparison.md)
-found exactly one surveyed tracker that keeps state in the working tree, and nothing at all that
-makes GitHub's own graph queryable from the repository.
+**What it is.** Five Maven modules under `com.sharca.*`, 208 commits, May to November 2010, built
+against Gerrit over SSH. A domain model of `Issue`, `Comment`, `Project`, `User`; a GWT web UI; a
+Grails server; a Griffon desktop client; and `gitfocus-jdits-engine` - the store.
 
-Read it before the GitHub-graph work starts, not after - a design already half-built is the worst
-moment to discover someone solved a piece of it seventeen years ago.
+**The design decision worth having seen.** The store was **pluggable, with two implementations
+bound by Guice annotations**: `@DirectFileIO` and `@OrientDBIssueStore`. Issues serialised as
+**YAML**, with **OrientDB** holding the per-project "nice ID" counter - the human-readable issue
+number. That is the same axis - *where issue state lives relative to the code* - that the
+[2026-09-01 survey](../plans/2026-09-01-001-investigate-beads-comparison.md) found still unoccupied
+sixteen years later.
+
+### Three things it settles, none of which change today's plan
+
+- **The human-readable ID is the hard part, and it needs a coordination point.** The engine's README
+  documents recovering a desynchronised counter by hand: connect to OrientDB, `update
+  projectissuecounter set issueNo = …`. A sequential per-project number is exactly what a
+  distributed store cannot give cheaply, which is why Backlog.md and Beads both use hash IDs, and
+  why this tool sidesteps the problem entirely by making the **filename** the identity.
+- **The database is what made it unreadable, not the format.** OrientDB is effectively gone, the
+  same arc as Titan into JanusGraph. A 2010 design is stranded by its datastore while its YAML
+  issues would still parse today - which is a better argument for the JSON-in-memory decision above
+  than anything reasoned from first principles. Corroborating: Antony forked OrientDB on 2010-07-29,
+  mid-project, and the README references building private `0.9.22-SNAPSHOT` artifacts.
+- **YAML and JSON are not competing here, they are different layers.** That store was human-facing
+  and committed, where YAML earns its readability. The decision above is about a machine-written
+  throwaway cache, where it buys nothing and costs a parser Node does not have.
+
+### What is NOT there, checked across all 33 refs
+
+**The engine was never implemented.** `gitfocus-jdits-engine` holds two Guice binding annotations
+and two SnakeYAML workarounds - four Java files - and never exceeds that on any ref. The project
+itself did get substantial: 139 Java files on `master`. The work went into the UI, the Grails
+server and the Gerrit connector; the storage layer stayed at its interfaces.
+
+So the *decision* survives and the *implementation* does not. That is the whole of what this repo can
+teach us, and it is worth exactly one read - which has now happened.
 
 ## Before this merges
 
