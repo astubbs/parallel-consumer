@@ -22,6 +22,7 @@ Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutio
 | `ParallelEoSStreamProcessorTest.processInKeyOrder` | 6 seen locally (2026-09-01) across two branches, 1 in 3 isolated runs | **Two DIFFERENT failures under one test name, and the documented fix is already in the tree.** See below - a solved flake still firing, plus a fast-failing `[sanity check input data]` precondition that has only ever been seen under load |
 | `JStreamParallelEoSStreamProcessorTest.testConsumeAndProduce` and `.testFlatMapProduce` | 1 seen (2026-09-01) | Not from the original scan - found in a **local** core unit run on a parallel re-cut of astubbs#207, not on astubbs#207 itself. Both failed together on produced-record count (`Expected size: 1/2 but was: 0`), i.e. the returned stream carried nothing. **Mechanism now known and owned by astubbs#116** - see below | <!-- post-merge: checked -->
 | `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 4 seen (2026-08-18, 2026-08-19, 2026-08-25, 2026-09-01) | Not from the original scan - each found while babysitting a branch. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third and fourth sightings independently carry the **same three-way key collision** in the failing batch contents, which points at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
+| `ManagedPCInstanceLifecycleTest.rapidToggleShouldNotCreateDuplicateInstances` | 1 seen (2026-09-02, astubbs#207, [job 100175277225](https://github.com/astubbs/parallel-consumer/actions/runs/33607572165/job/100175277225)) | Not from the original scan - **arrived on master with astubbs#29 and failed on the first PR to merge it**. `consumeCount` 0, repetition 1 of 5, `forkCount=4`, `probe clean`. Every wait in the test is a fixed sleep, and its assertion names a cause it cannot discriminate - see below <!-- post-merge: checked --> |
 | `RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed` | 1 seen (2026-09-01) | Not from the original scan - found while babysitting astubbs#257. Failed its **saturation/pause-point setup guard**, not the confluentinc#909 signature assertion, so it proves nothing about the defect it reproduces - see below <!-- post-merge: checked --> |
 
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
@@ -167,6 +168,41 @@ frozen partitions observed`. Worth weighing against the probe's own thresholds b
 it points away from broker contention and toward the test's own 30s timing budget - which is
 `forkCount=4` on a shared runner, waiting on a hand-orchestrated race between a paused registration
 loop and a forced eager rebalance.
+<!-- post-merge: checked-end -->
+
+### `ManagedPCInstanceLifecycleTest` - a sleep-timed test that names one cause for a symptom with several
+
+<!-- post-merge: checked-begin - names astubbs#29 and astubbs#207 in the past tense as, respectively, the
+     change that introduced the test and the branch the sighting came from; both stay true once landed -->
+Seen 2026-09-02 on astubbs#207's CI, one failure in 187 integration tests, at repetition 1 of 5.
+
+**Provenance first, because it decides who owns it.** `git log --diff-filter=A` on the file shows this class
+was **added by astubbs#29**, the confluentinc#857 revoke-path fix, and astubbs#207 merged that commit hours
+earlier. astubbs#207 does not touch the test, and it is cleared on mechanism rather than on timing: the test
+runs `PERIODIC_CONSUMER_ASYNCHRONOUS` + `UNORDERED` against a freshly created topic and never puts foreign
+metadata in a commit, so there is no offset metadata for an offset-*decoding* change to reach.
+
+Master's own CI was green at `a6941020f` (astubbs#29's merge) and at the head after it. One green run per
+commit cannot rule out a low-rate flake, so that is corroboration, not proof - the mechanism above is what
+clears the branch.
+
+**Every wait in it is a fixed sleep standing in for an event**, which is the defect class this repo has
+already met twice (`processInKeyOrder`'s `awaitForOneLoopCycle`, and what astubbs#265 removed elsewhere).
+Read the method: 2s to join the group, 10 toggle cycles at 100ms, 3s to settle, then produce 10 records and
+sleep 5s before asserting `consumeCount > 0`. Under `forkCount=4` on a shared runner with a Testcontainers
+broker, 5 seconds is not a guaranteed window for a rejoin, an assignment, a poll and ten records.
+
+**The assertion attributes a cause it cannot discriminate**, and that is the part worth fixing rather than
+the timing. Its message is *"if 0, the PC died from CME during rapid toggles"* - but a count of zero is also
+what starvation looks like, and the test has no way to tell the two apart. So a failure here does not
+establish the defect it was written for, and the honest fix is to assert on the thing that distinguishes
+them (a CME actually observed) and to wait on the consume rather than on a clock.
+
+The ambient probe said `probe clean` and, unusually, said why that is worth little here: **`detector reach:
+UNKNOWN - this test declares no @Timeout`**, so nothing in the autopsy says the long-bound detectors had time
+to fire. Take the clean verdict as unproven rather than as evidence.
+
+Not quarantined: quarantine is master-state and needs evidence, and one sighting is not a rate.
 <!-- post-merge: checked-end -->
 
 ### `simpleBatchTest` - three modules, one shared helper, and a lead nobody has tested
