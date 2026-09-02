@@ -155,10 +155,16 @@ Each of these outlived this PR and now has its own note, so nothing is restated 
 - [`core-fail-policy-escapes-the-rebalance-callback.md`](core-fail-policy-escapes-the-rebalance-callback.md)
   - `FAIL` stopping via Kafka's generic callback wrapper rather than PC's own fatal path.
 
-- **Back-links to add when astubbs#207 merges** (none existed when this note was written, in either
-  direction):
-  astubbs#207 -> astubbs#118 / astubbs#217 / confluentinc#326; astubbs#118 -> astubbs#207;
-  astubbs#217 -> astubbs#197; and astubbs#197's own "Also found while triaging" bullet, which still
-  carries item 5 unticked and unlinked even though the ledger file's copy was deleted.
+- **The back-links are DONE - do not re-add them.** This entry previously listed four as outstanding
+  and all four now exist, so the list was work nobody needed to repeat: astubbs#207's body names
+  astubbs#118, astubbs#217 and confluentinc#326; astubbs#118 carries a comment opening the paper
+  trail to astubbs#207; astubbs#217 carries one naming both astubbs#197 and astubbs#207, including
+  which of its decisions astubbs#207 overturns; and astubbs#197's item 5 is ticked, with the
+  fixed-twice-independently explanation inline. Verified 2026-09-02.
+
+  What is **not** on any of them is what this PR found after those comments were written - the
+  corrupt-body class, where a decoder trusting its own header returned a fabricated offset map rather
+  than failing. `issue-response-118.md` drafts that half; per this directory's rules it is posted only
+  on explicit instruction, and it outlives this PR rather than being deleted with it.
 
 <!-- post-merge: checked-end -->
