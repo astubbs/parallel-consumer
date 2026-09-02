@@ -93,6 +93,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     private final Map<TopicPartition, Counter> succeededRecordsCounters = new ConcurrentHashMap<>();
     private final Map<TopicPartition, Counter> failedRecordsCounters = new ConcurrentHashMap<>();
 
+    @Getter
     private final PCMetrics pcMetrics;
 
     public WorkManager(PCModule<K, V> module,

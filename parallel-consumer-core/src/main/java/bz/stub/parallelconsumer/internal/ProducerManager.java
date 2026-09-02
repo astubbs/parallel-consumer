@@ -6,6 +6,9 @@ package bz.stub.parallelconsumer.internal;
  */
 
 import bz.stub.parallelconsumer.*;
+import bz.stub.parallelconsumer.metrics.PCMetrics;
+import bz.stub.parallelconsumer.metrics.PCMetricsDef;
+import io.micrometer.core.instrument.Tag;
 import bz.stub.parallelconsumer.state.WorkManager;
 import lombok.Getter;
 import lombok.NonNull;
@@ -137,6 +140,8 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
     /** The condition the recovery in progress is answering; for the log line and the failure that names it. */
     private volatile Throwable conditionUnderRecovery;
 
+    private final PCMetrics pcMetrics;
+
     /**
      * Ends the produce-lock wait when the processor has left RUNNING or PAUSED, so a close during an outage releases
      * the parked workers at once rather than after the shutdown timeout. Supplied by the processor; false until then.
@@ -217,6 +222,8 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
         this.producerWrapper = newProducer;
         this.options = options;
         this.replacementProducerSource = replacementProducerSource;
+        this.pcMetrics = wm.getPcMetrics();
+        pcMetrics.gaugeFromMetricDef(PCMetricsDef.PRODUCER_CONSECUTIVE_RECOVERIES, this, ProducerManager::getConsecutiveRecoveriesWithoutCommit);
 
         boolean usingTransactions = producerWrapper.isConfiguredForTransactions();
         this.sendCallback = (RecordMetadata metadata, Exception exception) -> {
@@ -783,7 +790,8 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
                 nextRecoveryAttemptAt = Instant.EPOCH;
                 availabilityMonitor.notifyAll();
             }
-            logRecovery(condition, "replaced", attempt, consecutive);
+            pcMetrics.getCounterFromMetricDef(PCMetricsDef.PRODUCER_RECOVERIES, Tag.of("condition", condition)).increment();
+            logRecovery(condition, "replaced", attempt, consecutive, source.getTransactionalId());
             return new ReplacementOutcome(ReplacementOutcome.Kind.REPLACED, null);
         } catch (RuntimeException failure) {
             String failureType = failure.getClass().getName();
@@ -808,12 +816,13 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
     /**
      * The R22 record of a recovery: what the broker said, what PC did, and how many times in a row.
      */
-    private void logRecovery(String condition, String outcome, int attempt, int consecutiveRecoveries) {
+    private void logRecovery(String condition, String outcome, int attempt, int consecutiveRecoveries, String transactionalId) {
         if (consecutiveRecoveries > 1) {
-            log.error("Producer recovery {}: condition {}, attempt {}, {} consecutive recoveries with no successful commit " +
-                    "between them - the instance is alive but not progressing", outcome, condition, attempt, consecutiveRecoveries);
+            log.error("Producer recovery {}: condition {}, attempt {}, transactional.id '{}', {} consecutive recoveries with no " +
+                            "successful commit between them - the instance is alive but not progressing",
+                    outcome, condition, attempt, transactionalId, consecutiveRecoveries);
         } else {
-            log.warn("Producer recovery {}: condition {}, attempt {}", outcome, condition, attempt);
+            log.warn("Producer recovery {}: condition {}, attempt {}, transactional.id '{}'", outcome, condition, attempt, transactionalId);
         }
     }
 

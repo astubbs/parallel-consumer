@@ -1166,6 +1166,20 @@ Distribution Summary `pc.payload.ratio.used{subsystem=offsetencoder}`
 
 Ratio between offset metadata payload size and offsets encoded
 
+==== Producer Manager
+
+**Producer Recoveries**
+
+Counter `pc.producer.recoveries{subsystem=producer, condition="exceptionSimpleName"}`
+
+Total number of times the transactional producer was replaced after the broker reported it invalid (fenced, stale epoch, expired producer id, lost generation), tagged by the condition that triggered it. Distinct from ordinary commit failures, which are retried on the same producer
+
+**Producer Consecutive Recoveries**
+
+Gauge `pc.producer.consecutive.recoveries{subsystem=producer}`
+
+Producer recoveries since the last successful commit - non-zero for a moment after any recovery, rising while the instance is alive but not progressing
+
 === Example Metrics setup steps
 Meter registry that metrics should be bound has to be set using Parallel Consumer Options along with any common tags that identify the PC instance.
 In addition, if desired - Kafka Consumer, Producer can be bound to the registry as well as general JVM metric, logging system and other common binders.

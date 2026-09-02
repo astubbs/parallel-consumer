@@ -12,6 +12,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
@@ -39,10 +41,12 @@ class ProducerManagerRecoveryTest {
     private PCModuleTestEnv module;
     private ProducerWrapper<String, String> initial;
     private ProducerManager<String, String> manager;
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
 
     @BeforeEach
     void setUp() {
         module = new PCModuleTestEnv(ParallelConsumerOptions.<String, String>builder()
+                .meterRegistry(registry)
                 .commitMode(PERIODIC_TRANSACTIONAL_PRODUCER)
                 .commitLockAcquisitionTimeout(Duration.ofMillis(500))
                 .produceLockAcquisitionTimeout(Duration.ofMillis(200))
@@ -205,11 +209,18 @@ class ProducerManagerRecoveryTest {
         assertThat(manager.completeReplacement().getKind()).isEqualTo(ProducerManager.ReplacementOutcome.Kind.REPLACED);
         assertThat(manager.getConsecutiveRecoveriesWithoutCommit()).isEqualTo(2);
 
+        // R23 / R24 at the meter: two recoveries so far, both fenced, none committed since
+        assertThat(registry.get("pc.producer.consecutive.recoveries").gauge().value()).isEqualTo(2.0);
+        assertThat(registry.get("pc.producer.recoveries").tag("condition", "ProducerFencedException").counter().count()).isEqualTo(2.0);
+
         manager.preAcquireOffsetsToCommit();
         manager.commitOffsets(pl.tlinkowski.unij.api.UniMaps.of(), new org.apache.kafka.clients.consumer.ConsumerGroupMetadata("group"));
         manager.postCommit();
 
         assertThat(manager.getConsecutiveRecoveriesWithoutCommit()).isEqualTo(0);
+        assertThat(registry.get("pc.producer.consecutive.recoveries").gauge().value()).isEqualTo(0.0);
+        assertWithMessage("the counter is cumulative; only the gauge resets")
+                .that(registry.get("pc.producer.recoveries").tag("condition", "ProducerFencedException").counter().count()).isEqualTo(2.0);
         manager.recordInvalidation(new ProducerFencedException("fenced a third time"));
         assertWithMessage("the first recovery of a new run is not paced").that(manager.isRecoveryAttemptDue(Instant.now())).isTrue();
     }

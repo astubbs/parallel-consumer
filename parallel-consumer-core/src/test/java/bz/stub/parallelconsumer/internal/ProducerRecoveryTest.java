@@ -9,7 +9,13 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.ProducerFactory;
 import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.LoggerFactory;
 import org.apache.kafka.clients.consumer.ConsumerGroupMetadata;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
@@ -85,6 +91,7 @@ class ProducerRecoveryTest {
     private final AtomicInteger refreshedMetadataReads = new AtomicInteger();
     private ParallelEoSStreamProcessor<String, String> pc;
     private volatile String derivedTransactionalId;
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
 
     @AfterEach
     void tearDown() {
@@ -127,6 +134,7 @@ class ProducerRecoveryTest {
         }).when(consumer).groupMetadata();
         return ParallelConsumerOptions.<String, String>builder()
                 .consumer(consumer)
+                .meterRegistry(registry)
                 .producerConfig(UniMaps.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "mock:9092"))
                 .producerFactory(factory())
                 .commitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER)
@@ -263,25 +271,51 @@ class ProducerRecoveryTest {
     }
 
     /**
-     * Covers AE3 / R12: three fences in a row, three recoveries, no terminal state reached by counting.
+     * Covers AE3 / R12 and AE10 / R22-R24: three fences in a row, three recoveries, no terminal state reached by
+     * counting; each recovery is logged with its condition and outcome, the consecutive ones at ERROR, and the
+     * counter tells them apart from ordinary commit failures.
      */
     @Test
-    void recoveryRepeatsAsOftenAsTheConditionRecurs() {
+    void recoveryRepeatsAsOftenAsTheConditionRecursAndTheConsecutiveOnesAreLoggedLouder() {
         onBuild.put(0, this::fenceAtFirstCommit);
         onBuild.put(1, this::fenceAtFirstCommit);
         onBuild.put(2, this::fenceAtFirstCommit);
-        start(optionsBuilder().build());
-        producerManager().recoveryBackoffInitial = Duration.ofMillis(50); // the pacing is asserted elsewhere
-        addRecords(0, 4);
+        var logger = (Logger) LoggerFactory.getLogger(ProducerManager.class);
+        var appender = new ListAppender<ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            start(optionsBuilder().build());
+            producerManager().recoveryBackoffInitial = Duration.ofMillis(50); // the pacing is asserted elsewhere
+            addRecords(0, 4);
 
-        awaitProducers(4);
-        awaitCommittedThrough(producers.get(3), 5);
+            awaitProducers(4);
+            awaitCommittedThrough(producers.get(3), 5);
+        } finally {
+            logger.detachAppender(appender);
+        }
 
         assertThat(pc.isClosedOrFailed()).isFalse();
         assertThat(producers).hasSize(4);
         for (int i = 0; i < 3; i++) {
             assertThat(producers.get(i).consumerGroupOffsetsHistory()).isEmpty();
         }
+        // this instance's recovery lines, told apart from a concurrently running test's by the id they name
+        List<ILoggingEvent> recoveries = appender.list.stream()
+                .filter(event -> event.getFormattedMessage().startsWith("Producer recovery replaced"))
+                .filter(event -> event.getFormattedMessage().contains(derivedTransactionalId))
+                .collect(java.util.stream.Collectors.toList());
+        assertThat(recoveries).hasSize(3);
+        assertThat(recoveries.get(0).getLevel()).isEqualTo(Level.WARN);
+        assertThat(recoveries.get(1).getLevel()).isEqualTo(Level.ERROR);
+        assertThat(recoveries.get(2).getLevel()).isEqualTo(Level.ERROR);
+        for (ILoggingEvent event : recoveries) {
+            assertThat(event.getFormattedMessage()).contains("ProducerFencedException");
+        }
+        assertThat(recoveries.get(2).getFormattedMessage()).contains("3 consecutive recoveries");
+        assertThat(registry.get("pc.producer.recoveries").tag("condition", "ProducerFencedException").counter().count()).isEqualTo(3.0);
+        assertWithMessage("a successful commit resets the consecutive count")
+                .that(registry.get("pc.producer.consecutive.recoveries").gauge().value()).isEqualTo(0.0);
     }
 
     /**
