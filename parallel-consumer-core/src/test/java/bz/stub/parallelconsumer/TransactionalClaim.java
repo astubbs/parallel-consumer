@@ -1,0 +1,503 @@
+package bz.stub.parallelconsumer;
+/*-
+ * Copyright (C) 2026 Antony Stubbs and contributors
+ */
+
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.List;
+
+/**
+ * The guarantees this project <em>documents</em> for {@link ParallelConsumerOptions.CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER},
+ * one constant per claim, each carrying the sentence it was taken from.
+ * <p>
+ * The point of naming them is that a test can reference a claim instead of restating it, and that
+ * {@link TransactionalClaimCoverageTest} can then check two things no reviewer reliably checks by hand:
+ * <ol>
+ *     <li>every claim we say is covered actually has a test referencing it, and</li>
+ *     <li>every recorded sentence still appears in the file it was taken from - so editing the javadoc without
+ *     updating this register fails the build instead of silently leaving the register describing a promise the
+ *     code no longer makes.</li>
+ * </ol>
+ * <p>
+ * <strong>What the coverage check does and does not prove.</strong> It proves a claim is <em>referenced</em> by a
+ * test. It cannot prove the claim is <em>proved</em> - a {@link ProvesClaim} annotation on a weak or gutted test
+ * satisfies it forever. Proof strength lives entirely in the negative controls recorded per claim in
+ * {@code docs/plans/2026-08-07-001-test-transactional-eos-battle-test-plan.md}: a claim is only
+ * {@link Status#PROVED} once breaking the mechanism it guards was <em>observed</em> to turn its test red. Do not
+ * read a green build as evidence that the guarantees still hold.
+ */
+public enum TransactionalClaim {
+
+    /**
+     * C1 - all parallel workers share one bulk transaction, not one transaction per record or per worker.
+     */
+    BULK_SHARED_TRANSACTION(Source.OPTIONS_JAVADOC,
+            "Messages sent in parallel by different workers get added to the same transaction block",
+            Status.PROVED, "TransactionalBulkCommitTest#recordsFromDifferentWorkersInOneIntervalShareOneTransaction. "
+            + "Negative control observed (U2): splitting the four records across two commit cycles instead of one "
+            + "turned it red with 'Wanted 1 time ... but was 2 times' on beginTransaction()"),
+
+    /**
+     * C2 - the all-or-none visibility guarantee, per source offset, at READ_COMMITTED.
+     */
+    ALL_OR_NONE_PER_SOURCE_OFFSET(Source.OPTIONS_JAVADOC,
+            "All records produced from a given source offset will either all be visible, or none will be",
+            Status.PROVED, "Proved across four paths, and REFUTED on a fifth until astubbs#261 fixed it - the "
+            + "history is kept because the refutation is what produced the fix. "
+            + "TransactionalVisibilityIT#openTransactionIsInvisibleAtReadCommittedAndVisibleAtReadUncommitted and "
+            + "#readCommittedIsBlockedAtTheFirstStillOpenTransactionNotMerelyFiltered cover the open and "
+            + "later-committed cases, each with an observed control: flipping the verifier's isolation.level to "
+            + "read_uncommitted - one term - turns them red, so the absence is the isolation level's doing and not "
+            + "an unwritten record. Neither of those arms makes a send FAIL, which is the case the sentence did not "
+            + "survive: TransactionalBatchVisibilityIT#aTerminallyFailedSendLeavesTheWholeTransactionInvisible "
+            + "observed 'poison-key-0 has 2 of 5' - two records from ONE source offset visible at read_committed "
+            + "while three were not, 2/2 reproductions - because ProducerManager's produce callback threw out of "
+            + "KafkaProducer#doSend's ApiException handler before the client could mark the transaction abortable. "
+            + "astubbs#261 makes that callback non-throwing under transactions; the arm is re-enabled and passes, "
+            + "and restoring the unconditional throw reproduces the exact original failure and nothing else"),
+
+    /**
+     * C3 - a failed or crashed transaction is never visible, and is retried as a new transaction whose record
+     * grouping need not match the original.
+     */
+    FAILURE_INVISIBLE_AND_RECOMBINED(Source.OPTIONS_JAVADOC,
+            "none will ever be visible and the system will eventually retry them in new transactions - "
+                    + "potentially with different combinations of records from the original.",
+            Status.PROVED, "TransactionalCrashReplayIT#abandonedTransactionIsInvisibleAndTheReplacementFencesItsProducer "
+            + "covers the invisibility half (an instance abandoned mid-transaction, its records seen by a "
+            + "read_uncommitted control arm and never by a read_committed one), and "
+            + "#theReplayRecombinesTheSameResultsIntoDifferentTransactions covers the recombination half - the "
+            + "abandoned attempt held every payload result in ONE transaction, the replay spread the same results "
+            + "over several, and their union is exactly the expected set. Negative control observed (U13): "
+            + "replacing the shared, stable transactional.id with KafkaClientUtils' default random one - one term, "
+            + "everything else identical - turned it red at assertTheAbandonedProducerWasFenced, because the "
+            + "replacement no longer fences its predecessor and the abandoned instance is never refused. That is "
+            + "the control that matters here: without it, 'nothing is visible' would also be satisfied by an "
+            + "unfenced open transaction pinning the last stable offset"),
+
+    /**
+     * C4 - the source offset and its produced records commit together or not at all.
+     */
+    OFFSET_AND_RECORDS_ATOMIC(Source.OPTIONS_JAVADOC,
+            "A source offset, and it's produced records will be committed as an atomic set.",
+            Status.PROVED, "TransactionalCrashReplayIT#replayCommitsTheResultsAndTheirSourceOffsetTogether asserts "
+            + "both halves at both ends of a crash: before, no payload result visible AND the source offset still "
+            + "on the priming record; after, the offset reaching its target is PAIRED with every result being "
+            + "visible - sampled together on each poll rather than awaited one after the other, because two "
+            + "sequential awaits are satisfied by any window between them, however wide. A system committing the "
+            + "offset without its records fails that pairing. The OTHER direction, records without the offset, is "
+            + "deliberately NOT asserted and this claim does not rest on it: committing a transaction writes its "
+            + "markers concurrently to the output partitions and to __consumer_offsets with no ordering guarantee, "
+            + "so records-first is an ordinary broker state rather than a defect. Only the terminal pairing is "
+            + "checked, not each intermediate transaction's. Record counts come from what the verifier consumed, "
+            + "never from offsets (markers occupy "
+            + "offsets); the only offset read is the group's committed position on the non-transactional INPUT "
+            + "topic. Negative control observed (U13): the same random-transactional.id control recorded on "
+            + "FAILURE_INVISIBLE_AND_RECOMBINED - with no fencing the abandoned instance is never refused and the "
+            + "test goes red before the replay begins. THAT CONTROL IS FOR THE FENCING, NOT FOR THE PAIRING - so the "
+            + "pairing has its OWN observed control, run against a real broker: one expected result that can never "
+            + "be produced, everything else identical, so the offset lands while the results never complete. It "
+            + "fails as 'the source offset reached 41 and 1 of its 41 results were STILL invisible to a "
+            + "read_committed consumer PT15S later', which also shows the grace window absorbing concurrent "
+            + "transaction-marker delivery without swallowing a real violation. VALID ONLY AT batchSize=1: at batchSize>=2 the produce-lock "
+            + "double-release stops the instance committing at all, which is recorded under "
+            + "RESULTS_EXACTLY_ONCE_UNDER_FAILURE and in docs/solutions/test-issues/transactional-batching-stall-produce-lock-released-per-record-2026-08-08.md"),
+
+    /**
+     * C5 - selecting transactional mode silently changes the commit interval default.
+     */
+    COMMIT_INTERVAL_AUTO_REDUCED(Source.OPTIONS_JAVADOC,
+            "gets automatically reduced from the default of 5 seconds to 100ms",
+            Status.PROVED, "TransactionalBulkCommitTest#transactionalModeWithNoExplicitCommitIntervalResolvesTo100ms "
+            + "and its two sibling arms, which assert the literal durations after validate() rather than the "
+            + "DEFAULT_* constants, so changing a constant without changing the javadoc still fails. Negative "
+            + "control observed (U11): forcing commitInternalHasNotBeenSet to false in "
+            + "ParallelConsumerOptions#transactionsValidation - one term, everything else identical - failed "
+            + "exactly one of the four arms, 'expected PT0.1S but was PT5S'. The other three still passed, which is "
+            + "what makes the control narrow enough to attribute. Reverted; main is untouched. "
+            + "SEPARATE DEFECT found while proving this, recorded in "
+            + "docs/inflight/bug-commit-interval-identity-check.md: the same gate uses reference identity (==) "
+            + "against DEFAULT_COMMIT_INTERVAL, so a user who explicitly sets Duration.ofSeconds(5) is equals-but-"
+            + "not-identical and gets silently overridden to 100ms - 50x the broker load they configured. Not part "
+            + "of C5's documented sentence, so it is recorded beside the claim rather than asserted as part of it"),
+
+    /**
+     * C6 - this one is Kafka's guarantee, not ours. We document it, so we record it and test it once; we do not
+     * gate the build on it, because no change to this repository can break it.
+     */
+    READ_COMMITTED_BLOCKED_TO_FIRST_OPEN_TX(Source.OPTIONS_JAVADOC,
+            "blocked up to the offset of the first STILL open transaction",
+            Status.KAFKA_GUARANTEE, "broker behaviour, surfaced by our docs - reported, not enforced. Tested once "
+            + "for the record by TransactionalVisibilityIT#readCommittedIsBlockedAtTheFirstStillOpenTransactionNotMerelyFiltered, "
+            + "which distinguishes blocking from filtering: with one transaction open and a LATER one committed, the "
+            + "read_committed arm sees neither while the read_uncommitted arm sees both. Stays KAFKA_GUARANTEE "
+            + "regardless: no change to this repository can break it"),
+
+    /**
+     * C7 - pollAndProduceMany is all-or-none across the whole produced set.
+     */
+    PRODUCE_MANY_ALL_OR_NONE(Source.OPTIONS_JAVADOC,
+            "all records must have been produced successfully to the broker before the transaction will commit, "
+                    + "after which all will be visible together, or none.",
+            Status.PROVED, "Both halves now hold; the first half was REFUTED until astubbs#261. "
+            + "TransactionalBatchVisibilityIT#everyResultSetForAnInputRecordIsVisibleInFullOrNotAtAll proves "
+            + "'after which all will be visible together, or none': 20 input records x 5 results each at "
+            + "batchSize=1, with a read_committed verifier polling continuously THROUGHOUT the run and failing "
+            + "the instant any input record's result set is seen part-visible - not merely asserted complete at "
+            + "the end, which a system with no atomicity would also satisfy. Negative control observed and kept "
+            + "as a permanent running test, #thePartialResultSetAssertionRejectsASetSplitAcrossTwoTransactions: "
+            + "the same five records committed as two transactions instead of one - one term, everything else "
+            + "identical - makes the same assertion throw naming 'split-key has 2 of 5', and it then accepts the "
+            + "set once completed. "
+            + "But 'all records must have been produced successfully to the broker before the transaction will "
+            + "commit' is FALSE. #aTerminallyFailedSendLeavesTheWholeTransactionInvisible feeds one input record "
+            + "whose middle result is 2MB and so is rejected against max.request.size: results 0 and 1 are "
+            + "accepted into the open transaction, result 2 fails, results 3 and 4 are never attempted - and the "
+            + "next commit SUCCEEDS, making result|poison-key-0|0 and |1 visible at read_committed. Two of five "
+            + "records from one source offset, visible. The instance neither failed nor shut down. Mechanism: "
+            + "ProducerManager#produceMessages installs a Callback - the one its own comment calls 'only needed "
+            + "if not using tx' - that throws PCInternalRuntimeException from Callback#onCompletion; "
+            + "KafkaProducer#doSend invokes it from inside its catch (ApiException) handler and only AFTERWARDS "
+            + "calls transactionManager.maybeTransitionToErrorState(e), so the throw escapes first and the "
+            + "transaction is never moved to abortable-error. Nothing else in PC covers the case: a failed "
+            + "WorkContainer leaves the already-sent records in the transaction, and only an abort removes them. "
+            + "FIXED by astubbs#257's sibling astubbs#261, merged into this branch: the callback no longer throws "
+            + "when the producer is transactional, so the client's own maybeTransitionToErrorState runs and the "
+            + "transaction becomes abortable. The arm is re-enabled and passes. The negative control is not "
+            + "synthetic - restoring the unconditional throw, one term with everything else identical, reproduces "
+            + "'poison-key-0 has 2 of 5' exactly, and only that assertion fails while the other arms stay green. "
+            + "Verified in both worktrees. This claim was REFUTED before that fix; the history is kept here "
+            + "deliberately, because the refutation is what produced the fix"),
+
+    /**
+     * C8 - an aborted or timed-out transaction leaves nothing visible, ever.
+     */
+    ABORTED_NEVER_VISIBLE(Source.OPTIONS_JAVADOC,
+            "Records produced into a transaction that gets aborted or timed out, will never be visible.",
+            Status.PROVED, "TransactionalVisibilityIT#abortedTransactionRecordsAreNeverVisible covers the abort arm "
+            + "(before and after the abort, the 'after' anchored on a sentinel committed post-abort so the verifier "
+            + "demonstrably read past the aborted region), and #transactionThatExceedsItsTimeoutLeavesNoVisibleRecord "
+            + "covers the timeout arm via a 2s transaction.timeout.ms. Negative control observed (U4): flipping the "
+            + "verifying consumer's isolation.level to read_uncommitted turned the abort arm red on 'must not have "
+            + "seen any aborted record' - so the invisibility is the isolation level's, and an aborted record really "
+            + "is still sitting in the log"),
+
+    /**
+     * C9 - the exactly-once ordering invariant the produce/commit lock pair exists to protect.
+     */
+    NO_PRODUCE_WITHOUT_ITS_OFFSET(Source.OPTIONS_JAVADOC,
+            "The system must prevent records from being produced to the brokers whose source consumer record "
+                    + "offsets has not been included in this transaction.",
+            Status.PROVED, "ProducerManagerTest#commitLockIsGrantedOnlyAfterTheProducedWorkReachesTheMailbox, with "
+            + "ProducerManagerTest#producedRecordsCantBeInTransactionWithoutItsOffsetDirect covering the outcome and "
+            + "the docs/plans/2026-08-03-001 §11 guard. Negative control observed (U3): releasing the produce lock "
+            + "before the mailbox handoff, with the 400ms window §11's experiment used, failed 3/3 with 'the work "
+            + "reaches the controller's mailbox only after its record was sent' - the commit had completed while the "
+            + "work was still not in the mailbox. Position control: the same 400ms spent inside the lock, before the "
+            + "handoff, passed 2/2, so it is the ordering and not the added latency"),
+
+    /**
+     * C10 - holding the commit lock stops processing for the duration of the commit.
+     */
+    PROCESSING_BLOCKED_DURING_COMMIT(Source.OPTIONS_JAVADOC,
+            "This periodically slows down record production during this phase, by the time needed to commit the "
+                    + "transaction.",
+            Status.PROVED, "ProducerManagerTest#producingIsBlockedForTheDurationOfTheCommitAndResumesOnRelease, "
+            + "with ProducerManagerTest#sendingGetsLockedInTx covering the same pair of transitions. Negative "
+            + "control observed (U3): releasing the commit lock before the produce attempt starts made "
+            + "beginProducing return in ~40ms instead of blocking, failing 2/2 on 'getElapsed() expected to be at "
+            + "least PT1S'"),
+
+    /**
+     * C11 - already proved by {@code TransactionTimeoutsTest#commitTimeout}; U3 attributes it rather than
+     * reproving it.
+     */
+    COMMIT_LOCK_TIMEOUT_FAILS_FAST(Source.OPTIONS_JAVADOC,
+            "If the system cannot acquire the commit lock in time, it will shut down for whatever reason, the "
+                    + "system will shut down (fail fast) - during the shutdown a final commit attempt will be made.",
+            Status.COVERED_NO_CONTROL, "TransactionTimeoutsTest#commitTimeout, both timeout arms - attributed by U3, "
+            + "not reproved. No negative control: the test needs a broker, so it is not in the lane U3 ran, and "
+            + "breaking what it guards means changing the commit-lock timeout handling in ProducerManager itself. "
+            + "The control recorded in that test (dropping its overlap latch) proves the test's own guard, not the "
+            + "documented fail-fast behaviour"),
+
+    /**
+     * C12 - attributed to {@code TransactionTimeoutsTest#produceTimeout}, and separately proved with an observed
+     * control by the eager-processing trigger.
+     */
+    PRODUCE_LOCK_TIMEOUT_RETRIES_RECORD(Source.OPTIONS_JAVADOC,
+            "If the system cannot acquire the produce lock in time, it will fail the record processing and retry "
+                    + "the record later.",
+            Status.PROVED, "Covered twice, and only the second has a control. "
+            + "TransactionTimeoutsTest#produceTimeout is the original attribution (U3, not reproved): it asserts "
+            + "the retry, but the timeout is driven by a 5s sleep injected into the commit path rather than by "
+            + "anything that can be flipped one term at a time, so on its own this claim sat COVERED_NO_CONTROL. "
+            + "TransactionalEagerProcessingIT#eagerProcessingReplaysTheSideEffectOfARetriedRecordWhereStrictProcessingDoesNot "
+            + "supplies what was missing: it holds the write side of ProducerManager's producerTransactionLock shut "
+            + "until a worker's acquisition is OBSERVED to time out - main's own 'acquire produce lock' failure - "
+            + "feeds one victim record, releases, and then awaits that record's result becoming visible, so the "
+            + "retry is watched to success rather than assumed. Negative control observed (U6, third of three): "
+            + "removing the hold - one term, everything else identical - turns it red on the non-vacuity guard, "
+            + "'never raised a produce-lock timeout ... Worker-path failures seen: []'. That is a control on the "
+            + "timeout itself, which is the term this claim turns on"),
+
+    /**
+     * C13 - the documented cost of eager processing during commit.
+     */
+    EAGER_PROCESSING_MAY_REPLAY(Source.OPTIONS_JAVADOC,
+            "this may cause side effect replay when the record is retried, otherwise there is no replay.",
+            Status.PROVED, "TransactionalEagerProcessingIT#eagerProcessingReplaysTheSideEffectOfARetriedRecordWhereStrictProcessingDoesNot. "
+            + "Both halves observed under ONE forced trigger - the produce lock held shut until a worker's "
+            + "acquisition is seen to time out - applied identically to both arms: with eager processing ENABLED "
+            + "the victim's user function ran 2x, with it DISABLED exactly 1x. The claim is directional, so the "
+            + "assertion is the difference between the arms, not a count in one of them. The lock placement the "
+            + "claim rests on is read directly: the worker's own read-hold count on producerTransactionLock, "
+            + "sampled INSIDE the user function, is 1 when eager is off and 0 when it is on, and main's own two "
+            + "timeout messages agree ('early acquire produce lock ... could not START record processing phase' "
+            + "versus 'late acquire produce lock'). "
+            + "Negative controls observed (U6), all three predicted before running: (1) flipping the eager arm's "
+            + "allowEagerProcessingDuringTransactionCommit to false - one term, everything else identical - turned "
+            + "it red on 'Hold counts sampled inside the user function were [1, 1, 1, 1]' where 0 was required; "
+            + "(2) the same flip with that ordering assertion removed so the run reaches the counts turned it red "
+            + "on 'the eager arm did not re-run the user function ... invocations were {eager-victim-key-0=1}', "
+            + "with the trigger confirmed fired - so the replay is the option's doing and not the trigger's; "
+            + "(3) removing the hold itself turned it red on the non-vacuity guard, 'never raised a produce-lock "
+            + "timeout ... Worker-path failures seen: []', so a green run cannot be one where nothing was retried. "
+            + "Also asserted: the output topic still holds exactly one result per input record in BOTH arms - the "
+            + "discarded eager attempt fails before produceMessages, so what the option costs is the user's side "
+            + "effects, not duplicate output"),
+
+    /**
+     * C14 - the README's own promise. Users read the README, not the javadoc, so it is registered separately: a
+     * refuted guarantee must not stay published on the front page because only the javadoc was corrected.
+     */
+    RESULTS_EXACTLY_ONCE_UNDER_FAILURE(Source.README_TEMPLATE,
+            "This means that even under failure, the results will exist exactly once in the Kafka output topic.",
+            Status.PROVED, "Proved at BOTH batch sizes, but only after a real defect was found and fixed - the "
+            + "RED and the GREEN were each observed rather than argued. "
+            + "TransactionalCrashReplayIT#outputHoldsEachResultExactlyOnceAcrossTheReplay passes 4/4 at "
+            + "batchSize=1 across a real crash and replay (200 payload records, every input key demonstrably "
+            + "reprocessed, each result present exactly once). Its sibling "
+            + "#outputHoldsEachResultExactlyOnceAcrossTheReplayWhenBatching was RED 5/5 at batchSize=3, same "
+            + "volume and machine, unloaded - refuted by LIVENESS rather than duplication: the produce lock was "
+            + "acquired per PollContextInternal but released per WorkContainer, so every batch failed, only a "
+            + "success sets a partition dirty (PartitionState#onFailure is a no-op), the commit gate ANDs "
+            + "wm.isDirty(), and the instance stopped committing entirely - the source offset froze at 3 of 201 "
+            + "against a 200ms commit interval with no commit-path error, i.e. commits were never attempted. "
+            + "astubbs#257 fixes it and is merged into this branch: that arm now passes, whole class 5/5 in 72s "
+            + "where it previously took 178s to fail. The defect IS the negative control - it was found before the "
+            + "fix landed, not injected afterwards. Write-up in "
+            + "docs/solutions/test-issues/transactional-batching-stall-produce-lock-released-per-record-2026-08-08.md");
+
+    /**
+     * Where a claim is published, and how to find the text that must still contain it.
+     */
+    public enum Source {
+        /**
+         * The region rendered into {@code README.adoc} from the options javadoc. Bounded by the asciidoc tag
+         * markers, so a claim moved out of the tag - and therefore off the rendered page - fails the check even
+         * though the sentence still exists in the file.
+         */
+        OPTIONS_JAVADOC("parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java",
+                "// tag::transactionalJavadoc[]", "// end::transactionalJavadoc[]"),
+
+        /**
+         * The hand-written companion prose. Checked whole-file: unlike the javadoc there is no tag marking what
+         * gets published, because the whole template is.
+         */
+        README_TEMPLATE("src/docs/README_TEMPLATE.adoc", null, null);
+
+        private final String repoRelativePath;
+        private final String startMarker;
+        private final String endMarker;
+
+        Source(String repoRelativePath, String startMarker, String endMarker) {
+            this.repoRelativePath = repoRelativePath;
+            this.startMarker = startMarker;
+            this.endMarker = endMarker;
+        }
+
+        public String getRepoRelativePath() {
+            return repoRelativePath;
+        }
+
+        /**
+         * The published text of this source, whitespace-normalised so a claim wrapped across javadoc lines still
+         * matches the single-line sentence recorded here.
+         */
+        public String readPublishedText() {
+            Path file = repoRoot().resolve(repoRelativePath);
+            if (!Files.exists(file)) {
+                throw new IllegalStateException("claim source file not found: " + file
+                        + " - the register cannot check itself against a file it cannot read");
+            }
+            List<String> lines;
+            try {
+                lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+            } catch (IOException e) {
+                throw new UncheckedIOException("could not read claim source " + file, e);
+            }
+            StringBuilder sb = new StringBuilder();
+            boolean inRegion = startMarker == null;
+            boolean sawStart = startMarker == null;
+            boolean sawEnd = endMarker == null;
+            for (String line : lines) {
+                if (startMarker != null && line.contains(startMarker)) {
+                    inRegion = true;
+                    sawStart = true;
+                    continue;
+                }
+                if (endMarker != null && line.contains(endMarker)) {
+                    inRegion = false;
+                    sawEnd = true;
+                }
+                if (inRegion) {
+                    sb.append(stripJavadocPrefix(line)).append(' ');
+                }
+            }
+            if (!sawStart) {
+                throw new IllegalStateException("start marker '" + startMarker + "' not found in " + file
+                        + " - the tag was renamed or removed, so the register can no longer verify itself");
+            }
+            // Checked explicitly rather than inferred from the text collected, because losing the end marker fails
+            // in the direction that keeps this check GREEN: the region runs to end-of-file, the "published text"
+            // silently becomes the whole rest of the source, and a claim moved out of the rendered tag region -
+            // exactly what the tag bounds exist to catch - still matches.
+            if (!sawEnd) {
+                throw new IllegalStateException("end marker '" + endMarker + "' not found in " + file
+                        + " - the region is unbounded and runs to the end of the file, so this check would accept a "
+                        + "claim that has been moved off the rendered page. Restore the marker.");
+            }
+            String published = normalise(sb.toString());
+            if (published.isEmpty()) {
+                throw new IllegalStateException(startMarker == null
+                        ? "claim source " + file + " is empty - there is no published text to check claims against"
+                        : "the region between '" + startMarker + "' and '" + endMarker + "' in " + file
+                        + " is empty - both markers are present but nothing is published between them, so every "
+                        + "claim taken from this source would drift at once");
+            }
+            return published;
+        }
+
+        private static String stripJavadocPrefix(String line) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("*")) {
+                return trimmed.substring(1);
+            }
+            return trimmed;
+        }
+    }
+
+    /**
+     * What we currently assert about a claim. Only {@link #isCoverageEnforced()} statuses fail the build when no
+     * test references the claim - the others are reported, so that "not covered yet" and "not ours to prove" are
+     * expressible without either lying or turning the build red.
+     */
+    public enum Status {
+        /**
+         * Covered by a test, and breaking the guarded mechanism was observed to turn that test red.
+         */
+        PROVED(true),
+        /**
+         * Covered by a test, and the test says the documented claim is false. The disposition - correct the docs
+         * or file the defect - is a triage decision, not automatic.
+         */
+        REFUTED(true),
+        /**
+         * Covered by a test, but no negative control was produced, so the test has never been seen to fail. Not
+         * counted as proved.
+         */
+        COVERED_NO_CONTROL(true),
+        /**
+         * The guarantee is Kafka's, surfaced by our documentation. Tested once for the record; not gated, because
+         * no change here can break it.
+         */
+        KAFKA_GUARANTEE(false),
+        /**
+         * Owned by work that has not landed. Requires a reason naming the owner, so the status cannot be used to
+         * park a claim silently.
+         */
+        NOT_YET_COVERED(false);
+
+        private final boolean coverageEnforced;
+
+        Status(boolean coverageEnforced) {
+            this.coverageEnforced = coverageEnforced;
+        }
+
+        /**
+         * @return true when a claim in this status must have at least one {@link ProvesClaim} reference, on pain
+         *         of failing the build
+         */
+        public boolean isCoverageEnforced() {
+            return coverageEnforced;
+        }
+    }
+
+    private final Source source;
+    private final String documentedSentence;
+    private final Status status;
+    private final String note;
+
+    TransactionalClaim(Source source, String documentedSentence, Status status, String note) {
+        this.source = source;
+        this.documentedSentence = documentedSentence;
+        this.status = status;
+        this.note = note;
+    }
+
+    public Source getSource() {
+        return source;
+    }
+
+    /**
+     * @return the claim's sentence exactly as published, which {@link TransactionalClaimCoverageTest} requires to
+     *         still be present in {@link #getSource()}
+     */
+    public String getDocumentedSentence() {
+        return documentedSentence;
+    }
+
+    public Status getStatus() {
+        return status;
+    }
+
+    /**
+     * @return why the claim is in its current status - required for the non-enforced statuses so that parking a
+     *         claim always leaves a reason behind
+     */
+    public String getNote() {
+        return note;
+    }
+
+    /**
+     * Collapses every run of whitespace to one space so a sentence wrapped across javadoc or asciidoc lines
+     * compares equal to the single-line form recorded in this register.
+     */
+    public static String normalise(String text) {
+        return text.replaceAll("\\s+", " ").trim();
+    }
+
+    /**
+     * Walks up from the working directory to the repository root, identified by the README template the register
+     * checks against. Surefire runs with the module directory as the working directory, and this class is
+     * referenced from both the unit and the integration lane, so neither a module-relative nor an absolute path
+     * would work from every caller.
+     */
+    static Path repoRoot() {
+        Path dir = Paths.get("").toAbsolutePath();
+        while (dir != null) {
+            if (Files.exists(dir.resolve("src/docs/README_TEMPLATE.adoc"))) {
+                return dir;
+            }
+            dir = dir.getParent();
+        }
+        throw new IllegalStateException("could not locate the repository root above "
+                + Paths.get("").toAbsolutePath() + " - looked for src/docs/README_TEMPLATE.adoc");
+    }
+}

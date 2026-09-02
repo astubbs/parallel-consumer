@@ -53,6 +53,36 @@ be committing its starting offset. That property is also what makes the frontier
 asserting about a commit: which intermediate offsets a partition commits on the way there depends on
 when the periodic commit happens to fire, but where it ends up does not.
 
+**Assignment epoch**
+A per-partition counter incremented each time the partition is assigned to this instance. Records
+are stamped with the partition's current epoch as they are polled and carry it through processing;
+work whose stamp no longer matches is stale — fetched under an assignment that has since been
+revoked — and is discarded rather than completed or committed. This is what stops work still in
+flight across a rebalance from acting on a partition the instance no longer owns.
+
+**Revoke path**
+The work an instance performs while the group is taking partitions away from it. It runs inside the
+consumer's revocation callback, which the broker poller executes as part of its own fetch call — so
+everything done there is charged against the interval the group allows between fetches, and an
+instance that dwells too long is judged dead and evicted. That budget is why the revoke path commits
+opportunistically rather than waiting: it prefers to let uncommitted work be redelivered to the new
+owner over risking the member's membership. It is also where several of this project's hardest
+defects have clustered, because it is the one place where rebalance handling, committing, and
+in-flight work meet on a thread that must not block.
+
+**Back-pressure pause**
+The broker poller pausing its own subscription because the engine's internal buffers are full —
+self-imposed, invisible to the user, and expected to release itself once processing catches up.
+The authority for whether a partition is paused this way is the Kafka consumer's own pause state;
+the engine asks it rather than keeping its own record, because rebalances alter that state in
+protocol-dependent ways no local copy can track.
+
+**User pause**
+The user-facing paused state of the whole engine: work stops being handed to the worker pool, but
+in-flight work completes, pending commits still happen, and polling may continue until buffers
+fill. Deliberately distinct from a back-pressure pause — it is an engine state, not a broker-level
+subscription pause.
+
 ## Transactional commit
 
 **Produce lock**
@@ -182,6 +212,19 @@ exactly like one that works. The verification is therefore to assert the number 
 rule reports zero, that an enabled one reports more than zero - never to observe that the build
 passed.
 
+**Filtered diagnostic**
+A diagnostic the code emits correctly and no reader can see, because the logging profile in force
+suppresses that level for the package it was written in. Distinct from a missing diagnostic: the call
+executed, the evidence was produced, and only the transport discarded it. Neighbour of an inert
+configuration - both make an absence unreadable, one by never reaching the tool, the other by never
+reaching the reader.
+
+A search for the line returns the same nothing whether the code path ran or not, so silence carries
+no information in either direction. Two habits follow: prove the level reached the run before
+believing any zero, and when both branches of a decision are worth observing, emit them at the same
+level - logging only one makes "took the other branch" indistinguishable from "never reached the
+fork". Evidence a failure message must carry belongs in the assertion, which no profile can filter.
+
 **Positive control**
 An arm of a measurement whose only job is to register a hit, proving the instrument could have detected
 something on this run. Its own reading is never the result — it is what licenses reading every other
@@ -224,6 +267,22 @@ A ratchet is therefore a way to adopt a strict check against code that cannot pa
 today's findings as known, and every new one is blocked from that moment. It is not a suppression
 list - a suppression says "never report this", where a ratchet says "this one is already on the
 books, and here is the list you are expected to shorten".
+
+## Refactor window
+
+A **refactor candidate** is a file the project has already decided to decompose, listed as such
+rather than inferred from size or complexity. The decision is the entry condition: a large file
+nobody has committed to breaking up is not a candidate.
+
+Its **refactor window** is the period in which no large in-flight change stands on it, so a
+decomposition can land without forcing an expensive merge onto somebody else's unfinished work. The
+window is measured by the **largest single divergence** any live branch holds against the mainline
+for that file - not by how many branches touch it. The two come apart routinely: a file every branch
+adjusts by a line or two is open, while one branch rewriting half of it is enough to close the
+window on its own. Counting branches answers a question nobody asked.
+
+A window closes and reopens on its own as work lands, so the state is derived rather than declared,
+and nothing about it is stored: a remembered verdict is a second thing that can be wrong.
 
 ## Agent harness
 
@@ -274,3 +333,7 @@ vocabulary keeps naming from different sides.
   confusion.** It is told apart by asking whether what the test actually saw is *also correct*: the
   other three all mean the expected thing did not happen, while a tick-path assertion means something
   equally valid happened instead.
+- **"Paused" names three distinct things.** A user pause is an engine state; a back-pressure pause
+  is the poller pausing the broker subscription; and the Kafka consumer's own pause state is the
+  authority the back-pressure pause manipulates. A user report of "paused consumption" typically
+  describes none of them — a stall presenting as a pause — so the word alone attributes nothing.

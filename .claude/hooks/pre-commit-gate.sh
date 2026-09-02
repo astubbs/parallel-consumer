@@ -7,9 +7,11 @@
 # `--no-verify` the way git itself does.
 #
 # WHY THIS EXISTS AT ALL. `core.hooksPath` cannot be committed, so a fresh clone has no git hooks
-# until someone runs the config command once. This covers Claude Code in that window. It is
-# belt-and-braces, not the primary mechanism - the git hook binds every process that runs `git`,
-# including humans and other agents; this binds one tool.
+# until someone runs the config command once. This covers Claude Code in that window. The git hook
+# is the designed primary mechanism - it binds every process that runs `git`, including humans and
+# other agents, where this binds one tool - but the window does not close by itself: in this clone
+# `core.hooksPath` is unset, so this hook is the only gate that fires. The paragraph that closes
+# the tree-resolution list below owns what follows from that.
 #
 # WHY IT IS A SCRIPT AND NOT `... || exit 2` INLINE. The inline form never reads the hook payload,
 # so it could not see the command it was gating - which meant `git commit --no-verify` ran the
@@ -46,16 +48,21 @@
 # says which directory answered:
 #
 #   1. `git -C <path> commit` - the commit naming its own repository, and unambiguous only when
-#      every commit in the payload names the same one;
+#      every commit in the payload names the same one. LITERAL PATHS ONLY: this hook reads the
+#      command BEFORE the shell expands it, so `-C "$W"`, a backtick or a leading `~` arrives as
+#      text, resolves to nothing, and is refused with the remedy named rather than falling through
+#      to a tree the command never mentioned (observed three times on 2026-09-03);
 #   2. a leading `cd <path> &&` - belt-and-braces, since the registration above does not currently
 #      match that shape;
-#   3. the payload's own `cwd`, which is what a subagent's directory arrives in;
+#   3. the payload's own `cwd` - which is the SESSION's launch directory, not the subagent's, so a
+#      bare commit that lands here on a tree with nothing to commit is refused rather than gated;
 #   4. `$CLAUDE_PROJECT_DIR`, then this process's directory - the labelled last resorts.
 #
 # The gate script and its working directory both come from that answer, so a gate added on one
-# branch and absent on another behaves correctly in each. `.githooks/pre-commit` remains the primary
-# mechanism: git runs it inside the target repository by construction, which is the property this
-# hook now has to derive.
+# branch and absent on another behaves correctly in each. `.githooks/pre-commit` WOULD be the primary
+# mechanism - git runs it inside the target repository by construction - but `core.hooksPath` is not
+# set in this clone, so git never invokes it and this hook is the only gate that actually fires. That
+# is why the wrong-tree case below REFUSES rather than failing open: there is nothing behind it.
 #
 # FAIL OPEN ON OUR OWN BUG. If the payload does not parse, or the gate script is missing, this exits
 # 0. The git hook and CI both still gate the same commit.
@@ -106,7 +113,7 @@ command -v python3 >/dev/null 2>&1 || exit 0
 # disagreeing - the argument .claude/hooks/check-history-rewrite.sh makes for the same pairing.
 scan_rc=0
 commit_dir="$(python3 - "$payload_file" <<'PYGATE'
-import json, os, re, shlex, sys
+import json, os, re, shlex, subprocess, sys
 
 OPERATORS = {"&&", "||", ";", ";;", "|", "&", "(", ")"}
 # An unquoted NEWLINE separates statements exactly like `;`, but shlex's default whitespace
@@ -132,6 +139,11 @@ def is_separator(token):
 COMMAND_INTRODUCERS = {"if", "then", "elif", "else", "while", "until", "do", "{", "!", "time"}
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 GIT_VALUE_FLAGS = {"-C", "-c", "--git-dir", "--work-tree"}
+# Text the SHELL rewrites and this hook cannot: a dollar or a backtick anywhere in a word, or a
+# LEADING tilde (a tilde elsewhere is literal to the shell too). The backtick is spelled chr(96)
+# because this Python sits in a $( ) substitution that Apple bash 3.2 quote-counts naively, and a
+# lone backtick is one more delimiter for it to pair wrongly.
+UNEXPANDED = re.compile("[$" + chr(96) + "]|^~")
 
 try:
     with open(sys.argv[1], encoding="utf-8") as fh:
@@ -146,7 +158,7 @@ except Exception:
 
 
 def commit_bypass_counts(line):
-    """(commits, bypassing, dirs) for `git commit` in COMMAND POSITION on this line.
+    """(commits, bypassing, dirs, honest_empty, unexpanded) for `git commit` in COMMAND POSITION.
 
     Counted rather than short-circuited because ONE command line can hold SEVERAL commits, and a
     later one asking for a bypass must not exempt an earlier one that did not:
@@ -156,6 +168,13 @@ def commit_bypass_counts(line):
     `dirs` holds one entry per commit: the value of its `git -C <path>`, or "" when it has none and
     so runs where the tool call runs. Collected HERE rather than by a second walk because this loop
     already skips the git global flags that take a value, which is the whole difficulty.
+
+    `honest_empty` counts the commits that carry `--allow-empty` or `--amend` as a REAL argument -
+    the two forms git accepts against a tree with nothing to commit. Read from the same token slice
+    as `--no-verify`, for the same reason: a message that merely mentions the flag is not the flag.
+
+    `unexpanded` holds every RAW `-C` value on a commit that matches UNEXPANDED - collected here,
+    before composition, because a leading tilde disappears once joined onto an earlier -C.
     """
     # `\n` joins the default punctuation set and leaves `whitespace`, so a newline becomes a
     # TOKEN the loop can reset command position on - see SEPARATOR_CHARS above. Quoted newlines
@@ -164,8 +183,9 @@ def commit_bypass_counts(line):
     lexer.whitespace = " \t\r"
     lexer.whitespace_split = True
     tokens = list(lexer)
-    commits = bypassing = 0
+    commits = bypassing = honest_empty = 0
     dirs = []
+    unexpanded = []
     i, at_command = 0, True
     while i < len(tokens):
         token = tokens[i]
@@ -187,6 +207,7 @@ def commit_bypass_counts(line):
         if at_command and (token == "git" or token.endswith("/git")):
             j = i + 1
             repo_dir = ""
+            raw_c = []
             while j < len(tokens) and tokens[j] in GIT_VALUE_FLAGS:
                 # `-C <path>` is the only one of these that relocates the command. Recorded on the
                 # way past rather than re-derived - and repeated -C values COMPOSE, each relative
@@ -196,6 +217,8 @@ def commit_bypass_counts(line):
                 # commit unchecked (Codex review, astubbs/parallel-consumer#382).
                 if tokens[j] == "-C" and j + 1 < len(tokens):
                     nxt = tokens[j + 1]
+                    if UNEXPANDED.search(nxt):
+                        raw_c.append(nxt)
                     if os.path.isabs(nxt) or not repo_dir:
                         repo_dir = nxt
                     else:
@@ -207,14 +230,17 @@ def commit_bypass_counts(line):
                     end += 1
                 commits += 1
                 dirs.append(repo_dir)
+                unexpanded.extend(raw_c)
                 if "--no-verify" in tokens[j:end]:
                     bypassing += 1
+                if "--allow-empty" in tokens[j:end] or "--amend" in tokens[j:end]:
+                    honest_empty += 1
                 i = end
                 at_command = True
                 continue
         at_command = False
         i += 1
-    return commits, bypassing, dirs
+    return commits, bypassing, dirs, honest_empty, unexpanded
 
 
 def leading_cd(line):
@@ -275,12 +301,14 @@ def resolve_against(path, base):
 
 
 dirs = []
+honest_empty = 0
+unexpanded = []
 try:
     # The WHOLE command is lexed at once. Splitting into lines first breaks a quoted multiline
     # message down the middle, so the first line raises ValueError and the fallback below finds
     # `--no-verify` in the MESSAGE TEXT - which meant `git commit -m "...\n--no-verify\n..."`
     # skipped the gate entirely. shlex handles the newlines; the line split never needed to.
-    commits, bypassing, dirs = commit_bypass_counts(cmd)
+    commits, bypassing, dirs, honest_empty, unexpanded = commit_bypass_counts(cmd)
     # NO COMMIT AT ALL: skip. The registration's `if: Bash(git commit *)` is supposed to scope
     # this hook, but the script must not lean on it - observed live (astubbs#324 babysit): with
     # the gate red, a plain `ls` and a read-only `cat` of the gate itself were blocked with the
@@ -300,6 +328,27 @@ if not bypass:
     # case therefore falls through to the tool call's own directory, which gates the commits that
     # run there and leaves the relocated ones to `.githooks/pre-commit`, which git runs inside the
     # target repository. Incomplete, and never wrong about the tree it did read.
+    #
+    # AN UNEXPANDED SHELL EXPRESSION IN -C IS REFUSED, NOT RESOLVED. This hook reads the command
+    # BEFORE the shell expands it, so `git -C "$W" commit` arrives with the literal text $W. Joined
+    # onto the cwd that is a path which does not exist, and the failure is silent twice over: git
+    # status there ERRORS rather than reporting clean, so the clean-tree check below cannot fire;
+    # then bash finds no such directory and drops to $CLAUDE_PROJECT_DIR, gating the SESSION tree
+    # under a label saying the command did not say where it runs - when it did. Seen three times on
+    # 2026-09-03; in a session launched from a DIRTY tree it gates that tree in silence.
+    #
+    # This fires whenever ANY commit in the payload carries such a value, before and independently
+    # of the len(named) == 1 rule below: that rule chooses which tree to gate among READABLE answers,
+    # and a value nobody can read is not an answer to choose between. It also outranks a leading
+    # `cd` that names the right tree, because git -C beats cd at run time and the -C is the part we
+    # cannot see. A leading tilde is refused rather than expanded here: expanduser would be this
+    # hook doing the work of the shell with its own HOME - the same user today, and a silent wrong
+    # tree the day it is not. Only reached on the gating path, since a payload whose every commit
+    # bypasses gates no tree. A single-quoted literal $W is indistinguishable once lexed and is
+    # refused too; no worktree is named that. Exit 4: bash names the value and the remedy.
+    if unexpanded:
+        print(" ".join(unexpanded))
+        sys.exit(4)
     named = set(dirs)
     cd_dir = resolve_against(leading_cd(cmd), payload_cwd)
     target = ""
@@ -310,6 +359,26 @@ if not bypass:
         target = cd_dir
     if not target:
         target = payload_cwd
+    # A COMMIT AGAINST A CLEAN TREE MEANS THIS IS THE WRONG TREE. Rule 3 above trusts the payload
+    # `cwd` to be the directory a subagent runs in. It is not: it is the launch directory of the SESSION. On
+    # 2026-09-02 three subagents, each committing in its own worktree after a `cd` in an EARLIER tool
+    # call, were all gated against the main checkout - which had nothing changed - while their real
+    # trees went unchecked. Nothing-to-commit is the signature: git would refuse this commit anyway,
+    # so the only thing a gate can do here is read the wrong files and report their defects as yours.
+    # `--allow-empty` and `--amend` are the honest commits against a clean tree and go through to the
+    # gate - keyed on the flag the commit CARRIES, not on the text of the command, or a message that
+    # mentions the flag would switch this check off. The first version exempted `--allow-empty` alone
+    # by substring, and refused a plain amend with a remedy that reproduced the refusal.
+    # (No apostrophes in these comments: Apple bash 3.2 quote-counts a heredoc inside $( ) naively.)
+    if target and honest_empty < commits:
+        try:
+            st = subprocess.run(["git", "-C", target, "status", "--porcelain"],
+                                capture_output=True, text=True, timeout=10)
+            if st.returncode == 0 and not st.stdout.strip():
+                print(target)
+                sys.exit(3)              # wrong tree - bash prints the remedy and refuses
+        except Exception:
+            pass                         # cannot tell; fall through to gating as before
     print(target)
 
 sys.exit(0 if bypass else 1)
@@ -317,6 +386,27 @@ PYGATE
 )" || scan_rc=$?
 if [ "$scan_rc" -eq 0 ]; then
     exit 0
+fi
+if [ "$scan_rc" -eq 3 ]; then
+    printf 'pre-commit gate: this commit resolved to\n    %s\nand that tree has NO changes - nothing staged, unstaged or untracked - so it is not the tree\n' "$commit_dir" >&2
+    printf 'you are committing to. The payload cwd is the SESSION root, not a subagent worktree, and a\n' >&2
+    printf 'gate run there would report the defects of another tree as yours. Name the tree instead:\n\n' >&2
+    printf '    git -C <your-worktree> commit ...      # a literal path, not a variable\n\n' >&2
+    printf 'Refusing rather than guessing, because .githooks/pre-commit is not wired (core.hooksPath\n' >&2
+    printf 'is unset), so this hook is the only gate there is.\n' >&2
+    exit 2
+fi
+if [ "$scan_rc" -eq 4 ]; then
+    printf 'pre-commit gate: cannot tell which tree this commit runs in. Its git -C value is\n    %s\n' "$commit_dir" >&2
+    printf 'which is a shell expression, not a path: this hook reads the command BEFORE the shell expands\n' >&2
+    printf 'it, so a variable, a command substitution or a leading ~ arrives as text and resolves to\n' >&2
+    printf 'nothing. Literal paths only in git -C - write the path out in full:\n\n' >&2
+    printf '    git -C /absolute/path/to/your-worktree commit ...\n\n' >&2
+    printf 'Refused even when a cd earlier in the command names a tree, because the -C value itself is\n' >&2
+    printf 'the part that cannot be read and it is what git would obey. Refusing rather than guessing,\n' >&2
+    printf 'because .githooks/pre-commit is not wired (core.hooksPath is unset), so this hook is the only\n' >&2
+    printf 'gate there is.\n' >&2
+    exit 2
 fi
 
 # THE LAST RESORTS ARE LABELLED, and they are the pre-fix behaviour: `$CLAUDE_PROJECT_DIR` is the

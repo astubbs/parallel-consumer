@@ -333,35 +333,40 @@ public class ParallelConsumerOptions<K, V> {
     public static final Duration SASL_AUTHENTICATION_EXCEPTION_RETRY_BACKOFF = Duration.ofSeconds(5);
 
     /**
-     * Error handling strategy to use when <em>recognisably Kafka Streams</em> offset metadata is encountered. This could
-     * happen accidentally or deliberately if the user attempts to reuse an existing consumer group id.
+     * Error handling strategy to use when PC is assigned a partition whose committed offset metadata this build cannot
+     * read - a consumer group previously owned by Kafka Streams, by another framework, by operator tooling, or written
+     * by a <em>newer</em> PC using an encoding that did not exist when this version was built.
      * <p>
-     * This policy applies only to metadata PC can positively identify as Kafka Streams'. Metadata it cannot decode at
-     * all - written by some other framework, by operator tooling, or simply corrupt - is never fatal under either
-     * policy: PC logs it, drops the offset map, and resumes from the committed offset.
+     * The policy governs <em>every</em> such case uniformly. It previously governed only bytes PC could positively
+     * identify as Kafka Streams'; anything else bypassed it, which is what made the option unreachable for the
+     * forward-compatibility case it exists to handle (astubbs#197, release-ledger item 5).
      */
     public enum InvalidOffsetMetadataHandlingPolicy {
         /**
-         * Fails and shuts down the application. This is the default.
+         * Fail and shut down rather than silently discard the offset map. Dropping the map replays records that were
+         * completed but not yet committed, so this is the choice for a deployment that would rather stop than
+         * reprocess. Opt in: it is no longer the default - see {@link #invalidOffsetMetadataPolicy}.
          */
         FAIL,
         /**
-         * Ignore the error, logs a warning message and continue processing from the last committed offset.
+         * Log a warning, discard the unreadable metadata and resume from the last committed offset. The default.
          */
         IGNORE
     }
 
     /**
-     * Controls the error handling behaviour to use when Kafka Streams offset metadata from a pre-existing consumer group
-     * is encountered - the scenario where a consumer group id from a Kafka Streams application is reused.
+     * Controls what happens when PC is assigned a partition whose committed offset metadata it cannot read. See
+     * {@link InvalidOffsetMetadataHandlingPolicy}.
      * <p>
-     * Note this does not govern metadata PC cannot decode at all; that is always recovered from rather than being fatal.
-     * See {@link InvalidOffsetMetadataHandlingPolicy}.
-     * <p>
-     * Default is {@link InvalidOffsetMetadataHandlingPolicy#FAIL}
+     * <b>Default is {@link InvalidOffsetMetadataHandlingPolicy#IGNORE}, changed from {@code FAIL}.</b> Pointing PC at a
+     * consumer group that already has metadata in it is the first thing anyone adopting PC does, and dying during the
+     * rebalance callback is the reported failure of astubbs#118 / confluentinc#326. That was previously survivable only
+     * because undecodable metadata bypassed this option entirely; now that the option genuinely governs every
+     * unreadable path, leaving the default at {@code FAIL} would make that report's exact scenario fatal again for
+     * anyone who configures nothing. {@code FAIL} remains available and now means what it says.
      */
     @Builder.Default
-    private final InvalidOffsetMetadataHandlingPolicy invalidOffsetMetadataPolicy = InvalidOffsetMetadataHandlingPolicy.FAIL;
+    private final InvalidOffsetMetadataHandlingPolicy invalidOffsetMetadataPolicy = InvalidOffsetMetadataHandlingPolicy.IGNORE;
     /**
      * When a message fails, how long the system should wait before trying that message again. Note that this will not
      * be exact, and is just a target.
@@ -475,6 +480,7 @@ public class ParallelConsumerOptions<K, V> {
         Objects.requireNonNull(consumer, "A consumer must be supplied");
 
         transactionsValidation();
+        loadFactorValidation();
     }
 
     private void transactionsValidation() {
@@ -501,6 +507,29 @@ public class ParallelConsumerOptions<K, V> {
                         Fields.commitMode,
                         commitMode));
             }
+        }
+    }
+
+    /**
+     * The load factor bounds have only one meaningful ordering: {@link #initialLoadFactor} is where the dynamic load
+     * factor starts, and {@link #maximumLoadFactor} is the ceiling it is allowed to step up to. An inverted pair can
+     * never step, so it is a typo rather than a request. Unchecked it is accepted and pinned at the initial value,
+     * surfacing at best as an inverted {@code 100/10} inside the rate-limited saturation warning - which only fires
+     * under load, and reads as a capacity signal rather than as the misconfiguration it is.
+     * <p>
+     * Checked whether or not {@link #messageBufferSize} is set. A buffer size makes the pair <em>unused</em>, not
+     * sensible, and accepting a nonsensical value is how it survives to the configuration change that starts reading
+     * it again.
+     */
+    private void loadFactorValidation() {
+        if (initialLoadFactor > maximumLoadFactor) {
+            throw new IllegalArgumentException(msg("Cannot set {} ({}) above {} ({}) - the initial load factor is "
+                            + "where the dynamic load factor starts and the maximum is the ceiling it may step up "
+                            + "to, so an inverted pair can never step",
+                    Fields.initialLoadFactor,
+                    initialLoadFactor,
+                    Fields.maximumLoadFactor,
+                    maximumLoadFactor));
         }
     }
 
@@ -596,6 +625,18 @@ public class ParallelConsumerOptions<K, V> {
      * Switching this off restores the pre-0.6.0.1 behaviour exactly: no context crosses into the worker pool, and
      * anything your function puts into the MDC is left on the pooled thread for the next, unrelated, record to
      * inherit.
+     * <p>
+     * <b>On by default deliberately, and settled</b> (astubbs#205). Not propagating fails silently for everyone who
+     * has established a context; propagating fails visibly - an unexpected key in a log line - and has this switch.
+     * The pinning described above is the known cost of that choice and was accepted along with it. Flipping the
+     * default is a one-line change, but it takes evidence of the pinning actually biting rather than a re-reading of
+     * the same trade.
+     * <p>
+     * <b>Known gap on the reactive engines.</b> For Reactor and Mutiny this covers the invocation of your function and
+     * Parallel Consumer's own terminal signal handling. It does not follow the operators of the {@code Publisher} /
+     * {@code Uni} you return onto further schedulers - that needs Reactor's own
+     * {@code io.micrometer:context-propagation}, and is your call rather than Parallel Consumer's. It is a gap by
+     * decision, not an oversight.
      *
      * @see MdcPropagation
      */

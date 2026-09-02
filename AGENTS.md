@@ -72,7 +72,9 @@ is untracked (a whole triage doc was once written duplicating `docs/refactoring.
 
 | Document | Read it when |
 |---|---|
+| [`docs/building.md`](docs/building.md) | A build failed in a way that reads like a broken repository: the fresh-clone recipe, why the Truth assertion classes are generated rather than committed, and which invocations skip the generator |
 | [`docs/logging.md`](docs/logging.md) | Changing a logback file, adding a log stream, or wondering why a logging change had no effect - the two test profiles and how to prove which one loaded |
+| [`docs/inflight-tool.md`](docs/inflight-tool.md) | Querying the repo across every ref - worked examples for `bin/inflight.mjs`, and why each working-tree answer is wrong |
 | [`docs/testing.md`](docs/testing.md) | Writing or debugging tests: suite split, **why a run prints nothing and the flag that fixes it**, the ambient probe autopsy, the quarantine lane, the chaos suite, shared test utilities |
 | [`docs/ci.md`](docs/ci.md) | CI is red, or you are changing a workflow: what each workflow does, the self-hosted lanes, how to fetch a failed job's log |
 | [`docs/investigating.md`](docs/investigating.md) | Past the prior-art checks and into diagnosis: control arms, instrumentation traps, reporting rates |
@@ -105,7 +107,7 @@ a file in it is touched, rather than waiting to be opened.
 | **`AGENTS.md`** (this file) | Rules that bind every agent, and the map above | Work items of any kind; anything only one topic needs |
 | **`STRATEGY.md`** (repo root) | What the product is and why: target problem, the client-side guiding choice, who it is for, success metrics, tracks under investment | A roadmap or feature list. It is a *claims* document nothing tests - work that falsifies a claim must update it; the branches that will are named in `docs/inflight/pr-strategy-doc-merge-triggers.md` |
 | **`docs/w2-vision.md`** | The generative **laws** behind the W2/Hasten note corpus and the **connections between notes** - which law a claim follows from, what implies what, what must precede what, what contradicts what | Any fact a note owns. It links rather than restates, and **the note wins** where the two disagree. Live, unlike the dated handoffs under `docs/ideation/` that it draws the laws from |
-| **`docs/inflight/`** | *Transient* cross-branch state, **one file per item**, named `<area>-<slug>.md` - the prefix names an AREA, never a status. Rules, the prefix table and the tag vocabulary in [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md), which owns them | A backlog. A committed index file, which every PR would edit. **Not a place knowledge goes to die**: when your PR resolves a note, migrate what outlives it to its durable owner first - deleting the file is one of four outcomes, and that doc names them |
+| **`docs/inflight/`** | *Transient* cross-branch state, **one file per item**, named `<area>-<slug>.md` - the prefix names an AREA, never a status. Rules, the prefix table and the tag vocabulary in [`docs/inflight/AGENTS.md`](docs/inflight/AGENTS.md), which owns them | A backlog. A committed index file, which every PR would edit. **Not a place knowledge goes to die**: when your PR resolves a note, migrate what outlives it to its durable owner first - deleting the file is only one of the outcomes, and that doc names them |
 | **`docs/refactoring.md`** | Refactors **too small to deserve their own note** - a line or two each, grouped by file, no owner or tags - plus **breaking changes queued for the next major** (release-gated section) and the **triage of `TODO`/`FIXME`/`XXX` markers** | Anything carrying a decision, evidence or tracking - that is a `docs/inflight/` note; promote the line and delete it in the same commit |
 | **`docs/todo-index.md`** | Generated inventory of every marker in the tree (`bin/todo-index.sh`, `--check` fails when stale) | Priorities - deliberately unsorted; triage goes in `refactoring.md` |
 | **`docs/quarantined-tests.md`** | CI-enforced registry of quarantined tests and, when one exists, their owning fix PR (unowned entries are legal, flagged advisory) | Tests that merely flake - quarantine requires evidence: a diagnosis, or a recorded sighting ledger proving it is master-state |
@@ -191,26 +193,32 @@ accidental is *which* repo answered. The same ambiguity bites a bare `#NNN` in p
 
 ## Before you investigate anything
 
-Do all six checks **before** forming a hypothesis, and say in your write-up what each returned -
-including "nothing". Prior art tells you the method that settled the last question of this shape,
+Do every check in this table **before** forming a hypothesis, and say in your write-up what each
+returned - including "nothing", and including the size of the corpus that "nothing" covered. Prior art tells you the method that settled the last question of this shape,
 and the traps that voided earlier experiments.
 
 | Check | Command |
 |---|---|
-| Prior investigations | `ls docs/plans/`, then grep them |
-| Solved problems | `grep -rl <mechanism> docs/solutions/` |
-| In-flight state | `ls docs/inflight/`, `grep -rl <mechanism> docs/inflight/` |
+| Plans, solutions and in-flight notes, **on every branch** | `node bin/inflight.mjs prior-art <mechanism> [<mechanism>...]` |
 | Open PRs (collision check) | `gh pr list -R astubbs/parallel-consumer`, then `gh pr diff <n> -R astubbs/parallel-consumer --name-only` |
 | **Merged** PRs, by file | `gh pr list -R astubbs/parallel-consumer --state merged --limit 100 --json number,title,files --jq '.[] \| select(.files[]?.path \| test("<ClassName>")) \| "\(.number) \(.title)"'` |
 | Issues, `--state all` | `gh issue list -R astubbs/parallel-consumer --state all --limit 300` - fork issues *and* `upstream-mirror` ones; read the upstream original, not the mirror's summary |
 | **The javadoc of the thing you are about to run or change** | `grep -rn "Calibration status" --include=*.java .` - chaos scenarios record their prior experiments, seeds and verdicts in the class javadoc, nowhere else |
+| **Has this test failed before, and at which commit** | `node bin/inflight.mjs codecov test <name>` - recorded outcome per commit, from history that outlives a CI log; `codecov flaky` lists every test ever recorded with more than one outcome |
 
+- **`grep` and `find` read the working tree, and most of this repo's docs are not in it.** Roughly
+  two thirds of everything under `docs/` exists only on branches that have not merged, so a
+  working-tree search answers a narrower question than the table asks and returns a *false negative
+  carrying the authority of a completed check*. `bin/inflight.mjs prior-art` searches every ref and flags
+  each hit that is missing from `origin/master`; `bin/lib/prior-art.mjs`'s header explains the rest. Worked incident:
+  [`docs/solutions/workflow-issues/prior-art-lives-on-branches-2026-09-01.md`](docs/solutions/workflow-issues/prior-art-lives-on-branches-2026-09-01.md).
 - **The titles are already in your context**, injected at session start by
   `.claude/hooks/inject-recorded-knowledge.sh` - so "I did not know it existed" is not available as
-  an excuse, and the check costs one grep against a list you have been handed.
+  an excuse. **That index is branch-scoped too**, and says so along with the count it cannot show
+  you; it narrows the search, it does not complete it.
 - **Grep the mechanism, not the symptom.** The failing test's name is the weakest search term
   available. Search the class, the lock, the option, the exception, the log line.
-- **A test's own javadoc is prior art, and the six commands above will not find it.** The chaos
+- **A test's own javadoc is prior art, and the commands above will not find it.** The chaos
   scenarios carry a `Calibration status` block naming the shapes already tried, the seeds, and what
   each run established - including experiments that were run and are worth not repeating. Running
   `ChaosRevokeUnderWorkIT`'s recovery diagnostic in August 2026 re-derived a result its own javadoc
@@ -307,6 +315,14 @@ counts. This is a community-maintained fork of the no-longer-maintained
 
 ## How to Build
 
+**The first command in a fresh clone is a whole-reactor `./mvnw clean install -DskipTests`. Never
+start with `./mvnw compile`, and never narrow to `-pl <module>` without `-am`.** Both skip the
+`generate-test-sources` phase that writes `ManagedTruth` and its `*Subject` family into `target/`,
+and both then fail as a missing artifact or `cannot find symbol: class ManagedTruth` - which reads
+as a broken repository rather than a wrong command. Nothing catches this for you: the enforcer only
+covers the `-pl` half, and an IDE reaches neither. [`docs/building.md`](docs/building.md) **owns
+this topic** - the error text, the invocation table, the IDE case - and wins where the two disagree.
+
 ```bash
 bin/build.sh                 # quick local build (compile + unit tests)
 bin/ci-unit-test.sh          # unit tests only (no Docker needed)
@@ -381,6 +397,12 @@ Unit tests are surefire (`src/test/java/`); integration tests are failsafe and n
 ## Code Style
 
 - **Lombok** used extensively (builders, getters, logging); IntelliJ Lombok plugin required.
+- **Never discard a return value silently - name it and say why.** `boolean ignoredX = call();` with
+  a one-line comment beats `call();`, because a bare call reads identically whether ignoring the
+  result was a decision or an oversight, and a reader cannot tell which without reconstructing the
+  author's intent. If the value turns out to be worth acting on, act on it and name it for what it
+  is. Found via `ConsumerManager.close()`, which dropped a `tryClaimOwnership()` refusal and let a
+  foreseeable shutdown race surface as a bare guard exception instead of an explained one.
 - **EditorConfig** enforced - 4-space Java indent, 120-char lines.
 - **Google Truth** for test assertions, with JUnit 5 and Mockito.
 - **License headers** are enforced by `bin/check-copyright-headers.sh`, and there is no tool that
@@ -557,7 +579,9 @@ Nothing lints commit messages, so all of this is on you.
 root is shared mutable state - several agent sessions run against it at once, so its HEAD can move
 between two of *your own* commands. Work only under `.claude/worktrees/<name>`, and reach a task by
 `cd`-ing into its worktree. `git worktree list` tells you which one holds a branch; create one if
-none does.
+none does. Commit with `git -C <worktree> commit ...` spelled as a **literal path, not a variable**:
+the pre-commit hook reads the command before the shell expands it, and refuses a `-C "$W"` rather
+than gating a tree the command never named (`.claude/hooks/pre-commit-gate.sh` owns the why).
 
 **Reaching for `git checkout <branch>` is the tell that you are in the wrong directory** - and it is
 how the rule gets broken silently. Git refuses to check out a branch another worktree already holds,
