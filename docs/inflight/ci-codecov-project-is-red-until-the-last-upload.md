@@ -34,6 +34,19 @@ cannot subtract hits, so the difference is a missing upload rather than a covera
   `codecov/project` stays red at that head with nothing coming to fix it. That red is stale rather
   than transient, and it is cleared by the next head rather than by waiting.
 
+## It is three checks, not one
+
+The context is `codecov/project` for the total, and `codecov/project/<flag>` per flag -
+`codecov/project/unit` and `codecov/project/integration` here. **They go red at different moments and
+recover at different moments**, because each waits on its own suite's upload, so seeing one clear tells
+you nothing about the others and the names are different enough to read as unrelated problems.
+
+The flag-scoped pair is the more alarming to look at, because the total can be **up** while both flags
+report a drop. Measured on astubbs#207 at one point: project **+0.59%** (hits +78, misses -14) with
+`unit` at -4.14% and `integration` at -16.32%. Sixty-one added lines out of ~4,800 cannot move a flag
+four points, so a flag delta that large next to a positive total is the baseline talking, not the diff.
+All three were green once every upload had landed.
+
 ## What to do about it
 
 Nothing, while a run is in flight - **wait for `checks_terminal` before reading `codecov/project` at
