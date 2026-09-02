@@ -27,6 +27,11 @@ import java.util.stream.IntStream;
 /**
  * Used in tests to stub out the behaviour of the real Broker and Client's long polling system (the mock Kafka Consumer
  * doesn't have this behaviour).
+ * <p>
+ * Ships in the <em>main</em> artefact, not the test-jar, so downstream projects can test against it with an ordinary
+ * {@code compile}/{@code test} dependency on {@code parallel-consumer-core}. It is a test harness - nothing in the
+ * library itself uses it at runtime - but consuming it previously meant depending on the test-jar, which is what makes
+ * the project awkward to build against.
  *
  * @author Antony Stubbs
  */
@@ -117,9 +122,9 @@ public class LongPollingMockConsumer<K, V> extends MockConsumer<K, V> {
     }
 
     /**
-     * Makes the commit history look like the {@link MockProducer}s one so we can use the same assert method.
-     *
-     * @see KafkaTestUtils#assertCommitLists(List, List, Optional)
+     * Makes the commit history look like the {@link MockProducer}s one so we can use the same assert method
+     * ({@code KafkaTestUtils#assertCommitLists}, which lives in this module's test sources - referenced by name rather
+     * than by {@code @link} because this class ships in the main artefact and cannot see it).
      */
     private List<Map<String, Map<TopicPartition, OffsetAndMetadata>>> injectConsumerGroupId(final List<Map<TopicPartition, OffsetAndMetadata>> commitHistory) {
         String groupId = this.groupMetadata().groupId();
@@ -128,10 +133,9 @@ public class LongPollingMockConsumer<K, V> extends MockConsumer<K, V> {
                 .collect(Collectors.toList());
     }
 
-    /*
-     * Makes the commit history look like the {@link MockProducer}s one, so we can use the same assert method.
-     *
-     * @see KafkaTestUtils#assertCommitLists(List, List, Optional)
+    /**
+     * Makes the commit history look like the {@link MockProducer}s one, so we can use the same assert method
+     * ({@code KafkaTestUtils#assertCommitLists}).
      */
     public List<Map<String, Map<TopicPartition, OffsetAndMetadata>>> getCommitHistoryWithGroupId() {
         var commitHistoryInt = getCommitHistoryInt();

@@ -1646,6 +1646,10 @@ The source of truth readme is in link:{project_root}/src/docs/README_TEMPLATE.ad
 
 === Maven targets
 
+The first command in a fresh clone is a whole-reactor `mvn clean install -DskipTests`.
+The test sources need code that is *generated* at the `generate-test-sources` phase, so any invocation that stops earlier - `mvn compile` above all - leaves it absent and the tests then fail to compile with `cannot find symbol: class ManagedTruth`.
+See the Note below, and link:{project_root}/docs/building.md[docs/building.md] for the full recipe.
+
 [qanda]
 Compile and run all tests::
 `mvn verify`
@@ -1680,8 +1684,12 @@ git bisect run ./bisect.sh
 ----
 
 Note::
-`mvn compile` - Due to a bug in Maven's handling of test-jar dependencies - running `mvn compile` fails, use `mvn test-compile` instead.
-See https://github.com/confluentinc/parallel-consumer/issues/162[confluentinc issue #162]
+`mvn compile` fails on a fresh clone, and misleadingly: it dies resolving `parallel-consumer-core:jar:tests` for the `parallel-consumer-vertx` module, which reads like a broken repository or a network outage.
+It is neither - `compile` stops before `test-compile`, so core's test-jar is never produced inside that reactor run.
+Where that jar is already cached from an earlier `install`, the same command instead succeeds while generating nothing, and the failure resurfaces later as `cannot find symbol: class ManagedTruth`.
+Use `mvn clean install -DskipTests` or `mvn test-compile` instead.
+See https://github.com/confluentinc/parallel-consumer/issues/162[confluentinc#162],
+https://github.com/astubbs/parallel-consumer/issues/180[astubbs#180] / https://github.com/confluentinc/parallel-consumer/issues/861[confluentinc#861],
 and this https://stackoverflow.com/questions/4786881/why-is-test-jar-dependency-required-for-mvn-compile[Stack Overflow question].
 
 === Build Scripts
