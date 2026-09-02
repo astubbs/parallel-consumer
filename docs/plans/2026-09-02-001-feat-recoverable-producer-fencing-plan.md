@@ -37,11 +37,11 @@ PC has two answers today and both are wrong, in opposite directions.
 
 On the **commit path**, `ProducerManager.commitOffsets` catches `ProducerFencedException` and rethrows it as `PCInternalRuntimeException`. Nothing between there and the supervisor loop catches it, so it becomes `failureReason`, triggers `doClose`, and the instance is gone. Offsets stay dirty and the records are redelivered, so the data is correct; only the liveness is wrong.
 
-On the **produce path**, `ParallelEoSStreamProcessor` catches `InvalidPidMappingException` around the produce-and-ack block and calls `closeOnException`. That shutdown was itself a fix. Before it, PC retried the same record forever. A user hit exactly that in production and reported it as astubbs#411 (`confluentinc#830`), running `PERIODIC_TRANSACTIONAL_PRODUCER` with a per-instance UUID `transactional.id`, after two days of producer inactivity. Their own requested remedy was "close the producer that is causing this error and create a new producer instance". What shipped instead was `confluentinc#839`, which converted the spin into a shutdown, chosen on the maintainer's stated uncertainty about whether a transaction could be restarted without losing in-flight work.
+On the **produce path**, `ParallelEoSStreamProcessor` catches `InvalidPidMappingException` around the produce-and-ack block and calls `closeOnException`. That shutdown was itself a fix. Before it, PC retried the same record forever. A user hit exactly that in production and reported it as astubbs#411 (`confluentinc#830`), running `PERIODIC_TRANSACTIONAL_PRODUCER` with a per-instance UUID `transactional.id`, after two days of producer inactivity. Their own requested remedy was "close the producer that is causing this error and create a new producer instance". **Their configuration supplies a `Producer` instance** — today the only option — so it stays on the path that keeps its terminal behaviour, and the fix reaches them only once they move to the PC-built path. What shipped instead was `confluentinc#839`, which converted the spin into a shutdown, chosen on the maintainer's stated uncertainty about whether a transaction could be restarted without losing in-flight work.
 
 **That catch fires only on a synchronous throw from the produce call, not on the ack wait.** `FutureRecordMetadata.valueOrError` raises `new ExecutionException(exception)`, so the future's `get` can only surface an `ExecutionException`, which falls past the typed catch into the generic handler that wraps it as `PCInternalRuntimeException("Error while waiting for produce results", e)` — verbatim the stack trace in the report. The regression test mocks the synchronous throw, so it passes without covering the reported path. R9 therefore has to unwrap before matching, and the reported spin may still be reachable on master; that is a defect in its own right, not something this work can assume already handled.
 
-**The maintainer's doubt was better founded than it looks, and the obvious answer to it is wrong.** Offsets do stay dirty on a failed commit, but dirty is not the same as incomplete: `PartitionState.onSuccess` removes the offset from the incomplete set and raises the succeeded watermark at success time, while `onOffsetCommitSuccess` only records the committed offset and clears the dirty flag. Redelivery today is a consequence of the instance *dying* and rebuilding its offset state from the broker. An instance that survives keeps that in-memory completion, so the next commit would carry offsets whose output the abort discarded. Recovery therefore owes an explicit un-completion step — the same pairing Kafka Streams makes between resetting its producer and closing its tasks dirty.
+**The maintainer's doubt was better founded than it looks, and the obvious answer to it is wrong.** Offsets do stay dirty on a failed commit, but dirty is not the same as incomplete: `PartitionState.onSuccess` removes the offset from the incomplete set and raises the succeeded watermark at success time, while `onOffsetCommitSuccess` only records the committed offset and clears the dirty flag. Redelivery today is a consequence of the instance *dying* and rebuilding its offset state from the broker. An instance that survives keeps that in-memory completion, so the next commit would carry offsets whose output the abort discarded. Recovery therefore owes a mechanism for making that work processable again — the same pairing Kafka Streams makes between resetting its producer and closing its tasks dirty. Restoring the offset alone does not do it: `PartitionState.onSuccess` drops the `ConsumerRecord` with the offset and `ProcessingShard.onSuccess` retires the `WorkContainer`, so an offset restored without its work can never complete.
 
 The library exists to keep processing under conditions that would stall a plain consumer. Dying when the broker hands back a routine, recoverable condition is the opposite of that.
 
@@ -50,13 +50,13 @@ The reason PC cannot recover today is structural rather than incidental. `Parall
 ### Key Decisions
 
 - **PC builds its own producer from configuration, through an overridable factory.** (session-settled: user-directed — chosen over adding recovery around a user-supplied `Producer` instance: PC cannot read a finished producer's configuration, so it cannot build a replacement, and recovery is impossible without one.) Governs R1, R2, R3, R7.
-- **PC derives the `transactional.id` wherever PC builds the producer.** (session-settled: user-directed — chosen over letting the user set it on the PC-owned path: a `transactional.id` shared by two live instances makes re-initialisation fence the other holder, which re-initialises and fences back.) Governs R4, R5, R6, R19.
-- **The producer-instance option stays, deprecated, without recovery, and its removal is queued for the next major.** (session-settled: user-directed — chosen over removing it outright now: keeping it lowers the barrier for existing users, while queueing the removal stops producer handling being written twice indefinitely.) Governs R15, R16, R18, R20.
-- **One recoverable condition, not a per-exception taxonomy.** (session-settled: user-approved — chosen over classifying each transaction failure separately: Kafka Streams collapses the same four exceptions into a single migration signal, and the response PC needs is identical for all of them.) Governs R8, R9, R10.
-- **The produce-path case is absorbed rather than left to a separate change.** (session-settled: user-directed — chosen over scoping this to the commit path: it is the only trigger with a real user report, and recovery is better than both behaviours it replaces.) Governs R11, R17.
-- **Recovery attempts are unbounded.** (session-settled: user-approved — chosen over a bounded attempt count: Kafka Streams has no migration counter at all, and PC owning the `transactional.id` removes the failure mode a bound would guard against.) Governs R12, R14.
-- **Recovery is not observable to the application beyond logs and metrics.** (session-settled: user-approved — chosen over a public exception, a listener callback, or reuse of the commit-failure handler surface: recovery is PC's own business, like a retry, and nothing here forecloses adding a hook later.) Governs R21, R22, R23.
-- **This work supersedes astubbs/parallel-consumer#352's R6 rather than amending it.** (session-settled: user-directed — chosen over rewording R6 before that PR merges: R6 was true of the behaviour when written, and a later change making an earlier true statement untrue is the ordinary order, not an error to correct pre-emptively.) Governs R17.
+- **PC derives the `transactional.id` wherever PC builds the producer.** (session-settled: user-directed — chosen over letting the user set it on the PC-owned path: a `transactional.id` shared by two live instances makes re-initialisation fence the other holder, which re-initialises and fences back.) Governs R4, R5, R6, R20.
+- **The producer-instance option stays, deprecated, without recovery, and its removal is queued for the next major.** (session-settled: user-directed — chosen over removing it outright now: keeping it lowers the barrier for existing users, while queueing the removal stops producer handling being written twice indefinitely.) Governs R16, R17, R19, R21.
+- **One recoverable condition, not a per-exception taxonomy.** (session-settled: user-approved — chosen over classifying each transaction failure separately: Kafka Streams collapses the same four exceptions into a single migration signal, and the response PC needs is identical for all of them.) Governs R8, R9, R10, R13.
+- **The produce-path case is absorbed rather than left to a separate change.** (session-settled: user-directed — chosen over scoping this to the commit path: it is the only trigger with a real user report, and recovery is better than both behaviours it replaces.) Governs R11, R18.
+- **Recovery attempts are unbounded.** (session-settled: user-approved — chosen over a bounded attempt count: Kafka Streams has no migration counter at all, and PC owning the `transactional.id` removes the failure mode a bound would guard against.) Governs R12, R15.
+- **Recovery is not observable to the application beyond logs and metrics.** (session-settled: user-approved — chosen over a public exception, a listener callback, or reuse of the commit-failure handler surface: recovery is PC's own business, like a retry, and nothing here forecloses adding a hook later.) Governs R22, R23, R24.
+- **This work supersedes astubbs/parallel-consumer#352's R6 rather than amending it.** (session-settled: user-directed — chosen over rewording R6 before that PR merges: R6 was true of the behaviour when written, and a later change making an earlier true statement untrue is the ordinary order, not an error to correct pre-emptively.) Governs R10, R11.
 - **Kafka Streams is the reference, not the specification.** Its shape is copied where it fits and diverged from where PC can do better; every divergence is named at the requirement it affects.
 
 ### Requirements
@@ -64,37 +64,38 @@ The reason PC cannot recover today is structural rather than incidental. `Parall
 **Producer ownership and configuration**
 
 - R1. `ParallelConsumerOptions` accepts producer configuration for every produce flow, from which PC constructs the producer. Recovery applies only where PC is transactional; the configuration path itself is not restricted to those flows.
-- R2. Producer construction goes through a factory that callers may override, so a caller can wrap, instrument, or substitute the producer without supplying a finished one.
+- R2. Producer construction goes through a factory that callers may override, so a caller can wrap, instrument, or substitute the producer without supplying a finished one. PC passes the resolved configuration including the `transactional.id` it derived under R4, and each invocation returns a newly constructed producer rather than a cached or previously returned one.
 - R3. The factory has a default that requires no caller action; supplying producer configuration alone is sufficient to use the produce flows.
 - R4. Where PC builds the producer, PC sets the `transactional.id`. The value is unique per running instance, is stable for that instance's life, and is reused by every replacement producer so that re-initialisation fences the producer it replaces.
 - R5. A caller-set `transactional.id` on the PC-built path does not take effect, and PC says so at WARN naming the value it derived instead.
-- R6. The derived `transactional.id` uses a documented prefix derived from `group.id`, with only the uniqueness suffix varying, so a single prefixed TransactionalId ACL authorises it.
-- R7. Producer configuration is never rendered into logs, exception messages, or any `toString()`, and any diagnostic that does render it redacts every key Kafka types as a password.
+- R6. The derived `transactional.id` uses a documented prefix derived from `group.id`, with only the uniqueness suffix varying, so a single prefixed TransactionalId ACL authorises it. No group's prefix is a string prefix of another's, since Kafka matches prefixed ACLs literally and an aliasing prefix would authorise fencing another application's producers.
+- R7. Producer configuration is never rendered into logs, exception messages, or any `toString()`. Any diagnostic that does render it redacts by default, showing only keys on an explicit non-secret allow-list — Kafka's password typing does not cover serializer, interceptor or Schema Registry secrets such as `basic.auth.user.info`.
 
 **Detection and recovery**
 
-- R8. PC treats the producer as invalid on `ProducerFencedException`, `InvalidProducerEpochException`, `CommitFailedException` and `InvalidPidMappingException`, and responds to all four identically.
+- R8. PC treats the producer as invalid on `ProducerFencedException`, `InvalidProducerEpochException`, `InvalidPidMappingException`, `UnknownProducerIdException`, `OutOfOrderSequenceException` and `CommitFailedException`, and responds to all of them identically. The last is commit-path only; the two before it are send-path only.
 - R9. Detection unwraps `ExecutionException` and any `KafkaException` wrapper before matching the conditions in R8, so a condition surfacing from a send future is recognised.
-- R10. On detecting an invalid producer, PC attempts to abort the open transaction, discards the producer, builds a replacement through the factory, rejoins the consumer group, and resumes processing.
+- R10. On detecting an invalid producer, PC attempts to abort the open transaction, closes the discarded producer under a bounded timeout tolerating a close that fails, builds a replacement through the factory, and resumes processing.
 - R11. Recovery is reachable from both the commit path and the produce path.
 - R12. Recovery repeats as often as the condition recurs, with no attempt limit and no terminal state reached by counting.
-- R13. Recovery returns to incomplete every record marked succeeded since the last successful commit, so work whose output the abort discarded is reprocessed rather than having its offset committed.
-- R14. A replacement producer that fails to build or initialise is retried on the next commit cycle with backoff rather than inline; a failure retrying cannot fix, such as an authorization denial, is terminal and names the `transactional.id` that was refused.
+- R13. No offset from an aborted transaction is committed, and every record whose output that abort discarded is processed again. Returning the offset to incomplete does not by itself achieve this: `PartitionState.onSuccess` drops the `ConsumerRecord` along with the offset and `ProcessingShard.onSuccess` retires the `WorkContainer`, so an offset restored without its work can never complete and the partition stalls. What state PC retains to make the record processable again is a build decision.
+- R14. Recovery ends with PC a full member of the consumer group on a live generation, and the first commit after it does not carry group metadata predating the recovery. Whether that requires an explicit rejoin, and which thread performs it, is a build decision — PC's consumer is confined to the broker-poll thread and `onPartitionsRevoked` waits on the same write lock recovery holds, so the mechanism cannot be assumed.
+- R15. A replacement producer that fails to build or initialise is retried on the next commit cycle with backoff rather than inline; a failure retrying cannot fix, such as an authorization denial, is terminal and names the `transactional.id` that was refused. While no usable producer exists, producing is suspended rather than left to fail records against a discarded producer.
 
 **Compatibility and migration**
 
-- R15. Supplying a `Producer` instance continues to work for every flow it works for today, and is marked deprecated.
-- R16. Supplying both producer configuration and a `Producer` instance fails options validation rather than resolving silently to one of them.
-- R17. On the PC-built path, `InvalidPidMappingException` on the produce path recovers rather than closing the instance, replacing the behaviour `confluentinc#839` intended.
-- R18. On the producer-instance path, every condition in R8 keeps its current terminal behaviour, and PC logs at WARN, once, naming the recovery unavailable and what enables it.
-- R19. Adopting the PC-built path requires re-granting any TransactionalId ACL against the prefix in R6, and the upgrade notes say so.
-- R20. The `Producer`-instance option's deprecation javadoc names the release its removal is queued for, matching the entry in `docs/refactoring.md`.
+- R16. Supplying a `Producer` instance continues to work for every flow it works for today, and is marked deprecated.
+- R17. Supplying both producer configuration and a `Producer` instance fails options validation rather than resolving silently to one of them.
+- R18. On the PC-built path, `InvalidPidMappingException` on the produce path recovers rather than closing the instance, replacing the behaviour `confluentinc#839` intended.
+- R19. On the producer-instance path, every condition in R8 keeps its current terminal behaviour. PC logs a single WARN at options validation — not when a condition first arises — naming the configuration-plus-factory replacement, the absence of recovery, and the release the removal is queued for.
+- R20. The upgrade notes carry the whole move from a `Producer` instance to configuration plus factory, including re-granting any TransactionalId ACL against the prefix in R6 and the loss of any caller-set `transactional.id` that operational tooling keys on.
+- R21. The `Producer`-instance option's deprecation javadoc names the major *after* the release that ships the deprecation as the one its removal is queued for, matching the entry in `docs/refactoring.md`. Naming the current release would remove the option in the same version that deprecates it, contradicting R16.
 
 **Observability**
 
-- R21. Each recovery emits a log record identifying the triggering condition and the outcome.
-- R22. Recoveries are counted in the metrics surface, distinguishably from ordinary commit failures.
-- R23. Consecutive recoveries with no successful commit between them are counted separately and raise the log level, so an instance that is alive but not progressing is distinguishable from one that recovered once.
+- R22. Each recovery emits a log record identifying the triggering condition and the outcome.
+- R23. Recoveries are counted in the metrics surface, distinguishably from ordinary commit failures.
+- R24. Consecutive recoveries with no successful commit between them are counted separately and raise the log level, so an instance that is alive but not progressing is distinguishable from one that recovered once.
 
 ### Actors
 
@@ -116,44 +117,44 @@ flowchart TB
   F --> G[Control thread takes the write lock, readers drain]
   G --> E
   E --> H[Abort what can be aborted, discard producer, rebuild under the same transactional id]
-  H --> I[Return succeeded work to incomplete, rejoin the group]
-  I --> J[Reprocess; no offset from the aborted transaction is committed]
+  H --> I[Restore the discarded work; release the lock]
+  I --> J[Reprocess; no aborted-transaction offset is committed; membership refreshed]
 ```
 
 - F1. Commit-path recovery
   - **Trigger:** A condition in R8 is raised while PC is committing offsets inside a transaction.
   - **Actors:** A1, A3
-  - **Steps:** The control thread already holds the commit write lock, so no worker can be producing. PC aborts what can be aborted, discards the producer, builds a replacement under the same `transactional.id`, returns work succeeded since the last successful commit to incomplete, rejoins the group, and releases the lock.
+  - **Steps:** The control thread already holds the commit write lock, so no worker can be producing. PC aborts what can be aborted, discards the producer, builds a replacement under the same `transactional.id`, restores the work whose output the abort discarded, and releases the lock. The group-membership outcome in R14 is reached after the lock is released, not inside this step.
   - **Outcome:** The instance keeps running and the work is redelivered.
-  - **Covers R8, R10, R11, R13.**
+  - **Covers R8, R10, R11, R13, R14.**
 
 - F2. Produce-path recovery
   - **Trigger:** A condition in R8 surfaces from a send future on a worker thread, wrapped in `ExecutionException`.
   - **Actors:** A1, A2, A3
   - **Steps:** The worker unwraps the condition from its `ExecutionException`. It holds the produce read lock, so it cannot replace the producer itself: it reports the condition and releases its lock. The control thread acquires the write lock, which drains the remaining readers, then recovers as in F1.
   - **Outcome:** The instance keeps running; the affected records are redelivered.
-  - **Covers R8, R9, R10, R11, R13, R17.**
+  - **Covers R8, R9, R10, R11, R13, R14, R18.**
 
 - F3. Recovery unavailable
   - **Trigger:** A condition in R8 arises while PC is using a caller-supplied `Producer` instance.
   - **Actors:** A1, A3
   - **Steps:** PC cannot build a replacement, so it behaves as it does today and logs once at WARN naming what would enable recovery.
   - **Outcome:** Terminal, as today, but the reason and the remedy are stated.
-  - **Covers R15, R18.**
+  - **Covers R16, R19.**
 
 
 ### Acceptance Examples
 
-- AE1. **Covers R8, R10, R11, R13.** Given PC is running with PC-built producer configuration and a transaction is open, when the broker raises any of the four conditions during offset commit, then the instance is still running afterwards, no offset from that transaction is committed, and every record in it is processed again.
-- AE2. **Covers R9, R11, R17.** Given the same configuration, when `InvalidPidMappingException` surfaces from the ack wait on a worker thread, then the instance is still running afterwards and does not close — the behaviour confluentinc#839 introduced no longer applies on this path.
+- AE1. **Covers R8, R10, R11, R13, R14.** Given PC is running with PC-built producer configuration and a transaction is open, when the broker raises any of the recoverable conditions during offset commit, then the instance is still running afterwards, no offset from that transaction is committed, and every record in it is processed again.
+- AE2. **Covers R9, R11, R18.** Given the same configuration, when `InvalidPidMappingException` surfaces from a send future on a worker thread, then PC builds a replacement producer, the affected record is processed again, and its offset is committed within a bounded number of cycles. Asserting only that the instance stays alive would pass on master today, where the outcome is the original spin.
 - AE3. **Covers R12.** Given the condition recurs on several consecutive cycles, when each recovery completes, then PC recovers again each time and reaches no terminal state through repetition alone.
 - AE4. **Covers R4, R5, R6.** Given a caller sets a `transactional.id` in producer configuration on the PC-built path, when PC constructs the producer, then the value PC derived is used, a WARN names the override, and two instances of the same application never share an id.
-- AE5. **Covers R15, R18.** Given a caller supplies a `Producer` instance, when any condition in R8 occurs, then behaviour matches today's and a single WARN names the unavailable recovery and what enables it.
-- AE6. **Covers R16.** Given a caller supplies both producer configuration and a `Producer` instance, when options are validated, then construction fails with a message naming both.
+- AE5. **Covers R16, R19.** Given a caller supplies a `Producer` instance, when any condition in R8 occurs, then behaviour matches today's and a single WARN names the unavailable recovery and what enables it.
+- AE6. **Covers R17.** Given a caller supplies both producer configuration and a `Producer` instance, when options are validated, then construction fails with a message naming both.
 - AE7. **Covers R7.** Given producer configuration carrying SASL and TLS secrets, when PC starts and logs its options, then no credential material appears in the output.
 - AE8. **Covers R13.** Given a record completed successfully earlier in a transaction that is then aborted by recovery, when the next commit runs, then that record's offset is not committed and the record is processed again.
-- AE9. **Covers R14.** Given the replacement producer cannot reach the transaction coordinator, when recovery runs, then PC retries on a later cycle with backoff rather than looping inline; and given the `transactional.id` is not authorised, then PC fails terminally naming that id.
-- AE10. **Covers R23.** Given recovery fires repeatedly with no successful commit between attempts, when the pattern continues, then the consecutive count is observable and the log level rises above the single-recovery case.
+- AE9. **Covers R15.** Given the replacement producer cannot reach the transaction coordinator, when recovery runs, then PC retries on a later cycle with backoff rather than looping inline; and given the `transactional.id` is not authorised, then PC fails terminally naming that id.
+- AE10. **Covers R24.** Given recovery fires repeatedly with no successful commit between attempts, when the pattern continues, then the consecutive count is observable and the log level rises above the single-recovery case.
 
 ### Scope Boundaries
 
@@ -163,7 +164,7 @@ flowchart TB
 - The consumer remains a caller-supplied instance. The same argument for configuration-plus-factory applies to it, and is not this problem.
 - The unbounded wait at `onPartitionsRevoked` for an in-flight transaction to finish, owned by `docs/inflight/bug-857-transactional-revoke-wait.md`. astubbs#29 bounded the `PERIODIC_CONSUMER_SYNC` revoke path by declining the commit lock; the transactional wait is untouched. It reduces how often the commit path reaches a fencing condition without removing it.
 - The commit-failure seam in astubbs/parallel-consumer#352, which gives the application a decision when a commit exhausts its retry budget. Dependencies / Assumptions owns the relationship and the sequencing.
-- Actually removing the `Producer`-instance option. R20 only requires the deprecation to name its release; the removal is queued in `docs/refactoring.md` under the next-major section and lands there, not here.
+- Actually removing the `Producer`-instance option. R21 only requires the deprecation to name its release; the removal is queued in `docs/refactoring.md` under the next-major section and lands there, not here.
 - The remaining reflection in `ProducerWrapper` for transaction state (`isCompleting`, `isReady`). Owning the configuration removes the need to *discover* whether the producer is transactional; it does not remove these.
 
 **Outside this work**
@@ -174,6 +175,9 @@ flowchart TB
 ### Dependencies / Assumptions
 
 - Assumes aborting a transaction on an already-invalid producer may itself raise, and that this is expected rather than fatal — Kafka Streams' `StreamsProducer.abortTransaction` swallows exactly these exceptions on the grounds that the broker or transaction coordinator has already aborted the transaction.
+- The consumer is confined to the broker-poll thread by `ThreadConfinedConsumer`, and `onPartitionsRevoked` opens by spinning on `isTransactionCommittingInProgress()`, which is the write lock recovery holds. Any group-membership action taken from the control thread, or inside the write-locked region, deadlocks or throws. This is why R14 states an outcome rather than a mechanism.
+- Zombie fencing comes from every transaction carrying `sendOffsetsToTransaction(offsets, ConsumerGroupMetadata)` with a live generation, not from the `transactional.id` — R4 makes the id unique per instance, so it fences only the producer it replaces. No derivation chosen at planning time may be relied on for cross-instance fencing.
+- R4's uniqueness is scoped to a single run, so a restart does not fence its predecessor: a crashed instance's open transaction waits out `transaction.timeout.ms`, blocking `read_committed` consumers, and each run leaves a distinct id in the coordinator's state. Kafka Streams avoids this with an identity persisted across restarts; PC has no equivalent today. Recorded as an accepted cost, not a defect.
 - Assumes PC's existing produce/commit lock pair provides the exclusion recovery needs on the commit path: producing takes the read lock of `producerTransactionLock` and committing takes the write lock, with `preAcquireOffsetsToCommit` acquiring and flushing before `commitOffsets` runs. No new quiescing mechanism is assumed.
 - Assumes `group.id` is available to derive the R6 prefix from, matching how Kafka Streams derives one from `application.id`. This plan adds no separate prefix option; R6 makes the derived prefix documented and stable so a single prefixed ACL covers it.
 - Does **not** assume redelivery is already correct. Dirty offsets alone do not achieve R13: `PartitionState.onSuccess` clears an offset from the incomplete set at success time, long before any commit, so an instance that survives the abort keeps that completion. Un-completion is a mechanism this work owes, not a property it inherits.
@@ -186,6 +190,8 @@ flowchart TB
 
 - Whether the recoverable condition is represented as an internal exception type, a state on `ProducerManager`, or a signal on the existing commit-response channel. R8 fixes what is detected; how it travels is a build decision.
 - How a worker signals the control thread on the produce path without adding a second wait with its own deadline.
+- What state PC retains so a record whose output was discarded can run again (R13) — retaining each `WorkContainer` until the commit covering it succeeds, versus a seek-based re-fetch — and what bounds its memory, given shard back-pressure accounting.
+- How R14's group-membership outcome is reached: whether an explicit rejoin is needed at all once R13's restoration exists, which thread issues it, and what channel carries the request. Note that `enforceRebalance` is a no-op under the KIP-848 consumer protocol, so a caller on that protocol would silently get nothing.
 - Whether `State` gains a member for the window in which the producer is being replaced, or whether the write lock alone is sufficient to make that window invisible.
 - The exact `transactional.id` derivation, given that the integration harness in `parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/utils/KafkaClientUtils.java` already invents random ids to stop tests fencing each other, and that workaround becomes product behaviour.
 
@@ -198,5 +204,5 @@ flowchart TB
 - Kafka Streams 3.9.2 is the reference implementation: `StreamsProducer.commitTransaction` collapses `ProducerFencedException`, `InvalidProducerEpochException`, `CommitFailedException` and `InvalidPidMappingException` into `TaskMigratedException`; `StreamThread.handleTaskMigrated` closes tasks and resubscribes; `TaskManager.handleLostAll` calls `reInitializeThreadProducer` under EOS-v2, reaching `StreamsProducer.resetProducer`, which closes the producer and asks `KafkaClientSupplier` for another. `DefaultKafkaClientSupplier.getProducer` is the one-line default that makes the supplier free to callers. `StreamsConfig` lists `TRANSACTIONAL_ID_CONFIG` in `NON_CONFIGURABLE_PRODUCER_EOS_CONFIGS` and warns-and-drops a caller-set value.
 - KAFKA-14567 ("Kafka Streams crashes after ProducerFencedException") is the reason Streams' shape is copied without assuming it is airtight.
 - `TransactionManager`'s `TxnOffsetCommit` handler in kafka-clients 3.9.2 is where the four conditions diverge in the client: `UNKNOWN_MEMBER_ID` and `ILLEGAL_GENERATION` become an abortable `CommitFailedException`, while `INVALID_PRODUCER_EPOCH` and `PRODUCER_FENCED` become a fatal `ProducerFencedException`. PC catches only the latter today.
-- No test exercises producer fencing, transaction abort, or recovery. One test does pin the behaviour R17 replaces: `ParallelEoSStreamProcessorTest.closePCWhenInvalidPidMappingException` asserts the produce-path shutdown, and must be rewritten under R17 — though it mocks a synchronous throw from the produce call rather than the wrapped failure the field report shows, so it does not cover the reported path. The only other occurrence of the concept in the test tree is the comment in `KafkaClientUtils` explaining why test producers are given random transactional ids.
+- No test exercises producer fencing, transaction abort, or recovery. One test does pin the behaviour R18 replaces: `ParallelEoSStreamProcessorTest.closePCWhenInvalidPidMappingException` asserts the produce-path shutdown, and must be rewritten under R18 — though it mocks a synchronous throw from the produce call rather than the wrapped failure the field report shows, so it does not cover the reported path. The only other occurrence of the concept in the test tree is the comment in `KafkaClientUtils` explaining why test producers are given random transactional ids.
 - The defect class does not recur outside the core module: `produceMessages` is referenced only in `parallel-consumer-core`, and the vertx, reactor and mutiny processors inherit the core produce path through `ExternalEngine` rather than duplicating it.

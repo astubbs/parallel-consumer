@@ -103,7 +103,7 @@ refactors below, which are non-breaking and can land at any point in any line.
   so keeping both means every future change to producer handling is written twice, once on a path
   that recovers and once on a path that cannot. Deprecated by
   [`docs/plans/2026-09-02-001-feat-recoverable-producer-fencing-plan.md`](plans/2026-09-02-001-feat-recoverable-producer-fencing-plan.md)
-  (astubbs#225); the deprecation javadoc names this release.
+  (astubbs#225); the deprecation javadoc names the major AFTER the release that ships the deprecation, so the option is not removed in the same version that deprecates it.
 - **Remove the JStream API** (deprecate first) - design ref
   `origin/refactor/deprecate-jstream` @8a8f6508.
 - **Rename the enum to the standard pattern** (public enum rename) -
