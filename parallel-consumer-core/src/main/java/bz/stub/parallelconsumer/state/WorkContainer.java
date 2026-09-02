@@ -661,6 +661,7 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
             return false;
         }
         log.trace("Queueing for execution: {}", this);
+        deferredForRecovery = false; // a new delivery; how the last one ended is no longer the question
         deliveryCount.incrementAndGet();
         timeTakenAsWorkMs = of(System.currentTimeMillis());
         return true;
@@ -688,6 +689,54 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     public void onUserFunctionSuccess() {
         this.succeededAt = of(module.clock().instant());
         recordVerdict(true);
+    }
+
+    /**
+     * The value of {@link #dispatchedAtReplayGeneration} before a dispatch has stamped it: a container handed to a
+     * worker by anything but the control loop's dispatch (a test, an external engine) opts out of the check.
+     */
+    public static final long NEVER_DISPATCHED = -1;
+
+    /**
+     * The producer's replay generation the control thread observed when it dispatched this container
+     * ({@code ProducerManager#replayGeneration()}), for the produce lock to compare against after a replay. Written
+     * by the control thread immediately before the batch is submitted to the pool and read by the worker that runs
+     * it, so the executor's submit is the happens-before edge; volatile so that a reader on any other thread sees
+     * the stamp rather than a stale default. Transactional commit mode only; {@link #NEVER_DISPATCHED} otherwise.
+     */
+    private volatile long dispatchedAtReplayGeneration = NEVER_DISPATCHED;
+
+    /**
+     * Whether the current delivery ended by being deferred for a producer recovery rather than by a verdict of the
+     * user function. Set by {@link #deferForRecovery()} on the worker, read by the controller's failure bookkeeping,
+     * and reset by the next won claim - so a plain volatile: one writer per delivery, and the state transition that
+     * publishes it is the same one that publishes the verdict.
+     */
+    private volatile boolean deferredForRecovery;
+
+    public void markDispatchedAtReplayGeneration(long replayGeneration) {
+        this.dispatchedAtReplayGeneration = replayGeneration;
+    }
+
+    public long getDispatchedAtReplayGeneration() {
+        return dispatchedAtReplayGeneration;
+    }
+
+    public boolean isDeferredForRecovery() {
+        return deferredForRecovery;
+    }
+
+    /**
+     * The delivery ends without a user-function failure: the record could not be produced because the producer was
+     * being replaced, and it goes back to its shard to run again once the replacement is in use. Nothing about the
+     * failure history moves - not the attempt count a user's retry-delay function or dead-letter policy reads
+     * through {@code RecordContext}, not the retry delay, not the last failure reason - because recovery is PC's own
+     * business, like a commit, and a record must not be dead-lettered for having been in flight during one.
+     */
+    public void deferForRecovery() {
+        log.trace("Deferring for producer recovery {}", this);
+        deferredForRecovery = true;
+        recordVerdict(false);
     }
 
     public void onUserFunctionFailure(Throwable cause) {

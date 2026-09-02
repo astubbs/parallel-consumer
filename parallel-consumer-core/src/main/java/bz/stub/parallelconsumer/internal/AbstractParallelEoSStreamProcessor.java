@@ -1639,6 +1639,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         log.trace("Sending work ({}) to pool", batch);
         // snapshot at submit time, on the controller thread - which is already running under the caller's context
         final Map<String, String> submittersDiagnosticContext = mdcPropagation.capture();
+        if (options.isUsingTransactionCommitMode()) {
+            // stamped here, on the thread that also runs the replay, so "dispatched before the replay" is a total
+            // order the produce lock can check (ProducerManager#acquireProduceLock); stamping on the worker would
+            // leave a batch queued in the pool across a replay unstamped
+            producerManager.ifPresent(pm -> {
+                long replayGeneration = pm.replayGeneration();
+                batch.forEach(wc -> wc.markDispatchedAtReplayGeneration(replayGeneration));
+            });
+        }
         Future outputRecordFuture;
         try {
             outputRecordFuture = workerThreadPool.get().submit(() -> {
@@ -1861,16 +1870,47 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         workMailBox.drainTo(results, size);
 
         log.trace("Processing drained work {}...", results.size());
+        // Every drained result is landed before a failure is rethrown. A successful-work listener is user code
+        // that runs inside handleFutureResult; a throw there used to leave the results behind it in this local
+        // queue, unreachable - in flight forever, with no retry and no redelivery. On the ordinary pass the throw
+        // still ends the instance; on the recovery pass, which retries the drain, the results it left behind
+        // would have been the very records the replay exists to put back.
+        RuntimeException firstFailure = null;
         for (var action : results) {
-            if (action.isNewConsumerRecords()) {
-                wm.registerWork(action.getConsumerRecords());
-            } else {
-                WorkContainer<K, V> work = action.getWorkContainer();
-                MDC.put(MDC_WORK_CONTAINER_DESCRIPTOR, work.toString());
-                wm.handleFutureResult(work);
-                MDC.remove(MDC_WORK_CONTAINER_DESCRIPTOR);
+            try {
+                if (action.isNewConsumerRecords()) {
+                    wm.registerWork(action.getConsumerRecords());
+                } else {
+                    WorkContainer<K, V> work = action.getWorkContainer();
+                    MDC.put(MDC_WORK_CONTAINER_DESCRIPTOR, work.toString());
+                    try {
+                        wm.handleFutureResult(work);
+                    } finally {
+                        MDC.remove(MDC_WORK_CONTAINER_DESCRIPTOR);
+                    }
+                }
+            } catch (RuntimeException failure) {
+                firstFailure = (RuntimeException) firstOrSuppress(firstFailure, failure); // first is null or a RuntimeException, so the cast holds
             }
         }
+        if (firstFailure != null) {
+            throw firstFailure;
+        }
+    }
+
+    /**
+     * The step of a recovery that runs under the producer write lock, after the invalidated producer is discarded
+     * (KTD4, KTD5): land every result already in the mailbox - each worker that produced into the aborted transaction
+     * has mailboxed its result, which holding the write lock guarantees - so the ledger is complete, then put the
+     * ledger's records back into processing. The drain is what makes the replay complete: a result still in the
+     * mailbox is a record whose offset would otherwise be committed for output the broker discarded. Package-visible
+     * so the drain-then-replay order is pinned by a test rather than by the one call site's comment.
+     *
+     * @return how many records the replay put back
+     */
+    int replayWorkDiscardedByAbortedTransaction() {
+        processWorkCompleteMailBox(Duration.ZERO);
+        return wm.restoreWorkDiscardedByAbortedTransaction();
     }
 
     /**
@@ -1948,7 +1988,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             return;
         }
         try {
-            if (pm.pendingInvalidation().isPresent()) {
+            if (pm.pendingInvalidation().isPresent() || pm.isReplayOwed()) {
                 boolean entered;
                 try {
                     entered = pm.beginReplacement();
@@ -1968,10 +2008,8 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                     return; // the wait elapsed; a retry is scheduled and the condition stays recorded
                 }
                 try {
-                    // every worker that produced into the aborted transaction has already mailboxed its result
-                    // (the write lock guarantees it); land those results before the replay so the ledger is complete
-                    processWorkCompleteMailBox(Duration.ZERO);
-                    int ignoredRestored = wm.restoreWorkDiscardedByAbortedTransaction(); // logged inside; nothing in this pass depends on the count
+                    int restored = replayWorkDiscardedByAbortedTransaction();
+                    pm.replayCompleted(restored); // only now: a throw above leaves the replay owed, and the next pass runs it first
                 } finally {
                     pm.releaseCommitLockAfterReplacement();
                 }
@@ -1985,6 +2023,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             }
         } catch (RuntimeException e) {
             log.error("Producer recovery pass failed unexpectedly; it will be attempted again on a later pass: {}", describeWithRootCause(e), e);
+            pm.deferAfterFailedPass("the recovery pass failed with " + e.getClass().getName());
         } catch (Error fatal) {
             // Not retried, and not left to the supervisor either: its catch is Exception, so an Error would leave
             // the instance RUNNING with every worker parked on the produce lock for good. Leave RUNNING first - that
@@ -2111,9 +2150,18 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             // to avoid, reached through a different door. addToMailbox is in a finally for the same
             // reason: returning the record is the part that must happen.
             Throwable bookkeepingFailed = null;
+            // A batch that could not be produced because the producer is being replaced is deferred, not failed:
+            // the producer, not the record, is what stopped it, so no attempt is counted against the record and
+            // no retry delay applies. A user's retry-delay function or dead-letter policy reads that history
+            // through RecordContext, and a record must not be dead-lettered for being in flight during a recovery.
+            boolean deferredForRecovery = e instanceof ProducerInvalidatedException;
             for (var wc : workContainerBatch) {
                 try {
-                    wc.onUserFunctionFailure(e);
+                    if (deferredForRecovery) {
+                        wc.deferForRecovery();
+                    } else {
+                        wc.onUserFunctionFailure(e);
+                    }
                 } catch (Throwable userCodeThrew) {
                     bookkeepingFailed = firstOrSuppress(bookkeepingFailed, userCodeThrew);
                 }
@@ -2153,6 +2201,9 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                         " mailbox. Context: {}", context, e);
                 if (PCRetriableException.isPresentIn(e)) {
                     log.debug("Explicit " + PCRetriableException.class.getSimpleName() + " caught, logging at DEBUG only. " + msg, e);
+                } else if (e instanceof ProducerInvalidatedException) {
+                    // not a failure of the user's function: the producer is being replaced and the batch re-queues
+                    log.debug("Batch deferred for producer recovery, returning to mailbox without a failure recorded. Context: {}", context, e);
                 } else {
                     log.error(msg, e);
                 }

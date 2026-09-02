@@ -303,10 +303,15 @@ public enum TransactionalClaim {
             + "rogue producer initialised under PC's own derived transactional.id fences PC's producer three times on a "
             + "real coordinator; each time the recovery counter moves, every source record's result is visible exactly "
             + "once at read_committed, and the control - the rogue's next transactional call throwing "
-            + "ProducerFencedException - shows the replacement re-initialised under the same id. Negative control "
-            + "observed at the unit level: ProducerRecoveryTest's fenced-during-commit case was RED before recovery "
-            + "existed (no replacement was ever built) and GREEN after; at the broker level, with canRecover() "
-            + "forced false the IT fails because the instance closes on the first fence");
+            + "ProducerFencedException - shows the replacement re-initialised under the same id. That case fences "
+            + "on an empty ledger, so it proves the replacement half; the replay half is "
+            + "ProducerFencingRecoveryIT#aFenceLandingOnCompletedButUncommittedWorkReplaysItAndEveryResultIsStillVisibleExactlyOnce, "
+            + "where a 10 s commit interval keeps a processed phase uncommitted when the rogue arrives: the broker "
+            + "aborts the transaction that carried its output, every key's user function runs at least twice, and "
+            + "exactly one result per key is visible after a settle poll. Negative control observed at the unit "
+            + "level: ProducerRecoveryTest's fenced-during-commit case was RED before recovery existed (no "
+            + "replacement was ever built) and GREEN after; at the broker level, with canRecover() forced false "
+            + "the IT fails because the instance closes on the first fence");
 
     /**
      * Where a claim is published, and how to find the text that must still contain it.

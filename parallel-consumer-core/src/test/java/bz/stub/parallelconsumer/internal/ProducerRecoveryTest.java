@@ -84,6 +84,8 @@ class ProducerRecoveryTest {
     private final List<Instant> factoryCallTimes = new CopyOnWriteArrayList<>();
     /** How many times the user function saw each offset. */
     private final Map<Long, AtomicInteger> seen = new ConcurrentHashMap<>();
+    /** The failed-attempt count each delivery of each offset reported through its RecordContext, in order. */
+    private final Map<Long, List<Integer>> failedAttemptsSeen = new ConcurrentHashMap<>();
     /** Applied to each producer as the factory builds it, keyed by build index (0 = the initial producer). */
     private final Map<Integer, Consumer<MockProducer<String, String>>> onBuild = new ConcurrentHashMap<>();
     private volatile Optional<CountDownLatch> holdFactoryUntil = Optional.empty();
@@ -163,6 +165,8 @@ class ProducerRecoveryTest {
         consumer.subscribeWithRebalanceAndAssignment(UniLists.of(TOPIC), 1);
         pc.pollAndProduceMany(context -> {
             seen.computeIfAbsent(context.offset(), ignored -> new AtomicInteger()).incrementAndGet();
+            failedAttemptsSeen.computeIfAbsent(context.offset(), ignored -> new CopyOnWriteArrayList<>())
+                    .add(context.getSingleRecord().getNumberOfFailedAttempts());
             insideUserFunction.accept(context);
             return UniLists.of(new ProducerRecord<>("out", context.key(), context.value()));
         });
@@ -186,6 +190,33 @@ class ProducerRecoveryTest {
             groupMetadata = new ConsumerGroupMetadata(GROUP, groupMetadata.generationId() + 1, "member-1", Optional.empty());
             throw new ProducerFencedException("fenced at commit");
         }).when(producer).sendOffsetsToTransaction(anyMap(), any(ConsumerGroupMetadata.class));
+    }
+
+    /** Fences the producer at its second sendOffsetsToTransaction; the first commit lands as normal. */
+    private void fenceAtSecondCommit(MockProducer<String, String> producer) {
+        var commits = new AtomicInteger();
+        doAnswer(invocation -> {
+            if (commits.incrementAndGet() == 1) {
+                return invocation.callRealMethod();
+            }
+            producer.fenceProducer();
+            throw new ProducerFencedException("fenced at the second commit");
+        }).when(producer).sendOffsetsToTransaction(anyMap(), any(ConsumerGroupMetadata.class));
+    }
+
+    /**
+     * The exactly-once invariant a replay defect breaks: every offset the replacement committed below its frontier
+     * has output in the replacement's own history. An offset committed by the replacement whose only output went
+     * into the discarded producer's aborted transaction was committed for output the broker never saw.
+     */
+    private void assertEveryOffsetTheReplacementCommittedWasProducedByIt(MockProducer<String, String> replacement) {
+        long frontier = highestCommittedOffset(replacement);
+        assertWithMessage("fixture: the replacement committed something").that(frontier).isAtLeast(1);
+        List<String> keysProducedByReplacement = replacement.history().stream().map(ProducerRecord::key).collect(java.util.stream.Collectors.toList());
+        for (long offset = 0; offset < frontier; offset++) {
+            assertWithMessage("offset %s was committed by the replacement, so its output must have been produced by the replacement, not only by the discarded producer", offset)
+                    .that(keysProducedByReplacement).contains("k" + offset);
+        }
     }
 
     /** Every send's future fails with the condition - the shape FutureRecordMetadata.valueOrError produces. */
@@ -446,6 +477,128 @@ class ProducerRecoveryTest {
         assertThat(pc.isClosedOrFailed()).isFalse();
         assertThat(pc.getFailureCause()).isNull();
         assertWithMessage("the record produced into the aborted transaction ran again").that(seen.get(0L).get()).isAtLeast(2);
+    }
+
+    /**
+     * The replay is owed until it completes. A successful-work listener is user code that runs inside the drain;
+     * one that throws there used to leave the pass's catch saying "attempted again on a later pass" while the next
+     * pass, finding no condition pending, built the replacement straight away - and its first commit trimmed the
+     * intact ledger for output the broker had discarded. Now the replay stays owed, the next pass re-enters the lock
+     * and runs it first, and no offset the replacement commits lacks output the replacement produced.
+     */
+    @Test
+    void aListenerThrowingDuringTheRecoveryDrainLeavesTheReplayOwedUntilALaterPassCompletesIt() throws Exception {
+        var workerHoldsTheProduceLock = new CountDownLatch(1);
+        var releaseTheWorker = new CountDownLatch(1);
+        var firstDelivery = new AtomicBoolean(true);
+        insideUserFunction = context -> {
+            if (firstDelivery.compareAndSet(true, false)) {
+                workerHoldsTheProduceLock.countDown();
+                try {
+                    releaseTheWorker.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        };
+        start(optionsBuilder().build());
+        producerManager().recoveryBackoffInitial = Duration.ofMillis(50);
+        AbstractParallelEoSStreamProcessor<String, String> engine = pc;
+        var listenerThrewDuringTheDrain = new AtomicBoolean(false);
+        engine.wm.addSuccessfulWorkListener(wc -> {
+            // only inside the recovery drain, and only once: the ordinary control-loop drain would end the instance
+            if (producerManager().isReplayOwed() && listenerThrewDuringTheDrain.compareAndSet(false, true)) {
+                throw new RuntimeException("listener threw during the recovery drain");
+            }
+        });
+        addRecords(0, 0);
+        assertThat(workerHoldsTheProduceLock.await(30, TimeUnit.SECONDS)).isTrue();
+
+        // the fence lands while the worker holds the produce lock; its result is mailboxed after, so the recovery
+        // drain is what lands it - and that is where the listener throws
+        producerManager().recordInvalidation(new ProducerFencedException("fenced by a rebalance"));
+        await().atMost(Duration.ofSeconds(30)).until(() -> producerManager().getProducerTransactionLock().hasQueuedThreads());
+        releaseTheWorker.countDown();
+
+        await("the listener to have thrown inside the recovery drain").atMost(Duration.ofSeconds(30)).until(listenerThrewDuringTheDrain::get);
+        awaitProducers(2);
+        awaitCommittedThrough(producers.get(1), 1);
+        assertThat(pc.isClosedOrFailed()).isFalse();
+        assertEveryOffsetTheReplacementCommittedWasProducedByIt(producers.get(1));
+        assertWithMessage("the record whose output the aborted transaction discarded ran again").that(seen.get(0L).get()).isAtLeast(2);
+    }
+
+    /**
+     * Ordering across a replay (KEY ordering, R13): the second record of a key is dispatched once the first
+     * completes, and can be on its way to the produce lock when the replay puts the first back. It must not produce
+     * ahead of it into the replacement's transaction - it re-queues, and ordered selection takes the restored, lower
+     * offset first. Eager processing, so the record is dispatched and held in its user function before the fence
+     * with no lock held; the fence lands on the second commit, after the warm-up record's first, immediate one.
+     */
+    @Test
+    void aRecordDispatchedBeforeTheReplayProducesAfterTheRestoredEarlierRecordOfItsKey() throws Exception {
+        onBuild.put(0, this::fenceAtSecondCommit);
+        var laterRecordDispatched = new CountDownLatch(1);
+        var releaseTheLaterRecord = new CountDownLatch(1);
+        var firstDeliveryOfOffsetTwo = new AtomicBoolean(true);
+        insideUserFunction = context -> {
+            if (context.offset() == 2 && firstDeliveryOfOffsetTwo.compareAndSet(true, false)) {
+                laterRecordDispatched.countDown();
+                try {
+                    releaseTheLaterRecord.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        };
+        start(optionsBuilder()
+                .ordering(ParallelConsumerOptions.ProcessingOrder.KEY)
+                .allowEagerProcessingDuringTransactionCommit(true)
+                .commitInterval(Duration.ofSeconds(2))
+                .build());
+        consumer.addRecord(new ConsumerRecord<>(TOPIC, 0, 0, "warm-up", "v0"));
+        awaitCommittedThrough(producers.get(0), 1); // the first commit is immediate; the second is two seconds out
+        consumer.addRecord(new ConsumerRecord<>(TOPIC, 0, 1, "same-key", "v1"));
+        consumer.addRecord(new ConsumerRecord<>(TOPIC, 0, 2, "same-key", "v2"));
+
+        assertThat(laterRecordDispatched.await(30, TimeUnit.SECONDS)).isTrue();
+        assertWithMessage("fixture: offset 2 was dispatched before the fence, so it is in flight across the replay")
+                .that(registry.find("pc.producer.recoveries").counters()).isEmpty();
+        assertThat(producerManager().isProducerAvailable()).isTrue();
+        // the second commit fences; recovery replays offset 1 and publishes the replacement, all while 2 is held
+        awaitProducers(2);
+        await().atMost(Duration.ofSeconds(30)).until(() -> producerManager().isProducerAvailable());
+        releaseTheLaterRecord.countDown();
+
+        awaitCommittedThrough(producers.get(1), 3);
+        List<String> sameKeyValuesInReplacementOrder = producers.get(1).history().stream()
+                .filter(record -> record.key().equals("same-key"))
+                .map(ProducerRecord::value)
+                .collect(java.util.stream.Collectors.toList());
+        assertWithMessage("the restored earlier offset is produced before the later one that waited out the replay")
+                .that(sameKeyValuesInReplacementOrder).containsExactly("v1", "v2").inOrder();
+        assertWithMessage("offset 2 ran again after being re-queued").that(seen.get(2L).get()).isEqualTo(2);
+        assertWithMessage("being re-queued for the recovery is not a failed attempt of the record")
+                .that(failedAttemptsSeen.get(2L)).containsExactly(0, 0).inOrder();
+    }
+
+    /**
+     * Recovery is silent at the record level: a record whose produce failed because the producer was being
+     * replaced is re-queued with no attempt counted against it - the count a retry-delay function or a
+     * dead-letter policy reads through RecordContext - and nothing counted on the failed-records meter.
+     */
+    @Test
+    void aRecordDeferredForRecoveryCarriesNoFailedAttemptAndCountsOnNoFailureMeter() {
+        onBuild.put(0, producer -> failEverySendFromTheFuture(producer, new InvalidPidMappingException("producer id expired")));
+        start(optionsBuilder().build());
+        addRecords(0, 0);
+
+        awaitProducers(2);
+        awaitCommittedThrough(producers.get(1), 1);
+
+        assertWithMessage("the second delivery saw no failed attempt from the first").that(failedAttemptsSeen.get(0L)).containsExactly(0, 0).inOrder();
+        double failedRecords = registry.find("pc.failed.records").counters().stream().mapToDouble(c -> c.count()).sum();
+        assertWithMessage("the failed-records meter did not count the deferral").that(failedRecords).isEqualTo(0.0);
     }
 
     /**

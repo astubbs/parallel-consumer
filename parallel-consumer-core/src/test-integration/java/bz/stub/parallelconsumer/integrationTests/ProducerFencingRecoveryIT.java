@@ -39,6 +39,7 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
@@ -72,6 +73,9 @@ class ProducerFencingRecoveryIT extends BrokerIntegrationTest<String, String> {
     private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
     private final Map<String, List<String>> resultsByKey = new HashMap<>();
     private final Set<String> keysProcessed = ConcurrentHashMap.newKeySet();
+    /** How many times the user function ran for each key - a replayed record runs at least twice. */
+    private final Map<String, AtomicInteger> runsByKey = new ConcurrentHashMap<>();
+    private Consumer<String, String> pcConsumer;
     private final List<KafkaProducer<String, String>> rogues = new ArrayList<>();
     private volatile String derivedTransactionalId;
 
@@ -81,7 +85,17 @@ class ProducerFencingRecoveryIT extends BrokerIntegrationTest<String, String> {
         outputTopic = getTopic() + "-output";
         getKcu().createTopic(outputTopic, numPartitions);
 
-        var pcConsumer = getKcu().<String, String>createNewConsumer(KafkaClientUtils.GroupOption.NEW_GROUP);
+        pcConsumer = getKcu().<String, String>createNewConsumer(KafkaClientUtils.GroupOption.NEW_GROUP);
+
+        verifier = getKcu().createNewConsumer("fencing-recovery-verifier-" + nextInt());
+        verifier.subscribe(UniLists.of(outputTopic));
+    }
+
+    /**
+     * @param commitInterval short, so a fence lands on an empty ledger and tests the replacement alone; long, so
+     *                       completed work is still uncommitted when the fence lands and the replay runs on the wire
+     */
+    private void startPc(Duration commitInterval) {
         ProducerFactory<String, String> capturingFactory = config -> {
             derivedTransactionalId = (String) config.get(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
             return new KafkaProducer<>(config);
@@ -93,15 +107,17 @@ class ProducerFencingRecoveryIT extends BrokerIntegrationTest<String, String> {
                 .commitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER)
                 .ordering(ParallelConsumerOptions.ProcessingOrder.KEY)
                 .batchSize(1)
-                .commitInterval(ofMillis(500))
+                .commitInterval(commitInterval)
                 .defaultMessageRetryDelay(ofMillis(500))
                 .meterRegistry(registry)
                 .build();
         pc = new ParallelEoSStreamProcessor<>(options);
         pc.subscribe(UniLists.of(getTopic()));
-
-        verifier = getKcu().createNewConsumer("fencing-recovery-verifier-" + nextInt());
-        verifier.subscribe(UniLists.of(outputTopic));
+        pc.pollAndProduceMany(context -> {
+            keysProcessed.add(context.key());
+            runsByKey.computeIfAbsent(context.key(), ignored -> new AtomicInteger()).incrementAndGet();
+            return UniLists.of(new ProducerRecord<>(outputTopic, context.key(), "result-for-" + context.key()));
+        });
     }
 
     @AfterEach
@@ -127,10 +143,7 @@ class ProducerFencingRecoveryIT extends BrokerIntegrationTest<String, String> {
     @Test
     @ProvesClaim(TransactionalClaim.PRODUCER_INVALIDATION_RECOVERED)
     void aFencedProducerIsReplacedAndEveryResultIsStillVisibleExactlyOnce() {
-        pc.pollAndProduceMany(context -> {
-            keysProcessed.add(context.key());
-            return UniLists.of(new ProducerRecord<>(outputTopic, context.key(), "result-for-" + context.key()));
-        });
+        startPc(ofMillis(500));
         List<String> allKeys = new ArrayList<>();
 
         // phase 0: healthy traffic read back at read_committed - the non-vacuity anchor
@@ -150,26 +163,98 @@ class ProducerFencingRecoveryIT extends BrokerIntegrationTest<String, String> {
             allKeys.addAll(sendPhase(fence));
             await("recovery " + fence + " to complete").atMost(SETTLE).until(() -> recoveries() >= recoveriesBefore + 1);
             awaitResultsFor(allKeys);
-
-            // control: the replacement re-initialised under the same id, so the rogue is the fenced one now. A fenced
-            // producer learns it on its first network call, not on beginTransaction (a local state transition), so
-            // the control sends: the send must fail with the fence, and - the other half of the control - a rogue
-            // that was NOT fenced would land a record in the output topic and fail the exact-keys assertion below.
-            rogue.beginTransaction();
-            var rogueSend = rogue.send(new ProducerRecord<>(outputTopic, "rogue-" + fence, "must never be visible"));
-            var fencedRogue = assertThrows(Exception.class, () -> rogueSend.get(30, java.util.concurrent.TimeUnit.SECONDS));
-            assertWithMessage("the rogue's send fails with the fence, not with something else: %s", fencedRogue)
-                    .that(RecoverableProducerCondition.find(fencedRogue).map(Object::getClass).orElse(null))
-                    .isAnyOf(ProducerFencedException.class, InvalidProducerEpochException.class);
-            log.info("Fence {} control held: the rogue is fenced in turn ({})", fence, fencedRogue.getMessage());
+            assertTheRogueIsFencedInTurn(rogue, fence);
         }
 
         assertThat(pc.isClosedOrFailed()).isFalse();
         assertThat(recoveries()).isEqualTo(FENCES);
+        assertEveryKeyHasExactlyOneResultAfterSettling(allKeys);
+    }
+
+    /**
+     * The replay half of the guarantee, on the wire (R13, KTD5): the fence lands while a phase's records are
+     * processed and produced but not yet committed - the commit interval is long enough that the ledger is full when
+     * the rogue arrives - so the transaction that carried their output is aborted by the broker, PC puts every one of
+     * them back, and the replacement produces and commits them. Each key's user function runs at least twice and
+     * exactly one result per key is visible at {@code read_committed}. The first test fences on an empty ledger (its
+     * commit interval is short and every prior key was already visible), so it proves the replacement alone; without
+     * this case the replay could be stubbed out and the register stay green.
+     */
+    @Test
+    @ProvesClaim(TransactionalClaim.PRODUCER_INVALIDATION_RECOVERED)
+    void aFenceLandingOnCompletedButUncommittedWorkReplaysItAndEveryResultIsStillVisibleExactlyOnce() {
+        startPc(ofSeconds(10));
+        List<String> allKeys = new ArrayList<>();
+
+        // phase 0: the first commit is immediate, whatever the interval, so this phase lands and is read back
+        allKeys.addAll(sendPhase(0));
+        awaitResultsFor(allKeys);
+        log.info("Phase 0 read back; PC's transactional.id is {}", derivedTransactionalId);
+
+        // phase 1: processed and produced into the open transaction, which the 10 s interval keeps uncommitted
+        List<String> phaseOne = sendPhase(1);
+        allKeys.addAll(phaseOne);
+        await("phase 1 to be processed").atMost(SETTLE).until(() -> keysProcessed.containsAll(phaseOne));
+        pollVerifierFor(ofSeconds(2));
+        assertWithMessage("fixture: phase 1 is processed but not yet committed, so it is in the ledger when the fence lands")
+                .that(resultsByKey.keySet()).containsNoneIn(phaseOne);
+
+        double recoveriesBefore = recoveries();
+        KafkaProducer<String, String> rogue = rogueUnder(derivedTransactionalId);
+        rogue.initTransactions();
+        log.info("Fence with a non-empty ledger: rogue initialised under {}", derivedTransactionalId);
+
+        await("the recovery to complete").atMost(SETTLE).until(() -> recoveries() >= recoveriesBefore + 1);
+        awaitResultsFor(allKeys);
+        assertTheRogueIsFencedInTurn(rogue, 1);
+
+        assertThat(pc.isClosedOrFailed()).isFalse();
+        for (String key : phaseOne) {
+            assertWithMessage("%s was in the aborted transaction, so it was put back and processed again", key)
+                    .that(runsByKey.get(key).get()).isAtLeast(2);
+        }
+        assertEveryKeyHasExactlyOneResultAfterSettling(allKeys);
+    }
+
+    /**
+     * Control: the replacement re-initialised under the same id, so the rogue is the fenced one now. A fenced
+     * producer learns it on its first network call, not on beginTransaction (a local state transition), so the
+     * control sends: the send must fail with the fence, and - the other half of the control - a rogue that was NOT
+     * fenced would land a record in the output topic and fail the exact-keys assertion.
+     */
+    private void assertTheRogueIsFencedInTurn(KafkaProducer<String, String> rogue, int fence) {
+        rogue.beginTransaction();
+        var rogueSend = rogue.send(new ProducerRecord<>(outputTopic, "rogue-" + fence, "must never be visible"));
+        var fencedRogue = assertThrows(Exception.class, () -> rogueSend.get(30, java.util.concurrent.TimeUnit.SECONDS));
+        assertWithMessage("the rogue's send fails with the fence, not with something else: %s", fencedRogue)
+                .that(RecoverableProducerCondition.find(fencedRogue).map(Object::getClass).orElse(null))
+                .isAnyOf(ProducerFencedException.class, InvalidProducerEpochException.class);
+        log.info("Fence {} control held: the rogue is fenced in turn ({})", fence, fencedRogue.getMessage());
+    }
+
+    /**
+     * A duplicate lands after the first result, so "exactly one" is only meaningful after a quiet period: the
+     * verifier keeps reading for a few seconds past the last awaited key before the count is asserted.
+     */
+    private void assertEveryKeyHasExactlyOneResultAfterSettling(List<String> allKeys) {
+        pollVerifierFor(ofSeconds(5));
         for (String key : allKeys) {
             assertWithMessage("result for %s at read_committed", key).that(resultsByKey.get(key)).hasSize(1);
         }
         assertWithMessage("only the keys this test sent produced results").that(resultsByKey.keySet()).containsExactlyElementsIn(allKeys);
+    }
+
+    private void pollVerifierFor(Duration quietPeriod) {
+        Instant until = Instant.now().plus(quietPeriod);
+        while (Instant.now().isBefore(until)) {
+            collect(verifier.poll(ofMillis(250)));
+        }
+    }
+
+    private void collect(ConsumerRecords<String, String> polled) {
+        for (ConsumerRecord<String, String> record : polled) {
+            resultsByKey.computeIfAbsent(record.key(), ignored -> new ArrayList<>()).add(record.value());
+        }
     }
 
     private double recoveries() {
@@ -199,10 +284,7 @@ class ProducerFencingRecoveryIT extends BrokerIntegrationTest<String, String> {
     private void awaitResultsFor(List<String> keys) {
         Instant deadline = Instant.now().plus(SETTLE);
         while (Instant.now().isBefore(deadline)) {
-            ConsumerRecords<String, String> polled = verifier.poll(ofMillis(250));
-            for (ConsumerRecord<String, String> record : polled) {
-                resultsByKey.computeIfAbsent(record.key(), ignored -> new ArrayList<>()).add(record.value());
-            }
+            collect(verifier.poll(ofMillis(250)));
             if (keys.stream().allMatch(resultsByKey::containsKey)) {
                 return;
             }

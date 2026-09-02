@@ -369,8 +369,6 @@ public class PartitionState<K, V> {
         Map<Long, ConsumerRecord<K, V>> discarded;
         synchronized (uncommittedCompletionsLock) {
             discarded = new TreeMap<>(completedButUncommitted);
-            completedButUncommitted.clear();
-            completionsInCommit = Collections.emptySet();
         }
         if (discarded.isEmpty()) {
             return 0;
@@ -379,6 +377,13 @@ public class PartitionState<K, V> {
         for (ConsumerRecord<K, V> record : discarded.values()) {
             getShardManager().addWorkContainer(epoch, record);
             addNewIncompleteRecord(record);
+        }
+        // forgotten only once every entry is back in processing: a throw mid-loop leaves the ledger intact for the
+        // next pass, and both registrations tolerate a repeat (the shard keeps its resident, the incomplete set is a
+        // put), so replaying an entry twice costs nothing
+        synchronized (uncommittedCompletionsLock) {
+            discarded.keySet().forEach(completedButUncommitted::remove);
+            completionsInCommit = Collections.emptySet();
         }
         setDirty();
         log.debug("Restored {} completed-but-uncommitted record(s) to processing for {} after an aborted transaction; commit frontier is now {}",

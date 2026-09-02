@@ -410,6 +410,17 @@ public class ShardManager<K, V> {
     }
 
     /**
+     * Back into selection at once, and NOT into the retry queue: a delivery deferred for a producer recovery carries
+     * no failure history, so it has no retry deadline - and the retry queue reads an absent deadline as
+     * {@link java.time.Instant#MIN}, which {@link #getLowestRetryTime()} turns into a {@code long overflow} on the
+     * control thread. Ordered selection then takes it in offset order behind whatever the replay put back.
+     */
+    public void onDeferredForRecovery(WorkContainer<?, ?> wc) {
+        log.debug("Work deferred for producer recovery");
+        getShard(computeShardKey(wc)).ifPresent(shard -> shard.onFailure(wc));
+    }
+
+    /**
      * @return none if there are no messages to retry
      */
     public Optional<Duration> getLowestRetryTime() {

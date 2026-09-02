@@ -92,10 +92,109 @@ class ProducerManagerRecoveryTest {
         return replacement;
     }
 
+    /** The write-locked half as the control thread runs it: enter, (drain and) replay, release. */
     private void recoverPhaseA() throws InterruptedException {
+        recoverPhaseA(0);
+    }
+
+    private void recoverPhaseA(int restoredByTheReplay) throws InterruptedException {
         manager.recordInvalidation(new ProducerFencedException("fenced"));
         assertThat(manager.beginReplacement()).isTrue();
+        manager.replayCompleted(restoredByTheReplay);
         manager.releaseCommitLockAfterReplacement();
+    }
+
+    /**
+     * Between entering the lock and the replay returning, the aborted transaction's work is in the ledger and
+     * nowhere else. A pass that entered and threw before the replay must not build on its next pass - the commit
+     * after that would trim the ledger for output the broker never saw - so the replay stays owed and the build is
+     * deferred until a pass has completed it.
+     */
+    @Test
+    void noReplacementIsBuiltWhileTheReplayIsStillOwed() throws Exception {
+        manager.recordInvalidation(new ProducerFencedException("fenced"));
+        assertThat(manager.beginReplacement()).isTrue();
+        manager.releaseCommitLockAfterReplacement(); // the drain threw: replayCompleted was never reached
+        assertThat(manager.isReplayOwed()).isTrue();
+
+        var deferred = manager.completeReplacement();
+
+        assertThat(deferred.getKind()).isEqualTo(ProducerManager.ReplacementOutcome.Kind.DEFERRED);
+        assertWithMessage("nothing was built").that(built).isEmpty();
+        assertThat(manager.isReplacing()).isTrue();
+        assertWithMessage("paced like a failed build, not spun").that(manager.isRecoveryAttemptDue(Instant.now())).isFalse();
+
+        // the next pass re-enters the lock and replays; only then may it build
+        assertThat(manager.beginReplacement()).isTrue();
+        manager.replayCompleted(0);
+        manager.releaseCommitLockAfterReplacement();
+        assertThat(manager.isReplayOwed()).isFalse();
+        assertThat(manager.completeReplacement().getKind()).isEqualTo(ProducerManager.ReplacementOutcome.Kind.REPLACED);
+    }
+
+    /**
+     * A worker dispatched before the replay put lower offsets back into its shard, parked through the outage,
+     * must not produce ahead of them into the replacement's transaction: it is refused the lock and its batch
+     * re-queues behind the restored work. Compared against the generation the control thread stamped at dispatch.
+     */
+    @Test
+    void aWorkerDispatchedBeforeAReplayIsRefusedTheProduceLockAfterIt() throws Exception {
+        var context = mock(PollContextInternal.class);
+        doReturn(java.util.OptionalLong.of(manager.replayGeneration())).when(context).replayGenerationAtDispatch();
+        manager.recordInvalidation(new ProducerFencedException("fenced"));
+        assertThat(manager.beginReplacement()).isTrue();
+        var outcome = new AtomicReference<Throwable>();
+
+        var blocked = new BlockedThreadAsserter();
+        blocked.assertUnblocksAfter(
+                () -> {
+                    try {
+                        manager.beginProducing(context);
+                    } catch (Throwable t) {
+                        outcome.set(t);
+                    }
+                },
+                () -> {
+                    manager.replayCompleted(3); // the replay put three records back
+                    manager.releaseCommitLockAfterReplacement();
+                    assertThat(manager.completeReplacement().isTerminal()).isFalse();
+                });
+
+        assertThat(outcome.get()).isInstanceOf(ProducerInvalidatedException.class);
+        assertThat(outcome.get()).hasMessageThat().contains("re-queues behind");
+        assertWithMessage("the refused hold was released").that(manager.getProducerTransactionLock().getReadLockCount()).isEqualTo(0);
+        assertWithMessage("a worker dispatched after the replay is not refused")
+                .that(manager.replayGeneration()).isNotEqualTo(0L);
+    }
+
+    /**
+     * The control arm of the check above: a replay that put nothing back moved no offset below any record in
+     * flight, so a parked worker proceeds as before.
+     */
+    @Test
+    void aParkedWorkerProceedsWhenTheReplayPutNothingBack() throws Exception {
+        var context = mock(PollContextInternal.class);
+        doReturn(java.util.OptionalLong.of(manager.replayGeneration())).when(context).replayGenerationAtDispatch();
+        manager.recordInvalidation(new ProducerFencedException("fenced"));
+        assertThat(manager.beginReplacement()).isTrue();
+        var outcome = new AtomicReference<Throwable>();
+
+        var blocked = new BlockedThreadAsserter();
+        blocked.assertUnblocksAfter(
+                () -> {
+                    try {
+                        manager.finishProducing(manager.beginProducing(context));
+                    } catch (Throwable t) {
+                        outcome.set(t);
+                    }
+                },
+                () -> {
+                    manager.replayCompleted(0);
+                    manager.releaseCommitLockAfterReplacement();
+                    assertThat(manager.completeReplacement().isTerminal()).isFalse();
+                });
+
+        assertThat(outcome.get()).isNull();
     }
 
     @Test
@@ -237,6 +336,7 @@ class ProducerManagerRecoveryTest {
         manager.recordInvalidation(new ProducerFencedException("fenced again"));
         assertThat(manager.isRecoveryAttemptDue(Instant.now())).isFalse();
         assertThat(manager.beginReplacement()).isTrue(); // the pacing gates the control loop, not the lock
+        manager.replayCompleted(0);
         manager.releaseCommitLockAfterReplacement();
         assertThat(manager.completeReplacement().getKind()).isEqualTo(ProducerManager.ReplacementOutcome.Kind.REPLACED);
         assertThat(manager.getConsecutiveRecoveriesWithoutCommit()).isEqualTo(2);

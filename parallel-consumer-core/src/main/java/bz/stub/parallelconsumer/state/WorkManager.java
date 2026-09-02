@@ -270,7 +270,10 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
 
     private void onFailureResult(WorkContainer<K, V> wc, PartitionState<K, V> partitionState) {
         // error occurred, put it back in the queue if it can be retried
-        incrementCounterIfPresent(failedRecordsCounters, wc.getTopicPartition());
+        if (!wc.isDeferredForRecovery()) {
+            // a delivery deferred for a producer recovery is not a failure of the record, and is not counted as one
+            incrementCounterIfPresent(failedRecordsCounters, wc.getTopicPartition());
+        }
         wc.endFlight();
         pm.onFailure(wc, partitionState);
         // Re-validate against the LIVE map immediately before the retry re-queue - the staleness checkpoint's
@@ -286,6 +289,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         // Skipping the re-queue is the safe direction: the partition's next owner redelivers the record.
         if (checkIfWorkIsStale(wc)) {
             log.debug("Not re-queueing failed work for retry - its partition was revoked mid-flight, so the retry belongs to the partition's next owner. {}", wc);
+        } else if (wc.isDeferredForRecovery()) {
+            sm.onDeferredForRecovery(wc);
         } else {
             sm.onFailure(wc);
         }
