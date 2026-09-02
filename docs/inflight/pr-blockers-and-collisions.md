@@ -50,16 +50,16 @@ Blockers, collisions, and decisions someone is waiting on. Not a PR list - `gh` 
 <!-- post-merge: checked-begin - the chain is recorded as history and the outstanding item is stated
      against master rather than against a PR's live state, so nothing here turns false on a merge -->
 Three PRs, one dependency chain, declared with `depends on` in astubbs#262's body and enforced by the
-`Check PR Dependencies` required check. Both parents have merged - astubbs#261 on 2026-08-14, then
-astubbs#257 - so the chain is discharged and only astubbs#262 is still open. Kept because a reader who
-knows this work as a three-PR stack needs telling which parts are already master.
+`Check PR Dependencies` required check. **All three are master now** - astubbs#261, then astubbs#257,
+then astubbs#262, which was rebase-merged rather than squashed so its separable workstreams stayed
+separable in the log. Kept because a reader who knows this work as a three-PR stack needs telling that
+none of it is pending, and because the debt below outlived it.
 
-1. **astubbs#261**, merged - a terminally failed send left a partial result set visible at
-   `read_committed`.
-2. **astubbs#257**, merged - produce-lock double release. At `batchSize >= 2` the lock was taken per
-   poll context but released per record.
-3. **astubbs#262**, open - the battle test itself. **Rebase-merge, not squash**: it holds separable
-   workstreams, and squashing buries two real defect discoveries under one 5,000-line test commit.
+1. **astubbs#261** - a terminally failed send left a partial result set visible at `read_committed`.
+2. **astubbs#257** - produce-lock double release. At `batchSize >= 2` the lock was taken per poll
+   context but released per record.
+3. **astubbs#262** - the battle test itself, and the claim register that is now the standing gate on
+   the exactly-once headline.
 
 **The debt: astubbs#257's merged commit message understates the defect, and release notes are
 generated from the log.** It describes redelivery - "handed records back for a second delivery" - and
