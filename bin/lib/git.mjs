@@ -211,6 +211,44 @@ export function blobDiffStat(a, b) {
 }
 
 /**
+ * The merge-base commit for each ref against `base`.
+ *
+ * `git merge-base` takes one pair and has no batch form, so this is a fork per ref and there is no
+ * arrangement that avoids it. It is here rather than in a caller because it is plumbing with no
+ * interpretation, and because the alternative is what this file's header was written about: the
+ * private copy that works until it disagrees.
+ */
+export function mergeBases(base, refs) {
+    const byRef = new Map()
+    for (const ref of refs) {
+        const mb = exec('git', ['merge-base', base, ref]).out.trim()
+        if (mb) byRef.set(ref, mb)
+    }
+    return byRef
+}
+
+/**
+ * The blob at `path` in each of those merge-base commits, in ONE subprocess.
+ *
+ * The obvious spelling is a `git rev-parse --verify <mb>:<path>` per ref, and that is what the first
+ * two callers here did - about 3,500 forks for four candidates over 437 refs, most of a `refactor-window`
+ * run. A commit SHA is a perfectly good left-hand side for `<rev>:<path>`, so `blobsForPath` already
+ * batches this; it just had to be asked.
+ *
+ * Keyed by merge-base SHA, not by ref: branches share fork points heavily, so the distinct set is a
+ * fraction of the ref count and the batch collapses accordingly. Look a ref's answer up through its
+ * own entry in the map this was built from.
+ */
+export function mergeBaseBlobs(mbByRef, path) {
+    // `{ok, blobs}`, NOT the bare map. Returning `.blobs` threw away exactly the flag `blobsForPath`
+    // carries a flag for: a failed `cat-file` produces an empty map, and both consumers then read
+    // that as "the path is absent at the merge-base" - which `note drift` renders as a note this
+    // branch created, and `refactor-window` renders as a whole-file divergence. Two different silent
+    // wrong answers from one dropped boolean.
+    return blobsForPath([...new Set(mbByRef.values())], path)
+}
+
+/**
  * When the last fetch was, and HOW MUCH OF THE CORPUS it covered.
  *
  * FETCH_HEAD's mtime dates a fetch of ANY width, so `git fetch origin master` - one ref of 292 -

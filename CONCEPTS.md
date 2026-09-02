@@ -268,6 +268,22 @@ today's findings as known, and every new one is blocked from that moment. It is 
 list - a suppression says "never report this", where a ratchet says "this one is already on the
 books, and here is the list you are expected to shorten".
 
+## Refactor window
+
+A **refactor candidate** is a file the project has already decided to decompose, listed as such
+rather than inferred from size or complexity. The decision is the entry condition: a large file
+nobody has committed to breaking up is not a candidate.
+
+Its **refactor window** is the period in which no large in-flight change stands on it, so a
+decomposition can land without forcing an expensive merge onto somebody else's unfinished work. The
+window is measured by the **largest single divergence** any live branch holds against the mainline
+for that file - not by how many branches touch it. The two come apart routinely: a file every branch
+adjusts by a line or two is open, while one branch rewriting half of it is enough to close the
+window on its own. Counting branches answers a question nobody asked.
+
+A window closes and reopens on its own as work lands, so the state is derived rather than declared,
+and nothing about it is stored: a remembered verdict is a second thing that can be wrong.
+
 ## Agent harness
 
 ### Guard

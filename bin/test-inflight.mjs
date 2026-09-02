@@ -244,6 +244,162 @@ async function aDriftedNote(binDir) {
  * A check is an async predicate over a bin directory, so the same code runs against the real tree
  * and against a mutant. Returning a boolean rather than throwing is what makes that possible.
  */
+// ---------------------------------------------------------------------------------------------
+// REFACTOR-WINDOW FIXTURES
+//
+// The four checks that shipped first covered `loadCandidates` and one regex over the source, and
+// NOTHING drove the measurement against an actual repository. Every defect the review found lived
+// in the half no test could reach: a renamed path scored as a whole new file, a null baseline
+// reported as four open windows, a ref with no merge-base dropped from both the maximum and the
+// count meant to make absences visible. Each builder below is the smallest repository that makes
+// one of those states reachable, and every check here was written to FAIL against the code as it
+// was - that is what made them worth writing.
+//
+// Deliberately not the shared `buildFixture()`: that one is a corpus of in-flight NOTES, and these
+// need source files moving between two paths, which is the fork's package rename in miniature.
+
+function windowGit(dir) {
+    return (...args) => {
+        const r = spawnSync('git', args, { cwd: dir, encoding: 'utf8' })
+        if (r.status !== 0) throw new Error(`fixture: git ${args.join(' ')} failed: ${r.stderr}`)
+        return r.stdout.trim()
+    }
+}
+
+function windowRepo() {
+    const dir = mkdtempSync(join(tmpdir(), 'inflight-window-'))
+    const git = windowGit(dir)
+    git('init', '-q', '-b', 'master')
+    return { dir, git, commit: (m) => { git('add', '-A'); git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', m) } }
+}
+
+const lines = (n, tag) => `${Array.from({ length: n }, (_, i) => `line ${i} ${tag}`).join('\n')}\n`
+
+/**
+ * THE PACKAGE RENAME IN MINIATURE, which is the shape three of the four shipped candidates hit.
+ *
+ * master holds the file at the OLD path. `renamed` moves it to the NEW path and adds five lines;
+ * its real divergence is therefore five, not the twenty-five lines the file happens to contain.
+ * `plain` keeps the old path and adds three. The correct maximum is 5.
+ */
+function buildRenameFixture() {
+    const { dir, git, commit } = windowRepo()
+    mkdirSync(join(dir, 'src', 'io'), { recursive: true })
+    writeFileSync(join(dir, 'src', 'io', 'Big.java'), lines(20, 'base'))
+    commit('base at the old path')
+
+    git('checkout', '-q', '-b', 'renamed')
+    mkdirSync(join(dir, 'src', 'bz'), { recursive: true })
+    git('mv', 'src/io/Big.java', 'src/bz/Big.java')
+    writeFileSync(join(dir, 'src', 'bz', 'Big.java'), lines(20, 'base') + lines(5, 'added by renamed'))
+    commit('rename the package and add five lines')
+
+    git('checkout', '-q', '-b', 'plain', 'master')
+    writeFileSync(join(dir, 'src', 'io', 'Big.java'), lines(20, 'base') + lines(3, 'added by plain'))
+    commit('add three lines at the old path')
+
+    git('checkout', '-q', 'master')
+    return dir
+}
+
+/** A ref with an unrelated history, so `git merge-base` cannot answer for it at all. */
+function buildOrphanFixture() {
+    const { dir, git, commit } = windowRepo()
+    mkdirSync(join(dir, 'src', 'io'), { recursive: true })
+    writeFileSync(join(dir, 'src', 'io', 'Big.java'), lines(10, 'base'))
+    commit('base')
+    git('checkout', '-q', '--orphan', 'unrelated')
+    writeFileSync(join(dir, 'src', 'io', 'Big.java'), lines(400, 'unrelated history'))
+    commit('a huge version on an unrelated history')
+    git('checkout', '-q', 'master')
+    return dir
+}
+
+/** Neither origin/master nor master resolves - the shallow / single-ref clone `baseline()` names. */
+function buildNoBaselineFixture() {
+    const dir = mkdtempSync(join(tmpdir(), 'inflight-nobase-'))
+    const git = windowGit(dir)
+    git('init', '-q', '-b', 'trunk')
+    mkdirSync(join(dir, 'src', 'io'), { recursive: true })
+    writeFileSync(join(dir, 'src', 'io', 'Big.java'), lines(10, 'base'))
+    git('add', '-A'); git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'only commit')
+    return dir
+}
+
+
+/**
+ * A file that grew, with the OLD version committed far enough back to sit outside the growth window
+ * and under its pre-rename name - so this also pins that the historical lookup tries every
+ * configured path rather than only today's.
+ *
+ * `rev-list --before` reads the COMMITTER date, so both dates are set; setting only the author date
+ * leaves the commit looking present-day and the window finds nothing.
+ */
+function buildGrowthFixture() {
+    const { dir, git } = windowRepo()
+    const old = { GIT_AUTHOR_DATE: '2020-01-01T00:00:00Z', GIT_COMMITTER_DATE: '2020-01-01T00:00:00Z' }
+    const commitAt = (msg, env) => {
+        git('add', '-A')
+        const r = spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', msg],
+            { cwd: dir, encoding: 'utf8', env: { ...process.env, ...env } })
+        if (r.status !== 0) throw new Error(`fixture: commit failed: ${r.stderr}`)
+    }
+    mkdirSync(join(dir, 'src', 'io'), { recursive: true })
+    writeFileSync(join(dir, 'src', 'io', 'Big.java'), lines(10, 'old'))
+    commitAt('long ago, under the old name', old)
+    mkdirSync(join(dir, 'src', 'bz'), { recursive: true })
+    git('mv', 'src/io/Big.java', 'src/bz/Big.java')
+    writeFileSync(join(dir, 'src', 'bz', 'Big.java'), lines(30, 'now'))
+    commitAt('renamed and grown', {})
+    return dir
+}
+
+
+/** A branch that only DELETES, so a signal counting additions alone scores it at zero. */
+function buildDeletionFixture() {
+    const { dir, git, commit } = windowRepo()
+    mkdirSync(join(dir, 'src', 'io'), { recursive: true })
+    writeFileSync(join(dir, 'src', 'io', 'Big.java'), lines(20, 'base'))
+    commit('base')
+    git('checkout', '-q', '-b', 'deleter')
+    writeFileSync(join(dir, 'src', 'io', 'Big.java'), lines(12, 'base'))
+    commit('delete eight lines')
+    git('checkout', '-q', 'master')
+    return dir
+}
+
+/** One MEASURABLE ref safely under threshold, plus one unrelated ref nobody can measure. */
+function buildMixedFixture() {
+    const { dir, git, commit } = windowRepo()
+    mkdirSync(join(dir, 'src', 'io'), { recursive: true })
+    writeFileSync(join(dir, 'src', 'io', 'Big.java'), lines(20, 'base'))
+    commit('base')
+    git('checkout', '-q', '-b', 'small')
+    writeFileSync(join(dir, 'src', 'io', 'Big.java'), lines(20, 'base') + lines(1, 'one more'))
+    commit('add one line')
+    git('checkout', '-q', '--orphan', 'unrelated')
+    writeFileSync(join(dir, 'src', 'io', 'Big.java'), lines(300, 'unrelated history'))
+    commit('a huge version on an unrelated history')
+    git('checkout', '-q', 'master')
+    return dir
+}
+
+/** Run `fn` with the process inside `dir`, restoring the previous cwd whatever happens. */
+async function inDir(dir, fn) {
+    const before = cwd()
+    chdir(dir)
+    try { return await fn() } finally { chdir(before) }
+}
+
+/** A candidate config written beside the fixture, so the loader's default path is never involved. */
+function windowConfig(dir, candidates, name = "candidates.json") {
+    const p = join(dir, name)
+    writeFileSync(p, JSON.stringify({ candidates }))
+    return p
+}
+
+const NO_PRS = { ok: true, map: new Map() }
+
 const CHECKS = [
     {
         id: 'library-never-exits-the-process',
@@ -255,6 +411,219 @@ const CHECKS = [
             const f = join(binDir, 'lib', 'prior-art.mjs')
             writeFileSync(f, `${readFileSync(f, 'utf8')}\nif (globalThis.__never) process.exit(1)\n`)
         }, // append, so there is no anchor to go stale
+    },
+    {
+        id: 'a-renamed-path-is-one-file-not-two',
+        why: 'the shipped config lists two paths per candidate BECAUSE the package rename is in flight, and reading them as two independent files scored a renamed branch at the whole file length - 3 of 4 candidates reported a fabricated divergence and named the wrong branch to land',
+        run: async (binDir) => {
+            const { refactorWindow } = await import(pathToFileURL(join(binDir, 'lib', 'refactor-window.mjs')).href)
+            const dir = buildRenameFixture()
+            return inDir(dir, () => {
+                const cfg = windowConfig(dir, [{ id: 'big', paths: ['src/bz/Big.java', 'src/io/Big.java'], threshold: 2, hint: 'h' }])
+                const r = refactorWindow({ configPath: cfg, prs: NO_PRS })
+                if (!r.ok) return false
+                const c = r.candidates[0]
+                // `renamed` added five lines while moving the file; `plain` added three. The file is
+                // twenty-five lines long on `renamed`, and that number must appear nowhere.
+                return c.ok === true && c.largest !== null && c.largest.churn === 5 && c.open === false
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'refactor-window.mjs'),
+            'const mbBlobsByPath = c.paths.map((p) => mergeBaseBlobs(mbByRef, p))',
+            'const mbBlobsByPath = [mergeBaseBlobs(mbByRef, c.paths[0])]'),
+    },
+    {
+        id: 'no-baseline-never-reports-a-window-open',
+        why: 'baseline() returns null in a shallow or single-ref clone and documents that the caller must say so; unchecked, every candidate reported OPEN and both hooks told the operator to go and decompose an oversized class from a measurement that never ran',
+        run: async (binDir) => {
+            const { refactorWindow } = await import(pathToFileURL(join(binDir, 'lib', 'refactor-window.mjs')).href)
+            const dir = buildNoBaselineFixture()
+            return inDir(dir, () => {
+                const cfg = windowConfig(dir, [{ id: 'big', paths: ['src/io/Big.java'], threshold: 1, hint: 'h' }])
+                const r = refactorWindow({ configPath: cfg, prs: NO_PRS })
+                // The whole run is refused. Anything that reports per-candidate here has already
+                // decided it measured something.
+                return r.ok === false && typeof r.reason === 'string' && /baseline/i.test(r.reason)
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'refactor-window.mjs'),
+            '    if (!base) {', '    if (false) {'),
+    },
+    {
+        id: 'a-ref-that-cannot-be-measured-is-never-counted-as-measured',
+        why: 'a ref with no merge-base was added to `matched` and then dropped by a bare `continue`, so it was in neither the maximum nor the unmatched count - a 400-line divergence on a live branch reported as no divergence at all',
+        run: async (binDir) => {
+            const { refactorWindow } = await import(pathToFileURL(join(binDir, 'lib', 'refactor-window.mjs')).href)
+            const dir = buildOrphanFixture()
+            return inDir(dir, () => {
+                const cfg = windowConfig(dir, [{ id: 'big', paths: ['src/io/Big.java'], threshold: 5, hint: 'h' }])
+                const r = refactorWindow({ configPath: cfg, prs: NO_PRS })
+                if (!r.ok) return false
+                const c = r.candidates[0]
+                // The unrelated ref must be visible as unanswerable, and must not leave a verdict of
+                // "open" standing on a measurement that skipped it.
+                return c.unanswerableRefs >= 1 && c.open === false && c.ok === false
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'refactor-window.mjs'),
+            'if (typeof added !== \'number\') { out.unanswerableRefs++; continue }',
+            'if (typeof added !== \'number\') { continue }'),
+    },
+    {
+        id: 'a-candidate-no-ref-carries-is-a-broken-config-not-a-quiet-tree',
+        why: 'the paths list exists to survive the package rename, so the day a spelling is retired the entry matches nothing - and that reported OPEN forever, which is the config going stale rendered as an instruction to start refactoring',
+        run: async (binDir) => {
+            const { refactorWindow } = await import(pathToFileURL(join(binDir, 'lib', 'refactor-window.mjs')).href)
+            const dir = buildRenameFixture()
+            return inDir(dir, () => {
+                const cfg = windowConfig(dir, [{ id: 'gone', paths: ['src/io/NoSuchFile.java'], threshold: 5, hint: 'h' }])
+                const r = refactorWindow({ configPath: cfg, prs: NO_PRS })
+                if (!r.ok) return false
+                const c = r.candidates[0]
+                return c.ok === false && c.open === false && /path/i.test(c.reason || '')
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'refactor-window.mjs'),
+            'if (matched.size === 0) {',
+            'if (false) {'),
+    },
+    {
+        id: 'growth-is-derived-from-git-and-follows-the-rename',
+        why: 'the whole point of deriving it is that it cannot rot the way docs/refactoring.md\'s own "1533 lines" did while the file reached 2405 - and asking only today\'s path would report a renamed file as newly created rather than as grown',
+        run: async (binDir) => {
+            const { refactorWindow } = await import(pathToFileURL(join(binDir, 'lib', 'refactor-window.mjs')).href)
+            const dir = buildGrowthFixture()
+            return inDir(dir, () => {
+                const cfg = windowConfig(dir, [{ id: 'big', paths: ['src/bz/Big.java', 'src/io/Big.java'], threshold: 5, hint: 'h' }])
+                const r = refactorWindow({ configPath: cfg, prs: NO_PRS })
+                if (!r.ok) return false
+                const g = r.candidates[0].growth
+                // 10 lines then under the old name, 30 now under the new one.
+                return g !== null && g.now === 30 && g.then === 10 && g.delta === 20
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'refactor-window.mjs'),
+            'function firstBlobAtAnyPath(rev, paths) {\n    for (const path of paths) {',
+            'function firstBlobAtAnyPath(rev, paths) {\n    for (const path of [paths[0]]) {'),
+    },
+    {
+        id: 'a-failed-merge-base-lookup-is-not-a-new-file',
+        why: 'the rewrite onto the shared primitives added the one line that separates "absent at the merge-base" from "git could not be asked", and NOTHING patched notes.mjs - so a future edit could silently restore drift reporting an existing note as created-by-this-branch and nothing would go red',
+        run: async (binDir) => {
+            const { addedSinceMergeBase } = await import(pathToFileURL(join(binDir, 'lib', 'notes.mjs')).href)
+            const dir = buildRenameFixture()
+            return inDir(dir, () => {
+                // A path containing a NEWLINE injects an extra line into `cat-file --batch-check`'s
+                // input, so git returns fewer answers than refs and `blobsForPath` reports ok:false -
+                // the only cheap way to reach the branch under test, and a real input rather than a stub.
+                const r = addedSinceMergeBase('master', 'renamed', 'src/io/a\nb.java', '0'.repeat(40))
+                // null means "unanswerable". `{newFile: true}` would be the old conflation returning.
+                return r === null
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
+            '    if (!mb.ok) return null', '    if (false) return null'),
+    },
+    {
+        id: 'a-deleting-branch-is-a-divergence-too',
+        why: 'the signal is conflict-producing divergence, not file growth - counting only added lines scored a branch that deletes or moves a large block at nearly zero, which is exactly the branch a decomposition collides with',
+        run: async (binDir) => {
+            const { refactorWindow } = await import(pathToFileURL(join(binDir, 'lib', 'refactor-window.mjs')).href)
+            const dir = buildDeletionFixture()
+            return inDir(dir, () => {
+                const cfg = windowConfig(dir, [{ id: 'big', paths: ['src/io/Big.java'], threshold: 3, hint: 'h' }])
+                const r = refactorWindow({ configPath: cfg, prs: NO_PRS })
+                if (!r.ok) return false
+                const c = r.candidates[0]
+                // Eight lines removed, none added. Counting additions alone reports 0 and opens.
+                return c.ok === true && c.largest !== null && c.largest.churn === 8 && c.open === false
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'refactor-window.mjs'),
+            '? d.added + d.removed', '? d.added'),
+    },
+    {
+        id: 'one-unmeasurable-ref-blocks-an-otherwise-open-verdict',
+        why: 'the fourth route to the false pass, and the one three earlier reviews walked past: when SOMETHING was measurable the verdict stopped consulting the unanswerable count, so a tiny measured divergence plus an unmeasured ref reported open',
+        run: async (binDir) => {
+            const { refactorWindow } = await import(pathToFileURL(join(binDir, 'lib', 'refactor-window.mjs')).href)
+            const dir = buildMixedFixture()
+            return inDir(dir, () => {
+                const cfg = windowConfig(dir, [{ id: 'big', paths: ['src/io/Big.java'], threshold: 50, hint: 'h' }])
+                const r = refactorWindow({ configPath: cfg, prs: NO_PRS })
+                if (!r.ok) return false
+                const c = r.candidates[0]
+                // largest is +1, far under the threshold of 50 - and one ref was never measured.
+                return c.largest !== null && c.largest.churn <= 2 && c.unanswerableRefs >= 1 && c.open === false
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'refactor-window.mjs'),
+            'out.open = out.unanswerableRefs === 0 && (out.largest === null || out.largest.churn <= c.threshold)',
+            'out.open = out.largest === null ? out.unanswerableRefs === 0 : out.largest.churn <= c.threshold'),
+    },
+    {
+        id: 'the-threshold-boundary-is-inclusive',
+        why: 'R8 says at-or-below the threshold is open, and an off-by-one at the boundary is the difference between a window that opens and one that never does',
+        run: async (binDir) => {
+            const { refactorWindow } = await import(pathToFileURL(join(binDir, 'lib', 'refactor-window.mjs')).href)
+            const dir = buildRenameFixture()
+            return inDir(dir, () => {
+                const at = windowConfig(dir, [{ id: 'big', paths: ['src/bz/Big.java', 'src/io/Big.java'], threshold: 5, hint: 'h' }], 'at.json')
+                const below = windowConfig(dir, [{ id: 'big', paths: ['src/bz/Big.java', 'src/io/Big.java'], threshold: 4, hint: 'h' }], 'below.json')
+                const rAt = refactorWindow({ configPath: at, prs: NO_PRS })
+                const rBelow = refactorWindow({ configPath: below, prs: NO_PRS })
+                // Largest is 5. At a threshold of 5 the window is open; at 4 it is not.
+                return rAt.ok && rBelow.ok && rAt.candidates[0].open === true && rBelow.candidates[0].open === false
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'refactor-window.mjs'),
+            'out.largest.churn <= c.threshold', 'out.largest.churn < c.threshold'),
+    },
+    {
+        id: 'a-broken-refactor-config-is-not-an-empty-candidate-list',
+        why: 'an empty list renders identically to a quiet tree, and the two mean opposite things - go and refactor, versus this tool is broken',
+        run: async (binDir) => {
+            const { loadCandidates } = await import(pathToFileURL(join(binDir, 'lib', 'refactor-window.mjs')).href)
+            // Scratch goes to a TEMP DIR, never to binDir. On the mutant pass binDir is a throwaway
+            // copy and either would do; on the real pass it is this repository's own bin/, and the
+            // first cut of these two checks left fixture JSON sitting in it.
+            const scratch = mkdtempSync(join(tmpdir(), 'inflight-refactor-'))
+            const bad = join(scratch, 'not-json.json')
+            writeFileSync(bad, '{ this is not json')
+            const broken = loadCandidates(bad)
+            const absent = loadCandidates(join(scratch, 'no-such-file.json'))
+            return broken.ok === false && typeof broken.reason === 'string' && broken.reason.length > 0
+                && absent.ok === false && typeof absent.reason === 'string' && absent.reason.length > 0
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'refactor-window.mjs'),
+            'return { ok: false, reason: `${path} is not valid JSON: ${e.message}` }',
+            'return { ok: true, candidates: [] }'),
+    },
+    {
+        id: 'a-refactor-candidate-names-every-path-it-is-known-by',
+        why: 'a bare string works today and silently loses the second path the moment somebody edits it in place - which across this fork\'s in-flight package rename is exactly the regression the list exists to prevent',
+        run: async (binDir) => {
+            const { loadCandidates } = await import(pathToFileURL(join(binDir, 'lib', 'refactor-window.mjs')).href)
+            const f = join(mkdtempSync(join(tmpdir(), 'inflight-refactor-')), 'bare-string-paths.json')
+            writeFileSync(f, JSON.stringify({ candidates: [{ id: 'x', paths: 'a/B.java', threshold: 1, hint: 'h' }] }))
+            const r = loadCandidates(f)
+            return r.ok === false && typeof r.reason === 'string' && r.reason.includes('paths')
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'refactor-window.mjs'),
+            '        if (!Array.isArray(c.paths)',
+            "        if (typeof c.paths === 'string') c.paths = [c.paths]\n        if (!Array.isArray(c.paths)"),
+    },
+    {
+        id: 'the-shipped-refactor-candidate-list-loads',
+        why: 'every other check here uses a fixture, so nothing would notice the file the tool actually ships with going malformed',
+        run: async (binDir) => {
+            const { loadCandidates } = await import(pathToFileURL(join(binDir, 'lib', 'refactor-window.mjs')).href)
+            const r = loadCandidates()
+            return r.ok === true && r.candidates.length > 0 && r.candidates.every((c) => c.id
+                && Array.isArray(c.paths) && c.paths.length > 0
+                && typeof c.threshold === 'number' && typeof c.hint === 'string' && c.hint.length > 0)
+        },
+        mutate: (binDir) => writeFileSync(join(binDir, 'refactor-candidates.json'), '{ "candidates": [ { "id": "x" } ] }'),
     },
     {
         id: 'prior-art-returns-findings-not-a-code',
