@@ -567,6 +567,35 @@ entries:
       untouched, so this entry stays open after astubbs#203 lands.
 
 
+  - id: issue-402-max-load-factor-log-noise
+    group: logging-ux
+    summary: "\"Max loading factor steps reached\" WARN spammed every control loop pass"
+    fork:
+      branches: [recut/201-load-factor-noise]
+      prs: [201]
+      fork_issue: 155
+      status: pr-open
+    upstream:
+      repo: confluentinc/parallel-consumer
+      issues: [402]
+      prs: []
+      related: [547, 606, 857]
+      status: open
+      last_checked: 2026-08-06
+    adoc_anchor: null
+    notes: >
+      Mirrored as astubbs#155. Two halves to the original report: the STALL was
+      fixed upstream in confluentinc#547/#606 and further in the confluentinc#857
+      family on the fork (astubbs#119), and is not touched here. This is the LOG
+      NOISE half only -- checkPipelinePressure() ran the WARN on every control loop
+      pass with no rate limiting, and a configured messageBufferSize pins the load
+      factor to its own ceiling so it fired from startup. Fix:
+      DynamicLoadFactor#isStaticFactor() -> debug for a fixed factor, plus
+      RateLimiter(30s) and a reworded WARN for a dynamic factor at its cap. No
+      change to buffering behaviour. The reply to the original reporter is drafted
+      in docs/inflight/issue-response-155.md and posted by the pre-release sweep,
+      not at merge.
+
   # ---------------------------------------------------------------------------
   # THE 2023 ADMINISTRATIVE SWEEPS
   #

@@ -103,6 +103,15 @@ refactors below, which are non-breaking and can land at any point in any line.
   [`docs/inflight/core-exception-hierarchy-cleanup.md`](inflight/core-exception-hierarchy-cleanup.md)
   owns the rest of the naming work - `InternalException` and the two spellings of the PC prefix are
   untouched, so a later pass will be a second break unless it is done in this same release.
+- **DONE, landing with astubbs/parallel-consumer#201: an inverted `initialLoadFactor` /
+  `maximumLoadFactor` pair is rejected instead of accepted.**
+  `ParallelConsumerOptions#validate()` now throws `IllegalArgumentException` naming both options and
+  both values. A break only for a configuration that never did what it said - today an initial factor
+  above the maximum is accepted and pinned at the initial value, surfacing at best as an inverted
+  `100/10` in the rate-limited saturation warning, so an application carrying the typo starts and
+  runs; after this it fails at construction. Small blast radius, but "started yesterday, will not
+  start today" is what a `=== Breaking` bullet exists for. Recorded here rather than only in the
+  commit, because this section is what the release notes are assembled from.
 - **Remove the deprecated `commitInterval` options** - `public void setTimeBetweenCommits` /
   `public Duration getTimeBetweenCommits` in `internal/AbstractParallelEoSStreamProcessor.java`.
 - **Remove the accreting deprecated `ParallelConsumerOptions` fields**
@@ -318,9 +327,10 @@ cosmetic - see the last bullet.*
     `onPartitionsAssigned(Collection<TopicPartition> partitions)` and
     `onPartitionsLost(Collection<TopicPartition> partitions)`) and `ConsumerManager`'s
     `noWakeups`, `erroneousWakups`, `correctPollWakeups` counters.
-  - `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` (3) - primitive written in one thread may not
-    be visible to another: `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled`,
-    `ConsumerManager.commitRequested`, `RetryQueue.closed`.
+  - `AT_STALE_THREAD_WRITE_OF_PRIMITIVE` (2) - primitive written in one thread may not
+    be visible to another: `ConsumerManager.commitRequested`, `RetryQueue.closed`.
+    Was 3: `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled` is now
+    `volatile` (astubbs#201), and SpotBugs no longer reports it.
   - **`AT_STALE_THREAD_WRITE` on an OBJECT reference, which no detector fired on - FIXED 2026-08-18
     on the astubbs#119 branch:**
     `ConsumerManager.metaCache` (`private ConsumerGroupMetadata metaCache;`) is written by the poll
@@ -546,13 +556,18 @@ but not this.*
 ### internal/DynamicLoadFactor.java
 - `private synchronized boolean doStep` locks on `this` - same lock-hygiene note as
   ProducerManager; low priority.
+- The warm-up and cool-down `Duration`s are hard-coded fields with no seam, so
+  stepping to the ceiling for real costs one cool-down per step (minutes for the
+  default 2 -> 100). `LoadFactorCeilingReportingTest` has to assert the terminal
+  state via a subclass because of it. Injecting them (through `PCModule`, with the
+  module's `Clock`) would make the stepping schedule itself testable.
 
 ### internal/ExternalEngine.java
 - `TODO optimise thread usage`: avoid the extra thread (go straight from the control thread).
   `is this method redundant`: method may be redundant now that modules don't use the internal
   threading system.
 
-### ParallelConsumerOptions.java (573 lines)
+### ParallelConsumerOptions.java (627 lines)
 - Accreting deprecated fields (`public void setCommitInterval`,
   `private final Duration defaultMessageRetryDelay`, `isUsingTransactionalProducer`) and the
   `ignoreReflectiveAccessExceptionsForAutoCommitDisabledCheck` temporary
