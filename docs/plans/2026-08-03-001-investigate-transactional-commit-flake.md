@@ -396,7 +396,8 @@ the paragraph above was the right one. `ProducingLock#unlock()` logs *after* the
 that threw left no line in the log and a later acquire-versus-release count read a clean 1:1 while
 half the releases were failing; the `IllegalMonitorStateException` itself went into the worker's
 `Future`, which nothing in main ever reads. Under `batchSize >= 2` it was a live defect, not just
-noise — see `ProduceLockReleaseTest`. `cleanUpContext` is now the single release point, and
+noise — see `ProduceLockReleaseTest` (citation repair: merged into `ProducerManagerTest` on
+astubbs#262; grep `wholeBatchSucceedsWhenProducing`). `cleanUpContext` is now the single release point, and
 `WorkContainer#onPostAddToMailBox` — named throughout the sections above as the release site — was
 deleted along with it. To read the code as this document describes it, use
 `git log -S'onPostAddToMailBox' -- parallel-consumer-core` for the commit that removed it. The
