@@ -185,15 +185,25 @@ entries:
     serves: [reliability]
     horizon: next-0x
     blocks_1_0: false
-    stage: idea
+    stage: requirements-drafted
+    stage_delivery: draft
     stage_detail: >-
-      Mechanism analysis banked in the inflight note - the fatal path and the Kafka Streams
-      precedent are mapped; no design yet.
+      Requirements plan on astubbs#410, survived three review rounds; it decides the what, not the how.
+      Two mechanisms stay open by design - how work whose output an abort discarded is made processable
+      again, and how group membership is refreshed - because every concrete candidate so far failed
+      against PC's produce/commit locking and consumer thread confinement.
     why_now: >-
-      Fencing is an ordinary consequence of a rebalance under transactions and it currently kills the
-      instance. Kafka Streams treats the equivalent as a migrated task and rejoins.
-    done_when: A fenced producer causes an abort and rejoin, with the instance still running afterwards.
+      Fencing is an ordinary consequence of a rebalance under transactions, and a broker can expire an
+      idle producer id outright; either way PC dies on the commit path and spins on the produce path.
+      Kafka Streams treats the equivalent as a migrated task and rebuilds its producer. The one field
+      report (astubbs#411) asked for exactly this.
+    done_when: >-
+      A producer the broker has invalidated is replaced and processing continues, with no offset from
+      the aborted transaction committed and its work processed again. Applies where PC builds the
+      producer; supplying a Producer instance is deprecated and keeps today's behaviour.
     tracking: astubbs#225
+    related: astubbs#411
+    pull_request: astubbs#410
 
   - id: current-java-and-kafka
     title: Run on current Java and current Kafka
