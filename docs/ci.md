@@ -854,8 +854,8 @@ restructuring lost that, and this section is where it now lives.
 
 | Lane | Runs on | Uploads |
 |---|---|---|
-| `build` | push to master only | `jacoco/jacoco.xml` as flag `unit`; `jacoco-it/jacoco.xml` as flag `integration` - one file per flag |
-| `test` matrix | pull requests only | **both** files, under one flag per suite (`flags: ${{ matrix.suite }}`) |
+| `build` | push to master only | every module's `jacoco/jacoco.xml` as flag `unit`; every module's `jacoco-it/jacoco.xml` as flag `integration` - one half per flag |
+| `test` matrix | pull requests only | **both** halves, under one flag per suite (`flags: ${{ matrix.suite }}`) |
 <!-- file-refs: N/A - jacoco paths are generated build output under target/, named because the
      asymmetry between the two lanes IS which file goes to which flag -->
 

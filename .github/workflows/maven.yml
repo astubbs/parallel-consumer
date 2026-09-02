@@ -956,8 +956,8 @@ jobs:
       # because it is the base half of every `codecov/project/unit` and `codecov/project/integration`
       # comparison. The `test` matrix upload's step comment carries the rest of the diagnosis.
       #
-      # The two halves are collected in one step rather than two because this is one job and one
-      # tree walk; keeping the outputs separate is what preserves the per-flag split.
+      # The two halves are collected in one step rather than two because this is one job; keeping the
+      # outputs separate is what preserves the per-flag split.
       - name: Collect jacoco report files for Codecov
         if: always()
         id: coverage
