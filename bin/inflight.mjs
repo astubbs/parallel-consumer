@@ -50,9 +50,10 @@ import { baseline, freshnessWarnings, refTips } from './lib/git.mjs'
 import { cacheClear, cacheStatus, knownCaches } from './lib/cache.mjs'
 import { corpusIndex, drift, findNotes, prsByBranch, stranded } from './lib/notes.mjs'
 import { branchView, commitGraph, trackingGap } from './lib/branches.mjs'
+import { loadCandidates, refactorWindow } from './lib/refactor-window.mjs'
 import {
     formatBranch, formatCache, formatCoverage, formatDrift, formatFind, formatFlakes,
-    formatSlowest, formatStranded, formatTimeline, formatWarnings,
+    formatRefactorWindow, formatSlowest, formatStranded, formatTimeline, formatWarnings,
 } from './lib/views.mjs'
 import { coverage, flakeCandidates, slowest, testTimeline } from './lib/codecov.mjs'
 import {
@@ -409,6 +410,78 @@ them separately buries the finding under its own volume.`,
             if (!index.ok) return { ok: false, reason: `stranded: ${index.reason}` }
             emit(formatWarnings(freshnessWarnings(index.baseline, index.refs.length)))
             emit(formatStranded(stranded(index), index))
+            return { ok: true }
+        },
+    },
+    {
+        name: 'refactor-window',
+        summary: 'whether a file this repo means to decompose is cheap to decompose right now',
+        when: 'before starting - or deferring - a refactor of a known oversized class, and to see what is blocking one',
+        usage: `Usage: bin/inflight.mjs refactor-window [--if-open]
+       bin/inflight.mjs refactor-window --hint-for <file>
+
+docs/refactoring.md says its entries are to be picked up "when things are quiet". This evaluates
+that, for the files listed in bin/refactor-candidates.json.
+
+THE SIGNAL IS THE LARGEST SINGLE DIVERGENCE any live branch holds against the mainline - not the
+number of branches touching the file. Measured 2026-09-02: PartitionState had dozens of live
+branches with an open PR diverging from it and the largest of those was EIGHT LINES. A count calls
+that blocked with nothing in its way.
+
+The report names the branch and pull request holding that largest divergence, because the
+alternative to waiting is to go and land it.
+
+--if-open prints NOTHING when the signal ran and no candidate is open - the form the hooks use.
+It still prints when anything FAILED, because a hook's silence is indistinguishable from a hook
+that is broken.
+
+Nothing is remembered between runs: no stored verdict, so it keeps saying so until the work is
+done or the entry leaves the config. Thresholds are per candidate and live in that file; retuning
+one is an ordinary commit.
+
+--hint-for prints that file's one-line extraction hint and nothing else, reading only the config -
+no git, no gh, no signal. It is what the edit-time hook calls in front of every edit, where the
+full measurement would be unaffordable. Prints nothing for a file that is not a candidate.
+
+  bin/inflight.mjs refactor-window
+  bin/inflight.mjs refactor-window --if-open
+  bin/inflight.mjs refactor-window --hint-for parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/WorkManager.java`,
+        run: (args, emit) => {
+            // CONFIG ONLY, NO SIGNAL. This is what the edit-time hook calls, in front of every
+            // single file edit, so it must not compute anything: the full signal is ~3.4s and forks
+            // several hundred processes. Reading one small JSON file is ~35ms, and the hook's
+            // alternative - parsing that JSON in bash - is the fragility this repo keeps a whole
+            // gate to police. The loader stays the only thing that parses the file.
+            const hintAt = args.indexOf('--hint-for')
+            if (hintAt >= 0) {
+                const target = args[hintAt + 1]
+                if (!target) return { ok: false, reason: 'refactor-window --hint-for: give a file path' }
+                const cfg = loadCandidates()
+                if (!cfg.ok) return { ok: false, reason: `refactor-window: ${cfg.reason}` }
+                // Suffix match, because a hook is handed an absolute path and the config is
+                // repo-relative. Anchored on a separator so `.../OtherWorkManager.java` cannot
+                // match `.../WorkManager.java`.
+                const hit = cfg.candidates.find((c) => c.paths.some((p) => target === p || target.endsWith(`/${p}`)))
+                if (hit) emit(`${hit.id}: ${hit.hint}`)
+                return { ok: true }
+            }
+
+            const ifOpen = args.includes('--if-open')
+            const r = refactorWindow()
+            if (!r.ok) return { ok: false, reason: `refactor-window: ${r.reason}` }
+            // SPLIT BY WHETHER THE WARNING INVALIDATES THE ANSWER, not by output mode. The first cut
+            // suppressed all of them under --if-open, justified as skipping "a staleness NOTE" - but
+            // `no-baseline` is not staleness, it is a declaration that the run is void, and it was
+            // being dropped on exactly the path both hooks use. That put the compensating control
+            // out of action in the one place the answer could be confidently wrong.
+            const warnings = freshnessWarnings(r.baseline, r.liveRefs)
+            const INVALIDATING = new Set(['no-baseline', 'never-fetched', 'shallow'])
+            emit(formatWarnings(ifOpen ? warnings.filter((w) => INVALIDATING.has(w.id)) : warnings))
+            emit(formatRefactorWindow(r, { ifOpen }))
+            // A candidate that could not be measured is a failure of the RUN, not a quiet answer -
+            // exit 2, so a caller can tell "nothing is open" from "this never looked".
+            const failed = r.candidates.filter((c) => !c.ok)
+            if (failed.length > 0) return { ok: false, reason: `refactor-window: ${failed.length} candidate(s) could not be measured` }
             return { ok: true }
         },
     },

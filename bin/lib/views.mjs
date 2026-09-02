@@ -186,6 +186,114 @@ export function formatCache(status, known) {
     return out.join('\n')
 }
 
+/**
+ * The refactor-window report.
+ *
+ * ONE SILENCE IS ALLOWED AND IT HAS TO BE EARNED. Under `--if-open` this returns the empty string
+ * when the signal RAN and found no candidate open - and never when something failed. A hook's
+ * correct silence is byte-identical to a broken hook, which `.claude/hooks/inject-branch-context.sh`
+ * records as its own hard-won rule ("DEGRADED READS ARE LOUD, NEVER SHORT"), so every failure path
+ * below prints. The caller turns a failed run into exit 2; this only decides what is worth saying.
+ *
+ * A FAILED CANDIDATE STILL LETS ITS PEERS REPORT. That is why the per-candidate `ok` exists, and
+ * printing it inline rather than aborting is the whole point: one bad path must not produce the
+ * silence that means "go ahead and refactor".
+ */
+export function formatRefactorWindow(r, { ifOpen = false } = {}) {
+    const open = r.candidates.filter((c) => c.ok && c.open)
+    const failed = r.candidates.filter((c) => !c.ok)
+    if (ifOpen && open.length === 0 && failed.length === 0) return ''
+
+    const out = []
+    if (ifOpen) {
+        out.push(`refactor-window: ${plural(open.length, 'candidate')} now cheap to decompose.`, '')
+    } else {
+        // `plural` appends a bare 's', so every noun here has to take one - "live branchs" shipped
+        // in the first cut. `ref` is also the vocabulary the freshness warning above it already uses.
+        out.push(`refactor-window: ${plural(r.candidates.length, 'candidate')}, `
+            + `${plural(r.liveRefs, 'live ref')}, measured against ${r.baseline}.`, '')
+    }
+    const width = Math.max(...r.candidates.map((c) => c.id.length))
+
+    // ORDERED BY DISTANCE TO OPEN, closest first, because the list answers two questions and config
+    // order answered neither: which one can I start now, and which is furthest from ever being
+    // startable. With four candidates the reader was left doing largest-over-threshold in their head
+    // for each; with a dozen nobody would. An open candidate has a ratio at or below 1 and therefore
+    // sorts to the top by construction. A candidate that could not be measured has no distance at
+    // all and goes last rather than being given a fabricated position.
+    const distance = (c) => (c.largest ? c.largest.added / c.threshold : 0)
+    const ordered = [...r.candidates].sort((a, b) => {
+        if (a.ok !== b.ok) return a.ok ? -1 : 1
+        return distance(a) - distance(b)
+    })
+    if (!r.prsKnown) {
+        out.push(`  WARNING: ${r.prsReason} - pull requests below are UNKNOWN, not absent.`, '')
+    }
+    // BOTH ENDS, NAMED. The ordering already puts the nearest first, but the two questions actually
+    // asked of this list - which can I start, and which is the worst - are answered by its ends, and
+    // a reader should not have to infer that from position. Only when there is a spread to describe.
+    const measured = ordered.filter((c) => c.ok)
+    if (!ifOpen && measured.length > 1) {
+        const near = measured[0]
+        const far = measured[measured.length - 1]
+        const say = (c) => (c.open ? `${c.id} (open now)`
+            : `${c.id} (${(c.largest.added / c.threshold).toFixed(1)}x over)`)
+        out.push(`  nearest to workable: ${say(near)}`, `  furthest away:       ${say(far)}`, '')
+    }
+
+    for (const c of ordered) {
+        if (ifOpen && c.ok && !c.open) continue
+        if (!c.ok) {
+            out.push(`  FAILED  ${c.id}`, `          ${c.reason}`, '')
+            continue
+        }
+        const verdict = c.open ? 'OPEN' : 'BUSY'
+        const size = c.largest ? `+${c.largest.added}` : 'no divergence'
+        // The distance is the actionable half: "3.5x over" says how far off this one is, and
+        // "180 to spare" says how much room an open one still has before it closes again.
+        const gap = !c.largest ? 'no divergence at all'
+            : c.open ? `${c.threshold - c.largest.added} to spare`
+                : `${(c.largest.added / c.threshold).toFixed(1)}x over`
+        out.push(`  ${verdict.padEnd(7)} ${c.id.padEnd(width)}   largest ${size}, threshold ${c.threshold} - ${gap}`)
+        if (c.largest) {
+            const pr = c.largest.pr ? `PR #${c.largest.pr.number} (${c.largest.pr.state})` : 'no pull request'
+            // NAMED SO IT CAN BE ACTED ON. When the window is shut this is the branch to land in
+            // order to open it, which is the operator's alternative to waiting.
+            out.push(`          on ${c.largest.ref} - ${pr}`)
+        }
+        out.push(c.open
+            ? '          go, or take this entry out of bin/refactor-candidates.json'
+            : '          land that branch first, or wait')
+        // IS THE PROBLEM GROWING while nobody takes the moment? Derived from git on every run rather
+        // than recorded, so it cannot go stale the way docs/refactoring.md's own 1533 did.
+        if (c.growth) {
+            const g = c.growth
+            const trend = g.delta === null ? 'did not exist then'
+                : g.delta > 0 ? `up ${g.delta}`
+                    : g.delta < 0 ? `DOWN ${-g.delta}`
+                        : 'unchanged'
+            out.push(`          ${g.now} lines, ${trend} over the last ${g.days} days`)
+        }
+        // R15. A superset - it also counts branches predating the file - and worth printing anyway,
+        // because a path the config was never told about is otherwise indistinguishable from quiet.
+        // COUNT LAST, so neither line has a verb to agree with. `plural` inflects the noun and not
+        // the verb, so "N live refs carry it" reads "1 live ref carry it" at the boundary - which
+        // these two lines reach routinely, one of them on this repository today.
+        if (c.unmatchedRefs > 0) {
+            out.push(`          live refs carrying it under none of its `
+                + `${plural(c.paths.length, 'configured path')}: ${c.unmatchedRefs}`)
+        }
+        // A ref that carries the file but could not be measured - no merge-base with the baseline is
+        // the usual cause. It is neither a divergence nor an absence, and printing it is the only
+        // thing standing between "we looked and found nothing" and "we could not look at this bit".
+        if (c.unanswerableRefs > 0) {
+            out.push('          live refs carrying it that could not be measured '
+                + `(no merge-base with the baseline?): ${c.unanswerableRefs}`)
+        }
+        out.push('')
+    }
+    return out.join('\n')
+}
 // --- Codecov. What the recorded test history looks like when a human reads it. -------------------
 //
 // Every one of these renders the CACHED marker and the TRUNCATED marker when they apply. That is not
