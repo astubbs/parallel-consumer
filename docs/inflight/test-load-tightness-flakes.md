@@ -99,7 +99,8 @@ bug in exactly this area (a rebalance-time commit killing the broker-poll thread
 
 **Explicitly NOT a member: `RebalanceEoSDeadlockTest.noDeadlockOnRevoke`** (1/20). Per the astubbs#68 record
 its contended failure maps to the real confluentinc#857 deadlock - that sighting is live confirmation the
-deadlock is still on master, with its fix waiting in astubbs#29.
+<!-- post-merge: checked -->
+deadlock was still on master when this was recorded, with its fix carried by astubbs#29.
 
 ## `committedOffsetRemoved[1] latest` - the same assertion as the `[2]` row, failing from the other side (2026-09-01)
 

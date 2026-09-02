@@ -158,6 +158,11 @@ assert "the result survives a numeric test" YES "$numeric_ok"
 
 # Negative control, in this file's established style: the shipped-before implementation must fail
 # both, or the fixture has stopped reaching the defect and the two assertions above are vacuous.
+# DELIBERATELY THE BROKEN FORM - this is a RED CONTROL, not a defect. It reproduces the
+# pre-fix `|| echo 0` behaviour so the two tests below can prove the real implementation in
+# bin/lib/quarantine-common.sh differs from it. A sweep for `grep -c ... || echo 0` will land
+# here; do not "fix" it - doing so makes both controls pass vacuously and the gate stops
+# proving anything. (Done once, 2026-09-02, and caught by these tests going red.)
 previous_occurrences() { grep -cE "$QUARANTINE_ANNOTATION_ERE" "$1" 2>/dev/null || echo 0; }
 
 assert "the PREVIOUS implementation returns two lines" "$(printf '0\n0')" \

@@ -3,6 +3,7 @@
 <!-- inflight-type: bug -->
 <!-- inflight-labels: concurrency -->
 <!-- inflight-impact: stall -->
+<!-- post-merge: checked-begin - every astubbs#29 mention below states what its fix DOES (the AB-BA pair it replaces, the modes its cycle can close in, what its reproducer cannot settle), not that it is open; the three state claims that were here have been rewritten -->
 
 
 Three distinct defects sit behind upstream's one "paused consumption after rebalance" symptom.
@@ -17,21 +18,102 @@ intake paused indefinitely, and a restart clears it because the counter is in-me
 this family's symptom signature (halts after rebalance, resumes on restart), and possibly
 astubbs#183 (confluentinc#875) as well. **Hypothesis, not a diagnosis**: no reporter's instance has
 been tied to the counter, and the mirror's primary mechanism (the lost-partition skip) is different.
-The fix - deriving the gate by conservation - lands independently of this attribution; if reports
-persist after it ships, this mechanism is ruled out for them, which is also information.
+The fix - deriving the gate by conservation - landed independently of this attribution, as
+astubbs/parallel-consumer#336 (`3e668a448`), so **the test this paragraph proposed is now running in
+the wild**: if reports persist against a version carrying it, this mechanism is ruled out for them,
+which is also information. Nobody has checked yet.
+
+**Withdrawn for astubbs#183 specifically, 2026-09-01 - that report has a better-matching mechanism
+that is already fixed, and it is not in this family at all.** The paragraph above nominates the
+counter drift for astubbs#183 (confluentinc#875) "as well". A stronger candidate exists:
+**confluentinc#909**, whose fix landed here on 2026-08-19 as astubbs#31 (`5e8ea66ae`). Its own
+upstream reporter describes astubbs#183's symptoms at offset level - one offset never received while
+its neighbours complete, the committed offset pinned at exactly that offset, lag climbing on the
+partition, and a pod restart seeking back to it and processing it normally. astubbs#183 reads as the
+same account without the offsets filled in, and the defective `addWorkContainer` is byte-identical in
+the 0.5.3.1 both were reported against. The reasoning, and the two candidates it retracts
+(astubbs#344 and this family), are in
+[astubbs#183's thread](https://github.com/astubbs/parallel-consumer/issues/183#issuecomment-5489212857).
+
+**Do not read astubbs#183 as a confluentinc#857 sighting.** The only thing that ever linked them is
+one hedged third-party comment on the upstream issue - *"That's potentially the same issue as
+reported here: #857"* <!-- issue-refs: exempt - verbatim quotation of the upstream comment; altering the number would misquote it --> - and the mirror inherited it as structure. confluentinc#909 explains both
+halves of that report, including the eventual full stop: a pinned commit base eventually trips
+offset-encoding back-pressure for the partition. It is awaiting one thing only, which no code change
+can supply - whether the reporter's consumer was rebalancing, and under load, in the window.
 
 **Landed:** astubbs#100 (a mid-rebalance commit threw `RebalanceInProgressException`, which nothing caught,
 permanently killing the broker-poll thread) and astubbs#80 (a draining consumer never called
 `consumer.poll()` - ~10kHz busy-spin plus a rebalance-unresponsive member zombie-holding its
 assignment). Write-ups in `docs/solutions/test-flakiness/`.
 
-**Still open: the original deadlock, in astubbs#29** - `synchronized(commitCommand)` between the poll thread
+**The family's third defect - the original deadlock - is astubbs#29's** - `synchronized(commitCommand)` between the poll thread
 (`onPartitionsRevoked`) and the control thread (`commitOffsetsThatAreReady`), replaced there with
 `ReentrantLock.tryLock()`. A sibling of the two landed fixes, not a duplicate: astubbs#29/#31 were verified
 *not* to fix the drain defect, and the uber-branch experiment showed the astubbs#80 stack composes cleanly
 with both. Live confirmation the deadlock is still present: `RebalanceEoSDeadlockTest` failed once
 under the 20-run stress hunt (see `test-load-tightness-flakes.md`, where it is explicitly *not* a
-member). astubbs#29 needs a rebase and a retarget first - see `pr-blockers-and-collisions.md`.
+member). astubbs#29 has since been retargeted onto `master`; `pr-blockers-and-collisions.md` carries the
+coordination state.
+
+**THE FAMILY'S OWN ACCOUNTING WAS OUT OF DATE - re-totalled 2026-08-27/28.** This file, and
+astubbs#119's `## Fork status`, both said three defects landed and one remained. **At least six more
+have landed since**, none of them counted here: astubbs#346 (a rebalance between a staleness
+checkpoint and its acting read orphaned a retry entry, after which `workIsWaitingToBeProcessed()` read
+true FOREVER - its own commit calls that a family permanent stall), astubbs#345 (a
+`containsKey`-then-`get` race NPE'd the broker-poll thread inside the rebalance listener - poller
+death under KEY ordering), astubbs#373 (a sign-reversed overcount its body names the family's stall
+signature), astubbs#336 (the load gate, whose phantom counts keep intake paused until a restart),
+astubbs#344 (the offset encoder marking still-incomplete offsets complete) and astubbs#349 (a
+cross-thread `dirty` flag, jcstress-measured). The bucket has been drained from several directions
+and nobody re-totalled. **Do not read the "Landed / Still open" summary above as current.**
+
+**THE ORIGINAL DEADLOCK IS NOW VERIFIED, not merely diagnosed.** The six thread-dump captures below
+identified the mechanism; an A/B on `Rebalance857CommitSyncDeadlockProbeIT` has now closed it. Two
+trees differing by ONE term - the revoke side declining with `tryLock()` or blocking on `lock()` -
+run twelve invocations each, alternating: **the control failed every repetition with commit-response
+timeouts; the fix failed none, and logged the contended-decline line throughout**, so the window was
+open and the fix refused it. Method, the two settings that silently void the experiment, and the
+harness are in
+[`test-857-deadlock-ab-soak-harness.md`](test-857-deadlock-ab-soak-harness.md).
+
+**REPLAYING CAPTURED SEEDS DOES NOT REPRODUCE THIS DEADLOCK - stop trying.** Replayed locally, on both
+assignor arms, the captured seeds opened the window ZERO times. The chaos suite finds this defect by
+luck; only a purpose-built probe finds it by construction. Two write-ups were retracted the same day
+for reading a green replay as evidence when the mechanism had never executed.
+
+**THE ASYNC LINE NOW HAS A REPLAYABLE SEED - the first this family has ever had.**
+`9086872209853284830` on `ChaosChurnStormIT` reproduces `NO_PROGRESS` in most runs on unmodified
+master, in minutes, on a laptop. Found by RANDOM-SEED HUNTING in CI, not by replaying anything.
+astubbs#344 was the obvious candidate - same commit mode, right symptom shape - and is **refuted**:
+both arms either side of it fail. Details in
+[`test-857-churn-storm-async-stalls.md`](test-857-churn-storm-async-stalls.md).
+
+**A DETECTOR SILENCE PROBLEM, and it bears on everything below.** Across the astubbs#344 arms, **a
+third of the failures went red with `NO_PROGRESS` not firing at all**. Since the 2026-08-25 demotion
+moved the Class 2 bound to non-gating, the liveness claim rests on `INSTANCE_STALL` and this
+detector. **A detector whose silence cannot be trusted is worse than one that is absent**, because
+the suite goes green on its say-so. Settle it before reading any quiet run from it as evidence.
+
+**THE SYMPTOM IS A BUCKET, and this file only ever covered part of it.** Read from upstream's own
+comments rather than the mirror's summary: at least four distinguishable behaviours are reported,
+and upstream's maintainer separated two of them in one sentence - the April log is a paused
+subscription, the July one from the same reporter is *"not paused, but somehow polling 0 records"*.
+Also on file: an out-of-range fetch position with records stuck through redeploys, and lag that will
+not clear although the records were processed. A fifth is on astubbs#29 itself and was never chased -
+a reporter whose partitions pause and resume after hours with **no rebalance in the logs at all**.
+The best candidate for that one is the load gate astubbs#336 fixed, which is not in astubbs#29.
+
+**UPSTREAM'S OWN FIX SHIPPED AND DID NOT HOLD.** confluentinc#882 (stale-container rework) merged
+upstream 2025-08-07 and this fork carries that logic. The reporter came back after upgrading past it:
+the problem persisted, recurring after two months of uninterrupted traffic, triggered by a **broker
+leader election** rather than a consumer-group rebalance. Worth stating because stale containers are
+the theory most likely to be re-proposed.
+
+**confluentinc#875 IS FILED HERE ON A THIRD PARTY'S ASSUMPTION.** Its reporter describes a silently
+SKIPPED offset with no rebalance mentioned; somebody else said "potentially the same issue", the
+reporter never did. Skipped-then-recoverable is the shape of the offset-completion defects, not of a
+lock. Assess it on its own before counting it here.
 
 **READ BEFORE RESUMING astubbs#29, and before reading any `CLASS2_STALL` entry below.** On
 2026-08-25 the discriminating replay this file had been asking for since the twelfth sighting was
@@ -68,7 +150,217 @@ full evidence is the last section of this file; three consequences bind anyone p
   that superseded it for the lag bound is
   [`a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md`](../solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md).)
 
+## Does astubbs#119 close when the deadlock fix lands? NO - settled 2026-09-01
+
+**Migrated here from astubbs/parallel-consumer#29's own note, which is deleted when that PR lands.**
+The answer was established there and would have gone with it. This ledger is the durable owner of the
+family's accounting, so it is the right home.
+
+**No, because astubbs#119 is a symptom bucket rather than a defect.** It collects reports of
+consumption stopping after a rebalance; the AB-BA commit deadlock is one member of the family behind
+those reports, and fixing it removes one cause of the symptom rather than the symptom.
+
+**What that fix does and does not reach.** The cycle it breaks needs `onPartitionsRevoked` to block
+acquiring the commit lock while the control thread holds it inside a commit only the poll thread can
+complete. That second edge lives in `ConsumerOffsetCommitter`, which is constructed only for the
+consumer-commit modes - so the cycle **cannot close in `PERIODIC_TRANSACTIONAL_PRODUCER` at all**.
+
+**Which leaves at least one confirmed defect the fix cannot reach**: the unbounded revoke wait in
+transactional mode, `while (isTransactionCommittingInProgress()) Thread.sleep(100)` on the poll
+thread inside `poll()`, bounded only by `max.poll.interval.ms`. It carries astubbs#44
+(confluentinc#803), **an issue carrying upstream's verified-bug label**, and its own note says
+its fix is blocked on an unsettled design decision rather than on effort -
+[`bug-857-transactional-revoke-wait.md`](bug-857-transactional-revoke-wait.md).
+
+**So closing astubbs#119 on the deadlock fix would take the rest of the family with it**, which is
+the specific damage the merge checklist warns about: partly addressing an issue and closing it anyway
+retires the remainder silently. Say which part landed and leave it open.
+
+
+## Commit mode decides which defect can explain a sighting
+
+Added 2026-08-18, after a re-read found the mode recorded for **none** of the six sightings this file
+used to hold - which let a transactional-mode failure be logged as "live confirmation" of a cycle
+that cannot occur in that mode. Mode is the discriminator:
+
+| Mode | astubbs#29's AB-BA cycle | Transactional revoke wait |
+|---|---|---|
+| `PERIODIC_CONSUMER_SYNC` | **can close** - `commitAndWait()` blocks on the response queue | no - gated on transaction mode |
+| `PERIODIC_CONSUMER_ASYNCHRONOUS` | no - `commit()` falls through to `requestCommitInternal()` and never blocks | no |
+| `PERIODIC_TRANSACTIONAL_PRODUCER` | no - `ConsumerOffsetCommitter` is never constructed | **yes** - `:418-419` spins unbounded |
+
+**Record the commit mode with every future sighting.** It is one line and it is what makes a sighting
+decidable.
+
+## A fourth open item: an eager stall the astubbs#29 fix does not close
+
+Added 2026-08-18, from the first seed replays (`test-857-revoke-under-work-sightings.md` holds the
+grid and the confounds). Mode-compatibility was the best evidence this file had for attributing the
+eager `ChaosRevokeUnderWorkIT` sightings to astubbs#29's cycle. **The replay spends that evidence:**
+two recorded seeds reproduced `CLASS2_STALL/LAG_STAGNATION` six times out of six on the arm carrying
+the fix, and a *fresh* seed did the same on that arm with no replay machinery involved.
+
+So the count in this file's opening line is now a floor, not a total. What remains unattributed is a
+protocol-invisible stall in `PERIODIC_CONSUMER_SYNC`: group STABLE, heartbeats flowing, and a
+partition committed-frozen for 100s of the *quiet* phase against ~40s of legitimate recovery.
+
+**This does not weaken the case for astubbs#29's fix**, which is proven on its own instrument
+(60/60 failing before, 0/60 after). It removes a symptom that fix was never shown to own.
+
+**The mode table above still stands** - it says which defect *can* explain a sighting, and the
+replay changes nothing about the code paths. What the replay establishes is that "can" was doing
+work it could not support: mode-compatibility narrows the candidates and never attributes.
+
+## A fifth open item, 2026-09-01: a rebalance stall the astubbs#29 fix does not close either
+
+`MultiInstanceRebalanceTest.largeNumberOfInstances`, `PERIODIC_CONSUMER_ASYNCHRONOUS`/`UNORDERED`.
+Reproduced twice: once in ten consecutive runs on an idle Linux box, and once on CI at `55edffaf4`.
+
+**The mode table above rules astubbs#29's cycle out by construction.** In
+`PERIODIC_CONSUMER_ASYNCHRONOUS` the commit path never blocks, so the AB-BA pair has no second edge -
+the same reasoning that separates the `ChaosChurnStormIT` sightings from the
+`ChaosRevokeUnderWork*` ones. It is also not the throughput defect found the same week: the CI
+reproduction is on a tree carrying that fix.
+
+The signature, identical across both reproductions:
+
+```
+FLAT for 13s - it stopped rather than ran out of time | no consumer diagnostic supplied
+ZOMBIE_MEMBER/REBALANCE_BLOCKED: dwelling in PreparingRebalance for 15s (bound 15s)
+                                 - a member is not answering the rebalance
+```
+
+**This is protocol-VISIBLE, which distinguishes it from the fourth item above.** That one is a stall
+with the group STABLE and heartbeats flowing. Here the group cannot converge because a member has gone
+silent, and the members are PC instances - so it is a member-side story, not a coordinator one.
+
+**What stops it being a diagnosis** is that the capacity profile kills instances continuously, so an
+instance killed mid-`JoinGroup` is by construction a member that stops answering. The sharp question
+is one of identity - **is the unresponsive member one the harness stopped, or one still running?** -
+and it is unanswerable from what the runs currently record, because
+`ProgressTracker.withDiagnostic(...)` has never been wired, so every stall ends "no consumer
+diagnostic supplied". `test-largenumberofinstances-residual-failures-measured-not-explained.md` owns
+the thread and the three instrumentation gaps.
+
+## astubbs#29's own reproducer cannot currently settle anything
+
+`RebalanceEoSDeadlockTest` fails 5/5 in CI on that branch for two reasons independent of the
+deadlock, either of which alone is sufficient:
+
+- **Wrong mode** - it runs `PERIODIC_TRANSACTIONAL_PRODUCER`, where the cycle cannot occur.
+- **Unreachable latch** - it counts a latch by overriding `commitOffsetsThatAreReady()`, but the
+  revoke path on that branch calls the private `tryCommitOffsetsOnRevoke()` instead. It would fail
+  against a perfect fix.
+
+The `tryLock()` contended arm has never been observed executing: its INFO skip-log appears **zero**
+times in the 741,161-line CI log of the run meant to prove it.
+
+## Cluster decomposition and the A/B result
+
+astubbs#29's production diff is four independent changes in one April commit. The decomposition, the
+2026-08-18 A/B soak that measured the deadlock fix (master 20/20 fail vs branch 0/20) are in
+`../solutions/architecture-patterns/two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md`,
+which carries all four clusters as sections. The dated plan that first argued the decomposition was
+deleted once every cluster had landed; retrieve it with
+`git show a0ade8a66:docs/plans/2026-08-18-002-fix-857-revoke-path-cluster-decomposition-plan.md`.
+
+## The sightings, split out by mode
+
+One file per item, per this directory's rules:
+
+- `test-857-revoke-under-work-sightings.md` - `PERIODIC_CONSUMER_SYNC`; the only sightings
+  mode-compatible with astubbs#29.
+- `test-857-churn-storm-async-stalls.md` - `PERIODIC_CONSUMER_ASYNCHRONOUS`; **unexplained by every
+  known defect**, and the strongest single-arm evidence the family holds.
+- `bug-857-transactional-revoke-wait.md` - `PERIODIC_TRANSACTIONAL_PRODUCER`; a separate open defect
+  with a user report (astubbs#44, confluentinc#803), not astubbs#29's.
+- `test-857-parallel-integration-proof.md` - the Step-2 experiment, gated on astubbs#29 landing.
+
+**Not one of the five captured seeds has ever been replayed**, on any box, contended or not. Each
+sighting names the replay as its deciding experiment. That is the family's cheapest open work.
+
+## Deleting the split-out sightings files
+
+Per sighting, when its seed has been replayed and the result explained - not on a release, and not
+on astubbs#29 merging. astubbs#29 landing resolves at most the two consumer-sync sightings, and
+only if their replays confirm. (When *this* file may be retired is a separate question, answered
+under `## 2026-09-01, sixth capture on the DRAIN arm - and a replay that came back CLEAN
+
+**Not a new class. The same discriminator as the 2026-08-26 series, on the same arm as the fifth
+capture**, carried here from another machine via a transport branch rather than observed directly.
+Recorded because the date, the PR and the replay result are new; the signature is not.
+
+`ChaosRevokeUnderWorkDrainIT.revokeUnderDrainingStopsStaysProtocolHonest`, seed
+`1170511790377175835`, from astubbs/parallel-consumer#200 at head `e7b1dda88`
+([run 33458796933](https://github.com/astubbs/parallel-consumer/actions/runs/33458796933), job
+99704435326). It failed once and passed on a plain re-run of the same job with a different seed.
+
+Captured symptom, as reported: `POLL THREAD AT TIMEOUT: BLOCKED ... Lock: AtomicBoolean@5e65d395,
+held by: pc-control-PC-44` - the same monitor, the same holder-naming and the same method pair as
+every capture in the 2026-08-26 series.
+
+**Three novelty claims arrived with it, and none of them survives this file.** The handoff document
+argued this was new because of the Drain scenario, the BLOCKED-with-named-holder signature, and an
+uncontaminated tree. The fifth capture above is the Drain arm, carries the identical signature, and
+is already recorded as a not-PR-introduced control. Written down because the claims were made in good
+faith by a session that had read the ledger's opening and the eleventh sighting but not this series -
+which is the argument for reading a ledger to its end before adding to it.
+
+**It also made a line-number correction that is wrong, in the exact way this file already warns
+about.** It reported master's `:580` as "the control-thread side". At master's `d1827df41`, `:580` is
+the `commitOffsetsThatAreReady()` call *inside* `onPartitionsRevoked` - the POLL-thread side - and
+`:1775` is the `synchronized (commitCommand)` acquisition inside `commitOffsetsThatAreReady`, where
+the control thread holds across the blocking `retrieveOffsetsAndCommit()`. Verified directly against
+master rather than reasoned about. The fifth capture's own paragraph says it: *anyone matching future
+captures by line number will mis-file them; match by method and monitor.* This is that mistake, made
+by a reader who had the warning available.
+
+### The replay: CLEAN on master, once, locally
+
+The seed was replayed on this laptop against master at `d1827df41`, in a throwaway worktree, with
+`-Dit.test=ChaosRevokeUnderWorkDrainIT` and the seed above. Classified from the failsafe report
+rather than maven's exit code: `tests="1" errors="0" skipped="0" failures="0"`, 160.2s, no probe
+observations. **It did not reproduce.**
+
+**That is close to no evidence either way, and the reason is recorded on astubbs/parallel-consumer#29
+already: a chaos seed fixes the conductor's schedule, not the poll-versus-control interleaving.** A
+seed cannot pin the race this family turns on, which is why the assignor question was settled on the
+deterministic probe instead of by replaying a capture. One clean replay of a race that the instrument
+cannot force is a sample, not a result - and N=1, on a laptop, where the original failure occurred on
+a loaded CI runner.
+
+**The first attempt at that replay produced a false GREEN and is worth more than the replay itself.**
+It was run without `-Dfailsafe.failIfNoSpecifiedTests=false`, so the `-Dit.test` filter matched
+nothing on `parallel-consumer-parent`, no failsafe report was written at all, and the run still had
+to be classified from the report to notice - the exit code alone would have read as a pass. That flag
+is the first entry in the experiment runners' shared skip array for exactly this reason - that
+library arrives with astubbs/parallel-consumer#381 and is not on this file's branch yet - and the
+command was hand-written instead of going through its `pc_run_chaos` helper.
+
+### What this capture is actually worth
+
+Not a new signature and not a settled question. What it adds is **another in-the-wild occurrence on a
+tree that changes no `.java` at all** (astubbs/parallel-consumer#200 is documentation-only, measured:
+`git diff --name-only origin/master HEAD | grep '\.java$'` is empty), dated after the 2026-08-26
+series, on a different PR.
+
+The question it bears on is already settled by a stronger instrument: astubbs/parallel-consumer#29's
+four-cell control on `Rebalance857CommitSyncDeadlockProbeIT` - pre-fix arm red every repetition on
+both assignors, fixed arm green every repetition on both. This capture corroborates that from
+production-shaped conditions rather than from a forced window. **It does not need to replay in order
+to do that**, which is the thing to remember before anyone spends another chaos run on this seed.
+
+Nothing was recorded from astubbs/parallel-consumer#200 itself, and correctly so: it is a docs-only
+PR, and a sighting written from an unrelated branch is how a ledger acquires entries nobody can vouch
+for. The capture reached this file by being carried to the branch that owns the investigation.
+
+
+<!-- post-merge: checked-end -->
+
 **Second live confirmation, 2026-08-11: the chaos probe caught the stall directly.**
+
+<!-- post-merge: checked -->
+> STATUS: **SUPERSEDED** - `CLASS2_STALL`. The 2026-08-25 discriminator replayed this class of seed and the backlog DRAINED. Timing proxy, not a family sighting.
 `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` (the **eager** variant) was killed
 fail-fast by `ProgressProbe` with five simultaneous violations, on
 [job 93666671951](https://github.com/astubbs/parallel-consumer/actions/runs/31454939035/job/93666671951):
@@ -89,6 +381,7 @@ This is a stronger datapoint than the `RebalanceEoSDeadlockTest` sighting above,
 before assuming the two landed fixes closed the symptom. The probe's own vacuity caveat does not
 apply - 154s against a 150s bound with thousands of records of lag is a detector that genuinely
 fired, not a `probe clean` with nothing to see. The **cooperative** variant passed in the same run
+<!-- post-merge: checked -->
 (`probe violations=[]`), so whatever remains is eager-protocol-specific, which is where astubbs#29's
 `onPartitionsRevoked` / `commitOffsetsThatAreReady` contention lives. Seen on astubbs#224, a
 docs-and-CI-scripts branch that touches no product code, so the branch is not a suspect; the chaos
@@ -96,6 +389,9 @@ suite randomises its seed per run, so other branches passing the same day only m
 did not draw this interleaving.
 
 **Third sighting, 2026-08-12 - the COOPERATIVE variant went red, and this one is NOT confirmed as
+
+<!-- post-merge: checked -->
+> STATUS: **UNRESOLVED** - no probe verdict; a shutdown-path timeout that nothing distinguishes from a real stall. Never replayed.
 the stall.** `ChaosRevokeUnderWorkCooperativeIT.revokeUnderWorkStaysProtocolHonestWithCooperativeAssignor`
 failed on [job 93954713987](https://github.com/astubbs/parallel-consumer/actions/runs/31544745175/job/93954713987).
 **Replay seed `3986919097693415295`** - captured because it is the part no command can recover once
@@ -121,6 +417,7 @@ the inference should not be made without doing so.
 **What would settle it**, for whoever picks this up: replay the seed above and look for a
 `ProgressProbe` verdict. A `CLASS2_STALL`/`LAG_STAGNATION` violation alongside the termination
 timeout makes it the family; `probe violations=[]` with the timeout still present makes it a
+<!-- post-merge: checked -->
 shutdown-path issue of its own, and a third thing to chase rather than evidence about astubbs#29.
 Check the surefire XML rather than the console log - the console tail here carried no verdict either
 way, which is why this entry cannot resolve it.
@@ -145,6 +442,9 @@ suite randomises its seed per run, so other branches passing the same day only m
 not draw this interleaving.
 
 **Fourth sighting, 2026-08-12 - the `ZOMBIE_MEMBER` arm, and the probe genuinely fired.**
+
+<!-- post-merge: checked -->
+> STATUS: **RETIRED** - not a product defect. astubbs#292 found a harness double-start race; two PCs for one instance. Never evidence about anything.
 `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger` was killed fail-fast by `ProgressProbe` on
 [job 94014375262](https://github.com/astubbs/parallel-consumer/actions/runs/31564815332/job/94014375262),
 on astubbs#289 at head `976f88c65`. The failing wait is the `await()` in `ChaosChurnStormIT` aliased
@@ -176,7 +476,8 @@ a threshold by accident.
 **Which arm, and what it is not.** This is the `ZOMBIE_MEMBER`/`REBALANCE_BLOCKED` signature - a
 member not answering the rebalance - and not the `CLASS2_STALL`/`LAG_STAGNATION` signature of the
 second sighting. The zombie-member defect is recorded above as **landed** via astubbs#80, and the
-family's original deadlock (astubbs#29) is still open. **Do not read this entry as identifying
+<!-- post-merge: checked -->
+family's original deadlock is astubbs#29's. **Do not read this entry as identifying
 either.** It records a signature and a replayable seed; which defect it belongs to, if any, is what
 the replay is for.
 
@@ -194,6 +495,7 @@ two pool workers, each building its own consumer:
 Both joined `group-1-1929174831`; the probe fired four seconds later. Two PCs for one logical
 instance, one of them orphaned and closed by nobody - a group member that answers no rebalance. That
 is the double-start race astubbs#292 fixed, so this sighting is **retired from the family**: it was
+<!-- post-merge: checked -->
 never evidence about astubbs#29 or astubbs#80. The replay above is no longer worth spending.
 
 **Branch context: astubbs#289 is not a suspect, and here is why rather than an assertion.** It
@@ -215,6 +517,9 @@ exist. This generalises beyond the entry - it belongs in the ambient-probe secti
 the block, and that file was owned by another branch when this was written.
 
 **Fifth sighting, 2026-08-13 - the same `ZOMBIE_MEMBER` signature, with astubbs#292 present and no
+
+<!-- post-merge: checked -->
+> STATUS: **OPEN** - `ZOMBIE_MEMBER`, ASYNC mode, harness double-start ruled out by counting. Unexplained by every known family member.
 double-start anywhere in the log.** This is the one that matters, because it is what the fourth
 sighting's attribution does *not* cover.
 `ChaosChurnStormIT` on [job 94333179847](https://github.com/astubbs/parallel-consumer/actions/runs/31663523870/job/94333179847),
@@ -239,6 +544,7 @@ identified and removed, at least one remaining - and the check is cheap:
 > ~2s. Present, it is the harness and astubbs#292's guards regressed. **Absent, it is the other
 > cause, and this file is where it belongs.**
 
+<!-- post-merge: checked -->
 astubbs#29 and confluentinc#857 remain open, and none of this attributes anything to either.
 
 **Corroboration that the guards do engage.** The chaos lane on astubbs#296 at head `347ceae90`
@@ -257,6 +563,9 @@ weakens the second sighting's "whatever remains is eager-protocol-specific" read
 cooperative side, without settling it.
 
 **Sixth sighting, 2026-08-13 - the eager `CLASS2_STALL` again, and the first time both arms fired in
+
+<!-- post-merge: checked -->
+> STATUS: **PART SUPERSEDED** - the `CLASS2_STALL` half falls with the 2026-08-25 demotion. The `ZOMBIE_MEMBER` co-occurrence is still unexplained.
 one run.** `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` (the **eager** variant) was
 killed by `ProgressProbe` on
 [job 94355941379](https://github.com/astubbs/parallel-consumer/actions/runs/31671178444/job/94355941379),
@@ -310,6 +619,7 @@ stood alone for two days; it no longer does.
 and `ChaosChurnStormIT` both **passed in this same run** - same runner, same broker image, same
 minute. That is exactly the pattern the second sighting reported (cooperative green while eager
 died), now seen twice, which is the strongest evidence yet that whatever remains is
+<!-- post-merge: checked -->
 eager-protocol-specific - where astubbs#29's `onPartitionsRevoked` / `commitOffsetsThatAreReady`
 contention lives.
 
@@ -346,10 +656,12 @@ XML's captured system-out. The fourth sighting already recorded this; it is repe
 the trap was walked into anyway, one screen after reading the warning. **A zero from the console is
 not a zero.**
 
+<!-- post-merge: checked -->
 **Gated on astubbs#29: proving thread-parallel integration tests are safe again.** astubbs#68 made the integration
 suite reliable by *forking* per broker (`forkCount=4`), which sidesteps the deadlock rather than
 proving it gone - the contended `RebalanceEoSDeadlockTest.noDeadlockOnRevoke` failure it was hiding is
 the real confluentinc#857 bug. The deferred "Step 2" is to re-run with `-Dparallel-tests=true` on a
+<!-- post-merge: checked -->
 shared broker **after astubbs#29 lands** and see whether it stays green. One probe on the highcpu runner
 hinted it might (forked unit suite green with threads enabled; the integration red was the separate
 `PartitionStateCommittedOffsetIT` flake, since fixed by astubbs#80), but one green run is not proof. Forking
@@ -359,6 +671,9 @@ saturates the cores.
 ---
 
 **Seventh sighting, 2026-08-14 - local, not CI, and the first one bisected against a clean
+
+<!-- post-merge: checked -->
+> STATUS: **SUPERSEDED - NOT A FAMILY SIGHTING.** A test defect: the assertion compared a contiguous commit offset to an out-of-order completion counter. Do not count it.
 baseline.** `PCMetricsTest.metricsRegisterBinding` failed a full multi-module unit run with
 `expected: 205.0 but was: 203.0 within 2 minutes` - two records that never completed. That is the
 family's signature, not a new one, and it appeared while landing astubbs#296's work-return path -
@@ -433,6 +748,9 @@ turns "probably a flake" into an answer. Do that before attributing - or dismiss
 this signature, especially on a branch whose subject matter would explain it.
 
 **Eighth sighting, 2026-08-17 - the `ZOMBIE_MEMBER` arm again, and its seed replays clean.**
+
+<!-- post-merge: checked -->
+> STATUS: **UNRESOLVED** - replayed and does not reproduce; uncontended, all three scenarios passed. Cleared as evidence, not as a question.
 `ChaosRevokeUnderWorkCooperativeIT.revokeUnderWorkStaysProtocolHonestWithCooperativeAssignor` on
 [job 95308176649](https://github.com/astubbs/parallel-consumer/actions/runs/32002566427/job/95308176649),
 on astubbs#204 at head `85a3646d8`. Same arm as the fourth sighting, on the revoke-under-work
@@ -470,6 +788,9 @@ killing the `highcpu` lane on three other branches with the no-verdict signature
 than cleared - a later sighting on a branch that does not touch the commit path would settle it.
 
 **Ninth sighting, 2026-08-18 - the fleet-level `NO_PROGRESS` arm, twice in one night (this entry
+
+<!-- post-merge: checked -->
+> STATUS: **LIKELY A TIMING PROXY, 2026-08-28** - ASYNC `NO_PROGRESS`. The seed `9086872209853284830` replays, and when the stall fires the backlog DRAINS: flat, then climbing past target. Same shape as `CLASS2_STALL`. One firing so far - see `test-857-churn-storm-async-stalls.md`.
 and the ninth below share a signature).** `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger`
 was killed fail-fast by `ProgressProbe` on
 [job 95579861648](https://github.com/astubbs/parallel-consumer/actions/runs/32093367999/job/95579861648),
@@ -504,6 +825,9 @@ attempt) - a second retrieval route alongside the fourth sighting's report-artif
 console-log truncation trap is the same one recorded there.
 
 **Tenth sighting, 2026-08-18 - same test, same arm, four hours earlier, different branch.**
+
+<!-- post-merge: checked -->
+> STATUS: **LIKELY A TIMING PROXY, 2026-08-28** - same ASYNC `NO_PROGRESS` line as the ninth; the discriminator shows it draining.
 `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger`, killed by the same fleet detector on
 [job 95584026682's run, attempt at head d96375053](https://github.com/astubbs/parallel-consumer/actions/runs/32078875110)
 (2026-08-17T23:04Z), on astubbs#308 - a docs-only branch (ideation/strategy/ledger files, zero
@@ -534,6 +858,9 @@ single-arm evidence the ledger holds; whichever defect they belong to, the repla
 cheapest next experiment the family has.
 
 **Eleventh sighting, 2026-08-19 - the eager `CLASS2_STALL` again, and the first seed in this family
+
+<!-- post-merge: checked -->
+> STATUS: **WITHDRAWN, explicitly** - its master arm does not survive as evidence. Crossing a timing bound on master means master was slow on that schedule, not wedged.
 that replays RED on demand, with a master control arm proving it is not branch-caused.**
 `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` killed by `ProgressProbe` on
 [job 95962195275](https://github.com/astubbs/parallel-consumer/actions/runs/32217696441), at head
@@ -595,6 +922,9 @@ with `-Dit.test=ChaosRevokeUnderWorkIT` needs `-Dfailsafe.failIfNoSpecifiedTests
 The unnarrowed command above has neither problem.
 
 **Twelfth sighting, 2026-08-20 - three `Chaos Pain Suite` reds inside twenty minutes across two
+
+<!-- post-merge: checked -->
+> STATUS: **PART SUPERSEDED** - `CLASS2_STALL` entries fall with the demotion (this is the seed the discriminator used). The `ChaosKeyOrderIT` zombie was later diagnosed as calibration.
 branches, and the first one is on the DRAIN control arm.** Four scenarios fired between 01:05 and
 01:21Z. All the numbers below come from the uploaded failsafe artifacts, per the retrieval note
 above, not from the console.
@@ -703,6 +1033,9 @@ green: whatever draws this signature is drawn per seed, and no tree-content expl
 pair. Every prior entry asserts seed-dependence from branch subject matter; this one measures it.
 
 **Thirteenth sighting, 2026-08-20 - the first chaos run with the new detectors, and none of them
+
+<!-- post-merge: checked -->
+> STATUS: **SUPERSEDED** - `CLASS2_STALL`, timing proxy.
 fired.** `Chaos Pain Suite` on astubbs/parallel-consumer#325's merged head `283202eb5`
 ([run 32334089543](https://github.com/astubbs/parallel-consumer/actions/runs/32334089543)), 8 of 9
 chaos ITs green, `ChaosRevokeUnderWorkDrainIT.revokeUnderDrainingStopsStaysProtocolHonest` red at
@@ -732,6 +1065,9 @@ Recorded as unresolved.
 
 <!-- post-merge: checked-begin -->
 **Fourteenth sighting, 2026-08-25 - THREE reds on a docs-and-comments branch, fresh seeds each time,
+
+<!-- post-merge: checked -->
+> STATUS: **PART SUPERSEDED** - `CLASS2_STALL` entries fall; the `NO_PROGRESS` entry belongs to the open ASYNC line.
 and the contention explanation does NOT fit.** `Chaos Pain Suite` failed at three consecutive heads
 while astubbs#347 was in review - `22826761a`, `5f9fa4088` (run `32803999735`) and `7753777c3` (run
 `32805270339`) - having passed at `257c4173a`, an earlier head of the same work. Three of the four
@@ -777,6 +1113,9 @@ measurement, not a correctness verdict" - and a `-Dchaos.diagnoseStallRecovery=t
 master's required-checks ruleset, so neither red blocked the PR.
 <!-- post-merge: checked-begin -->
 **Fifteenth sighting, 2026-08-24 - the eager `CLASS2_STALL` again, on a branch that added no reactor
+
+<!-- post-merge: checked -->
+> STATUS: **SUPERSEDED** - `CLASS2_STALL` tally marks. Its `NO_PROGRESS` entry belongs to the open ASYNC line.
 code at all.** Numbered after the fourteenth although it happened a day *earlier*: both were written
 while their PRs were open and astubbs#347 merged first. The numbers are recording order, not
 chronology, and renumbering a merged entry would break every citation of it.
@@ -867,6 +1206,9 @@ Entries in this ledger that lean on a clean autopsy are worth re-checking agains
 
 <!-- post-merge: checked-begin -->
 **Sixteenth sighting, 2026-08-25 - the drain arm again, and a SECOND same-day timing rule-out of
+
+<!-- post-merge: checked -->
+> STATUS: **SUPERSEDED** - `CLASS2_STALL`. Its value is the same-day timing rule-outs of runner contention, which stand.
 contention.** `Chaos Pain Suite` on astubbs/parallel-consumer#353's head `c1f423e4a`
 ([run 32807910210](https://github.com/astubbs/parallel-consumer/actions/runs/32807910210/job/97681493424)),
 <!-- post-merge: checked-end -->
@@ -915,6 +1257,9 @@ recording order, not chronology - and all three are `CLASS2_STALL`, so the closu
 them the moment they land. Cite the seed, never the ordinal.
 
 **Seventeenth sighting, 2026-08-19 - the eager `CLASS2_STALL` arm, with astubbs#209's fix already
+
+<!-- post-merge: checked -->
+> STATUS: **SUPERSEDED** - `CLASS2_STALL`, timing proxy.
 merged in.** `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest`, killed by `ProgressProbe`
 on [job 95906973285](https://github.com/astubbs/parallel-consumer/actions/runs/32198410456/job/95906973285),
 on astubbs#57 at head `5b1e7b099`. **Replay seed `7964289159858266180`**:
@@ -946,6 +1291,9 @@ and the cooperative arm's expected rebalance churn is exactly what a truncated r
 failure.
 
 **Eighteenth sighting, 2026-08-19 - same test, same arm, two hours later, and two partitions breached
+
+<!-- post-merge: checked -->
+> STATUS: **SUPERSEDED** - `CLASS2_STALL`. The partition-match observation against the seventeenth was never revisited.
 at coordinates identical to the seventeenth.**
 `ChaosRevokeUnderWorkIT.revokeUnderWorkStaysProtocolHonest` again, on
 [job 96004301277](https://github.com/astubbs/parallel-consumer/actions/runs/32232211120/job/96004301277),
@@ -979,6 +1327,9 @@ holds, the seed matters less to this family than the ledger has assumed - which 
 the sightings whose seeds replay clean.
 
 **Nineteenth sighting, 2026-08-21 - both revoke-under-work arms in a single run, and a prose-only
+
+<!-- post-merge: checked -->
+> STATUS: **SUPERSEDED** - `CLASS2_STALL`, timing proxy.
 diff that stayed red.** One `Chaos Pain Suite` red on astubbs#57 at 03:06Z, seven scenarios run, two
 errored. Numbers from the uploaded failsafe artifacts, per the retrieval note above - the console
 log truncated (see `docs/solutions/workflow-issues/gh-run-view-log-truncation.md`), so the artifact
@@ -1055,7 +1406,9 @@ and the scenario fail-fasts on the first violation, so the peak is always bound 
 and can carry no severity information at all. The note above already said "~154s is a signature, not a
 diagnosis"; this is the same point, now with the mechanism rather than the caution.
 
+<!-- post-merge: checked -->
 **What this does NOT close.** The confluentinc#857 wedge is real and `bugs/857-paused-consumption-multi-consumers-bug`
+<!-- post-merge: checked -->
 (astubbs#29) still fixes a real deadlock. What is now established is narrower and more useful: **the
 chaos suite has never reproduced it.** That agrees with
 [`test-chaos-phase2.md`](test-chaos-phase2.md)'s own long-standing assessment - *"a 9-seed sweep found
@@ -1084,6 +1437,7 @@ three in-process reviewers on that same diff missed it, which is the clearest ar
 records for keeping a cross-model pass.
 <!-- post-merge: checked-end -->
 
+<!-- post-merge: checked -->
 **A falsifiable prediction, recorded before the fact.** Land astubbs#29 and the rest of the backlog,
 re-run the chaos suite on a loaded box, and the `CLASS2_STALL` findings continue at roughly the same
 rate - because they are the bound meeting the load, and neither the deadlock fix nor the sequencing
@@ -1330,6 +1684,7 @@ Top frames: [...commitOffsetsThatAreReady(AbstractParallelEoSStreamProcessor.jav
              ConsumerRebalanceListenerInvoker.invokePartitionsRevoked, ... ConsumerManager.poll]
 ```
 
+<!-- post-merge: checked -->
 **The frames resolve, at the head under test, to the exact AB-BA pair astubbs#29 replaces.** Frame
 `:1585` is not merely inside `commitOffsetsThatAreReady` - it *is* that method's
 `synchronized (commitCommand)` line, so the poll thread was stopped on the monitor acquisition
@@ -1364,10 +1719,12 @@ window completed green, and the non-successes among them were `cancelled` by the
 queue rather than failed, so this red is not master-state.
 <!-- post-merge: checked-end -->
 
+<!-- post-merge: checked -->
 **What is wanted next is no longer a discriminator but a verification.** astubbs#29 replaces this
 `synchronized` with `ReentrantLock.tryLock()`; until now it had a unit reproduction
 (`RebalanceEoSDeadlockTest`) and no fleet-level one. Replaying this seed with that stack applied, and
 reading whether the poll thread is still found `BLOCKED` on the same monitor, is the experiment that
+<!-- post-merge: checked -->
 would let astubbs#29 land on evidence rather than on argument. **Recorded as one observation, not a
 rate:** the seed has not been replayed, and nothing here says how often the cycle closes.
 
@@ -1566,7 +1923,7 @@ same holder, inside two minutes. Contention on one loaded machine cannot be what
 **Still not a rate, and still no replay.** Neither seed here has been replayed either, and there is
 no denominator - other chaos jobs in the same window were green. What this adds is that the cycle is
 not rare enough to need a hunt to see, and that the verification the first 2026-08-26 section asks
-for (replay a captured seed with astubbs#29's `tryLock()` applied, and read whether the poll thread
+for (replay a captured seed with astubbs#29's `tryLock()` applied, and read whether the poll thread <!-- post-merge: checked -->
 is still found `BLOCKED` on the same monitor) now has four seeds to choose from.
 
 ## 2026-08-26, fifth capture: the DRAIN arm, and the first capture whose frames were re-resolved
@@ -1626,7 +1983,7 @@ read the peaks line and stop there.
       -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=3198328355855848347
 
 **Not replayed, and still not a rate.** Five seeds now exist for the verification the first
-2026-08-26 section asks for - replay one with astubbs#29's `tryLock()` applied and read whether the
+2026-08-26 section asks for - replay one with astubbs#29's `tryLock()` applied and read whether the <!-- post-merge: checked -->
 poll thread is still found `BLOCKED` on the same monitor. None of the five has been replayed, here or
 above; the write-up
 [`revoke-path-commit-deadlock-between-poll-and-control-threads.md`](../solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md)
@@ -1741,6 +2098,9 @@ the verification the first 2026-08-26 section asks for; still none of them spent
 
 <!-- post-merge: checked-begin -->
 **Twentieth sighting, 2026-08-26 - the `ZOMBIE_MEMBER` arm, and the first capture of it since the
+
+<!-- post-merge: checked -->
+> STATUS: **UNRESOLVED** - `ZOMBIE_MEMBER`, not replayed.
 dispatch ceiling landed.** `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger` was killed
 fail-fast by the probe on astubbs/parallel-consumer#205, at a head that had just merged master.
 The autopsy names the same arm as the fourth, fifth and eighth sightings, in the same words:
@@ -1851,7 +2211,10 @@ consistent with the standing intermittency and **is not a rate**: it is a handfu
 branch, gathered while doing something else, not an experiment anybody designed.
 
 **Still not replayed.** Six seeds now exist for the verification the first 2026-08-26 section asks
-for - replay one with astubbs#29's `tryLock()` applied and read whether the poll thread is still
+for.
+<!-- post-merge: checked - names the PR whose fix the replay applies; describes an experiment, so it reads the same once that PR has landed, at which point the replay only gets cheaper -->
+Replay one with astubbs/parallel-consumer#29's `tryLock()` applied and read whether the poll
+thread is still
 found `BLOCKED` on the same monitor. None has been replayed, and
 [`revoke-path-commit-deadlock-between-poll-and-control-threads.md`](../solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md)
 still records its verification status as Unproven. **A seventh capture of this signature is worth
@@ -1869,6 +2232,29 @@ of the same crossings rather than an exception to them; the counts here are left
 written rather than silently re-derived. The seventeenth to nineteenth arrive the same way, from
 astubbs/parallel-consumer#57 - the same crossings again, which is why they take the numbers after
 the sixteenth despite two of them predating it.
-<!-- post-merge: checked-end --> This file may be retired once astubbs#29 lands and the
-remaining open item - the original deadlock - has its own solutions write-up.
+<!-- post-merge: checked-end -->
 
+**This is a register, not an investigation note, and the retirement criterion follows from that.** It
+began as one investigation and became the place this family's mechanisms are kept apart from each
+other - which is the job it is still doing.
+
+**What it is for.** Upstream reports one symptom, paused consumption after a rebalance, and that
+symptom has more than one cause. The register exists to stop those causes being collapsed into each
+other, because every attempt to treat "the 857 bug" as a single defect has ended up attributing one
+mechanism's evidence to another.
+
+**What earns an entry.** A distinct mechanism that can produce the family symptom, with evidence
+tying it to the symptom rather than to the vocabulary. A sighting on its own does not earn one: it
+attaches to the mechanism it belongs to, or to the unattributed list until something claims it.
+
+**What retires it.** Every open mechanism in it being explained or closed - not a PR merging. A fix
+retires *its own mechanism's section*, never the register, because what remains is by definition
+about the mechanisms that fix does not reach.
+<!-- post-merge: checked-begin -->
+The revoke-path deadlock is the worked example, and the reason this criterion is written this way
+rather than the way it was. Its fix is astubbs/parallel-consumer#29 and its write-up is
+[`../solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md`](../solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md),
+so that mechanism is settled and its section may go. The register may not: two of its open items
+reproduce on trees already carrying that fix, so retiring the file on that merge would delete two
+live unexplained stalls. That is exactly why "the 857 PR merged" was never the right test.
+<!-- post-merge: checked-end -->

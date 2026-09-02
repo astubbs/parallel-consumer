@@ -67,7 +67,7 @@ on:
         default: ''
   schedule:
     # Weekly, Sundays 04:00 UTC. ONLY the largeNumberOfInstances rate: its question is open and
-    # recorded (docs/inflight/test-largenumberofinstances-residual-failures-unmeasured.md), and a
+    # recorded (docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md), and a
     # rate with no sampler never gets answered. Nothing else is scheduled - an experiment whose
     # question is settled should be deleted, not run forever.
     - cron: '0 4 * * 0'
