@@ -18,7 +18,7 @@ baseline for comparison is 15/20 runs fully clean, zero stall-class failures.
 | `PartitionStateCommittedOffsetIT.committedOffsetRemoved[3] none` | 1 sighting (2026-08-05) | `RebalanceInProgressException` out of the test's own setup |
 | `ParallelEoSStreamProcessorTest.inFlightMessagesCommittedIfProcessedDuringShutdown[1]` | 1/15 (2026-08-07) | `assertCommits(of(1))`, "1 record completed during shutdown", in the transactional arm |
 | `PartitionStateCommittedOffsetIT.committedOffsetRemoved[2] earliest` | 1 sighting (2026-08-25, astubbs#353, [job 97859037375](https://github.com/astubbs/parallel-consumer/actions/runs/32865269364/job/97859037375)) | `checkHowManyRecordsWithKeyPresent` expected 2 got 1 - the `[1] latest` assertion signature (solved 2026-08-05 as a nudge race) appearing on the `earliest` parameter; `probe clean` autopsy (test-side, not consumer-group progress), on a branch with no Java <!-- post-merge: checked --> |
-| `PartitionStateCommittedOffsetIT.committedOffsetRemoved[1] latest` | 2 sightings (2026-09-01, astubbs#407, [job 100057065090](https://github.com/astubbs/parallel-consumer/actions/runs/33568429332/job/100057065090); 2026-09-02, astubbs#409, [job 100174428838](https://github.com/astubbs/parallel-consumer/actions/runs/33607276956/job/100174428838)) | `checkHowManyRecordsWithKeyPresent` expected 2 got 1 - the assertion the `[2]` row carries, but the record that SURVIVED is the compactor rather than the original, which the 2026-08-05 mechanism cannot produce; `probe clean`, `forkCount=4`, on a branch with no Java <!-- post-merge: checked --> |
+| `PartitionStateCommittedOffsetIT.committedOffsetRemoved[1] latest` | 3 sightings (2026-09-01, astubbs#407, [job 100057065090](https://github.com/astubbs/parallel-consumer/actions/runs/33568429332/job/100057065090); 2026-09-02, astubbs#409, [job 100174428838](https://github.com/astubbs/parallel-consumer/actions/runs/33607276956/job/100174428838); 2026-09-02, astubbs#416, [job 100257067886](https://github.com/astubbs/parallel-consumer/actions/runs/33632566980/job/100257067886)) | `checkHowManyRecordsWithKeyPresent` expected 2 got 1 - the assertion the `[2]` row carries, but the record that SURVIVED is the compactor rather than the original, which the 2026-08-05 mechanism cannot produce; `probe clean`, `forkCount=4`, on a branch with no Java <!-- post-merge: checked --> |
 | `TransactionTimeoutsTest.commitTimeout[2]` | 1 sighting (2026-08-06, astubbs#204) | incompletes `[8]` where the parameter pins `[8, 12]` |
 
 **On `inFlightMessagesCommittedIfProcessedDuringShutdown[1]` - read the parameter index before
@@ -163,6 +163,25 @@ It does not settle the mechanism. `[1]`'s 2026-09-01 sighting recorded that the 
 was the compactor rather than the original, which the 2026-08-05 nudge-race mechanism cannot produce;
 nothing here contradicts or confirms that. What it does settle is that `[1]` is not deterministic on
 this branch, which one job could never show.
+<!-- post-merge: checked-end -->
+
+## `committedOffsetRemoved[1] latest` a third time, and the rate now spans branches (2026-09-02)
+
+<!-- post-merge: checked-begin - names astubbs#416 in the past tense as the branch the sighting came
+     from; the claim survives that branch merging -->
+`Integration Tests` on astubbs#416's head `1f844c5fb`
+([job 100257067886](https://github.com/astubbs/parallel-consumer/actions/runs/33632566980/job/100257067886)),
+`forkCount=4`, one failure in 201 integration tests, `probe clean`. Same assertion and the same
+survivor as the 2026-09-01 row: the scan held `offset = 202, key = key-50, value = compactor` and the
+original was gone, so this is that shape again and not the solved nudge race. It failed at 25.7s
+where every pass in the window below took 46-60s - the fast-failing signature this family is named for.
+
+**The rate is no longer one branch's.** `inflight codecov test committedOffsetRemoved`, read when this
+was recorded, showed 13 runs of `[1]` across eight branches in the 35 minutes around this sighting:
+this one failure and 12 passes, the next head on the same branch (`0ffab86`) among them; `[2]` and
+`[3]` 13 of 13 in the same window. The row above had one failure in seven on one branch; this is the
+same failure on a second branch that shares nothing with it - a shell hook, two Node scripts and
+docs, no Java. Master state, not astubbs#416's. Still not a mechanism.
 <!-- post-merge: checked-end -->
 
 ## `commitTimeout[2]`, for whoever picks it up (seen 2026-08-06 on astubbs#204)
