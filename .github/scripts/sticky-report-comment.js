@@ -68,8 +68,9 @@ function readPayload(text, dataMarker) {
  *
  * The caller must pass a PAGINATED list - see `findExisting` below, which is the safe way in.
  */
-function pickOurComment(comments, marker) {
-  return comments.find(c => c.body?.includes(marker) && c.user?.type === "Bot");
+function pickOurComment(comments, marker, { where = () => true, newest = false } = {}) {
+  const ours = comments.filter(c => c.body?.includes(marker) && c.user?.type === "Bot" && where(c));
+  return newest ? ours[ours.length - 1] : ours[0];
 }
 
 /**
@@ -82,9 +83,12 @@ function pickOurComment(comments, marker) {
  * fifteen-comments problem the stickiness exists to prevent comes back.
  */
 async function findExisting({ github, owner, repo, issue_number, marker }) {
-  const all = await github.paginate(github.rest.issues.listComments,
-    { owner, repo, issue_number, per_page: 100 });
-  return pickOurComment(all, marker);
+  return pickOurComment(await listAllComments({ github, owner, repo, issue_number }), marker);
+}
+
+/** Every comment on the PR, paginated. `postStickyReport` fetches once and picks from it twice. */
+async function listAllComments({ github, owner, repo, issue_number }) {
+  return github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 });
 }
 
 /**
@@ -175,6 +179,19 @@ function stampFor({ serverUrl, owner, repo, prNumber, headSha, runId, now = new 
 }
 
 /**
+ * The two notes a retired comment can end with, and the test that tells them apart.
+ *
+ * The first is written BEFORE the fresh comment exists and so names no place; the second replaces it
+ * once the fresh comment demonstrably exists. `pendingNoteRe` matches the first whatever the caller's
+ * `what` was, because the run that repairs a retired comment (see `postStickyReport`) may not be the
+ * run that wrote it, and a renamed noun must not leave the old comment unrepairable.
+ */
+const pendingNote = what => `Superseded - a fresh ${what} should follow for this push.`;
+const linkedNote = (what, url) => `Superseded by [a newer ${what}](${url}).`;
+const pendingNoteRe = /<sub>Superseded - a fresh .* should follow for this push\.<\/sub>/;
+const awaitingForwardLink = c => pendingNoteRe.test(c.body ?? "");
+
+/**
  * The retired body for a superseded comment: marker renamed so later runs stop targeting it, heading
  * prefixed so a reader who lands on it knows, and a note appended.
  *
@@ -209,8 +226,9 @@ function retiredBody({ body, marker, supersededMarker, headingRe, label, note, c
  *
  * Returns `{ action, commentId, url, statusChanged, prev, cur }` where `action` is one of
  * `updated` (edited in place), `created` (no previous comment), `superseded` (retired the old one
- * and posted fresh because the status changed), or `skipped` (nothing was written - only reachable
- * under `postWhenAbsent: false`).
+ * and posted fresh because the status changed), `recovered` (posted fresh and forward-linked a
+ * comment an earlier run retired but never replaced - see below) or `skipped` (nothing was written).
+ * The last two are only reachable under `postWhenAbsent: false`.
  *
  * Required: `github`, `context`, `core` (the github-script globals), `marker`, `dataMarker`, `body`.
  * Optional: `supersededMarker` (defaults to the marker with ` (superseded)` before the `-->`),
@@ -258,14 +276,33 @@ async function postStickyReport({
   const pr = context.payload.pull_request;
   const correction = !postWhenAbsent;
 
-  const existing = await findExisting({ github, owner, repo, issue_number, marker });
-  const prev = readPayload(existing?.body, dataMarker);
+  // ONE FETCH. The correction path below picks a second comment out of the same list; the steady
+  // state once a lane is empty is that path on every PR, so a second pagination there would be the
+  // common case rather than the rare one.
+  const all = await listAllComments({ github, owner, repo, issue_number });
+  const existing = pickOurComment(all, marker);
   const cur = readPayload(body, dataMarker);
 
-  // Nothing of ours to correct, and this caller only wanted to correct - so say nothing.
-  if (!existing && !postWhenAbsent) {
+  // Nothing LIVE of ours to correct - but have we spoken? A previous run may have retired our comment
+  // and then failed to create its replacement (the retire-then-create order below makes that the
+  // failure mode, by design). Such a comment carries the superseded marker and still ends with the
+  // first, place-less note; nothing else ever revisits it, so if this path also stays silent the
+  // wrong instruction sits under a heading promising a report that never comes, permanently. It is
+  // ours, so we finish the job: post the correction and link the retired comment forward to it.
+  //
+  // THE NEWEST UNLINKED ONE, not the oldest. Several retired comments can lack a forward link - the
+  // link is a best-effort third write - but only the newest is the one whose replacement never
+  // existed: every older one was superseded by the comment retired after it. Linking an older one
+  // here would point it past a successor it really had.
+  const unreplaced = existing ? undefined
+    : correction ? pickOurComment(all, supersededMarker, { where: awaitingForwardLink, newest: true })
+    : undefined;
+  if (!existing && correction && !unreplaced) {
     return { action: "skipped", commentId: null, url: null, statusChanged: false, prev: null, cur };
   }
+
+  const previous = existing ?? unreplaced;
+  const prev = readPayload(previous?.body, dataMarker);
 
   const delta = renderDelta(prev, cur) || "";
   const stamp = stampFor({
@@ -298,8 +335,12 @@ async function postStickyReport({
   //                          latches onto the STALE one and updates it forever while the newer report
   //                          sits orphaned. Silent, self-perpetuating, and worst on the status change
   //                          it exists to announce.
-  //   retire then create  -> the create fails and NO comment carries the live marker. The next run
-  //                          simply posts a fresh one. Degraded, obvious, and it recovers by itself.
+  //   retire then create  -> the create fails and NO comment carries the live marker. Degraded,
+  //                          obvious, and the next run repairs it: a report posts fresh because it
+  //                          finds nothing live, and a correction finds the unreplaced retired
+  //                          comment above and posts fresh for that reason. A correction that only
+  //                          looked for a LIVE comment would stay silent here forever - which is how
+  //                          this path was first written.
   //
   // The forward link costs a third write, so it is best-effort and last: by the time it runs, the
   // marker state is already correct whether or not it succeeds.
@@ -315,20 +356,22 @@ async function postStickyReport({
   });
 
   if (existing) {
-    await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id,
-      body: retire(`Superseded - a fresh ${what} should follow for this push.`) });
+    await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: retire(pendingNote(what)) });
   }
   const created = await github.rest.issues.createComment({ owner, repo, issue_number, body: payload });
-  if (existing) {
+  if (previous) {
+    // A comment we retired just now is rebuilt from its live body; one an earlier run retired already
+    // has its retired shape, so only its note changes.
+    const linked = linkedNote(what, created.data.html_url);
+    const forwardLinked = existing ? retire(linked) : previous.body.replace(pendingNoteRe, `<sub>${linked}</sub>`);
     try {
-      await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id,
-        body: retire(`Superseded by [a newer ${what}](${created.data.html_url}).`) });
+      await github.rest.issues.updateComment({ owner, repo, comment_id: previous.id, body: forwardLinked });
     } catch (e) {
       core.warning(`could not link the retired ${what} forward: ${e.message}`);
     }
   }
   return {
-    action: existing ? "superseded" : "created",
+    action: existing ? "superseded" : previous ? "recovered" : "created",
     commentId: created.data.id,
     url: created.data.html_url,
     statusChanged: changed,
@@ -341,6 +384,8 @@ module.exports = {
   readPayload,
   pickOurComment,
   findExisting,
+  listAllComments,
+  awaitingForwardLink,
   statusChanged,
   sanitiseForHeading,
   stampFor,

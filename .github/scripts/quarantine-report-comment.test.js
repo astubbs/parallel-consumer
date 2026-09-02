@@ -359,6 +359,46 @@ asyncTest("an empty lane says NOTHING on a PR it never spoke on", async () => {
   }
 });
 
+// THE HALF-DONE RETRACTION. The retire-then-create order in sticky-report-comment.js means a create
+// that fails leaves the ACTION REQUIRED comment retired - marker renamed, heading prefixed, table
+// folded - and nothing live. The next emptied run finds nothing live, and `postWhenAbsent: false`
+// used to make it stay silent: the retired comment then promised "a fresh quarantine lane report
+// should follow for this push" forever, and no later run revisits a retired comment. Driven through
+// the real reporter's output, twice, so the payload the recovery reads back is the producer's own.
+asyncTest("an emptying run whose create FAILED is completed by the next emptied run", async () => {
+  const root = mkdtempSync(join(tmpdir(), "qlane-recover-"));
+  try {
+    const gh = fakeGithub([]);
+    const first = await post({
+      github: gh, context: CONTEXT, core: CORE,
+      body: runReporter(root, false), now: new Date("2026-09-02T03:04:05Z"),
+    });
+    const emptied = runReporter(root, false, { emptyLane: true });
+
+    gh.faults.failCreate = true;
+    await assert.rejects(() => post({ github: gh, context: CONTEXT, core: CORE, body: emptied, now: new Date("2026-09-02T03:05:05Z") }));
+    const halfDone = gh.store.find(c => c.id === first.commentId).body;
+    assert.ok(halfDone.includes("should follow for this push"), `not the half-done state this test is about: ${halfDone}`);
+
+    gh.faults.failCreate = false;
+    const next = await post({
+      github: gh, context: CONTEXT, core: CORE,
+      body: runReporter(root, false, { emptyLane: true }), now: new Date("2026-09-02T03:06:05Z"),
+    });
+    assert.strictEqual(next.action, "recovered");
+    const created = gh.calls.filter(c => c.op === "createComment").pop().body;
+    assert.ok(created.includes("quarantine lane is empty"), `the retraction was not posted: ${created}`);
+    assert.ok(created.includes("`SomeQuarantinedIT.someMethod` left the lane"),
+      `the recovered retraction lost the row it withdraws - the retired payload was not read: ${created}`);
+    const repaired = gh.store.find(c => c.id === first.commentId).body;
+    assert.ok(repaired.includes(`Superseded by [a newer quarantine lane report](${next.url})`), `no forward link: ${repaired}`);
+    assert.ok(!repaired.includes("should follow for this push"), `the pending note survived: ${repaired}`);
+    assert.strictEqual(gh.store.filter(c => c.body.includes(`${MARKER}\n`)).length, 1, "exactly one live comment");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // A lane that is still empty on the next push must not re-announce itself either: the retraction is
 // already there, and the digest has not moved.
 asyncTest("a lane that stays empty updates in place rather than posting again", async () => {
