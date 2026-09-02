@@ -1060,6 +1060,89 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
     }
 
     /**
+     * @return true if <em>this</em> thread already owns the commit lock, so a commit made from here re-enters
+     *         rather than acquiring. Distinct from {@link #isTransactionCommittingInProgress()}, which answers
+     *         for any thread.
+     */
+    public boolean isCommitLockHeldByCurrentThread() {
+        return producerTransactionLock.isWriteLockedByCurrentThread();
+    }
+
+    /**
+     * Releases the commit lock if - and only if - this thread still holds it. Idempotent by design.
+     * <p>
+     * <b>Why the revocation path cannot simply trust {@link #postCommit()} to do this.</b>
+     * {@code AbstractOffsetCommitter#retrieveOffsetsAndCommit} calls {@code preAcquireOffsetsToCommit()}
+     * <em>outside</em> its {@code try/finally}, and this class's implementation of that is
+     * {@code acquireCommitLock(); flush();}. A {@code flush()} that throws - a live possibility during a
+     * rebalance, where a competing instance can fence this producer - therefore escapes before the
+     * {@code finally} that would have released the lock.
+     * <p>
+     * On the ordinary control-thread path that is survivable, because the exception kills the instance anyway.
+     * On the revocation path it is not: the callback catches, logs and returns, so a transient producer error
+     * would strand the write lock on a thread that has left, and from then on every revocation declines forever
+     * while every control-thread commit throws {@code ConcurrentModificationException}. That trades this issue's
+     * unbounded wait for a permanent commit deadlock, which is strictly worse.
+     * <p>
+     * After a successful commit the hold count is already zero and this is a no-op, so the caller may always
+     * call it in a {@code finally} without knowing which happened.
+     */
+    public void releaseCommitLockIfHeldByCurrentThread() {
+        if (producerTransactionLock.isWriteLockedByCurrentThread()) {
+            log.warn("Releasing a commit lock the commit path did not release - a pre-commit step threw. " +
+                    "See releaseCommitLockIfHeldByCurrentThread().");
+            producerTransactionLock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * The revocation path's acquisition: takes the commit lock <b>only if it is free right now</b>, and otherwise
+     * declines. Never waits.
+     * <p>
+     * <b>Why a rebalance callback may only ever try.</b> It runs on the broker-poll thread inside
+     * {@code consumer.poll()}, so every millisecond spent here is charged against {@code max.poll.interval.ms}
+     * and the whole group waits. Both of this callback's former waits were unbounded against that budget: the
+     * {@code while (isTransactionCommittingInProgress()) Thread.sleep(100)} spin, and - the one that actually
+     * threw in confluentinc#803 - {@link #acquireCommitLock()}'s
+     * {@code writeLock.tryLock(commitLockAcquisitionTimeout)}, five minutes by default.
+     * <p>
+     * <b>Waiting is not merely slow here, it is self-defeating.</b> The control thread holds this lock across
+     * {@code flush()} and the transaction commit, and a transaction commit needs the group coordinator - which
+     * cannot finish the rebalance until this callback returns. Measured on the reproducer: a 20s dwell produced
+     * a <b>79s</b> callback, because with a short commit interval the control thread re-takes the lock as fast
+     * as it drops it and the waiter is starved across <em>successive</em> transactions. So no bound on any one
+     * transaction fixes this; the deadline has to be on the wait, and the shortest correct deadline is none.
+     * <p>
+     * <b>Declining costs only a replay.</b> The offsets were never marked committed, so they stay dirty and
+     * travel to whoever ends up owning the partitions, who reprocesses from where the broker actually is. That
+     * is PC's at-least-once contract doing its ordinary job, traded for the rebalance completing - the same
+     * disposition the rebalance-behaviour feature record already publishes for the consumer lane
+     * (<i>"declines rather than blocks ... declining is what keeps the callback inside
+     * max.poll.interval.ms"</i>), and the same one Kafka Streams falls back to when its own inline revoke
+     * commit exhausts {@code max.block.ms}.
+     * <p>
+     * <b>Release is the caller's responsibility, via {@link #releaseCommitLockIfHeldByCurrentThread()}.</b> On
+     * the happy path the ordinary commit path's {@link #postCommit()} gets there first and that call is a no-op;
+     * but {@code postCommit()} is NOT reached when a pre-commit step throws, so the caller must still make the
+     * call. See that method for why.
+     *
+     * @return true if the lock was acquired and the caller should proceed with the commit; false if a commit is
+     *         already running and the caller must skip it
+     */
+    public boolean tryAcquireCommitLockForRevocation() {
+        // Re-entrant acquisition would take the hold count to 2, which postCommit() rejects outright
+        // ("Lock held too many times"). The close path reaches the revoke callback on the control thread, which
+        // may already own the lock, so this case is reachable rather than theoretical.
+        if (producerTransactionLock.isWriteLockedByCurrentThread()) {
+            throw new IllegalStateException("Bug: revocation commit lock already held by this thread - "
+                    + "callers must check isCommitLockHeldByCurrentThread() first");
+        }
+        boolean acquired = producerTransactionLock.writeLock().tryLock();
+        log.debug("Revocation commit lock {}", acquired ? "acquired" : "DECLINED - a commit is already running");
+        return acquired;
+    }
+
+    /**
      * Must call before sending records - acquires the lock on sending records, which blocks committing transactions)
      */
     public ProducingLock beginProducing(PollContextInternal<K, V> context) throws java.util.concurrent.TimeoutException {

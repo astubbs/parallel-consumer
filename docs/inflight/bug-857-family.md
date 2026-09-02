@@ -2340,27 +2340,15 @@ astubbs/parallel-consumer#57 - the same crossings again, which is why they take 
 the sixteenth despite two of them predating it.
 <!-- post-merge: checked-end -->
 
-**This is a register, not an investigation note, and the retirement criterion follows from that.** It
-began as one investigation and became the place this family's mechanisms are kept apart from each
-other - which is the job it is still doing.
+**Status of that criterion, 2026-09-02: half met, and the other half moved.** The deadlock's write-up
+exists - `../solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md`
+- so only the merge is outstanding. But "the remaining open item" is no longer singular: a fourth and
+a fifth open item have been added above since this criterion was written, and the fifth reproduces on
+a tree carrying the fix.
+<!-- post-merge: checked - names the PR and describes what its merge would do to this file; reads the same once it has merged -->
+**Retiring this file when astubbs/parallel-consumer#29 lands would delete two live unexplained
+stalls**, so the criterion needs rewriting rather than applying: what may retire on the merge is the
+deadlock's own section, not the register.
 
-**What it is for.** Upstream reports one symptom, paused consumption after a rebalance, and that
-symptom has more than one cause. The register exists to stop those causes being collapsed into each
-other, because every attempt to treat "the 857 bug" as a single defect has ended up attributing one
-mechanism's evidence to another.
 
-**What earns an entry.** A distinct mechanism that can produce the family symptom, with evidence
-tying it to the symptom rather than to the vocabulary. A sighting on its own does not earn one: it
-attaches to the mechanism it belongs to, or to the unattributed list until something claims it.
-
-**What retires it.** Every open mechanism in it being explained or closed - not a PR merging. A fix
-retires *its own mechanism's section*, never the register, because what remains is by definition
-about the mechanisms that fix does not reach.
-<!-- post-merge: checked-begin -->
-The revoke-path deadlock is the worked example, and the reason this criterion is written this way
-rather than the way it was. Its fix is astubbs/parallel-consumer#29 and its write-up is
-[`../solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md`](../solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md),
-so that mechanism is settled and its section may go. The register may not: two of its open items
-reproduce on trees already carrying that fix, so retiring the file on that merge would delete two
-live unexplained stalls. That is exactly why "the 857 PR merged" was never the right test.
 <!-- post-merge: checked-end -->

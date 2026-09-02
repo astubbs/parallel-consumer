@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
+<!-- inflight-labels: concurrency -->
 
 
 The double-start race inside `ChaosConductor`'s draw loop is fixed (astubbs/parallel-consumer#292:

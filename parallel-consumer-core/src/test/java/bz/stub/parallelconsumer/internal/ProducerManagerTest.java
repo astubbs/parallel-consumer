@@ -135,7 +135,6 @@ class ProducerManagerTest {
     }
 
 
-
     /**
      * @see ProduceLockHandover#acquireInto - which owns why this must not be released inside the user function
      */
@@ -958,4 +957,112 @@ class ProducerManagerTest {
                 });
         return seen;
     }
+
+    /**
+     * The revocation seam behind astubbs/parallel-consumer#44 (confluentinc#803). Unit-level because the
+     * integration probe that proves the whole path, {@code Revoke857TransactionalWaitProbeIT}, needs a broker
+     * and three minutes - so a regression there would only surface in the failsafe lane. These three run in
+     * seconds and pin the contract itself.
+     */
+    @Test
+    void revocationDeclinesRatherThanWaitingWhenAnotherThreadIsCommitting() {
+        var committerHoldsLock = new CountDownLatch(1);
+        var revocationAttempted = new CountDownLatch(1);
+
+        var committer = new Thread(() -> {
+            try {
+                producerManager.preAcquireOffsetsToCommit();
+                committerHoldsLock.countDown();
+                LatchTestUtils.awaitLatch(revocationAttempted);
+                producerManager.postCommit();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }, "fake-pc-control");
+        committer.start();
+
+        LatchTestUtils.awaitLatch(committerHoldsLock);
+        assertThat(producerManager).isTransactionCommittingInProgress();
+
+        // The whole point: this returns, rather than waiting out commitLockAcquisitionTimeout (5 minutes by
+        // default) on a thread that is inside consumer.poll().
+        Truth.assertWithMessage("a revocation must DECLINE while another thread is committing, never wait")
+                .that(producerManager.tryAcquireCommitLockForRevocation())
+                .isFalse();
+
+        revocationAttempted.countDown();
+    }
+
+    @Test
+    void revocationAcquiresWhenNoCommitIsRunning() {
+        assertThat(producerManager).isNotTransactionCommittingInProgress();
+
+        Truth.assertWithMessage("an uncontended revocation must be able to commit")
+                .that(producerManager.tryAcquireCommitLockForRevocation())
+                .isTrue();
+        assertThat(producerManager).isCommitLockHeldByCurrentThread();
+
+        // Handed to the ordinary commit path, whose postCommit() releases it - the caller must not.
+        producerManager.postCommit();
+        assertThat(producerManager).isNotTransactionCommittingInProgress();
+    }
+
+    /**
+     * The leak this guards is not hypothetical. {@code AbstractOffsetCommitter#retrieveOffsetsAndCommit} calls
+     * {@code preAcquireOffsetsToCommit()} OUTSIDE its {@code try/finally}, and this class's implementation of
+     * that is {@code acquireCommitLock(); flush();} - so a {@code flush()} that throws escapes before the
+     * {@code finally} that would have called {@code postCommit()}. On the revocation path the callback catches
+     * and returns, so without an explicit release the write lock is stranded on a thread that has left.
+     */
+    @Test
+    void releasingAfterARevocationCommitFreesALockThePostCommitPathDidNot() {
+        Truth.assertWithMessage("a revocation must be able to take an uncontended lock")
+                .that(producerManager.tryAcquireCommitLockForRevocation()).isTrue();
+        assertThat(producerManager).isCommitLockHeldByCurrentThread();
+
+        // Stands in for "the commit threw before postCommit() could run".
+        producerManager.releaseCommitLockIfHeldByCurrentThread();
+
+        assertThat(producerManager).isNotCommitLockHeldByCurrentThread();
+        assertThat(producerManager).isNotTransactionCommittingInProgress();
+        Truth.assertWithMessage("a later revocation must not be permanently locked out by the stranded hold")
+                .that(producerManager.tryAcquireCommitLockForRevocation()).isTrue();
+        producerManager.releaseCommitLockIfHeldByCurrentThread();
+    }
+
+    /**
+     * Idempotence is what lets the caller put it in a {@code finally} without knowing whether the commit path
+     * already released - which is the happy path, and by far the common one.
+     */
+    @Test
+    void releasingWhenNothingIsHeldIsANoOp() {
+        assertThat(producerManager).isNotCommitLockHeldByCurrentThread();
+
+        producerManager.releaseCommitLockIfHeldByCurrentThread();
+        producerManager.releaseCommitLockIfHeldByCurrentThread();
+
+        assertThat(producerManager).isNotCommitLockHeldByCurrentThread();
+        Truth.assertWithMessage("the lock must still be usable after redundant releases")
+                .that(producerManager.tryAcquireCommitLockForRevocation()).isTrue();
+        producerManager.releaseCommitLockIfHeldByCurrentThread();
+    }
+
+    /**
+     * Re-entering would take the write hold count to 2, which {@code postCommit} rejects as "Lock held too many
+     * times" - a deadlock, not a warning. The close path reaches the revoke callback on the control thread,
+     * which may already own the lock, so callers check {@code isCommitLockHeldByCurrentThread()} first and this
+     * refuses loudly if one forgets.
+     */
+    @Test
+    void revocationRefusesToReenterALockThisThreadAlreadyHolds() throws Exception {
+        producerManager.preAcquireOffsetsToCommit();
+        assertThat(producerManager).isCommitLockHeldByCurrentThread();
+
+        var thrown = assertThrows(IllegalStateException.class,
+                () -> producerManager.tryAcquireCommitLockForRevocation());
+        Truth.assertThat(thrown).hasMessageThat().contains("already held by this thread");
+
+        producerManager.postCommit();
+    }
+
 }

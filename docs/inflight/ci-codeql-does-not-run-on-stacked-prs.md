@@ -65,8 +65,11 @@ Two reasons it is filed rather than done:
 
 ## An outlier this note does not explain
 
+<!-- post-merge: checked-begin - a dated observation of a PR while it was open; "at the time of
+     writing" keeps it true after that PR merges -->
 At least one PR based on `master` also showed no CodeQL checks (astubbs/parallel-consumer#408 at the
 time of writing), despite touching Java. That does not fit the base-branch explanation and has not
 been diagnosed. Re-run the loop above before assuming the rule is exactly "base != master"; there may
 be a second condition - a run that never started, a path filter, or an ordering effect - sitting
 underneath this one.
+<!-- post-merge: checked-end -->

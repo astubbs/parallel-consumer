@@ -10,6 +10,7 @@ import com.tngtech.archunit.junit.AnalyzeClasses;
 import com.tngtech.archunit.junit.ArchTest;
 import com.tngtech.archunit.lang.ArchCondition;
 import com.tngtech.archunit.base.DescribedPredicate;
+import com.tngtech.archunit.core.domain.JavaClass;
 import com.tngtech.archunit.core.domain.JavaMethod;
 import com.tngtech.archunit.core.domain.JavaMethodCall;
 import com.tngtech.archunit.core.domain.JavaModifier;
@@ -27,11 +28,9 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 
-import com.tngtech.archunit.core.domain.JavaAccess;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.fields;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.methods;
-import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 
 /**
  * ArchUnit rules enforcing the architecture of the Parallel Consumer.
@@ -158,43 +157,70 @@ class ArchitectureTest {
             "java.util.concurrent.BlockingQueue.take()",
             "java.util.concurrent.BlockingQueue.put(java.lang.Object)",
             "java.util.concurrent.locks.ReentrantReadWriteLock$ReadLock.lock()",
-            "java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()"
+            "java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
+            // Added 2026-09-01 by astubbs/parallel-consumer#44. A TIMED acquire is still a wait, and this
+            // rule's own advice - "decline (tryLock) rather than wait" - reads as if tryLock were the cure,
+            // which is how the five-minute tryLock(commitLockAcquisitionTimeout) that confluentinc#803's
+            // stack trace actually threw from sat inside a rebalance callback with the gate green. The
+            // no-arg tryLock() IS the cure and is deliberately absent from this list; the timed overloads
+            // are not, because a callback inside poll() has no budget to spend waiting for anything.
+            "java.util.concurrent.locks.Lock.tryLock(long, java.util.concurrent.TimeUnit)",
+            "java.util.concurrent.locks.ReentrantLock.tryLock(long, java.util.concurrent.TimeUnit)",
+            "java.util.concurrent.locks.ReentrantReadWriteLock$ReadLock.tryLock(long, java.util.concurrent.TimeUnit)",
+            "java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.tryLock(long, java.util.concurrent.TimeUnit)",
+            "java.util.concurrent.CountDownLatch.await(long, java.util.concurrent.TimeUnit)",
+            "java.util.concurrent.Future.get(long, java.util.concurrent.TimeUnit)",
+            "java.util.concurrent.BlockingQueue.poll(long, java.util.concurrent.TimeUnit)"
     ));
 
     /**
      * Known violations, each an open defect rather than an accepted design.
      *
-     * <p><b>Keyed on {@code root => target}, not on the root alone.</b> A root-keyed exemption silences
+     * <p><b>Keyed on {@code root => via => target}.</b> The {@code via} was added 2026-09-02: without it, two
+     * different paths from one callback to the SAME blocking target share a key, so exempting one silently
+     * exempts the other. That is not theoretical - astubbs#44 deleted {@code onPartitionsRevoked}'s
+     * {@code Thread.sleep} spin and the callback still reaches {@code Thread.sleep} through
+     * {@code ConsumerManager.retryBackOff}, so a two-part key would have re-blinded the rule to the very spin
+     * that was just removed while looking like tracked debt.
+     *
+     * <p><b>Not keyed on the root alone either.</b> A root-keyed exemption silences
      * that callback for EVERY blocking call, so accepting one known defect would hide the next,
      * unrelated one - a gate that goes quiet exactly where it has already found something is worse
      * than one that never looked. The pair form exempts the one reach that is tracked and leaves the
      * callback under inspection for everything else.
      *
-     * <p>{@code onPartitionsRevoked}'s {@code while (isTransactionCommittingInProgress())
-     * Thread.sleep(100)} is unbounded and transactional-mode only. It arrived as confluentinc#548's
-     * fix and is now the defect behind astubbs/parallel-consumer#44 - which holds upstream's
-     * {@code verified bug} label - one of a couple of dozen that carry it. Tracked in
-     * {@code docs/inflight/bug-857-transactional-revoke-wait.md};
-     * remove this entry when that lands.
+     * <p><b>The {@code Thread.sleep} entry is gone, which is the point.</b> It exempted
+     * {@code onPartitionsRevoked}'s {@code while (isTransactionCommittingInProgress()) Thread.sleep(100)},
+     * arriving with confluentinc#548 and tracked as astubbs/parallel-consumer#44. That spin has been
+     * removed, so the exemption went with it - which is what this list is for: open debt, deleted when
+     * paid, never an accepted design.
      */
     private static final Set<String> KNOWN_BLOCKING_VIOLATIONS = new HashSet<>(Arrays.asList(
-            "bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.onPartitionsRevoked"
-                    + "(java.util.Collection) => java.lang.Thread.sleep(long)",
-            // The RetryQueue write lock on the revoke/lost path. Pre-existing on master, surfaced by the
-            // astubbs/parallel-consumer#29 defect-class sweep once the deny list learned about
-            // ReentrantReadWriteLock. Owner: docs/inflight/bug-retry-queue-write-lock-on-the-rebalance-path.md
-            "bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.onPartitionsRevoked"
-                    + "(java.util.Collection) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
-            "bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.onPartitionsLost"
-                    + "(java.util.Collection) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
-            "bz.stub.parallelconsumer.state.PartitionStateManager.onPartitionsLost"
-                    + "(java.util.Collection) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
-            "bz.stub.parallelconsumer.state.PartitionStateManager.onPartitionsRevoked"
-                    + "(java.util.Collection) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
-            "bz.stub.parallelconsumer.state.WorkManager.onPartitionsLost"
-                    + "(java.util.Collection) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
-            "bz.stub.parallelconsumer.state.WorkManager.onPartitionsRevoked"
-                    + "(java.util.Collection) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()"
+            // The RetryQueue write lock on the revoke/lost path. Pre-existing on master; owner:
+            // docs/inflight/bug-retry-queue-write-lock-on-the-rebalance-path.md
+            "bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.onPartitionsRevoked(java.util.Collection) => "
+                    + "bz.stub.parallelconsumer.state.RetryQueue.remove(bz.stub.parallelconsumer.state.WorkContainer) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
+            "bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.onPartitionsLost(java.util.Collection) => "
+                    + "bz.stub.parallelconsumer.state.RetryQueue.remove(bz.stub.parallelconsumer.state.WorkContainer) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
+            "bz.stub.parallelconsumer.state.PartitionStateManager.onPartitionsRevoked(java.util.Collection) => "
+                    + "bz.stub.parallelconsumer.state.RetryQueue.remove(bz.stub.parallelconsumer.state.WorkContainer) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
+            "bz.stub.parallelconsumer.state.PartitionStateManager.onPartitionsLost(java.util.Collection) => "
+                    + "bz.stub.parallelconsumer.state.RetryQueue.remove(bz.stub.parallelconsumer.state.WorkContainer) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
+            "bz.stub.parallelconsumer.state.WorkManager.onPartitionsRevoked(java.util.Collection) => "
+                    + "bz.stub.parallelconsumer.state.RetryQueue.remove(bz.stub.parallelconsumer.state.WorkContainer) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
+            "bz.stub.parallelconsumer.state.WorkManager.onPartitionsLost(java.util.Collection) => "
+                    + "bz.stub.parallelconsumer.state.RetryQueue.remove(bz.stub.parallelconsumer.state.WorkContainer) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
+
+            // SURFACED 2026-09-02 by teaching the walk to follow interface hops (astubbs#44). All three
+            // are PRE-EXISTING and were invisible while the walk stopped at the declared member - the rule
+            // was blind to the very defect class it was written for. Owner:
+            // docs/inflight/static-archunit-walk-was-blind-through-interface-hops.md
+            "bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.onPartitionsRevoked(java.util.Collection) => "
+                    + "bz.stub.parallelconsumer.internal.ConsumerManager.retryBackOff(long) => java.lang.Thread.sleep(long)",
+            "bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.onPartitionsRevoked(java.util.Collection) => "
+                    + "bz.stub.parallelconsumer.internal.ConsumerOffsetCommitter.commitAndWait() => java.util.concurrent.BlockingQueue.poll(long, java.util.concurrent.TimeUnit)",
+            "bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.onPartitionsRevoked(java.util.Collection) => "
+                    + "bz.stub.parallelconsumer.internal.ProducerManager.lazyMaybeBeginTransaction() => bz.stub.parallelconsumer.internal.ProducerManager.syncBeginTransaction()"
     ));
 
     private static DescribedPredicate<JavaMethod> areRebalanceCallbacks() {
@@ -225,7 +251,8 @@ class ArchitectureTest {
                     for (JavaMethodCall call : current.getMethodCallsFromSelf()) {
                         String target = call.getTarget().getFullName();
                         if (BLOCKING_CALLS.contains(target)
-                                && !KNOWN_BLOCKING_VIOLATIONS.contains(root.getFullName() + " => " + target)) {
+                                && !KNOWN_BLOCKING_VIOLATIONS.contains(
+                                        root.getFullName() + " => " + current.getFullName() + " => " + target)) {
                             events.add(SimpleConditionEvent.violated(root,
                                     root.getFullName() + " reaches blocking call " + target
                                             + " via " + current.getFullName()
@@ -235,12 +262,30 @@ class ArchitectureTest {
                         // only walk our own code; the JDK and Kafka client are the boundary
                         // resolveMember() on a method call already yields a JavaMethod, so an instanceof
                         // here is a null check wearing a type check - which is what BadInstanceof flagged.
+                        // FOLLOW INTERFACE HOPS. resolveMember() yields the DECLARED target, so a call through an
+                        // interface-typed field lands on the abstract method - which has no body - and the walk
+                        // stops there. That is not hypothetical: `committer` is declared as OffsetCommitter, so
+                        // `committer.retrieveOffsetsAndCommit()` never reached ProducerManager.acquireCommitLock()
+                        // and its timed tryLock. The deny entries above would have been decorative on exactly the
+                        // path astubbs/parallel-consumer#44 fixed. Fan out to PC-owned implementations so the
+                        // rule sees what it claims to.
+                        call.getTarget().resolveMember().ifPresent(declared -> {
+                            if (declared.getOwner().isInterface() || declared.getModifiers().contains(JavaModifier.ABSTRACT)) {
+                                declared.getOwner().getAllSubclasses().stream()
+                                        .filter(impl -> impl.getPackageName().startsWith("bz.stub.parallelconsumer"))
+                                        .forEach(impl -> impl.tryGetMethod(declared.getName(), declared.getRawParameterTypes().stream()
+                                                        .map(JavaClass::getName).toArray(String[]::new))
+                                                .ifPresent(queue::add));
+                            }
+                        });
                         call.getTarget().resolveMember().ifPresent(reached -> {
                             if (reached.getOwner().getPackageName().startsWith("bz.stub.parallelconsumer")) {
                                 // A synchronized METHOD keeps its modifier in the class file, so unlike a
                                 // synchronized block it is visible here. Entering one from a rebalance
                                 // callback is an unbounded wait on whoever holds the monitor.
-                                if (reached.getModifiers().contains(JavaModifier.SYNCHRONIZED)) {
+                                if (reached.getModifiers().contains(JavaModifier.SYNCHRONIZED)
+                                        && !KNOWN_BLOCKING_VIOLATIONS.contains(
+                                                root.getFullName() + " => " + current.getFullName() + " => " + reached.getFullName())) {
                                     events.add(SimpleConditionEvent.violated(root,
                                             root.getFullName() + " reaches synchronized method "
                                                     + reached.getFullName() + " via " + current.getFullName()

@@ -617,18 +617,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
         log.debug("Partitions revoked {}, state: {}", partitions, state);
         isRebalanceInProgress.set(true);
-        while (isTransactionCommittingInProgress())
-            Thread.sleep(100); //wait for the transaction to finish committing
 
         numberOfAssignedPartitions = numberOfAssignedPartitions - partitions.size();
 
         try {
-            // Try to commit offsets for revoked partitions, but don't block if the control
-            // thread is already mid-commit. Blocking here deadlocks: the poll thread (us)
-            // holds the rebalance callback, and the control thread's commitSync() needs the
-            // poll thread to be responsive. If we can't commit, it's safe — the offsets will
-            // be re-delivered to the new assignee. See confluentinc#857.
-            tryCommitOffsetsOnRevoke();
+            // Commit offsets for the revoked partitions BEFORE truncation - declining, rather than
+            // waiting, when a commit is already running. Blocking here deadlocks in the consumer lane
+            // (confluentinc#857) and burns max.poll.interval.ms in the transactional one
+            // (confluentinc#803); the method gates on both locks for that reason.
+            tryCommitOffsetsOnRevoke(partitions);
 
             // truncate the revoked partitions
             wm.onPartitionsRevoked(partitions);
@@ -646,49 +643,145 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     /**
-     * Non-blocking attempt to commit offsets during partition revocation. Uses tryLock semantics
-     * on the commitCommand monitor to avoid deadlocking with the control thread.
+     * The revocation-time commit, which <b>declines rather than waits</b> when a commit is already running.
      * <p>
-     * If the lock is already held (control thread is mid-commit), we skip the commit. This is
-     * safe because Kafka will re-deliver uncommitted records to the new partition assignee.
+     * <b>This is one rule applied to two different locks, because the two commit modes deadlock differently
+     * and each fix is blind to the other's mode.</b> It is the merge of astubbs#29's cut and astubbs#44's:
+     * <ul>
+     *   <li><b>{@link #commitLock} - the consumer lane (confluentinc#857).</b> The control thread blocks
+     *       waiting for a commit response that only the poll thread can produce, while the poll thread blocks
+     *       here for the lock the control thread holds. AB-BA, and permanent rather than slow. That cycle can
+     *       only close in the consumer-commit modes, where {@code ConsumerOffsetCommitter} exists.</li>
+     *   <li><b>the producer transaction lock - the transactional lane (confluentinc#803).</b> No cycle is
+     *       needed: the control thread simply holds that lock across {@code flush()} and the transaction
+     *       commit, and this callback used to wait for it with no deadline at all.</li>
+     * </ul>
+     * <b>Neither gate subsumes the other, which is why both are here.</b> The control thread takes the
+     * producer write lock in {@code maybeAcquireCommitLock()} <em>before</em> it takes {@link #commitLock},
+     * so there is a window where {@code commitLock.tryLock()} succeeds and the transaction lock is already
+     * gone - and proceeding into it lands on the five-minute wait this method exists to remove.
      * <p>
-     * See <a href="https://github.com/confluentinc/parallel-consumer/issues/857">#857</a> —
-     * the original synchronized(commitCommand) call in onPartitionsRevoked caused a deadlock
-     * between the poll thread and the control thread under rebalance churn.
+     * <b>The transactional lane had TWO unbounded waits, and the tracking notes only ever named the first:</b>
+     * the {@code while (isTransactionCommittingInProgress()) Thread.sleep(100)} spin from confluentinc#548,
+     * and the commit beneath it, whose acquisition waits up to
+     * {@link ParallelConsumerOptions#getCommitLockAcquisitionTimeout()} - five minutes by default. The second
+     * is the one confluentinc#803's stack trace actually threw from
+     * ({@code "Timeout getting commit lock (which was set to PT5M)"}, raised inside
+     * {@code onPartitionsRevoked}), and the reported timeline matches it exactly: rebalance at 0, eviction at
+     * {@code max.poll.interval.ms}, the throw at {@code commitLockAcquisitionTimeout}. Removing only the spin
+     * would have left that report reproducible.
+     * <p>
+     * <b>Order matters and is not arbitrary.</b> {@link #commitLock} is taken first because it is the one this
+     * method releases itself; the transaction lock is handed to the commit path, whose {@code postCommit()}
+     * releases it in a {@code finally}. Taking the transaction lock first would leave it held with no owner on
+     * the path where {@link #commitLock} is then unavailable.
+     * <p>
+     * <b>Declining costs only a replay, and truncation still runs.</b> The offsets were never marked committed,
+     * so they stay dirty and travel to whoever ends up owning the partitions. A commit that lands after those
+     * partitions are gone resolves through {@link bz.stub.parallelconsumer.state.RemovedPartitionState}, whose
+     * whole purpose is to absorb exactly that. This is PC's at-least-once contract doing its ordinary job,
+     * traded for the rebalance completing - and it is what Kafka Streams falls back to
+     * ({@code closeDirtyAndRevive}) when its own inline revoke commit exhausts {@code max.block.ms}. Streams
+     * can commit inline because one thread owns its consumer and producer; PC cannot, until
+     * confluentinc#200 / astubbs#142.
+     * <p>
+     * <b>Known residual, deliberately not fixed here:</b> the commit this proceeds with still calls
+     * {@code Producer#flush()} and then the transaction commit, both broker round trips on the poll thread.
+     * They are bounded by the producer's own {@code delivery.timeout.ms} / {@code max.block.ms} rather than
+     * unbounded - which is the difference between them and what was removed - but they are not free.
      */
-    private void tryCommitOffsetsOnRevoke() {
-        if (commitLock.tryLock()) {
-            try {
-                // INFO, not DEBUG, and deliberately paired with the decline below at the same level:
-                // the two branches are the two outcomes of one fork, and logging only one of them
-                // makes "the revoke path never contended" indistinguishable from "the revoke path
-                // never ran". A seed replay cannot tell whether the deadlock window opened without
-                // this line, which is what voided the 2026-08-31 cooperative replay.
-                log.info("Acquired commitLock on revoke without contention - committing offsets " +
-                        "inline. See confluentinc#857.");
-                committer.retrieveOffsetsAndCommit();
-                clearCommitCommand();
-                this.lastCommitTime = Instant.now();
-            } catch (Exception e) {
-                // Restore the flag rather than swallowing the interrupt: this runs inside the poll
-                // thread's rebalance callback, and dropping it strands whatever is waiting on it.
-                if (e instanceof InterruptedException) {
-                    Thread.currentThread().interrupt();
-                }
-                // Pass the throwable, never e.getMessage(): the message alone drops the type, the
-                // cause chain and the stack, and an exception thrown without one renders as
-                // "...: null" - the exact complaint behind astubbs#177. describeWithRootCause is
-                // interpolated alongside it so a description survives even if the trace is elided.
-                ThrowableUtils.logWithoutEscaping(e, () ->
-                        log.warn("Failed to commit offsets during revoke: {}",
-                                ThrowableUtils.describeWithRootCause(e), e));
-            } finally {
-                commitLock.unlock();
-            }
-        } else {
-            log.info("Skipping offset commit during partition revocation — control thread is mid-commit. " +
+    private void tryCommitOffsetsOnRevoke(Collection<TopicPartition> partitions) {
+        if (!commitLock.tryLock()) {
+            // INFO, not DEBUG, and deliberately paired with the commit branch below at the same level:
+            // the two are the outcomes of one fork, and logging only one makes "the revoke path never
+            // contended" indistinguishable from "the revoke path never ran". A seed replay cannot tell
+            // whether the window opened without this line, which is what voided the 2026-08-31
+            // cooperative replay.
+            log.info("Skipping offset commit during partition revocation - control thread is mid-commit. " +
                     "Uncommitted offsets will be re-delivered to the new assignee. See confluentinc#857.");
+            return;
         }
+        // Tracked rather than inferred: only a lock THIS method took may be released here. On the close path the
+        // control thread may already own it, and releasing another owner's hold would be worse than leaking one.
+        boolean tookTransactionLock = false;
+        try {
+            if (options.isUsingTransactionCommitMode()) {
+                //noinspection OptionalGetWithoutIsPresent - transactional mode implies a producer manager
+                var pm = producerManager.get();
+                // The close path reaches this callback on the control thread, which may already own the lock.
+                // Re-taking it would push the write hold count to 2, which postCommit() rejects outright.
+                if (!pm.isCommitLockHeldByCurrentThread()) {
+                    if (!pm.tryAcquireCommitLockForRevocation()) {
+                        log.warn("Declining the revocation commit for {} - a transaction commit is already in " +
+                                "progress. The uncommitted offsets stay dirty and travel to the partitions' new " +
+                                "assignee, which reprocesses them (at-least-once). Waiting here instead would " +
+                                "burn max.poll.interval.ms and evict this member - see " +
+                                "astubbs/parallel-consumer#44.", partitions);
+                        return;
+                    }
+                    tookTransactionLock = true;
+                }
+            }
+            log.info("Acquired commitLock on revoke without contention - committing offsets " +
+                    "inline. See confluentinc#857.");
+            performCommit();
+        } catch (Exception e) {
+            // A producer the broker has invalidated arrives here too, as ProducerInvalidatedException: the
+            // commit path has already recorded the condition, and the control thread replaces the producer
+            // on its next pass (astubbs#225, KTD11 in its plan) - once woken, see the finally. This path only
+            // declines - it never waits for the replacement, and it no longer rethrows: the rethrow that used
+            // to sit here kept fencing fatal while a fenced instance had no way back. On the deprecated
+            // producer-instance path nothing is recorded and the raw condition lands here as well; that path
+            // keeps its pre-recovery behaviour by design.
+            // Restore the flag rather than swallowing the interrupt: this runs inside the poll
+            // thread's rebalance callback, and dropping it strands whatever is waiting on it.
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            // Pass the throwable, never e.getMessage(): the message alone drops the type, the
+            // cause chain and the stack, and an exception thrown without one renders as
+            // "...: null" - the exact complaint behind astubbs#177. describeWithRootCause is
+            // interpolated alongside it so a description survives even if the trace is elided.
+            ThrowableUtils.logWithoutEscaping(e, () ->
+                    log.warn("Failed to commit offsets during revoke: {}",
+                            ThrowableUtils.describeWithRootCause(e), e));
+        } finally {
+            // Only a lock THIS method took. Note the narrower guarantee than "never releases another owner's
+            // hold": on the already-held branch performCommit() -> postCommit() unlocks unconditionally, which
+            // is the pre-existing commit-path contract and not something this flag can or should override.
+            if (tookTransactionLock) {
+                // NOT redundant with postCommit(). retrieveOffsetsAndCommit() calls preAcquireOffsetsToCommit()
+                // OUTSIDE its try/finally, and that is where flush() runs - so a throwing flush escapes before
+                // the finally that would have released this. Leaking it here would be permanent: every later
+                // revocation declines forever and every control-thread commit throws
+                // ConcurrentModificationException. Idempotent, so the happy path costs nothing.
+                //noinspection OptionalGetWithoutIsPresent - guarded by tookTransactionLock
+                producerManager.get().releaseCommitLockIfHeldByCurrentThread();
+            }
+            commitLock.unlock();
+            // A condition this commit recorded is answered by the control thread, and nothing else wakes it:
+            // the produce path gets that for free because the failed record lands in the mailbox (KTD4), but
+            // this path produces no mailbox event, so the control loop would sit out the rest of its
+            // commit-interval wait first - an hour, if that is what the user configured - with every worker
+            // parked on the produce lock meanwhile. After the releases above, so the wake is not skipped for a
+            // write lock this thread still held. Found by the unit test that pins this trace.
+            if (producerManager.map(ProducerManager::isReplacing).orElse(false)) {
+                notifySomethingToDo();
+            }
+        }
+    }
+
+    /**
+     * The commit itself, shared by the control thread's {@link #commitOffsetsThatAreReady()} and the revocation
+     * path's {@link #tryCommitOffsetsOnRevoke}. Extracted so the two cannot drift: they differ in how they take
+     * the locks, never in what a commit is.
+     * <p>
+     * Callers hold {@link #commitLock}.
+     */
+    private void performCommit() throws TimeoutException, InterruptedException {
+        committer.retrieveOffsetsAndCommit();
+        clearCommitCommand();
+        this.lastCommitTime = Instant.now();
     }
 
     /**
@@ -2175,9 +2268,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         commitLock.lock();
         try {
             log.debug("Committing offsets that are ready...");
-            committer.retrieveOffsetsAndCommit();
-            clearCommitCommand();
-            this.lastCommitTime = Instant.now();
+            performCommit();
         } finally {
             commitLock.unlock();
         }
@@ -2625,11 +2716,6 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         notifySomethingToDo();
     }
 
-
-    private boolean isTransactionCommittingInProgress() {
-        return options.isUsingTransactionCommitMode() &&
-                producerManager.map(ProducerManager::isTransactionCommittingInProgress).orElse(false);
-    }
 
     @Override
     public void pauseIfRunning() {

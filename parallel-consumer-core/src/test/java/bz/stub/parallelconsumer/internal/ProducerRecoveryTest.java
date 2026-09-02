@@ -4,6 +4,7 @@ package bz.stub.parallelconsumer.internal;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.ManagedTruth;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
@@ -52,6 +53,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static com.google.common.truth.Truth.assertThat;
@@ -288,6 +290,74 @@ class ProducerRecoveryTest {
                 .that(all.get(all.size() - 1).generationId()).isEqualTo(2);
         assertThat(derivedTransactionalId).startsWith(TransactionalIdDerivation.prefixFor(GROUP));
         assertThat(producerManager().isProducerAvailable()).isTrue();
+    }
+
+    /**
+     * KTD11's third detection site, end to end: a producer fenced by the REVOKE-PATH commit is recorded and
+     * declined on the poll thread, never rethrown as fatal and never waited out, and the control thread replaces it
+     * on its next pass. This is the trace astubbs#44 (confluentinc#803) left in {@code tryCommitOffsetsOnRevoke}'s
+     * generic catch when it deleted the fencing rethrow, and nothing else drives a fence through
+     * {@code onPartitionsRevoked}: {@code ProducerFencingRecoveryIT} fences from control-thread commits, and both
+     * revoke-under-commit integration tests run on the deprecated producer-instance path, where recovery is off.
+     * <p>
+     * The fence is armed only for the revocation: the control thread commits the first records at its normal
+     * cadence, the commit interval is then raised to an hour at runtime to keep it away from the lock, and fresh
+     * work after that gives the revocation something to commit of its own. The fence hook also records which
+     * caller it fired for - a fence that fired elsewhere would make every assertion below true for the wrong
+     * reason. The replacement build is held on a latch so the recorded state can be
+     * observed before recovery completes. Negative control: with the deleted rethrow restored, the fence escapes
+     * {@code onPartitionsRevoked} and this test goes red on that exception.
+     */
+    @Test
+    @Timeout(60)
+    void fencedDuringTheRevokePathCommitIsRecordedAndDeclinedThenRecoveredByTheControlThread() throws Exception {
+        var fenceArmed = new AtomicBoolean(false);
+        var fencedOnThread = new AtomicReference<String>();
+        onBuild.put(0, producer -> doAnswer(invocation -> {
+            if (!fenceArmed.get()) {
+                return invocation.callRealMethod();
+            }
+            fencedOnThread.set(Thread.currentThread().getName());
+            producer.fenceProducer();
+            throw new ProducerFencedException("fenced at the revoke-path commit");
+        }).when(producer).sendOffsetsToTransaction(anyMap(), any(ConsumerGroupMetadata.class)));
+        start(optionsBuilder().build());
+        addRecords(0, 4);
+        awaitCommittedThrough(producers.get(0), 5);
+        // from here the control thread stays away from the lock: the next commit is an hour out
+        pc.setTimeBetweenCommits(Duration.ofHours(1));
+        addRecords(5, 6);
+        await().atMost(Duration.ofSeconds(30)).until(() -> seen.size() == 7);
+        // every worker has handed its produce lock back, so the revocation can take the write lock
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> ManagedTruth.assertThat(producerManager()).hasNoProduceLockHolders());
+        await().atMost(Duration.ofSeconds(10)).until(() -> !producerManager().isTransactionCommittingInProgress());
+        var holdReplacement = new CountDownLatch(1);
+        holdFactoryUntil = Optional.of(holdReplacement);
+        fenceArmed.set(true);
+
+        long start = System.currentTimeMillis();
+        pc.onPartitionsRevoked(UniLists.of(TP));
+        long took = System.currentTimeMillis() - start;
+
+        assertWithMessage("fixture: the fence fired for the revocation's own commit, on the thread that ran it")
+                .that(fencedOnThread.get()).isEqualTo(Thread.currentThread().getName());
+        assertWithMessage("the revocation declines and returns; it neither waits for the replacement nor fails the instance")
+                .that(took).isLessThan(1_000L);
+        assertWithMessage("the fence raised by the revoke-path commit is recorded for the control thread to recover")
+                .that(producerManager().isReplacing()).isTrue();
+        assertThat(pc.getFailureCause()).isNull();
+        assertThat(pc.isClosedOrFailed()).isFalse();
+        // recovery releases the write lock before it builds the replacement, and the revocation released its own
+        // hold on the way out - so with the build held, the lock is free and a later revocation could take it
+        await().atMost(Duration.ofSeconds(10)).until(() -> !producerManager().isTransactionCommittingInProgress());
+        assertWithMessage("no hold on the producer write lock is stranded on the thread that ran the revocation")
+                .that(producerManager().tryAcquireCommitLockForRevocation()).isTrue();
+        producerManager().releaseCommitLockIfHeldByCurrentThread();
+
+        holdReplacement.countDown();
+        awaitProducers(2);
+        await().atMost(Duration.ofSeconds(30)).until(() -> producerManager().isProducerAvailable());
+        assertThat(pc.isClosedOrFailed()).isFalse();
     }
 
     /**
