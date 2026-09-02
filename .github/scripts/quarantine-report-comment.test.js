@@ -166,6 +166,9 @@ asyncTest("the retired comment's heading says what changed, not a raw digest", a
   const retired = gh.store.find(c => c.id === 5).body;
   assert.ok(retired.includes("## [superseded - a quarantined test changed outcome]"), retired);
   assert.ok(!retired.includes("=PASSED_ACTION]"), `the digest leaked into the heading: ${retired}`);
+  // An outcome change retires a report that was TRUE when written; only the emptied lane retires a
+  // wrong one, and only that one is folded away (asserted in the END TO END section below).
+  assert.ok(!retired.includes("<details>"), `an older-but-true report was hidden as if it were wrong: ${retired}`);
 });
 
 asyncTest("quarantining a test mid-PR is a change, so it announces itself", async () => {
@@ -324,6 +327,14 @@ asyncTest("emptying the lane RETRACTS the ACTION REQUIRED comment instead of lea
       "the ACTION REQUIRED comment still carries the live marker - later runs would keep updating it");
     assert.ok(retired.includes("## [superseded - the quarantine lane is now empty]"),
       `the retired comment's heading does not say the instruction is withdrawn: ${retired}`);
+    // And its table is FOLDED AWAY, not merely captioned: the heading says the instruction is
+    // withdrawn, but a fully visible ACTION REQUIRED table under it is still the first thing a reader
+    // sees. The heading stays above the fold and the payload survives inside it - the recovery test
+    // below depends on reading it back.
+    assert.ok(retired.indexOf("<details>") > retired.indexOf("[superseded - "), `the withdrawn table is not collapsed: ${retired}`);
+    assert.ok(retired.indexOf("<details>") < retired.indexOf("ACTION REQUIRED"), "the ACTION REQUIRED row is above the fold");
+    assert.deepStrictEqual(require("./sticky-report-comment.js").readPayload(retired, DATA_MARKER)?.outcomes,
+      { "SomeQuarantinedIT.someMethod": "PASSED_ACTION" }, "the payload did not survive the fold");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

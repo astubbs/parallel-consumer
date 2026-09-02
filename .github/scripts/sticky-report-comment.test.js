@@ -215,6 +215,59 @@ test("a label containing $& is not expanded as replacement syntax", () => {
   assert.ok(out.includes("[superseded - a $& b]"), `replacement syntax leaked: ${out}`);
 });
 
+const SUPERSEDED = "<!-- pc-test-report (superseded) -->";
+const retire = collapse => retiredBody({
+  body: `${MARKER}\n${bodyWith("green")}\n\n<sub>Updated for x</sub>`, marker: MARKER,
+  supersededMarker: SUPERSEDED, headingRe: /^### /m,
+  label: "the lane is now empty", note: "Superseded.", collapse,
+});
+
+// =================================================================================================
+section("\nretiredBody with collapse - a WRONG report must not lead with its table");
+
+// RED-PROOF: drop the `if (collapse)` block and the first two tests here go red; the rest stay green.
+test("collapse folds everything below the heading into a details block", () => {
+  const out = retire(true);
+  const lines = out.split("\n");
+  assert.strictEqual(lines[0], SUPERSEDED, `the superseded marker must stay on line one: ${out}`);
+  assert.ok(lines[1].startsWith("### [superseded - the lane is now empty] Test Report"), lines[1]);
+  assert.strictEqual(lines[2], "", "no blank line between the heading and the block");
+  assert.ok(lines[3].startsWith("<details><summary>"), `the block does not open right under the heading: ${out}`);
+  assert.ok(out.indexOf("<details>") < out.indexOf("some prose"), "the old body is outside the block");
+  assert.ok(out.indexOf("some prose") < out.indexOf("</details>"), "the old body is outside the block");
+  assert.ok(out.indexOf("</details>") < out.indexOf("<sub>Superseded.</sub>"), "the note landed inside the block");
+});
+
+// GitHub only renders markdown inside <details> after a blank line following </summary>; without it
+// the old table comes out as one line of pipes.
+test("the block leaves a blank line after the summary so the markdown inside still renders", () =>
+  assert.match(retire(true), /<\/summary>\n\n/));
+
+test("without collapse the body is untouched, because an older report is not a wrong one", () => {
+  const out = retire(false);
+  assert.ok(!out.includes("<details>"), `an ordinary retirement was collapsed: ${out}`);
+  assert.ok(out.includes("### [superseded - the lane is now empty] Test Report\n\nsome prose"), out);
+});
+
+// The two lookups that later runs perform against a retired comment. Both must survive the fold, or
+// the recovery path in postStickyReport cannot see the comment it exists to repair.
+test("the data payload inside the block is still read", () =>
+  assert.deepStrictEqual(readPayload(retire(true), DATA), { status: "green" }));
+
+test("the collapsed comment is still found by its superseded marker", () => {
+  const found = pickOurComment([{ id: 4, user: { type: "Bot" }, body: retire(true) }], SUPERSEDED);
+  assert.strictEqual(found?.id, 4);
+});
+
+test("a body with no heading is folded from below the marker line rather than not at all", () => {
+  const out = retiredBody({
+    body: `${MARKER}\nno heading here\n\n<!-- ${DATA}: {"status":"g"} -->`, marker: MARKER,
+    supersededMarker: SUPERSEDED, headingRe: /^### /m, label: "l", note: "n", collapse: true,
+  });
+  assert.ok(out.startsWith(`${SUPERSEDED}\n\n<details>`), out);
+  assert.ok(out.includes("no heading here"), out);
+});
+
 section("\nsanitiseForHeading");
 test("a status is reduced to letters and hyphens", () =>
   assert.strictEqual(sanitiseForHeading("no-control<script>1"), "no-controlscript"));
@@ -412,6 +465,33 @@ asyncTest("a human comment carrying the marker does not count as ours to correct
   });
   assert.strictEqual(result.action, "skipped");
   assert.strictEqual(gh.store.find(c => c.id === 3).body, `${MARKER}\nis this right?`);
+});
+
+// =================================================================================================
+section("\na correction COLLAPSES the comment it retires; an ordinary status change does not");
+
+// RED-PROOF: pass `collapse: false` (or nothing) from postStickyReport and the first goes red.
+asyncTest("postWhenAbsent false folds the retired body under its heading", async () => {
+  const gh = fakeGithub({ comments: [botComment(7, "green")] });
+  await postStickyReport({
+    github: gh, context: fakeContext, core: fakeCore(), marker: MARKER,
+    supersededMarker: "<!-- pc-test-report (superseded) -->", dataMarker: DATA,
+    body: bodyWith("empty"), postWhenAbsent: false, now: new Date("2026-09-02T03:05:05Z"),
+  });
+  const retired = gh.store.find(c => c.id === 7).body;
+  assert.ok(retired.includes("<details><summary>"), `the wrong report is still fully visible: ${retired}`);
+  assert.ok(retired.indexOf("[superseded - ") < retired.indexOf("<details>"), "the heading is inside the block");
+  assert.ok(retired.indexOf("</details>") < retired.indexOf("Superseded by ["), "the forward link is inside the block");
+});
+
+asyncTest("an ordinary status change leaves the retired body readable", async () => {
+  const gh = fakeGithub({ comments: [botComment(7, "green")] });
+  await postStickyReport({
+    github: gh, context: fakeContext, core: fakeCore(), marker: MARKER,
+    supersededMarker: "<!-- pc-test-report (superseded) -->", dataMarker: DATA,
+    body: bodyWith("regression"), now: new Date("2026-09-02T03:05:05Z"),
+  });
+  assert.ok(!gh.store.find(c => c.id === 7).body.includes("<details>"), "an older report was hidden as if it were wrong");
 });
 
 // =================================================================================================

@@ -180,12 +180,28 @@ function stampFor({ serverUrl, owner, repo, prNumber, headSha, runId, now = new 
  *
  * THE NOTE IS PASSED WHOLE rather than as a noun slotted into a fixed "Superseded by X" sentence,
  * because the two writes that use this cannot honestly promise the same thing - see `postStickyReport`.
+ *
+ * `collapse` FOLDS EVERYTHING BELOW THE HEADING INTO A `<details>` BLOCK. A comment retired by an
+ * ordinary status change is merely older - its table was true when written and the newer one is a
+ * scroll away, so it stays readable. A comment retired by a CORRECTION was wrong, and its body is an
+ * instruction the reader must not act on; a prefixed heading above a fully visible ACTION REQUIRED
+ * table still leads with the table. The heading and the note stay outside the block, and so does the
+ * superseded marker on the line above the heading, which is where the lookup expects it; the data
+ * payload inside the block is still read - `readPayload` scans the whole text.
  */
-function retiredBody({ body, marker, supersededMarker, headingRe, label, note }) {
-  return `${body
+function retiredBody({ body, marker, supersededMarker, headingRe, label, note, collapse = false }) {
+  let out = body
     .replace(marker, supersededMarker)
-    .replace(headingRe, match => `${match}[superseded - ${label}] `)
-    }\n\n<sub>${note}</sub>`;
+    .replace(headingRe, match => `${match}[superseded - ${label}] `);
+  if (collapse) {
+    // Split after the heading line; with no heading to find, after the marker line instead.
+    const heading = headingRe.exec(out);
+    const cut = out.indexOf("\n", heading ? heading.index : 0);
+    const [above, below] = cut < 0 ? [out, ""] : [out.slice(0, cut), out.slice(cut + 1)];
+    out = `${above}\n\n<details><summary>The superseded report, collapsed because it no longer applies</summary>\n\n`
+      + `${below.trim()}\n\n</details>`;
+  }
+  return `${out}\n\n<sub>${note}</sub>`;
 }
 
 /**
@@ -209,6 +225,14 @@ function retiredBody({ body, marker, supersededMarker, headingRe, label, note })
  * push demanded an annotation be deleted the same body is the retraction, and must be posted. The
  * flag is here rather than in the caller because the only way to know is the lookup this function
  * already does; doing it in the caller means paginating the comment list twice.
+ *
+ * A CORRECTION ALSO COLLAPSES THE COMMENT IT RETIRES, and that is the same flag on purpose rather
+ * than a second one. The two consequences are one fact about the body: it is silent when there is
+ * nothing to correct BECAUSE its predecessor was wrong, and a predecessor that was wrong must not
+ * lead with its table. A separate `collapseRetired` would admit two combinations nobody can give a
+ * meaning to - a correction that leaves the wrong instruction fully visible, or a plain report that
+ * hides a predecessor that was true - and the module stays generic either way: nothing in here knows
+ * what a lane is.
  */
 async function postStickyReport({
   github, context, core,
@@ -232,6 +256,7 @@ async function postStickyReport({
   const { owner, repo } = context.repo;
   const issue_number = context.issue.number;
   const pr = context.payload.pull_request;
+  const correction = !postWhenAbsent;
 
   const existing = await findExisting({ github, owner, repo, issue_number, marker });
   const prev = readPayload(existing?.body, dataMarker);
@@ -286,7 +311,7 @@ async function postStickyReport({
   // Only the second note, written once `created` demonstrably exists, may point at it.
   const label = supersededLabel(prev, cur);
   const retire = note => retiredBody({
-    body: existing.body, marker, supersededMarker, headingRe, label, note,
+    body: existing.body, marker, supersededMarker, headingRe, label, note, collapse: correction,
   });
 
   if (existing) {

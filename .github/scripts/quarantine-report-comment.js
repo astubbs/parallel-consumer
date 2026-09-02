@@ -98,8 +98,9 @@ function laneEmptied(payload) {
  * silently rewriting a comment thirty scrolls up is exactly the failure astubbs/parallel-consumer#409
  * removed, and it would land on the one PR where the instruction has already been carried out. The
  * old comment is retired the way every superseded one is - live marker renamed, heading prefixed,
- * forward link - so a reader who arrives at the merged PR and lands on it is told it is stale rather
- * than being sent to delete something that is gone.
+ * forward link - and, because this body is a correction, its table is folded under that heading: a
+ * reader who arrives at the merged PR and lands on it is told it is stale before they can read the
+ * instruction it withdrew, rather than being sent to delete something that is gone.
  *
  * It STAYS SILENT when there is nothing to retract. An empty lane is the healthy steady state, and a
  * comment on every PR announcing that nothing is quarantined is noise the stickiness exists to
