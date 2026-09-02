@@ -16,6 +16,7 @@ import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager;
 import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.Tag;
+import com.google.errorprone.annotations.concurrent.GuardedBy;
 import lombok.Getter;
 import lombok.NonNull;
 import lombok.Setter;
@@ -203,6 +204,36 @@ public class PartitionState<K, V> {
      */
     private boolean stateChangedSinceCommitStart = false;
 
+    /**
+     * Guards the two fields below. A plain monitor, never the producer's {@code ReadWriteLock}: the engine's
+     * {@code AGENTS.md} records that {@code @GuardedBy} is inert on that kind, and this monitor is held only for the
+     * map operations here - never across a lock acquisition, a client call, or a callback - so it can be entered from
+     * either thread without an ordering.
+     */
+    private final Object uncommittedCompletionsLock = new Object();
+
+    /**
+     * The completed-but-uncommitted ledger: every record this partition has completed since its last successful
+     * commit, with the record itself, because {@link #onSuccess(long)} drops the record and the shard retires the
+     * container, and an offset restored without its record could never run again (R13, KTD5). Kept only in
+     * transactional commit mode, where a commit can be aborted after the completions it carried were recorded.
+     * <p>
+     * Written on the control thread ({@code WorkManager.handleFutureResult}) and read or trimmed on whichever thread
+     * commits - the poll thread does, through the revoke-path commit - hence the monitor.
+     */
+    @GuardedBy("uncommittedCompletionsLock")
+    private final Map<Long, ConsumerRecord<K, V>> completedButUncommitted = new HashMap<>();
+
+    /**
+     * The ledger offsets the commit being performed carries, snapshotted when its data was collected. Commit success
+     * removes exactly these, so a completion that lands between collection and success - possible when the
+     * revoke-path commit runs on the poll thread while the control thread drains its mailbox - stays in the ledger for
+     * a later replay. The same guard {@link #setClean()} applies to the dirty flag through
+     * {@link #stateChangedSinceCommitStart}.
+     */
+    @GuardedBy("uncommittedCompletionsLock")
+    private Set<Long> completionsInCommit = Collections.emptySet();
+
 
     public PartitionState(long newEpoch,
                           PCModule<K, V> pcModule,
@@ -239,6 +270,10 @@ public class PartitionState<K, V> {
     public void onOffsetCommitSuccess(OffsetAndMetadata committed) { //NOSONAR
         lastCommittedOffset = committed.offset();
         setClean();
+        synchronized (uncommittedCompletionsLock) {
+            completionsInCommit.forEach(completedButUncommitted::remove);
+            completionsInCommit = Collections.emptySet();
+        }
     }
 
     private void setClean() {
@@ -273,6 +308,10 @@ public class PartitionState<K, V> {
         return incompleteOffsets.size();
     }
 
+    /**
+     * @see #onSuccess(WorkContainer) which is what the engine calls; this overload keeps the record out of the ledger
+     *         and exists for the tests that drive offsets directly
+     */
     public void onSuccess(long offset) {
         //noinspection OptionalAssignedToNull - null check to see if key existed
         boolean removedFromIncompletes = this.incompleteOffsets.remove(offset) != null; // NOSONAR
@@ -281,6 +320,70 @@ public class PartitionState<K, V> {
         updateHighestSucceededOffsetSoFar(offset);
 
         setDirty();
+    }
+
+    /**
+     * Records a completed container: the offset leaves the incomplete set, and in transactional commit mode the
+     * record enters the completed-but-uncommitted ledger until the commit carrying it succeeds.
+     */
+    public void onSuccess(WorkContainer<K, V> work) {
+        onSuccess(work.offset());
+        if (retainsCompletedRecords()) {
+            synchronized (uncommittedCompletionsLock) {
+                completedButUncommitted.put(work.offset(), work.getCr());
+            }
+        }
+    }
+
+    private boolean retainsCompletedRecords() {
+        return module.options().isUsingTransactionCommitMode();
+    }
+
+    /**
+     * Puts every completed-but-uncommitted record back into processing, after the transaction that carried its
+     * output was aborted (R13, KTD5). Each record goes back through the pair
+     * {@link #maybeRegisterNewPollBatchAsWork} uses for a fresh poll batch - a new {@link WorkContainer} at the
+     * partition's current epoch into its shard, then the record back into {@link #incompleteOffsets} - so
+     * {@link #isRecordPreviouslyCompleted} answers false for it again, {@link #getOffsetHighestSequentialSucceeded()}
+     * drops below it, and no offset from the aborted transaction can be committed. The partition is marked dirty so
+     * the next commit publishes the lowered frontier.
+     * <p>
+     * <b>Cleared suspicion, 2026-09-02: a container completing after the replay cannot target a restored offset.</b>
+     * The suspicion: {@link #onSuccess(long)} asserts the offset was still incomplete, so a late-arriving completion
+     * for a restored offset would either trip that assert or silently re-complete a record the replay just put back.
+     * The discriminator is what the caller does before calling this: recovery holds the producer write lock, so no
+     * worker is between {@code beginProducing} and {@code cleanUpContext}, and it drains the mailbox first - so every
+     * container that produced into the aborted transaction has already reached {@code handleFutureResult} and is
+     * either in this ledger (success) or the retry queue (failure) before the replay runs. A record on the
+     * {@code poll} flow takes no produce lock, but produced nothing, so nothing of it was discarded and its late
+     * completion targets an offset that is not in the ledger. What would reopen it: calling this outside the write
+     * lock, or before the drain - nothing gates that but the one call site in
+     * {@code AbstractParallelEoSStreamProcessor}.
+     * <p>
+     * Runs on the control thread. The monitor is released before the replay itself, which enters the shard map's
+     * per-key lock and must not do so while holding this one.
+     *
+     * @return how many records were put back
+     */
+    public int restoreCompletedButUncommittedWork() {
+        Map<Long, ConsumerRecord<K, V>> discarded;
+        synchronized (uncommittedCompletionsLock) {
+            discarded = new TreeMap<>(completedButUncommitted);
+            completedButUncommitted.clear();
+            completionsInCommit = Collections.emptySet();
+        }
+        if (discarded.isEmpty()) {
+            return 0;
+        }
+        long epoch = getPartitionsAssignmentEpoch();
+        for (ConsumerRecord<K, V> record : discarded.values()) {
+            getShardManager().addWorkContainer(epoch, record);
+            addNewIncompleteRecord(record);
+        }
+        setDirty();
+        log.debug("Restored {} completed-but-uncommitted record(s) to processing for {} after an aborted transaction; commit frontier is now {}",
+                discarded.size(), tp, getOffsetToCommit());
+        return discarded.size();
     }
 
     public void onFailure(WorkContainer<K, V> work) {
@@ -473,6 +576,10 @@ public class PartitionState<K, V> {
             // setting the flag so that any subsequent offset completed while commit is being performed could mark state as dirty
             // and retain the dirty state on commit completion.
             stateChangedSinceCommitStart = false;
+            synchronized (uncommittedCompletionsLock) {
+                // the same guard for the ledger: only what this commit carries is trimmed on its success
+                completionsInCommit = new HashSet<>(completedButUncommitted.keySet());
+            }
             return of(createOffsetAndMetadata());
         }
         return empty();
