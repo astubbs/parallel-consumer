@@ -15,8 +15,9 @@ astubbs#265, and `OffsetEncodingBackPressureTest.backPressureShouldPreventTooMan
 written up in
 [`back-pressure-freezes-the-frontier-the-test-asserted-2026-08-24.md`](../solutions/test-flakiness/back-pressure-freezes-the-frontier-the-test-asserted-2026-08-24.md).
 Also fixed and out: `MdcContextPropagationTest.anEmptyCallerContextIsHandledAndNothingLeaks`, which
-asserted a null MDC on a runner thread two other classes had left holding `{}` -
-[`mdc-precondition-asserted-a-thread-state-it-never-established-2026-09-02.md`](../solutions/test-flakiness/mdc-precondition-asserted-a-thread-state-it-never-established-2026-09-02.md).
+asserted a null MDC on a runner thread two other classes had left holding `{}` (four sightings, the
+last one master's own build for the astubbs#415 merge; fixed twice over, by two sessions that did not see each other) -
+[`mdc-null-precondition-armed-by-an-earlier-class-in-the-same-fork-2026-09-02.md`](../solutions/test-flakiness/mdc-null-precondition-armed-by-an-earlier-class-in-the-same-fork-2026-09-02.md).
 Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutions/).
 
 | Test | Rate | Why it is worth attention |

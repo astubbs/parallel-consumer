@@ -60,15 +60,15 @@ class MdcContextPropagationTest extends ParallelEoSStreamProcessorTestBase {
     private final List<Observation> observations = new CopyOnWriteArrayList<>();
 
     /**
-     * Before AND after, not only after. This class asserts, as a precondition, that the runner thread arrives with no
-     * context at all ({@code getCopyOfContextMap() == null}), and a test may only assert a precondition it has
-     * established itself: the runner thread is shared with every other class in the fork, and two of them -
-     * {@code ProducerManagerTest} and {@code TransactionalBulkCommitTest} - drive
-     * {@code AbstractParallelEoSStreamProcessor#processWorkCompleteMailBox} on it, whose
-     * {@code MDC.put(...); MDC.remove(...)} pair leaves logback holding an EMPTY map rather than none. On logback
-     * 1.6.1, {@code remove} of the last key gives {@code {}} where {@code clear()} gives {@code null}; measured, not
-     * read. Without this the precondition is a coin flip on fork scheduling - it failed 2 of 2 full runs on one
-     * tree and 0 of 3 on another, with identical code.
+     * Before AND after, not only after - the shape its sibling {@code MdcPropagationTest} already had. The runner
+     * thread is shared with every other class in the fork, and two of them - {@code ProducerManagerTest} and
+     * {@code TransactionalBulkCommitTest} - drive {@code AbstractParallelEoSStreamProcessor#processWorkCompleteMailBox}
+     * on it, whose {@code MDC.put(...); MDC.remove(...)} pair leaves logback holding an EMPTY map rather than none: on
+     * logback 1.6.1, {@code remove} of the last key gives {@code {}} where {@code clear()} gives {@code null}, measured
+     * against the build's own jars. A test may only assert a precondition it has established itself, and which class
+     * ran before this one is decided by fork placement, not by this class - so
+     * {@link #anEmptyCallerContextIsHandledAndNothingLeaks()} gets its clear BEFORE it runs. Without it that
+     * precondition was a per-run coin: it failed 2 of 2 full runs on one tree and 0 of 3 on another, same code.
      */
     @BeforeEach
     @AfterEach
@@ -203,8 +203,17 @@ class MdcContextPropagationTest extends ParallelEoSStreamProcessorTestBase {
         int recordCount = 3;
         ktu.sendRecords(recordCount);
 
-        // deliberately NO MDC.put here - the caller has no diagnostic context at all
-        assertThat(MDC.getCopyOfContextMap()).isNull();
+        // deliberately NO MDC.put here - the caller has no diagnostic context at all. clearCallersContext() has just
+        // run, so on logback that reads null; a binding that keeps an emptied map reads {}. PC treats both as "no
+        // context", so both are legal here - asserting null alone was asserting the logging binding, not PC, and it
+        // went red whenever an earlier class in the same fork had put and removed a key on this thread (the javadoc
+        // on clearCallersContext() names them). Belt and braces on purpose: the @BeforeEach establishes the state,
+        // this accepts either spelling of it. Reproduced by class order alone; docs/solutions/test-flakiness/ has the
+        // experiment.
+        Map<String, String> callerContextOnEntry = MDC.getCopyOfContextMap();
+        if (callerContextOnEntry != null) {
+            assertThat(callerContextOnEntry).isEmpty();
+        }
 
         parallelConsumer.poll(context -> {
             observe(context);
