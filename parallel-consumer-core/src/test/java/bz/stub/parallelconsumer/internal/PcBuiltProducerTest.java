@@ -64,7 +64,10 @@ class PcBuiltProducerTest {
     }
 
     private static Map<String, Object> minimalConfig() {
-        return UniMaps.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "broker:9092");
+        // A literal address, not a hostname: the default factory builds a real KafkaProducer from this map, whose
+        // constructor resolves bootstrap.servers. `broker` resolved on the author's network and nowhere else, and
+        // the two construction cases failed on every CI runner with "Failed to construct kafka producer".
+        return UniMaps.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "127.0.0.1:1");
     }
 
     /**
