@@ -1,15 +1,27 @@
-# `codecov/project` is red for most of a run, and clears itself
+# A codecov project check going red usually is not your PR - two causes, and only one clears itself
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
 <!-- post-merge: checked-begin - the measurements below name astubbs#207 as where they were taken,
      in the past tense, which stays true once that PR has landed -->
 
-**A required-looking check is red for most of every CI run and turns green on its own.** Seen three
-times in one afternoon on astubbs#207, each time going green once the run finished. Nobody has been
-misled by it yet only because nobody looked while a run was in flight.
+**A required-looking check goes red on a PR that did nothing wrong.** Four times in one afternoon on
+astubbs#207. **Do not read that as "it always clears itself"** - this note said exactly that until the
+fourth one survived to a terminal run, and a heading promising self-recovery is how a reader dismisses
+the one occurrence that is telling them something.
 
-## The mechanism
+There are **two causes with the same symptom**, and they need different responses:
+
+| | mid-run | at a terminal run |
+|---|---|---|
+| What is partial | the **head** - a suite has not uploaded yet | the **base** - master's own report is incomplete |
+| Clears itself? | **yes**, when the last upload lands | **no**, it stays red |
+| What to do | wait for `checks_terminal` | run the files check below |
+
+The `Files` count separates them in one line, so start there rather than deciding which case you are
+in from the percentages.
+
+## Cause 1, mid-run: the head is partial
 
 Coverage is uploaded per suite, from several jobs: `.github/workflows/maven.yml` uploads with
 `flags: ${{ matrix.suite }}` from the matrixed lane, and separately with `flags: default` from the
@@ -47,11 +59,32 @@ report a drop. Measured on astubbs#207 at one point: project **+0.59%** (hits +7
 four points, so a flag delta that large next to a positive total is the baseline talking, not the diff.
 All three were green once every upload had landed.
 
+## Cause 2, at a terminal run: the BASE is partial - and the one-line tell
+
+Every other symptom here needs an argument. This one does not. The report's diff block prints
+`Files` for base and head, and **the difference must equal the number of files the PR adds**. When it
+does not, the base report is incomplete and every percentage in the comment is comparing against a
+partial measurement.
+
+Measured on astubbs#207 at a terminal run: base **83** files, head **93**, on a PR that adds **3**.
+The other seven are master's own files missing from the base report - which also accounts for
+`Lines +446` on a diff of about sixty. Project read -0.11%, `integration` -16.99% and `unit` -5.43%
+off that base; none of it was this PR.
+
+Check that before reading any percentage, including at a terminal run - it is faster than reasoning
+about hits and misses, and unlike them it cannot be argued with.
+
 ## What to do about it
 
-Nothing, while a run is in flight - **wait for `checks_terminal` before reading `codecov/project` at
-all**. `codecov/patch` is the one that answers "is the code this PR added covered", it is computed
-from the patch rather than from totals, and it does not swing during a run.
+**Mid-run: nothing.** Wait for `checks_terminal` before reading a project check at all.
+
+**Still red at a terminal run: run the files check.** If the base is short, the percentages are
+measuring master's missing report and there is nothing here to fix on the PR - say so and move on. If
+the files line up, the number is real and worth reading.
+
+**Either way, `codecov/patch` is the check that answers "is the code this PR added covered".** It is
+computed from the patch rather than from totals, so it does not swing during a run and it does not
+inherit a partial base. On astubbs#207 it stayed green through all four reds.
 
 Worth fixing properly if it ever costs someone real time: the honest fix is a codecov config that
 waits for all expected flags before posting a project status (`after_n_builds`), not a threshold
