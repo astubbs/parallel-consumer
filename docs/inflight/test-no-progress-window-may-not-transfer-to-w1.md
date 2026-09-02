@@ -20,6 +20,7 @@ for it either:
 | `bug-857-family.md`'s fourteenth sighting (from astubbs/parallel-consumer#347) | `NO_PROGRESS, fleet stuck at 97896/100000` - 30s against a 30s bound | **`1521825993857670757`** |
 | Torture soak 2026-08-29, cycle 51 (`bin/torture-overnight.sh`) | `fleet consumed count stuck at 97386/100000 for 30s (bound 30s)` | **`87978223167568`** |
 | Torture soak 2026-08-29, cycle 166 | `fleet consumed count stuck at 97297/100000 for 30s (bound 30s)` | **`106062481479157`** |
+| PR lane, hosted runner, 2026-09-02 - astubbs/parallel-consumer#414 at `810a8b3ac` (a workflow-only branch: no Java differs from master) | `fleet consumed count stuck at 95209/100000 for 30s (bound 30s)` | **`2512758007437016849`** |
 <!-- file-refs: N/A - the harness moved to branch test/overnight-torture-harness-v2; named here as the instrument that produced these runs, not as a file in this tree -->
 
 **The soak gives this line its first RATE, and its first control arm.** `NO_PROGRESS` killed
@@ -37,12 +38,22 @@ not pass `-Dchaos.diagnoseStallRecovery`, so both aborted at the violation and n
 whether the fleet recovered. They are seeds, not answers. Replaying them with the diagnostic engaged
 is now the cheapest experiment on this line - each reproduces in about two and a half minutes.
 
-**Not one of the four was looking for this, which is why they are worth something.** astubbs#348's
+**Not one of these was looking for this, which is why they are worth something.** astubbs#348's
 note is about a **reporting** defect - the ambient autopsy printed `violations (0)` for its run,
 because fleet-scoped detectors cannot be re-derived by the ambient probe, which has no consumed-count
 supplier. The fourteenth sighting records its occurrence as one arm among several on a branch it was
 clearing of suspicion. The two soak firings are incidental output of an unattended rotation. This
 note exists so the calibration question is not lost between them.
+
+**The 2026-09-02 firing adds two things and settles nothing.** It is the first on a hosted GitHub
+runner since the soak, and it fired on a branch whose only change from master is workflow YAML - the
+cleanest branch-independence control this line has had, since nothing in the product differed. Its
+outstanding count at the kill is the largest recorded here, several times the slack rather than a
+little past it. And the ambient autopsy for that run printed `violations (0)` with the fleet-level
+`NO_PROGRESS` line sitting a hundred lines above it in the same log - the reporting defect
+[`test-chaos-autopsy-omits-fleet-violations.md`](test-chaos-autopsy-omits-fleet-violations.md)
+records, still live. The seed is in the table; the diagnostic was not engaged, so whether the fleet
+drained is unknown, as for every row above it.
 
 ## Why it looks like the same class
 
