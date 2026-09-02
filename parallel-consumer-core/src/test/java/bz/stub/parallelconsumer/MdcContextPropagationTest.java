@@ -190,8 +190,17 @@ class MdcContextPropagationTest extends ParallelEoSStreamProcessorTestBase {
         int recordCount = 3;
         ktu.sendRecords(recordCount);
 
-        // deliberately NO MDC.put here - the caller has no diagnostic context at all
-        assertThat(MDC.getCopyOfContextMap()).isNull();
+        // deliberately NO MDC.put here - the caller has no diagnostic context at all. That is null on a thread that
+        // has never touched the MDC and {} on one that has put and removed a key: logback keeps the emptied map. PC
+        // treats both as "no context", so both are legal here. Insisting on null made this test's outcome depend on
+        // which class ran before it in the same fork - a sibling that drives controlLoop() on the test thread
+        // (ProducerManagerTest, TransactionalBulkCommitTest) leaves {} behind through the control loop's own
+        // put-then-remove of the work descriptor, and nothing clears it. Reproduced by class order alone; see
+        // docs/solutions/test-flakiness/.
+        Map<String, String> callerContextOnEntry = MDC.getCopyOfContextMap();
+        if (callerContextOnEntry != null) {
+            assertThat(callerContextOnEntry).isEmpty();
+        }
 
         parallelConsumer.poll(context -> {
             observe(context);
