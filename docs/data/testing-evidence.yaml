@@ -83,7 +83,7 @@ test_layers:
       is explicitly non-gating - it is skipped for fork PRs and its runner may be offline - so it cannot
       block a merge. What the chaos entry's optional flag buys is that a red shows as red rather than
       neutral, which makes it a real finding to act on rather than a required check.
-    why_it_matters: Seeded schedules, progress probes and a no-loss/bounded-duplicate ledger target alive-but-not-progressing failures that normal tests can miss.
+    why_it_matters: Seeded schedules, progress probes and a correctness ledger - no loss, bounded duplicates, and per-key ordering under churn - target alive-but-not-progressing failures that normal tests can miss.
     limitation: A calibrated detector hunts known failure classes; it does not establish the absence of every concurrency defect.
     inspect:
       - path: parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/chaostests/ChaosScenarioBase.java
@@ -92,6 +92,8 @@ test_layers:
         demonstrates: Calibrated consumer-churn detection for stalled progress.
       - path: parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/chaostests/ChaosRevokeUnderWorkIT.java
         demonstrates: Revocation while work is active and protocol-invisible lag stagnation detection.
+      - path: parallel-consumer-core/src/test-integration/java/bz/stub/parallelconsumer/integrationTests/chaostests/KeyOrderLedger.java
+        demonstrates: Per-key ordering asserted under rebalance churn, scoped to the window where the guarantee holds so legitimate redelivery is not reported as a violation.
   - id: soak
     proves: Long-running behavior outside the merge gate.
     command: bin/soak-test.sh

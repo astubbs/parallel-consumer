@@ -22,8 +22,10 @@ question was asked and answered, not the answer itself.
 Merged with no closing reference, on purpose. Its body has a section headed "What this closes, and
 what it does not", reading confluentinc#833 as one symptom sitting on three independent defects:
 astubbs#100 and astubbs#80 landed, astubbs#204 took the reporting and the retry budget, and the third
-- an AB-BA deadlock between the poll and control threads on the commit path - is astubbs#29, still a
-draft whose fix has never been observed working.
+<!-- post-merge: checked -->
+- an AB-BA deadlock between the poll and control threads on the commit path - is astubbs#29, whose fix
+had not been observed working at the time of writing: its reproducer runs in a commit mode the cycle
+cannot reach. `bug-857-family.md` owns that finding and its current state.
 
 No change needed to the PR. **The gap is on the issue**, whose only comment is a heads-up about the
 `InternalRuntimeException` rename, so the reasoning for why it survived its own fix exists only inside

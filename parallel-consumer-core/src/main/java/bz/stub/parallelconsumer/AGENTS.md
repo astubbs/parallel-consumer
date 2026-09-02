@@ -36,6 +36,30 @@ If the right fix is `volatile` or removing the sharing outright, there is no loc
 annotation to write. That is fine - the rule is "record the invariant you just established", not
 "add an annotation".
 
+## Record a CLEARED suspicion in the javadoc, not only in the commit
+
+When you investigate a concurrency path and conclude it is safe, **write that conclusion where the
+next reader forms the same suspicion** - on the method or field, not only in the commit message or a
+`docs/inflight/` note. A dismissal nobody can find is re-derived, and re-deriving it costs the same
+as the first time.
+
+The chaos scenarios already do this under a `Calibration status` heading, which is why
+`AGENTS.md`'s prior-art checks name a test's own javadoc as a source the six commands cannot reach.
+Main code needs it more, because a suspicion here is formed by whoever is reading the code, not by
+whoever chose to run a test.
+
+An entry is three things, and the third is what makes it durable:
+
+- **What was suspected**, in the form the next reader will suspect it.
+- **The discriminator that cleared it** - the specific fact that decides it, not "looks fine". For a
+  lock-ordering suspicion that is what a holder DOES while holding, not that it holds.
+- **What would reopen it**, and whether any gate would catch that happening. Say so plainly when
+  nothing would: `clearCommitCommand()` carries the worked example, where the ArchUnit rule is green
+  whether the invariant holds or not because it cannot see `synchronized` blocks.
+
+**Date it.** A cleared suspicion is a statement about the code as it was, and the reader needs to
+know whether it predates the change they are looking at.
+
 ## Known shared state, and where its ledger lives
 
 Do not re-derive these; they are measured and recorded.

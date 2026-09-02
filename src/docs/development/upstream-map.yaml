@@ -398,6 +398,14 @@ entries:
       (RegistrationRaceStaleResidentIT) followed in a separate PR; why chance-based
       chaos load could never find the race is recorded in
       docs/solutions/logic-errors/909-needs-a-saturated-pipeline-the-third-precondition-2026-08-19.md.
+      LIKELY ALSO EXPLAINS fork issue 183 (confluentinc#875), assessed 2026-09-01 and
+      recorded in that issue's thread: its reporter describes the same signature -
+      one offset never received while neighbours complete, the committed offset pinned
+      there, lag climbing, a restart seeking back and processing it - and the defective
+      addWorkContainer is identical in the 0.5.3.1 both were filed against. Not asserted
+      as a duplicate: it turns on whether that reporter's consumer was rebalancing and
+      saturated in the window, which only they can answer. Supersedes the
+      confluentinc#857 attribution the mirror inherited from a third-party comment.
 
   - id: java-17-baseline-kafka4
     group: java-baseline-kafka4

@@ -57,4 +57,4 @@ suspected on its own evidence, or when the fork wants a fidelity claim it cannot
 
 - `docs/inflight/test-857-revoke-under-work-sightings.md` - the replays and the recovery experiment
 - `docs/testing.md` - the chaos suite's shape and lanes
-<!-- file-refs: N/A - the sightings ledger arrives with astubbs/parallel-consumer#29, which this branch was split out of; it resolves once that merges -->
+<!-- file-refs: N/A - the sightings ledger belongs to the astubbs/parallel-consumer#29 line of work and resolves wherever that work is present --> <!-- post-merge: checked -->
