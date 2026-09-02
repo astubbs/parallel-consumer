@@ -38,6 +38,11 @@ const cacheDir = () => process.env.PC_INFLIGHT_CACHE_DIR
 const POLICY = {
     'prs.json': { maxAgeMs: 24 * 60 * 60 * 1000, cacheEmpty: true },
     'pr-branch.json': { maxAgeMs: 6 * 60 * 60 * 1000, cacheEmpty: false },
+    // Codecov's recorded test history. Ten minutes because a burst of `inflight codecov` queries in
+    // one session should cost one fetch, while a CI run finishing mid-session still shows up. Empty
+    // is not cached: an empty corpus would read as "no flakes recorded" - a false negative in the
+    // dangerous direction, which is the same reason `pr-branch.json` refuses to cache "no PR".
+    'codecov-tests.json': { maxAgeMs: 10 * 60 * 1000, cacheEmpty: false },
 }
 const DEFAULT_POLICY = { maxAgeMs: 60 * 60 * 1000, cacheEmpty: false }
 

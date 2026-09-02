@@ -22,6 +22,14 @@
 // for rules. A tool reachable only by knowing its filename is the state this file exists to end, so
 // a new tool that is not in this table is not finished.
 //
+// AND YOU ARE MEANT TO ADD ONE. If you needed an answer and had to get it some other way, that is a
+// gap in this tool and you are holding the only evidence of what it was - patch it rather than
+// working around it or writing a script beside it. Migrate query-shaped shell scripts in here
+// opportunistically as you touch them (`worktree-status.sh`, `issue-index.sh`, `todo-index.sh` are
+// the standing candidates); scripts that DO something rather than answer something - the builds, the
+// deploys, the check-* gates - stay shell, and bin/AGENTS.md owns those. docs/inflight-tool.md, "If
+// it does not answer your question, change it", carries the full guidance and the three invariants.
+//
 // THIS IS THE ONLY FILE HERE THAT MAY CALL process.exit, and it does so once, at the bottom. The
 // libraries return findings; the views render them; the exit code is a fact about a process and
 // belongs at the process boundary. A library that exits has decided something that is not its to
@@ -42,11 +50,60 @@ import { baseline, freshnessWarnings, refTips } from './lib/git.mjs'
 import { cacheClear, cacheStatus, knownCaches } from './lib/cache.mjs'
 import { corpusIndex, drift, findNotes, prsByBranch, stranded } from './lib/notes.mjs'
 import { branchView, commitGraph, trackingGap } from './lib/branches.mjs'
-import { formatBranch, formatCache, formatDrift, formatFind, formatStranded, formatWarnings } from './lib/views.mjs'
+import {
+    formatBranch, formatCache, formatCoverage, formatDrift, formatFind, formatFlakes,
+    formatSlowest, formatStranded, formatTimeline, formatWarnings,
+} from './lib/views.mjs'
+import { coverage, flakeCandidates, slowest, testTimeline } from './lib/codecov.mjs'
 import {
     format, formatHeader, formatSection, formatTail,
     priorArt, summary as priorArtSummary, usage as priorArtUsage,
 } from './lib/prior-art.mjs'
+
+/**
+ * The two flags every codecov subcommand takes, parsed in one place rather than three - and the
+ * POSITIONALS with the flag values removed.
+ *
+ * `rest` is the part that matters. Finding the query with `args.find(a => !a.startsWith('--'))`
+ * looks right and is wrong: `--branch` takes a VALUE, and a branch ref does not start with `--`
+ * either, so `codecov test --branch <ref> <name>` took the REF as the search term and reported
+ * "no test matching /<ref>/" - exit 0, plausible wording, wrong question answered. That is the
+ * silent-wrong-answer shape bin/lib/codecov.mjs's header is written against, in the one command
+ * whose whole value is being trusted during a bisect.
+ */
+export const cvOpts = (args) => {
+    const branchAt = args.indexOf('--branch')
+    // -1 IS A SENTINEL, NOT AN INDEX. Filtering on `i !== branchAt + 1` reads correctly and is
+    // wrong when the flag is absent: indexOf returns -1, so branchAt + 1 is 0 and the filter drops
+    // the FIRST POSITIONAL - the query itself. `codecov test <name>` then answered "give part of a
+    // test name" and `codecov slow 3` silently printed 20 rows.
+    const branchValueAt = branchAt >= 0 ? branchAt + 1 : -1
+    const branch = branchAt >= 0 ? args[branchValueAt] : undefined
+
+    // VALIDATE, BECAUSE EVERY BAD FORM HERE FAILS QUIETLY AND PLAUSIBLY. `--branch` with nothing
+    // after it left branch undefined and silently queried EVERY branch; `--branch --fresh` took
+    // the next flag as a branch name and returned a convincing empty result for a branch that
+    // cannot exist; and an unknown flag was dropped by the startsWith('--') filter, so a typo ran
+    // a different query than the one that was typed. None of those errored - they answered.
+    const KNOWN = new Set(['--fresh', '--branch'])
+    const unknown = args.filter((a) => a.startsWith('--') && !KNOWN.has(a))
+    if (unknown.length) return { error: `unknown option(s): ${unknown.join(', ')} - known: --fresh, --branch <ref>` }
+    // A REPEATED FLAG IS AMBIGUOUS, so it is refused rather than silently resolved. `--branch a
+    // --branch b` took the FIRST and folded `b` into the positionals as a stray query term - the
+    // same answer-a-different-question shape the guards above exist to stop, one level in.
+    const repeated = [...KNOWN].filter((f) => args.filter((a) => a === f).length > 1)
+    if (repeated.length) return { error: `${repeated.join(', ')} given more than once - which one did you mean?` }
+    if (branchAt >= 0 && (branch === undefined || branch.startsWith('--'))) {
+        return { error: '--branch needs a ref after it' }
+    }
+
+    return {
+        fresh: args.includes('--fresh'),
+        branch,
+        rest: args.filter((a, i) => !a.startsWith('--') && i !== branchValueAt),
+    }
+}
+
 
 /**
  * The registry.
@@ -242,6 +299,92 @@ because the next run then pays full price, so it takes --all.`,
         run: (args, emit) => {
             const known = knownCaches()
             emit(formatCache(cacheStatus(known), known))
+            return { ok: true }
+        },
+    },
+    {
+        name: 'codecov',
+        summary: 'coverage now; and per SUBCOMMAND, the recorded outcome and wall-clock of every test per commit',
+        when: 'asking WHEN a test started failing, whether it is flaky, or what the coverage is now',
+        usage: `Usage: bin/inflight.mjs codecov                    coverage totals, and per-flag
+       bin/inflight.mjs codecov test <fuzzy>      one test's outcome per commit - the bisect
+       bin/inflight.mjs codecov flaky             tests recorded with more than one outcome
+       bin/inflight.mjs codecov slow [n]          slowest tests by last recorded wall-clock
+
+Add --fresh to any of these to bypass the 10-minute cache, and --branch <ref> to scope to one branch.
+
+NO TOKEN AND NO SETUP: this repo is public, so Codecov's API answers unauthenticated. It works from
+a fresh sandbox and from CI, which is the whole reason it is reachable from here rather than being a
+dashboard somebody has to remember to open.
+
+WHAT IT IS FOR. Codecov keeps per-test outcome and duration per commit, for longer than a CI log is
+retained. That answers "which commit did this start failing at" from RECORDED history rather than by
+re-running builds, and it supplies the sighting evidence docs/quarantined-tests.md demands, which is
+currently assembled by hand from logs that expire.
+
+WHAT IT IS NOT FOR. \`duration_seconds\` is test wall-clock on a shared runner, not the library's
+throughput. It must never feed the throughput regression comparison - see bin/lib/codecov.mjs.`,
+        sub: [
+            {
+                name: 'test',
+                summary: "one test's recorded outcome and duration, per commit, newest first",
+                when: 'a test is failing and you need the commit it changed at, not a guess',
+                usage: `Usage: bin/inflight.mjs codecov test <fuzzy-name> [--branch <ref>] [--fresh]
+
+Substring match, case-insensitive, because you almost always hold the method name and not the
+fully-qualified one. Several matches are listed rather than guessed at: resolving to the wrong test
+here produces a confident answer to a question nobody asked.`,
+                run: (args, emit) => {
+                    const opts = cvOpts(args)
+                    if (opts.error) return { ok: false, reason: `codecov test: ${opts.error}` }
+                    const q = opts.rest[0]
+                    if (!q) return { ok: false, reason: 'codecov test: give part of a test name' }
+                    const r = testTimeline(q, opts)
+                    if (!r.ok) return { ok: false, reason: `codecov test: ${r.reason}` }
+                    emit(formatTimeline(r.value))
+                    return { ok: true }
+                },
+            },
+            {
+                name: 'flaky',
+                summary: 'tests recorded with more than one outcome - flake CANDIDATES, never a verdict',
+                when: 'building the sighting evidence a quarantine entry needs, instead of re-reading CI logs',
+                usage: `Usage: bin/inflight.mjs codecov flaky [--branch <ref>] [--fresh]
+
+A candidate list. The same evidence fits a real regression that landed between two commits, which is
+exactly why docs/quarantined-tests.md refuses to quarantine on a rate alone.`,
+                run: (args, emit) => {
+                    const opts = cvOpts(args)
+                    if (opts.error) return { ok: false, reason: `codecov flaky: ${opts.error}` }
+                    const r = flakeCandidates(opts)
+                    if (!r.ok) return { ok: false, reason: `codecov flaky: ${r.reason}` }
+                    emit(formatFlakes(r.value))
+                    return { ok: true }
+                },
+            },
+            {
+                name: 'slow',
+                summary: 'the slowest tests by their most recent recorded wall-clock',
+                when: 'CI wall-clock is the complaint and you need to know which tests own it',
+                usage: `Usage: bin/inflight.mjs codecov slow [n] [--branch <ref>] [--fresh]
+
+Wall-clock on a shared GitHub runner. Good for "this test owns four minutes of every run"; not a
+benchmark, and never an input to a throughput comparison.`,
+                run: (args, emit) => {
+                    const opts = cvOpts(args)
+                    if (opts.error) return { ok: false, reason: `codecov slow: ${opts.error}` }
+                    const n = opts.rest.find((a) => /^\d+$/.test(a))
+                    const r = slowest(n ? Number(n) : 20, opts)
+                    if (!r.ok) return { ok: false, reason: `codecov slow: ${r.reason}` }
+                    emit(formatSlowest(r.value))
+                    return { ok: true }
+                },
+            },
+        ],
+        run: (args, emit) => {
+            const r = coverage()
+            if (!r.ok) return { ok: false, reason: `codecov: ${r.reason}` }
+            emit(formatCoverage(r.value))
             return { ok: true }
         },
     },
