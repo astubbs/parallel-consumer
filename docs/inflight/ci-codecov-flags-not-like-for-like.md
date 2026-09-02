@@ -1,4 +1,4 @@
-# The coverage comparison is still not like-for-like
+# Coverage gates are flag-scoped now; what is left is the total and one upload pattern
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
@@ -6,41 +6,43 @@
 `codecov/project` compared a PR total against a base total built from a **disjoint set of flags**.
 The master `build` job uploaded everything under one `default` flag; a PR runs the `test` matrix and
 uploads `unit`, `integration`, `performance`, `lincheck`, `chaos`, and never `default`.
+
+**Observed on a PR touching zero Java**: Files 90 -> 90, Lines 4822 -> 4822, Branches 463 -> 463,
+reported **-3.53%**. Nothing had changed; the two sides counted different things. The check was new
+enough that nothing had caught it, and it would have gone red on every PR from then on.
+
 <!-- post-merge: checked-begin -->
-Fixed on the master side in astubbs/parallel-consumer#400: that job now uploads `unit` and
-`integration` separately, matching the two halves the pom's `report` and `report-integration`
-executions produce.
+**Both halves are fixed in astubbs/parallel-consumer#400.** The master job now uploads `unit` and
+`integration` separately - the split the pom's `report` and `report-integration` executions already
+make - and `codecov.yml` gates per flag rather than on the overall total. Both sides of each gate
+come from the same `-Pci` profile and the same `-Dexcluded.groups=performance,chaos,quarantined,lincheck`,
+so a drop there is a real drop. The whole-repository number is `informational: true`: five flags on a
+PR against two on master cannot be made honest by tuning a threshold, so it is reported as a trend
+and never gates. `carryforward` is off explicitly, because it is the reflexive fix for this and the
+wrong one - it merges a stale measurement into a run that did not produce it, masking genuine drops.
+Validated with codecov's own `POST /validate` before landing.
 <!-- post-merge: checked-end -->
 
-**Observed before the fix**, on a PR touching zero Java: Files 90 -> 90, Lines 4822 -> 4822,
-Branches 463 -> 463, reported **-3.53%**. Nothing had changed; the two sides counted different things.
+## What is still open
 
-## What is still wrong, and why it was not fixed in the same change
+**The fix cannot be verified by the change that makes it.** `build` is `push`-only, so the new flags
+do not exist on the base until this lands on master and that job runs. Until then a PR compares
+against a `default`-flagged base and the flag gates have nothing to compare with. **A red or
+no-data `codecov/project` on the first PRs after this merges is the expected state, not a
+regression** - it clears once master has re-uploaded under the new flags. The first post-merge PR is
+the real test of all of this, and nobody has run it yet.
 
-**The base now has `{unit, integration}` and a PR has `{unit, integration, performance, lincheck,
-chaos}`.** The asymmetry is smaller and it now errs SAFE - a PR's total can only be higher, so the
-threshold no longer fires spuriously - but it has become a false-negative channel: a genuine drop in
-unit or integration coverage can be masked by coverage that `performance`, `lincheck` or `chaos`
-contributes and the base has no equivalent for.
-
-That is the trade this repository normally refuses, so it is written down rather than left implied.
-It was not fixed in the same change because the fix is a **status-check policy** decision, not a
-workflow one, and it adds check contexts to every PR:
-
-- **Per-flag project statuses** in `codecov.yml` - `unit` compares against `unit`, `integration`
-  against `integration` - so each side is measured the same way and the extra PR-only flags stop
-  contaminating the total. This is the complete fix.
-- Or drop `performance`, `lincheck` and `chaos` from coverage upload entirely, leaving one pair on
-  both sides. Simpler, and loses whatever those suites uniquely cover.
-
-## The fix cannot be verified on the PR that makes it
-
-`build` is `push`-only, so the new flags do not exist until this lands on master and that job runs.
-Until then every PR still compares against a `default`-flagged base and `codecov/project` stays red -
-including the PR carrying the fix. **A red `codecov/project` on the first PRs after this merges is
-the expected state, not a regression**, and it clears once master has re-uploaded under the new flags.
+**Every suite uploads both jacoco patterns, not just its own** - unverified, and recorded rather
+than changed. The `test` matrix has one shared upload step with
+`files: '**/target/site/jacoco/jacoco.xml,**/target/site/jacoco-it/jacoco.xml'`, so the
+`integration` job (which runs `clean verify -DskipUTs=true`) may also upload a unit report with no
+exec data behind it. Codecov merges reports within a flag by union, so an empty report should not
+un-cover anything - which is why this was left alone rather than guessed at. Narrowing it means a
+per-suite `files` value in the matrix, and three of the five suites (`performance`, `lincheck`,
+`chaos`) would need their report shape established first rather than assumed.
 
 ## Delete when
 
-Per-flag statuses are configured (or the extra suites stop uploading), and a PR after that change has
-shown `codecov/project` comparing like-for-like.
+A PR after this has merged shows `codecov/project/unit` and `codecov/project/integration` comparing
+against a base that carries those flags, and the upload-pattern question above has been settled
+either way.
