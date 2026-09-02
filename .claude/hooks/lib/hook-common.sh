@@ -350,3 +350,55 @@ hook_project_root() { # [payload-json]
     fi
     git rev-parse --show-toplevel 2>/dev/null || true
 }
+
+# THE `-C` TARGET, which hook_git_invocations parses and then deliberately discards.
+#
+# A COMPANION RATHER THAN A WIDER CONTRACT. `hook_git_invocations` consumes `-C <path>` with the
+# other value-taking globals so the subcommand lands at rest[0] - correct for its own job, and three
+# hooks read its output today. Emitting the value there would change what all three receive, so this
+# reuses the same lexer and answers the one extra question instead. The two must keep the same
+# VALUE_FLAGS list; that is the cost of the split and it is cheaper than the alternative.
+#
+# WHY IT MATTERS: a hook that resolves its repository from the payload cwd measures the SESSION for
+# `git -C /other/worktree push`, so it can stay silent because this tree is quiet while the pushed
+# one is not - the confident wrong answer
+# docs/solutions/workflow-issues/a-hook-processes-own-directory-describes-the-session-not-the-command-2026-08-31.md
+# records. Prints nothing when the command names no -C, which callers treat as "use the fallback".
+hook_git_dash_c() { # <payload-json> <subcommand>
+    printf '%s' "$1" | SUBCOMMAND="$2" python3 -c '
+import json, os, shlex, sys
+try:
+    data = json.load(sys.stdin)
+    cmd = data.get("tool_input", {}).get("command", "")
+    lex = shlex.shlex(cmd, posix=True, punctuation_chars="();<>|&;\n")
+    lex.whitespace = " \t\r"
+    lex.whitespace_split = True
+    toks = list(lex)
+except Exception:
+    sys.exit(0)
+want = os.environ.get("SUBCOMMAND", "")
+for i, t in enumerate(toks):
+    if t.rsplit("/", 1)[-1] == "git":
+        # NO APOSTROPHES IN THIS BLOCK - it lives inside a single-quoted shell string.
+        # Must stay in step with hook_git_invocations VALUE_FLAGS.
+        VALUE_FLAGS = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path")
+        j, rest, target = i + 1, [], ""
+        while j < len(toks):
+            t = toks[j]
+            if t == "-C" and j + 1 < len(toks):
+                target = toks[j + 1]
+                j += 2
+                continue
+            if t in VALUE_FLAGS:
+                j += 2
+                continue
+            if t.startswith("-"):
+                j += 1
+                continue
+            rest.append(t)
+            break
+        if rest and rest[0] == want:
+            print(target)
+            break
+' 2>/dev/null || true
+}

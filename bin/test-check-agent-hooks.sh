@@ -3184,6 +3184,29 @@ esac
 assert "a failure-only report does not announce an open window" says-unknown "$got"
 rm -f "${TMPDIR:-/tmp}/pc-refactor-window-$(printf '%s' "$rw_tmp" | tr '/' '_')"
 
+
+# `git -C /other push` PUBLISHES THAT REPOSITORY, so the hook must measure it and not the session's.
+# Two real repos: the session's stub says SESSION, the pushed one says TARGET. Before hook_git_dash_c
+# the -C value was parsed and discarded, so this answered about the wrong tree - silently, which is
+# the whole failure class (a hook process does not run where its guarded command runs).
+rw_sess="$(mktemp -d)"; rw_push="$(mktemp -d)"
+for d in "$rw_sess" "$rw_push"; do ( cd "$d" && git init -q -b master . && mkdir -p bin ); done
+printf 'process.stdout.write("SESSION-REPO");\n' > "$rw_sess/bin/inflight.mjs"
+printf 'process.stdout.write("TARGET-REPO");\n'  > "$rw_push/bin/inflight.mjs"
+rm -f "${TMPDIR:-/tmp}/pc-refactor-window-$(printf '%s' "$rw_push" | tr '/' '_')"
+out="$(printf '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git -C %s push"}}' "$rw_push" \
+    | CLAUDE_PROJECT_DIR="$rw_sess" "$HOOKS/remind-refactor-window.sh" 2>/dev/null)"
+case "$out" in *TARGET-REPO*) got=pushed-repo ;; *SESSION-REPO*) got=session-repo ;; *) got="${out:-EMPTY}" ;; esac
+assert "a push naming another repo measures THAT repo" pushed-repo "$got"
+
+# And a push naming no -C still falls back to the session, which is the ordinary case.
+rm -f "${TMPDIR:-/tmp}/pc-refactor-window-$(printf '%s' "$rw_sess" | tr '/' '_')"
+out="$(printf '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git push"}}' \
+    | CLAUDE_PROJECT_DIR="$rw_sess" "$HOOKS/remind-refactor-window.sh" 2>/dev/null)"
+case "$out" in *SESSION-REPO*) got=session-repo ;; *) got="${out:-EMPTY}" ;; esac
+assert "a push naming no repo still measures the session" session-repo "$got"
+rm -rf "$rw_sess" "$rw_push"
+
 rm -rf "$rw_tmp"
 
 if [ "$failures" -eq 0 ]; then

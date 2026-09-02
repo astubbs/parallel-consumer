@@ -85,13 +85,22 @@ fi
 # used to sit here was inert (the old ordering overrode it) AND load-bearing-looking, which is the
 # worst combination: with CLAUDE_PROJECT_DIR absent it let the payload choose which bin/inflight.mjs
 # ran. Resolving the root first and invoking by ABSOLUTE path removes that entirely.
-# KNOWN LIMIT, recorded rather than papered over: for `git -C /other/worktree push` this measures
-# the session's repository, not the one being pushed. The obvious fix - read the -C target from the
-# already-tokenised command - is not available: `hook_git_invocations` emits the subcommand and its
-# arguments, and -C is a git GLOBAL option that precedes the subcommand, so the helper drops it.
-# Getting it would mean widening that helper's output contract, which three other hooks consume.
-# Left as an open thread on the pull request rather than decided here.
-root="$(hook_project_root "$payload")"
+# THE COMMAND OUTRANKS THE SESSION, which is the derivation order hook_project_root documents and
+# the one this hook could not previously honour: `git -C /other/worktree push` publishes THAT
+# repository, so measuring the session's could stay silent because this tree is quiet while the
+# pushed one has an open window, or inject this tree's advice into that push.
+#
+# `hook_git_dash_c` is a companion to the tokeniser rather than a widening of it - the -C value was
+# always parsed and then discarded, and three hooks read the existing output, so the new question
+# gets its own answer instead of changing theirs.
+root=""
+if [ "$event" != "SessionStart" ]; then
+    pushed_dir="$(hook_git_dash_c "$payload" push)"
+    if [ -n "$pushed_dir" ] && [ -d "$pushed_dir" ]; then
+        root="$(git -C "$pushed_dir" rev-parse --show-toplevel 2>/dev/null || true)"
+    fi
+fi
+[ -n "$root" ] || root="$(hook_project_root "$payload")"
 [ -n "$root" ] || exit 0
 inflight="$root/bin/inflight.mjs"
 [ -f "$inflight" ] || exit 0
