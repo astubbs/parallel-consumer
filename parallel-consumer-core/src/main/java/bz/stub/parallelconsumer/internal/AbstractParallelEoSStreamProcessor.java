@@ -709,11 +709,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         } catch (Exception e) {
             // A producer the broker has invalidated arrives here too, as ProducerInvalidatedException: the
             // commit path has already recorded the condition, and the control thread replaces the producer
-            // on its next pass (astubbs#225, KTD11 in its plan). This path only declines - it never waits
-            // for the replacement, and it no longer rethrows: the rethrow that used to sit here kept fencing
-            // fatal while a fenced instance had no way back. On the deprecated producer-instance path
-            // nothing is recorded and the raw condition lands here as well; that path keeps its
-            // pre-recovery behaviour by design.
+            // on its next pass (astubbs#225, KTD11 in its plan) - once woken, see the finally. This path only
+            // declines - it never waits for the replacement, and it no longer rethrows: the rethrow that used
+            // to sit here kept fencing fatal while a fenced instance had no way back. On the deprecated
+            // producer-instance path nothing is recorded and the raw condition lands here as well; that path
+            // keeps its pre-recovery behaviour by design.
             // Restore the flag rather than swallowing the interrupt: this runs inside the poll
             // thread's rebalance callback, and dropping it strands whatever is waiting on it.
             if (e instanceof InterruptedException) {
@@ -740,6 +740,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 producerManager.get().releaseCommitLockIfHeldByCurrentThread();
             }
             commitLock.unlock();
+            // A condition this commit recorded is answered by the control thread, and nothing else wakes it:
+            // the produce path gets that for free because the failed record lands in the mailbox (KTD4), but
+            // this path produces no mailbox event, so the control loop would sit out the rest of its
+            // commit-interval wait first - an hour, if that is what the user configured - with every worker
+            // parked on the produce lock meanwhile. After the releases above, so the wake is not skipped for a
+            // write lock this thread still held. Found by the unit test that pins this trace.
+            if (producerManager.map(ProducerManager::isReplacing).orElse(false)) {
+                notifySomethingToDo();
+            }
         }
     }
 
