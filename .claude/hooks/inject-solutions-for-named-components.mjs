@@ -21,10 +21,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { execFileSync } from 'node:child_process';
 import { match, render, isSelfReferential } from './lib/solutions-for-named-components.mjs';
 
-const CAP = Number(process.env.PC_SOLUTIONS_HOOK_CAP || 4);
+// A cap that does not parse, or is not positive, falls back to the default: `Number('abc')` is NaN,
+// and `slice(0, NaN)` is an empty list under a header that promises entries.
+const requestedCap = Number.parseInt(process.env.PC_SOLUTIONS_HOOK_CAP ?? '', 10);
+const CAP = Number.isInteger(requestedCap) && requestedCap > 0 ? requestedCap : 4;
 
 function readStdin() {
   try {
@@ -34,13 +36,43 @@ function readStdin() {
   }
 }
 
-function repoRoot() {
-  if (process.env.CLAUDE_PROJECT_DIR) return process.env.CLAUDE_PROJECT_DIR;
-  try {
-    return execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
-  } catch {
-    return null;
+/** The nearest enclosing checkout: a `.git` entry marks it - a directory, or the file a worktree carries. */
+function treeContaining(dir) {
+  let d = path.resolve(dir);
+  for (;;) {
+    if (fs.existsSync(path.join(d, '.git'))) return d;
+    const parent = path.dirname(d);
+    if (parent === d) return null;
+    d = parent;
   }
+}
+
+/**
+ * The tree the write is going INTO, derived from the write itself - the way `pre-commit-gate.sh`
+ * derives the commit's tree from its command rather than from the session. `$CLAUDE_PROJECT_DIR`
+ * names the SESSION's root, and a session started in the main checkout that writes into a worktree
+ * would otherwise be matched against master's corpus and silently miss what the branch added.
+ * Reproduced before this ordering existed: the incident text, written into a worktree whose
+ * session root was the main checkout, surfaced nothing. The variable is the last resort, not the
+ * first answer.
+ */
+function repoRoot(ev) {
+  const ti = ev.tool_input || {};
+  const cwd = typeof ev.cwd === 'string' && ev.cwd ? ev.cwd : process.cwd();
+  const candidates = [];
+  if (typeof ti.file_path === 'string' && ti.file_path) {
+    candidates.push(path.dirname(path.resolve(cwd, ti.file_path)));
+  }
+  candidates.push(cwd);
+  for (const c of candidates) {
+    try {
+      const found = treeContaining(c);
+      if (found) return found;
+    } catch {
+      /* an unreadable candidate is not the answer; keep looking */
+    }
+  }
+  return process.env.CLAUDE_PROJECT_DIR || null;
 }
 
 /**
@@ -69,7 +101,7 @@ function main() {
     return;
   }
 
-  const root = repoRoot();
+  const root = repoRoot(ev);
   if (!root || !fs.existsSync(path.join(root, 'docs', 'solutions'))) return;
 
   const ti = ev.tool_input || {};
@@ -99,9 +131,13 @@ function main() {
   const fresh = hits.filter((h) => !seen.has(h.relPath));
   if (fresh.length === 0) return;
 
+  // Remember only what is about to be SHOWN. Recording the whole fresh set marked the write-ups the
+  // cap hid as seen, so they were silenced for the rest of the session without ever being printed.
+  // Hits are in a fixed order (category, then filename), so the next write that names a hidden
+  // one's component surfaces it instead of repeating the first CAP.
   if (store) {
     try {
-      fs.appendFileSync(store, fresh.map((h) => h.relPath).join('\n') + '\n');
+      fs.appendFileSync(store, fresh.slice(0, CAP).map((h) => h.relPath).join('\n') + '\n');
     } catch {
       /* failing to remember costs a repeat, not correctness */
     }

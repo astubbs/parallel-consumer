@@ -14,7 +14,7 @@
 //
 // What existed instead was `inject-recorded-knowledge.sh`, which lists every solution title at
 // session start. That is right for discovery and wrong for RELEVANCE - a flat list of every title
-// competes with itself, and `docs/compound-engineering.md` states the constraint outright: "the
+// competes with itself, and `docs/inflight/AGENTS.md` states the constraint outright: "the
 // index is only useful while it is short enough to be read".
 //
 // WORKED INCIDENT, 2026-09-02 - the fourth of its kind, which is the point
@@ -164,10 +164,17 @@ export function match(text, root, { types = null, docs = null } = {}) {
   return hits;
 }
 
-/** True when the file being written is itself a write-up, or this mechanism's own test fixture. */
+/**
+ * True when the file being written is itself a write-up, or one of this mechanism's own files - the
+ * hook, this lib, or the self-test, whose fixtures name components on purpose.
+ */
 export function isSelfReferential(filePath) {
   const p = String(filePath || '');
-  return /(^|\/)docs\/solutions\//.test(p) || p.includes('solutions-for-named-components');
+  return (
+    /(^|\/)docs\/solutions\//.test(p) ||
+    p.includes('solutions-for-named-components') ||
+    p.includes('test-check-solutions-hook')
+  );
 }
 
 /**
@@ -198,7 +205,7 @@ export function render(hits, cap) {
     lines.push('');
     lines.push(
       `  ${hidden} further write-up(s) also matched and are not listed; ` +
-        'grep docs/solutions/ for the component names above.',
+        'each surfaces on a later write in this session that names its components.',
     );
   }
   return lines.join('\n');

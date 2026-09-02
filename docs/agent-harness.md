@@ -469,7 +469,12 @@ what this one got wrong was not calling the tool but owning the tool's correctne
   write-ups whose `related_components` appear in the text being written. It is the relevance half of
   the entry above: session-start injection answers *does a document exist*, this answers *does one
   apply to what I am writing now*, and the two fail differently. Once per write-up per session, and
-  it never blocks.
+  it never blocks. **The corpus it reads is the tree the file is going into**, derived from the
+  write itself the way the pre-commit gate derives the commit's tree from its command -
+  `$CLAUDE_PROJECT_DIR` names the session's root, and a write into another worktree was matched
+  against the wrong tree's corpus before that ordering existed. Its self-test asserts the
+  never-blocks contract on every invocation - exit 0, nothing on stderr - because a helper that
+  mapped a crash to silence once passed a mutant that blocked every edit.
 
   It exists because `related_components` and `applies_when` were **inert**. A majority of write-ups
   carried an `applies_when`, and `grep -rln applies_when bin/ .claude/` returned nothing - retrieval

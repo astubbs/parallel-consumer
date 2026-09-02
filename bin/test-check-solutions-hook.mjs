@@ -17,7 +17,7 @@
 // The fixture is inline rather than read from the plan it came from, so the case runs on every
 // branch instead of only where that plan happens to live.
 
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -37,21 +37,33 @@ const RUN = `t${process.pid}-${Math.floor(Date.now() % 1e6)}`;
 let fails = 0;
 let n = 0;
 
-function runHook(caseName, filePath, content, env = {}, toolInput = null) {
-  const payload = JSON.stringify({
+// Drives the hook as the harness does: JSON on stdin, `cwd` set as the payload carries it. `raw`
+// bypasses the JSON entirely, for the inputs the hook must survive rather than read.
+//
+// EVERY invocation asserts the never-blocks contract - exit 0, no signal, nothing on stderr -
+// whatever the case then asserts about stdout. The first version mapped a non-zero exit to '',
+// which is the pass condition of every negative control: a mutant that exited 2 on the no-match
+// path, blocking every edit in production, passed 15 of 15.
+function runHook(caseName, filePath, content, env = {}, toolInput = null, raw = null) {
+  const payload = raw ?? JSON.stringify({
     session_id: `${RUN}-${caseName}`,
     hook_event_name: 'PreToolUse',
+    cwd: root,
     tool_input: toolInput ?? { file_path: filePath, content },
   });
-  try {
-    return execFileSync('node', [HOOK], {
-      input: payload,
-      encoding: 'utf8',
-      env: { ...process.env, CLAUDE_PROJECT_DIR: root, ...env },
-    });
-  } catch {
-    return '';
+  const r = spawnSync('node', [HOOK], {
+    input: payload,
+    encoding: 'utf8',
+    timeout: 10_000,
+    killSignal: 'SIGKILL',
+    env: { ...process.env, CLAUDE_PROJECT_DIR: root, ...env },
+  });
+  if (r.status !== 0 || r.signal || r.stderr) {
+    const stderr = (r.stderr || '').trim().slice(0, 200);
+    console.log(`  FAIL ${caseName} - broke the never-blocks contract: status=${r.status} signal=${r.signal} stderr='${stderr}'`);
+    fails += 1;
   }
+  return r.stdout || '';
 }
 
 function expectFires(label, out, needle) {
@@ -118,6 +130,17 @@ expectSilent(
 
 expectSilent('empty content', runHook('n4', 'notes.md', ''));
 
+// This file names components on purpose; editing it must not surface write-ups to itself.
+expectSilent(
+  'editing this self-test does not surface write-ups to itself',
+  runHook('n5', 'bin/test-check-solutions-hook.mjs', 'ProducerManager ThreadConfinedConsumer'),
+);
+
+console.log('inputs the hook must survive rather than read - each MUST be silent AND exit 0:');
+expectSilent('unparseable stdin', runHook('raw1', null, null, {}, null, 'this is not json'));
+expectSilent('empty stdin', runHook('raw2', null, null, {}, null, ''));
+expectSilent('a payload with no tool_input', runHook('raw3', null, null, {}, null, JSON.stringify({ session_id: `${RUN}-raw3` })));
+
 console.log('dedupe:');
 const first = runHook('dd', 'notes.md', 'ProducerManager');
 const second = runHook('dd', 'notes.md', 'ProducerManager');
@@ -150,6 +173,72 @@ const multi = runHook('me', null, null, {}, {
   edits: [{ old_string: 'x', new_string: 'nothing here' }, { old_string: 'y', new_string: 'ProducerManager' }],
 });
 expectFires('MultiEdit edits[].new_string is read', multi, 'docs/solutions/');
+
+// Edit is the commonest write tool, and its text arrives as a top-level new_string. Until this case
+// nothing sent one: dropping `ti.new_string` from the hook passed every case.
+expectFires(
+  'Edit new_string is read',
+  runHook('ed', null, null, {}, { file_path: 'notes.md', old_string: 'x', new_string: 'ProducerManager' }),
+  'docs/solutions/',
+);
+expectSilent(
+  'Edit old_string - the text being replaced - is not matched',
+  runHook('ed2', null, null, {}, { file_path: 'notes.md', old_string: 'ProducerManager', new_string: 'nothing here' }),
+);
+
+console.log('root derivation, and the cap against the dedupe (synthetic tree):');
+// A checkout is a `.git` entry (directory, or the file a worktree carries) above the file. The tree
+// carries one Java type per write-up so each name maps to exactly one write-up.
+function syntheticRepo(components) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'solutions-hook-repo-'));
+  fs.mkdirSync(path.join(dir, '.git'));
+  const java = path.join(dir, 'parallel-consumer-core', 'src', 'main', 'java');
+  const sol = path.join(dir, 'docs', 'solutions', 'x');
+  fs.mkdirSync(java, { recursive: true });
+  fs.mkdirSync(sol, { recursive: true });
+  for (const [type, file] of Object.entries(components)) {
+    fs.writeFileSync(path.join(java, `${type}.java`), '');
+    fs.writeFileSync(path.join(sol, file), `---\nrelated_components:\n  - ${type}\n---\n# About ${type}\n`);
+  }
+  return dir;
+}
+const repoA = syntheticRepo({ Alpha: 'alpha.md', Beta: 'beta.md' });
+const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'solutions-hook-elsewhere-'));
+fs.mkdirSync(path.join(elsewhere, '.git'));
+try {
+  // $CLAUDE_PROJECT_DIR names the SESSION's root. A session started in one checkout that writes
+  // into another must be matched against the tree the file is going into - before this case the
+  // hook read the session's corpus and was silent on the incident text written into a worktree.
+  expectFires(
+    'the corpus is the tree the file is in, not $CLAUDE_PROJECT_DIR',
+    runHook('root1', path.join(repoA, 'notes.md'), 'Alpha', { CLAUDE_PROJECT_DIR: elsewhere }),
+    'docs/solutions/x/alpha.md',
+  );
+  expectSilent(
+    'a file outside any corpus tree is silent even when the session root has one',
+    runHook('root2', path.join(elsewhere, 'notes.md'), 'Alpha', { CLAUDE_PROJECT_DIR: repoA }),
+  );
+
+  // The store must remember only what was SHOWN. Recording every fresh hit marked the ones the cap
+  // hid as seen, so they were silenced for the session without ever being printed.
+  const capped = runHook('cd', path.join(repoA, 'notes.md'), 'Alpha Beta', { PC_SOLUTIONS_HOOK_CAP: '1' });
+  expectFires('cap: the first write shows one write-up and counts the other', capped, '1 further write-up');
+  n += 1;
+  if (!capped.includes('beta.md')) console.log('  ok   cap: the hidden write-up is not listed');
+  else { console.log(`  FAIL cap: hidden write-up was listed: ${capped}`); fails += 1; }
+  expectFires(
+    'cap: a hidden write-up still surfaces on a later write in the same session',
+    runHook('cd', path.join(repoA, 'notes.md'), 'Beta', { PC_SOLUTIONS_HOOK_CAP: '1' }),
+    'beta.md',
+  );
+  expectSilent(
+    'dedupe: once both have been shown, naming both again is silent',
+    runHook('cd', path.join(repoA, 'notes.md'), 'Alpha Beta', { PC_SOLUTIONS_HOOK_CAP: '1' }),
+  );
+} finally {
+  fs.rmSync(repoA, { recursive: true, force: true });
+  fs.rmSync(elsewhere, { recursive: true, force: true });
+}
 
 console.log('fixture-based (decoupled from the live corpus):');
 // The cases above drive the real docs/solutions/ tree, so a retitled write-up or a moved class reddens
