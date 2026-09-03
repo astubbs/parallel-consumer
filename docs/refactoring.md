@@ -422,16 +422,6 @@ cosmetic - see the last bullet.*
 - `TODO should extend java.lang.Error`: should it extend `java.lang.Error`?
   (exception-hierarchy design)
 
-### state/RetryQueue.java
-
-- **Three `// visible for testing` accessors that no test calls.** `RetryQueue`'s `unique`, `sorted`
-  and `comparator` Lombok `@Getter(AccessLevel.PACKAGE)`s have zero callers anywhere in the tree -
-  main, test or integration. Delete them; the comment is documenting an access route nobody uses, and
-  an ArchUnit rule policing a dead accessor would pass vacuously forever (see
-  `docs/inflight/static-archunit-main-code-rules.md`). `ShardManager`'s `retryQueue` accessor was a
-  fourth until `WorkManagerStaleCheckDoubleLookupTest` and `RetryQueueRebalancePathTest` started
-  asserting through it - that one now earns its keep.
-
 ### state/PartitionState.java (715 lines)
 - `Needs to be concurrent because`: concurrent commit-data collection exists only because
   control/poller threads share state - removed under shared-nothing (confluentinc#200).

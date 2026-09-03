@@ -280,13 +280,10 @@ public class ProcessingShard<K, V> {
      * {@code PartitionStateManager}'s {@code onPartitionsAssigned} and {@code onPartitionsRemoved}. So it takes
      * the retry queue the declining way ({@link RetryQueue#tryRemove}) and never waits.
      * <p>
-     * <b>The queue goes first, and a refusal skips the shard removal too</b>, which is what keeps the two in
-     * step: a container removed from the shard whose queue entry survives is an orphan nothing can ever remove,
-     * because every removal path reaches the queue through shard contents. Left in place instead, the pair is
-     * merely stale - already true before this sweep ran, since the epoch was incremented first - and
-     * {@link #getWorkIfAvailable}'s last-resort branch retires both on the controller thread, where waiting for
-     * the lock is allowed. {@code ShardManager.removeWorkFromShardFor} carries the full reasoning, including
-     * what would reopen the hazard; do not restate it here.
+     * <b>The queue goes first, and a refusal skips the shard removal too</b>, leaving the pair whole.
+     * <b>{@code ShardManager.removeWorkFromShardFor} owns why that is the right answer</b> - what an orphan
+     * costs, why staleness is tolerable, how long the pair waits and what would reopen the hazard. Read it
+     * there; the paragraph that used to be here was a second copy of it, which is how two of them drift apart.
      *
      * @param retryQueue the queue mirroring this shard's failed work, cleaned in step with it
      * @return the containers that actually left this shard
