@@ -234,15 +234,22 @@ class InstanceStallProbeIT {
         sibling.workResultsReturned = 30_112;
         ProgressProbe probe = probeWatching(stalled, sibling);
 
+        String atTheFiring = probe.instanceProgressSnapshot();
         assertWithMessage("the firing's own numbers must be readable per instance, not just fleet-wide")
-                .that(probe.instanceProgressSnapshot()).isEqualTo(
+                .that(atTheFiring).isEqualTo(
                         "0(live q=0 out=35 res=24834) 1(live q=12 out=8 res=30112)");
 
         // the discriminating observation: this instance's completions moved and its held work drained,
         // so it recovered rather than wedging - the question the fleet-level line cannot answer
         stalled.workResultsReturned = 24_900;
         stalled.outForProcessing = 0;
-        assertThat(probe.instanceProgressSnapshot()).contains("0(live q=0 out=0 res=24900)");
+        String afterRecovery = probe.instanceProgressSnapshot();
+
+        // asserting the two DIFFER is the actual property: a snapshot that did not track the change
+        // would be a diagnostic that cannot classify anything, however well-formed each reading looked
+        assertWithMessage("the snapshot has to track the instance, not just render it once")
+                .that(afterRecovery).isNotEqualTo(atTheFiring);
+        assertThat(afterRecovery).contains("0(live q=0 out=0 res=24900)");
     }
 
     @Test
