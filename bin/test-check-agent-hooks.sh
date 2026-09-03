@@ -1494,7 +1494,10 @@ rm -rf "$empty_dir"
 # THE SECTIONS OUTSIDE THE CORPUS ARE STILL THE HOOK'S OWN, read from the working tree exactly as
 # before the migration (the plan's R17): the repo-level registers, the ideation documents and the
 # test-hardening audits. Asserted against the real checkout, by content rather than by count.
-case "$knowledge_out" in *'- The deferred-work backlog, and the TODO/FIXME triage  `docs/refactoring.md`'*) got=listed ;; *) got=missing ;; esac
+# The register's title carries the marker words themselves, and bin/todo-index.sh indexes any file
+# that spells them out - so the pattern is split around them, matching the same line without the
+# scanner reading a test assertion as a marker.
+case "$knowledge_out" in *'- The deferred-work backlog, and the '*'triage  `docs/refactoring.md`'*) got=listed ;; *) got=missing ;; esac
 assert "the repo-level registers are still listed" listed "$got"
 case "$knowledge_out" in *'# Ideation: ranked directions, and what was already REJECTED and why'*) got=present ;; *) got=missing ;; esac
 assert "the ideation section is still present" present "$got"
