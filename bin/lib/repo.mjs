@@ -3,7 +3,7 @@
 // THE FACTS THAT ARE ABOUT THIS REPOSITORY RATHER THAN ABOUT GIT.
 //
 // Everything else under bin/lib/ is generic - `git.mjs` wraps plumbing, `cache.mjs` stores network
-// answers, `notes.mjs` reads a corpus. These two constants are the only things that would have to
+// answers, `notes.mjs` reads a corpus. These constants are the only things that would have to
 // change to point the tool at a different project, and `ci-inflight-next-commands.md` names
 // gathering them as the one concrete thing the extract-as-FOSS direction already argues for.
 //
@@ -19,3 +19,21 @@ export const REPO = 'astubbs/parallel-consumer'
 
 /** Where in-flight notes live, relative to the repository root. */
 export const NOTES_DIR = 'docs/inflight'
+
+/**
+ * THE THREE CORPUS AREAS, in the order `prior-art` has always numbered them.
+ *
+ * This was the section list hard-coded inside prior-art.mjs, and ci-inflight-next-commands.md
+ * named it as the one fact to lift before it spread - which it was about to: the context query
+ * indexes the same three directories, the docs shape groups by them, and the session index renders
+ * them. Three private copies of a three-row table is the REPO defect again, one row wider.
+ *
+ * `dir` has no trailing slash - callers add one where git wants a pathspec. `name` is the display
+ * half, and `prior-art`'s headings are built from it verbatim, so renaming one here changes output
+ * a reader has learned to scan; the self-test pins the headings for that reason.
+ */
+export const DOC_AREAS = [
+    { dir: 'docs/plans', name: 'Prior investigations' },
+    { dir: 'docs/solutions', name: 'Solved problems' },
+    { dir: NOTES_DIR, name: 'In-flight state' },
+]

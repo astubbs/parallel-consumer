@@ -50,6 +50,7 @@ import { perfReport, perfStart } from './lib/perf.mjs'
 import { baseline, freshnessWarnings, refTips } from './lib/git.mjs'
 import { cacheClear, cacheStatus, knownCaches } from './lib/cache.mjs'
 import { corpusIndex, drift, findNotes, prsByBranch, stranded } from './lib/notes.mjs'
+import { DOC_AREAS, NOTES_DIR } from './lib/repo.mjs'
 import { branchView, commitGraph, trackingGap } from './lib/branches.mjs'
 import { loadCandidates, refactorWindow } from './lib/refactor-window.mjs'
 import {
@@ -106,6 +107,13 @@ export const cvOpts = (args) => {
     }
 }
 
+
+/**
+ * The notes area alone, for the two commands whose question is about in-flight NOTES. `corpusIndex`
+ * now spans every docs area by default - the context query needs all three - and passing this keeps
+ * `note find` and `stranded` answering exactly what they answered before the default widened.
+ */
+const NOTES_AREA = DOC_AREAS.filter((a) => a.dir === NOTES_DIR)
 
 /**
  * The registry.
@@ -178,7 +186,7 @@ working tree can show you under a third of them.
                 run: (args, emit) => {
                     const query = args[0]
                     if (!query) return { ok: false, reason: 'note find: give a fuzzy name to match' }
-                    const index = corpusIndex()
+                    const index = corpusIndex({ areas: NOTES_AREA })
                     if (!index.ok) return { ok: false, reason: `note find: ${index.reason}` }
                     emit(formatWarnings(freshnessWarnings(index.baseline, index.refs.length)))
                     emit(formatFind(findNotes(index, query), query, index))
@@ -405,9 +413,13 @@ more than the right conclusion:
   master's HISTORY once had this path            it landed and was git rm'd - removed 40 more
 
 What survives is clustered by ref-set, because one workstream's notes share their refs and listing
-them separately buries the finding under its own volume.`,
+them separately buries the finding under its own volume.
+
+SCOPE: docs/inflight/ only. The corpus index can read plans and solutions too; this command reports
+the notes area alone, because the stranded-work impact is a contract docs/inflight/AGENTS.md makes
+about notes. For the whole corpus - plans and solutions too - prior-art searches every area.`,
         run: (args, emit) => {
-            const index = corpusIndex()
+            const index = corpusIndex({ areas: NOTES_AREA })
             if (!index.ok) return { ok: false, reason: `stranded: ${index.reason}` }
             emit(formatWarnings(freshnessWarnings(index.baseline, index.refs.length)))
             emit(formatStranded(stranded(index), index))

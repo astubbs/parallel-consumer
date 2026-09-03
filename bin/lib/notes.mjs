@@ -38,12 +38,20 @@
 // and simply pays its 1.3s. The ONE cache left is `prsByBranch`, because that one crosses the
 // network and shares a rate limit with every parallel session here.
 //
+// THE CORPUS IS THREE AREAS NOW, NOT ONE. `corpusIndex` reads every area in `DOC_AREAS` by default
+// - plans, solutions and notes - because the document context query answers for all three and
+// every delivery renders the one index. `note find` and `stranded` still ask for the notes area
+// alone, so their answers did not change when the default widened; the option is the seam.
+//
 // No process.exit, no printing: bin/inflight.mjs owns the process boundary.
 
 
 import { cacheRead, cacheWrite } from './cache.mjs'
-import { NOTES_DIR, REPO } from './repo.mjs'
-import { baseline, blobDiffStat, blobsForPath, exec, lines, mergeBaseBlobs, mergeBases, refTips, treeEntries } from './git.mjs'
+import { DOC_AREAS, NOTES_DIR, REPO } from './repo.mjs'
+import {
+    baseline, blobContents, blobDiffAddedLines, blobDiffStat, blobsForPath, exec, lines, mergeBaseBlobs, mergeBases,
+    refTips, treeEntries,
+} from './git.mjs'
 
 export { NOTES_DIR }
 
@@ -60,9 +68,15 @@ export { NOTES_DIR }
 const PR_CACHE_TTL_MS = 24 * 60 * 60 * 1000
 
 /**
- * Every (blob, path) under docs/inflight/ on every ref, plus the derived indexes.
+ * Every (blob, path) under the corpus areas on every ref, plus the derived indexes.
  *
+ * `areas` defaults to all of `DOC_AREAS`; pass the notes area alone for a question that is about
+ * in-flight notes only. One `ls-tree` per ref whatever the width, because the areas go in as one
+ * pathspec list - three calls per ref would have tripled the pass to answer the same question.
+ *
+ * @param {{areas?: {dir: string, name: string}[]}} [opts]
  * @returns {{
+ *   areas: {dir: string, name: string}[],
  *   baseline: string, refs: {ref: string, sha: string}[],
  *   byPath: Map<string, Map<string, string[]>>,   // path -> blob -> refs carrying that version
  *   byRef: Map<string, {blob: string, path: string}[]>, // ref -> what it carries; the inverse, built once
@@ -72,7 +86,8 @@ const PR_CACHE_TTL_MS = 24 * 60 * 60 * 1000
  *   baseEverPaths: Set<string>,                   // every path the baseline's HISTORY has held - the stranded filter
  * }}
  */
-export function corpusIndex() {
+export function corpusIndex({ areas = DOC_AREAS } = {}) {
+    const dirs = areas.map((a) => a.dir)
     const { ok, tips: refs } = refTips()
     const base = baseline()
     // A failed ref enumeration is not an empty repository, and a missing baseline is not an empty
@@ -84,7 +99,7 @@ export function corpusIndex() {
     // carries no notes"; if it were the baseline, every landed note would have reported as stranded.
     const unreadable = []
     const entries = refs.map(({ ref }) => {
-        const t = treeEntries(ref, NOTES_DIR)
+        const t = treeEntries(ref, dirs)
         if (!t.ok) unreadable.push(ref)
         return [ref, t.entries.map((e) => [e.blob, e.path])]
     })
@@ -128,11 +143,11 @@ export function corpusIndex() {
     // when its work lands (docs/inflight/AGENTS.md), so a path the baseline once had and no longer
     // has is a CLOSED item, not a stranded one.
     const baseEverPaths = new Set(lines(
-        exec('git', ['log', base, '--diff-filter=AD', '--name-status', '--format=', '--', `${NOTES_DIR}/`]).out,
+        exec('git', ['log', base, '--diff-filter=AD', '--name-status', '--format=', '--', ...dirs.map((d) => `${d}/`)]).out,
     ).map((l) => l.split('\t')[1]).filter(Boolean))
 
     return {
-        ok: true, unreadableRefs: unreadable,
+        ok: true, unreadableRefs: unreadable, areas,
         baseline: base, refs, byPath, byRef, basePaths, baseBlobs, baseEverPaths,
         blobPaths: new Map([...blobPaths].map(([b, s]) => [b, [...s]])),
     }
@@ -186,13 +201,43 @@ export function prsByBranch({ cache = true } = {}) {
  * note - `note drift` on a busy note spent 361ms of 527ms in `sys`, almost all of it forking.
  */
 const titleCache = new Map()
+const titleOf = (content) => {
+    for (const l of lines(content)) if (l.startsWith('# ')) return l.slice(2).trim()
+    return null
+}
 export function blobTitle(blob) {
     if (titleCache.has(blob)) return titleCache.get(blob)
     const res = exec('git', ['cat-file', '-p', blob])
-    let title = null
-    if (res.ok) for (const l of lines(res.out)) if (l.startsWith('# ')) { title = l.slice(2).trim(); break }
+    const title = res.ok ? titleOf(res.out) : null
     titleCache.set(blob, title)
     return title
+}
+
+/**
+ * The titles of MANY blobs through ONE subprocess - the batch form of `blobTitle`, sharing its
+ * memo, so a title read here is free to every later caller and a title already read is not asked
+ * for again.
+ *
+ * This is how every caller that wants more than one title reads them (the plan's KTD16). The
+ * per-blob form above stays for the callers that stop at the first title they find, where a batch
+ * would read what they will never look at.
+ *
+ * A FAILED BATCH IS NOT CACHED. Recording null for every requested blob would turn one transient
+ * cat-file failure into "these documents have no title" for the rest of the process; the map still
+ * answers null for them, but the next call asks git again.
+ *
+ * @returns {Map<string, string|null>} blob -> title, null when the blob has no `# ` heading
+ */
+export function blobTitles(blobs) {
+    const wanted = [...new Set(blobs)]
+    const uncached = wanted.filter((b) => !titleCache.has(b))
+    if (uncached.length > 0) {
+        const batch = blobContents(uncached)
+        if (batch.ok) {
+            for (const b of uncached) titleCache.set(b, batch.contents.has(b) ? titleOf(batch.contents.get(b)) : null)
+        }
+    }
+    return new Map(wanted.map((b) => [b, titleCache.get(b) ?? null]))
 }
 
 /**
@@ -251,8 +296,44 @@ export function addedSinceMergeBase(base, ref, path, blob) {
     // note that exists, purely because git could not be asked.
     if (!mb.ok) return null
     const at = mb.blobs.get(mbByRef.get(ref))
-    if (!at) return { added: null, removed: null, newFile: true } // the branch created it after diverging
-    return blobDiffStat(at, blob)
+    // `against` names the merge-base blob so the preview can diff the same pair rather than
+    // re-deriving it - a second merge-base fork per cluster for a fact this call already holds.
+    if (!at) return { added: null, removed: null, newFile: true, against: null } // the branch created it after diverging
+    return { ...blobDiffStat(at, blob), against: at }
+}
+
+/**
+ * WHAT A DIVERGENT VERSION ADDS, as evidence: its added markdown headings, else its first added
+ * line. The header shows this instead of calling a version "newer", because content the baseline
+ * never held is proof of knowledge and not of recency - the plan's "Divergence is the only claim".
+ *
+ * Null when there is nothing to say for a reason worth not hiding: the size lookup failed, or
+ * there was no merge-base to diff against. Both render as absent, never as "adds nothing".
+ */
+function previewOf(stat, blob) {
+    if (!stat || stat.diffFailed) return null
+    const diff = blobDiffAddedLines(stat.newFile ? null : stat.against, blob)
+    if (!diff.ok) return null
+    const added = diff.lines
+    return {
+        headings: added.filter((l) => /^#{1,6}\s/.test(l)),
+        firstLine: added.find((l) => l.trim().length > 0) ?? null,
+    }
+}
+
+/**
+ * WHICH OF THE STATES THE COPY AT HAND IS IN - the R2 answer for the file in front of the reader.
+ *
+ * Three states the plan names, plus two it did not and that are real: `behind` is a version the
+ * baseline itself once held (calling it `baseline` would say the reader holds the current copy,
+ * which is the stale-copy incident), and `absent` is a ref that does not carry the path at all.
+ */
+function copyState(blob, baseBlob, history) {
+    if (blob === null) return 'absent'
+    if (baseBlob === null) return 'branch-only'
+    if (blob === baseBlob) return 'baseline'
+    if (history.has(blob)) return 'behind'
+    return 'own-divergent'
 }
 
 /** The baseline's own note paths - one ls-tree, memoised, used only by the theme fallback. */
@@ -325,7 +406,15 @@ export function findNotes(index, query) {
  * to be told. What is reported is content that exists on a branch and has never existed on the
  * baseline, because that is what is at risk of being lost.
  */
-export function drift(path, { prs = new Map(), maxBranchesPerCluster = 6, all = false } = {}) {
+export function drift(path, {
+    prs = new Map(), maxBranchesPerCluster = 6, all = false, detail = 'full', at = null,
+} = {}) {
+    // TWO TIERS ON ONE FUNCTION (the plan's KTD2). `summary` stops after the clustering, the
+    // history filter and the copy at hand's own size - one merge-base and one diff, for HEAD's ref
+    // only - and is what the read-time hook calls inside its budget. `full` is what `note drift`
+    // has always done, plus the preview. One function, so the header and the hook cannot disagree
+    // about which versions are divergent.
+    const summary = detail === 'summary'
     const base = baseline()
     const { ok, tips } = refTips()
     if (!ok) return { path, ok: false, reason: 'cannot list refs - is this a git repository?' }
@@ -334,10 +423,50 @@ export function drift(path, { prs = new Map(), maxBranchesPerCluster = 6, all = 
     if (tips.length === 0) return { path, ok: false, reason: 'no branch refs found - nothing to search' }
     if (!base) return { path, ok: false, reason: 'neither origin/master nor master resolves - no baseline' }
     const refs = tips.map((r) => r.ref)
+    // ARCHIVAL REFS ARE SEARCHED, THEN LABELLED - the move `stranded` makes. A tag or a
+    // `refs/backup` ref is where this repository parks work before a re-cut, so a version held only
+    // there is PRESERVED, not in flight, and the divergent set counts live refs alone (KTD17).
+    const archivalOf = new Map(tips.map((r) => [r.ref, r.archival === true]))
+    const kindOf = new Map(tips.map((r) => [r.ref, r.kind]))
+    const scope = {
+        refsTotal: refs.length,
+        liveRefsTotal: tips.filter((r) => !r.archival).length,
+        archivalRefsTotal: tips.filter((r) => r.archival).length,
+    }
     const lookup = blobsForPath(refs, path)
     if (!lookup.ok) return { path, ok: false, reason: `cannot read ${path} across refs - the object lookup failed` }
     const blobs = lookup.blobs
-    if (blobs.size === 0) return { path, ok: true, found: false }
+
+    // THE COPY AT HAND. Summary defaults it to HEAD, because the summary exists to describe the file
+    // in front of a reader; full computes it only when asked, so `note drift` pays nothing new. A
+    // caller that already resolved the blob (the hook, per KTD15) passes it and saves the lookup.
+    // HEAD is not a tip, so it is one extra `cat-file` unless the caller named a branch.
+    const atSpec = at ?? (summary ? { ref: 'HEAD' } : null)
+    let atBlob = null
+    if (atSpec) {
+        if (atSpec.blob) atBlob = atSpec.blob
+        else if (blobs.has(atSpec.ref)) atBlob = blobs.get(atSpec.ref)
+        else {
+            const one = blobsForPath([atSpec.ref], path)
+            // A failed lookup reads as `absent` below, which is wrong in the same way every
+            // dropped flag here has been - so it is named in the result rather than swallowed.
+            atBlob = one.ok ? (one.blobs.get(atSpec.ref) ?? null) : null
+            if (!one.ok) scope.atLookupFailed = true
+        }
+    }
+
+    const history = baselineHistoryBlobs(base, path)
+    const baseBlob = blobs.get(base) ?? null
+    let atResult = null
+    if (atSpec) {
+        const state = copyState(atBlob, baseBlob, history)
+        atResult = { ref: atSpec.ref, blob: atBlob, state, added: null }
+        // The one merge-base the summary tier is allowed: the size of THIS copy's own edit.
+        if (state === 'own-divergent' || state === 'branch-only') {
+            atResult.added = addedSinceMergeBase(base, atSpec.ref, path, atBlob)
+        }
+    }
+    if (blobs.size === 0) return { path, ok: true, found: false, detail, baseline: base, at: atResult, ...scope }
 
     const versions = new Map()
     for (const [ref, blob] of blobs) {
@@ -345,38 +474,54 @@ export function drift(path, { prs = new Map(), maxBranchesPerCluster = 6, all = 
         versions.get(blob).push(ref)
     }
 
-    const history = baselineHistoryBlobs(base, path)
-    const baseBlob = blobs.get(base) ?? null
-
-    const build = ([blob, refs]) => {
-        const sorted = [...refs].sort()
-        return {
-            blob,
-            refs: sorted,
-            isBaseline: blob === baseBlob,
-            // Against the merge-base of the first carrying ref, so the number is what this branch
-            // ADDED rather than how far the baseline has moved since.
-            added: blob === baseBlob ? null : addedSinceMergeBase(base, sorted[0], path, blob),
-            title: blobTitle(blob),
-            branches: sorted.slice(0, maxBranchesPerCluster).map((r) => branchFacts(r, prs, base)),
-        }
-    }
-
     const divergent = []
     const behind = []
+    const preserved = []
     for (const entry of versions.entries()) {
         const [blob, refs] = entry
         if (blob === baseBlob) continue
-        if (history.has(blob)) behind.push({ blob, refs })
+        if (history.has(blob)) { behind.push({ blob, refs }); continue }
+        const live = refs.filter((r) => !archivalOf.get(r))
+        // Named by ref KIND, because "in a tag" and "in refs/backup" send a reader to different
+        // places, and neither is a branch anyone should be told to rescue.
+        if (live.length === 0) preserved.push({
+            blob, refs: [...refs].sort(), kinds: [...new Set(refs.map((r) => kindOf.get(r)))].sort(),
+        })
         else divergent.push(entry)
     }
 
+    // ONE BATCH for every title the full tier will show (KTD16); the summary tier shows none.
+    const titles = summary ? new Map()
+        : blobTitles([...(baseBlob ? [baseBlob] : []), ...divergent.map(([b]) => b), ...(all ? behind.map((b) => b.blob) : [])])
+
+    const build = ([blob, refs]) => {
+        const sorted = [...refs].sort()
+        const cluster = {
+            blob,
+            refs: sorted,
+            liveRefs: sorted.filter((r) => !archivalOf.get(r)),
+            archivalRefs: sorted.filter((r) => archivalOf.get(r)),
+            isBaseline: blob === baseBlob,
+        }
+        if (summary) return cluster
+        // Against the merge-base of the first carrying ref, so the number is what this branch
+        // ADDED rather than how far the baseline has moved since.
+        cluster.added = blob === baseBlob ? null : addedSinceMergeBase(base, sorted[0], path, blob)
+        cluster.title = titles.get(blob) ?? null
+        cluster.branches = sorted.slice(0, maxBranchesPerCluster).map((r) => branchFacts(r, prs, base))
+        cluster.preview = blob === baseBlob ? null : previewOf(cluster.added, blob)
+        return cluster
+    }
+
     return {
-        path, ok: true, found: true, baseline: base, onBaseline: baseBlob !== null,
+        path, ok: true, found: true, detail, baseline: base, onBaseline: baseBlob !== null,
         refsCarrying: blobs.size,
-        refsTotal: refs.length,
+        liveRefsCarrying: [...blobs.keys()].filter((r) => !archivalOf.get(r)).length,
+        ...scope,
+        at: atResult,
         baselineCluster: baseBlob ? build([baseBlob, versions.get(baseBlob)]) : null,
         divergent: divergent.map(build).sort((a, b) => b.refs.length - a.refs.length),
+        preserved,
         behind: {
             versions: behind.length,
             refs: behind.reduce((n, b) => n + b.refs.length, 0),

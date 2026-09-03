@@ -176,7 +176,13 @@ export function blobsForPath(refs, path) {
     return { ok: true, blobs: out }
 }
 
-/** Every (blob, path) pair under a pathspec on one ref. */
+/**
+ * Every (blob, path) pair under one pathspec - or several - on one ref.
+ *
+ * SEVERAL PATHSPECS IN ONE CALL, because the cost of an index is the fork count: the corpus index
+ * runs this once per ref, and widening it from one docs area to three as three calls would have
+ * tripled a 1.3s pass to answer the same question.
+ */
 export function treeEntries(ref, pathspec) {
     // `-z`, because git C-QUOTES a path containing non-ASCII or special characters unless told
     // otherwise - wrapping it in quotes with octal escapes. Splitting the default output on tab
@@ -187,7 +193,8 @@ export function treeEntries(ref, pathspec) {
     // failed ls-tree returned `[]`, which corpusIndex read as "this branch carries no notes". If
     // the failing ref were the BASELINE, basePaths would empty and every landed note would report
     // as stranded - a plumbing failure feeding a headline number, unreported.
-    const res = exec('git', ['ls-tree', '-r', '-z', ref, '--', pathspec])
+    const specs = Array.isArray(pathspec) ? pathspec : [pathspec]
+    const res = exec('git', ['ls-tree', '-r', '-z', ref, '--', ...specs])
     if (!res.ok) return { ok: false, entries: [] }
     const entries = res.out.split('\0').filter((r) => r.length > 0).map((rec) => {
         const [meta, path] = rec.split('\t')
@@ -195,6 +202,52 @@ export function treeEntries(ref, pathspec) {
         return { blob: cols[2], path }
     }).filter((e) => e.blob && e.path)
     return { ok: true, entries }
+}
+
+/**
+ * The CONTENT of many blobs, in ONE process - `git cat-file --batch`, the full-content sibling of
+ * the `--batch-check` that `blobsForPath` already relies on.
+ *
+ * WHY A BATCH. Titles were read with one `cat-file -p` per blob, memoised per process. That is fine
+ * for `note drift`, which asks for a few dozen, and not for an index over three docs areas across
+ * every ref, where every off-baseline document needs its title and the session-start budget has no
+ * room for a fork per document. The plan's KTD16 makes this the only way a title is read.
+ *
+ * PARSED IN BYTES, NOT CHARACTERS. Each record is `<sha> <type> <size>\n`, then exactly `size`
+ * BYTES, then `\n`. A note with a non-ASCII character is longer in bytes than in characters, so
+ * slicing a decoded string by `size` walks off the end of one record into the header of the next -
+ * and every title after that point is garbage that looks like a title. The subprocess is therefore
+ * read as a Buffer and cut by byte offsets; decoding happens per blob, after the cut.
+ *
+ * A missing blob comes back `<sha> missing` and is simply absent from the map. `{ok}` for the
+ * reason every batch here carries it: a failed cat-file and an empty request both produce an
+ * empty map, and only one of them is an answer.
+ *
+ * @returns {{ok: boolean, contents: Map<string, string>}} blob -> its content, as utf8
+ */
+export function blobContents(blobs) {
+    const contents = new Map()
+    if (blobs.length === 0) return { ok: true, contents }
+    // `encoding: null` is how execFileSync is asked for a Buffer. The documented alias `'buffer'`
+    // throws "Unknown encoding: buffer" on Node 25, and `exec` reports a throw as a failed command -
+    // so the first cut of this returned an empty map that read as "no blob has a title".
+    const res = exec('git', ['cat-file', '--batch'], { input: `${blobs.join('\n')}\n`, encoding: null })
+    if (!res.ok) return { ok: false, contents }
+    const buf = Buffer.isBuffer(res.out) ? res.out : Buffer.from(res.out ?? '')
+    let at = 0
+    while (at < buf.length) {
+        const eol = buf.indexOf(0x0a, at)
+        if (eol < 0) break
+        const header = buf.subarray(at, eol).toString('utf8').split(' ')
+        at = eol + 1
+        // `<sha> missing` has two fields; a hit has three, the last being the byte size.
+        if (header.length < 3) continue
+        const size = Number(header[2])
+        if (!Number.isInteger(size)) return { ok: false, contents }
+        contents.set(header[0], buf.subarray(at, at + size).toString('utf8'))
+        at += size + 1 // the record's trailing newline
+    }
+    return { ok: true, contents }
 }
 
 /** Line-level size of the difference between two blobs, without checking anything out. */
@@ -208,6 +261,38 @@ export function blobDiffStat(a, b) {
     if (!first) return { added: 0, removed: 0, identical: true }
     const [added, removed] = first.split('\t')
     return { added: Number(added), removed: Number(removed), identical: false }
+}
+
+/**
+ * The lines blob `b` ADDS over blob `a`, in order - the raw material for "what does this version
+ * add", which is the evidence the divergence header shows instead of calling anything "newer".
+ *
+ * `a` may be null, meaning there is nothing to diff against - the branch created the file after it
+ * diverged - and then every line of `b` is an addition. That is one `cat-file -p` rather than a diff
+ * against the empty blob, whose object name depends on the repository's hash algorithm.
+ *
+ * `git diff <blob> <blob>` prints a unified diff of the two objects with no working tree involved.
+ * The `+++ b/...` header line starts with the same character as an added line, so added lines are
+ * taken only from inside hunks - after the first `@@` - rather than by excluding a `+++` prefix,
+ * which would also drop a content line that happens to begin `++`.
+ *
+ * @returns {{ok: boolean, lines: string[]}}
+ */
+export function blobDiffAddedLines(a, b) {
+    if (a === b) return { ok: true, lines: [] }
+    if (a === null) {
+        const whole = exec('git', ['cat-file', '-p', b])
+        return whole.ok ? { ok: true, lines: lines(whole.out) } : { ok: false, lines: [] }
+    }
+    const res = exec('git', ['diff', a, b])
+    if (!res.ok) return { ok: false, lines: [] }
+    const added = []
+    let inHunk = false
+    for (const l of res.out.split('\n')) {
+        if (l.startsWith('@@')) inHunk = true
+        else if (inHunk && l.startsWith('+')) added.push(l.slice(1))
+    }
+    return { ok: true, lines: added }
 }
 
 /**

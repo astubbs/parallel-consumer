@@ -384,6 +384,67 @@ function buildMixedFixture() {
     return dir
 }
 
+/**
+ * A CORPUS THAT SPANS THE THREE DOCS AREAS, holding every state the divergence header reports.
+ *
+ *   master            docs/inflight/note.md, docs/solutions/ci/sol.md, docs/plans/2026-01-01-001-plan.md
+ *   adds-heading      note.md plus a new `## ...` section - a divergent version that ADDED A HEADING
+ *   adds-line         note.md plus one plain line - a divergent version that added NO heading
+ *   only-here         docs/inflight/branch-only.md, which master has never had
+ *   tag preserved/parked
+ *                     note.md with content no live ref carries - its branch was deleted after
+ *                     tagging, which is how this repository parks work before a re-cut
+ *
+ * ITS OWN REPOSITORY, NOT THE SHARED FIXTURE. The drift checks assert exact counts on shared.md
+ * (`divergent.length === 1`), and the mutant phase re-runs every check against whatever the earlier
+ * ones left behind - so growing that note's divergent set here would turn an unrelated check red
+ * one phase later, with nothing pointing back at the cause.
+ */
+function buildDocsFixture() {
+    const { dir, git, commit } = windowRepo()
+    const write = (rel, body) => {
+        mkdirSync(join(dir, dirname(rel)), { recursive: true })
+        writeFileSync(join(dir, rel), body)
+    }
+    const NOTE = '# The note\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\nbody\n'
+    write('docs/inflight/note.md', NOTE)
+    write('docs/solutions/ci/sol.md', '# A solved problem\n\nfixed\n')
+    write('docs/plans/2026-01-01-001-plan.md', '# A plan\n\nsteps\n')
+    commit('the corpus')
+
+    git('checkout', '-q', '-b', 'adds-heading')
+    write('docs/inflight/note.md', `${NOTE}\n## What the branch learned\n\ndetail\n`)
+    commit('add a heading')
+
+    git('checkout', '-q', '-b', 'adds-line', 'master')
+    write('docs/inflight/note.md', `${NOTE}one plain added line\n`)
+    commit('add a line')
+
+    git('checkout', '-q', '-b', 'only-here', 'master')
+    write('docs/inflight/branch-only.md', '# Only here\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\nz\n')
+    commit('a note master never had')
+
+    git('checkout', '-q', '-b', 'to-tag', 'master')
+    write('docs/inflight/note.md', `${NOTE}parked before a re-cut\n`)
+    commit('parked')
+    git('tag', 'preserved/parked')
+    git('checkout', '-q', 'master')
+    git('branch', '-q', '-D', 'to-tag')
+    return dir
+}
+
+let DOCS = null
+const docsFixture = () => (DOCS ??= buildDocsFixture())
+
+const views = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'views.mjs')).href)
+const perfOf = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'perf.mjs')).href)
+
+/** How many times one subcommand ran since the last perfReset, read off the perf report. */
+const callCount = (report, kind) => {
+    const m = report.match(new RegExp(`${kind.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}\\s+(\\d+) call`))
+    return m ? Number(m[1]) : 0
+}
+
 /** Run `fn` with the process inside `dir`, restoring the previous cwd whatever happens. */
 async function inDir(dir, fn) {
     const before = cwd()
@@ -674,7 +735,7 @@ const CHECKS = [
             })
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'prior-art.mjs'),
-            "            'docs/', ':(exclude)docs/plans/', ':(exclude)docs/solutions/', ':(exclude)docs/inflight/']],",
+            "            'docs/', ...DOC_AREAS.map((a) => `:(exclude)${a.dir}/`)]],",
             "            'docs/*.md']],"),
     },
     {
@@ -886,9 +947,8 @@ const CHECKS = [
         // exists for. This keeps the bookkeeping intact and corrupts only the SPLIT, so a historical
         // blob lands in `divergent` and the final `.every(...)` is what goes red.
         mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
-            '        if (history.has(blob)) behind.push({ blob, refs })\n        else divergent.push(entry)',
-            '        if (history.has(blob)) { behind.push({ blob, refs }); divergent.push(entry) }\n'
-            + '        else divergent.push(entry)'),
+            '        if (history.has(blob)) { behind.push({ blob, refs }); continue }',
+            '        if (history.has(blob)) { behind.push({ blob, refs }); divergent.push(entry); continue }'),
     },
     {
         id: 'drift-clusters-by-blob-not-by-ref',
@@ -1671,6 +1731,215 @@ const CHECKS = [
         mutate: (binDir) => patch(join(binDir, 'lib', 'branches.mjs'),
             "import { NOTES_DIR, REPO } from './repo.mjs'",
             "const REPO = 'astubbs/parallel-consumer'\nimport { NOTES_DIR } from './repo.mjs'"),
+    },
+    // ---------------------------------------------------------------------------------------------
+    // THE DOCUMENT CONTEXT QUERY - one `drift` at two costs, over three docs areas and every ref.
+    // docs/plans/2026-09-03-001-feat-inflight-docs-context-query-plan.md, unit U1.
+    // ---------------------------------------------------------------------------------------------
+    {
+        id: 'summary-tier-answers-with-one-merge-base',
+        why: 'the read-time hook runs on every docs read inside a 500ms budget; a summary that quietly does the full work per cluster blows it on a busy note',
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            const perf = await perfOf(binDir)
+            return inDir(docsFixture(), () => {
+                const full = n.drift('docs/inflight/note.md', { prs: new Map(), at: { ref: 'adds-heading' } })
+                if (!full.found || full.divergent.length === 0) return false
+                perf.perfReset()
+                const s = n.drift('docs/inflight/note.md', { detail: 'summary', at: { ref: 'adds-heading' } })
+                const report = perf.perfReport()
+                if (!s.found || s.detail !== 'summary') return false
+                // The copy at hand is this branch's own edit, so its size costs one merge-base and
+                // one diff - and no other cluster gets either.
+                if (callCount(report, 'git merge-base') !== 1 || callCount(report, 'git diff') !== 1) return false
+                if (s.at?.state !== 'own-divergent') return false
+                // Same divergent set as the full tier, without the branch facts the full tier adds.
+                const same = new Set(full.divergent.map((c) => c.blob))
+                return s.divergent.length === same.size && s.divergent.every((c) => same.has(c.blob))
+                    && s.divergent.every((c) => c.branches === undefined)
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
+            "    const summary = detail === 'summary'", '    const summary = false'),
+    },
+    {
+        id: 'preview-shows-added-headings-else-the-first-added-line',
+        why: 'the header shows evidence of what a divergent version adds, never a claim that it is newer',
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            return inDir(docsFixture(), () => {
+                const d = n.drift('docs/inflight/note.md', { prs: new Map() })
+                if (!d.found) return false
+                const byRef = (ref) => d.divergent.find((c) => c.refs.includes(ref))
+                const heading = byRef('adds-heading')?.preview
+                const line = byRef('adds-line')?.preview
+                if (!heading || !line) return false
+                if (!(heading.headings.length === 1 && heading.headings[0] === '## What the branch learned')) return false
+                return line.headings.length === 0 && line.firstLine === 'one plain added line'
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
+            '        headings: added.filter((l) => /^#{1,6}\\s/.test(l)),',
+            '        headings: [],'),
+    },
+    {
+        id: 'a-tag-only-version-is-preserved-not-divergent',
+        why: 'a version parked in a tag before a re-cut is preserved on purpose; counting it as divergent sends someone to rescue what nobody lost',
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            return inDir(docsFixture(), () => {
+                const d = n.drift('docs/inflight/note.md', { prs: new Map() })
+                if (!d.found) return false
+                if (d.divergent.some((c) => c.refs.includes('preserved/parked'))) return false
+                const parked = d.preserved.find((p) => p.refs.includes('preserved/parked'))
+                // Named by its ref KIND, which is what a reader needs to know where to look.
+                return !!parked && parked.kinds.includes('tag') && d.divergent.length === 2
+                    && d.archivalRefsTotal >= 1 && d.liveRefsTotal + d.archivalRefsTotal === d.refsTotal
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
+            '        if (live.length === 0) preserved.push', '        if (false) preserved.push'),
+    },
+    {
+        id: 'copy-state-names-baseline-own-divergent-and-branch-only',
+        why: 'a branch-only document mistaken for a landed one, or an own edit reported as divergence elsewhere, is the stale-copy incident again',
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            return inDir(docsFixture(), () => {
+                const at = (path, ref) => n.drift(path, { prs: new Map(), at: { ref } }).at
+                const base = at('docs/inflight/note.md', 'master')
+                const own = at('docs/inflight/note.md', 'adds-line')
+                const only = at('docs/inflight/branch-only.md', 'only-here')
+                if (base?.state !== 'baseline') return false
+                if (own?.state !== 'own-divergent' || !(own.added?.added > 0)) return false
+                return only?.state === 'branch-only'
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
+            "    if (blob === baseBlob) return 'baseline'", "    if (blob === baseBlob) return 'own-divergent'"),
+    },
+    {
+        id: 'corpus-index-spans-every-docs-area',
+        why: 'every delivery renders the same corpus; an index that reads notes alone hides the solutions and plans that live only on branches',
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            return inDir(docsFixture(), () => {
+                const index = n.corpusIndex()
+                if (!index.ok) return false
+                return index.byPath.has('docs/solutions/ci/sol.md')
+                    && index.byPath.has('docs/plans/2026-01-01-001-plan.md')
+                    && index.byPath.has('docs/inflight/note.md')
+                    && index.byPath.has('docs/inflight/branch-only.md')
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
+            'export function corpusIndex({ areas = DOC_AREAS } = {})',
+            'export function corpusIndex({ areas = DOC_AREAS.filter((a) => a.dir === NOTES_DIR) } = {})'),
+    },
+    {
+        id: 'note-find-still-reads-notes-only',
+        why: '`note find` is a question about in-flight notes; widening the default index must not change its answer',
+        run: async (binDir) => {
+            const r = invoke(binDir, ['note', 'find', 'md'], { cwd: docsFixture() })
+            return r0(r) && r.out.includes('docs/inflight/note.md') && !r.out.includes('docs/solutions/')
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+            '                    const index = corpusIndex({ areas: NOTES_AREA })\n'
+            + '                    if (!index.ok) return { ok: false, reason: `note find:',
+            '                    const index = corpusIndex()\n'
+            + '                    if (!index.ok) return { ok: false, reason: `note find:'),
+    },
+    {
+        id: 'prior-art-sections-derive-from-doc-areas',
+        why: 'the section list was hard-coded in prior-art.mjs, and a second copy of the area list would drift the way REPO did',
+        run: async (binDir) => {
+            const p = await lib(binDir)
+            return inDir(docsFixture(), () => {
+                const r = p.priorArt(['note'], { github: false })
+                if (!r.ok || r.sections.length !== 4) return false
+                // Byte-identical to the headings the hard-coded list produced, captured before the
+                // derivation - the point is that deriving them changed nothing a reader sees.
+                const expected = [
+                    ['1', 'Prior investigations - docs/plans/', ['docs/plans/']],
+                    ['2', 'Solved problems - docs/solutions/', ['docs/solutions/']],
+                    ['3', 'In-flight state - docs/inflight/', ['docs/inflight/']],
+                    ['4', 'Everything else under docs/',
+                        ['docs/', ':(exclude)docs/plans/', ':(exclude)docs/solutions/', ':(exclude)docs/inflight/']],
+                ]
+                return r.sections.every((s, i) => s.n === expected[i][0] && s.heading === expected[i][1]
+                    && JSON.stringify(s.pathspec) === JSON.stringify(expected[i][2]))
+                    && r.sections[2].hits.some((h) => h.path === 'docs/inflight/note.md')
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'repo.mjs'), "name: 'Solved problems'", "name: 'Solved problem'"),
+    },
+    {
+        id: 'blob-titles-are-read-in-one-batch',
+        why: 'one cat-file per blob is a fork per document, and the session-start budget has no room for it',
+        run: async (binDir) => {
+            const g = await gitlib(binDir)
+            const n = await notes(binDir)
+            const perf = await perfOf(binDir)
+            return inDir(docsFixture(), () => {
+                const blobs = g.treeEntries('master', 'docs').entries.map((e) => e.blob)
+                if (blobs.length < 3) return false
+                perf.perfReset()
+                const titles = n.blobTitles(blobs)
+                if (callCount(perf.perfReport(), 'git cat-file') !== 1) return false
+                if (titles.size !== blobs.length) return false
+                return blobs.every((b) => titles.get(b) === n.blobTitle(b))
+                    && titles.get(blobs[0]) !== null
+            })
+        },
+        // Forks once per blob, which is the loop the batch replaced.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'git.mjs'),
+            'export function blobContents(blobs) {',
+            'export function blobContents(blobs) {\n'
+            + "    return { ok: true, contents: new Map(blobs.map((b) => [b, exec('git', ['cat-file', '-p', b]).out])) }"),
+    },
+    {
+        id: 'source-frame-puts-the-label-first-and-the-command-last',
+        why: 'an agent tells a fresh signal from a repeat by its first line, and always needs the next command',
+        run: async (binDir) => {
+            const v = await views(binDir)
+            const cases = [
+                ['header', 'docs/inflight/x.md', 'docs context: divergence header for docs/inflight/x.md'],
+                ['terms', ['RetryQueue', 'writeLock'], 'docs context: prompt terms RetryQueue, writeLock'],
+                ['branch', null, 'docs context: branch facts'],
+                ['index', null, 'docs context: session index'],
+            ]
+            return cases.every(([kind, subject, label]) => {
+                const framed = v.sourceFrame(kind, subject, 'body line one\nbody line two', 'bin/inflight.mjs docs')
+                const ls = framed.split('\n')
+                return ls[0] === label && ls[ls.length - 1] === 'more: bin/inflight.mjs docs'
+                    && ls.includes('body line two')
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'views.mjs'),
+            '    return [label, body.trimEnd(), `more: ${moreCommand}`].join(\'\\n\')',
+            '    return [`more: ${moreCommand}`, body.trimEnd(), label].join(\'\\n\')'),
+    },
+    {
+        id: 'the-divergence-header-previews-and-names-the-rest-command',
+        why: 'a header that shows counts without the evidence or the next command is an assertion, not a finding',
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            const v = await views(binDir)
+            return inDir(docsFixture(), () => {
+                const full = n.drift('docs/inflight/note.md', { prs: new Map(), at: { ref: 'master' } })
+                const box = v.formatDivergenceHeader(full, { tier: 'full' })
+                if (!box.includes('## What the branch learned') || !box.includes('one plain added line')) return false
+                if (!box.includes('bin/inflight.mjs note drift docs/inflight/note.md')) return false
+                if (!box.includes('adds-heading') || !/preserved/.test(box)) return false
+                const s = n.drift('docs/inflight/note.md', { detail: 'summary', at: { ref: 'master' } })
+                const line = v.formatDivergenceHeader(s, { tier: 'summary' })
+                // One line, counting versions and refs, naming the scope and the copy state.
+                return line.length > 0 && !line.trim().includes('\n') && /2 divergent versions/.test(line)
+                    && /refs searched/.test(line) && /baseline/.test(line) && /1 preserved/.test(line)
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'views.mjs'),
+            '    const rest = `bin/inflight.mjs note drift ${d.path}`', "    const rest = 'bin/inflight.mjs note drift'"),
     },
 ]
 

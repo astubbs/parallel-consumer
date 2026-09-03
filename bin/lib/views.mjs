@@ -72,12 +72,130 @@ export function formatDrift(d) {
         }
     }
 
+    // A version held ONLY by a tag or a refs/backup ref was listed above as if it were a branch,
+    // with a merge-base size and a "branch name" nobody can check out. It is preserved on purpose,
+    // so it gets its own line - present, because the corpus looks everywhere, and labelled.
+    if ((d.preserved ?? []).length > 0) {
+        out.push(`  Preserved, not in flight: ${plural(d.preserved.length, 'version')} held only by archival refs `
+            + `(${[...new Set(d.preserved.flatMap((p) => p.kinds))].join(', ')}):`)
+        for (const p of d.preserved) out.push(`      ${p.blob.slice(0, 9)}  ${p.refs.join(', ')}`)
+        out.push('')
+    }
     if (d.behind.versions > 0) {
         out.push(`  Not shown: ${plural(d.behind.versions, 'version')} on ${plural(d.behind.refs, 'ref')} `
             + `that ${d.baseline} itself once held - those branches are simply behind, which is`)
         out.push('  not drift and gets worse on its own. Pass --all to see them.')
     }
     return out.join('\n')
+}
+
+// --- The document context query, rendered. ------------------------------------------------------
+//
+// `formatDivergenceHeader` is the header every delivery of the context query shows before a
+// document - the read-time hook (summary tier, one line), `docs show` and `docs header` (full tier,
+// a box). It is named for what it is rather than `formatHeader`, because prior-art.mjs already
+// exports a `formatHeader` and bin/inflight.mjs imports it; two exports of one name across two
+// libraries is an alias at every call site and a wrong pick waiting to happen.
+//
+// DIVERGENCE IS THE ONLY CLAIM. Nothing here says a version is "newer" - it says how much the
+// version added, and what: headings, else its first added line. Evidence, and the command for more.
+
+const copyStateText = (d) => {
+    const a = d.at
+    if (!a) return null
+    const size = (s) => (!s ? '' : s.diffFailed ? ' (size unknown - the diff failed)'
+        : s.newFile ? ' (created on this branch)' : ` (+${s.added} -${s.removed} since its merge-base)`)
+    switch (a.state) {
+        case 'baseline': return `this copy is the baseline's version (${d.baseline})`
+        case 'behind': return `this copy is a version ${d.baseline} once held - it is BEHIND, not divergent`
+        case 'own-divergent': return `this copy is ${a.ref}'s OWN divergent version${size(a.added)}`
+        case 'branch-only': return `this copy is on NO baseline ref - branch-only${size(a.added)}`
+        case 'absent': return `${a.ref} does not carry this path`
+        default: return `copy state unknown (${a.state})`
+    }
+}
+
+const scopeText = (d) => `${d.refsTotal} refs searched (${d.liveRefsTotal} live, ${d.archivalRefsTotal} archival)`
+
+/**
+ * @param {object} d the result of `drift()` at either tier
+ * @param {{tier?: 'summary'|'full', top?: number, warnings?: {id: string, lines: string[]}[], uncommitted?: boolean}} [opts]
+ *   `uncommitted` is the hook's finding that the working-tree file differs from the committed blob
+ *   the query described (R24); the query cannot know it, so the caller says so and this prints it.
+ */
+export function formatDivergenceHeader(d, { tier = 'summary', top = 3, warnings = [], uncommitted = false } = {}) {
+    if (d.ok === false) return `${d.path}: could not answer - ${d.reason}`
+    const rest = `bin/inflight.mjs note drift ${d.path}`
+    const edited = uncommitted ? ' - the working-tree file has UNCOMMITTED edits; this describes the committed version' : ''
+    if (!d.found) {
+        return `${d.path}: at that path on none of ${scopeText(d)}`
+            + (d.at?.state === 'branch-only' ? ` - only ${d.at.ref} holds it, uncommitted to any ref` : '')
+            + edited
+    }
+    const liveCarrying = d.divergent.reduce((n, c) => n + c.liveRefs.length, 0)
+    const preserved = (d.preserved ?? []).length
+    const preservedText = preserved === 0 ? '' : `; ${preserved} preserved (${[...new Set(d.preserved.flatMap((p) => p.kinds))].join(', ')} only)`
+    const counts = d.onBaseline
+        ? `${plural(d.divergent.length, 'divergent version')} on ${plural(liveCarrying, 'live ref')}`
+        : `on NO baseline ref (branch-only); ${plural(d.liveRefsCarrying, 'live ref')} carry it, ${plural(d.divergent.length, 'version')}`
+
+    if (tier === 'summary') {
+        return `${d.path}: ${counts}; ${scopeText(d)}; ${copyStateText(d) ?? 'copy state not asked'}${preservedText}${edited}`
+    }
+
+    const out = [`=== divergence: ${d.path} ===`]
+    const warn = formatWarnings(warnings)
+    if (warn) out.push(warn.trimEnd())
+    out.push(`  ${counts} carry content ${d.baseline} has NEVER held; ${scopeText(d)}`)
+    const state = copyStateText(d)
+    if (state) out.push(`  ${state}`)
+    if (edited) out.push(`  ${edited.slice(3)}`)
+    if (preserved > 0) {
+        out.push(`  preserved, not in flight: ${plural(preserved, 'version')} held only by ${[...new Set(d.preserved.flatMap((p) => p.kinds))].join(', ')} refs - `
+            + d.preserved.map((p) => p.refs.join(', ')).join('; '))
+    }
+    // LARGEST FIRST, by what the version ADDED - the evidence of knowledge, not of recency. A version
+    // whose size is unknown sorts last rather than being given a fabricated position.
+    const size = (c) => (c.added && Number.isInteger(c.added.added) ? c.added.added : -1)
+    const shown = [...d.divergent].sort((a, b) => size(b) - size(a) || b.liveRefs.length - a.liveRefs.length).slice(0, top)
+    if (shown.length > 0) out.push(`  largest ${shown.length === 1 ? 'version' : `${shown.length} versions`}, by what each added:`)
+    for (const c of shown) {
+        const a = c.added
+        const sizeText = !a ? 'size unknown (no merge-base)' : a.diffFailed ? 'size unknown (diff failed)'
+            : a.newFile ? 'created after diverging' : `+${a.added} -${a.removed}`
+        const branches = (c.branches ?? []).filter((b) => c.liveRefs.includes(b.ref))
+        const named = branches.slice(0, 3).map((b) => `${b.ref}${b.pr ? ` [astubbs/parallel-consumer#${b.pr.number} ${b.pr.state}]` : ''}`)
+        const more = c.liveRefs.length - named.length
+        out.push(`    ${sizeText.padEnd(14)} ${named.join(', ')}${more > 0 ? ` and ${plural(more, 'more ref')}` : ''}`)
+        if (c.preview) {
+            if (c.preview.headings.length > 0) out.push(`        adds: ${c.preview.headings.map((h) => `"${h}"`).join(', ')}`)
+            else if (c.preview.firstLine !== null) out.push(`        adds: "${c.preview.firstLine}" (no heading added)`)
+            else out.push('        adds: nothing visible in a line diff')
+        }
+    }
+    if (d.divergent.length > shown.length) out.push(`    ... and ${d.divergent.length - shown.length} more`)
+    out.push(`  the rest: ${rest}`)
+    return out.join('\n')
+}
+
+/**
+ * THE FRAME EVERY INJECTED BLOCK WEARS (the plan's KTD9): a fixed source label first, so an agent
+ * can tell a fresh signal from a repeat by its first line, and the command that prints more LAST,
+ * so it always knows the next thing to run. Four sources, one renderer, so they cannot drift.
+ */
+const SOURCE_LABELS = {
+    header: (path) => `docs context: divergence header for ${path}`,
+    terms: (terms) => `docs context: prompt terms ${[].concat(terms).join(', ')}`,
+    branch: () => 'docs context: branch facts',
+    index: () => 'docs context: session index',
+}
+
+export function sourceFrame(kind, subject, body, moreCommand) {
+    const toLabel = SOURCE_LABELS[kind]
+    // An unknown kind is a programming error in the caller, and printing it is the right failure:
+    // a silent fallback label would defeat the one job the label has.
+    const label = toLabel ? toLabel(subject) : `docs context: UNKNOWN SOURCE ${kind}`
+    return [label, body.trimEnd(), `more: ${moreCommand}`].join('\n')
 }
 
 export function formatStranded(clusters, index) {
