@@ -271,7 +271,7 @@ merged as a no-op - `git ls-files | grep -c CLAUDE.md` returned **0**. The three
 negated individually rather than with a blanket `!CLAUDE.md`; the reasoning is in `.gitignore`
 itself, next to the rule.
 
-**`.claude/settings.json`** - seventeen hook scripts across twenty registrations, and the file is
+**`.claude/settings.json`** - nineteen hook scripts across twenty-two registrations, and the file is
 **tracked**. The entries below are the ones whose design decisions are worth recording here;
 `remind-inflight-on-push.sh` and `check-history-rewrite.sh` carry theirs in their own headers.
 The count is stated because it drifted: this said "five" while the file registered seven, which is
@@ -452,10 +452,65 @@ what this one got wrong was not calling the tool but owning the tool's correctne
   inject the thought at the decision, not to gate anything. Matching is deliberately broad on verbs
   and narrow on nouns: a false positive costs a few hundred tokens, a false negative costs the thing
   it exists to prevent.
+- `UserPromptSubmit` also runs `.claude/hooks/inject-docs-for-prompt.mjs`, the per-prompt delivery
+  of the document context query: when a prompt names a mechanism - a CamelCase class, a snake_case
+  or kebab-case name, a path, a backticked span, an issue number - it puts the titles and paths of
+  the documents carrying that name across every live ref beside the prompt, each marked
+  `(off baseline)` or `(divergent elsewhere)`, ranked frontmatter field first, then heading, then
+  body under a per-term cap, twelve titles at most with a `+N more` tail and the
+  `prior-art --headings` command for the rest. Silent when nothing matches; once per document per
+  divergence state per session. It runs `termsFromPrompt` and, only when a term survives, imports
+  the git-touching modules and runs `matchDocs` - one `git grep` over the live refs, never a
+  corpus-index build (both in `bin/lib/terms.mjs`); the marks come from the same `drift` summary
+  the read-time header uses. Budget 2500 ms cold when it fires and 100 ms on the silent path,
+  measured at about 1550 ms firing on `ProducerManager` and about 65 ms silent; the figures live in
+  its header, with the method and the knob for a slower host. **`UserPromptSubmit` delivering
+  `additionalContext` is already verified above** by `inject-merge-checklist.sh`, which uses the
+  same envelope; this hook adds no new delivery claim.
 
-- `PostToolUse` on `Bash` runs `.claude/hooks/after-push-check-ci.sh`, the only registration on that
-  event. Why it has to be there rather than any earlier layer is above, under `PostToolUse`; it is
-  listed here so the registry is not silent about an event the rest of the file never uses.
+- `PostToolUse` on `Bash` runs `.claude/hooks/after-push-check-ci.sh`. Why it has to be there
+  rather than any earlier layer is above, under `PostToolUse`.
+- `PostToolUse` on `Read|Bash` runs `.claude/hooks/inject-docs-divergence.mjs`, the read-time
+  delivery of the document context query: when the agent has just read a file under
+  `docs/inflight/`, `docs/solutions/` or `docs/plans/` - through the Read tool, or a Bash command
+  whose tokens name the path - it puts the divergence header's summary line beside the read: how
+  many versions of that document exist on other live refs carrying content the baseline has never
+  held, whether this copy is the baseline's, its own branch's, or branch-only, whether the
+  working-tree file has uncommitted edits, and the command for the full header. Once per session
+  per divergence state; it fires again when another branch adds a version, because that is news.
+  It imports `bin/lib/notes.mjs` directly and calls the same `drift` query `note drift` renders,
+  so the hook and the command cannot disagree. Budget 500 ms cold, measured at about 240 ms
+  firing on one path and about 70 ms silent; the figures live in its header, with the method.
+
+  **`PostToolUse` on the Read tool delivers `additionalContext`, verified on 2.1.258 before the
+  hook was written** - the *Settled by testing* entry below has the method. `PostToolUse` was
+  chosen over `PreToolUse` allow-with-context because the context reaches the model at the same
+  moment (with the tool result, before its next action) without putting the query's latency in
+  front of the read and without the fail-closed shape a permission decision carries.
+
+  **Bash coverage is best-effort by path token, and says so.** `cat docs/inflight/x.md` fires;
+  `cat "$f"`, a glob, or a path built by a pipeline does not, for the reason the pre-commit gate
+  refuses `git -C "$W"`: the hook reads the command before the shell expands it. The tree is the
+  one the event names - a leading literal `cd`, then the payload's `cwd`, with
+  `$CLAUDE_PROJECT_DIR` last, per the 2026-08-31 wrong-directory solution - and the shared
+  derivation now lives in `.claude/hooks/lib/hook-common.mjs` with the per-session seen-store,
+  extracted from the solutions hook so there is one copy of each. **A directory change the
+  leading-`cd` rule did not consume keeps only absolute tokens**: after `(cd <wt> && cat
+  docs/inflight/x.md)`, `git -C <wt> diff -- docs/inflight/x.md`, a `pushd`, `--git-dir` or
+  `GIT_DIR=`, a relative path resolved against the payload's `cwd` would describe the session
+  tree's copy of a file the command read in another worktree - every worktree carries the same
+  note paths - so the relative tokens are dropped, silence over a guess. A command naming more
+  than four corpus paths gets headers for the first four and one trailing line naming how many
+  were not checked, with a `docs header` command for each; and on a shallow or never-fetched
+  clone the line opens with `UNRELIABLE (<id> - run: <remedy>):`, because the divergent set is
+  computed against a truncated history and the count that follows is confidently wrong.
+
+  **It fails open, and leaves a record.** Every failure path exits 0 with nothing on stdout; the
+  failure is written to the in-flight tool's cache (`delivery-failures.json`, seven-day policy)
+  and `inflight docs` prints a one-line notice while it exists, because a hook broken for a week
+  is otherwise indistinguishable from one with nothing to say. Self-tested by
+  `bin/test-check-docs-hooks.mjs` against a fixture repository holding every state the header
+  reports, with a mutant control and a git shim proving the silent path makes no git call.
 - `SessionStart` runs `.claude/hooks/inject-recorded-knowledge.sh`, which lists the **titles** of
   every `docs/solutions/` write-up, the open items in `docs/inflight/`, and the size of
   `docs/plans/`. Titles only, once per session, no bodies - the length tracks the corpus, so no
@@ -553,10 +608,10 @@ would miss the subagent row entirely.
 **A degraded read is LOUD, never short.** A section that cannot be built says `COULD NOT BE BUILT` or
 `UNKNOWN` and names the reason, instead of being omitted - because a shorter block that reads
 complete is indistinguishable from a healthy one, which is this hook's own failure signature. That is
-measured here rather than assumed: `inject-recorded-knowledge.sh` uses GNU-only `xargs -r`, and under
-a BSD `xargs` its Registers section drops from 13 entries to 4 while closed notes get relabelled as
-mis-tagged. That defect belongs to astubbs/parallel-consumer#341's class and is fixed there, not
-here. Distinguishing a *confirmed* absence from a failure matters just as much in the other
+measured here rather than assumed: `inject-recorded-knowledge.sh` used GNU-only `xargs -r` while its
+scan was bash, and under a BSD `xargs` its Registers section dropped from 13 entries to 4 while closed
+notes got relabelled as mis-tagged. That defect belonged to astubbs/parallel-consumer#341's class and
+was fixed there, not here; the scan has since moved into `bin/inflight.mjs docs index`. Distinguishing a *confirmed* absence from a failure matters just as much in the other
 direction: `gh` exits non-zero for "this branch has no PR" exactly as it does for offline, so the
 no-PR case is read off stderr and reported as a fact - otherwise every fresh branch prints an alarm,
 and an alarm that is always on gets scrolled past.
@@ -700,6 +755,19 @@ Until then this is an assumption, and a rule that does not arrive is a rule that
   the same question answered that it had seen nothing. A `PreToolUse` hook on a dispatch therefore
   cannot pre-empt that dispatch - it can only inform what the caller does next. Choose the event for
   *when* it fires, and then be honest in the text about what that instant can and cannot promise.
+- **`PostToolUse` on the Read tool delivers `additionalContext`, and so does `PreToolUse`
+  allow-with-context on it.** **Verified against 2.1.258**, before the read-time divergence hook
+  was written rather than after: two throwaway hooks registered through `claude -p --settings
+  <file>` - one `PostToolUse` on matcher `Read`, one `PreToolUse` on `Read` emitting
+  `permissionDecision: allow` - each carried a distinct passphrase, and a `claude -p` told to Read
+  a small file and report every hook context it received quoted both back, labelled
+  `PostToolUse:Read hook additional context` and `PreToolUse:Read hook additional context`, and
+  described them as arriving beside the tool result. Both hooks also logged their payloads: the
+  `PostToolUse` one carries `tool_name`, `tool_input.file_path`, `cwd`, `session_id` and a
+  `tool_response` with the file's content - so a post-read hook can name the file without reading
+  it again. The registration shape that worked is the one in `.claude/settings.json`: a
+  `PostToolUse` group with `"matcher": "Read|Bash"` and a `node "$CLAUDE_PROJECT_DIR/..."`
+  command. The probe hooks and settings file were deleted after the run.
 - **Injected text that reads like an instruction gets flagged as prompt injection.** Not a harness
   behaviour but a reliable model one, and it shapes how these hooks must be written: probes whose
   `additionalContext` said "repeat this string verbatim" were quoted back with an unprompted warning
