@@ -12,10 +12,15 @@ import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.state.ShardManager;
 import bz.stub.parallelconsumer.state.WorkManager;
 import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
 
 import java.time.Clock;
+import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * Minimum dependency injection system, modled on how Dagger works.
@@ -24,6 +29,7 @@ import java.time.Clock;
  *
  * @author Antony Stubbs
  */
+@Slf4j
 public class PCModule<K, V> {
 
     protected ParallelConsumerOptions<K, V> optionsInstance;
@@ -57,18 +63,70 @@ public class PCModule<K, V> {
 
     private ProducerWrapper<K, V> producerWrapper;
 
+    /**
+     * The wrapper around the producer PC uses: the caller's instance, or the one PC builds from
+     * {@link ParallelConsumerOptions#getProducerConfig()}.
+     */
     protected ProducerWrapper<K, V> producerWrap() {
         if (this.producerWrapper == null) {
-            this.producerWrapper = new ProducerWrapper<>(options());
+            this.producerWrapper = options().isProducerInstanceSupplied()
+                    ? new ProducerWrapper<>(options())
+                    : wrapPcBuilt(buildProducer(new LinkedHashMap<>(options().getProducerConfig())));
         }
         return producerWrapper;
+    }
+
+    /**
+     * Wraps a producer PC just built, closing it if the wrapper cannot be constructed around it: the wrapper's
+     * transactional discovery reads a {@code KafkaProducer} field reflectively, and a subclass of
+     * {@code KafkaProducer} does not declare that field, so the constructor throws - and the producer, already
+     * running its network thread, is referenced by nobody else. Throwable, not RuntimeException: that reflective
+     * failure is a checked exception thrown sneakily, which a narrower catch lets straight through.
+     */
+    private ProducerWrapper<K, V> wrapPcBuilt(Producer<K, V> producer) {
+        try {
+            return new ProducerWrapper<>(options(), producer);
+        } catch (Throwable wrapFailed) {
+            closeQuietly(producer, "the producer built for a wrapper that failed to construct");
+            throw wrapFailed;
+        }
+    }
+
+    private void closeQuietly(Producer<K, V> producer, String what) {
+        try {
+            producer.close(Duration.ZERO);
+        } catch (RuntimeException closeFailed) {
+            log.debug("Closing {} also failed", what, closeFailed);
+        }
+    }
+
+    /**
+     * Constructs the producer on the configuration path: {@code new KafkaProducer<>(config)}, serializers and all,
+     * exactly as the caller would have. The substitution seam for a test that needs the producer PC builds to be a
+     * {@link org.apache.kafka.clients.producer.MockProducer}. The map is a copy, so an override may read or edit it
+     * without touching the options.
+     */
+    protected Producer<K, V> buildProducer(Map<String, Object> producerConfig) {
+        return new KafkaProducer<>(producerConfig);
     }
 
     private ProducerManager<K, V> producerManager;
 
     protected ProducerManager<K, V> producerManager() {
         if (producerManager == null) {
-            this.producerManager = new ProducerManager<>(producerWrap(), consumerManager(), workManager(), options());
+            ProducerWrapper<K, V> wrapper = producerWrap();
+            try {
+                this.producerManager = new ProducerManager<>(wrapper, consumerManager(), workManager(), options());
+            } catch (Throwable constructionFailed) {
+                // The manager's constructor initialises transactions, which can throw (a coordinator that is not
+                // there yet, say). A producer PC built is PC's to close: nobody else holds it, and the processor that
+                // failed to construct is never returned to the caller, so without this every failed start-up leaks
+                // a producer and its network thread. The caller's own instance is the caller's to close.
+                if (!options().isProducerInstanceSupplied()) {
+                    closeQuietly(wrapper, "the producer built for a manager that failed to construct");
+                }
+                throw constructionFailed;
+            }
         }
         return producerManager;
     }

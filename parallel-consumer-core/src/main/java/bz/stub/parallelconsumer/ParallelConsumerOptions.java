@@ -22,6 +22,7 @@ import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.common.annotation.InterfaceStability;
 
 import java.time.Duration;
+import java.util.Map;
 import java.util.Objects;
 import java.util.function.Function;
 
@@ -39,8 +40,9 @@ import static java.time.Duration.ofMillis;
  * If you want to go deeper, look at {@link #defaultMessageRetryDelay}, {@link #retryDelayProvider} and
  * {@link #commitMode}.
  * <p>
- * Note: The only required option is the {@link #consumer} ({@link #producer} is only needed if you use the Produce
- * flows). All other options have sensible defaults.
+ * Note: The only required option is the {@link #consumer} (a producer - {@link #producerConfig} for PC to build one
+ * from, or a {@link #producer} instance - is only needed if you use the Produce flows). All other options have
+ * sensible defaults.
  *
  * @author Antony Stubbs
  * @see #builder()
@@ -59,11 +61,24 @@ public class ParallelConsumerOptions<K, V> {
     private final Consumer<K, V> consumer;
 
     /**
-     * Supplying a producer is only needed if using the produce flows.
+     * A finished producer instance for the produce flows. Supplying a producer is only needed if using the produce
+     * flows; the alternative is {@link #producerConfig}, from which PC builds the producer itself.
      *
      * @see ParallelStreamProcessor
      */
     private final Producer<K, V> producer;
+
+    /**
+     * Producer configuration for the produce flows, from which PC builds its own producer with
+     * {@code new KafkaProducer<>(config)}: any {@code ProducerConfig} key, serializers included, exactly as it would
+     * be passed to that constructor. In {@link CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER} set
+     * {@code transactional.id} here, as you would when building the producer yourself.
+     * <p>
+     * The alternative to {@link #producer}; supplying both fails validation. Excluded from {@link #toString()}, as
+     * the map may carry credentials.
+     */
+    @ToString.Exclude
+    private final Map<String, Object> producerConfig;
 
     /**
      * Path to Managed executor service for Java EE
@@ -164,9 +179,10 @@ public class ParallelConsumerOptions<K, V> {
          * message replay may cause duplicates in external systems which is unavoidable - external systems must be
          * idempotent).
          * <p>
-         * The default commit interval {@link AbstractParallelEoSStreamProcessor#KAFKA_DEFAULT_AUTO_COMMIT_FREQUENCY}
+         * The default commit interval {@link ParallelConsumerOptions#DEFAULT_COMMIT_INTERVAL}
          * gets automatically reduced from the default of 5 seconds to 100ms (the same as Kafka Streams <a
          * href=https://docs.confluent.io/platform/current/streams/developer-guide/config-streams.html">commit.interval.ms</a>).
+         * The reduction applies only when no interval was set; an interval set explicitly is kept, whatever its value.
          * Reducing this configuration places higher load on the broker, but will reduce (but cannot eliminate) replay
          * upon failure. Note also that when using transactions in Kafka, consumption in {@code READ_COMMITTED} mode is
          * blocked up to the offset of the first STILL open transaction. Using a smaller commit frequency reduces this
@@ -239,10 +255,16 @@ public class ParallelConsumerOptions<K, V> {
      */
     public static final int KAFKA_DEFAULT_AUTO_COMMIT_INTERVAL_MS = 5000;
 
+    /**
+     * The commit interval when none is set and the commit mode is not transactional - Kafka's own auto-commit
+     * interval. See {@link #getCommitInterval()} for how an unset interval resolves.
+     */
     public static final Duration DEFAULT_COMMIT_INTERVAL = ofMillis(KAFKA_DEFAULT_AUTO_COMMIT_INTERVAL_MS);
 
-    /*
-     * The same as Kafka Streams
+    /**
+     * The commit interval when none is set and the commit mode is {@link CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER} -
+     * the same as Kafka Streams' {@code commit.interval.ms}. Applies ONLY when no interval was set; a value set
+     * explicitly is kept even when it equals {@link #DEFAULT_COMMIT_INTERVAL} (astubbs#422).
      */
     public static final Duration DEFAULT_COMMIT_INTERVAL_FOR_TRANSACTIONS = ofMillis(100);
 
@@ -276,9 +298,36 @@ public class ParallelConsumerOptions<K, V> {
 
     /**
      * Time between commits. Using a higher frequency (a lower value) will put more load on the brokers.
+     * <p>
+     * Leave it unset to take the default, which depends on the commit mode: {@link #DEFAULT_COMMIT_INTERVAL} normally,
+     * {@link #DEFAULT_COMMIT_INTERVAL_FOR_TRANSACTIONS} under {@link CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER}. A
+     * value you set is always kept - including one equal to either default - because "unset" is the absence of a
+     * value, never inferred from the value itself. (Inferring it by reference identity against the constant treated an
+     * explicit {@code DEFAULT_COMMIT_INTERVAL} as unset; inferring it by {@code equals} would have treated every
+     * explicit five seconds as unset - astubbs#422.)
      */
-    @Builder.Default
-    private Duration commitInterval = DEFAULT_COMMIT_INTERVAL;
+    private Duration commitInterval;
+
+    /**
+     * Never null, and never throws: an unset interval resolves here, from the commit mode, so every reader - the
+     * engine, {@code toString}, a caller inspecting options before constructing a processor - sees the effective value
+     * whether or not {@link #validate()} has run.
+     * <p>
+     * The mode test is written constant-first rather than as {@link #isUsingTransactionCommitMode()} so that a
+     * {@code commitMode} explicitly built as null resolves to the non-transactional default instead of throwing.
+     * Reading options has never been able to fail and must not start now: a null commit mode is a misconfiguration,
+     * but it is {@link #validate()}'s to reject, at the point that already names the option.
+     *
+     * @return the commit interval in effect
+     */
+    public Duration getCommitInterval() {
+        if (commitInterval != null) {
+            return commitInterval;
+        }
+        return PERIODIC_TRANSACTIONAL_PRODUCER.equals(commitMode)
+                ? DEFAULT_COMMIT_INTERVAL_FOR_TRANSACTIONS
+                : DEFAULT_COMMIT_INTERVAL;
+    }
 
     /**
      * @deprecated only settable during {@code deprecation phase} - use
@@ -479,23 +528,28 @@ public class ParallelConsumerOptions<K, V> {
     public void validate() {
         Objects.requireNonNull(consumer, "A consumer must be supplied");
 
+        producerSourceValidation();
         transactionsValidation();
         loadFactorValidation();
     }
 
+    /**
+     * Exactly one way of supplying a producer may be used: two producers cannot be resolved to one silently.
+     */
+    private void producerSourceValidation() {
+        if (producer != null && producerConfig != null) {
+            throw new IllegalArgumentException(msg("Supply either a {} instance or {} for PC to build one from, not both",
+                    Fields.producer, Fields.producerConfig));
+        }
+    }
+
     private void transactionsValidation() {
-        boolean commitInternalHasNotBeenSet = getCommitInterval() == DEFAULT_COMMIT_INTERVAL;
-
         if (isUsingTransactionCommitMode()) {
-            if (producer == null) {
-                throw new IllegalArgumentException(msg("Cannot set {} to Transaction Producer mode ({}) without supplying a Producer instance",
+            if (!isProducerSupplied()) {
+                throw new IllegalArgumentException(msg("Cannot set {} to Transaction Producer mode ({}) without supplying a Producer instance or {} for PC to build one from",
                         Fields.commitMode,
-                        commitMode));
-            }
-
-            // update commit frequency
-            if (commitInternalHasNotBeenSet) {
-                this.commitInterval = DEFAULT_COMMIT_INTERVAL_FOR_TRANSACTIONS;
+                        commitMode,
+                        Fields.producerConfig));
             }
         }
 
@@ -548,8 +602,19 @@ public class ParallelConsumerOptions<K, V> {
         return commitMode.equals(PERIODIC_TRANSACTIONAL_PRODUCER);
     }
 
+    /**
+     * @return true when the produce flows can be used - a finished instance, or a configuration for PC to build the
+     *         producer from
+     */
     public boolean isProducerSupplied() {
-        return getProducer() != null;
+        return producer != null || producerConfig != null;
+    }
+
+    /**
+     * @return true when the {@link #producer} instance was supplied, rather than {@link #producerConfig}
+     */
+    public boolean isProducerInstanceSupplied() {
+        return producer != null;
     }
 
     /**
