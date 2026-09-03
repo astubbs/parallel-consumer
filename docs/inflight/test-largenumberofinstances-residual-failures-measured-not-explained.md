@@ -391,10 +391,14 @@ run by `bin/exp-measure-large-instances-failure-rate.sh 30` on the idle self-hos
 **sequentially - never concurrently**, because two 12-instance fleets on one machine reproduce the
 overload confound that invalidated the 2026-08-28 sweep:
 
-- control `debug/largenumberofinstances-rebalance-stall` - **predicted to fail around 1 run in 10**,
-  reproducing the recorded rate and signature.
-- treatment `debug/lnoi-stall-with-431` - **predicted not to fail**, or to fail materially less
-  often.
+<!-- post-merge: checked -->
+- **control** (the tree without astubbs/parallel-consumer#431) - *predicted to fail around 1 run in
+  10*, reproducing the recorded rate and signature. Actions run 33752432746.
+- **treatment** (the same tree plus that fix, and nothing else) - *predicted not to fail*, or to fail
+  materially less often. Actions run 33802869646.
+
+The two arms are named by run id rather than by branch, because the branches carrying them are
+temporary and the runs are the durable record.
 
 **What each outcome licenses, agreed before the data:**
 
