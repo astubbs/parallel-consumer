@@ -70,6 +70,41 @@ group in the corpus silently - and the register names at least one note in each 
 every open note the impact buckets did not claim. `bin/inflight.mjs docs list inflight` prints the
 per-group figures.
 
+## The filename number is attributed by the NOTE, not by the convention
+
+The first cut printed `gh issue view <n> -R astubbs/parallel-consumer` for every non-`pr-` number,
+on the reasoning that the convention says the number is this fork's. `AGENTS.md` names the exceptions
+in the same breath, and one of them is on the baseline: `bug-857-family.md`, whose own title reads
+"The confluentinc#857 family". That command resolves to the wrong issue the moment this fork's
+counter passes 857 - the failure `AGENTS.md` rates worse than a broken reference.
+
+So the number is attributed by the note's own text: a qualified mention of its own number decides
+it, and a note that names neither gets both lookups and is labelled unattributable. The filename
+alone cannot carry this, which is why the first cut was wrong and its docstring said the opposite of
+what its code did.
+
+## Two crashes that only a real corpus produced
+
+Both were found by running the command, not by reading it, and both are now pinned by a check whose
+mutant restores the defect.
+
+- **A note closed on every live ref but still open on a preserved tag.** The chosen version's refs
+  and the path's live refs are then disjoint sets, so the read ref resolved to nothing and the row
+  threw on `.replace()`. The read ref now comes from the chosen version's own refs.
+- **A number's text read from outside its scope**, which threw on any note carrying one - most of
+  them - and exited 1, neither of the tool's two documented codes.
+
+The second is the more useful lesson: the command has a `{ok, reason}` contract and an exit-code
+contract, and neither protects against a `ReferenceError`. Nothing in this repository asserts that
+the front door cannot throw, so the guard is the self-test running the real command end to end.
+
+## A note the ref listing named and `cat-file` did not return
+
+`blobContents` can answer ok overall while one blob comes back `missing` - a partial clone, a gc
+race. That note was being dropped with no accounting, which is the failure-rendering-as-an-empty-
+result shape this whole file is organised against. Unreadable paths are now named and the run says
+the answer is incomplete.
+
 ## Pull requests come from the bulk snapshot only
 
 `branchView` falls through to `prForBranch` when the bulk map misses, because it answers about one
