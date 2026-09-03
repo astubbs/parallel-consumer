@@ -45,9 +45,11 @@ import java.util.List;
  *       probe module is where it is measured.</li>
  * </ul>
  * So what this closes is the linearizability question: whether the read/write lock discipline across
- * {@code add}, {@code remove}, {@code removeAll}, {@code contains} and {@code isEmpty} can be broken by
- * ordinary interleaving - which is what a future edit "simplifying" the locking would break first, and what
- * arm one shows this catches.
+ * {@code add}, {@code remove}, {@code tryRemove}, {@code removeAll}, {@code contains} and {@code isEmpty} can
+ * be broken by ordinary interleaving - which is what a future edit "simplifying" the locking would break
+ * first, and what arm one shows this catches. {@code tryRemove} is the newest of those and reaches the same
+ * state through a barging {@code tryLock()} rather than the fair {@code lock()}; how a refusal is modelled,
+ * and why it has to be, is on {@link #dropOneDeclining}.
  * <p>
  * <b>STRESS only</b>, for the reason already settled in this lane: the queue keys itself with
  * {@code WorkContainerSortKey}, a Lombok {@code @EqualsAndHashCode(callSuper = true)} value type, and Lincheck
@@ -126,6 +128,39 @@ public class RetryQueueLincheckTest {
     }
 
     /**
+     * Broker-poll thread, inside a rebalance callback: the DECLINING removal, which is how both callbacks take
+     * a container out of this queue since 2026-09-03. It reaches the same two maps as {@link #dropOne} through
+     * a different acquire - {@code tryLock()}, which barges past the fair queue - so the locking discipline it
+     * relies on is a separate question from the one {@code remove} answers, and it was unmodelled here.
+     * <p>
+     * <b>It loops until the lock is taken, and that is a modelling decision worth stating rather than a
+     * convenience.</b> A refusal changes nothing and reports nothing about the queue - {@code tryRemove}
+     * deliberately discards whether an entry was present - so it is indistinguishable from not having called
+     * at all. Lincheck cannot express that: its sequential specification is this class run single-threaded,
+     * where the lock is always free and the removal therefore always happens. Measured before it was written
+     * this way, a plain {@code return retryQueue.tryRemove(..)} operation fails in seconds with
+     * {@code tryDropOneNaive(0): false} beside {@code queueIsEmpty(): false} - a refusal no sequential order
+     * can produce, which is a false red about the harness rather than a finding about the queue.
+     * <p>
+     * Looping keeps the one thing that IS observable - the removal - and puts the {@code tryLock} body under
+     * the same linearizability question as every other operation here: whether the two maps can be seen out of
+     * step, or two callers can both claim the same container. What it does NOT cover is production's response
+     * to a refusal, which is to abandon the paired shard removal as well; that is behaviour, not
+     * linearizability, and {@code RetryQueueRebalancePathTest} owns it.
+     * <p>
+     * Returns nothing because there is nothing honest to return: see above.
+     */
+    @Operation
+    public void dropOneDeclining(@Param(name = "offset") int offset) {
+        var container = CONTAINERS.get(offset);
+        var topicPartition = container.getTopicPartition();
+        while (!retryQueue.tryRemove(topicPartition.topic(), topicPartition.partition(), container.offset())) {
+            // another operation holds the lock this instant; the actors are finite, so this terminates
+            Thread.yield();
+        }
+    }
+
+    /**
      * Control thread: work was taken for the pool, so the containers it took leave the queue. This is the
      * production caller, and it runs on every work request per shard.
      */
@@ -164,7 +199,7 @@ public class RetryQueueLincheckTest {
      * Bounds. Unlike the violation-expecting harnesses in this lane, every iteration here runs to completion -
      * a run that finds nothing cannot stop early - so the bound is a straight cost, and there is no hit rate to
      * price on the gating machine. 100 x 1,000 keeps it inside the lane's existing whole-lane budget while
-     * covering every pairing of the six operations several times over.
+     * covering every pairing of the operations several times over.
      * <p>
      * The assertion is Lincheck's own: {@code check} throws and fails this test, carrying the interleaving,
      * the moment a result appears that no sequential order of the same operations could produce. Do not

@@ -168,8 +168,33 @@ shard-map accessor rule above is the worked example of turning one down.
 `ArchitectureTest.rebalanceCallbacksMustNotBlock` carries `KNOWN_BLOCKING_VIOLATIONS`, which is
 exactly the shape named above. It arrived with one entry - the confluentinc#857 transactional revoke
 wait, owned by astubbs#44 - and grew on 2026-08-31 when the rule's deny list was widened during a
-defect-class sweep and immediately found a second, pre-existing defect on master
-([`bug-retry-queue-write-lock-on-the-rebalance-path.md`](bug-retry-queue-write-lock-on-the-rebalance-path.md)).
+defect-class sweep and immediately found a second, pre-existing defect on master (the retry queue's
+write lock, six entries).
+
+**Update 2026-09-03: those six entries are gone, and deleting them is what proved the warning.** The
+defect they carried is fixed - the rebalance callbacks decline the lock instead of waiting for it -
+so the list is back to the one confluentinc#857 transactional-revoke entry. Deleting them first, as
+the re-enable path below says, is also what surfaced the finding the entries' own comments did not
+claim: with the six deleted, the rule reported violations on the revoke and lost callbacks and
+nothing at all on `onPartitionsAssigned`, which reaches the same lock through a METHOD REFERENCE the
+walk cannot see. Write-up:
+[`../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md`](../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md).
+
+**Update 2026-09-03, later the same day: the walk that missed it now follows method references.**
+`notReachBlockingCalls()` follows `getMethodReferencesFromSelf()` beside `getMethodCallsFromSelf()`, so the
+shape above is reported rather than skipped - re-measured by restoring `.map(retryQueue::remove)` to the
+production tree, which takes the rule from green to a report naming all three callbacks.
+`RebalanceCallbackRuleControlTest` holds a fixture reaching a deny-listed acquire through a method reference
+and asserts the rule reports it, so the hop cannot be dropped again silently; it fails on the pre-2026-09-03
+walk, which is how it was checked.
+
+**Constructor calls were the obvious next widening and were measured and rejected**, which is worth recording
+because it reads as free. Enqueuing `getConstructorCallsFromSelf()` turns every factory call into a reach into
+whatever the constructed object wires up: `PCModule.workManager()` contains `new WorkManager(..)`, whose
+constructor registers a metrics gauge as a method reference, and that gauge reads the retry queue under its
+read lock - a red rule on a path no callback takes. The general limit under it is that ArchUnit's model has
+the same shape for a reference invoked now (a stream stage) and one invoked later (a gauge, an executor task),
+so a reference-walking rule is conservative by construction.
 
 **The tension is real and is not resolved here.** The argument for the entries: each names a defect
 that exists on master, has a tracking note, and was not introduced by the branch that had to decide

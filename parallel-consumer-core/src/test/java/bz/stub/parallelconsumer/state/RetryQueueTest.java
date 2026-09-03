@@ -13,12 +13,13 @@ import java.util.Collections;
 import java.util.List;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 
 /**
  * {@link RetryQueue#removeAll} contract tests - the one entry point the shard calls on EVERY work request, and
  * the only one with no coverage at all until now (the three pre-existing {@code RetryQueue} tests live in
- * {@link ShardManagerTest} and assert ordering only; see
- * {@code docs/inflight/test-retry-queue-behaviour-untested.md}).
+ * {@link ShardManagerTest} and assert ordering only). What is still untested is inventoried in
+ * {@code docs/inflight/test-retry-queue-behaviour-untested.md}.
  * <p>
  * <b>What these pin, and what they cannot.</b> {@code removeAll} opens with a fast path that returns
  * {@code false} without taking the write lock. That guard reads the CALLER'S list, never the queue's shared
@@ -124,6 +125,71 @@ class RetryQueueTest {
         assertThat(retryQueue.removeAll(UniLists.of(workFor(0)))).isTrue();
 
         assertThat(retryQueue.isEmpty()).isTrue();
+    }
+
+    /**
+     * {@link RetryQueue#tryRemove} takes an uncontended lock and removes, keyed by the record's coordinates
+     * rather than by container identity - the same uniqueness {@code removeAll} matches on.
+     */
+    @Test
+    void tryRemoveTakesAnUncontendedLockAndRemovesByCoordinates() {
+        WorkContainer<String, String> stays = workFor(0);
+        WorkContainer<String, String> goes = workFor(1);
+        retryQueue.add(stays);
+        retryQueue.add(goes);
+
+        assertThat(retryQueue.tryRemove(TOPIC, PARTITION, 1L)).isTrue();
+
+        assertThat(retryQueue.size()).isEqualTo(1);
+        assertThat(retryQueue.contains(goes)).isFalse();
+        assertThat(retryQueue.contains(stays)).isTrue();
+    }
+
+    /**
+     * An absent entry is not a refusal. {@code true} means "I got the lock and did the removal"; only the lock
+     * can say no, because the only caller decision it feeds is whether the caller may go on to its own paired
+     * removal - and for that, "there was nothing here" is as good as "I removed it".
+     */
+    @Test
+    void tryRemoveOfAnAbsentEntryStillReportsThatItRan() {
+        retryQueue.add(workFor(0));
+
+        assertThat(retryQueue.tryRemove(TOPIC, PARTITION, 99L)).isTrue();
+
+        assertThat(retryQueue.size()).isEqualTo(1);
+    }
+
+    /**
+     * The refusal itself, driven the way the controller thread actually causes it: {@link RetryQueue#iterator()}
+     * hands out the READ lock and holds it for the whole scan. A writer arriving in that window must be told no
+     * rather than parked - and must change nothing, because a caller that was refused goes on to leave its own
+     * half of the pair alone.
+     * <p>
+     * The acquire runs on another thread on purpose: a read lock is not upgradeable, so asking from the thread
+     * already holding it would be a deadlock rather than the contention being modelled.
+     */
+    @Test
+    void tryRemoveRefusesWhileAnIteratorHoldsTheReadLockAndChangesNothing() throws InterruptedException {
+        WorkContainer<String, String> present = workFor(0);
+        retryQueue.add(present);
+
+        var answer = new java.util.concurrent.atomic.AtomicBoolean(true);
+        try (RetryQueue.RetryQueueIterator heldElsewhere = retryQueue.iterator()) {
+            assertThat(heldElsewhere.hasNext()).isTrue();
+
+            Thread writer = new Thread(() -> answer.set(retryQueue.tryRemove(TOPIC, PARTITION, 0L)), "writer");
+            writer.start();
+            writer.join(java.util.concurrent.TimeUnit.SECONDS.toMillis(10));
+
+            assertWithMessage("the acquire must have returned rather than parked - a caller that waits here is "
+                    + "the defect this method exists to remove")
+                    .that(writer.isAlive()).isFalse();
+            assertThat(answer.get()).isFalse();
+        }
+
+        assertWithMessage("a refusal changes nothing at all")
+                .that(retryQueue.contains(present)).isTrue();
+        assertThat(retryQueue.size()).isEqualTo(1);
     }
 
     /**

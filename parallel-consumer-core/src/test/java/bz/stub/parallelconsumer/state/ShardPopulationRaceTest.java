@@ -5,6 +5,7 @@ package bz.stub.parallelconsumer.state;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import bz.stub.parallelconsumer.internal.utils.ThreadUtils;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
@@ -12,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentMatchers;
 import pl.tlinkowski.unij.api.UniLists;
 
+import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -82,7 +84,7 @@ class ShardPopulationRaceTest {
                 .that(laterEpoch).isGreaterThan(firstEpoch);
 
         // THE INTERLEAVING: the sweep lands between the read of the resident and the insertion
-        onNextStalenessCheck(seam, shard::removeStaleWorkContainersFromShard);
+        onNextStalenessCheck(seam, () -> shard.removeStaleWorkContainersFromShard(new RetryQueue()));
 
         shard.addWorkContainer(new WorkContainer<>(laterEpoch, record, module));
 
@@ -119,7 +121,7 @@ class ShardPopulationRaceTest {
         // between yielding it and removing it, so the stale sweep's own removal takes nothing out
         onNextStalenessCheck(seam, () -> shard.removeWorkAtOffset(20L));
 
-        var swept = shard.removeStaleWorkContainersFromShard();
+        var swept = shard.removeStaleWorkContainersFromShard(new RetryQueue());
 
         assertThat(shard.getCountOfWorkTracked()).isEqualTo(0L);
         assertWithMessage("one admission, retired exactly once - by whichever call actually removed it")
@@ -212,7 +214,7 @@ class ShardPopulationRaceTest {
                     var thread = new Thread(() -> sm.removeShardIfEmpty(ShardKey.ofKey(this)), "shard-collector");
                     collector.set(thread);
                     thread.start();
-                    joinQuietly(thread, 500);
+                    ThreadUtils.joinQuietly(thread, Duration.ofMillis(500));
                 }
                 return super.offset();
             }
@@ -259,11 +261,4 @@ class ShardPopulationRaceTest {
         return new ConsumerRecord<>(TOPIC, 0, offset, "a-key", "value-" + offset);
     }
 
-    private static void joinQuietly(Thread thread, long millis) {
-        try {
-            thread.join(millis);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-    }
 }
