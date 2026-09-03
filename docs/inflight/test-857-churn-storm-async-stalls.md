@@ -488,3 +488,28 @@ both would mislead the next reader.
   **Note what the reading above does to the priority**: an instance that accepts work while returning
   none is not the merely-slow case a loose bound would excuse, so a re-calibration must not be
   allowed to quietly absorb it.
+
+## Sighting, 2026-09-03 - recorded late, and its seed recovered from a CANCELLED run
+
+`node bin/inflight.mjs codecov test ChaosChurnStormIT` records a **failure at `f75f4ee`**
+(`feat/225-pc-built-producer`, 2026-09-03 05:20, 324.7s), which no ledger held. The failure text is
+the outer wait rather than a gating detector - *"Condition with alias 'all messages consumed under
+churn' didn't complete within 5 minutes"* - which is cycle 16's shape, not the `INSTANCE_STALL` one
+above.
+
+**Replay seed `166202700392495171`** (`CHAOS W1 churn storm: seed=166202700392495171`).
+
+Two things about how it was retrieved are worth more than the sighting itself:
+
+- **`gh run list` finds nothing, because the CI run was CANCELLED, not failed.** A later push
+  cancelled it by concurrency group while the chaos job was mid-flight; codecov had already taken the
+  test's outcome. So a test failure can be recorded with **no failed run to find**, and any search
+  that filters on `conclusion=failure` misses it entirely. The run id is `33717741761` and the log
+  came from `gh api repos/.../actions/runs/<id>/logs`, which still serves a cancelled run's archive.
+- **Because the job was cancelled, treat this one as WEAK evidence.** A runner being torn down can
+  starve a fleet past a 5-minute cap, so the timeout is not attributable. It is recorded for the seed,
+  not for the verdict.
+
+This is the rule about recording a sighting before the PR that saw it merges, missed: astubbs#426 had
+already merged by the time anyone looked. The seed survived only because the archive outlives the
+run listing.
