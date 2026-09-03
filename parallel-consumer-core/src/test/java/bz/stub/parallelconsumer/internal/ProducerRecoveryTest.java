@@ -85,6 +85,8 @@ class ProducerRecoveryTest {
     private final List<Instant> buildTimes = new CopyOnWriteArrayList<>();
     /** How many times the user function saw each offset. */
     private final Map<Long, AtomicInteger> seen = new ConcurrentHashMap<>();
+    /** The keys of every record whose send the discarded producer failed - the records recovery must run again. */
+    private final java.util.Set<String> keysWhoseSendFailed = ConcurrentHashMap.newKeySet();
     /** The failed-attempt count each delivery of each offset reported through its RecordContext, in order. */
     private final Map<Long, List<Integer>> failedAttemptsSeen = new ConcurrentHashMap<>();
     /** Applied to each producer as it is built, keyed by build index (0 = the initial producer). */
@@ -228,8 +230,9 @@ class ProducerRecoveryTest {
     }
 
     /** Every send's future fails with the condition - the shape FutureRecordMetadata.valueOrError produces. */
-    private static void failEverySendFromTheFuture(MockProducer<String, String> producer, RuntimeException condition) {
+    private void failEverySendFromTheFuture(MockProducer<String, String> producer, RuntimeException condition) {
         doAnswer(invocation -> {
+            keysWhoseSendFailed.add(invocation.<ProducerRecord<String, String>>getArgument(0).key());
             var future = new CompletableFuture<RecordMetadata>();
             future.completeExceptionally(condition);
             return future;
@@ -314,9 +317,15 @@ class ProducerRecoveryTest {
 
         assertThat(pc.isClosedOrFailed()).isFalse();
         assertThat(producers.get(0).consumerGroupOffsetsHistory()).isEmpty();
-        assertWithMessage("the record whose send failed ran again").that(seen.get(0L).get()).isAtLeast(2);
-        // the others were either failed and retried too, or parked at the produce lock until the replacement existed
-        // and produced once - both are correct, and which one depends on dispatch timing
+        // Which records reached the discarded producer depends on dispatch timing: with two workers, the first
+        // failed send records the condition and a worker not yet at the produce lock parks there until the
+        // replacement exists, then produces once. So the records that must run again are exactly the ones whose send
+        // failed - at least one, or the fixture proved nothing - and every record ran at least once.
+        assertWithMessage("fixture: at least one send failed on the discarded producer").that(keysWhoseSendFailed).isNotEmpty();
+        for (String key : keysWhoseSendFailed) {
+            long offset = Long.parseLong(key.substring(1));
+            assertWithMessage("record %s, whose send failed, ran again", key).that(seen.get(offset).get()).isAtLeast(2);
+        }
         for (long offset = 0; offset <= 2; offset++) {
             assertThat(seen.get(offset).get()).isAtLeast(1);
         }
