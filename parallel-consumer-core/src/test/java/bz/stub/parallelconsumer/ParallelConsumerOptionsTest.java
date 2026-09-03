@@ -14,6 +14,7 @@ import org.mockito.Mockito;
 
 import java.time.Duration;
 
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
@@ -194,6 +195,39 @@ class ParallelConsumerOptionsTest {
         assertWithMessage("clearing the interval means unset, so it resolves from the commit mode again rather than "
                         + "returning null or keeping the value that was just cleared")
                 .that(options.getCommitInterval())
+                .isEqualTo(Duration.ofMillis(100));
+    }
+
+    /**
+     * The second defect astubbs#422 carried, and the one the fix closes structurally rather than by a named change:
+     * {@code validate()} used to write the resolved interval back into the field, so {@link
+     * ParallelConsumerOptions#toBuilder()} copied it forward as if the caller had chosen it. Re-building a validated
+     * transactional options object with a non-transactional commit mode then kept 100ms - a value that was never
+     * anybody's configuration and that no reader could tell from an explicit one. Unset now round-trips as unset, so
+     * the copy re-resolves against its own commit mode.
+     */
+    @Tag("transactions")
+    @Test
+    void anUnsetIntervalRoundTripsThroughToBuilderInsteadOfBeingBakedInByValidation() {
+        var transactional = validatedTransactionalOptions(null);
+
+        assertWithMessage("precondition - the transactional original does resolve an unset interval to 100ms, so the "
+                        + "value below could only have come from it")
+                .that(transactional.getCommitInterval())
+                .isEqualTo(Duration.ofMillis(100));
+
+        var rebuiltAsNonTransactional = transactional.toBuilder()
+                .commitMode(PERIODIC_CONSUMER_ASYNCHRONOUS)
+                .build();
+        rebuiltAsNonTransactional.validate();
+
+        assertWithMessage("the copy inherits an unset interval, not the 100ms its transactional parent resolved to, "
+                        + "so it resolves against its own commit mode (astubbs#422)")
+                .that(rebuiltAsNonTransactional.getCommitInterval())
+                .isEqualTo(Duration.ofSeconds(5));
+
+        assertWithMessage("and validating the copy still does not disturb the original")
+                .that(transactional.getCommitInterval())
                 .isEqualTo(Duration.ofMillis(100));
     }
 

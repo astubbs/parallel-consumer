@@ -15,8 +15,9 @@ tags:
   - prior-art-correction
 ---
 
-`git show d3d9e7bea:docs/inflight/bug-commit-interval-identity-check.md` (astubbs, 2026-08-07; the
-note itself is deleted now that this is fixed) recorded that
+`git show 10ed71c9e:docs/inflight/bug-commit-interval-identity-check.md` (astubbs, 2026-08-07; the
+note itself is deleted now that this is fixed, so the hash is the last commit on master that still
+carries it - grep anchor `commitInternalHasNotBeenSet`) recorded that
 `ParallelConsumerOptions#transactionsValidation` decided "did the user set a commit interval?" by
 reference identity (`getCommitInterval() == DEFAULT_COMMIT_INTERVAL`), and claimed a user who wrote
 `commitInterval(Duration.ofSeconds(5))` under a transactional commit mode would have it silently
