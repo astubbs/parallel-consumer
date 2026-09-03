@@ -931,7 +931,9 @@ Every `PROVED` claim has a control that was seen to fail. Three worth naming:
    not. An early draft did exactly that.
 3. **The commit-interval identity check** - open. `transactionsValidation` compares with `==`, so an
    explicit `Duration.ofSeconds(5)` is silently replaced by 100ms.
-   `docs/inflight/bug-commit-interval-identity-check.md`.
+   The note this cited was retired when astubbs#422 fixed the defect; read it as this plan did with
+   `git show 10ed71c9e:docs/inflight/bug-commit-interval-identity-check.md` (grep anchor
+   `commitInternalHasNotBeenSet`).
 
 ### What was not done
 

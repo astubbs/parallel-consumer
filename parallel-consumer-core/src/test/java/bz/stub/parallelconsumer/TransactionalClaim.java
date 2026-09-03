@@ -117,17 +117,25 @@ public enum TransactionalClaim {
     COMMIT_INTERVAL_AUTO_REDUCED(Source.OPTIONS_JAVADOC,
             "gets automatically reduced from the default of 5 seconds to 100ms",
             Status.PROVED, "TransactionalBulkCommitTest#transactionalModeWithNoExplicitCommitIntervalResolvesTo100ms "
-            + "and its two sibling arms, which assert the literal durations after validate() rather than the "
-            + "DEFAULT_* constants, so changing a constant without changing the javadoc still fails. Negative "
-            + "control observed (U11): forcing commitInternalHasNotBeenSet to false in "
-            + "ParallelConsumerOptions#transactionsValidation - one term, everything else identical - failed "
-            + "exactly one of the four arms, 'expected PT0.1S but was PT5S'. The other three still passed, which is "
-            + "what makes the control narrow enough to attribute. Reverted; main is untouched. "
-            + "SEPARATE DEFECT found while proving this, recorded in "
-            + "docs/inflight/bug-commit-interval-identity-check.md: the same gate uses reference identity (==) "
-            + "against DEFAULT_COMMIT_INTERVAL, so a user who explicitly sets Duration.ofSeconds(5) is equals-but-"
-            + "not-identical and gets silently overridden to 100ms - 50x the broker load they configured. Not part "
-            + "of C5's documented sentence, so it is recorded beside the claim rather than asserted as part of it"),
+            + "and its two sibling arms, which cover the unset cases, plus the explicit ones in "
+            + "ParallelConsumerOptionsTest - #explicitFiveSecondsInTransactionalModeIsKept, "
+            + "#explicitDefaultConstantInTransactionalModeIsKept and "
+            + "#clearingTheIntervalThroughTheDeprecatedSetterReturnsItToUnset. All assert the literal durations after "
+            + "validate() rather than the DEFAULT_* constants, so changing a constant without changing the javadoc "
+            + "still fails. Negative control observed (U11) against the PRE-astubbs#422 code: forcing "
+            + "commitInternalHasNotBeenSet to false in ParallelConsumerOptions#transactionsValidation - one term, "
+            + "everything else identical - failed exactly one of the four arms then present, 'expected PT0.1S but "
+            + "was PT5S'. That variable no longer exists, so a fresh control was observed against the new code: "
+            + "making ParallelConsumerOptions#getCommitInterval() return DEFAULT_COMMIT_INTERVAL for the unset case "
+            + "regardless of the commit mode - again one term - failed exactly the two arms that read an unset "
+            + "interval under transactions, #transactionalModeWithNoExplicitCommitIntervalResolvesTo100ms and "
+            + "#clearingTheIntervalThroughTheDeprecatedSetterReturnsItToUnset, both 'expected: PT0.1S but was : "
+            + "PT5S', while the kept-explicit arms and the non-transactional control stayed green. Narrow enough to "
+            + "attribute. Reverted; main is untouched. "
+            + "The identity defect this entry used to record beside the claim - an explicitly passed "
+            + "DEFAULT_COMMIT_INTERVAL treated as unset and silently reduced to 100ms - is fixed by astubbs#422; "
+            + "ParallelConsumerOptionsTest#explicitDefaultConstantInTransactionalModeIsKept is its regression test "
+            + "and was observed red before the fix"),
 
     /**
      * C6 - this one is Kafka's guarantee, not ours. We document it, so we record it and test it once; we do not
