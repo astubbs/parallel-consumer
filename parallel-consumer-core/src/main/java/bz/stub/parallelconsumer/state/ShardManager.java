@@ -394,7 +394,49 @@ public class ShardManager<K, V> {
     }
 
     /**
-     * Idempotent - work may have not been removed, either way it's put back
+     * Idempotent - work may have not been removed, either way it's put back.
+     * <p>
+     * <b>The queue entry is added FIRST and its shard residency confirmed SECOND</b>, and that order is the
+     * whole of this method's thread safety. {@link WorkManager#onFailureResult} re-validates the epoch against
+     * the live partition map immediately before calling this, but says at the site that no epoch check can ever
+     * be atomic with the actions that follow it - so the revoke sweep on the broker-poll thread can complete in
+     * the gap. It removes this container from its shard and then removes it from the retry queue, finding
+     * nothing there yet; under PARTITION or UNORDERED ordering the emptied shard object survives (only KEY
+     * ordering garbage-collects one), so {@link #getShard} still answers present and the add below goes through
+     * anyway. What that used to leave is a <b>queue-only orphan</b>: work is handed out by scanning shards, so a
+     * container in no shard is never selected, never completed and never swept - and every route that removes a
+     * retry-queue entry reaches it THROUGH shard contents, so nothing can ever take it out again.
+     * <p>
+     * <b>Asking about residency before adding would only narrow the window</b> - it is another check-then-act,
+     * and the sweep can land between that answer and the add exactly as it lands between the epoch check and
+     * this call. Reversing the order closes it instead, because the last thing to happen is a REMOVAL driven by
+     * a read taken after the add, and the sweep's own action is also a removal. The four ways the two can
+     * interleave all settle with the pair whole:
+     * <ul>
+     * <li>the sweep completes before the add - the residency read below sees a departed container and undoes
+     *     the add;</li>
+     * <li>the sweep starts after the residency read - it finds the container in the shard, so
+     *     {@code removeWorkAtOffset} hands it back non-null and the paired queue removal runs;</li>
+     * <li>the sweep lands between the add and the residency read - its queue removal finds the entry this time
+     *     and takes it, and the read then undoes an add that is already gone (a no-op);</li>
+     * <li>the sweep's queue removal races the add itself - {@link RetryQueue} serialises them under its own
+     *     write lock, which reduces this to one of the two above.</li>
+     * </ul>
+     * Once the read below sees a departed container the answer cannot go stale in the dangerous direction:
+     * residency is by reference, and nothing ever re-inserts the same container instance.
+     * <p>
+     * <b>This adds no lock and makes no thread wait.</b> The alternative - moving the shard map and the queue
+     * under one lock - would put the broker-poll thread's rebalance callbacks behind the retry queue's fair
+     * lock, which is the wait astubbs/parallel-consumer#431 removed from that thread on purpose. Nothing here
+     * touches the poll thread's side of the interleaving at all.
+     * <p>
+     * <b>What would reopen it.</b> A future caller that adds to {@link #retryQueue} without a residency
+     * confirmation after the add, or one that removes a container from a shard without removing it from the
+     * queue. {@link ProcessingShard#addWorkContainer} is the second shape and is a KNOWN separate orphan route -
+     * it displaces a stale resident with no queue removal, because the shard has no handle on the queue. That is
+     * its own defect, not this one, and is tracked rather than fixed here.
+     *
+     * @see ProcessingShard#isResident(WorkContainer)
      */
     public void onFailure(WorkContainer<?, ?> wc) {
         log.debug("Work FAILED");
@@ -403,8 +445,17 @@ public class ShardManager<K, V> {
         var shardOptional = getShard(key);
 
         if (shardOptional.isPresent()) {
-            shardOptional.get().onFailure(wc);
+            var shard = shardOptional.get();
+            shard.onFailure(wc);
             this.retryQueue.add(wc);
+
+            // Confirm residency AFTER the add, and undo it if the container has left - see the javadoc for why
+            // this order closes the window that asking first only narrows.
+            if (!shard.isResident(wc)) {
+                log.debug("Failed work left its shard while it was being re-queued (its partition was revoked); " +
+                        "taking the retry queue entry back out so it cannot be orphaned. {}", wc);
+                this.retryQueue.remove(wc);
+            }
         }
 
     }
