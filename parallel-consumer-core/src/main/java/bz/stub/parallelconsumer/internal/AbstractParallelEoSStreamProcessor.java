@@ -406,7 +406,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             this.producerManager.get().setSuspensionEndsWhen(() -> state != RUNNING && state != State.PAUSED);
             if (options.isUsingTransactionCommitMode()) {
                 this.committer = this.producerManager.get();
-                this.producerRecoveryPass = Optional.of(new ProducerRecoveryPass<>(this.producerManager.get(),
+                this.producerRecoveryPass = Optional.of(new ProducerRecoveryPass<>(this.producerManager.get().recovery(),
                         () -> state, this::replayWorkDiscardedByAbortedTransaction, this::closeWith));
             } else {
                 this.committer = this.brokerPollSubsystem;
@@ -1173,7 +1173,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                             ThrowableUtils.describeWithRootCause(e), e));
         }
 
-        producerManager.ifPresent(x -> x.close(timeout));
+        try {
+            producerManager.ifPresent(x -> x.close(timeout));
+        } catch (Exception e) {
+            ThrowableUtils.logWithoutEscaping(e, () ->
+                    log.warn("Failed to close the Kafka producer - its IO thread, sockets and buffers may be " +
+                            "left running in this JVM until it exits. Shutdown continues; this cannot fail the " +
+                            "close. Cause: {}",
+                            ThrowableUtils.describeWithRootCause(e), e));
+        }
     }
 
     /**
@@ -2041,7 +2049,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     private Duration capAtNextRecoveryAttempt(Duration wait) {
         return producerManager
-                .flatMap(pm -> pm.timeUntilNextRecoveryAttempt(Instant.now()))
+                .flatMap(pm -> pm.recovery().timeUntilNextRecoveryAttempt(Instant.now()))
                 .filter(untilAttempt -> untilAttempt.compareTo(wait) < 0)
                 .orElse(wait);
     }

@@ -333,13 +333,13 @@ class ProducerRecoveryTest {
         onBuild.put(0, this::fenceAtFirstCommit);
         onBuild.put(1, this::fenceAtFirstCommit);
         onBuild.put(2, this::fenceAtFirstCommit);
-        var logger = (Logger) LoggerFactory.getLogger(ProducerManager.class);
+        var logger = (Logger) LoggerFactory.getLogger(ProducerRecovery.class);
         var appender = new ListAppender<ILoggingEvent>();
         appender.start();
         logger.addAppender(appender);
         try {
             start(optionsBuilder().build());
-            producerManager().recoveryBackoffInitial = Duration.ofMillis(50); // the pacing is asserted elsewhere
+            producerManager().recovery().recoveryBackoffInitial = Duration.ofMillis(50); // the pacing is asserted elsewhere
             addRecords(0, 4);
 
             awaitProducers(4);
@@ -383,7 +383,7 @@ class ProducerRecoveryTest {
         onBuild.put(1, coordinatorUnreachable);
         onBuild.put(2, coordinatorUnreachable);
         start(optionsBuilder().commitInterval(Duration.ofSeconds(5)).build());
-        producerManager().recoveryBackoffInitial = Duration.ofMillis(300);
+        producerManager().recovery().recoveryBackoffInitial = Duration.ofMillis(300);
         addRecords(0, 2);
 
         awaitProducers(4);
@@ -431,11 +431,11 @@ class ProducerRecoveryTest {
         // the replacement cannot initialise, and the backoff keeps the outage open for the rest of the test
         onBuild.put(1, producer -> producer.initTransactionException = new TimeoutException("coordinator unreachable"));
         start(optionsBuilder().shutdownTimeout(Duration.ofSeconds(30)).build());
-        producerManager().recoveryBackoffInitial = Duration.ofMinutes(5);
+        producerManager().recovery().recoveryBackoffInitial = Duration.ofMinutes(5);
         addRecords(0, 9);
 
         await().atMost(Duration.ofSeconds(30)).until(() -> producers.size() >= 2 && producerManager().isReplacing()
-                && !producerManager().isRecoveryAttemptDue(Instant.now()));
+                && !producerManager().recovery().isRecoveryAttemptDue(Instant.now()));
         Instant closeStarted = Instant.now();
         pc.closeDontDrainFirst(Duration.ofSeconds(30));
         Duration closeTook = Duration.between(closeStarted, Instant.now());
@@ -474,7 +474,7 @@ class ProducerRecoveryTest {
         assertWithMessage("fixture: strict mode, so the worker took the produce lock before its user function ran")
                 .that(producerManager().getProducerTransactionLock().getReadLockCount()).isAtLeast(1);
 
-        producerManager().recordInvalidation(new ProducerFencedException("fenced by a rebalance"));
+        producerManager().recovery().recordInvalidation(new ProducerFencedException("fenced by a rebalance"));
         await("the control thread to be waiting for the write lock").atMost(Duration.ofSeconds(30))
                 .until(() -> producerManager().getProducerTransactionLock().hasQueuedThreads());
         pc.notifySomethingToDo(); // what onPartitionsAssigned does at the end of the rebalance
@@ -511,12 +511,12 @@ class ProducerRecoveryTest {
             }
         };
         start(optionsBuilder().build());
-        producerManager().recoveryBackoffInitial = Duration.ofMillis(50);
+        producerManager().recovery().recoveryBackoffInitial = Duration.ofMillis(50);
         AbstractParallelEoSStreamProcessor<String, String> engine = pc;
         var listenerThrewDuringTheDrain = new AtomicBoolean(false);
         engine.wm.addSuccessfulWorkListener(wc -> {
             // only inside the recovery drain, and only once: the ordinary control-loop drain would end the instance
-            if (producerManager().isReplayOwed() && listenerThrewDuringTheDrain.compareAndSet(false, true)) {
+            if (producerManager().recovery().isReplayOwed() && listenerThrewDuringTheDrain.compareAndSet(false, true)) {
                 throw new RuntimeException("listener threw during the recovery drain");
             }
         });
@@ -525,7 +525,7 @@ class ProducerRecoveryTest {
 
         // the fence lands while the worker holds the produce lock; its result is mailboxed after, so the recovery
         // drain is what lands it - and that is where the listener throws
-        producerManager().recordInvalidation(new ProducerFencedException("fenced by a rebalance"));
+        producerManager().recovery().recordInvalidation(new ProducerFencedException("fenced by a rebalance"));
         await().atMost(Duration.ofSeconds(30)).until(() -> producerManager().getProducerTransactionLock().hasQueuedThreads());
         releaseTheWorker.countDown();
 
@@ -646,9 +646,9 @@ class ProducerRecoveryTest {
         pc = new ParallelEoSStreamProcessor<>(optionsBuilder().build());
         pc.close();
         assertThat(pc.isClosedOrFailed()).isTrue();
-        producerManager().recordInvalidation(new ProducerFencedException("fenced during close"));
+        producerManager().recovery().recordInvalidation(new ProducerFencedException("fenced during close"));
         assertWithMessage("fixture: the attempt is due, so only the state gate can stop it")
-                .that(producerManager().isRecoveryAttemptDue(Instant.now())).isTrue();
+                .that(producerManager().recovery().isRecoveryAttemptDue(Instant.now())).isTrue();
 
         // through the declaring type: a package-private member is not inherited across packages
         AbstractParallelEoSStreamProcessor<String, String> engine = pc;
@@ -679,8 +679,8 @@ class ProducerRecoveryTest {
                 .commitInterval(Duration.ofSeconds(30))
                 .defaultMessageRetryDelay(Duration.ofSeconds(30))
                 .build());
-        producerManager().recoveryBackoffInitial = Duration.ofMillis(200);
-        producerManager().recoveryBackoffMax = Duration.ofMillis(200);
+        producerManager().recovery().recoveryBackoffInitial = Duration.ofMillis(200);
+        producerManager().recovery().recoveryBackoffMax = Duration.ofMillis(200);
         fenceAtFirstCommit(producers.get(0));
         addRecords(0, 1);
 

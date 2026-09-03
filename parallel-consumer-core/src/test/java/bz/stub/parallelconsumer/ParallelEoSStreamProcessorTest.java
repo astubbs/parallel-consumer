@@ -9,12 +9,14 @@ import bz.stub.parallelconsumer.internal.utils.*;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.internal.ProducerManager;
+import bz.stub.parallelconsumer.internal.ProducerRecovery;
 import bz.stub.parallelconsumer.internal.State;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.*;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
+import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.InvalidPidMappingException;
 import org.apache.kafka.common.serialization.Deserializer;
@@ -30,6 +32,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentMatchers;
 import org.mockito.Mockito;
 import org.mockito.MockitoAnnotations;
+import pl.tlinkowski.unij.api.UniLists;
 
 import java.lang.reflect.Field;
 import java.time.Duration;
@@ -136,7 +139,7 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
 
     /**
      * The four produce-path shapes of an invalid producer (R9, R18, R19), all driven through a mocked
-     * {@link ProducerManager}. Every variant here mocks either the SYNCHRONOUS throw from
+     * {@link ProducerManager} whose recovery half is a mock too. Every variant here mocks either the SYNCHRONOUS throw from
      * {@link ProducerManager#produceMessages} or the send future failing; the real wrapped shape - kafka-clients'
      * {@code FutureRecordMetadata.valueOrError} raising {@code ExecutionException} - is what the future variants
      * reproduce, and {@code RecoverableProducerConditionTest} pins the unwrapping itself.
@@ -148,10 +151,14 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         producerManagerField.setAccessible(true);
         producerManagerField.set(pc, Optional.of(producerManager));
         when(producerManager.beginProducing(any())).thenReturn(mock(ProducerManager.ProducingLock.class));
-        when(producerManager.canRecover()).thenReturn(canRecover);
-        // the detect-and-record step is the real one, so the tests below see the mock's canRecover() and can verify
-        // recordInvalidation() the way they always did
-        when(producerManager.recordIfRecoverable(any())).thenCallRealMethod();
+        @SuppressWarnings("unchecked")
+        ProducerRecovery<String, String> recovery = mock(ProducerRecovery.class);
+        when(producerManager.recovery()).thenReturn(recovery);
+        // the manager delegates detection to its recovery half, where the detect-and-record step is the real one,
+        // so the tests below see the mock's canRecover() and verify recordInvalidation() on recovery()
+        when(producerManager.recordIfRecoverable(any())).thenAnswer(invocation -> recovery.recordIfRecoverable(invocation.getArgument(0)));
+        when(recovery.canRecover()).thenReturn(canRecover);
+        when(recovery.recordIfRecoverable(any())).thenCallRealMethod();
         return producerManager;
     }
 
@@ -193,7 +200,7 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
 
         Assertions.assertThat(pcSpy.getFailureCause().equals(invalidPidMappingException)).isTrue();
         Assertions.assertThat(State.CLOSED.equals(stateOf(pcSpy))).isTrue();
-        verify(producerManager, never()).recordInvalidation(any());
+        verify(producerManager.recovery(), never()).recordInvalidation(any());
     }
 
     /**
@@ -222,7 +229,7 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         verify(producerManager, timeout(10_000).atLeast(2)).produceMessages(any());
         awaitForSomeLoopCycles(2);
         assertCommits(of(), "the batch whose output was never produced is failed, so nothing is committed");
-        verify(producerManager, never()).recordInvalidation(any());
+        verify(producerManager.recovery(), never()).recordInvalidation(any());
     }
 
     /**
@@ -252,7 +259,7 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
 
         parallelConsumer.pollAndProduceMany((record) -> of(new ProducerRecord<>("outputTopic", record.key(), record.value())));
 
-        verify(producerManager, timeout(10_000).atLeastOnce()).recordInvalidation(invalidPidMappingException);
+        verify(producerManager.recovery(), timeout(10_000).atLeastOnce()).recordInvalidation(invalidPidMappingException);
         awaitForSomeLoopCycles(2);
         Assertions.assertThat(parallelConsumer.getFailureCause()).isNull();
         Assertions.assertThat(stateOf(parallelConsumer)).isEqualTo(State.RUNNING);
@@ -277,9 +284,88 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         parallelConsumer.pollAndProduceMany((record) -> of(new ProducerRecord<>("outputTopic", record.key(), record.value())));
 
         verify(producerManager, timeout(10_000).atLeast(3)).produceMessages(any());
-        verify(producerManager, never()).recordInvalidation(any());
+        verify(producerManager.recovery(), never()).recordInvalidation(any());
         Assertions.assertThat(parallelConsumer.getFailureCause()).isNull();
         Assertions.assertThat(stateOf(parallelConsumer)).isEqualTo(State.RUNNING);
+    }
+
+    /**
+     * The produce path's {@link InvalidPidMappingException} arm closes the instance; it must ALSO fail the batch.
+     * Before this, it returned an empty result list and every {@code WorkContainer} was marked succeeded - output
+     * never produced, offset eligible to commit.
+     * <p>
+     * {@code closeOnException} is stubbed to a no-op here so the batch's fate is observable on a live instance: a
+     * failed record is re-dispatched (so {@code produceMessages} is called again) and nothing is committed; a
+     * swallowed one is produced once, marked succeeded, and its offset is committed. On master the swallowed verdict
+     * never reaches a commit only because {@code closeOnException} blocks the worker until the instance is CLOSED -
+     * an accident of the close path, not a property of the verdict, which is exactly why the stub is here.
+     * <p>
+     * A consumer commit mode is used because the {@link ProducerManager} is a mock, so the commit has to be
+     * observable through the consumer spy; the mechanism under test - the batch verdict after a produce failure -
+     * does not depend on the commit mode.
+     */
+    @Test
+    @SneakyThrows
+    @ProvesClaim(TransactionalClaim.OFFSET_AND_RECORDS_ATOMIC)
+    public void invalidPidMappingFailsTheBatchInsteadOfMarkingItSucceeded() {
+        setupParallelConsumerInstance(getBaseOptions(PERIODIC_CONSUMER_ASYNCHRONOUS).toBuilder()
+                .defaultMessageRetryDelay(Duration.ofMillis(50))
+                .build());
+        primeFirstRecord(); // setupParallelConsumerInstance built a new client, so prime again
+        final ParallelEoSStreamProcessor<String, String> pcSpy = spy(parallelConsumer);
+        final InvalidPidMappingException pidMappingGone = new InvalidPidMappingException("pid mapping gone");
+        var producerManager = mockProducerManagerInto(pcSpy, false);
+        when(producerManager.produceMessages(any())).thenThrow(pidMappingGone);
+        doNothing().when(pcSpy).closeOnException(any()); // keep the instance alive so the verdict is observable
+
+        pcSpy.pollAndProduceMany(record -> of(new ProducerRecord<>("outputTopic", record.key(), record.value())));
+
+        try {
+            verify(pcSpy, timeout(10_000).atLeastOnce()).closeOnException(pidMappingGone);
+            verify(producerManager, timeout(10_000).atLeast(2)).produceMessages(any()); // failed, so re-dispatched
+            awaitForSomeLoopCycles(2);
+            assertCommits(of(), "the batch whose output was never produced is failed, so nothing is committed");
+            assertWithMessage("the primed record is still an incomplete offset - it was never marked succeeded")
+                    .that(pcSpy.getWm().getNumberOfIncompleteOffsets()).isEqualTo(1);
+        } finally {
+            // The spy is a DIFFERENT object from parallelConsumer, and the base class's @AfterEach closes
+            // parallelConsumer - which never ran. With closeOnException stubbed out there is no other route to
+            // shutdown, so without this the spy's non-daemon control thread retries the throwing produce forever,
+            // inside a Surefire fork that reuseForks hands to every later test class in this module.
+            pcSpy.close();
+        }
+    }
+
+    /**
+     * The producer close is the one shutdown step in {@code innerDoClose} without the try/catch its three
+     * predecessors have. Unguarded, a throwing {@code ProducerManager#close} does not merely skip teardown: the
+     * control task's catch OVERWRITES {@code failureReason} with "Error from poll control thread", re-runs
+     * {@code doClose} on already-closed subsystems, and fails the control future - so the user's {@code close()}
+     * throws and {@code getFailureCause()} no longer names what actually happened.
+     * <p>
+     * The user function returns no records, so the produce path is never entered and the mocked
+     * {@link ProducerManager} only has to answer its close.
+     */
+    @Test
+    @SneakyThrows
+    public void closeCompletesWhenTheProducerCloseThrows() {
+        setupParallelConsumerInstance(getBaseOptions(PERIODIC_CONSUMER_ASYNCHRONOUS));
+        primeFirstRecord(); // setupParallelConsumerInstance built a new client, so prime again
+        var producerManager = mockProducerManagerInto(parallelConsumer, false);
+        doThrow(new KafkaException("simulated producer close failure")).when(producerManager).close(any());
+
+        parallelConsumer.pollAndProduceMany(record -> UniLists.<ProducerRecord<String, String>>of());
+        awaitForSomeLoopCycles(2);
+
+        parallelConsumer.close(); // must not throw
+
+        verify(producerManager).close(any());
+        Field state = AbstractParallelEoSStreamProcessor.class.getDeclaredField("state");
+        state.setAccessible(true);
+        assertWithMessage("a failing producer close must not stop the instance reaching CLOSED")
+                .that(state.get(parallelConsumer)).isEqualTo(State.CLOSED);
+        assertWithMessage("and it must not invent a failure cause - nothing the user asked for failed")
+                .that(parallelConsumer.getFailureCause()).isNull();
     }
 
 

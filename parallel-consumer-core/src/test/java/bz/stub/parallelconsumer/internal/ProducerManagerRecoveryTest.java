@@ -75,7 +75,7 @@ class ProducerManagerRecoveryTest {
         // a fresh wrapper per build, as the module's configuration path gives; the test env memoises its own spy
         var source = new ReplacementProducerSource<String, String>(this::buildReplacement, "pc-4-test-id");
         var pm = new ProducerManager<>(initial, module.consumerManager(), module.workManager(), module.options(), Optional.of(source));
-        pm.recoveryBackoffInitial = Duration.ofMillis(100);
+        pm.recovery().recoveryBackoffInitial = Duration.ofMillis(100);
         return pm;
     }
 
@@ -98,10 +98,10 @@ class ProducerManagerRecoveryTest {
     }
 
     private void recoverPhaseA(int restoredByTheReplay) throws InterruptedException {
-        manager.recordInvalidation(new ProducerFencedException("fenced"));
-        assertThat(manager.beginReplacement()).isTrue();
-        manager.replayCompleted(restoredByTheReplay);
-        manager.releaseCommitLockAfterReplacement();
+        manager.recovery().recordInvalidation(new ProducerFencedException("fenced"));
+        assertThat(manager.recovery().beginReplacement()).isTrue();
+        manager.recovery().replayCompleted(restoredByTheReplay);
+        manager.recovery().releaseCommitLockAfterReplacement();
     }
 
     /**
@@ -112,28 +112,28 @@ class ProducerManagerRecoveryTest {
      */
     @Test
     void noReplacementIsBuiltWhileTheReplayIsStillOwed() throws Exception {
-        manager.recordInvalidation(new ProducerFencedException("fenced"));
-        assertThat(manager.beginReplacement()).isTrue();
-        manager.releaseCommitLockAfterReplacement(); // the drain threw: replayCompleted was never reached
-        assertThat(manager.isReplayOwed()).isTrue();
+        manager.recovery().recordInvalidation(new ProducerFencedException("fenced"));
+        assertThat(manager.recovery().beginReplacement()).isTrue();
+        manager.recovery().releaseCommitLockAfterReplacement(); // the drain threw: replayCompleted was never reached
+        assertThat(manager.recovery().isReplayOwed()).isTrue();
 
         // the deadline the deferral sets is relative to the clock at the call, so ask about an instant taken BEFORE
         // it rather than after: under a loaded parallel suite the 100 ms backoff can elapse between the call and
         // the assertion, and "now" is then already past the deadline - seen once as a flake in a full run
         Instant beforeTheAttempt = Instant.now();
-        var deferred = manager.completeReplacement();
+        var deferred = manager.recovery().completeReplacement();
 
         assertThat(deferred.getKind()).isEqualTo(ReplacementOutcome.Kind.DEFERRED);
         assertWithMessage("nothing was built").that(built).isEmpty();
         assertThat(manager.isReplacing()).isTrue();
-        assertWithMessage("paced like a failed build, not spun").that(manager.isRecoveryAttemptDue(beforeTheAttempt)).isFalse();
+        assertWithMessage("paced like a failed build, not spun").that(manager.recovery().isRecoveryAttemptDue(beforeTheAttempt)).isFalse();
 
         // the next pass re-enters the lock and replays; only then may it build
-        assertThat(manager.beginReplacement()).isTrue();
-        manager.replayCompleted(0);
-        manager.releaseCommitLockAfterReplacement();
-        assertThat(manager.isReplayOwed()).isFalse();
-        assertThat(manager.completeReplacement().getKind()).isEqualTo(ReplacementOutcome.Kind.REPLACED);
+        assertThat(manager.recovery().beginReplacement()).isTrue();
+        manager.recovery().replayCompleted(0);
+        manager.recovery().releaseCommitLockAfterReplacement();
+        assertThat(manager.recovery().isReplayOwed()).isFalse();
+        assertThat(manager.recovery().completeReplacement().getKind()).isEqualTo(ReplacementOutcome.Kind.REPLACED);
     }
 
     /**
@@ -145,8 +145,8 @@ class ProducerManagerRecoveryTest {
     void aWorkerDispatchedBeforeAReplayIsRefusedTheProduceLockAfterIt() throws Exception {
         var context = mock(PollContextInternal.class);
         doReturn(java.util.OptionalLong.of(manager.replayGeneration())).when(context).replayGenerationAtDispatch();
-        manager.recordInvalidation(new ProducerFencedException("fenced"));
-        assertThat(manager.beginReplacement()).isTrue();
+        manager.recovery().recordInvalidation(new ProducerFencedException("fenced"));
+        assertThat(manager.recovery().beginReplacement()).isTrue();
         var outcome = new AtomicReference<Throwable>();
 
         var blocked = new BlockedThreadAsserter();
@@ -159,9 +159,9 @@ class ProducerManagerRecoveryTest {
                     }
                 },
                 () -> {
-                    manager.replayCompleted(3); // the replay put three records back
-                    manager.releaseCommitLockAfterReplacement();
-                    assertThat(manager.completeReplacement().isTerminal()).isFalse();
+                    manager.recovery().replayCompleted(3); // the replay put three records back
+                    manager.recovery().releaseCommitLockAfterReplacement();
+                    assertThat(manager.recovery().completeReplacement().isTerminal()).isFalse();
                 });
 
         assertThat(outcome.get()).isInstanceOf(ProducerInvalidatedException.class);
@@ -179,8 +179,8 @@ class ProducerManagerRecoveryTest {
     void aParkedWorkerProceedsWhenTheReplayPutNothingBack() throws Exception {
         var context = mock(PollContextInternal.class);
         doReturn(java.util.OptionalLong.of(manager.replayGeneration())).when(context).replayGenerationAtDispatch();
-        manager.recordInvalidation(new ProducerFencedException("fenced"));
-        assertThat(manager.beginReplacement()).isTrue();
+        manager.recovery().recordInvalidation(new ProducerFencedException("fenced"));
+        assertThat(manager.recovery().beginReplacement()).isTrue();
         var outcome = new AtomicReference<Throwable>();
 
         var blocked = new BlockedThreadAsserter();
@@ -193,9 +193,9 @@ class ProducerManagerRecoveryTest {
                     }
                 },
                 () -> {
-                    manager.replayCompleted(0);
-                    manager.releaseCommitLockAfterReplacement();
-                    assertThat(manager.completeReplacement().isTerminal()).isFalse();
+                    manager.recovery().replayCompleted(0);
+                    manager.recovery().releaseCommitLockAfterReplacement();
+                    assertThat(manager.recovery().completeReplacement().isTerminal()).isFalse();
                 });
 
         assertThat(outcome.get()).isNull();
@@ -205,11 +205,11 @@ class ProducerManagerRecoveryTest {
     void recordingAConditionSuspendsAvailabilityAtOnceOnTheDetectingThread() {
         assertThat(manager.isProducerAvailable()).isTrue();
 
-        manager.recordInvalidation(new ProducerFencedException("fenced"));
+        manager.recovery().recordInvalidation(new ProducerFencedException("fenced"));
 
         assertThat(manager.isProducerAvailable()).isFalse();
         assertThat(manager.isReplacing()).isTrue();
-        assertThat(manager.isRecoveryAttemptDue(Instant.now())).isTrue();
+        assertThat(manager.recovery().isRecoveryAttemptDue(Instant.now())).isTrue();
     }
 
     /**
@@ -234,7 +234,7 @@ class ProducerManagerRecoveryTest {
                         throw new RuntimeException(e);
                     }
                 },
-                () -> assertThat(manager.completeReplacement().isTerminal()).isFalse());
+                () -> assertThat(manager.recovery().completeReplacement().isTerminal()).isFalse());
 
         assertWithMessage("the worker held a produce lock with the replacement published").that(produced.get()).isTrue();
         assertThat(manager.isProducerAvailable()).isTrue();
@@ -288,7 +288,7 @@ class ProducerManagerRecoveryTest {
      */
     @Test
     void aWriteLockHeldElsewhereForTheWholeWaitDefersRecoveryWithBackoff() throws Exception {
-        manager.recordInvalidation(new ProducerFencedException("fenced"));
+        manager.recovery().recordInvalidation(new ProducerFencedException("fenced"));
         var writer = new Thread(() -> {
             manager.getProducerTransactionLock().writeLock().lock();
             try {
@@ -302,16 +302,16 @@ class ProducerManagerRecoveryTest {
         writer.start();
         Thread.sleep(50);
 
-        boolean entered = manager.beginReplacement();
+        boolean entered = manager.recovery().beginReplacement();
 
         assertThat(entered).isFalse();
         assertThat(manager.isReplacing()).isTrue();
-        assertWithMessage("the condition stays recorded for the next pass").that(manager.pendingInvalidation()).isPresent();
-        assertWithMessage("not due again until the backoff has elapsed").that(manager.isRecoveryAttemptDue(Instant.now())).isFalse();
-        assertThat(manager.timeUntilNextRecoveryAttempt(Instant.now())).isPresent();
+        assertWithMessage("the condition stays recorded for the next pass").that(manager.recovery().pendingInvalidation()).isPresent();
+        assertWithMessage("not due again until the backoff has elapsed").that(manager.recovery().isRecoveryAttemptDue(Instant.now())).isFalse();
+        assertThat(manager.recovery().timeUntilNextRecoveryAttempt(Instant.now())).isPresent();
         writer.join();
-        assertThat(manager.beginReplacement()).isTrue();
-        manager.releaseCommitLockAfterReplacement();
+        assertThat(manager.recovery().beginReplacement()).isTrue();
+        manager.recovery().releaseCommitLockAfterReplacement();
     }
 
     @Test
@@ -321,7 +321,7 @@ class ProducerManagerRecoveryTest {
         doThrow(new IllegalStateException("close blew up")).when(initial).close(any(Duration.class));
 
         recoverPhaseA();
-        var outcome = manager.completeReplacement();
+        var outcome = manager.recovery().completeReplacement();
 
         verify(initial).abortTransaction();
         verify(initial).close(any(Duration.class));
@@ -333,16 +333,16 @@ class ProducerManagerRecoveryTest {
     @Test
     void aSuccessfulCommitResetsTheConsecutiveRecoveryCountAndTheNextRecoveryIsNotPaced() throws Exception {
         recoverPhaseA();
-        assertThat(manager.completeReplacement().getKind()).isEqualTo(ReplacementOutcome.Kind.REPLACED);
+        assertThat(manager.recovery().completeReplacement().getKind()).isEqualTo(ReplacementOutcome.Kind.REPLACED);
         assertThat(manager.getConsecutiveRecoveriesWithoutCommit()).isEqualTo(1);
 
         // a second condition with no commit between is paced by the backoff
-        manager.recordInvalidation(new ProducerFencedException("fenced again"));
-        assertThat(manager.isRecoveryAttemptDue(Instant.now())).isFalse();
-        assertThat(manager.beginReplacement()).isTrue(); // the pacing gates the control loop, not the lock
-        manager.replayCompleted(0);
-        manager.releaseCommitLockAfterReplacement();
-        assertThat(manager.completeReplacement().getKind()).isEqualTo(ReplacementOutcome.Kind.REPLACED);
+        manager.recovery().recordInvalidation(new ProducerFencedException("fenced again"));
+        assertThat(manager.recovery().isRecoveryAttemptDue(Instant.now())).isFalse();
+        assertThat(manager.recovery().beginReplacement()).isTrue(); // the pacing gates the control loop, not the lock
+        manager.recovery().replayCompleted(0);
+        manager.recovery().releaseCommitLockAfterReplacement();
+        assertThat(manager.recovery().completeReplacement().getKind()).isEqualTo(ReplacementOutcome.Kind.REPLACED);
         assertThat(manager.getConsecutiveRecoveriesWithoutCommit()).isEqualTo(2);
 
         // R23 / R24 at the meter: two recoveries so far, both fenced, none committed since
@@ -357,8 +357,8 @@ class ProducerManagerRecoveryTest {
         assertThat(registry.get("pc.producer.consecutive.recoveries").gauge().value()).isEqualTo(0.0);
         assertWithMessage("the counter is cumulative; only the gauge resets")
                 .that(registry.get("pc.producer.recoveries").tag("condition", "ProducerFencedException").counter().count()).isEqualTo(2.0);
-        manager.recordInvalidation(new ProducerFencedException("fenced a third time"));
-        assertWithMessage("the first recovery of a new run is not paced").that(manager.isRecoveryAttemptDue(Instant.now())).isTrue();
+        manager.recovery().recordInvalidation(new ProducerFencedException("fenced a third time"));
+        assertWithMessage("the first recovery of a new run is not paced").that(manager.recovery().isRecoveryAttemptDue(Instant.now())).isTrue();
     }
 
     /**
@@ -371,7 +371,7 @@ class ProducerManagerRecoveryTest {
         onBuild.put(0, replacement -> doThrow(new TimeoutException("coordinator unreachable")).when(replacement).initTransactions());
         recoverPhaseA();
 
-        var outcome = manager.completeReplacement();
+        var outcome = manager.recovery().completeReplacement();
 
         assertThat(outcome.getKind()).isEqualTo(ReplacementOutcome.Kind.DEFERRED);
         verify(built.get(0)).close(any(Duration.class));
@@ -384,7 +384,7 @@ class ProducerManagerRecoveryTest {
         onBuild.put(0, replacement -> doThrow(new TransactionalIdAuthorizationException("denied")).when(replacement).initTransactions());
         recoverPhaseA();
 
-        var outcome = manager.completeReplacement();
+        var outcome = manager.recovery().completeReplacement();
 
         assertThat(outcome.getKind()).isEqualTo(ReplacementOutcome.Kind.TERMINAL);
         verify(built.get(0)).close(any(Duration.class));
@@ -401,7 +401,7 @@ class ProducerManagerRecoveryTest {
         sourceFailure = new ProducerFactoryContractException("The ProducerFactory returned the producer it had already returned");
         recoverPhaseA();
 
-        var outcome = manager.completeReplacement();
+        var outcome = manager.recovery().completeReplacement();
 
         assertThat(outcome.getKind()).isEqualTo(ReplacementOutcome.Kind.TERMINAL);
         assertThat(outcome.getFailure()).hasMessageThat().contains(ProducerFactoryContractException.class.getName());
@@ -428,7 +428,7 @@ class ProducerManagerRecoveryTest {
         manager = managerOn(registryThatRejectsTheRecoveryCounter);
         recoverPhaseA();
 
-        var outcome = manager.completeReplacement();
+        var outcome = manager.recovery().completeReplacement();
 
         assertThat(outcome.getKind()).isEqualTo(ReplacementOutcome.Kind.REPLACED);
         assertThat(manager.isProducerAvailable()).isTrue();
@@ -456,10 +456,10 @@ class ProducerManagerRecoveryTest {
      */
     @Test
     void anErrorInsideTheWriteLockedRegionStillReleasesTheWriteLock() throws Exception {
-        manager.recordInvalidation(new ProducerFencedException("fenced"));
+        manager.recovery().recordInvalidation(new ProducerFencedException("fenced"));
         doThrow(new OutOfMemoryError("simulated, from abortTransaction")).when(initial).abortTransaction();
 
-        assertThrows(OutOfMemoryError.class, manager::beginReplacement);
+        assertThrows(OutOfMemoryError.class, manager.recovery()::beginReplacement);
 
         assertWithMessage("the write lock is not left held by a thread that is going down")
                 .that(manager.isTransactionCommittingInProgress()).isFalse();

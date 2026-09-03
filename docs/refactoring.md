@@ -497,8 +497,6 @@ cosmetic - see the last bullet.*
   (reports `PT30S` for an actual 10s). Tiny standalone fix + unit test.
 
 ### internal/ProducerManager.java
-- **Extract the availability state machine** (`Availability`, its monitor, backoff, park/wake, replay-owed flag
-  and generation) into a package-private `ProducerAvailability`; the class crossed 1,000 lines with astubbs#225.
 - `private synchronized void syncBeginTransaction` locks on `this` -
   lock-hygiene: a dedicated private lock is safer (same idea as the PCMetrics `confluentinc#859`
   fix); low priority, separate concern. `alternatives to this brute force approach`:
