@@ -32,11 +32,11 @@
 # every live ref, so a note that exists only on an unmerged branch is listed under the branch set
 # carrying it, where this hook's own `find` and `grep` over the working tree could never see it. The
 # grouping, the headings and the impact order are the ones this file used to compute in bash; they
-# live in bin/lib/views.mjs (`formatDocsIndex`) and bin/lib/inflight-tags.mjs now, and this file
+# live in bin/lib/docs-views.mjs (`formatDocsIndex`) and bin/lib/inflight-tags.mjs now, and this file
 # keeps only what is NOT corpus: the framing, the repo-level registers, the ideation documents and
 # the test-hardening audits, all still read from the working tree (R17). The hook no longer sources
-# bin/lib/inflight-tags.sh - the vocabulary reaches it through the command, and the Node copy is
-# held equal to the shell one by a parity self-test in bin/test-inflight.mjs.
+# bin/lib/inflight-tags.sh - the vocabulary reaches it through the command, from the one source
+# bin/lib/inflight-tags.mjs, which the shell wrapper the gate sources is itself rendered from.
 #
 # COST, MEASURED COLD, end to end, on the slowest developer host (an Apple Silicon laptop, 613
 # refs), against the 8 s session-start budget (the plan's R19, KTD5). Three runs each, same

@@ -486,6 +486,7 @@ const bigIndexFixture = () => (BIG_INDEX ??= buildBigIndexFixture())
 const bodyShown = (out, path, ref) => out.split(`--- ${path} @ ${ref} ---`)[1] ?? null
 
 const views = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'views.mjs')).href)
+const docsViews = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'docs-views.mjs')).href)
 const perfOf = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'perf.mjs')).href)
 
 /** How many times one subcommand ran since the last perfReset, read off the perf report. */
@@ -2031,7 +2032,7 @@ const CHECKS = [
         id: 'source-frame-puts-the-label-first-and-the-command-last',
         why: 'an agent tells a fresh signal from a repeat by its first line, and always needs the next command',
         run: async (binDir) => {
-            const v = await views(binDir)
+            const v = await docsViews(binDir)
             const cases = [
                 ['header', 'docs/inflight/x.md', 'docs context: divergence header for docs/inflight/x.md'],
                 ['terms', ['RetryQueue', 'writeLock'], 'docs context: prompt terms RetryQueue, writeLock'],
@@ -2045,7 +2046,7 @@ const CHECKS = [
                     && ls.includes('body line two')
             })
         },
-        mutate: (binDir) => patch(join(binDir, 'lib', 'views.mjs'),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-views.mjs'),
             '    return [label, body.trimEnd(), `more: ${moreCommand}`].join(\'\\n\')',
             '    return [`more: ${moreCommand}`, body.trimEnd(), label].join(\'\\n\')'),
     },
@@ -2054,7 +2055,7 @@ const CHECKS = [
         why: 'a header that shows counts without the evidence or the next command is an assertion, not a finding',
         run: async (binDir) => {
             const n = await notes(binDir)
-            const v = await views(binDir)
+            const v = await docsViews(binDir)
             return inDir(docsFixture(), () => {
                 const full = n.drift('docs/inflight/note.md', { prs: new Map(), at: { ref: 'master' } })
                 const box = v.formatDivergenceHeader(full, { tier: 'full' })
@@ -2068,7 +2069,7 @@ const CHECKS = [
                     && /refs searched/.test(line) && /baseline/.test(line) && /1 preserved/.test(line)
             })
         },
-        mutate: (binDir) => patch(join(binDir, 'lib', 'views.mjs'),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-views.mjs'),
             '    const rest = `bin/inflight.mjs note drift ${d.path}`', "    const rest = 'bin/inflight.mjs note drift'"),
     },
     // ---------------------------------------------------------------------------------------------
@@ -2092,7 +2093,7 @@ const CHECKS = [
             // The baseline's copy: the note's own body line, and none of what a branch added.
             return body !== null && body.includes('\nbody\n') && !body.includes('## What the branch learned')
         },
-        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-commands.mjs'),
             '(lookup.blobs.has(base) ? base : liveCarriers[0] ?? null)', '(liveCarriers[0] ?? null)'),
     },
     {
@@ -2107,7 +2108,7 @@ const CHECKS = [
             if (parked.code !== 0 || !/yy-live/.test(parked.out.split('\n')[0])) return false
             return (bodyShown(parked.out, 'docs/inflight/parked.md', 'yy-live') ?? '').includes('first live copy')
         },
-        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-commands.mjs'),
             'const liveCarriers = carriers.filter((r) => liveSet.has(r)).sort()',
             'const liveCarriers = carriers.filter((r) => liveSet.has(r)).sort().reverse()'),
     },
@@ -2127,7 +2128,7 @@ const CHECKS = [
             if (other.code !== 0 || !/adds-heading/.test(other.out.split('\n')[0])) return false
             return (bodyShown(other.out, 'docs/inflight/note.md', 'adds-heading') ?? '').includes('## What the branch learned')
         },
-        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-commands.mjs'),
             'const liveCarriers = carriers.filter((r) => liveSet.has(r)).sort()',
             'const liveCarriers = carriers.filter(() => true).sort()'),
     },
@@ -2144,9 +2145,9 @@ const CHECKS = [
             if (!header.out.includes('=== divergence:') || bodyShown(header.out, path, 'master') !== null) return false
             return header.out === show.out
         },
-        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
-            "run: (args, emit) => showDocument([...args, '--header-only'], emit)",
-            'run: (args, emit) => showDocument(args, emit)'),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-commands.mjs'),
+            "export const showHeader = (args, emit) => showDocument([...args, '--header-only'], emit)",
+            'export const showHeader = (args, emit) => showDocument(args, emit)'),
     },
     {
         id: 'docs-show-says-what-it-searched-and-cannot-run-outside-a-repo',
@@ -2162,7 +2163,7 @@ const CHECKS = [
                     return r.code === 2 && r.out.trim().length > 0
                 })
         },
-        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-commands.mjs'),
             "if (!tips.ok) return { ok: false, reason: 'docs show: cannot list refs - is this a git repository?' }",
             'if (!tips.ok) return { ok: true }'),
     },
@@ -2176,7 +2177,7 @@ const CHECKS = [
             return ['docs/inflight', 'docs/solutions', 'docs/plans'].every((area) => r.out.includes(area))
                 && !r.out.includes('=== divergence:')
         },
-        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-commands.mjs'),
             "if (!inCorpus(path)) {\n        emit(", "if (!inCorpus(path)) {\n        return { ok: false, reason: 'mutant' }\n        emit("),
     },
     {
@@ -2198,25 +2199,33 @@ const CHECKS = [
     // docs/plans/2026-09-03-001-feat-inflight-docs-context-query-plan.md, unit U5.
     // ---------------------------------------------------------------------------------------------
     {
-        id: 'tag-vocabulary-matches-the-bash-library',
-        why: 'the gate sources the shell file and the shape imports the Node one; a value or an order the two disagree on is a note the gate accepts and the shape misplaces, and nothing else would report it',
+        id: 'tag-vocabulary-round-trips-through-the-shell-library',
+        why: 'the gate reads the vocabulary by sourcing the shell wrapper, which evals what the Node file prints; a printer that renders a set wrongly is a gate comparing against the wrong values, and nothing else would report it',
         run: async (binDir) => {
             const t = await tagsLib(binDir)
             const names = Object.keys(t.SHELL_VARIABLES)
-            // SOURCED, NOT PARSED: the feature and register sets are built by shell expansion, so
-            // only bash can say what they hold.
+            // SOURCED UNDER BASH, NOT PARSED: the wrapper runs node and evals, so this exercises
+            // the path the gate takes - node resolution, the render, the eval - not the values alone.
             const script = `source "$1" || exit 9; for v in ${names.join(' ')}; do eval "printf '%s\\n' \\"\\$\${v}\\""; done`
             const r = spawnSync('bash', ['-c', script, '_', join(binDir, 'lib', 'inflight-tags.sh')], { encoding: 'utf8' })
             if (r.status !== 0) return false
             const got = r.stdout.split('\n').slice(0, names.length).map((l) => l.trim().split(/\s+/).filter(Boolean))
             if (got.length !== names.length || got.some((v) => v.length === 0)) return false
+            // And the wrapper must fail LOUDLY, not define nothing, when the render fails: an empty
+            // set would let the gate call every note invalid, or - with set -u off - valid.
+            // bash by absolute path: spawnSync resolves the executable against the env it is
+            // GIVEN, so an emptied PATH would fail to find bash and prove nothing about node.
+            const bashPath = spawnSync('sh', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim()
+            const broken = spawnSync(bashPath, ['-c', 'source "$1"; echo "rc=$?"', '_', join(binDir, 'lib', 'inflight-tags.sh')],
+                { encoding: 'utf8', env: { ...process.env, PATH: '/nonexistent' } })
+            if (!/rc=[1-9]/.test(broken.stdout) || !broken.stderr.includes('node')) return false
             return names.every((n, i) => JSON.stringify(got[i]) === JSON.stringify(t.SHELL_VARIABLES[n]))
         },
-        // One impact moved one place: the same set, a different order, which is the drift that
-        // would silently re-rank the index.
+        // The printer joins one set on the wrong separator: bash then reads the whole set as one
+        // word, and the gate would reject every real value.
         mutate: (binDir) => patch(join(binDir, 'lib', 'inflight-tags.mjs'),
-            "export const INFLIGHT_IMPACT_ORDER = [\n    'misdirection', 'blind-spot', 'crash',",
-            "export const INFLIGHT_IMPACT_ORDER = [\n    'blind-spot', 'misdirection', 'crash',"),
+            "        return `${name}=\"${values.join(' ')}\"`",
+            "        return `${name}=\"${values.join(name === 'INFLIGHT_TYPES' ? ',' : ' ')}\"`"),
     },
     {
         id: 'bare-docs-prints-the-shape-the-guide-and-any-recorded-delivery-failure',
@@ -2243,7 +2252,7 @@ const CHECKS = [
             const noticed = invoke(binDir, ['docs'], { cwd: dir, env: { ...process.env, PC_INFLIGHT_CACHE_DIR: cacheDir } })
             return noticed.code === 0 && /DELIVERY FAILED: header - the hook threw on a fixture/.test(noticed.out)
         },
-        mutate: (binDir) => patch(join(binDir, 'lib', 'views.mjs'),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-views.mjs'),
             'for (const [delivery, f] of Object.entries(failures)) {', 'for (const [delivery, f] of []) {'),
     },
     {
@@ -2276,7 +2285,7 @@ const CHECKS = [
             const want = ['registers', ...t.INFLIGHT_IMPACT_ORDER, 'feature', 'unmatched', 'closed', 'deferred']
             return listed.code === 0 && JSON.stringify(order) === JSON.stringify(want)
         },
-        mutate: (binDir) => patch(join(binDir, 'lib', 'views.mjs'),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-views.mjs'),
             'out.push(`        ${TOOL} docs show ${d.path}`)', 'out.push(`        ${TOOL} docs show`)'),
     },
     {
@@ -2344,7 +2353,7 @@ const CHECKS = [
             const none = invoke(binDir, ['docs', 'list'], { cwd: dir })
             return none.code === 0 && none.out.includes('bin/inflight.mjs docs list inflight')
         },
-        mutate: (binDir) => patch(join(binDir, 'lib', 'views.mjs'),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-views.mjs'),
             "const out = [area === null ? 'give an area to list:' : `no area named '${area}' - the areas are:`]",
             "return area === null ? 'give an area to list' : `no area named '${area}'`\n        const out = []"),
     },
@@ -2425,7 +2434,7 @@ const CHECKS = [
                 .every((h) => r.out.includes(`${h}\n`)) && r.out.startsWith('docs context: session index\n')
         },
         // Only the first path of each cluster is grouped; the rest silently vanish from the index.
-        mutate: (binDir) => patch(join(binDir, 'lib', 'views.mjs'),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-views.mjs'),
             'for (const p of c.paths) setOf.set(p, key)', 'for (const p of c.paths.slice(0, 1)) setOf.set(p, key)'),
     },
     {
@@ -2449,7 +2458,7 @@ const CHECKS = [
             const bad = invoke(binDir, ['docs', 'index', '--max-lines', 'lots'], { cwd: dir })
             return bad.code === 2
         },
-        mutate: (binDir) => patch(join(binDir, 'lib', 'views.mjs'), '                omitted++\n', '                omitted += 2\n'),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-views.mjs'), '                omitted++\n', '                omitted += 2\n'),
     },
     {
         id: 'docs-index-reads-on-baseline-titles-from-the-baseline-blob-not-the-working-tree',
@@ -2519,7 +2528,7 @@ const CHECKS = [
             if (ok.out.includes('DELIVERY FAILED: session index')) return false
             return withCache(() => !('session index' in cache.deliveryFailures()))
         },
-        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'), '            clearDeliveryFailure(INDEX_DELIVERY)\n', ''),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-commands.mjs'), '    clearDeliveryFailure(INDEX_DELIVERY)\n', ''),
     },
     {
         id: 'help-lists-docs-index-with-its-when-line',
@@ -2726,7 +2735,7 @@ const CHECKS = [
             const last = lines.filter((l) => l.length > 0).at(-1)
             return last.startsWith('more: bin/inflight.mjs prior-art --headings ') && last.includes('RetryQueueDrainer')
         },
-        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'), "sourceFrame('branch', ref,", "sourceFrame('index', ref,"),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-commands.mjs'), "sourceFrame('branch', ref,", "sourceFrame('index', ref,"),
     },
     {
         id: 'docs-for-branch-defaults-to-head-and-says-so-on-the-baseline',
@@ -2757,7 +2766,7 @@ const CHECKS = [
                 git('worktree', 'remove', '--force', wt)
             }
         },
-        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'), "ref = head.out.trim()", "ref = 'master'"),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-commands.mjs'), "ref = head.out.trim()", "ref = 'master'"),
     },
     {
         id: 'docs-for-branch-never-calls-gh-and-is-silent-on-stdout-when-nothing-matches',
@@ -2782,7 +2791,7 @@ const CHECKS = [
             if (calls.length !== 1) return false
             return /nothing-names-this/.test(r.stderr) && /\d+ live ref/.test(r.stderr) && /not proof/i.test(r.stderr)
         },
-        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'), 'prsByBranch({ network: false })', 'prsByBranch()'),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-commands.mjs'), 'prsByBranch({ network: false })', 'prsByBranch()'),
     },
     {
         id: 'docs-for-branch-records-its-own-failure-and-clears-it-on-the-next-success',
@@ -2806,7 +2815,7 @@ const CHECKS = [
             if (ok.code !== 0) return false
             return withCache(() => !('branch facts' in cache.deliveryFailures()))
         },
-        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'), '            clearDeliveryFailure(BRANCH_DELIVERY)\n', ''),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-commands.mjs'), '    clearDeliveryFailure(BRANCH_DELIVERY)\n', ''),
     },
     {
         id: 'help-lists-docs-for-branch-with-its-when-line',
@@ -2822,7 +2831,96 @@ const CHECKS = [
         },
         mutate: (binDir) => patch(join(binDir, 'inflight.mjs'), "        name: 'for-branch',", "        name: 'for-br',"),
     },
+    // ---------------------------------------------------------------------------------------------
+    // THE FULL TIER'S COST IS BOUNDED BY WHAT THE HEADER SHOWS, and callers hand `drift` what they
+    // already resolved. docs/plans/2026-09-03-001-feat-inflight-docs-context-query-plan.md, KTD2.
+    // ---------------------------------------------------------------------------------------------
+    {
+        id: 'drift-details-every-divergent-cluster-by-default-and-only-the-largest-under-previewLimit',
+        why: 'note drift renders branch facts and a preview for every cluster and must keep doing so; docs show renders three, and paying for the rest was the cost this option removes',
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            return inDir(docsFixture(), () => {
+                const all = n.drift('docs/inflight/note.md', { prs: new Map() })
+                if (!all.found || all.divergent.length < 2) return false
+                if (!all.divergent.every((c) => Array.isArray(c.branches) && c.preview !== undefined)) return false
+                const one = n.drift('docs/inflight/note.md', { prs: new Map(), previewLimit: 1 })
+                const detailed = one.divergent.filter((c) => c.branches !== undefined)
+                // Exactly one, and it is the one the header would put first.
+                return detailed.length === 1 && detailed[0].blob === n.largestFirst(one.divergent)[0].blob
+                    && one.divergent.every((c) => c.branches !== undefined || c.preview === undefined)
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
+            'lookup: givenLookup = null, previewLimit = Infinity,', 'lookup: givenLookup = null, previewLimit = 1,'),
+    },
+    {
+        id: 'docs-show-hands-drift-the-refs-baseline-and-lookup-it-resolved-for-the-selection',
+        why: 'the selection lists the refs and looks the path up across them; asking git the same questions again inside drift doubled the header\'s fixed cost for identical answers',
+        run: async (binDir) => {
+            const r = invoke(binDir, ['--perf', 'docs', 'show', 'docs/inflight/note.md', '--header-only'], { cwd: manyVersionsFixture() })
+            if (r.code !== 0 || !r.out.includes('=== divergence:')) return false
+            return callCount(r.out, 'git for-each-ref') === 1
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-commands.mjs'),
+            '        tips: tips.tips, base, lookup, previewLimit: HEADER_TOP,', '        previewLimit: HEADER_TOP,'),
+    },
+    {
+        id: 'docs-show-previews-only-the-versions-its-header-shows',
+        why: 'one diff per divergent cluster is the size, which the ranking needs; the preview diff is for the rows the header prints, and a corpus note with a dozen divergent versions paid for nine nobody saw',
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            const dir = manyVersionsFixture()
+            const divergent = await inDir(dir, () => n.drift('docs/inflight/note.md', { prs: new Map(), detail: 'summary', at: null }).divergent.length)
+            if (divergent <= 3) return false
+            const r = invoke(binDir, ['--perf', 'docs', 'show', 'docs/inflight/note.md', '--header-only'], { cwd: dir })
+            if (r.code !== 0) return false
+            // The sizes for every cluster, plus one preview for each of the three rows shown.
+            return callCount(r.out, 'git diff') === divergent + 3
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-commands.mjs'),
+            '        tips: tips.tips, base, lookup, previewLimit: HEADER_TOP,', '        tips: tips.tips, base, lookup,'),
+    },
+    {
+        id: 'the-header-caps-the-adds-line-at-five-headings-and-counts-the-rest',
+        why: 'a version that restructured a note adds dozens of headings, and a header line that names them all is the wall of text every other list in these views is capped against',
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            const v = await docsViews(binDir)
+            return inDir(manyVersionsFixture(), () => {
+                const d = n.drift('docs/inflight/note.md', { prs: new Map(), at: { ref: 'master' } })
+                const box = v.formatDivergenceHeader(d, { tier: 'full' })
+                const adds = box.split('\n').find((l) => l.includes('adds: "## Added 1"'))
+                if (!adds) return false
+                return adds.includes('"## Added 5"') && !adds.includes('"## Added 6"') && adds.endsWith(' and 2 more')
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-views.mjs'), 'const ADDS_SHOWN = 5', 'const ADDS_SHOWN = 50'),
+    },
 ]
+
+/**
+ * The corpus fixture plus MANY divergent versions of one note: five branches each appending a
+ * distinct line, and one adding seven headings - more clusters than the header shows and more
+ * headings than its adds line names. Its own repository for the reason bin/lib/fixture-repos.mjs
+ * gives: the drift checks assert exact counts on the shared one.
+ */
+let MANY = null
+function manyVersionsFixture() {
+    if (MANY) return MANY
+    const { dir, git, commit, write, NOTE } = buildDocsFixture()
+    for (let i = 1; i <= 5; i++) {
+        git('checkout', '-q', '-b', `version-${i}`, 'master')
+        write('docs/inflight/note.md', `${NOTE}line only version ${i} adds\n`)
+        commit(`version ${i}`)
+    }
+    git('checkout', '-q', '-b', 'many-headings', 'master')
+    write('docs/inflight/note.md', `${NOTE}${Array.from({ length: 7 }, (_, i) => `\n## Added ${i + 1}\n\ntext\n`).join('')}`)
+    commit('seven headings')
+    git('checkout', '-q', 'master')
+    MANY = dir
+    return dir
+}
 
 console.log('bin/test-inflight.mjs - front door and prior-art library self-test\n')
 

@@ -14,8 +14,11 @@
 // docs/solutions/workflow-issues/a-hook-processes-own-directory-describes-the-session-not-the-command-2026-08-31.md;
 // what is here is that order, once.
 //
-// NOTHING HERE PRINTS OR EXITS. A hook's stdout is the JSON envelope only, and whether to print one
-// is the hook's decision; this file answers questions.
+// NOTHING HERE PRINTS, AND ONE THING EXITS. A hook's stdout is the JSON envelope only, and whether
+// to print one is the hook's decision; this file answers questions. The exception is
+// `runFailingOpen`, which IS the process boundary of a fail-open hook - the two docs hooks ended
+// with the same twelve-line try/catch/record/exit trailer, and a trailer copied twice is a contract
+// that drifts twice.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -137,4 +140,27 @@ export function seenStore(hookName, sessionId) {
       }
     },
   };
+}
+
+/**
+ * RUN A FAIL-OPEN HOOK TO ITS EXIT: `main` to completion, and on any throw the failure recorded
+ * under `delivery` in the in-flight tool's cache (`delivery-failures.json`, the plan's KTD13) so
+ * that bare `inflight docs` can show it - then exit 0 either way, because a hook that blocks a
+ * tool call to be helpful has inverted its own purpose (R20). The agent sees nothing on failure;
+ * the cache remembers why, and a later success of the same delivery clears the record.
+ *
+ * The record is a courtesy: a tree where even writing it fails still gets its tool call.
+ */
+export async function runFailingOpen(delivery, main) {
+  try {
+    await main();
+  } catch (e) {
+    try {
+      const { recordDeliveryFailure } = await import('../../../bin/lib/cache.mjs');
+      recordDeliveryFailure(delivery, e && e.message ? e.message : String(e));
+    } catch {
+      /* the record is a courtesy; a tree where even that fails still gets its tool call */
+    }
+  }
+  process.exit(0);
 }

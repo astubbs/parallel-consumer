@@ -14,7 +14,7 @@
 #
 # THE SETS ARE CLOSED ON PURPOSE, the same reasoning docs/data/schema.yaml gives for the feature
 # categories: an open set drifts into synonyms nobody can group by. If a note genuinely does not fit,
-# add the value to bin/lib/inflight-tags.sh and to docs/inflight/AGENTS.md in the same commit, and
+# add the value to bin/lib/inflight-tags.mjs and to docs/inflight/AGENTS.md in the same commit, and
 # say why - do not invent one in a note and hope.
 #
 # WHAT IT DELIBERATELY DOES NOT CHECK: whether the chosen impact is the RIGHT one. That is a
@@ -23,11 +23,11 @@
 
 set -uo pipefail
 
-# The sets live in bin/lib/inflight-tags.sh, whose Node port (bin/lib/inflight-tags.mjs) the session
-# index (`bin/inflight.mjs docs index`) groups by - held equal by a parity self-test, so the gate can
-# never accept a tag the index cannot place. The lib also explains why the bug/task partition
-# exists. Resolve it from this script's own location BEFORE the cd below - the self-test runs this
-# gate inside a fixture repo.
+# The sets live in bin/lib/inflight-tags.mjs - the file the session index (`bin/inflight.mjs docs
+# index`) groups by - and reach bash through bin/lib/inflight-tags.sh, which evals that file's
+# `--shell` rendering. One source, so the gate cannot accept a tag the index cannot place. The lib
+# also explains why the bug/task partition exists. Resolve it from this script's own location
+# BEFORE the cd below - the self-test runs this gate inside a fixture repo.
 # shellcheck source=lib/inflight-tags.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/inflight-tags.sh" || exit 1
 
@@ -127,7 +127,7 @@ for f in docs/inflight/*.md; do
     if [ -n "$labels" ]; then
         for label in $labels; do
             if ! in_set "$label" "$LABELS"; then
-                note "$f \"$(note_title "$f")\": inflight-labels '$label' is not one of: $LABELS. Labels name a MECHANISM, never an area (the filename prefix does that) or a consequence (the impact does). Add a value to bin/lib/inflight-tags.sh AND docs/inflight/AGENTS.md in the same commit, or drop it"
+                note "$f \"$(note_title "$f")\": inflight-labels '$label' is not one of: $LABELS. Labels name a MECHANISM, never an area (the filename prefix does that) or a consequence (the impact does). Add a value to bin/lib/inflight-tags.mjs AND docs/inflight/AGENTS.md in the same commit, or drop it"
             fi
         done
     fi
@@ -139,7 +139,7 @@ for f in docs/inflight/*.md; do
 done
 
 # THE DOC AND THE LIB MUST LIST THE SAME VALUES, and until now nothing checked it. The sets live in
-# bin/lib/inflight-tags.sh and are DESCRIBED in docs/inflight/AGENTS.md, which this script names as
+# bin/lib/inflight-tags.mjs and are DESCRIBED in docs/inflight/AGENTS.md, which this script names as
 # their owner five times over - so the two were stated twice with the agreement verified only by
 # whoever happened to look. That is the shape this repo treats as a defect everywhere else: a rule
 # documented rather than enforced drifts, and the drift is silent because both halves still parse.
@@ -149,7 +149,7 @@ done
 OWNER_DOC="docs/inflight/AGENTS.md"
 if [ -r "$OWNER_DOC" ]; then
     for v in $INFLIGHT_TYPES $INFLIGHT_BUG_IMPACTS $INFLIGHT_TASK_IMPACTS; do
-        grep -q "\`${v}\`" "$OWNER_DOC" || note "vocabulary '$v' is in bin/lib/inflight-tags.sh but never described in $OWNER_DOC"
+        grep -q "\`${v}\`" "$OWNER_DOC" || note "vocabulary '$v' is in bin/lib/inflight-tags.mjs but never described in $OWNER_DOC"
     done
     # every impact the doc's table declares must be one the gate accepts.
     # `sed -E`, NOT a basic regex: `\+` and `\|` are GNU BRE extensions that BSD sed does not
@@ -159,7 +159,7 @@ if [ -r "$OWNER_DOC" ]; then
     while IFS= read -r v; do
         [ -n "$v" ] || continue
         in_set "$v" "$INFLIGHT_BUG_IMPACTS $INFLIGHT_TASK_IMPACTS" \
-            || note "$OWNER_DOC documents impact '$v', which bin/lib/inflight-tags.sh does not accept"
+            || note "$OWNER_DOC documents impact '$v', which bin/lib/inflight-tags.mjs does not accept"
     done <<< "$(sed -E -n 's/^\| `([a-z-]+)` \| (bug|task|feature|register).*/\1/p' "$OWNER_DOC")"
 fi
 

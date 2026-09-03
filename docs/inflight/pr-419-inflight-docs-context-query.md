@@ -30,10 +30,11 @@ on the text the agent writes; folding the existing write-time solutions hook ont
 - Every delivery publishes its measured cold cost in its own header before it ships; the budgets
   are in the plan's cost decision. The full-tier header pays one diff per divergent cluster for the
   preview, which `note drift` now pays too - flag it if that command's wall-clock matters.
-- The tag vocabulary exists twice, in `bin/lib/inflight-tags.sh` for the gates and in
-  `bin/lib/inflight-tags.mjs` for the index, held equal by a parity self-test. The bash file is the
-  source of truth today; the cheaper end state is the Node file as the source with the shell library
-  derived from it.
+- The tag vocabulary has one source, `bin/lib/inflight-tags.mjs`: the index imports it, and the
+  bash gate reaches it through `bin/lib/inflight-tags.sh`, a wrapper that evals the Node file's
+  `--shell` rendering. The parity self-test that held two copies equal is now a round-trip check on
+  that renderer. Migrating the gate itself to Node stays out of scope; it no longer has a drift
+  problem to solve.
 - Session start breached its budget once the branch-facts block landed, and the lever named in the
   hook header was pulled: `corpusIndex` resolves every ref's `docs/` tree in one
   `cat-file --batch-check` and lists each distinct tree once, since most tips share the baseline's.

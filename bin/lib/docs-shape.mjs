@@ -36,10 +36,10 @@ const DIRECTORY_DOCS_RE = /\/(AGENTS|CLAUDE|README)\./
 const DOCUMENT_RE = /\.(md|html)$/
 
 /** The word an agent types for an area: the directory's last segment - `inflight`, `solutions`, `plans`. */
-export const areaKey = (dir) => dir.split('/').pop()
+const areaKey = (dir) => dir.split('/').pop()
 
 /** The in-flight groups that are not impacts, in the index's order around the impact list. */
-export const INFLIGHT_GROUPS = {
+const INFLIGHT_GROUPS = {
     registers: 'registers - standing documents, consult before choosing work',
     feature: 'feature - proposed, no consequence attached',
     unmatched: 'unmatched - no group claimed them: inflight-type or inflight-impact missing or misspelt',
@@ -48,7 +48,7 @@ export const INFLIGHT_GROUPS = {
 }
 
 /** Every in-flight group key in presentation order. */
-export const INFLIGHT_GROUP_ORDER = ['registers', ...INFLIGHT_IMPACT_ORDER, 'feature', 'unmatched', 'closed', 'deferred']
+const INFLIGHT_GROUP_ORDER = ['registers', ...INFLIGHT_IMPACT_ORDER, 'feature', 'unmatched', 'closed', 'deferred']
 
 const impactRank = (impact) => {
     const i = INFLIGHT_IMPACT_ORDER.indexOf(impact)

@@ -131,7 +131,7 @@ document. This section is the detail behind it.
     depends on it.
   - **`check-action-versions.sh`** keeps every GitHub Action pinned to one version across workflows.
   - **`check-inflight-tags.sh`** validates every `docs/inflight/` note's tags against the closed sets
-    in `bin/lib/inflight-tags.sh` ([`docs/inflight/AGENTS.md`](inflight/AGENTS.md) owns their
+    in `bin/lib/inflight-tags.mjs` ([`docs/inflight/AGENTS.md`](inflight/AGENTS.md) owns their
     meanings), failing the commit that mistyped a tag rather than leaving the next session to notice
     the index could not place a note.
   - **`check-test-log-config.sh`** pins the four library modules' `logback-test.xml` to the

@@ -19,13 +19,14 @@
 //
 // BUDGET: 500 ms cold, the plan's R19 figure for this delivery. MEASURED 2026-09-03 on this
 // repository (Apple Silicon, warm disk, about 610 refs), end to end from stdin to exit with a fresh
-// session each run: a Read of docs/inflight/bug-857-family.md costs about 240 ms (300 ms on the
-// first, coldest run of five); the silent path (a Read outside the corpus) about 100 ms, against
-// 90 ms for a bare `node -e 0` on the same host - because nothing git-touching is imported until
-// a corpus file is found. Six git processes make up the difference when it fires: the branch name,
-// the blob at HEAD, and the four the summary tier costs (refs, blobs, history, one merge-base and
-// diff). There is no warm state: each firing is a fresh process, and the query keeps no corpus
-// cache (KTD5).
+// session each run, median of five: a Read of docs/inflight/bug-857-family.md costs about 210 ms
+// (200 ms before the working-tree hash moved to `git hash-object`, which is the one process the
+// change added); the silent path (a Read outside the corpus) about 70 ms, against 50 ms for a
+// bare `node -e 0` on the same host - because nothing git-touching is imported until a corpus file
+// is found. Seven git processes make up the difference when it fires: the branch name, the blob at
+// HEAD, the working-tree file's hash, and the four the summary tier costs (refs, blobs, history,
+// one merge-base and diff). There is no warm state: each firing is a fresh process, and the query
+// keeps no corpus cache (KTD5).
 //
 // ONCE PER SESSION PER STATE (KTD4). The seen key is the path, the committed blob at HEAD and the
 // sorted set of divergent blobs; a repeat read is silent until that set changes, and a change -
@@ -55,8 +56,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
-import { readStdin, baseDir, treeContaining, seenStore } from './lib/hook-common.mjs';
+import { readStdin, baseDir, treeContaining, seenStore, runFailingOpen } from './lib/hook-common.mjs';
 import { DOC_AREAS } from '../../bin/lib/repo.mjs';
 
 /** The name this delivery records failures under; `inflight docs` prints it back. */
@@ -105,12 +105,6 @@ function corpusFile(token, base) {
   return { tree, rel, abs };
 }
 
-/** The blob id git would give the working-tree file, computed here rather than by a fifth process. */
-function workingTreeBlob(abs) {
-  const body = fs.readFileSync(abs);
-  return crypto.createHash('sha1').update(`blob ${body.length}\0`).update(body).digest('hex');
-}
-
 async function main() {
   const raw = readStdin();
   if (!raw.trim()) return;
@@ -131,10 +125,10 @@ async function main() {
   if (found.length === 0) return;
 
   // Loaded only now: the silent path above must cost Node's start and nothing else.
-  const [{ drift }, { exec }, { formatDivergenceHeader, sourceFrame }, { clearDeliveryFailure }] = await Promise.all([
+  const [{ drift }, { exec, workingTreeBlob }, { formatDivergenceHeader, sourceFrame }, { clearDeliveryFailure }] = await Promise.all([
     import('../../bin/lib/notes.mjs'),
     import('../../bin/lib/git.mjs'),
-    import('../../bin/lib/views.mjs'),
+    import('../../bin/lib/docs-views.mjs'),
     import('../../bin/lib/cache.mjs'),
   ]);
 
@@ -152,7 +146,15 @@ async function main() {
     // An untracked or freshly created file has no committed blob; the query then reports that no
     // ref carries the path, which is the true state of a note nobody has committed yet.
     const blob = head.ok ? head.out.trim() : null;
-    const uncommitted = blob === null || workingTreeBlob(f.abs) !== blob;
+    // Hashed by git, on the FIRING path only: `hash-object --path` applies the clean filters and
+    // line-ending normalisation git would at `git add`, where a hash over the raw bytes calls a
+    // clean CRLF checkout edited. A hash git cannot produce is a failure to record, not an edit.
+    let uncommitted = blob === null;
+    if (!uncommitted) {
+      const onDisk = workingTreeBlob(f.rel);
+      if (onDisk === null) throw new Error(`${f.rel}: git hash-object failed on the working-tree file`);
+      uncommitted = onDisk !== blob;
+    }
 
     const d = drift(f.rel, { detail: 'summary', at: blob ? { ref, blob } : { ref } });
     if (d.ok === false) throw new Error(`${f.rel}: ${d.reason}`);
@@ -181,15 +183,4 @@ async function main() {
   }));
 }
 
-try {
-  await main();
-} catch (e) {
-  // Fail open, but not silently everywhere: the agent sees nothing, the cache remembers why.
-  try {
-    const { recordDeliveryFailure } = await import('../../bin/lib/cache.mjs');
-    recordDeliveryFailure(DELIVERY, e && e.message ? e.message : String(e));
-  } catch {
-    /* the record is a courtesy; a tree where even that fails still gets its read */
-  }
-}
-process.exit(0);
+await runFailingOpen(DELIVERY, main);

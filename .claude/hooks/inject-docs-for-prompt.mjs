@@ -54,7 +54,7 @@
 //
 // Self-tested by bin/test-check-docs-hooks.mjs, including the silent twins and a mutant control.
 
-import { readStdin, baseDir, treeContaining, seenStore } from './lib/hook-common.mjs';
+import { readStdin, baseDir, treeContaining, seenStore, runFailingOpen } from './lib/hook-common.mjs';
 import { termsFromPrompt } from '../../bin/lib/terms.mjs';
 
 /** The name this delivery records failures under; `inflight docs` prints it back. */
@@ -89,9 +89,9 @@ async function main() {
 
   // The document line and the "more" quoting are shared with `docs for-branch`, which prints the
   // same block for the branch's own facts at session start - one shape, learned once.
-  const [{ matchDocs }, { formatDocHit, sourceFrame, termsAsArgv }, { clearDeliveryFailure }] = await Promise.all([
+  const [{ matchDocs }, { formatMatchBody, sourceFrame, termsAsArgv }, { clearDeliveryFailure }] = await Promise.all([
     import('../../bin/lib/terms.mjs'),
-    import('../../bin/lib/views.mjs'),
+    import('../../bin/lib/docs-views.mjs'),
     import('../../bin/lib/cache.mjs'),
   ]);
 
@@ -111,11 +111,7 @@ async function main() {
   const shown = fresh.slice(0, CAP);
   if (store) store.remember(shown.map(stateKey));
   const more = fresh.length - shown.length + unshownTail;
-  const body = [
-    `${m.hits.length + m.truncated} document(s) across ${m.refsSearched} live ref(s) name ${terms.length === 1 ? 'this term' : 'these terms'}; ${shown.length} shown:`,
-    ...shown.map(formatDocHit),
-    ...(more > 0 ? [`+${more} more`] : []),
-  ].join('\n');
+  const body = formatMatchBody(m, shown, { label: terms.length === 1 ? 'this term' : 'these terms', more });
 
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
@@ -125,15 +121,4 @@ async function main() {
   }));
 }
 
-try {
-  await main();
-} catch (e) {
-  // Fail open, but not silently everywhere: the agent sees nothing, the cache remembers why.
-  try {
-    const { recordDeliveryFailure } = await import('../../bin/lib/cache.mjs');
-    recordDeliveryFailure(DELIVERY, e && e.message ? e.message : String(e));
-  } catch {
-    /* the record is a courtesy; a tree where even that fails still gets its prompt */
-  }
-}
-process.exit(0);
+await runFailingOpen(DELIVERY, main);

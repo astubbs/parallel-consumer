@@ -201,9 +201,10 @@ state it twice; that is how the two drift apart.
 ## Tagging a note
 
 **This section is the source of truth for what each tag MEANS.** The machine-readable sets live in
-`bin/lib/inflight-tags.sh`, sourced by both the gate (`bin/check-inflight-tags.sh`, which names this
-file when it fails) and the session index - so a value here and a value there must never disagree:
-change this table and that lib in the same commit.
+`bin/lib/inflight-tags.mjs`, imported by the session index and read by the gate
+(`bin/check-inflight-tags.sh`, which names this file when it fails) through the thin
+`bin/lib/inflight-tags.sh` wrapper - so a value here and a value there must never disagree: change
+this table and that lib in the same commit.
 <!-- file-refs: N/A - the tag gate and its shared vocabulary lib ship in astubbs#324; this doc is their owner and lands first, so the notes it describes are never explained by a retired scheme -->
 
 The fields are HTML comments after the heading. Only `inflight-type` is always required:
@@ -253,7 +254,7 @@ prefixes - `misdirection` covers notes filed under `ci-`, `test-`, `branch-`, `d
 
 **A single consequence axis was tried and rejected - do not re-propose it.**
 `<!-- inflight-class: X -->` folded kind and consequence into one field, so it could not say that a
-feature addressing a crash belongs beside the crashes - the case `bin/lib/inflight-tags.sh`'s header
+feature addressing a crash belongs beside the crashes - the case `bin/lib/inflight-tags.mjs`'s header
 names when it explains why the impact sets are partitioned by type. The three axes here are its
 successor and carry the sentence above forward unchanged. Branch
 `ci/inflight-index-by-type-and-priority`, merged superseded into astubbs#400.
@@ -300,7 +301,7 @@ reason - the first is `type: feature`, the second is a `state`.
   **The set is closed on purpose.** A free-text field becomes tag soup within a month and then
   partitions nothing, which is the failure this whole scheme exists to prevent. Add a value by
   reading the corpus and finding a group the existing values cannot express - the way the impacts
-  were derived - and put it in `bin/lib/inflight-tags.sh` AND this table in the same commit.
+  were derived - and put it in `bin/lib/inflight-tags.mjs` AND this table in the same commit.
   `bin/check-inflight-tags.sh` validates each value separately, so one typo names itself instead of
   silently founding a group of one.
 
@@ -316,7 +317,7 @@ reason - the first is `type: feature`, the second is a `state`.
   count too, which is why none is written here.
 
 **Add a value when the corpus needs one, do not force a note into a poor fit** - the set was derived
-by reading the notes, not chosen in advance. Add it to this table AND to `bin/lib/inflight-tags.sh`
+by reading the notes, not chosen in advance. Add it to this table AND to `bin/lib/inflight-tags.mjs`
 in the same commit, and say why. The gate checks SHAPE, never judgement: it cannot tell you that a
 valid impact is the wrong one for that note, and six such corrections were needed when this scheme
 landed.

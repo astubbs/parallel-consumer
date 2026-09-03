@@ -440,6 +440,19 @@ export function branchFacts(ref, prs, base) {
     return { ref, pr: null, theme: ref, themeFrom: 'branch-name' }
 }
 
+/**
+ * LARGEST FIRST, by what the version ADDED - the evidence of knowledge, not of recency. A version
+ * whose size is unknown sorts last rather than being given a fabricated position. One function,
+ * because the header's preview, the "more" command under it and the clusters `drift` spends branch
+ * facts on must all agree about which version is the one to look at next: `drift` returns clusters
+ * most-carried first, and a suggestion built on that order once pointed at a stale integration
+ * branch's copy under a preview naming a different one.
+ */
+export const largestFirst = (divergent) => {
+    const size = (c) => (c.added && Number.isInteger(c.added.added) ? c.added.added : -1)
+    return [...divergent].sort((a, b) => size(b) - size(a) || b.liveRefs.length - a.liveRefs.length)
+}
+
 /** Fuzzy path lookup over every note that has ever existed on any ref. */
 export function findNotes(index, query) {
     const needle = query.toLowerCase()
@@ -476,15 +489,29 @@ export function findNotes(index, query) {
  */
 export function drift(path, {
     prs = new Map(), maxBranchesPerCluster = 6, all = false, detail = 'full', at = null,
+    tips: givenTips = null, base: givenBase = null, lookup: givenLookup = null, previewLimit = Infinity,
 } = {}) {
     // TWO TIERS ON ONE FUNCTION (the plan's KTD2). `summary` stops after the clustering, the
     // history filter and the copy at hand's own size - one merge-base and one diff, for HEAD's ref
     // only - and is what the read-time hook calls inside its budget. `full` is what `note drift`
     // has always done, plus the preview. One function, so the header and the hook cannot disagree
     // about which versions are divergent.
+    //
+    // WHAT THE CALLER ALREADY RESOLVED IS TAKEN, NOT RE-ASKED. `docs show` lists the refs, finds
+    // the baseline and looks the path up across every ref to choose which copy to print, and
+    // `matchDocs` lists the refs once for its whole hit loop; each then asked this function, which
+    // asked git the same questions again - a second `for-each-ref`, `rev-parse` and `cat-file`
+    // per call, with every answer identical. `tips`, `base` and `lookup` are those answers in
+    // `refTips`, `baseline` and `blobsForPath` shape; absent, they are fetched here as before.
+    //
+    // `previewLimit` bounds the EXPENSIVE half of the full tier - branch facts and the added-lines
+    // preview, an `ls-tree` per PR-less branch and a diff per cluster - to the largest N versions
+    // by what they added, the order the header shows them in. The sizes are computed for every
+    // cluster regardless, because they are what "largest" is measured by. Unbounded by default,
+    // so `note drift` details every cluster as it always has.
     const summary = detail === 'summary'
-    const base = baseline()
-    const { ok, tips } = refTips()
+    const base = givenBase ?? baseline()
+    const { ok, tips } = givenTips ? { ok: true, tips: givenTips } : refTips()
     if (!ok) return { path, ok: false, reason: 'cannot list refs - is this a git repository?' }
     // The guard corpusIndex has and this did not: zero refs fell through to an empty blobsForPath
     // and rendered as a confident "no note at that path on any ref".
@@ -501,7 +528,7 @@ export function drift(path, {
         liveRefsTotal: tips.filter((r) => !r.archival).length,
         archivalRefsTotal: tips.filter((r) => r.archival).length,
     }
-    const lookup = blobsForPath(refs, path)
+    const lookup = givenLookup ?? blobsForPath(refs, path)
     if (!lookup.ok) return { path, ok: false, reason: `cannot read ${path} across refs - the object lookup failed` }
     const blobs = lookup.blobs
 
@@ -576,10 +603,21 @@ export function drift(path, {
         // ADDED rather than how far the baseline has moved since.
         cluster.added = blob === baseBlob ? null : addedSinceMergeBase(base, sorted[0], path, blob)
         cluster.title = titles.get(blob) ?? null
-        cluster.branches = sorted.slice(0, maxBranchesPerCluster).map((r) => branchFacts(r, prs, base))
-        cluster.preview = blob === baseBlob ? null : previewOf(cluster.added, blob)
         return cluster
     }
+    /** The expensive half: who carries it, in facts, and what it added. Summary clusters never get it. */
+    const detailed = (cluster) => {
+        if (summary) return cluster
+        cluster.branches = cluster.refs.slice(0, maxBranchesPerCluster).map((r) => branchFacts(r, prs, base))
+        cluster.preview = cluster.isBaseline ? null : previewOf(cluster.added, cluster.blob)
+        return cluster
+    }
+
+    // Most-carried first is the order this returns, and the order the header ranks from - so the
+    // clusters detailed here are chosen over that SAME order, or a tie on added size could put a
+    // bare cluster in the header's top rows while a detailed one sat just below them.
+    const divergentClusters = divergent.map(build).sort((a, b) => b.refs.length - a.refs.length)
+    if (!summary) for (const c of largestFirst(divergentClusters).slice(0, previewLimit)) detailed(c)
 
     return {
         path, ok: true, found: true, detail, baseline: base, onBaseline: baseBlob !== null,
@@ -587,13 +625,13 @@ export function drift(path, {
         liveRefsCarrying: [...blobs.keys()].filter((r) => !archivalOf.get(r)).length,
         ...scope,
         at: atResult,
-        baselineCluster: baseBlob ? build([baseBlob, versions.get(baseBlob)]) : null,
-        divergent: divergent.map(build).sort((a, b) => b.refs.length - a.refs.length),
+        baselineCluster: baseBlob ? detailed(build([baseBlob, versions.get(baseBlob)])) : null,
+        divergent: divergentClusters,
         preserved,
         behind: {
             versions: behind.length,
             refs: behind.reduce((n, b) => n + b.refs.length, 0),
-            clusters: all ? behind.map((b) => build([b.blob, b.refs])) : [],
+            clusters: all ? behind.map((b) => detailed(build([b.blob, b.refs]))) : [],
         },
     }
 }

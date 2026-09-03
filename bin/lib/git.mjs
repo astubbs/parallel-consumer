@@ -197,6 +197,22 @@ export function blobsForPath(refs, path) {
 export const treesForPath = blobsForPath
 
 /**
+ * The blob id git WOULD record for a working-tree file - `hash-object --path`, so the clean filters
+ * and line-ending normalisation `.gitattributes` and `core.autocrlf` apply at `git add` are applied
+ * here too. A hash computed over the raw bytes (the `blob <len>\0` header through node:crypto, which
+ * is what this replaced) disagrees with the committed blob on exactly the files git normalises, and
+ * reports a clean checkout as edited on a CRLF host. One process, and only worth it where the
+ * answer is about to be shown.
+ *
+ * @returns {string|null} the sha, or null when git could not hash it - a failure to distinguish from
+ *   "differs", which is why this does not return a boolean
+ */
+export function workingTreeBlob(path) {
+    const res = exec('git', ['hash-object', '--path', path, '--', path])
+    return res.ok ? res.out.trim() : null
+}
+
+/**
  * Every (blob, path) pair under one pathspec - or several - on one tree-ish: a ref, or a bare tree
  * SHA, in which case the paths come back relative to that tree.
  *
@@ -405,6 +421,17 @@ function lastFetch(commonDir) {
  *
  * @returns {{id: string, lines: string[]}[]}
  */
+/**
+ * The freshness warnings that VOID an answer rather than date it. `no-baseline` is not staleness,
+ * it is a declaration that the run is unreliable; the others say the ref set itself is partial.
+ * The rest - a stale or narrow fetch, a main checkout, HEAD behind - date the answer, and a
+ * command that is one step of a longer walk, or a hook whose silence must be earned, need not
+ * repeat them. Beside `freshnessWarnings` because it is a fact about ITS ids: a new id added there
+ * has to be classified here, and two callers each holding their own copy of the set would classify
+ * it twice or not at all.
+ */
+export const INVALIDATING_WARNINGS = new Set(['no-baseline', 'never-fetched', 'shallow'])
+
 export function freshnessWarnings(base, refCount) {
     const warnings = []
     const warn = (id, ...text) => warnings.push({ id, lines: text })

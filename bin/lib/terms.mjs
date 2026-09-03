@@ -299,7 +299,8 @@ export function matchDocs(terms, { areas = DOC_AREAS, bodyCap = BODY_CAP_PER_TER
     for (const d of top) {
         // `at` names the first ref the grep hit, which certainly carries the path, so the summary
         // costs no extra lookup and its blob is the version that matched.
-        const s = drift(d.path, { detail: 'summary', at: { ref: d.refs[0] } })
+        // The refs and the baseline were resolved once above for the grep; every summary takes them.
+        const s = drift(d.path, { detail: 'summary', at: { ref: d.refs[0] }, tips: tips.tips, base })
         if (s.ok === false) return cannot(`${d.path}: ${s.reason}`)
         d.onBaseline = s.found ? s.onBaseline : false
         d.divergent = s.found ? (s.divergent ?? []).length > 0 : false
