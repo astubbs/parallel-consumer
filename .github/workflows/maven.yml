@@ -168,7 +168,7 @@ jobs:
           # never load-bearing: it passes no forkCount and no -Dparallel-tests, so the suite was
           # never configured to exploit those cores.
           #
-          # FOUR SHARDS, one VM each, since docs/inflight/ci-shard-the-chaos-suite.md. Eight
+          # FOUR SHARDS, one VM each - docs/ci.md, "Chaos runs as four shards", owns the design. Eight
           # @Tag("chaos") scenario classes running serially in one JVM set a 15-20 min floor under
           # every PR, and two shards only halve that if the work divides evenly - it does not, one
           # revoke-under-work cell running long puts a floor under any arrangement - so the split is
