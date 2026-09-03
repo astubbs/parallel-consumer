@@ -16,7 +16,7 @@ The counts are XML attributes and the `AMBIENT PROBE AUTOPSY` is captured inside
 neither depends on the console stream surviving:
 
 ```bash
-gh run download <run-id> -R astubbs/parallel-consumer -n "highcpu-fast-feedback-reports-Chaos Pain Suite-<n>" -D /tmp/reports
+gh run download <run-id> -R astubbs/parallel-consumer -p 'chaos-suite-reports-*' -D /tmp/reports   # one artifact per shard
 # then parse /tmp/reports/**/failsafe-reports/TEST-*.xml - `errors`/`failures` are attributes
 ```
 
@@ -62,10 +62,12 @@ document. This section is the detail behind it.
 - **`maven.yml`** - build and test on every push/PR. PRs run two tiers in parallel: split suites on
   the pom's default Kafka version (`bin/ci-unit-test.sh`, `bin/ci-integration-test.sh`,
   `bin/performance-test.sh`) for fast feedback, and an experimental Kafka 4.x compatibility check
-  (`bin/ci-build.sh`). It also carries **`Chaos Pain Suite`**, the per-PR ambient tripwire,
-  which moved here from the self-hosted box on 2026-08-26 - see
-  ["Chaos does not need the self-hosted box"](#chaos-does-not-need-the-self-hosted-box). It is
-  **gating**, like the suite it replaced: a chaos RED is a real finding. Also carries the seconds-fast Quarantine Audit job, SpotBugs, duplicate
+  (`bin/ci-build.sh`). It also carries the **`Chaos Pain Suite`**, the per-PR ambient tripwire,
+  as four shard jobs (`Chaos Pain Suite 1/4` to `4/4`) - it moved here from the self-hosted box on
+  2026-08-26 and was split on 2026-09-03; see
+  ["Chaos does not need the self-hosted box"](#chaos-does-not-need-the-self-hosted-box) and
+  ["Chaos runs as four shards"](#chaos-runs-as-four-shards). Every shard is
+  **gating**, like the job they replaced: a chaos RED is a real finding. Also carries the seconds-fast Quarantine Audit job, SpotBugs, duplicate
   detection, PR-scoped mutation testing (PIT), and dependency vulnerability scanning. Push to
   master runs a single full `bin/ci-build.sh` on the default Kafka version to gate SNAPSHOT
   publishing. All jobs use explicit `cache/restore` with rotating keys from the `prepare-deps`
@@ -325,7 +327,8 @@ had. A hosted runner gives each job **its own VM**, so co-residency cannot occur
 load-bearing: it passes no `forkCount` and no `-Dparallel-tests`, so the suite was never configured
 to exploit the cores it was placed there for.
 
-It now runs as `Chaos Pain Suite` in `maven.yml`, and it is **gating** - a chaos RED is a
+It now runs in `maven.yml` - as four shard jobs since 2026-09-03, see
+["Chaos runs as four shards"](#chaos-runs-as-four-shards) - and it is **gating** - a chaos RED is a
 real finding. Do not re-add it to the self-hosted lane: chaos would then run twice per PR, and the
 second copy is the one that has to be scheduled against a finite box. On-demand seeded hunts stay in
 `chaos-pain.yml`.
@@ -335,6 +338,57 @@ hosted job's per-scenario test counts were not read (the job-log endpoint return
 rules out a zero-scenario run - that is build-only, ~2 minutes - but the standing rule still applies:
 read the job's own `Chaos suite timing` summary and its zero-tests-selected warning before trusting a
 green.
+
+### Chaos runs as four shards
+
+**Since 2026-09-03 (astubbs#421) the Chaos Pain Suite is four matrix jobs, `Chaos Pain Suite 1/4`
+to `4/4`, each a VM running two scenario classes.** The suite had not got slower; it had got bigger -
+eight `@Tag("chaos")` classes run serially in one JVM put the job at 15-20 minutes, the wall-clock
+floor for feedback on every PR. Measured on three dispatched runs of that shape the scenarios summed
+to 17-20 minutes with ~1 minute of build and broker start; three runs of the four-shard shape came
+in at 370-423s critical path, every class reporting exactly once with its seed, for about 15% more
+runner-minutes (the per-VM overhead, paid four times).
+
+**The ceiling is the longest scenario, not the total divided by the shard count**, so the shards are
+packed longest-first from measured per-class medians - the numbers are in the matrix comment beside
+the entries. Any one class can run about twice its median on a given run and which one varies, so
+the longest shard moves around; the packing keeps the *average* bin balanced and a doubled 180s class
+inside a two-class shard is the remaining floor. Eight one-class shards would not lower it.
+
+**How a shard selects its classes, and the guard that makes it safe.** `bin/chaos-test.sh` stays the
+single entry point for the gate and for `chaos-pain.yml`; a shard's `scenarios:` matrix value reaches
+it as `CHAOS_SCENARIOS` (env, never spliced into the script) and becomes `-Dit.test` plus
+`-Dfailsafe.failIfNoSpecifiedTests=false` - the latter because `-am` builds the parent first and it
+matches nothing. Turning that flag off is exactly what makes a shard able to run fewer scenarios
+than it was assigned and still exit 0, which is the mutation lane's old "nothing to mutate,
+skipping" shape. So the script's own summary compares the classes that produced a report against
+the ones requested and turns a green exit red naming the missing scenario; a real Maven failure is
+never relabelled. With `CHAOS_SCENARIOS` unset - `chaos-pain.yml`, a local replay - nothing changes.
+
+**The matrix is static, and `bin/check-chaos-shards.mjs` keeps it honest.** A static list is
+greppable and reviewable; its cost is drift as scenarios are added, renamed or retagged. The gate
+fails when the chaos-tagged classes under `chaostests/` are not partitioned exactly once across the
+`suite: chaos` entries, naming what is unassigned, duplicated, unknown or empty. **Adding a scenario**
+therefore means adding it to whichever shard keeps the bins balanced by *its* measured duration, and
+the gate tells you if you forgot. `@Quarantined` is deliberately not the gate's business: a
+quarantined class still belongs to a shard on paper, `bin/chaos-test.sh` excludes it at run time,
+and the missing-report guard is what notices.
+
+**Reading a red shard.** Each shard uploads its own artifact, `chaos-suite-reports-<run>-shard<N>`,
+and prints its own `Chaos suite timing` summary with each class's seed and replay command, so a red
+shard is reproducible on its own. The replay command reproduces the schedule, not the sharding - a
+seed that fires on the gate can be replayed under the one-JVM local recipe in `docs/testing.md`.
+
+**Two things that did not survive measurement.** `-DforkCount=2` inside one VM, the integration
+lane's pattern, halved the wall-clock but its first sample went red on `ChaosChurnStormIT`'s
+`INSTANCE_STALL` probe; seeded control arms then showed the failure belongs to the seed (it
+reproduced under one fork on a different probe) and not to forking - but forking adds CPU contention
+exactly where the 857 ledger says those detectors are load-sensitive, and failsafe lacks the
+per-fork log-silo wiring surefire has. Sharding gives every shard the gate's own configuration on its
+own VM, so it inherits the existing per-class rate without adding to it. And the required-check name:
+master's ruleset required `Chaos Pain Suite` by that exact name, so landing the split means replacing
+it with the four shard names in the same step - a required check that no job reports blocks every
+PR. `gh api repos/astubbs/parallel-consumer/rules/branches/master` lists what is required today.
 
 ### The box decides its own concurrency
 
@@ -378,7 +432,7 @@ where capacity lives - the number of runners serving the label.
 #### Reading a cancelled or absent chaos check
 
 **A CANCELLED check is rendered as a FAILING one.** `gh pr checks` prints `conclusion=cancelled` as
-`fail`, so a red `Performance (optional)` or `Chaos Pain Suite` may mean *it never ran* rather than
+`fail`, so a red `Performance (optional)` or `Chaos Pain Suite n/4` shard may mean *it never ran* rather than
 that something regressed - check `conclusion` before believing it. A cancelled chaos check means
 **not measured**: neither a pass nor a failure.
 

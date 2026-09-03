@@ -22,6 +22,7 @@ import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.common.annotation.InterfaceStability;
 
 import java.time.Duration;
+import java.util.Map;
 import java.util.Objects;
 import java.util.function.Function;
 
@@ -39,8 +40,9 @@ import static java.time.Duration.ofMillis;
  * If you want to go deeper, look at {@link #defaultMessageRetryDelay}, {@link #retryDelayProvider} and
  * {@link #commitMode}.
  * <p>
- * Note: The only required option is the {@link #consumer} ({@link #producer} is only needed if you use the Produce
- * flows). All other options have sensible defaults.
+ * Note: The only required option is the {@link #consumer} (a producer - {@link #producerConfig} for PC to build one
+ * from, or a {@link #producer} instance - is only needed if you use the Produce flows). All other options have
+ * sensible defaults.
  *
  * @author Antony Stubbs
  * @see #builder()
@@ -59,11 +61,24 @@ public class ParallelConsumerOptions<K, V> {
     private final Consumer<K, V> consumer;
 
     /**
-     * Supplying a producer is only needed if using the produce flows.
+     * A finished producer instance for the produce flows. Supplying a producer is only needed if using the produce
+     * flows; the alternative is {@link #producerConfig}, from which PC builds the producer itself.
      *
      * @see ParallelStreamProcessor
      */
     private final Producer<K, V> producer;
+
+    /**
+     * Producer configuration for the produce flows, from which PC builds its own producer with
+     * {@code new KafkaProducer<>(config)}: any {@code ProducerConfig} key, serializers included, exactly as it would
+     * be passed to that constructor. In {@link CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER} set
+     * {@code transactional.id} here, as you would when building the producer yourself.
+     * <p>
+     * The alternative to {@link #producer}; supplying both fails validation. Excluded from {@link #toString()}, as
+     * the map may carry credentials.
+     */
+    @ToString.Exclude
+    private final Map<String, Object> producerConfig;
 
     /**
      * Path to Managed executor service for Java EE
@@ -513,16 +528,28 @@ public class ParallelConsumerOptions<K, V> {
     public void validate() {
         Objects.requireNonNull(consumer, "A consumer must be supplied");
 
+        producerSourceValidation();
         transactionsValidation();
         loadFactorValidation();
     }
 
+    /**
+     * Exactly one way of supplying a producer may be used: two producers cannot be resolved to one silently.
+     */
+    private void producerSourceValidation() {
+        if (producer != null && producerConfig != null) {
+            throw new IllegalArgumentException(msg("Supply either a {} instance or {} for PC to build one from, not both",
+                    Fields.producer, Fields.producerConfig));
+        }
+    }
+
     private void transactionsValidation() {
         if (isUsingTransactionCommitMode()) {
-            if (producer == null) {
-                throw new IllegalArgumentException(msg("Cannot set {} to Transaction Producer mode ({}) without supplying a Producer instance",
+            if (!isProducerSupplied()) {
+                throw new IllegalArgumentException(msg("Cannot set {} to Transaction Producer mode ({}) without supplying a Producer instance or {} for PC to build one from",
                         Fields.commitMode,
-                        commitMode));
+                        commitMode,
+                        Fields.producerConfig));
             }
         }
 
@@ -575,8 +602,19 @@ public class ParallelConsumerOptions<K, V> {
         return commitMode.equals(PERIODIC_TRANSACTIONAL_PRODUCER);
     }
 
+    /**
+     * @return true when the produce flows can be used - a finished instance, or a configuration for PC to build the
+     *         producer from
+     */
     public boolean isProducerSupplied() {
-        return getProducer() != null;
+        return producer != null || producerConfig != null;
+    }
+
+    /**
+     * @return true when the {@link #producer} instance was supplied, rather than {@link #producerConfig}
+     */
+    public boolean isProducerInstanceSupplied() {
+        return producer != null;
     }
 
     /**
