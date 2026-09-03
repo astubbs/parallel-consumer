@@ -31,7 +31,7 @@ Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutio
 | `Chaos Pain Suite` and `Lincheck` lanes - `Could not find or load main class org.apache.maven.wrapper.MavenWrapperMain` | 2 seen (2026-09-03: astubbs#410 chaos on [run 33700215189](https://github.com/astubbs/parallel-consumer/actions/runs/33700215189), astubbs#426 Lincheck on [run 33705127539](https://github.com/astubbs/parallel-consumer/actions/runs/33705127539)) | Not a test - the LANE fails before Maven starts. `.mvn/wrapper/maven-wrapper.jar` is gitignored and `mvnw` downloads it from Maven Central on first use, with `--quiet`, so a failed or partial download leaves no error and no class. Every other job in the same run passed, so it is the download on that runner, not the tree; the chaos lane passed on the next head. Durable fix, for a CI PR on master: commit the jar, or switch the wrapper to `only-script` so there is no jar to fetch. <!-- post-merge: checked - dated sightings on named runs -->
 | `Mutation Tests (PIT, PR-scoped)` lane | 1 seen (2026-09-02, astubbs#207, [run 33610711974](https://github.com/astubbs/parallel-consumer/actions/runs/33610711974)) | Not a test - the LANE hit its `timeout-minutes: 30` cap and was cancelled, on a **markdown-only** delta from a head where it had scored in 19m18s with the same class set. The cap has about a third headroom over a normal run, so it will flap on a slow runner. `continue-on-error: true`, so it never gates a merge - but a cancelled row reads like a failure <!-- post-merge: checked --> |
 | `ManagedPCInstanceLifecycleTest.rapidToggleShouldNotCreateDuplicateInstances` | 2 seen (2026-09-02, astubbs#207, [job 100175277225](https://github.com/astubbs/parallel-consumer/actions/runs/33607572165/job/100175277225); 2026-09-03, astubbs#410, [job 100508674056](https://github.com/astubbs/parallel-consumer/actions/runs/33710182789/job/100508674056), `consumeCount` 0 again, passing on three sibling heads within minutes) | Not from the original scan - **arrived on master with astubbs#29 and failed on the first PR to merge it**. `consumeCount` 0, repetition 1 of 5, `forkCount=4`, `probe clean`. Every wait in the test is a fixed sleep, and its assertion names a cause it cannot discriminate - see below <!-- post-merge: checked --> |
-| `RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed` | 4 seen (2026-09-01; 2026-09-03 on astubbs#420, [run 33706716163](https://github.com/astubbs/parallel-consumer/actions/runs/33706716163), and twice running on astubbs#410, [run 33710182789](https://github.com/astubbs/parallel-consumer/actions/runs/33710182789) and [run 33711953542](https://github.com/astubbs/parallel-consumer/actions/runs/33711953542) - same setup-guard failure each time, probe clean; the recorded history shows it red on an unrelated branch the same hour and green on ten other heads in the same window, including astubbs#420, a superset of astubbs#410. astubbs#410 does not touch the consumer-sync registration path this test drives) | Not from the original scan - found while babysitting astubbs#257. Failed its **saturation/pause-point setup guard**, not the confluentinc#909 signature assertion, so it proves nothing about the defect it reproduces - see below <!-- post-merge: checked --> |
+| `RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed` | 6 seen (2026-09-01; 2026-09-03 five times: on astubbs#420, [run 33706716163](https://github.com/astubbs/parallel-consumer/actions/runs/33706716163), twice in a row on astubbs#429 whose same head then passed on a deliberate re-run, and twice running on astubbs#410, [run 33710182789](https://github.com/astubbs/parallel-consumer/actions/runs/33710182789) and [run 33711953542](https://github.com/astubbs/parallel-consumer/actions/runs/33711953542) - same setup-guard failure each time, probe clean; the recorded history shows it red on an unrelated branch the same hour and green on ten other heads in the same window, including astubbs#420, a superset of astubbs#410. astubbs#410 does not touch the consumer-sync registration path this test drives) | Not from the original scan - found while babysitting astubbs#257. Failed its **saturation/pause-point setup guard**, not the confluentinc#909 signature assertion, so it proves nothing about the defect it reproduces - see below <!-- post-merge: checked --> |
 | `ParallelEoSStreamProcessorTest.processInKeyOrder` | 8 seen locally (2026-09-01) across three branches, 1 in 3 isolated runs; the input-data failure separately **1 of 8 on unmodified `master`** | **Two DIFFERENT failures under one test name, and the documented fix is already in the tree.** See below - this one is not a fresh flake, it is a solved one still firing. The second failure now has a control arm on master and a source-level lead, so classify from those rather than re-measuring |
 
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
@@ -207,6 +207,36 @@ frozen partitions observed`. Worth weighing against the probe's own thresholds b
 it points away from broker contention and toward the test's own 30s timing budget - which is
 `forkCount=4` on a shared runner, waiting on a hand-orchestrated race between a paused registration
 loop and a forced eager rebalance.
+
+**Seen three times more on 2026-09-03.** Identical assertion each time - `control thread must reach the mid-loop pause point
+(offset 25)` - on two branches with nothing in common:
+`feat/225-pc-built-producer` at `e35db1e` (02:24) and astubbs#429 at `fc99d29` (02:41,
+[job 100501224076](https://github.com/astubbs/parallel-consumer/actions/runs/33707938531/job/100501224076),
+1 failure in 201 integration tests). The probe was clean again, and the failing runs took 30.8s and
+30.9s against 14-19s on the passing ones either side - the shape of a 30s budget being waited out in
+full, not of work going wrong.
+
+**Then astubbs#429 failed it a second time in a row**, at `6fd8e70` (03:03, 30.7s, the same assertion),
+which is the count that stops the sentence above from being safe: two consecutive failures on one
+branch against roughly one in a dozen elsewhere is not a coincidence anyone should merge through. So
+the same head was re-run once as a **measurement, with the outcome recorded here whichever way it
+went** - not the retry-to-green that AGENTS.md forbids. It passed, in 17.0s, the same length as the
+19.1s pass this branch had at `909a885` before it merged master. Two of three on this branch, every
+failure at the guard's 30s ceiling and every pass at the length other branches see; the only delta
+between the green head and the two red ones is the pom exclusion and the doc astubbs#430 landed.
+
+**The control arm is unusually good here and cost nothing**, because the same lane ran on four other
+branches inside the same 25 minutes: `fix/422-commit-interval-unset-detection` (02:42), astubbs#428
+at `def16c6` (02:41), `optimize/chaos-ci-perf` (02:44) and `feat/225-producer-config` (02:49) all
+PASSED it. So the failure is not a property of any one branch's diff, and it is not the runner being
+uniformly slow that half-hour either. `node bin/inflight.mjs codecov test
+freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed` reproduces that table.
+
+**Ruled out as astubbs#429's doing, on mechanism:** that PR changes the produce path's
+`InvalidPidMappingException` arm, `ProducerManager#close` and `innerDoClose`'s producer step. This IT
+is `CommitMode.PERIODIC_CONSUMER_SYNC` driving `pc.poll(...)`, so it never produces and never reaches
+any of them, and it fails in stage 2 of its own setup - before the instance is closed at all. Same
+reasoning that cleared astubbs#257 above, for the same reason: the test never enters the changed code.
 <!-- post-merge: checked-end -->
 
 ### `ManagedPCInstanceLifecycleTest` - a sleep-timed test that names one cause for a symptom with several

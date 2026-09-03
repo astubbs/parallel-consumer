@@ -106,7 +106,10 @@ public enum TransactionalClaim {
             + "read_committed consumer PT15S later', which also shows the grace window absorbing concurrent "
             + "transaction-marker delivery without swallowing a real violation. VALID ONLY AT batchSize=1: at batchSize>=2 the produce-lock "
             + "double-release stops the instance committing at all, which is recorded under "
-            + "RESULTS_EXACTLY_ONCE_UNDER_FAILURE and in docs/solutions/test-issues/transactional-batching-stall-produce-lock-released-per-record-2026-08-08.md"),
+            + "RESULTS_EXACTLY_ONCE_UNDER_FAILURE and in docs/solutions/test-issues/transactional-batching-stall-produce-lock-released-per-record-2026-08-08.md. "
+            + "A SECOND arm, at the unit seam: ParallelEoSStreamProcessorTest#invalidPidMappingFailsTheBatchInsteadOfMarkingItSucceeded "
+            + "- the produce path's InvalidPidMappingException close used to return the batch as succeeded, so the offset could "
+            + "commit with no records; RED observed before the rethrow (offset committed, record never re-dispatched), GREEN after."),
 
     /**
      * C5 - selecting transactional mode silently changes the commit interval default.

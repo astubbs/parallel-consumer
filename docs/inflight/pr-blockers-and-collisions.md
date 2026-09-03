@@ -72,11 +72,6 @@ either an amended note in the release section when 0.6.0.0 is cut, or a follow-u
 
 ### Decisions waiting on a human
 
-- **Two pre-existing main-code holes need their own PR**, written up with fix and test shapes in
-  `bug-eos-swallowed-produce-failures.md`. The `InvalidPidMappingException` one is the serious one: a
-  whole batch is marked *succeeded* and its offsets committed for records whose output was never
-  produced. Same shape as the defect astubbs#261 fixed, and the single exception to the rationale that
-  justified it.
 - **The commit-interval identity check** (`bug-commit-interval-identity-check.md`) - an explicit
   `Duration.ofSeconds(5)` is silently replaced with 100ms. One-line fix, wants its own change so the
   behaviour change is visible.
