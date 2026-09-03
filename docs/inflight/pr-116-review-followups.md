@@ -9,9 +9,35 @@
      the last item below is closed. -->
 
 Full report and per-reviewer JSON were in a scratch dir that is gone; this is the durable residue.
-Reviewed at `fdbaaf476`. Eight reviewers, one validation pass. Verdict was **not ready** - not
-because the fix is wrong (the `Spliterator` diagnosis and the live-stream design both survived
-review) but because two review threads block merge and one of them attacks the regression proof.
+Reviewed at `fdbaaf476`. Eight reviewers, one validation pass. The two review threads that blocked
+merge are settled and resolved; what remains below is one genuinely untested path and two accepted
+limits.
+
+## Still open
+
+- **No test drives the self-close-on-error path.** `JStreamParallelEoSStreamProcessor` wires the
+  stream's completion predicate to `this::isClosedOrFailed`, and `Java8StreamUtils`' own comment
+  justifies that choice over a poison pill *because* the control thread can self-close on an
+  unhandled error - nothing enqueues a sentinel on that path. Every test drives the predicate with a
+  plain boolean supplier (`() -> true`, `() -> false`, or an `AtomicBoolean`), and every processor-level
+  test terminates through an explicit close. So the path the design argument rests on is the one path
+  never exercised. What it needs: drive a real processor into a control-thread failure and assert the
+  consumer's stream ends rather than hanging.
+- **`controlThreadFuture` is still a plain field**, read from the consumer thread via
+  `isClosedOrFailed()`. Master's astubbs#342 made `state` volatile, which publishes the half that
+  decides correctness, so a consumer seeing a stale `Optional.empty()` now falls through to the
+  volatile read and gets the right answer. One keyword, owned by that class rather than by this work.
+- **The queue is unbounded**, so a consumer genuinely *slower* than the producer still grows it. The
+  PR says so; what was fixed is the consumer that walked away. `LinkedBlockingQueue` takes a bound
+  whenever someone decides what should happen when it is reached.
+- **The `shutdownNow()` branch** can make `isClosedOrFailed()` true while a worker can still enqueue,
+  so the javadoc's "queued results are delivered, not discarded" is stated more strongly than that
+  path supports.
+
+## Already fixed
+
+Kept because the reasoning is worth more than the outcome - two of these were settled by refuting the
+finding rather than by accepting it.
 
 **Do them in this order.** The first is the only one that can change what the fix has to prove.
 
@@ -85,11 +111,6 @@ immediately" to "blocks until close" on a published API.
 `VertxCPResultBuilder` in `JStreamVertxParallelEoSStreamProcessor` is unchanged upstream code and its
 race is identical before and after this diff (pre-existing, real, out of scope); and ending the
 stream on `InterruptedException` after restoring the flag is the standard idiom, not a defect.
-
-Also still true: the queue is unbounded, so a merely-slower consumer still grows it. The PR says so.
-The `shutdownNow()` branch can make `isClosedOrFailed()` true while a worker can still enqueue, so
-the javadoc's "queued results are delivered, not discarded" is stated more strongly than that path
-supports.
 
 **The two SpotBugs findings on lines this PR wrote are settled, 2026-09-03** - `bin/check-pr-analysis-surfaces.sh`
 wants each fixed or answered, and both are answered rather than fixed, in
