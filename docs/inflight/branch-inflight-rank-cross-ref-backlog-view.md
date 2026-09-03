@@ -105,6 +105,27 @@ race. That note was being dropped with no accounting, which is the failure-rende
 result shape this whole file is organised against. Unreadable paths are now named and the run says
 the answer is incomplete.
 
+## The command committed its own cardinal error, twice, one layer apart
+
+The thing this facade exists to stop is answering from one ref while another says otherwise. It did
+that itself, in two places, and the second was found only after the first was fixed and reviewed:
+
+- **First-sorted-live-ref.** A note open on the branch that owns the bug and closed on a branch that
+  fixed something adjacent was read from whichever ref sorted first, and dropped.
+- **Baseline preference.** `chooseVersion` then preferred the baseline's version *unconditionally*,
+  so a note the baseline calls deferred while a live branch carries it open vanished from its group
+  **and** the delta told the register it was deferred - on the baseline's word, naming no ref.
+  `core-auto-scaling.md` is the worked case and one of the register's own ready picks.
+
+The second is worse than a missing row: a missing row is silence, but the delta actively prescribed
+the wrong disposition. Both have the same shape - a preference rule that looked like a sensible
+default and quietly outranked the evidence. The rule now is that a **still-open version beats any
+preference**, and the preference only breaks ties among those.
+
+Worth carrying to whatever reads this corpus next: a default that picks one version is not neutral.
+It is an answer, and it will be wrong exactly when the versions disagree - which is the only case
+anyone is asking about.
+
 ## The register is prose, and a scan cannot tell a ranking from a sentence about one
 
 The first cut parsed the register by scanning the whole document for `astubbs#<n>` and for any
