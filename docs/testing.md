@@ -180,7 +180,7 @@ Two things that make the result trustworthy:
 A `@RepeatedTest` is the shape to look at hardest: repetition is what you reach for when you cannot
 force a race and hope to draw it, so it is often a hope-based test sitting in a gating lane.
 
-## Chaos Pain Suite (on-demand bug detector - never gates)
+## Chaos Pain Suite (seeded bug detector - gates every PR, hunts on demand)
 
 A seeded, calibrated chaos suite (`integrationTests.chaostests`: `ChaosConductor`, `ProgressProbe`,
 `ChaosScenarioBase`) that hunts the "alive but not progressing" bug class: rebalance-dwell zombies,
@@ -271,12 +271,14 @@ is why the chaos job summary prints the peak rather than a verdict - read it as 
 - **Replay a schedule**: every run logs its seed and the full replay command, and a failure repeats
   both inside its autopsy block (above, where truncation cannot reach them); add
   `-Dchaos.seed=<seed>`.
-- **CI**: per same-repo PR commit via the highcpu fast-feedback lane (check `highcpu / Chaos Pain
-  Suite` - not optional: a chaos RED shows red); on-demand seeded hunts via `chaos-pain.yml`, e.g.
+- **CI**: on every PR as four gating shard jobs in `maven.yml` (`Chaos Pain Suite 1/4` to `4/4`,
+  two scenario classes each, packed longest-first - `docs/ci.md`, "Chaos runs as four shards", owns
+  the split and its guard); on-demand seeded hunts via `chaos-pain.yml`, e.g.
   `gh workflow run chaos-pain.yml -R astubbs/parallel-consumer -f seed=42 -f reps=3`. Both call
-  `bin/chaos-test.sh`. Unlike the local recipe above, CI runs **exclude** `@Quarantined` chaos
-  scenarios (the Quarantine Lane owns those), so they can select zero tests - the job summary flags
-  that loudly.
+  `bin/chaos-test.sh`; a shard selects its classes through `CHAOS_SCENARIOS`, and a shard whose
+  requested scenario produced no report fails rather than reading green. Unlike the local recipe
+  above, CI runs **exclude** `@Quarantined` chaos scenarios (the Quarantine Lane owns those), so an
+  unsharded run can select zero tests - the job summary flags that loudly.
 - **Probe a fix PR** (the suite's primary purpose): on the fix PR's branch (merge master in first
   if the branch predates the suite landing there), run the suite at a commit before the fix - expect
   RED, and the violation names the mechanism - and again at the fix, expecting GREEN. The local
