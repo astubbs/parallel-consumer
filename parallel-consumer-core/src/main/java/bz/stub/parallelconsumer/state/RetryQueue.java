@@ -173,6 +173,12 @@ public class RetryQueue {
      * documented behaviour, and the property wanted here. It returns immediately either way, which is the whole
      * contract: this method never waits.
      * <p>
+     * <b>What barging costs, on the record</b> (review of astubbs/parallel-consumer#431): one rebalance
+     * callback sweeps every revoked record in a loop, so a burst of these can repeatedly cut in front of a
+     * controller thread already queued on the fair, BLOCKING {@link #remove}/{@link #add}. That inversion is
+     * bounded by the burst - one callback's worth of records - and it is the trade taken knowingly, because the
+     * alternative is the poll thread waiting, which is the defect this method exists to remove.
+     * <p>
      * <b>Keyed by the record's coordinates rather than by a container</b>, so a caller can ask this queue FIRST
      * and only then take the record out of its shard. That ordering is what makes a refusal safe - see the
      * callers in {@code ShardManager.removeWorkFromShardFor} and

@@ -119,13 +119,17 @@ and those are what gate the poller and time the control loop.
   waiting for the lock is permitted.
 
 Nothing is moved off-thread, nothing is queued for later, and no caller contract changes except that
-a removal may be deferred by one control-loop tick.
+a removal may be deferred. **How long that delay is, `ShardManager.removeWorkFromShardFor`'s javadoc
+owns** - it was measured on 2026-09-03 and is not the one control-loop tick this paragraph used to
+claim: under KEY or PARTITION ordering the shard scan breaks as soon as it hands out a container, so
+a stale entry behind a takeable head is not inspected that tick, and the delay ends when the head in
+front leaves. What is bounded is that the pair stays whole for the whole wait.
 
 ### What would reopen it
 
 The abandonment is only ever a delay, and exactly one thing ends it. If
 `ProcessingShard.getWorkIfAvailable`'s stale branch stops removing from the retry queue, or stops
-being reached on every control-loop tick, the delay becomes permanent and the orphan is back.
+being reached at all, the delay becomes permanent and the orphan is back.
 **Nothing fails if that happens**: `rebalanceCallbacksMustNotBlock` only checks that nothing on the
 callback path WAITS, and it is green either way. The reasoning is recorded at the site, on
 `ShardManager.removeWorkFromShardFor`.
