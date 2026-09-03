@@ -33,7 +33,7 @@ on the text the agent writes; folding the existing write-time solutions hook ont
 - The tag vocabulary exists twice, in `bin/lib/inflight-tags.sh` for the gates and in
   `bin/lib/inflight-tags.mjs` for the index, held equal by a parity self-test. The bash file is the
   source of truth today; the cheaper end state is the Node file as the source with the shell library
-  derived from it, which is queued for this PR's simplify pass.
+  derived from it.
 - Session start is inside its budget but with little headroom, and almost all of it is one
   `ls-tree` per ref inside `corpusIndex`. The lever - dedupe refs by their `docs/` tree object,
   since most tips share one - is named in the hook header and not yet pulled.

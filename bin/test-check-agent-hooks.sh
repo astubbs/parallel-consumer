@@ -1545,6 +1545,37 @@ assert "a recorded delivery failure is printed by the session index" noticed "$g
 # ...and the corpus was rendered beside it: the notice is a line in the index, not a replacement for it.
 case "$notice_out" in *'A well-tagged bug'*) got=rendered ;; *) got=missing ;; esac
 assert "the index is still rendered beside the notice" rendered "$got"
+
+# THE BRANCH-FACTS BLOCK (the plan's R11): after the index, the documents that name the checked-out
+# branch, its PR or its issue numbers, rendered by `docs for-branch` and injected verbatim - once.
+# The fixture's note names the branch by its slug in prose; the PR cache is pointed at an empty
+# directory, so this is also the cache-miss path, and the hook must still find the note by the
+# branch name alone without reaching for `gh`. On master there is nothing to look up and no block.
+printf '# The flange workstream\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\nlives on feats/widget-flange until it lands\n' > "$nc_tmp/docs/inflight/ci-flange.md"
+knowledge_commit "$nc_tmp" "a note naming its branch"
+git -C "$nc_tmp" switch -q -c feats/widget-flange
+empty_pr_cache="$TMP/empty-pr-cache"; mkdir -p "$empty_pr_cache"
+facts_out=$(PC_INFLIGHT_CACHE_DIR="$empty_pr_cache" CLAUDE_PROJECT_DIR="$nc_tmp" "$HOOKS/inject-recorded-knowledge.sh" 2>/dev/null)
+assert "on a branch the hook exits 0" 0 "$?"
+facts_blocks=$(grep -c '^docs context: branch facts$' <<<"$facts_out")
+assert "on a branch with a document naming it, the branch-facts block is printed once" 1 "$facts_blocks"
+case "$facts_out" in *'- The flange workstream  docs/inflight/ci-flange.md'*) got=listed ;; *) got=missing ;; esac
+assert "the block lists the document that names the branch" listed "$got"
+case "$facts_out" in *'terms from feats/widget-flange'*) got=named ;; *) got=unnamed ;; esac
+assert "the block says which terms it searched for" named "$got"
+# The block follows the index, never precedes it: the index is the map, the block is the pin.
+index_at=$(grep -n '^docs context: session index$' <<<"$facts_out" | head -1 | cut -d: -f1)
+facts_at=$(grep -n '^docs context: branch facts$' <<<"$facts_out" | head -1 | cut -d: -f1)
+{ [ -n "$index_at" ] && [ -n "$facts_at" ] && [ "$index_at" -lt "$facts_at" ]; } && got=after_index || got=elsewhere
+assert "the branch-facts block comes after the session index" after_index "$got"
+git -C "$nc_tmp" switch -q master
+master_out=$(PC_INFLIGHT_CACHE_DIR="$empty_pr_cache" CLAUDE_PROJECT_DIR="$nc_tmp" "$HOOKS/inject-recorded-knowledge.sh" 2>/dev/null)
+assert "on master the hook exits 0" 0 "$?"
+master_blocks=$(grep -c '^docs context: branch facts$' <<<"$master_out")
+assert "on master there is no branch-facts block" 0 "$master_blocks"
+# ...while the index beside it still rendered - silence on the block is not silence on the session.
+case "$master_out" in *'A well-tagged bug'*) got=rendered ;; *) got=missing ;; esac
+assert "on master the index is still rendered" rendered "$got"
 rm -rf "$nc_tmp"
 
 # check-merge-outstanding-work.sh

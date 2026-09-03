@@ -66,14 +66,6 @@ const CAP = 12;
 /** The seen key: the path and the two marks, so a change of state is a new fact. */
 const stateKey = (h) => `${h.path} ${h.onBaseline ? 'on-baseline' : 'off-baseline'} ${h.divergent ? 'divergent' : 'single'}`;
 
-function renderLine(h) {
-  const marks = [];
-  if (!h.onBaseline) marks.push('off baseline');
-  else if (h.divergent) marks.push('divergent elsewhere');
-  const title = h.title ?? '(no title)';
-  return `- ${title}  ${h.path}${marks.length ? `  (${marks.join(', ')})` : ''}`;
-}
-
 async function main() {
   const raw = readStdin();
   if (!raw.trim()) return;
@@ -95,7 +87,9 @@ async function main() {
   // the prompt was sent from - the payload's cwd, never the session root alone.
   process.chdir(tree);
 
-  const [{ matchDocs }, { sourceFrame }, { clearDeliveryFailure }] = await Promise.all([
+  // The document line and the "more" quoting are shared with `docs for-branch`, which prints the
+  // same block for the branch's own facts at session start - one shape, learned once.
+  const [{ matchDocs }, { formatDocHit, sourceFrame, termsAsArgv }, { clearDeliveryFailure }] = await Promise.all([
     import('../../bin/lib/terms.mjs'),
     import('../../bin/lib/views.mjs'),
     import('../../bin/lib/cache.mjs'),
@@ -119,15 +113,14 @@ async function main() {
   const more = fresh.length - shown.length + unshownTail;
   const body = [
     `${m.hits.length + m.truncated} document(s) across ${m.refsSearched} live ref(s) name ${terms.length === 1 ? 'this term' : 'these terms'}; ${shown.length} shown:`,
-    ...shown.map(renderLine),
+    ...shown.map(formatDocHit),
     ...(more > 0 ? [`+${more} more`] : []),
   ].join('\n');
 
-  const quoted = terms.map((t) => (/^[A-Za-z0-9_./#-]+$/.test(t) ? t : `'${t.replaceAll("'", "'\\''")}'`));
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'UserPromptSubmit',
-      additionalContext: sourceFrame('terms', terms, body, `node bin/inflight.mjs prior-art --headings ${quoted.join(' ')}`),
+      additionalContext: sourceFrame('terms', terms, body, `node bin/inflight.mjs prior-art --headings ${termsAsArgv(terms)}`),
     },
   }));
 }

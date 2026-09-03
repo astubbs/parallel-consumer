@@ -39,7 +39,7 @@ import { spawnSync } from 'node:child_process'
 import { buildDocsFixture, buildTermsFixture, windowGit, windowRepo } from './lib/fixture-repos.mjs'
 import { chdir, cwd } from 'node:process'
 import {
-    cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, symlinkSync, utimesSync,
+    cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, symlinkSync, utimesSync,
     writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -2535,6 +2535,185 @@ const CHECKS = [
         mutate: (binDir) => patch(join(binDir, 'lib', 'terms.mjs'),
             "if (!tips.ok) return cannot('cannot list refs - is this a git repository?')",
             'if (!tips.ok) return { ...result, ok: true }'),
+    },
+    // ---------------------------------------------------------------------------------------------
+    // THE BRANCH HALF OF THE QUERY - terms from the branch's own facts, the block the session hook
+    // injects. docs/plans/2026-09-03-001-feat-inflight-docs-context-query-plan.md, unit U7.
+    // ---------------------------------------------------------------------------------------------
+    {
+        id: 'terms-from-branch-splits-the-issue-number-off-the-slug-and-drops-the-type-prefix',
+        why: 'a document names a branch by its slug and its issue by its number; the type prefix names a kind of work and would match every note there is',
+        run: async (binDir) => {
+            const t = await termsLib(binDir)
+            // issue-refs: exempt-begin
+            const got = t.termsFromBranch('fix/857-commit-lock', { prs: new Map() })
+            if (got.length !== 2 || got[0] !== '#857' || got[1] !== 'commit-lock') return false
+            // A hyphenated prefix survives the shape rules, so only the prefix set can drop it.
+            const picked = t.termsFromBranch('cherry-pick/893-drain-twice', { prs: new Map() })
+            if (picked.includes('cherry-pick') || !picked.includes('#893') || !picked.includes('drain-twice')) return false
+            // A remote-tracking spelling names the same branch.
+            const remote = t.termsFromBranch('origin/fix/857-commit-lock', { prs: new Map() })
+            if (remote.length !== 2 || remote[0] !== '#857') return false
+            // issue-refs: exempt-end
+            return t.termsFromBranch('master', { prs: new Map() }).length === 0 && t.termsFromBranch('', { prs: new Map() }).length === 0
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'terms.mjs'),
+            'const m = seg.match(/^(\\d+)(?:[-_](.+))?$/)', 'const m = seg.match(/^(\\d+)$/)'),
+    },
+    {
+        id: 'terms-from-branch-adds-the-cached-pr-number-and-title-identifiers-and-nothing-on-a-miss',
+        why: 'the PR title is where the mechanism is named in full; a cache miss must fall back to the branch name rather than reach for gh at session start',
+        run: async (binDir) => {
+            const t = await termsLib(binDir)
+            // issue-refs: exempt-begin
+            const prs = new Map([['fix/857-commit-lock', { number: 41, title: 'fix(core) astubbs#857: give ProducerManager a lock', state: 'OPEN' }]])
+            const got = t.termsFromBranch('fix/857-commit-lock', { prs })
+            const kept = ['#857', 'commit-lock', 'ProducerManager', '#41']
+            const dropped = ['fix', 'core', 'give', 'lock', 'astubbs#857']
+            if (!kept.every((k) => got.includes(k)) || dropped.some((d) => got.includes(d))) return false
+            // The branch's own segments come first: they are the terms a cap must never drop.
+            if (got[0] !== '#857' || got[1] !== 'commit-lock') return false
+            // The PR's number is not the issue's, and both are terms.
+            if (got.filter((x) => x === '#857').length !== 1) return false
+            // A backticked span in a title is not a shape claim here: `inflight docs` in a PR
+            // title must not yield the word `inflight`, which names the whole directory.
+            const ticked = new Map([['feats/x-y', { number: 9, title: 'feat: `inflight docs` and `commit lock`', state: 'OPEN' }]])
+            const fromTicks = t.termsFromBranch('feats/x-y', { prs: ticked })
+            if (fromTicks.includes('inflight') || fromTicks.includes('lock')) return false
+            // A miss: the branch name alone, and `prs` absent is the same as a miss.
+            const miss = t.termsFromBranch('fix/857-commit-lock', { prs: new Map() })
+            const none = t.termsFromBranch('fix/857-commit-lock')
+            // issue-refs: exempt-end
+            return miss.length === 2 && none.length === 2 && !miss.includes('ProducerManager')
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'terms.mjs'),
+            'const pr = prs?.get(name) ?? null', 'const pr = null'),
+    },
+    {
+        id: 'docs-for-branch-lists-the-document-that-names-the-branch-pr-marked-off-baseline',
+        why: 'the session hook injects this block verbatim; a document naming the PR on a branch the baseline never had is exactly the prior art a working-tree grep cannot show',
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            const cache = await cacheLib(binDir)
+            const cacheDir = mkdtempSync(join(tmpdir(), 'inflight-for-branch-cache-'))
+            const env = { ...process.env, PC_INFLIGHT_CACHE_DIR: cacheDir }
+            const before = process.env.PC_INFLIGHT_CACHE_DIR
+            process.env.PC_INFLIGHT_CACHE_DIR = cacheDir
+            try {
+                // The cached PR list, written through the library under the key it reads by.
+                cache.cacheWrite('prs.json', [['terms-only', { number: 7, title: 'feat: RetryQueueDrainer drains once', state: 'OPEN', baseRefName: 'master' }]], n.PR_LIST_FIELDS)
+            } finally {
+                if (before === undefined) delete process.env.PC_INFLIGHT_CACHE_DIR
+                else process.env.PC_INFLIGHT_CACHE_DIR = before
+            }
+            const r = invoke(binDir, ['docs', 'for-branch', 'terms-only'], { cwd: termsFixture(), env })
+            if (r.code !== 0) return false
+            const lines = r.out.split('\n')
+            if (lines[0] !== 'docs context: branch facts') return false
+            // The terms it used, on the first body line - the branch slug, the PR number, the title's class.
+            // issue-refs: exempt-begin
+            if (!/^terms from terms-only .*#7/.test(lines[1]) || !lines[1].includes('RetryQueueDrainer') || !lines[1].includes('terms-only')) return false
+            // issue-refs: exempt-end
+            if (!r.out.includes('- The retry queue drained twice  docs/solutions/ci/retry-queue.md  (off baseline)')) return false
+            if (!/across \d+ live ref\(s\)/.test(r.out)) return false
+            const last = lines.filter((l) => l.length > 0).at(-1)
+            return last.startsWith('more: bin/inflight.mjs prior-art --headings ') && last.includes('RetryQueueDrainer')
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'), "sourceFrame('branch', ref,", "sourceFrame('index', ref,"),
+    },
+    {
+        id: 'docs-for-branch-defaults-to-head-and-says-so-on-the-baseline',
+        why: 'the hook passes no ref, so HEAD is the branch it answers for; on master there is nothing to look up and the one line saying so is not a block',
+        run: async (binDir) => {
+            const git = windowGit(termsFixture())
+            const wt = mkdtempSync(join(tmpdir(), 'inflight-for-branch-wt-'))
+            git('worktree', 'add', '-q', '--detach', wt, 'terms-only')
+            spawnSync('git', ['checkout', '-q', 'terms-only'], { cwd: wt, encoding: 'utf8' })
+            // The prompt hook's fixture branch matches no document by its slug alone; a document that
+            // names the branch is committed on it, so the default-ref path has a hit to show.
+            mkdirSync(join(wt, 'docs', 'inflight'), { recursive: true })
+            writeFileSync(join(wt, 'docs', 'inflight', 'ci-drainer.md'), '# The drainer workstream\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\nlives on terms-only\n')
+            spawnSync('git', ['add', '-A'], { cwd: wt })
+            spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'a note naming its branch'], { cwd: wt })
+            const cacheDir = mkdtempSync(join(tmpdir(), 'inflight-for-branch-cache-'))
+            const env = { ...process.env, PC_INFLIGHT_CACHE_DIR: cacheDir }
+            try {
+                const onBranch = invoke(binDir, ['docs', 'for-branch'], { cwd: wt, env })
+                if (onBranch.code !== 0 || !onBranch.out.startsWith('docs context: branch facts')) return false
+                if (!onBranch.out.includes('- The drainer workstream  docs/inflight/ci-drainer.md  (off baseline)')) return false
+                const onMaster = invoke(binDir, ['docs', 'for-branch'], { cwd: termsFixture(), env })
+                if (onMaster.code !== 0 || onMaster.out.includes('docs context: branch facts')) return false
+                if (!onMaster.out.includes('on the baseline - nothing to look up')) return false
+                const explicit = invoke(binDir, ['docs', 'for-branch', 'master'], { cwd: wt, env })
+                return explicit.code === 0 && explicit.out.includes('on the baseline - nothing to look up') && !explicit.out.includes('branch facts')
+            } finally {
+                git('worktree', 'remove', '--force', wt)
+            }
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'), "ref = head.out.trim()", "ref = 'master'"),
+    },
+    {
+        id: 'docs-for-branch-never-calls-gh-and-is-silent-on-stdout-when-nothing-matches',
+        why: 'it runs at every session start - the budget and the shared rate limit both forbid a network call there; and silence is the R12 rule for an injected block, with the coverage on stderr for a human',
+        run: async (binDir) => {
+            // A `gh` first on PATH that records that it was called and then fails, as an unauthenticated one would.
+            const stub = mkdtempSync(join(tmpdir(), 'inflight-gh-stub-'))
+            const log = join(stub, 'calls.log')
+            writeFileSync(join(stub, 'gh'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\nexit 1\n`, { mode: 0o755 })
+            const cacheDir = mkdtempSync(join(tmpdir(), 'inflight-for-branch-cache-'))
+            const env = { ...process.env, PC_INFLIGHT_CACHE_DIR: cacheDir, PATH: `${stub}:${process.env.PATH}` }
+            // A branch no fixture document names - `terms-only` is named by the note the previous
+            // check commits on it, and the fixture is shared across checks in order.
+            const r = spawnSync(process.execPath, [join(binDir, 'inflight.mjs'), 'docs', 'for-branch', 'feats/nothing-names-this'], { cwd: termsFixture(), encoding: 'utf8', env })
+            if (r.status !== 0 || r.stdout !== '') return false
+            // Positive control for the stub: a command that DOES reach for gh on a miss calls it.
+            const control = spawnSync(process.execPath, [join(binDir, 'inflight.mjs'), 'note', 'drift', 'docs/inflight/note.md'], { cwd: termsFixture(), encoding: 'utf8', env })
+            const stubCalled = existsSync(log)
+            if (control.status !== 0 || !stubCalled) return false
+            const calls = readFileSync(log, 'utf8').split('\n').filter(Boolean)
+            // Exactly the control's call: for-branch added none.
+            if (calls.length !== 1) return false
+            return /nothing-names-this/.test(r.stderr) && /\d+ live ref/.test(r.stderr) && /not proof/i.test(r.stderr)
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'), 'prsByBranch({ network: false })', 'prsByBranch()'),
+    },
+    {
+        id: 'docs-for-branch-records-its-own-failure-and-clears-it-on-the-next-success',
+        why: 'the session hook prints nothing for this block when the command cannot run, so the record is the only place the failure exists; bare docs reads it back',
+        run: async (binDir) => {
+            const cache = await cacheLib(binDir)
+            const cacheDir = mkdtempSync(join(tmpdir(), 'inflight-for-branch-cache-'))
+            const env = { ...process.env, PC_INFLIGHT_CACHE_DIR: cacheDir }
+            const withCache = (fn) => {
+                const before = process.env.PC_INFLIGHT_CACHE_DIR
+                process.env.PC_INFLIGHT_CACHE_DIR = cacheDir
+                try { return fn() } finally {
+                    if (before === undefined) delete process.env.PC_INFLIGHT_CACHE_DIR
+                    else process.env.PC_INFLIGHT_CACHE_DIR = before
+                }
+            }
+            const outside = mkdtempSync(join(tmpdir(), 'inflight-for-branch-notarepo-'))
+            const failed = invoke(binDir, ['docs', 'for-branch', 'feats/anything-at-all'], { cwd: outside, env })
+            if (failed.code !== 2 || !withCache(() => 'branch facts' in cache.deliveryFailures())) return false
+            const ok = invoke(binDir, ['docs', 'for-branch', 'terms-only'], { cwd: termsFixture(), env })
+            if (ok.code !== 0) return false
+            return withCache(() => !('branch facts' in cache.deliveryFailures()))
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'), '            clearDeliveryFailure(BRANCH_DELIVERY)\n', ''),
+    },
+    {
+        id: 'help-lists-docs-for-branch-with-its-when-line',
+        why: 'the hook names this command as the branch-facts block; a command help cannot find is one the agent will not trust',
+        run: async (binDir) => {
+            const help = invoke(binDir, ['help'])
+            if (help.code !== 0) return false
+            const lines = help.out.split('\n')
+            const at = lines.findIndex((l) => /^ {2}docs for-branch\b/.test(l))
+            if (at < 0 || !/^\s+when: \S/.test(lines[at + 1] ?? '')) return false
+            const usage = invoke(binDir, ['help', 'docs', 'for-branch'])
+            return usage.code === 0 && usage.out.includes('Usage: bin/inflight.mjs docs for-branch')
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'), "        name: 'for-branch',", "        name: 'for-br',"),
     },
 ]
 

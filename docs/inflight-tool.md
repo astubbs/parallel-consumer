@@ -217,6 +217,29 @@ prints. The hook itself adds one line when the command could not run at all - no
 corpus unreadable - and never falls back to a working-tree scan, because a partial index that reads
 as complete is the thing it replaced.
 
+## What already names the branch you are on
+
+```
+node bin/inflight.mjs docs for-branch            # the checked-out branch
+node bin/inflight.mjs docs for-branch fix/857-commit-lock
+```
+
+The branch-facts block the session hook injects after the index: the documents across every live
+ref that name the branch's slug, its issue number, its PR number or the identifiers in its cached
+PR title. The first body line lists the terms it used, so a block can be judged by what it looked
+for; each document line carries the same marks as the prompt-terms block.
+
+<!-- issue-refs: exempt-begin - the bare form is what the tool searches for; a qualified one would not be found in a document that wrote it bare -->
+`fix/857-commit-lock` with a cached title of `fix(core) astubbs#857: give ProducerManager a lock`
+searches for `#857`, `commit-lock`, `ProducerManager` and the PR's own `#NNN` - every spelling of
+an issue reference collapses to its bare core, because that is the substring all of them contain.
+<!-- issue-refs: exempt-end --> The PR facts come from
+the tool's cache only - a session start never calls `gh` - so on a fresh cache the branch name is
+all it has, and it says so in the terms line. On the baseline (`master`, `origin/master`, or a
+detached head) it prints one line saying there is nothing to look up; when the terms match nothing,
+stdout is empty - the hook's silence is the answer - and the coverage (which terms, how many refs,
+that an empty result is not proof) goes to stderr for whoever ran it by hand.
+
 ## Finding work that will be lost if nobody acts
 
 ```

@@ -210,6 +210,25 @@ export function sourceFrame(kind, subject, body, moreCommand) {
 }
 
 /**
+ * ONE DOCUMENT LINE IN AN INJECTED BLOCK. The prompt-terms hook and `docs for-branch` print the
+ * same line for the same hit, so an agent learns one shape: `- <title>  <path>  (<marks>)`. The
+ * marks are the two facts the query exists for - the path exists off the baseline only, else a
+ * live ref carries a version the baseline has never held. On the baseline and undivergent: no mark.
+ */
+export function formatDocHit(h) {
+    const marks = []
+    if (!h.onBaseline) marks.push('off baseline')
+    else if (h.divergent) marks.push('divergent elsewhere')
+    const title = h.title ?? '(no title)'
+    return `- ${title}  ${h.path}${marks.length ? `  (${marks.join(', ')})` : ''}`
+}
+
+/** Terms as shell words for a "more" command an agent will paste: bare when safe, single-quoted otherwise. */
+export const termsAsArgv = (terms) => terms
+    .map((t) => (/^[A-Za-z0-9_./#-]+$/.test(t) ? t : `'${t.replaceAll("'", "'\\''")}'`))
+    .join(' ')
+
+/**
  * THE PAGE `docs show` PRINTS - and, with no body, exactly what `docs header` prints. One renderer
  * for both, so the two commands cannot disagree about the same file: the hook names `docs header`
  * as its "more" command, and a header there that differed from the one above the document would be

@@ -153,14 +153,27 @@ export function corpusIndex({ areas = DOC_AREAS } = {}) {
     }
 }
 
-/** headRefName -> {number, title, state}. One gh call for every ref, never one per branch. */
-export function prsByBranch({ cache = true } = {}) {
+/**
+ * The `gh pr list` fields the PR cache is keyed on. Exported so a self-test that seeds the cache
+ * writes it under the key the tool reads by, rather than a copy of this string that drifts.
+ */
+export const PR_LIST_FIELDS = 'headRefName,baseRefName,number,title,state'
+
+/**
+ * headRefName -> {number, title, state}. One gh call for every ref, never one per branch.
+ *
+ * `network: false` answers from the cache or not at all, and says which: a session start never
+ * calls gh (the plan's R19 budget, and a rate limit shared with every parallel session here), so
+ * `docs for-branch` takes the cached list when there is one and the branch name alone when not.
+ */
+export function prsByBranch({ cache = true, network = true } = {}) {
     // KEYED ON THE FIELD SET, so widening it cannot serve a cached answer that lacks the new
     // field. Adding `baseRefName` did exactly that: the code read it, the cache had never stored it,
     // and every branch silently looked unexplained until the TTL expired.
-    const shape = 'headRefName,baseRefName,number,title,state'
+    const shape = PR_LIST_FIELDS
     const cached = cache ? cacheRead('prs.json', { key: shape }) : null
     if (cached) return { ok: true, cached: true, map: new Map(cached) }
+    if (!network) return { ok: false, reason: 'no cached PR list, and this path never calls gh', cached: false, map: new Map() }
     // Naming the repo is not optional: `gh` resolves a bare command against `upstream` in this fork,
     // and an answer for confluentinc reads exactly like "this branch has no PR".
     // BOUNDED, because this became reachable from every session start and every push when the

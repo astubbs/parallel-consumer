@@ -51,6 +51,13 @@
 # seconds of the seven). Bare `docs` costs the same build. The lever if the budget is breached is
 # a build that deduplicates refs by their `docs/` tree object before listing; the plan's stop
 # condition is half again over budget, which no measurement here approached.
+#
+# The branch-facts block (R11) added its own call after the index, MEASURED 2026-09-03 on the same
+# laptop, quiet host, 562 live refs: `docs for-branch` alone costs 1.0 s to 1.3 s cold, whether it
+# finds documents or not - one `git grep` over the live refs plus a drift summary per hit shown -
+# and the whole hook ran 9.2 s to 9.7 s in a window where `docs index` alone ran 6.5 s to 7.9 s.
+# It shares the index's lever and adds none of its own: the grep is fixed-string and single, per
+# bin/lib/terms.mjs. On the baseline the call costs one `git rev-parse` and prints one line.
 # Re-measure with `time CLAUDE_PROJECT_DIR=$PWD .claude/hooks/inject-recorded-knowledge.sh`.
 #
 # Tool-neutral where it can be: the knowledge lives in the documents, and this only enumerates them.
@@ -147,6 +154,23 @@ else
     emit "on PATH, or the corpus could not be read), so the solutions, in-flight notes and plans are NOT"
     emit "listed below. Nothing else will tell you what exists: run \`node bin/inflight.mjs docs\` yourself,"
     emit "and if that fails too its exit reason is the fault to fix."
+    emit ""
+fi
+
+# THE BRANCH'S OWN FACTS, FROM THE TOOL (the plan's R11): the documents across every live ref that
+# name the checked-out branch, its PR or its issue numbers - the prior art most specific to this
+# session and the least likely to be grepped for, because nobody searches for their own branch name.
+# Same never-fail rule as the index; the difference is what a failure looks like. The index gets a
+# notice because its absence is a hole in the map; this block's absence is the COMMON case - master,
+# or a branch nothing names yet - so the hook prints nothing for it, and a real failure is recorded
+# by the command itself under `branch facts`, where bare `inflight docs` reads it back. It never
+# calls gh: PR facts come from the tool's cache or not at all, and the block says which it had.
+branch_facts=""
+if command -v node >/dev/null 2>&1; then
+    branch_facts=$(node "$INFLIGHT_TOOL" docs for-branch 2>/dev/null) || branch_facts=""
+fi
+if [ -n "$branch_facts" ]; then
+    emit "$branch_facts"
     emit ""
 fi
 

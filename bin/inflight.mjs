@@ -60,13 +60,14 @@ import { cacheClear, cacheStatus, clearDeliveryFailure, deliveryFailures, knownC
 import { corpusIndex, drift, findNotes, prsByBranch, stranded } from './lib/notes.mjs'
 import { DOC_AREAS, NOTES_DIR } from './lib/repo.mjs'
 import { docsShape } from './lib/docs-shape.mjs'
+import { matchDocs, termsFromBranch } from './lib/terms.mjs'
 import { branchView, commitGraph, trackingGap } from './lib/branches.mjs'
 import { loadCandidates, refactorWindow } from './lib/refactor-window.mjs'
 import {
-    formatBranch, formatCache, formatCoverage, formatDivergenceHeader, formatDocsIndex, formatDocsList, formatDocsShape,
-    formatDocsShow,
+    formatBranch, formatCache, formatCoverage, formatDivergenceHeader, formatDocHit, formatDocsIndex, formatDocsList,
+    formatDocsShape, formatDocsShow,
     formatDrift, formatFind, formatFlakes, formatRefactorWindow, formatSlowest, formatStranded, formatTimeline,
-    formatWarnings,
+    formatWarnings, sourceFrame, termsAsArgv,
 } from './lib/views.mjs'
 import { coverage, flakeCandidates, slowest, testTimeline } from './lib/codecov.mjs'
 import {
@@ -141,6 +142,7 @@ const DOCS_USAGE = `Usage: bin/inflight.mjs docs                                
        bin/inflight.mjs docs list <area> [<group>]              one level of it, with the next level's commands
        bin/inflight.mjs docs show <path> [--ref <ref>] [--header-only]
        bin/inflight.mjs docs header <path> [--ref <ref>]
+       bin/inflight.mjs docs for-branch [<ref>]                 what names the branch, its PR, its issues
 
 The docs corpus - docs/inflight/, docs/solutions/, docs/plans/ - read across EVERY ref, never the
 working tree. Bare \`docs\` prints each area, its groups and their counts, how many documents exist
@@ -151,7 +153,8 @@ walk from here to one document is copy and paste.
   list    the areas; one area's groups; or one group's documents, each with its \`docs show\`
   show    one document with its divergence header, from the right ref
   header  the header alone - what the read-time hook shows, in full
-  index   the session-start index for the three areas - every title, corpus-scoped`
+  index   the session-start index for the three areas - every title, corpus-scoped
+  for-branch  the documents naming a branch, its cached PR and its issue numbers - the block after the index`
 
 /**
  * The index, its stranded clusters and the shape over both - what bare `docs` and every `docs
@@ -170,6 +173,8 @@ function corpusShape() {
 
 /** The name the session index records its failures under (the plan's KTD13) - what bare `docs` shows. */
 const INDEX_DELIVERY = 'session index'
+/** The same for the branch-facts block the session hook injects after the index (the plan's R11). */
+const BRANCH_DELIVERY = 'branch facts'
 const DEFAULT_INDEX_MAX_LINES = 400
 
 /**
@@ -395,6 +400,86 @@ Cost: one index build, the same as bare \`docs\` - several seconds here, every c
             return { ok: true }
         },
     },
+    {
+        name: 'for-branch',
+        summary: 'the documents across every live ref that name a branch - its slug, its issue number, its cached PR number and title - as the session hook injects them',
+        when: 'you start on a branch you did not cut, or want the notes and plans that already talk about the one you are on',
+        usage: `Usage: bin/inflight.mjs docs for-branch [<ref>]
+
+The branch-facts block .claude/hooks/inject-recorded-knowledge.sh injects after the session index.
+Terms come from the branch name (\`fix/857-commit-lock\` gives \`#857\` and \`commit-lock\`; the kind
+prefix is dropped) and, when the tool's PR cache holds the branch, its PR number and the identifiers
+in its title. The cache is the only source: this never calls gh, so on a fresh cache the branch name
+is all it has, and the first body line says which terms were used and whether a PR was known. One
+\`git grep\` over the live refs - the same query as the prompt-terms hook, the same document lines
+and the same marks.
+
+<ref> defaults to the checked-out branch. On the baseline - master, origin/master, a detached head -
+it prints one line saying there is nothing to look up, exit 0. When the terms match nothing, stdout
+is EMPTY (the hook's silence is the answer) and the coverage - the terms, the ref count, and that an
+empty result is not proof - goes to stderr; exit 0.
+
+  bin/inflight.mjs docs for-branch
+  bin/inflight.mjs docs for-branch fix/857-commit-lock`,
+        run: (args, emit) => {
+            if (args.length > 1 || args.some((a) => a.startsWith('--'))) {
+                return { ok: false, reason: `docs for-branch: takes one ref at most, not '${args.join(' ')}'` }
+            }
+            // THE RECORD IS THIS COMMAND'S OWN JOB (the plan's KTD13). The hook prints nothing for
+            // this block when the command cannot run - silence is its common, legitimate state - so
+            // without the record a broken delivery is indistinguishable from a branch nothing names.
+            const cannot = (reason) => {
+                recordDeliveryFailure(BRANCH_DELIVERY, reason)
+                return { ok: false, reason: `docs for-branch: ${reason}` }
+            }
+            let ref = args[0] ?? null
+            if (ref === null) {
+                const head = exec('git', ['rev-parse', '--abbrev-ref', 'HEAD'])
+                if (!head.ok) return cannot('cannot resolve HEAD - is this a git repository?')
+                ref = head.out.trim()
+            }
+            // `rev-parse --abbrev-ref` answers `HEAD` for a detached head: on no workstream, so
+            // nothing to look up - the same reading `docs index` makes when it pins nothing.
+            const name = ref.replace(/^origin\//, '')
+            if (ref === 'HEAD' || name === 'master' || ref === baseline()) {
+                emit(`docs for-branch: ${ref} is on the baseline - nothing to look up`)
+                return { ok: true }
+            }
+            // Cache or nothing: this runs at every session start, where a gh call is both over the
+            // budget and a draw on the rate limit every parallel session shares.
+            const prs = prsByBranch({ network: false })
+            const pr = prs.map.get(name) ?? null
+            const source = pr ? `${ref} and its PR #${pr.number}` : `${ref} (no PR in the cache)`
+            const terms = termsFromBranch(ref, { prs: prs.map })
+            // Silence, not a failure record: a branch named by plain words carries no identifier,
+            // and the coverage line still says what was looked at, to stderr, for whoever asked.
+            if (terms.length === 0) {
+                console.error(`docs for-branch: ${source} yields no identifier-shaped term - nothing searched`)
+                return { ok: true }
+            }
+            const m = matchDocs(terms)
+            if (!m.ok) return cannot(m.reason)
+            clearDeliveryFailure(BRANCH_DELIVERY)
+            // Only the marked hits are shown, as the prompt hook shows them; the unmarked tail past
+            // MARK_LIMIT and the body-capped rest are counted, and the "more" command lists them.
+            const marked = m.hits.filter((h) => h.onBaseline !== null)
+            const more = m.hits.length - marked.length + m.truncated
+            if (marked.length === 0) {
+                console.error(`docs for-branch: terms from ${source} - ${terms.join(', ')} - name no document across `
+                    + `${m.refsSearched} live ref(s). Not proof of absence: headings alone never justify an empty result, `
+                    + 'and a cold PR cache means the title was never searched for.')
+                return { ok: true }
+            }
+            const body = [
+                `terms from ${source}: ${terms.join(', ')}`,
+                `${m.hits.length + m.truncated} document(s) across ${m.refsSearched} live ref(s) name them; ${marked.length} shown:`,
+                ...marked.map(formatDocHit),
+                ...(more > 0 ? [`+${more} more`] : []),
+            ].join('\n')
+            emit(sourceFrame('branch', ref, body, `bin/inflight.mjs prior-art --headings ${termsAsArgv(terms)}`))
+            return { ok: true }
+        },
+    },
 ]
 
 const COMMANDS = [
@@ -495,7 +580,7 @@ carries that the baseline does not, else the branch name. Nothing is summarised 
     },
     {
         name: 'docs',
-        summary: 'the docs corpus across every ref - its shape, one level of it, a document with its divergence header, or the header alone',
+        summary: 'the docs corpus across every ref - its shape, one level of it, a document with its divergence header, the header alone, or what names your branch',
         when: 'you are about to act on anything under docs/inflight, docs/solutions or docs/plans, or want to see what the corpus holds',
         usage: DOCS_USAGE,
         sub: DOCS_SUB,

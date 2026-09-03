@@ -143,6 +143,65 @@ export function termsFromPrompt(text) {
     return out.slice(0, MAX_TERMS)
 }
 
+/**
+ * BRANCH-NAME PREFIXES THAT SAY WHAT KIND OF WORK A BRANCH IS, never what it is about: the plan's
+ * list, plus the ones `git branch -r | cut -d/ -f2 | sort | uniq -c` reports in use here. Most
+ * would fall to the shape rules anyway - a plain word is not an identifier - so the set earns its
+ * place on the hyphenated ones (`cherry-pick`, `upstream-pr`) and by saying the intent out loud.
+ */
+export const BRANCH_TYPE_SEGMENTS = new Set([
+    'feats', 'feat', 'feature', 'features', 'fix', 'fixes', 'bugs', 'bug', 'docs', 'ci', 'test', 'tests',
+    'chore', 'refactor', 'refactors', 'experiment', 'demos', 'demo', 'improvements', 'perf', 'backup',
+    'handoff', 'research', 'optimize', 'debug', 'cherry-pick', 'upstream', 'upstream-pr', 'recut', 'deps',
+    'dependabot', 'issues', 'web',
+])
+
+/** `origin/x`, `refs/heads/x` and `refs/remotes/origin/x` all name the branch `x` - the PR cache's key. */
+const branchName = (ref) => ref.replace(/^refs\/(?:heads|remotes\/[^/]+)\//, '').replace(/^origin\//, '')
+
+/**
+ * The terms a branch's own facts yield: its name's segments and - when `prs` holds it - its PR
+ * number and the identifiers in its PR title. The plan's U7: what `docs for-branch` searches for
+ * and the session hook injects.
+ *
+ * THE SLUG IS THE IDENTIFIER, NOT ITS WORDS. `fix/857-commit-lock` yields `#857` and `commit-lock`:
+ * a leading issue number is split off into the `#NNN` core every spelling collapses to, and the
+ * rest stays one hyphenated term, because a document that names the branch writes the slug, while
+ * one that merely uses the words `commit` and `lock` is half the corpus. The kind prefix is
+ * dropped; a plain-word segment with no number meets termsFromPrompt's shape rules like any other
+ * word, and usually fails them, which is right - `hasten` on its own names nothing.
+ *
+ * NO NETWORK, BY CONSTRUCTION. `prs` is whatever map the caller has - the CLI passes the cached PR
+ * list and nothing else - and a miss yields the branch-name terms alone. Backticks in a PR title
+ * are stripped before the shape rules see it: a span there is not the author claiming a word is a
+ * name, and `inflight docs` in a title would otherwise yield `inflight`, which names a directory.
+ *
+ * @param {string} ref a branch name, with or without `origin/` or `refs/...`
+ * @param {{prs?: Map<string, {number: number, title: string}> | null}} opts
+ * @returns {string[]} the branch's terms first, then the PR's, deduplicated and capped as termsFromPrompt does
+ */
+export function termsFromBranch(ref, { prs = null } = {}) {
+    if (typeof ref !== 'string' || ref.length === 0) return []
+    const name = branchName(ref)
+    const parts = []
+    for (const seg of name.split('/').filter(Boolean)) {
+        if (BRANCH_TYPE_SEGMENTS.has(seg.toLowerCase())) continue
+        const m = seg.match(/^(\d+)(?:[-_](.+))?$/)
+        if (m) {
+            parts.push(`#${m[1]}`)
+            if (m[2]) parts.push(m[2])
+            continue
+        }
+        parts.push(seg)
+    }
+    const pr = prs?.get(name) ?? null
+    if (pr) {
+        if (Number.isInteger(pr.number)) parts.push(`#${pr.number}`)
+        if (typeof pr.title === 'string') parts.push(pr.title.replaceAll('`', ' '))
+    }
+    return termsFromPrompt(parts.join(' '))
+}
+
 const TIER_RANK = { frontmatter: 3, heading: 2, body: 1 }
 
 /**
