@@ -450,3 +450,98 @@ export function formatSlowest(v) {
     out.push('this to a throughput comparison; that is what bin/check-throughput-regression.mjs is for.')
     return out.join('\n') + truncNote(v)
 }
+
+/**
+ * The backlog view: groups of open notes, and the register delta.
+ *
+ * THE DELTA IS FIRST because it is the deliverable - the ranking pass wants the disagreements, not
+ * the corpus. The groups follow as a map with the command that scopes to each, which is the
+ * interface every level of this front door already uses.
+ *
+ * ASYMMETRIC ON PURPOSE. What the register ranks is a handful of entries, so each is listed with the
+ * reason it needs attention. What it does not name is nearly every open note in the repository, so
+ * that half is a count per group until a group scopes the call - listing it unscoped would be the
+ * whole-corpus dump this command exists to avoid, arriving under the name "delta".
+ */
+export function formatRank(r) {
+    const out = []
+    const cmd = (g) => `bin/inflight.mjs rank --impact ${g}`
+
+    if (!r.prsOk) {
+        out.push(`  WARNING: ${r.prsReason} - pull-request state below is UNKNOWN, not absent.\n`)
+    }
+
+    const d = r.delta
+    if (!d.ok) {
+        out.push(`  THE DELTA DID NOT RUN: ${d.reason}`)
+        out.push('  Everything below is the grouping alone - not a statement that the register agrees with it.\n')
+    } else {
+        out.push(`the register (${'docs/inflight/process-candidate-ranking.md'}) against the corpus:\n`)
+        if (d.ranked.length === 0 && d.byNumber.length === 0) out.push('  nothing it ranks has stopped being open work.')
+        else {
+            out.push('  ranked, but no longer open work in an impact bucket:')
+            for (const e of d.ranked) out.push(`      ${e.name.padEnd(52)}${e.reason}`)
+        }
+        for (const e of d.byNumber) {
+            out.push(`      astubbs#${e.number}`.padEnd(58) + e.reason)
+            if (e.names.length > 1) for (const nm of e.names) out.push(`          ${nm}`)
+        }
+        if (d.unresolvable.length > 0) {
+            out.push(`  ranked by a number that resolves to no note on any ref: ${d.unresolvable.map((n) => `astubbs#${n}`).join(', ')}`)
+        }
+        if (d.unrankedCounts.length > 0) {
+            out.push('', '  open and NOT named by the register:')
+            for (const u of d.unrankedCounts) {
+                out.push(r.scoped === null
+                    ? `      ${u.key.padEnd(18)}${String(u.count).padStart(4)}    ${cmd(u.key)}`
+                    : `      ${plural(u.count, 'note')} in ${u.key}`)
+            }
+        }
+        out.push('')
+    }
+
+    for (const g of r.groups) {
+        out.push(`  ${g.label}`)
+        // Rows only when a group scopes the call - the bare call is the map, never the dump.
+        if (r.scoped === null) { out.push(`      ${plural(g.rows.length, 'open note')}    ${cmd(g.key)}`); continue }
+        for (const row of g.rows) {
+            out.push(`      ${row.name}`)
+            if (row.title) out.push(`          "${row.title}"`)
+            out.push(`          ${carriage(row, r)}`)
+            if (row.number) out.push(`          number in the filename: ${row.number.command}`)
+            for (const d of row.disagreement) {
+                out.push(`          DISAGREEMENT: on ${d.ref} this note reads as ${d.group}, not ${row.group}`)
+            }
+        }
+        out.push('')
+    }
+
+    if (r.scoped === null && r.groups.length === 0) out.push('  no open note is in any impact bucket.')
+
+    if (r.excluded.length > 0) {
+        out.push(`  not work waiting to be ranked: ${r.excluded.map((e) => `${e.count} ${e.key}`).join(', ')}`)
+    }
+    if (r.groups.some((g) => g.rows.some((row) => row.number))) {
+        out.push('  A filename number is NOT attributed to a repository: `pr-` is a fork pull request, and names')
+        out.push('  predating the convention carry confluentinc numbers (docs/inflight/AGENTS.md owns both).')
+    }
+    out.push(`\n  searched ${plural(r.refsTotal, 'ref')} (${r.liveRefs} live); baseline ${r.baseline}. Read from the refs,`)
+    out.push('  never the working tree - so an empty group means nothing on any ref carries one, not that your checkout has none.')
+    return out.join('\n')
+}
+
+/**
+ * The one sentence that must never read as ownership.
+ *
+ * On the baseline, carriage is evidence of nothing - every branch cut from it carries the note. Off
+ * it, the carrying branch is the most useful thing in the row, and its pull request is named as a
+ * fact about the BRANCH rather than about the note's subject.
+ */
+function carriage(row, r) {
+    if (row.onBaseline) return `on ${r.baseline} - every branch cut from it carries this, so carriage names no owner`
+    const pr = row.pr ? `  [astubbs/parallel-consumer#${row.pr.number} ${row.pr.state}]` : (row.prKnown ? '' : '  [PR state UNKNOWN]')
+    const where = row.preserved
+        ? `preserved only on ${row.readRef} - an archive, so nothing here will land it`
+        : `carried by ${plural(row.carryingRefs.length, 'ref')}, read from ${row.readRef}${pr}`
+    return `${where} - CARRIES the note, which is not the same as fixing what it describes`
+}

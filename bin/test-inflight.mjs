@@ -193,6 +193,27 @@ const tagsLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'inflight-t
 const docsShapeLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'docs-shape.mjs')).href)
 const cacheLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'cache.mjs')).href)
 const docsCommandsLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'docs-commands.mjs')).href)
+const rankLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'rank.mjs')).href)
+const repoLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'repo.mjs')).href)
+
+/** The notes-area corpus index, the way the `rank` row builds it - notes only, never all three areas. */
+async function rankCorpus(binDir) {
+    const { corpusIndex } = await notes(binDir)
+    const { DOC_AREAS, NOTES_DIR } = await repoLib(binDir)
+    return corpusIndex({ areas: DOC_AREAS.filter((a) => a.dir === NOTES_DIR) })
+}
+
+/**
+ * `rank` over the fixture with no PR snapshot, exercising the real register fetch.
+ *
+ * The blob read goes through `registerBlob` rather than the working tree, because reading the
+ * checked-out copy is exactly the working-tree answer this whole tool exists to stop giving.
+ */
+async function rankIndex(binDir, group = null) {
+    const { rank, registerBlob } = await rankLib(binDir)
+    const index = await rankCorpus(binDir)
+    return rank(index, { prs: NO_PRS, register: registerBlob(index), group })
+}
 
 /**
  * Source with comments removed, so a check about CODE is not answered by prose. The first cut of
@@ -2996,6 +3017,265 @@ const CHECKS = [
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'docs-views.mjs'), 'const ADDS_SHOWN = 5', 'const ADDS_SHOWN = 50'),
     },
+
+    // --- `rank` --------------------------------------------------------------------------------
+    {
+        id: 'rank-openness-follows-the-marker-not-the-word-inside-it',
+        why: "`classifyNote` sets `open` from the PRESENCE of a state marker, so a note declaring `inflight-state: open - <reason>` is not open - and one is on the baseline today. A requirement written as a list of state words (closed/blocked/deferred/parked) would keep it, and the two readings disagree with nothing in the output to say which happened",
+        run: async (binDir) => {
+            const { rank } = await rankLib(binDir)
+            return inRankFixture(async () => {
+                const r = await rankIndex(binDir)
+                if (!r.ok) return false
+                const paths = new Set(r.groups.flatMap((g) => g.rows.map((row) => row.path)))
+                // Excluded: every note carrying ANY marker, whatever word it holds.
+                for (const excluded of ['bug-closed-thing', 'bug-blocked-thing', 'bug-parked-thing', 'bug-says-open']) {
+                    if (paths.has(`docs/inflight/${excluded}.md`)) return false
+                }
+                // Kept: no marker, and a prose mention that never closes one.
+                return paths.has('docs/inflight/bug-open-stall.md')
+                    && paths.has('docs/inflight/bug-mentions-marker.md')
+            })
+        },
+        // Reading openness off the WORDS keeps `bug-says-open`, which is the whole finding.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'), "new Set(['closed', 'deferred', 'registers'])", "new Set(['registers'])"),
+    },
+    {
+        id: 'rank-emits-open-notes-no-impact-bucket-claimed-rather-than-dropping-them',
+        why: 'keeping only the impact buckets silently drops the corpus\'s largest group of open notes - registers, impact-less features and unknown or misspelt impacts - and the standing register names notes in two of them, so they would vanish from the very view meant to rank them',
+        run: async (binDir) => {
+            const { rank } = await rankLib(binDir)
+            return inRankFixture(async () => {
+                const r = await rankIndex(binDir)
+                if (!r.ok) return false
+                const at = (key) => r.groups.find((g) => g.key === key)
+                const has = (key, stem) => (at(key)?.rows ?? []).some((row) => row.path === `docs/inflight/${stem}.md`)
+                return has('unmatched', 'bug-misspelt-impact') && has('feature', 'core-no-impact')
+                    && has('stall', 'bug-open-stall')
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'), "[...INFLIGHT_IMPACT_ORDER, 'feature', 'unmatched']", '[...INFLIGHT_IMPACT_ORDER]'),
+    },
+    {
+        id: 'rank-accounts-for-every-open-note-the-impact-buckets-did-not-claim',
+        why: 'an enumeration that does not say what it excluded is a false negative wearing the authority of a completed check - the failure docs/inflight-tool.md names as the reason exit 0 and exit 2 are different answers',
+        run: async (binDir) => {
+            const { rank } = await rankLib(binDir)
+            return inRankFixture(async () => {
+                const r = await rankIndex(binDir)
+                if (!r.ok) return false
+                const excluded = new Map(r.excluded.map((e) => [e.key, e.count]))
+                // Four notes carry a state marker in the fixture; all four are accounted for, and
+                // the accounting names WHICH disposition rather than a single total.
+                return (excluded.get('closed') ?? 0) === 3 && (excluded.get('deferred') ?? 0) === 1
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'), 'excluded.set(key, (excluded.get(key) ?? 0) + 1)', 'excluded.set(key, 0)'),
+    },
+    {
+        id: 'rank-says-carriage-names-no-owner-for-a-note-on-the-baseline',
+        why: 'every branch cut from the baseline carries a baseline note, so listing its carrying refs reads like evidence and is none - while for a branch-only note the same field is the most informative thing in the row. Getting the asymmetry backwards makes the highest-signal rows read like the lowest',
+        run: async (binDir) => {
+            const { rank } = await rankLib(binDir)
+            return inRankFixture(async () => {
+                const r = await rankIndex(binDir)
+                if (!r.ok) return false
+                const row = (stem) => r.groups.flatMap((g) => g.rows).find((x) => x.path === `docs/inflight/${stem}.md`)
+                const onBase = row('bug-open-stall')
+                const branchOnly = row('bug-branch-only-stall')
+                if (!onBase || !branchOnly) return false
+                return onBase.onBaseline === true && branchOnly.onBaseline === false
+                    && branchOnly.readRef === 'origin/carries-a-note'
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'), 'onBaseline: index.basePaths.has(path),', 'onBaseline: false,'),
+    },
+    {
+        id: 'rank-reads-an-archive-only-note-from-its-archival-ref',
+        why: "`stranded` marks a cluster preserved when it has no live refs and `docsShape` then drops those paths entirely, so the first-sorted-LIVE-ref rule is undefined for exactly this case - an implementer following it gets `undefined` for the ref and cannot read the note at all",
+        run: async (binDir) => {
+            const { rank } = await rankLib(binDir)
+            return inRankFixture(async () => {
+                const r = await rankIndex(binDir)
+                if (!r.ok) return false
+                const row = r.groups.flatMap((g) => g.rows).find((x) => x.path === 'docs/inflight/bug-archived-only.md')
+                return !!row && row.preserved === true && row.readRef === 'preserved/rank'
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'), 'const readable = live.length > 0 ? live : all', 'const readable = live'),
+    },
+    {
+        id: 'rank-never-prints-a-pr-number-as-an-issue',
+        why: "docs/inflight/AGENTS.md makes `pr-` the deliberate exception whose number is a fork PULL REQUEST, so a `gh issue view` command built from it resolves to a different thing entirely - and AGENTS.md's own rule is that a wrong reference which resolves is worse than a broken one",
+        run: async (binDir) => {
+            const { rank } = await rankLib(binDir)
+            return inRankFixture(async () => {
+                const r = await rankIndex(binDir)
+                if (!r.ok) return false
+                const row = (stem) => r.groups.flatMap((g) => g.rows).find((x) => x.path === `docs/inflight/${stem}.md`)
+                const pr = row('pr-207-a-pr-note')
+                const issue = row('core-141-numbered-thing')
+                const none = row('bug-open-stall')
+                if (!pr || !issue || !none) return false
+                return pr.number.kind === 'pull-request' && pr.number.command.includes('gh pr view 207')
+                    && issue.number.kind === 'issue' && issue.number.command.includes('gh issue view 141')
+                    && issue.number.command.includes('-R astubbs/parallel-consumer')
+                    && none.number === null
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'), "path.startsWith(`${NOTES_DIR}/pr-`)", 'false'),
+    },
+    {
+        id: 'rank-never-claims-a-branch-or-pull-request-fixes-a-note',
+        why: 'a note travels on the branch that produced it, so carriage is cheap and ownership is unavailable - and the worked case is a data-loss note whose own text says the bug predates the pull request of the only branch carrying it. A row reading "fixed by" that PR would be confidently wrong',
+        run: async (binDir) => {
+            const { rank } = await rankLib(binDir)
+            return inRankFixture(async () => {
+                const r = await rankIndex(binDir)
+                if (!r.ok) return false
+                const rendered = JSON.stringify(r.groups)
+                return !/\bfix(es|ed)\b/i.test(rendered) && !/\bowns?\b/i.test(rendered)
+                    && r.groups.flatMap((g) => g.rows).every((row) => row.relation === 'carries')
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'), "relation: 'carries'", "relation: 'fixed-by'"),
+    },
+    {
+        id: 'rank-reports-an-unanswered-pr-snapshot-as-unknown-not-as-no-pull-request',
+        why: 'an unauthenticated or rate-limited `gh` is indistinguishable from a branch that genuinely has no pull request unless the shape can carry the difference - the exact defect `prsByBranch` was changed to fix, reintroduced one layer up',
+        run: async (binDir) => {
+            const { rank } = await rankLib(binDir)
+            return inRankFixture(async () => {
+                const idx = await rankCorpus(binDir)
+                const bad = rank(idx, { prs: { ok: false, reason: 'gh unavailable', map: new Map() }, register: { ok: true, text: '' } })
+                if (!bad.ok) return false
+                const rows = bad.groups.flatMap((g) => g.rows)
+                return bad.prsOk === false && rows.length > 0 && rows.every((row) => row.prKnown === false)
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'), 'prKnown: prs.ok === true', 'prKnown: true'),
+    },
+    {
+        id: 'rank-cannot-report-a-failed-corpus-as-an-empty-backlog',
+        why: '"nothing is open" and "the search never ran" are different answers, and this repository has shipped two P0s where a failure rendered as a confident empty result',
+        run: async (binDir) => {
+            const { rank } = await rankLib(binDir)
+            const r = rank({ ok: false, reason: 'cannot list refs' }, { prs: { ok: true, map: new Map() }, register: { ok: true, text: '' } })
+            return r.ok === false && typeof r.reason === 'string' && r.reason.length > 0
+        },
+        // ANCHORED PAST `registerBlob`'s IDENTICAL GUARD. `patch` replaces the FIRST occurrence, and
+        // the shorter anchor hit that one instead - so the mutant left `rank`'s own guard intact and
+        // the control passed while asserting nothing. The reason expression is what makes it unique.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'),
+            'if (!index.ok) return { ok: false, reason: index.reason', 'if (false) return { ok: false, reason: index.reason'),
+    },
+    {
+        id: 'rank-delta-gives-each-ranked-entry-the-reason-it-is-no-longer-open',
+        why: 'the reason IS the finding - a note the register ranks that is gone needs deleting from the register, one that is deferred needs a schedule decision, and one sitting outside the impact buckets needs a tag. Reporting all three as "not open" turns three different actions into one shrug',
+        run: async (binDir) => {
+            const { rank } = await rankLib(binDir)
+            return inRankFixture(async () => {
+                const r = await rankIndex(binDir)
+                if (!r.ok) return false
+                const why = new Map(r.delta.ranked.map((e) => [e.name, e.reason]))
+                return why.get('bug-gone-forever.md') === 'absent'
+                    && why.get('bug-parked-thing.md') === 'deferred'
+                    && why.get('bug-closed-thing.md') === 'closed'
+                    && why.get('core-no-impact.md') === 'feature'
+                    && !why.has('bug-open-stall.md')
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'), "reason: 'absent'", "reason: 'closed'"),
+    },
+    {
+        id: 'rank-counts-a-note-the-register-ranks-by-number-as-ranked',
+        why: "the register's ranked section leads EVERY line with `astubbs#NNN` rather than a filename, so a delta keyed on filenames alone reports the notes it actually ranks as unranked - the finding fires hardest exactly where the register is doing its job",
+        run: async (binDir) => {
+            const { rank } = await rankLib(binDir)
+            return inRankFixture(async () => {
+                const r = await rankIndex(binDir)
+                if (!r.ok) return false
+                const unranked = new Set(r.delta.unranked.map((e) => e.path))
+                return !unranked.has('docs/inflight/core-141-numbered-thing.md')
+                    && r.delta.unresolvable.includes(999)
+                    && !r.delta.unresolvable.includes(141)
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'), 'const numbered = positionalNumber(path)', 'const numbered = null'),
+    },
+    {
+        id: 'rank-lists-unranked-rows-only-when-a-group-scopes-the-call',
+        why: 'the register names a handful of notes against a corpus of hundreds, so an unscoped unranked list is every open note in the repository - the whole-corpus dump the command exists to avoid, arriving under the name "delta"',
+        run: async (binDir) => {
+            const { rank } = await rankLib(binDir)
+            return inRankFixture(async () => {
+                const bare = await rankIndex(binDir)
+                const scoped = await rankIndex(binDir, 'stall')
+                if (!bare.ok || !scoped.ok) return false
+                return bare.delta.unranked.length === 0 && bare.delta.unrankedCounts.length > 0
+                    && scoped.delta.unranked.length > 0
+                    && scoped.delta.unranked.every((e) => e.group === 'stall')
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'), 'const listUnranked = group !== null', 'const listUnranked = true'),
+    },
+    {
+        id: 'rank-fails-the-run-when-the-register-could-not-be-read',
+        why: '"the delta was empty" and "the delta never ran" are different answers, and the delta is the deliverable - so a register that could not be read is a failed run, reported after everything that did run, the way refactor-window already reports an unmeasurable candidate',
+        run: async (binDir) => {
+            const { rank } = await rankLib(binDir)
+            return inRankFixture(async () => {
+                const idx = await rankCorpus(binDir)
+                const r = rank(idx, { prs: { ok: true, map: new Map() }, register: { ok: false, reason: 'no such blob' } })
+                // It still ANSWERED the part it could: groups are present, and only the delta failed.
+                return r.ok === true && r.groups.length > 0 && r.delta.ok === false
+                    && typeof r.delta.reason === 'string' && r.delta.reason.length > 0
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'), 'if (register.ok !== true) {', 'if (false) {'),
+    },
+    {
+        id: 'rank-does-not-pick-one-note-when-a-number-resolves-to-several',
+        why: "filenames get recycled and renamed here, so a note and its own dead predecessor sit on different refs carrying the same positional number - and a map keeping the last writer reported the register's LIVE entry as stale while naming the dead copy. Found by running the command against this repository, where astubbs#177 resolves to two notes",
+        run: async (binDir) => {
+            const { rank } = await rankLib(binDir)
+            return inRankFixture(async () => {
+                const bare = await rankIndex(binDir)
+                // SCOPED, because the unranked half is a count until a group scopes the call - an
+                // assertion about it on the bare call is vacuously true and the mutant survived it.
+                const scoped = await rankIndex(binDir, 'unmatched')
+                if (!bare.ok || !scoped.ok) return false
+                // 141 resolves to the open `crash` note AND to a dead twin sitting in `unmatched`.
+                // The register's entry is satisfied by the open one, so neither is a finding - and
+                // above all the dead twin is never named as the reason the entry is stale.
+                const named = JSON.stringify(bare.delta.byNumber) + JSON.stringify(bare.delta.ranked)
+                const unranked = new Set(scoped.delta.unranked.map((e) => e.name))
+                return !named.includes('bug-141-older-name.md')
+                    && !bare.delta.byNumber.some((e) => e.number === 141)
+                    && !unranked.has('bug-141-older-name.md')
+            })
+        },
+        // Keeping only ONE candidate per number is the defect: the dead twin wins and is reported.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'),
+            'byNumber.get(numbered.value).push(name)', 'byNumber.set(numbered.value, [name])'),
+    },
+    {
+        id: 'rank-resolves-a-pull-request-for-a-remote-ref-by-its-bare-branch-name',
+        why: "`prsByBranch` maps `headRefName`, which never carries the `origin/` prefix, while a corpus ref almost always does - so a lookup on the full ref returns null for every remote branch and the entire corpus reads as pull-request-less while `prs.ok` is true. That is the shape where a wrong answer is indistinguishable from a true one, since no row says UNKNOWN",
+        run: async (binDir) => {
+            const { rank, registerBlob } = await rankLib(binDir)
+            return inRankFixture(async () => {
+                const index = await rankCorpus(binDir)
+                const prs = { ok: true, map: new Map([['carries-a-note', { number: 4242, state: 'OPEN', title: 't' }]]) }
+                const r = rank(index, { prs, register: registerBlob(index) })
+                if (!r.ok) return false
+                const row = r.groups.flatMap((g) => g.rows).find((x) => x.name === 'bug-branch-only-stall.md')
+                return !!row && row.readRef === 'origin/carries-a-note' && row.pr !== null && row.pr.number === 4242
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'),
+            "prs.map.get(readRef.replace(/^origin\\//, ''))", 'prs.map.get(readRef)'),
+    },
 ]
 
 /**
@@ -3019,6 +3299,101 @@ function manyVersionsFixture() {
     git('checkout', '-q', 'master')
     MANY = dir
     return dir
+}
+
+/**
+ * THE `rank` CORPUS: one note per situation `rank` has to get right, so every check below has a
+ * known right answer rather than an ambient one.
+ *
+ * Its own repository, and deliberately NOT an extension of `buildFixture()`: several checks there
+ * assert exact counts against that tree, so adding a note to it would break them for a reason that
+ * has nothing to do with what they test. `manyVersionsFixture` and `buildRenameFixture` are the
+ * precedent.
+ *
+ * What each note is for:
+ *
+ *   bug-open-stall              open, impact stall - the ordinary row, and the register names it
+ *   bug-closed-thing            state `closed`     - excluded, and the register names it
+ *   bug-blocked-thing           state `blocked`    - excluded; the word is neither closed nor parked
+ *   bug-parked-thing            `parked - deferred`- excluded, and the word sits mid-state
+ *   bug-says-open               `open - <reason>`  - EXCLUDED, because the marker's PRESENCE decides
+ *                                                    openness, not the word inside it
+ *   bug-mentions-marker         prose only         - still open: no closing `-->`, so no marker
+ *   bug-misspelt-impact         impact `stalll`    - unmatched, never silently dropped
+ *   core-no-impact              feature, no impact - feature group, and the register names it
+ *   core-141-numbered-thing     `<area>-NNN-<slug>`- the positional number, which the register
+ *                                                    ranks by number rather than by filename
+ *   pr-207-a-pr-note            `pr-` prefix       - a fork PR number, never printed as an issue
+ *   bug-branch-only-stall       one branch only    - carriage names a branch here, unlike on master
+ *   bug-archived-only           one TAG only       - preserved, and read from an archival ref
+ */
+let RANK = null
+function rankFixture() {
+    if (RANK) return RANK
+    const { dir, git, commit } = windowRepo()
+    const write = (rel, body) => {
+        mkdirSync(join(dir, dirname(rel)), { recursive: true })
+        writeFileSync(join(dir, rel), body)
+    }
+    const note = (name, body) => write(`docs/inflight/${name}.md`, body)
+    const tags = (type, impact, state) => `<!-- inflight-type: ${type} -->\n`
+        + (impact ? `<!-- inflight-impact: ${impact} -->\n` : '')
+        + (state ? `<!-- inflight-state: ${state} -->\n` : '')
+
+    note('bug-open-stall', `# An open stall\n\n${tags('bug', 'stall')}\nbody\n`)
+    note('bug-closed-thing', `# A closed thing\n\n${tags('bug', 'stall', 'closed - it landed')}\nbody\n`)
+    note('bug-blocked-thing', `# A blocked thing\n\n${tags('bug', 'stall', 'blocked - waiting on a decision')}\nbody\n`)
+    note('bug-parked-thing', `# A parked thing\n\n${tags('bug', 'stall', 'parked - deferred, after v6')}\nbody\n`)
+    // The word `open` inside the state does NOT make it open - the marker's presence decides.
+    note('bug-says-open', `# It says open\n\n${tags('bug', 'stall', 'open - still going')}\nbody\n`)
+    // A mention with no closing `-->` is prose, not a marker. Last line, so nothing closes it later.
+    note('bug-mentions-marker', `# It only mentions the marker\n\n${tags('bug', 'stall')}\nprose about inflight-state: closed\n`)
+    note('bug-misspelt-impact', `# A misspelt impact\n\n${tags('bug', 'stalll')}\nbody\n`)
+    note('core-no-impact', `# A feature with no impact\n\n${tags('feature', '')}\nbody\n`)
+    note('core-141-numbered-thing', `# A numbered note\n\n${tags('bug', 'crash')}\nbody\n`)
+    note('pr-207-a-pr-note', `# A note about a pull request\n\n${tags('task', 'ci')}\nbody\n`)
+    write('docs/inflight/process-candidate-ranking.md', [
+        '# Next candidates, ranked', '', '<!-- inflight-type: register -->', '',
+        '- `bug-open-stall.md` - open, so no delta row',
+        '- `bug-gone-forever.md` - on no ref at all',
+        '- `bug-parked-thing.md` - deferred',
+        '- `bug-closed-thing.md` - closed',
+        '- `core-no-impact.md` - open, but no impact bucket claims it',
+        '- astubbs#141 - ranked by NUMBER, and the note that carries it is open',
+        '- astubbs#999 - resolves to no note on any ref', '',
+    ].join('\n'))
+    commit('the rank corpus')
+
+    git('checkout', '-q', '-b', 'carries-a-note')
+    note('bug-branch-only-stall', `# A note only this branch has\n\n${tags('bug', 'stall')}\nbody\n`)
+    // The SAME positional number as core-141-numbered-thing, under a dead earlier name. Filenames
+    // get recycled and renamed here, so one number resolving to two notes is ordinary, not exotic.
+    note('bug-141-older-name', `# The renamed predecessor\n\n${tags('bug', 'stalll')}\nbody\n`)
+    commit('a note master never had, and a stale twin of a numbered one')
+    // A REMOTE ref, because a real corpus is overwhelmingly `origin/*` - and the PR snapshot is
+    // keyed on the bare branch name, so a lookup that forgets to strip the prefix silently reports
+    // every remote branch as having no pull request.
+    git('update-ref', 'refs/remotes/origin/carries-a-note', git('rev-parse', 'HEAD'))
+    git('checkout', '-q', 'master')
+    git('branch', '-q', '-D', 'carries-a-note')
+
+    // Held ONLY by a tag: preserved on purpose, so it has no live ref to be read from.
+    git('checkout', '-q', '-b', 'to-tag', 'master')
+    note('bug-archived-only', `# A note only an archive has\n\n${tags('bug', 'stall')}\nbody\n`)
+    commit('parked before a re-cut')
+    git('tag', 'preserved/rank')
+    git('checkout', '-q', 'master')
+    git('branch', '-q', '-D', 'to-tag')
+
+    RANK = dir
+    return dir
+}
+
+/** Run a predicate with the rank fixture as the working directory, so the libraries read it. */
+async function inRankFixture(fn) {
+    const before = cwd()
+    chdir(rankFixture())
+    try { return await fn(rankFixture()) } finally { chdir(before) }
 }
 
 console.log('bin/test-inflight.mjs - front door and prior-art library self-test\n')
