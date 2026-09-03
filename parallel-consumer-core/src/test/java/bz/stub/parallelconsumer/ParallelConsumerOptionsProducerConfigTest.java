@@ -28,8 +28,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 
 /**
- * The producer-configuration path of {@link ParallelConsumerOptions}: how it combines with the deprecated instance
- * option, what validation says, and what the options render when logged (astubbs#225, R1, R3, R7, R16, R17, R19,
+ * The producer-configuration path of {@link ParallelConsumerOptions}: how it combines with the instance option,
+ * what validation says, and what the options render when logged (astubbs#225, R1, R3, R7, R16, R17, R19,
  * R21).
  */
 class ParallelConsumerOptionsProducerConfigTest {
@@ -62,25 +62,53 @@ class ParallelConsumerOptionsProducerConfigTest {
     }
 
     /**
-     * Covers AE5, the validation half: the one WARN the deprecated path gets, at validation, naming the remedy.
+     * The instance option is a peer of the configuration one, not a deprecated path: validating it says nothing.
      */
     @Test
-    void anInstanceAloneLogsOneWarnNamingTheReplacementAndTheRemovalRelease() {
+    void anInstanceAloneValidatesWithoutAWarn() {
         var options = ParallelConsumerOptions.<String, String>builder()
                 .consumer(consumer)
                 .producer(producerInstance)
                 .commitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER)
                 .build();
 
-        List<ILoggingEvent> warns = captureWarns(() -> options.validate());
+        List<ILoggingEvent> warns = captureWarns(options::validate);
 
-        assertThat(warns).hasSize(1);
-        String message = warns.get(0).getFormattedMessage();
-        assertThat(message).contains(ParallelConsumerOptions.Fields.producerConfig);
-        assertThat(message).contains(ParallelConsumerOptions.Fields.producerFactory);
-        assertThat(message).contains("recover");
-        assertThat(message).contains(ParallelConsumerOptions.PRODUCER_INSTANCE_REMOVAL_RELEASE);
+        assertThat(warns).isEmpty();
         assertThat(options.isProducerSupplied()).isTrue();
+        assertThat(options.isProducerInstanceSupplied()).isTrue();
+    }
+
+    /**
+     * What needs PC to build the producer refuses to be configured beside a finished instance: a factory has nothing
+     * to build from, and saying so at validation beats a factory that is silently never called.
+     */
+    @Test
+    void aFactoryBesideAnInstanceIsRefusedNamingAllThree() {
+        var options = ParallelConsumerOptions.<String, String>builder()
+                .consumer(consumer)
+                .producer(producerInstance)
+                .producerFactory(config -> producerInstance)
+                .build();
+
+        var thrown = assertThrows(IllegalArgumentException.class, options::validate);
+
+        assertThat(thrown).hasMessageThat().contains(ParallelConsumerOptions.Fields.producerFactory);
+        assertThat(thrown).hasMessageThat().contains(ParallelConsumerOptions.Fields.producerConfig);
+        assertThat(thrown).hasMessageThat().contains(ParallelConsumerOptions.Fields.producer + " instance");
+    }
+
+    @Test
+    void aFactoryWithoutConfigurationIsRefused() {
+        var options = ParallelConsumerOptions.<String, String>builder()
+                .consumer(consumer)
+                .producerFactory(config -> producerInstance)
+                .build();
+
+        var thrown = assertThrows(IllegalArgumentException.class, options::validate);
+
+        assertThat(thrown).hasMessageThat().contains(ParallelConsumerOptions.Fields.producerFactory);
+        assertThat(thrown).hasMessageThat().contains(ParallelConsumerOptions.Fields.producerConfig);
     }
 
     @Test
@@ -148,7 +176,7 @@ class ParallelConsumerOptionsProducerConfigTest {
                         ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName()))
                 .build();
 
-        try (Producer<String, String> built = options.getProducerFactory().create(options.getProducerConfig())) {
+        try (Producer<String, String> built = options.effectiveProducerFactory().create(options.getProducerConfig())) {
             assertThat(built).isInstanceOf(KafkaProducer.class);
         }
     }

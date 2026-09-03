@@ -15,7 +15,8 @@ import java.util.Map;
  * PC owns the producer's lifecycle: it builds one at start-up, and when the broker reports that producer invalid
  * (fenced, an expired producer id, a stale epoch, a lost group generation) it discards it and asks this factory for
  * another. That is only possible because PC holds the configuration rather than a finished instance, which is why
- * this replaces {@link ParallelConsumerOptions#getProducer()}.
+ * this needs {@link ParallelConsumerOptions#getProducerConfig()} and refuses a finished
+ * {@link ParallelConsumerOptions#getProducer()} instance beside it.
  * <p>
  * <b>Contract.</b> Every call returns a <em>new</em> producer built from the map it is given, with every key
  * present - {@code transactional.id} above all. PC derives that id (see {@link ParallelConsumerOptions#getProducerConfig()}

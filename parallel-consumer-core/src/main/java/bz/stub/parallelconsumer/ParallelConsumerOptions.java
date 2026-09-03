@@ -17,7 +17,6 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.ToString;
 import lombok.experimental.FieldNameConstants;
-import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.producer.Producer;
@@ -55,7 +54,6 @@ import static java.time.Duration.ofMillis;
 @ToString
 @FieldNameConstants
 @InterfaceStability.Evolving
-@Slf4j
 public class ParallelConsumerOptions<K, V> {
 
     /**
@@ -64,27 +62,19 @@ public class ParallelConsumerOptions<K, V> {
     private final Consumer<K, V> consumer;
 
     /**
-     * The release the {@link #producer} instance option is queued for removal in: the major after the one that ships
-     * its deprecation, so that the option is not removed in the same version that deprecates it.
-     */
-    public static final String PRODUCER_INSTANCE_REMOVAL_RELEASE = "0.7.0.0";
-
-    /**
-     * A finished producer instance for the produce flows.
+     * A finished producer instance for the produce flows. Supplying a producer is only needed if using the produce
+     * flows; the alternative is {@link #producerConfig}, from which PC builds the producer itself - and a
+     * replacement, when the broker reports the producer invalid. A finished instance carries no configuration to
+     * rebuild from, so on this path those conditions (fenced, an expired producer id, a stale epoch, a lost
+     * generation) keep their pre-recovery behaviour: a shutdown on the commit path, and on the produce path whatever
+     * the condition's shape produces today.
      * <p>
-     * Supplying a producer is only needed if using the produce flows, and this is the older of the two ways to do it.
-     * PC cannot read a finished producer's configuration back out, so it cannot build a replacement when the broker
-     * reports the producer invalid - fenced, an expired producer id, a stale epoch, a lost generation - and on this
-     * path those conditions keep their pre-recovery behaviour: a shutdown on the commit path, and on the produce path
-     * whatever the condition's shape produces today. Supply {@link #producerConfig} (and optionally
-     * {@link #producerFactory}) instead, and PC recovers from all of them.
+     * Both ways are supported. What needs PC to build the producer - {@link #producerFactory}, and the recovery it
+     * exists for - refuses an instance at validation rather than degrading silently; supplying this together with
+     * {@link #producerConfig} fails validation too.
      *
      * @see ParallelStreamProcessor
-     * @deprecated since 0.6.0.0, in favour of {@link #producerConfig} plus {@link #producerFactory}; removal is queued
-     *         for {@value #PRODUCER_INSTANCE_REMOVAL_RELEASE} (see {@code docs/refactoring.md}, "Remove the
-     *         {@code producer} instance option"). Supplying both this and {@link #producerConfig} fails validation.
      */
-    @Deprecated
     private final Producer<K, V> producer;
 
     /**
@@ -111,13 +101,13 @@ public class ParallelConsumerOptions<K, V> {
     private final Map<String, Object> producerConfig;
 
     /**
-     * Builds the producer from {@link #producerConfig}. Defaults to a plain {@code KafkaProducer}; override it to wrap,
-     * instrument or substitute the producer. See {@link ProducerFactory} for the contract every implementation must
-     * keep.
+     * Builds the producer from {@link #producerConfig}, and so requires it: a finished {@link #producer} instance
+     * carries no configuration for a factory to build from, and supplying both fails validation. Unset, PC builds a
+     * plain {@code KafkaProducer}; set it to wrap, instrument or substitute the producer. See {@link ProducerFactory}
+     * for the contract every implementation must keep.
      */
-    @Builder.Default
     @ToString.Exclude
-    private final ProducerFactory<K, V> producerFactory = ProducerFactory.kafkaProducer();
+    private final ProducerFactory<K, V> producerFactory;
 
     /**
      * Path to Managed executor service for Java EE
@@ -539,8 +529,8 @@ public class ParallelConsumerOptions<K, V> {
     }
 
     /**
-     * Exactly one way of supplying a producer may be used, and using the deprecated one says so once, here, rather
-     * than on the day the broker invalidates it.
+     * Exactly one way of supplying a producer may be used, and what needs PC to build the producer refuses a finished
+     * instance here, at validation, rather than on the day it matters.
      */
     private void producerSourceValidation() {
         if (producer != null && producerConfig != null) {
@@ -548,14 +538,20 @@ public class ParallelConsumerOptions<K, V> {
                             "they cannot be resolved to one producer silently.",
                     Fields.producer, Fields.producerConfig));
         }
-        if (producer != null) {
-            log.warn("A {} instance was supplied. PC cannot rebuild a producer it did not build, so when the broker " +
-                            "invalidates this one (fenced, expired producer id, stale epoch, lost generation) PC cannot " +
-                            "recover and keeps its pre-recovery behaviour. Supply {} (and optionally {}) instead and PC " +
-                            "recovers from all of them. The instance option is deprecated and its removal is queued " +
-                            "for {}.",
-                    Fields.producer, Fields.producerConfig, Fields.producerFactory, PRODUCER_INSTANCE_REMOVAL_RELEASE);
+        if (producerFactory != null && producerConfig == null) {
+            throw new IllegalArgumentException(msg("{} builds the producer from {}, which was not supplied{}",
+                    Fields.producerFactory, Fields.producerConfig,
+                    producer != null
+                            ? msg(" - a finished {} instance carries no configuration for a factory to build from, so the two cannot be combined", Fields.producer)
+                            : ""));
         }
+    }
+
+    /**
+     * The factory PC builds the producer with: the one supplied, or a plain {@code KafkaProducer}.
+     */
+    public ProducerFactory<K, V> effectiveProducerFactory() {
+        return producerFactory != null ? producerFactory : ProducerFactory.kafkaProducer();
     }
 
     private void transactionsValidation() {
@@ -563,7 +559,7 @@ public class ParallelConsumerOptions<K, V> {
 
         if (isUsingTransactionCommitMode()) {
             if (!isProducerSupplied()) {
-                throw new IllegalArgumentException(msg("Cannot set {} to Transaction Producer mode ({}) without supplying {} for PC to build a Producer from (or, deprecated, a Producer instance)",
+                throw new IllegalArgumentException(msg("Cannot set {} to Transaction Producer mode ({}) without supplying {} for PC to build a Producer from (or a Producer instance)",
                         Fields.commitMode,
                         commitMode,
                         Fields.producerConfig));
@@ -625,16 +621,16 @@ public class ParallelConsumerOptions<K, V> {
     }
 
     /**
-     * @return true when the produce flows can be used - a configuration for PC to build the producer from, or the
-     *         deprecated finished instance
+     * @return true when the produce flows can be used - a configuration for PC to build the producer from, or a
+     *         finished instance
      */
     public boolean isProducerSupplied() {
         return producer != null || producerConfig != null;
     }
 
     /**
-     * @return true when the deprecated {@link #producer} instance was supplied - the path on which PC cannot recover
-     *         an invalidated producer
+     * @return true when the {@link #producer} instance was supplied, rather than {@link #producerConfig} - the path
+     *         on which PC cannot recover an invalidated producer
      */
     public boolean isProducerInstanceSupplied() {
         return producer != null;

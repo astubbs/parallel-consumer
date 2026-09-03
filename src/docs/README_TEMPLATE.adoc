@@ -517,7 +517,7 @@ This ensures maximum concurrency, while ensuring messages are processed and comm
 <3> The maximum number of concurrent processing operations to be performing at any given time.
 Also, because the library coordinates offsets, `enable.auto.commit` must be disabled in your consumer.
 <4> Producer configuration, only required if using the `produce` flows: PC builds the producer from it through the factory on the next line (the default is `new KafkaProducer<>(config)`; override it to wrap or instrument the producer, keeping every key it is given), and rebuilds it if the broker invalidates it - see <<producer-ownership>> and <<producer-recovery>>.
-Handing PC a finished `Producer` instance still works, deprecated.
+Handing PC a finished `Producer` instance works as it always has; it is the one path PC cannot rebuild a producer on, so `producerFactory` and the recovery in <<producer-recovery>> need `producerConfig`, and a factory beside an instance is refused at validation.
 <5> Subscribe to your topics
 
 NOTE: Because the library coordinates offsets, `enable.auto.commit` must be disabled.
@@ -693,11 +693,10 @@ The API is source-compatible, so beyond the import lines no source edit is neede
 Committed offset metadata is unchanged too, so an existing consumer group can be upgraded in place without resetting or migrating offsets.
 The library's shared internal utilities moved with the rest, into `bz.stub.parallelconsumer.internal.utils` -- they were always plumbing, they are not part of the published API, and they are now named as such.
 
-==== Move from a producer instance to producer configuration
+==== Moving from a producer instance to producer configuration
 
-The `producer` option - a finished `Producer` instance - is deprecated in favour of `producerConfig` (plus, optionally, `producerFactory`), and its removal is queued for `0.7.0.0`.
-Nothing forces the move in this release, but only the configuration path recovers when the broker invalidates the producer; see <<producer-recovery>>.
-To move:
+The `producer` option - a finished `Producer` instance - stays supported.
+`producerConfig` (plus, optionally, `producerFactory`) is the path PC owns, and the only one that recovers when the broker invalidates the producer (see <<producer-recovery>>), so this is how to move when you want that:
 
 * Replace `.producer(kafkaProducer)` with `.producerConfig(producerProperties)`, the same map you built the producer from, serializers included.
 * Drop any `transactional.id` from that map. PC derives one per running instance, and a value you set is replaced with a WARN.
@@ -962,9 +961,7 @@ A `transactional.id` set in `producerConfig` does not take effect there, and PC 
 Configuration values are never rendered into logs: PC's own log lines and `toString()` show an allow-list of non-secret keys and redact the rest.
 A factory must return a new producer on every call - PC may discard one and build another from the same configuration - and a factory that returns one it already returned, or drops the `transactional.id` it was given, is rejected at construction naming that contract.
 
-Supplying a finished `Producer` instance still works for every flow it worked for, and is deprecated: PC cannot read a finished producer's configuration back out, so it can never build another from it.
-PC logs one WARN at start-up naming the remedy.
-The instance option's removal is queued for `0.7.0.0`.
+Supplying a finished `Producer` instance still works for every flow it worked for, and stays supported: PC cannot read a finished producer's configuration back out, so it can never build another from it - which is why anything that needs PC to build the producer refuses an instance at validation (`producerFactory` beside `producer` fails, naming both) and why recovery does not run on that path.
 
 [[producer-recovery]]
 === Producer recovery

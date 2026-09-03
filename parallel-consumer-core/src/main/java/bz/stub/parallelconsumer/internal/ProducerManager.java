@@ -629,7 +629,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
 
     /**
      * @return true where PC built the producer and so can build another, and the commit mode is the transactional
-     *         one whose control loop performs the recovery; false on the deprecated producer-instance path, and in
+     *         one whose control loop performs the recovery; false on the producer-instance path, and in
      *         the consumer-commit modes, where every condition keeps its pre-recovery behaviour
      */
     public boolean canRecover() {

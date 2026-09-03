@@ -102,7 +102,7 @@ public class PCModule<K, V> {
     }
 
     /**
-     * The wrapper around the producer PC starts with - the caller's instance on the deprecated path, or the first
+     * The wrapper around the producer PC starts with - the caller's instance on the instance path, or the first
      * producer built from configuration through the factory.
      */
     protected ProducerWrapper<K, V> producerWrap() {
@@ -136,7 +136,7 @@ public class PCModule<K, V> {
         // user code, wrapped as every other user function is: a factory that throws an Error (a serializer's static
         // initialiser failing, say) would otherwise escape every catch on the recovery path, leaving the instance
         // RUNNING with its workers parked on the produce lock for good
-        Producer<K, V> producer = UserFunctions.carefullyRun(options().getProducerFactory()::create, resolved);
+        Producer<K, V> producer = UserFunctions.carefullyRun(options().effectiveProducerFactory()::create, resolved);
         if (producer == null) {
             throw new ProducerFactoryContractException("The ProducerFactory returned null; every call must return a new Producer");
         }

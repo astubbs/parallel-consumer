@@ -193,7 +193,7 @@ entries:
       completed-but-uncommitted ledger, and rebuilds under the same derived id; proven at the unit level
       (fenced-during-commit was red before the change) and on a real coordinator by ProducerFencingRecoveryIT,
       with the recovery guarantee registered as a transactional claim. Not yet run in anger, so not
-      "implemented"; the producer-instance path keeps its old behaviour and is deprecated.
+      "implemented"; the producer-instance path keeps its old behaviour.
     why_now: >-
       Fencing is an ordinary consequence of a rebalance under transactions, and a broker can expire an
       idle producer id outright; either way PC dies on the commit path and spins on the produce path.
@@ -202,7 +202,7 @@ entries:
     done_when: >-
       A producer the broker has invalidated is replaced and processing continues, with no offset from
       the aborted transaction committed and its work processed again. Applies where PC builds the
-      producer; supplying a Producer instance is deprecated and keeps today's behaviour.
+      producer; supplying a Producer instance keeps today's behaviour.
     tracking: astubbs#225
     related: astubbs#411
     pull_request: astubbs#410

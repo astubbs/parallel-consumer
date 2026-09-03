@@ -72,7 +72,6 @@ public class ProducerWrapper<K, V> implements Producer<K, V> {
     /**
      * The producer-instance path: wraps the caller's finished producer and discovers whether it is transactional.
      */
-    @SuppressWarnings("deprecation") // the instance option is deprecated, and this is the one place that reads it
     public ProducerWrapper(ParallelConsumerOptions<K, V> options) {
         this(options, options.getProducer(), Optional.empty());
     }
