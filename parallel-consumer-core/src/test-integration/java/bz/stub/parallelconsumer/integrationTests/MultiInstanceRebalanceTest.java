@@ -631,7 +631,12 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
         // capacity profiles keep the legacy detector (11 consecutive progress-free 1s checks) so
         // their measured pass-rate baseline is undisturbed; correctness profiles use the sliding
         // NO_PROGRESS watermark (see Scenario#noProgressWindow)
-        ProgressTracker progressTracker = new ProgressTracker(count);
+        // withDiagnostic is what puts the fleet's own state next to the external count: without it
+        // every stall this test has ever produced ended "no consumer diagnostic supplied", which is
+        // the cheapest of the three instrumentation gaps standing between the recorded
+        // ZOMBIE_MEMBER/REBALANCE_BLOCKED signature and a diagnosis.
+        ProgressTracker progressTracker = new ProgressTracker(count)
+                .withDiagnostic(() -> describeFleet(allPCRunners));
         ProgressWatermark watermark = new ProgressWatermark(scenario.noProgressWindow, count.get());
         try {
             waitAtMost(scenario.completionCeiling)
@@ -650,8 +655,8 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
                             expectedKeys.removeAll(getAllConsumedKeys(allPCRunners));
                             throw scenario.noProgressWindow == null
                                     ? progressTracker.constructError(msg("No progress, missing keys: {}.", expectedKeys))
-                                    : new RuntimeException(msg("NO_PROGRESS: consumed count stuck at {} beyond the {} watermark window, missing keys: {}.",
-                                    count.get(), scenario.noProgressWindow, expectedKeys));
+                                    : new RuntimeException(msg("NO_PROGRESS: consumed count stuck at {} beyond the {} watermark window, missing keys: {}. {}",
+                                    count.get(), scenario.noProgressWindow, expectedKeys, describeFleet(allPCRunners)));
                         }
                         SoftAssertions all = new SoftAssertions();
                         all.assertThat(overallConsumedKeys.containsAll(expectedKeys)).as("contains all: all expected are consumed at least once").isTrue();
@@ -820,6 +825,74 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
     }
 
     /**
+     * One line of per-instance state, shared by the stall log dump and by the failure message's
+     * consumer diagnostic so the two can never drift apart.
+     * <p>
+     * <b>{@code started} and {@code closePending} are the load-bearing pair, and they are why this
+     * exists.</b> Every recorded {@code largeNumberOfInstances} stall carries the ambient probe's
+     * {@code ZOMBIE_MEMBER/REBALANCE_BLOCKED} verdict - the group dwelling in
+     * {@code PreparingRebalance} because a member stopped answering - and the question no sighting
+     * has been able to answer is whether that silent member is one the chaos monkey stopped (in
+     * which case it is the harness, and expected) or one still running (in which case it is PC, and
+     * a defect). {@code started=false, closePending=true} is the first; {@code started=true} with a
+     * live PC is the second. See
+     * {@code docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md}.
+     */
+    private String describeInstance(ManagedPCInstance instance) {
+        var pc = instance.getParallelConsumer();
+        if (pc == null) {
+            return msg("Instance {}: PC is null (never started?), started={}, closePending={}",
+                    instance.getInstanceId(), instance.isStarted(), instance.isClosePending());
+        }
+        try {
+            var wm = pc.getWm();
+            var sm = wm.getSm();
+            // assignedPartitions is deliberately absent: the accessor behind it mirrored state
+            // Kafka already owns, and astubbs/parallel-consumer#393 deleted the mirror rather
+            // than keep the poll path asking Kafka a third time per pass. This dump is a
+            // failure-path diagnostic, so it is not worth reintroducing a cached field for -
+            // and reading the live assignment here would need a consumer handle the dump does
+            // not have.
+            return msg("Instance {}: closed/failed={}, failureCause={}, started={}, closePending={}, " +
+                            "queuedInShards={}, outForProcessing={}, " +
+                            "incompleteOffsets={}, hasIncompletes={}, " +
+                            "pausedPartitions={}, consumedKeys={}, pc[{}]",
+                    instance.getInstanceId(),
+                    pc.isClosedOrFailed(),
+                    pc.getFailureCause() != null ? pc.getFailureCause().getMessage() : "none",
+                    instance.isStarted(),
+                    instance.isClosePending(),
+                    sm.getNumberOfWorkQueuedInShardsAwaitingSelection(),
+                    wm.getNumberRecordsOutForProcessing(),
+                    wm.getNumberOfIncompleteOffsets(),
+                    wm.hasIncompleteOffsets(),
+                    pc.getPausedPartitionSize(),
+                    instance.getConsumedKeys().size(),
+                    pc.describeProgress());
+        } catch (Exception e) {
+            // the type is kept, not just the message: a diagnostic that says only "error dumping
+            // state: null" names neither the failure nor the field that produced it
+            return msg("Instance {}: error dumping state: {}: {}",
+                    instance.getInstanceId(), e.getClass().getSimpleName(), e.getMessage());
+        }
+    }
+
+    /**
+     * The whole fleet's state as one string, for {@code ProgressTracker.withDiagnostic}.
+     * <p>
+     * This goes in the thrown assertion MESSAGE rather than only in the log, deliberately: a CI log
+     * is truncated (GitHub cut a 9,968-line job to 7,138 during this very investigation, and the
+     * autopsy had to be recovered from the uploaded report artifact), whereas the failure message
+     * survives into the failsafe XML and the job summary. A diagnostic that is only in the log is
+     * one that is missing exactly when it is needed.
+     */
+    private String describeFleet(List<ManagedPCInstance> instances) {
+        return instances.stream()
+                .map(this::describeInstance)
+                .collect(Collectors.joining("\n    ", "fleet:\n    ", ""));
+    }
+
+    /**
      * Dump the internal state of every PC instance when a stall is detected.
      * This tells us exactly what each component thinks is happening:
      * - Is the PC alive or dead?
@@ -831,42 +904,7 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
     private void dumpInstanceState(List<ManagedPCInstance> instances) {
         log.error("=== STALL DETECTED — dumping all instance state ===");
         for (var instance : instances) {
-            var pc = instance.getParallelConsumer();
-            if (pc == null) {
-                log.error("  Instance {}: PC is null (never started?), started={}", instance.getInstanceId(), instance.isStarted());
-                continue;
-            }
-            try {
-                var wm = pc.getWm();
-                // Check if the shard manager has any processing shards at all
-                var sm = wm.getSm();
-                long totalWorkTracked = sm.getNumberOfWorkQueuedInShardsAwaitingSelection();
-                boolean hasIncompletes = wm.hasIncompleteOffsets();
-
-                // assignedPartitions is deliberately absent: the accessor behind it mirrored state
-                // Kafka already owns, and astubbs/parallel-consumer#393 deleted the mirror rather
-                // than keep the poll path asking Kafka a third time per pass. This dump is a
-                // failure-path diagnostic, so it is not worth reintroducing a cached field for -
-                // and reading the live assignment here would need a consumer handle the dump does
-                // not have.
-                log.error("  Instance {}: closed/failed={}, failureCause={}, started={}, " +
-                                "queuedInShards={}, outForProcessing={}, " +
-                                "incompleteOffsets={}, hasIncompletes={}, " +
-                                "pausedPartitions={}, consumedKeys={}",
-                        instance.getInstanceId(),
-                        pc.isClosedOrFailed(),
-                        pc.getFailureCause() != null ? pc.getFailureCause().getMessage() : "none",
-                        instance.isStarted(),
-                        totalWorkTracked,
-                        wm.getNumberRecordsOutForProcessing(),
-                        wm.getNumberOfIncompleteOffsets(),
-                        hasIncompletes,
-                        pc.getPausedPartitionSize(),
-                        instance.getConsumedKeys().size()
-                );
-            } catch (Exception e) {
-                log.error("  Instance {}: error dumping state: {}", instance.getInstanceId(), e.getMessage(), e);
-            }
+            log.error("  {}", describeInstance(instance));
         }
         log.error("=== END STATE DUMP ===");
     }

@@ -30,6 +30,13 @@ source "${BASH_SOURCE[0]%/*}/lib/chaos-experiment-common.sh"
 
 D="$(git rev-parse --show-toplevel)"
 OUT=/tmp/large-instances; mkdir -p "$OUT"
+# STAMP EVERY ROW WITH THE TREE THAT PRODUCED IT. The tally is appended to a fixed /tmp path that
+# PERSISTS on a self-hosted runner, so rows from different dispatches share one file - and a
+# two-arm comparison (a suspected fix against its control) is exactly the case where attributing a
+# row to the wrong tree inverts the result. The timestamp alone cannot do it: concurrent dispatches
+# on one box interleave. This workflow's header calls the shared directory a known limitation; the
+# ref column is the cheap half of the fix it prescribes.
+REF="$(git -C "$D" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 for i in $(seq 1 "${1:-10}"); do
     log="$OUT/run-$i.log"
     pc_run_performance "$D" 'MultiInstanceRebalanceTest#largeNumberOfInstances' "$log" \
@@ -37,11 +44,11 @@ for i in $(seq 1 "${1:-10}"); do
     stats=$(pc_failsafe_stats "$D" MultiInstanceRebalance)
     r=$(pc_classify_failsafe_stats "$stats")
     if [ "$r" = DID-NOT-RUN ]; then
-        printf '%s\trun=%s\tDID-NOT-RUN\t%s\n' "$(pc_now)" "$i" "${stats:-no-report}" >> "$OUT/tally.tsv"
+        printf '%s\tref=%s\trun=%s\tDID-NOT-RUN\t%s\n' "$(pc_now)" "$REF" "$i" "${stats:-no-report}" >> "$OUT/tally.tsv"
         continue
     fi
     progress=$(grep -ohE 'No progress beyond [0-9]+ records after [0-9]+ rounds' "$log" | tail -1)
     keys=$(grep -ohE 'missing keys: \[[^]]{0,70}' "$log" | tail -1)
-    printf '%s\trun=%s\t%s\t%s\t%s\n' "$(pc_now)" "$i" "$r" "${progress:-no-progress-line}" \
+    printf '%s\tref=%s\trun=%s\t%s\t%s\t%s\n' "$(pc_now)" "$REF" "$i" "$r" "${progress:-no-progress-line}" \
         "${keys:-no-keys-line}" >> "$OUT/tally.tsv"
 done
