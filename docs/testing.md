@@ -223,8 +223,8 @@ that is finishing records however slowly. Read that as **only a SUCCESSFUL resul
 `onFailureResult` and the revoked-partition drop both return a work result and notify nothing, and
 the bound's arithmetic budgets for the second but not the first. `ProgressProbe#INSTANCE_STALL_BOUND`
 owns the detail, including why the budget is not established for W1's continuous churn. A run where
-Class 2 observes and `INSTANCE_STALL` stays silent is measured slow, not wedged. `Class2ObservationIT` guards the routing;
-it is untagged deliberately, so it gates every default integration build.
+Class 2 observes and `INSTANCE_STALL` stays silent is measured slow, not wedged. `Class2ObservationIT`
+guards the routing; it is untagged deliberately, so it gates every default integration build.
 
 **The demotion REDUCED per-shard coverage, and that is a known gap rather than a relocation.**
 `INSTANCE_STALL` is per-INSTANCE, so one wedged shard on an instance whose other shards keep

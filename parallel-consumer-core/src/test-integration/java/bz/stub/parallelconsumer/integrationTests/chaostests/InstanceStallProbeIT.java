@@ -264,6 +264,21 @@ class InstanceStallProbeIT {
         assertThat(probe.instanceProgressSnapshot()).isEqualTo("5(down q=40 out=0 res=0)");
     }
 
+    /**
+     * The not-wired case - ambient mode, or a scenario predating the per-instance supplier - and it
+     * is the one contract {@code ChaosScenarioBase#logDiagnosticProgress} leans on: its
+     * {@code !instances.isEmpty()} guard is what keeps the second {@code [diagnose]} line off for
+     * those runs. Nothing else pins it, so a snapshot that started rendering a placeholder here would
+     * add a per-poll line to every unwired scenario and no test would say so.
+     */
+    @Test
+    void anUnwiredProbeRendersNothingAtAll() {
+        ProgressProbe probe = ProgressProbe.forSeamTest("test-group", "test-topic");
+
+        assertWithMessage("no supplier means no per-instance line, not a line saying nothing")
+                .that(probe.instanceProgressSnapshot()).isEmpty();
+    }
+
     @Test
     void anUnreadableSnapshotSaysSoRatherThanReadingAsAnEmptyFleet() {
         ProgressProbe probe = ProgressProbe.forSeamTest("test-group", "test-topic")
