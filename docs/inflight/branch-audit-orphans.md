@@ -90,60 +90,32 @@ stayed invisible for three years. Two audit modes wanted:
   the docs/upstream.md trap above); docs/upstream.md already records this as manual-only, tracked in
   astubbs#300
 
-## Pre-fork branches described nowhere at all, found 2026-09-03
+## Pre-fork branches: all read and classified, 2026-09-03
 
-<!-- post-merge: checked-begin -->
-Turned up while archiving `refactor/deprecate-jstream` under astubbs#116. That branch had a
-one-line description in `docs/refactoring.md` but no `branch_accounting` record, which raised the
-obvious question: how many others? The audit is the durable part; the PR that prompted it is cited
-only as where it came from.
-<!-- post-merge: checked-end -->
+Every pre-fork branch on `origin` now has a `branch_accounting` record in
+`src/docs/development/upstream-map.yaml`, carrying what it does and whether the idea already
+landed. The gap this section previously recorded - branches described nowhere at all - is closed,
+so the list of names it held is gone: the manifest holds the answer now, per branch, and a list
+here would be a second copy that drifts.
 
-**Re-derive rather than trusting this list** - it is a snapshot, and the shape is what matters:
+**Each branch was judged by reading its COMMITS and diff**, never its name. That is not a
+formality: `improvements/privacy-restriction` is a shared-nothing-architecture spike
+(`ControllerEventBus`, `PartitionEpochTracker`), and any name-based triage would have filed it
+under privacy and lost it again.
+
+**What to grep, rather than a count that goes stale:**
 
 ```sh
-git ls-remote --heads origin | sed 's|.*refs/heads/||' | sort            # every branch
-grep -oE '\{ref: [^,}]+' src/docs/development/upstream-map.yaml        # every ledger record
-# then: tips dated before the 2026-03-24 fork point, minus the ledger,
-# minus any name that appears anywhere under docs/
+grep -c 'class: open-idea' src/docs/development/upstream-map.yaml   # how many are unabsorbed
+grep    'class: open-idea' src/docs/development/upstream-map.yaml   # which ones, with the reasoning
 ```
 
-Most pre-fork branches ARE accounted for - the majority of those missing from
-`branch_accounting` are still described somewhere under `docs/`, which is the audit working. The
-residue below is the set with **no mention anywhere in the repository**: not the manifest, not a
-ledger, not a note. For these, nobody can say what they were for without reading their commits.
+**The finding that mattered.** A large share are `open-idea` - written, never landed, and in several
+cases the direct answer to a defect this repository documents as still live. The sweep was prompted by
+noticing one such case and asking how many others there were; the answer was "most of them". Nothing
+came back `unclear`.
 
-  0.2.0.x
-  bug/back-pressure-fix
-  bugs/block-asserter-subject
-  bugs/disabled-tests
-  bugs/fix-incorrect-assume-test
-  build-repetition
-  ci-tests
-  continuous-encode-backup
-  continuous-encoding-tests
-  docker-fixes
-  editor-config
-  features/health-check
-  improvements/multi-topic-test
-  improvements/privacy-restriction
-  improvements/remove-static-use-pcmodule
-  issues/num395
-  m1-changes
-  parallel-join-technique
-  parallel-tests-ci
-  parallel-webservice
-  refactor/chaos-broker-challage-test
-  refactor/test-consumer-disconnect
-  refactors/mvnw
-  refactors/offsets-class-partition-state
-  v0.5.2.2
-  vertx-web-examples
-
-**Not a task list, and deliberately not triaged here.** Several are obviously spent (`editor-config`,
-`refactors/mvnw`, `m1-changes`, `ci-tests`), and a few read like they could carry real work
-(`features/health-check` against the shipped health-check API, `improvements/remove-static-use-pcmodule`
-against the `PCModule` seam astubbs#322 built, `refactor/chaos-broker-challage-test` against the chaos
-suite). Guessing from names is what this directory's rules warn against; the point of recording them is
-that the next audit starts from a list rather than from scratch.
+**It is not a worklist.** `open-idea` says the code never landed, not that it should. Several are
+breaking changes belonging in `docs/refactoring.md`'s release-gated queue, several are stacked on an
+unfinished actor base, and some are worth less than reviving them costs. Read the note first.
 
