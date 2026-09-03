@@ -82,7 +82,7 @@ class ShardPopulationRaceTest {
                 .that(laterEpoch).isGreaterThan(firstEpoch);
 
         // THE INTERLEAVING: the sweep lands between the read of the resident and the insertion
-        onNextStalenessCheck(seam, shard::removeStaleWorkContainersFromShard);
+        onNextStalenessCheck(seam, () -> shard.removeStaleWorkContainersFromShard(new RetryQueue()));
 
         shard.addWorkContainer(new WorkContainer<>(laterEpoch, record, module));
 
@@ -119,7 +119,7 @@ class ShardPopulationRaceTest {
         // between yielding it and removing it, so the stale sweep's own removal takes nothing out
         onNextStalenessCheck(seam, () -> shard.removeWorkAtOffset(20L));
 
-        var swept = shard.removeStaleWorkContainersFromShard();
+        var swept = shard.removeStaleWorkContainersFromShard(new RetryQueue());
 
         assertThat(shard.getCountOfWorkTracked()).isEqualTo(0L);
         assertWithMessage("one admission, retired exactly once - by whichever call actually removed it")

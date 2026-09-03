@@ -168,8 +168,17 @@ shard-map accessor rule above is the worked example of turning one down.
 `ArchitectureTest.rebalanceCallbacksMustNotBlock` carries `KNOWN_BLOCKING_VIOLATIONS`, which is
 exactly the shape named above. It arrived with one entry - the confluentinc#857 transactional revoke
 wait, owned by astubbs#44 - and grew on 2026-08-31 when the rule's deny list was widened during a
-defect-class sweep and immediately found a second, pre-existing defect on master
-([`bug-retry-queue-write-lock-on-the-rebalance-path.md`](bug-retry-queue-write-lock-on-the-rebalance-path.md)).
+defect-class sweep and immediately found a second, pre-existing defect on master (the retry queue's
+write lock, six entries).
+
+**Update 2026-09-03: those six entries are gone, and deleting them is what proved the warning.** The
+defect they carried is fixed - the rebalance callbacks decline the lock instead of waiting for it -
+so the list is back to the one confluentinc#857 transactional-revoke entry. Deleting them first, as
+the re-enable path below says, is also what surfaced the finding the entries' own comments did not
+claim: with the six deleted, the rule reported violations on the revoke and lost callbacks and
+nothing at all on `onPartitionsAssigned`, which reaches the same lock through a METHOD REFERENCE the
+walk cannot see. Write-up:
+[`../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md`](../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md).
 
 **The tension is real and is not resolved here.** The argument for the entries: each names a defect
 that exists on master, has a tracking note, and was not introduced by the branch that had to decide

@@ -267,10 +267,31 @@ public class ProcessingShard<K, V> {
 
 
 
-    // remove staled WorkContainer otherwise when the partition is reassigned, the staled messages will:
-    // 1. block the new work containers to be picked and processed
-    // 2. will cause the consumer to paused consuming new messages indefinitely
-    public List<WorkContainer<K, V>> removeStaleWorkContainersFromShard() {
+    /**
+     * Remove stale work containers from this shard AND from the retry queue that mirrors it, otherwise when the
+     * partition is reassigned the stale messages will:
+     * <ol>
+     *     <li>block the new work containers from being picked up and processed</li>
+     *     <li>cause the consumer to pause consuming new messages indefinitely</li>
+     * </ol>
+     * <p>
+     * <b>Runs on the broker-poll thread inside a rebalance callback</b> - every production caller reaches here
+     * through {@link ShardManager#removeStaleContainers()}, which is only ever called from
+     * {@code PartitionStateManager}'s {@code onPartitionsAssigned} and {@code onPartitionsRemoved}. So it takes
+     * the retry queue the declining way ({@link RetryQueue#tryRemove}) and never waits.
+     * <p>
+     * <b>The queue goes first, and a refusal skips the shard removal too</b>, which is what keeps the two in
+     * step: a container removed from the shard whose queue entry survives is an orphan nothing can ever remove,
+     * because every removal path reaches the queue through shard contents. Left in place instead, the pair is
+     * merely stale - already true before this sweep ran, since the epoch was incremented first - and
+     * {@link #getWorkIfAvailable}'s last-resort branch retires both on the controller thread, where waiting for
+     * the lock is allowed. {@code ShardManager.removeWorkFromShardFor} carries the full reasoning, including
+     * what would reopen the hazard; do not restate it here.
+     *
+     * @param retryQueue the queue mirroring this shard's failed work, cleaned in step with it
+     * @return the containers that actually left this shard
+     */
+    public List<WorkContainer<K, V>> removeStaleWorkContainersFromShard(RetryQueue retryQueue) {
         List<WorkContainer<K, V>> staleContainers = new ArrayList<>();
         for (Map.Entry<Long, WorkContainer<K, V>> entry : workMap.entrySet()) {
             if (isWorkContainerStale(entry.getValue())) {
@@ -284,6 +305,11 @@ public class ProcessingShard<K, V> {
                 // is handed it rather than the container the sweep was looking at. The eviction of the fresh
                 // record itself is untouched and still open, with the decision it needs, in
                 // docs/inflight/bug-stale-sweep-iterator-evicts-fresh-replacement.md.
+                if (!retryQueue.tryRemove(entry.getValue())) {
+                    log.debug("Retry queue is busy - leaving stale container {} in shard {} rather than waiting " +
+                            "on the poll thread; the controller thread's own sweep retires it.", entry.getValue(), this);
+                    continue;
+                }
                 WorkContainer<K, V> removed = removeWorkAtOffset(entry.getKey());
                 if (removed != null) {
                     staleContainers.add(removed);

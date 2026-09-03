@@ -137,24 +137,84 @@ public class RetryQueue {
     }
 
     /**
-     * Remove a work container from the set. Method follows Set.remove() behaviour, returning true if the element was
-     * present.
+     * Remove a work container from the set, WAITING for the write lock. Method follows Set.remove() behaviour,
+     * returning true if the element was present.
+     * <p>
+     * <b>Only for threads that are allowed to wait</b> - which here means the controller thread. The broker-poll
+     * thread must use {@link #tryRemove(String, int, long)} instead; {@link #tryRemove} carries the reasoning and
+     * {@code ArchitectureTest.rebalanceCallbacksMustNotBlock} is the check that this method stays off the
+     * rebalance callbacks.
      *
-     * @param workContainer
-     * @return
+     * @param workContainer the container to remove
+     * @return true if the element was present
      */
     public boolean remove(final WorkContainer<?, ?> workContainer) {
         lock.writeLock().lock();
         try {
-            WorkContainerKey newKey = WorkContainerKey.of(workContainer);
-            WorkContainerSortKey existing = unique.remove(newKey);
-            if (existing != null) {
-                sorted.remove(existing);
-            }
-            return existing != null;
+            return removeWhileWriteLocked(WorkContainerKey.of(workContainer));
         } finally {
             lock.writeLock().unlock();
         }
+    }
+
+    /**
+     * Remove the entry for one record, but ONLY if the write lock is free at this instant - never waiting for it.
+     * <p>
+     * <b>This exists for the broker-poll thread inside a Kafka rebalance callback</b>, which runs inside
+     * {@code consumer.poll()} with the whole group waiting on it: a wait there is spent out of
+     * {@code max.poll.interval.ms} and can evict the member. {@link #remove} waits, and the wait is not
+     * theoretical - {@link #iterator()} hands the READ lock to the controller thread for a whole scan, and this
+     * lock is constructed fair, so an arriving writer queues behind that scan rather than interleaving with it.
+     * {@code AbstractParallelEoSStreamProcessor.tryCommitOffsetsOnRevoke} is the same decision taken for the
+     * commit lock, for the same reason (confluentinc#857).
+     * <p>
+     * <b>{@code tryLock()} barges deliberately.</b> {@link java.util.concurrent.locks.ReentrantReadWriteLock}'s
+     * {@code tryLock()} ignores the fairness policy and takes a free lock even with waiters queued ahead of it -
+     * documented behaviour, and the property wanted here. It returns immediately either way, which is the whole
+     * contract: this method never waits.
+     * <p>
+     * <b>Keyed by the record's coordinates rather than by a container</b>, so a caller can ask this queue FIRST
+     * and only then take the record out of its shard. That ordering is what makes a refusal safe - see the
+     * callers in {@code ShardManager.removeWorkFromShardFor} and
+     * {@link ProcessingShard#removeStaleWorkContainersFromShard}, which own the reasoning about what a refusal
+     * means for the shard.
+     *
+     * @return true if the lock was taken and the removal ran - whether or not an entry was actually present;
+     *         false if the lock was contended, in which case NOTHING was changed
+     */
+    public boolean tryRemove(final String topic, final int partition, final long offset) {
+        if (!lock.writeLock().tryLock()) {
+            return false;
+        }
+        try {
+            // Presence is deliberately not reported. Every caller is deciding whether it may go on to its own
+            // paired removal, and for that decision "there was no entry" and "I removed the entry" are the same
+            // answer - only "I could not look" differs.
+            boolean ignoredWasPresent = removeWhileWriteLocked(WorkContainerKey.of(topic, partition, offset));
+            return true;
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    /**
+     * @see #tryRemove(String, int, long)
+     */
+    public boolean tryRemove(final WorkContainer<?, ?> workContainer) {
+        return tryRemove(workContainer.getTopicPartition().topic(),
+                workContainer.getTopicPartition().partition(),
+                workContainer.getCr().offset());
+    }
+
+    /**
+     * The two maps move together or not at all - callers hold the write lock.
+     */
+    private boolean removeWhileWriteLocked(final WorkContainerKey key) {
+        WorkContainerSortKey existing = unique.remove(key);
+        if (existing != null) {
+            sorted.remove(existing);
+        }
+        return existing != null;
     }
 
     /**
@@ -275,6 +335,14 @@ public class RetryQueue {
             return new WorkContainerKey(workContainer.getTopicPartition().topic(),
                     workContainer.getTopicPartition().partition(),
                     workContainer.getCr().offset());
+        }
+
+        /**
+         * The same key, built from a record's coordinates rather than from a container - uniqueness here has
+         * never been by container identity, so the two are interchangeable by construction.
+         */
+        static WorkContainerKey of(String topic, int partition, long offset) {
+            return new WorkContainerKey(topic, partition, offset);
         }
     }
 

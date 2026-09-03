@@ -422,29 +422,15 @@ cosmetic - see the last bullet.*
 - `TODO should extend java.lang.Error`: should it extend `java.lang.Error`?
   (exception-hierarchy design)
 
-### state/ProcessingShard.java
-
-- **`getWorkIfAvailable`'s inline stale removal orphans the `retryQueue` entry.** It does
-  `iterator.remove()` and decrements the counter, but never calls `retryQueue.remove` - whereas the
-  sweep does both, and says so: `// remove stale containers from both processingShards and retryQueue`
-  in `ShardManager.removeStaleContainers`, which maps `retryQueue::remove` over what the shard
-  returned. If the control thread's inline removal reaches a *failed* (retry-queue-resident) container
-  that has just gone stale before the poll thread's sweep does, that queue entry is orphaned
-  permanently, inflating `getQueueSizeAndNumberReadyToBeRetried` and therefore
-  `getNumberOfWorkQueuedInShardsAwaitingSelection`. Throttle-gate noise and a false "ready to retry"
-  signal - **not record loss**. Pre-existing and independent of astubbs#31.
-  **There is no test that would catch it**: the only retryQueue coverage is `ShardManagerTest`'s
-  `retryQueueOrdering`, `testRetryQueueOrdering` and `testRetryQueueOrderingMultipleTries`, all of
-  which test ordering only. Nothing asserts shard/retryQueue consistency after a stale removal by
-  either path.
-
 ### state/RetryQueue.java
 
-- **Four `// visible for testing` accessors that no test calls.** `RetryQueue`'s `unique`, `sorted`
-  and `comparator` Lombok `@Getter(AccessLevel.PACKAGE)`s, and `ShardManager`'s `retryQueue` one,
-  have zero callers anywhere in the tree - main, test or integration. Delete them; the comment is
-  documenting an access route nobody uses, and an ArchUnit rule policing a dead accessor would pass
-  vacuously forever (see `docs/inflight/static-archunit-main-code-rules.md`).
+- **Three `// visible for testing` accessors that no test calls.** `RetryQueue`'s `unique`, `sorted`
+  and `comparator` Lombok `@Getter(AccessLevel.PACKAGE)`s have zero callers anywhere in the tree -
+  main, test or integration. Delete them; the comment is documenting an access route nobody uses, and
+  an ArchUnit rule policing a dead accessor would pass vacuously forever (see
+  `docs/inflight/static-archunit-main-code-rules.md`). `ShardManager`'s `retryQueue` accessor was a
+  fourth until `WorkManagerStaleCheckDoubleLookupTest` and `RetryQueueRebalancePathTest` started
+  asserting through it - that one now earns its keep.
 
 ### state/PartitionState.java (715 lines)
 - `Needs to be concurrent because`: concurrent commit-data collection exists only because

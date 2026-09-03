@@ -306,7 +306,39 @@ public class ShardManager<K, V> {
     }
 
     /**
-     * Removes any tracked work for this record, and removes the shard if it is empty
+     * Removes any tracked work for this record, and removes the shard if it is empty.
+     * <p>
+     * <b>Runs on the broker-poll thread, inside a rebalance callback</b> - reached from
+     * {@code AbstractParallelEoSStreamProcessor.onPartitionsRevoked} and {@code onPartitionsLost} through
+     * {@link WorkManager} and {@link PartitionStateManager}. So it may not wait for anything, and the retry
+     * queue's write lock is something it can wait for: see {@link RetryQueue#tryRemove(String, int, long)}.
+     * <p>
+     * <b>The retry queue is asked FIRST, and a refusal abandons the whole removal</b> - the shard entry stays
+     * too. That ordering is the fix, not a detail. Taking the record out of the shard and then failing to take
+     * it out of the queue leaves an entry no code path can ever remove: work is handed out by scanning shards,
+     * so a container in no shard is never selected, never completed, and never swept - while
+     * {@link RetryQueue#getQueueSizeAndNumberReadyToBeRetried()} keeps counting it as work parked for retry, and
+     * that count is subtracted from the shard population by the figure the broker-poller load gate reads. The
+     * same orphan reached from the other direction is what {@code WorkManager.onFailureResult} re-validates
+     * against, and what {@code ShardPopulationRaceTest.theInlineStaleSweepTakesTheRecordOutOfTheRetryQueueToo}
+     * pins.
+     * <p>
+     * <b>Abandoning is safe, and here is why.</b> {@code PartitionStateManager.onPartitionsRemoved} increments
+     * the partition's assignment epoch BEFORE this sweep runs, so anything left behind is already stale, and
+     * staleness is the state the engine is built to tolerate: {@code PartitionState.couldBeTakenAsWork} refuses
+     * to hand it out, {@code WorkManager.handleFutureResult} drops any result carrying its epoch, and its
+     * partition state has been replaced with {@code RemovedPartitionState}, so no offset of its is ever
+     * committed. It is then retired from BOTH structures by
+     * {@link ProcessingShard#getWorkIfAvailable}'s last-resort stale sweep, which runs on the controller thread
+     * where waiting for the queue lock is permitted.
+     * <p>
+     * <b>What would reopen this</b> (2026-09-02): a caller that reads the retry queue's size or its
+     * lowest-retry-time WITHOUT an epoch check and acts on it before the controller thread's next work request -
+     * the abandonment is only ever a delay, and only that sweep ends it. If
+     * {@code ProcessingShard.getWorkIfAvailable}'s stale branch ever stops removing from the retry queue, or
+     * stops being reached on every control loop tick, the delay becomes permanent and this becomes the orphan it
+     * was written to avoid. Nothing fails if that happens: {@code ArchitectureTest.rebalanceCallbacksMustNotBlock}
+     * only checks that nothing here WAITS.
      */
     private void removeWorkFromShardFor(ConsumerRecord<K, V> consumerRecord) {
         ShardKey shardKey = computeShardKey(consumerRecord);
@@ -315,14 +347,17 @@ public class ShardManager<K, V> {
         // (KEY ordering removes empty shards), NPE-ing out of the rebalance listener into consumer.poll
         Optional<ProcessingShard<K, V>> shardOpt = getShard(shardKey);
         if (shardOpt.isPresent()) {
-            // remove the work
-            WorkContainer<K, V> removedWC = shardOpt.get().removeWorkAtOffset(consumerRecord.offset());
-
-            // remove if in retry queue
-            // check null to avoid race condition
-            if (Objects.nonNull(removedWC)) {
-                this.retryQueue.remove(removedWC);
+            // remove from the retry queue first, declining rather than waiting - see the javadoc above
+            if (!this.retryQueue.tryRemove(consumerRecord.topic(), consumerRecord.partition(), consumerRecord.offset())) {
+                log.debug("Retry queue is busy - leaving {} in its shard rather than waiting on the poll thread. " +
+                        "It is already stale, and the controller thread's stale sweep retires it from both.", consumerRecord);
+                return;
             }
+
+            // remove the work. The container it gives back is not needed: the queue entry is keyed by
+            // topic/partition/offset and has already gone, which also removes the null guard this line used to
+            // need (confluentinc#757 - remove(null) NPE'd when the shard had nothing at this offset).
+            WorkContainer<K, V> ignoredRemovedWC = shardOpt.get().removeWorkAtOffset(consumerRecord.offset());
 
             // remove the shard if empty
             removeShardIfEmpty(shardKey);
@@ -480,13 +515,27 @@ public class ShardManager<K, V> {
         return workFromAllShards;
     }
 
-    // remove stale containers from both processingShards and retryQueue
+    /**
+     * Remove stale containers from both {@link #processingShards} and {@link #retryQueue}.
+     * <p>
+     * <b>Every production caller is a rebalance callback on the broker-poll thread</b> -
+     * {@code PartitionStateManager.onPartitionsAssigned} and {@code onPartitionsRemoved} - so the pair is
+     * removed the declining way, unconditionally. {@link ProcessingShard#removeStaleWorkContainersFromShard}
+     * owns what a refusal means.
+     * <p>
+     * This used to map {@code retryQueue::remove} over the swept containers, which blocked on the poll thread -
+     * and, being a METHOD REFERENCE rather than a call, was invisible to
+     * {@code ArchitectureTest.rebalanceCallbacksMustNotBlock}, so the rule reported the revoke path's other
+     * reach into the same method and never this one. That is why the assigned path carried no exemption while
+     * reaching exactly the same lock.
+     *
+     * @return how many containers actually left a shard
+     */
     public long removeStaleContainers() {
         return processingShards.values().stream()
-                .map(ProcessingShard::removeStaleWorkContainersFromShard)
-                .flatMap(Collection::stream)
-                .map(retryQueue::remove)
-                .count();
+                .map(shard -> shard.removeStaleWorkContainersFromShard(retryQueue))
+                .mapToLong(Collection::size)
+                .sum();
     }
 
     private void updateResumePoint(Optional<Map.Entry<ShardKey, ProcessingShard<K, V>>> lastShard) {

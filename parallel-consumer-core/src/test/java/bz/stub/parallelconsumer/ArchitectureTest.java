@@ -116,6 +116,16 @@ class ArchitectureTest {
      * {@link #BLOCKING_CALLS}", never "nothing here blocks" - and reading it as the latter is
      * exactly the false green this rule exists to prevent elsewhere.
      *
+     * <p><b>A METHOD REFERENCE is not a method call either, and that one has already cost a path.</b>
+     * The walk is {@code getMethodCallsFromSelf()}; ArchUnit models {@code retryQueue::remove} as a
+     * method REFERENCE, which that accessor does not return. {@code ShardManager.removeStaleContainers}
+     * reached {@code RetryQueue.remove}'s write lock that way, from {@code onPartitionsAssigned} as well
+     * as from the revoke and lost callbacks - and this rule reported none of it. Measured on 2026-09-02:
+     * with every exemption deleted the unfixed tree reported six violations, all through the one
+     * DIRECT call, and nothing at all on {@code onPartitionsAssigned}; rewriting that method reference
+     * as a lambda over a direct call took the same tree to nine. So an exemption list that looks
+     * complete is evidence about what the walk can see, never about what the callback reaches.
+     *
      * <p>Two narrower limits follow from the same mechanism. Synchronized <em>methods</em> ARE
      * detectable, because the modifier survives into the class file, and this rule now flags them -
      * so the blind spot is blocks specifically, not monitors in general. And the walk
@@ -176,25 +186,18 @@ class ArchitectureTest {
      * {@code verified bug} label - one of a couple of dozen that carry it. Tracked in
      * {@code docs/inflight/bug-857-transactional-revoke-wait.md};
      * remove this entry when that lands.
+     *
+     * <p><b>The six {@code ReentrantReadWriteLock$WriteLock.lock()} entries that sat here are gone,
+     * on merit rather than by exemption</b> - the rebalance callbacks now decline that lock through
+     * {@code RetryQueue.tryRemove} instead of waiting for it. {@code tryLock()} is deliberately NOT in
+     * {@link #BLOCKING_CALLS}: it returns immediately whether or not it succeeds, which is the whole
+     * point of it. Adding it there temporarily is how the fix was checked - the rule then reports all
+     * nine reaches, so a green run here is "no callback reaches a WAITING acquire", not "the rule
+     * cannot see the retry queue any more".
      */
     private static final Set<String> KNOWN_BLOCKING_VIOLATIONS = new HashSet<>(Arrays.asList(
             "bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.onPartitionsRevoked"
-                    + "(java.util.Collection) => java.lang.Thread.sleep(long)",
-            // The RetryQueue write lock on the revoke/lost path. Pre-existing on master, surfaced by the
-            // astubbs/parallel-consumer#29 defect-class sweep once the deny list learned about
-            // ReentrantReadWriteLock. Owner: docs/inflight/bug-retry-queue-write-lock-on-the-rebalance-path.md
-            "bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.onPartitionsRevoked"
-                    + "(java.util.Collection) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
-            "bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor.onPartitionsLost"
-                    + "(java.util.Collection) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
-            "bz.stub.parallelconsumer.state.PartitionStateManager.onPartitionsLost"
-                    + "(java.util.Collection) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
-            "bz.stub.parallelconsumer.state.PartitionStateManager.onPartitionsRevoked"
-                    + "(java.util.Collection) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
-            "bz.stub.parallelconsumer.state.WorkManager.onPartitionsLost"
-                    + "(java.util.Collection) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()",
-            "bz.stub.parallelconsumer.state.WorkManager.onPartitionsRevoked"
-                    + "(java.util.Collection) => java.util.concurrent.locks.ReentrantReadWriteLock$WriteLock.lock()"
+                    + "(java.util.Collection) => java.lang.Thread.sleep(long)"
     ));
 
     private static DescribedPredicate<JavaMethod> areRebalanceCallbacks() {
