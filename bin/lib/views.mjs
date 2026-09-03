@@ -534,14 +534,28 @@ export function formatRank(r) {
             for (const dis of row.disagreement) {
                 out.push(`          DISAGREEMENT: on ${dis.ref} this note reads as ${dis.group}, not ${row.group}`)
             }
+            // EVERY LEVEL PRINTS THE NEXT LEVEL'S COMMAND - the front door's whole interface, and
+            // what `docs list inflight <impact>` already does for the same rows. Without it a reader
+            // who wants the note has to know `docs show` exists and retype the path.
+            out.push(`          bin/inflight.mjs docs show ${row.path}`)
         }
         out.push('')
     }
 
-    if (r.scoped === null && r.groups.length === 0) out.push('  no open note is in any impact bucket.')
+    if (r.groups.length === 0) {
+        // AN EMPTY RESULT IS AN ANSWER AND HAS TO LOOK LIKE ONE. Saying nothing here is
+        // indistinguishable from a section that was dropped, which is the silence this whole
+        // command is organised against.
+        out.push(r.scoped === null
+            ? '  no open note is in any impact bucket.'
+            : `  no open note is in ${r.scoped}. That is a result: nothing on any ref carries one.`)
+    }
 
     if (r.excluded.length > 0) {
-        out.push(`  not work waiting to be ranked: ${r.excluded.map((e) => `${e.count} ${e.key}`).join(', ')}`)
+        // ACROSS THE WHOLE CORPUS, and it says so - these counts are identical scoped or not, so
+        // sitting them unqualified among scope-limited lines read as if they described the group.
+        out.push(`  not work waiting to be ranked, across the whole corpus: `
+            + `${r.excluded.map((e) => `${e.count} ${e.key}`).join(', ')}`)
     }
     out.push(`\n  ${scopeLine(r)}`)
     out.push('  An empty group means nothing on any ref carries one, not that your checkout has none.')

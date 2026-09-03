@@ -3359,6 +3359,25 @@ const CHECKS = [
         mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'),
             'if (seen.length === 0) { unreadable.push(path); continue }', 'if (seen.length === 0) { continue }'),
     },
+    {
+        id: 'rank-rows-print-the-command-that-shows-the-note-and-an-empty-scope-says-so',
+        why: "the front door's whole interface is that every level prints the next level's command - `docs list inflight <impact>` prints `docs show <path>` beside each row and `rank` did not, so a reader who wanted the note had to know that command exists and retype the path. And a SCOPED group with no rows printed nothing at all, which is indistinguishable from a section that was dropped. Until this check, nothing asserted on formatRank's rendered text at all",
+        run: async (binDir) => {
+            const { formatRank } = await views(binDir)
+            return inRankFixture(async () => {
+                const scoped = await rankIndex(binDir, 'stall')
+                const empty = await rankIndex(binDir, 'security')
+                if (!scoped.ok || !empty.ok) return false
+                const shown = formatRank(scoped)
+                return shown.includes('bin/inflight.mjs docs show docs/inflight/bug-open-stall.md')
+                    // The fixture has no `security` note, and that is an ANSWER, not silence.
+                    && empty.groups.length === 0
+                    && /no open note is in security/.test(formatRank(empty))
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'views.mjs'),
+            'out.push(`          bin/inflight.mjs docs show ${row.path}`)', 'out.push(\'\')'),
+    },
 ]
 
 /**
