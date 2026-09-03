@@ -16,11 +16,13 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
+import org.apache.kafka.clients.producer.ProducerConfig;
 
 import java.time.Clock;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Minimum dependency injection system, modled on how Dagger works.
@@ -71,9 +73,34 @@ public class PCModule<K, V> {
         if (this.producerWrapper == null) {
             this.producerWrapper = options().isProducerInstanceSupplied()
                     ? new ProducerWrapper<>(options())
-                    : wrapPcBuilt(buildProducer(new LinkedHashMap<>(options().getProducerConfig())));
+                    : buildProducerWrapperFromConfiguration();
         }
         return producerWrapper;
+    }
+
+    /**
+     * How a replacement producer is built after the broker invalidates the current one: present only where PC built
+     * the producer itself, because a caller's finished instance carries no configuration to rebuild from. Each call
+     * builds from the same configuration - the same {@code transactional.id} included, so that initialising the
+     * replacement fences the producer it replaces. The id travels with the source so a failure to build can name it.
+     */
+    public Optional<ReplacementProducerSource<K, V>> replacementProducerWrap() {
+        if (options().isProducerInstanceSupplied()) {
+            return Optional.empty();
+        }
+        // null in a non-transactional commit mode, where the caller sets none
+        String transactionalId = (String) options().getProducerConfig().get(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
+        return Optional.of(new ReplacementProducerSource<>(this::buildProducerWrapperFromConfiguration, transactionalId));
+    }
+
+    private ProducerWrapper<K, V> buildProducerWrapperFromConfiguration() {
+        // a copy per call: the seam may read or edit it, and must not edit the options
+        Map<String, Object> config = new LinkedHashMap<>(options().getProducerConfig());
+        // run as user code is: the seam is overridable, and an Error from the constructor (a serializer's static
+        // initialiser failing, say) must surface as a failure of the build rather than escape every catch on the
+        // recovery path, leaving the instance RUNNING with its workers parked on the produce lock for good
+        Producer<K, V> producer = UserFunctions.carefullyRun(this::buildProducer, config);
+        return wrapPcBuilt(producer);
     }
 
     /**
@@ -116,7 +143,7 @@ public class PCModule<K, V> {
         if (producerManager == null) {
             ProducerWrapper<K, V> wrapper = producerWrap();
             try {
-                this.producerManager = new ProducerManager<>(wrapper, consumerManager(), workManager(), options());
+                this.producerManager = new ProducerManager<>(wrapper, consumerManager(), workManager(), options(), replacementProducerWrap());
             } catch (Throwable constructionFailed) {
                 // The manager's constructor initialises transactions, which can throw (a coordinator that is not
                 // there yet, say). A producer PC built is PC's to close: nobody else holds it, and the processor that

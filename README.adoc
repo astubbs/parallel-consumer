@@ -541,7 +541,7 @@ Where `${project.version}` is the version to be used:
 ----
 
 <1> Setup your clients as per normal.
-A Producer is only required if using the `produce` flows: hand PC either a finished `Producer` instance, or the configuration to build one from as `producerConfig` - any `ProducerConfig` key, serializers included, and PC builds it with `new KafkaProducer<>(config)`.
+A Producer is only required if using the `produce` flows: hand PC either a finished `Producer` instance, or the configuration to build one from as `producerConfig` - any `ProducerConfig` key, serializers included, and PC builds it with `new KafkaProducer<>(config)`, and builds it again if the broker invalidates it (see <<producer-recovery>>).
 In the transactional commit mode, set `transactional.id` in that configuration as you would when building the producer yourself.
 <2> Choose your ordering type, `KEY` in this case.
 This ensures maximum concurrency, while ensuring messages are processed and committed in `KEY` order, making sure no offset is committed unless all offsets before it in it's partition, are completed also.
@@ -1088,6 +1088,20 @@ It is covered by an existing test, but no negative control was observed for it, 
 The produce-lock timeout returning the record for retry started out the same way and no longer is: the eager-processing test holds the commit lock shut until a worker's acquisition is observed to time out, then watches that record's retry succeed, and removing the hold turns it red.
 It is recorded `PROVED`.
 
+[[producer-recovery]]
+=== Producer recovery
+
+Where PC built the producer, a producer the broker reports invalid is replaced and the work its aborted transaction discarded is processed again, so processing continues instead of the instance stopping.
+The replacement is built from the same configuration, `transactional.id` included, and initialising it is what fences the producer it replaces; a finished `Producer` instance carries no configuration to rebuild from, so on that path these conditions keep their earlier behaviour.
+Recovery is a transactional-mode mechanism, because only a transactional producer has anything to recover from: in the consumer-commit modes PC's producer is non-transactional, so it cannot be fenced and has no epoch or generation to lose, an expired producer id is healed by the idempotent producer itself (KIP-360), and a send that still fails is retried record by record as it always was.
+What recovery adds is what only a transaction needs: abort, replay the completed-but-uncommitted work, rebuild under the same `transactional.id`.
+To make the replay possible, transactional mode keeps every completed record until the commit that carries it succeeds - on both producer paths - so memory held per partition grows with `commitInterval`; the default interval keeps it to a fraction of a second of throughput.
+The conditions PC treats this way are `ProducerFencedException`, `InvalidProducerEpochException`, `InvalidPidMappingException`, `OutOfOrderSequenceException` (and so `UnknownProducerIdException`) and `CommitFailedException`, on both the commit path and the produce path, unwrapped from the `ExecutionException` a send future raises and the `KafkaException` the client wraps a stored error in.
+Recovery repeats as often as the condition recurs; consecutive recoveries with no successful commit between them are paced by an exponential backoff, logged at ERROR, and visible on the `pc.producer.consecutive.recoveries` gauge, so an instance that is alive but not progressing is distinguishable from one that recovered once.
+A replacement that cannot be built yet is retried on a later cycle; one that can never be built - an authorization failure - ends the instance, naming the `transactional.id` that was refused.
+
+One thing did change there: an `InvalidPidMappingException` on the produce path still closes the instance, but the batch is now failed and its offsets are not committed, where previously the close swallowed the exception and offsets were published for output that was never produced.
+
 For implementations details, see the <<Transactional System Architecture>> section.
 
 .From the Options Javadoc
@@ -1406,6 +1420,21 @@ Ratio between offset metadata payload size and available space
 Distribution Summary `pc.payload.ratio.used{subsystem=offsetencoder}`
 
 Ratio between offset metadata payload size and offsets encoded
+
+==== Producer Manager
+
+**Producer Recoveries**
+
+Counter `pc.producer.recoveries{subsystem=producer, condition="exceptionSimpleName"}`
+
+Total number of times the transactional producer was replaced after the broker reported it invalid (fenced, stale epoch, expired producer id, lost generation), tagged by the condition that triggered it. Distinct from ordinary commit failures, which are retried on the same producer
+
+**Producer Consecutive Recoveries**
+
+Gauge `pc.producer.consecutive.recoveries{subsystem=producer}`
+
+Producer recoveries since the last successful commit - non-zero for a moment after any recovery, rising while the instance is alive but not progressing
+
 
 === Example Metrics setup steps
 Meter registry that metrics should be bound has to be set using Parallel Consumer Options along with any common tags that identify the PC instance.

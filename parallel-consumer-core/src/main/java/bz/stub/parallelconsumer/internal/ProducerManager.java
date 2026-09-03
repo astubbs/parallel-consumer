@@ -7,6 +7,7 @@ package bz.stub.parallelconsumer.internal;
 
 import bz.stub.parallelconsumer.*;
 import bz.stub.parallelconsumer.internal.utils.ThrowableUtils;
+import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.state.WorkManager;
 import lombok.Getter;
 import lombok.NonNull;
@@ -19,10 +20,12 @@ import org.apache.kafka.clients.producer.*;
 import org.apache.kafka.clients.producer.internals.RecordAccumulator;
 import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.errors.AuthorizationException;
 import org.apache.kafka.common.errors.InterruptException;
 import org.apache.kafka.common.errors.InvalidProducerEpochException;
 import org.apache.kafka.common.errors.ProducerFencedException;
 import org.apache.kafka.common.errors.TimeoutException;
+import org.apache.kafka.common.errors.UnsupportedVersionException;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -31,6 +34,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.Future;
+import java.util.Optional;
+import java.util.function.BooleanSupplier;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -44,8 +49,16 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 @ToString(onlyExplicitlyIncluded = true)
 public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> implements OffsetCommitter {
 
+    /**
+     * The producer in use. Volatile and replaceable: recovery drops the invalidated one under the write lock (the
+     * field reads null while no usable producer exists - see {@link #producer()}) and publishes the replacement once
+     * it is initialised. After construction, every path that needs a producer goes through {@link #producer()},
+     * which is what makes an unavailable producer a {@link ProducerInvalidatedException} rather than a null
+     * dereference; the constructor and {@link #initProducer()} read the field directly, and run before any
+     * replacement can exist.
+     */
     @Getter
-    protected final ProducerWrapper<K, V> producerWrapper;
+    protected volatile ProducerWrapper<K, V> producerWrapper;
 
     private final ParallelConsumerOptions<K, V> options;
 
@@ -70,7 +83,9 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
      * work is done by worker threads, I'm hesitant to give up the performance over simplification in this case.
      */
     @Getter
-    private ReentrantReadWriteLock producerTransactionLock;
+    private final ReentrantReadWriteLock producerTransactionLock = new ReentrantReadWriteLock(true);
+
+    private final PCMetrics pcMetrics;
 
     /**
      * Installed on every send. Built once, because whether this manager uses transactions is already decided before
@@ -101,13 +116,30 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
     //  Detail, including why the subclass alone is not enough: docs/refactoring.md, internal/ProducerManager.java.
     private final Callback sendCallback;
 
+    /**
+     * The replacement half of recovery: what the broker reported, whether a usable producer exists, and the two
+     * steps that replace it. This manager keeps the locks, the producer and the commit, and consults it on every
+     * produce and commit path; {@link ProducerRecoveryPass} drives it from the control thread.
+     */
+    private final ProducerRecovery<K, V> recovery;
+
     public ProducerManager(ProducerWrapper<K, V> newProducer,
                            ConsumerManager<K, V> newConsumer,
                            WorkManager<K, V> wm,
                            ParallelConsumerOptions<K, V> options) {
+        this(newProducer, newConsumer, wm, options, Optional.empty());
+    }
+
+    public ProducerManager(ProducerWrapper<K, V> newProducer,
+                           ConsumerManager<K, V> newConsumer,
+                           WorkManager<K, V> wm,
+                           ParallelConsumerOptions<K, V> options,
+                           Optional<ReplacementProducerSource<K, V>> replacementProducerSource) {
         super(newConsumer, wm);
         this.producerWrapper = newProducer;
         this.options = options;
+        this.pcMetrics = wm.getPcMetrics();
+        this.recovery = new ProducerRecovery<>(this, options, pcMetrics, replacementProducerSource);
 
         boolean usingTransactions = producerWrapper.isConfiguredForTransactions();
         this.sendCallback = (RecordMetadata metadata, Exception exception) -> {
@@ -122,9 +154,12 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
         initProducer();
     }
 
+    /**
+     * Checks the initial producer against the commit mode and initialises its transactions. The transaction lock is
+     * a final field, constructed once: inherited from astubbs#262 is the warning that constructing it here would let
+     * a replacement path silently swap the lock out from under the thread holding it.
+     */
     private void initProducer() {
-        producerTransactionLock = new ReentrantReadWriteLock(true);
-
         if (options.isUsingTransactionalProducer()) {
             if (!producerWrapper.isConfiguredForTransactions()) {
                 throw new IllegalArgumentException("Using transactional option, yet Producer doesn't have a transaction ID - Producer needs a transaction id");
@@ -164,9 +199,10 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
         lazyMaybeBeginTransaction();
 
         List<ParallelConsumer.Tuple<ProducerRecord<K, V>, Future<RecordMetadata>>> futures = new ArrayList<>(outMsgs.size());
+        ProducerWrapper<K, V> producer = producer();
         for (ProducerRecord<K, V> rec : outMsgs) {
             log.trace("Producing {}", rec);
-            var future = producerWrapper.send(rec, sendCallback);
+            var future = producer.send(rec, sendCallback);
             futures.add(ParallelConsumer.Tuple.pairOf(rec, future));
         }
         return futures;
@@ -181,7 +217,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
      */
     private void lazyMaybeBeginTransaction() {
         if (options.isUsingTransactionCommitMode()) {
-            boolean txNotBegunAlready = !producerWrapper.isTransactionOpen();
+            boolean txNotBegunAlready = !producer().isTransactionOpen();
             if (txNotBegunAlready) {
                 syncBeginTransaction();
             }
@@ -194,7 +230,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
      * Thread safe.
      */
     private synchronized void syncBeginTransaction() {
-        boolean txNotBegunAlready = !producerWrapper.isTransactionOpen();
+        boolean txNotBegunAlready = !producer().isTransactionOpen();
         if (txNotBegunAlready) {
             beginTransaction();
         }
@@ -204,26 +240,68 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
         lock.unlock();
     }
 
+    /**
+     * Takes the produce (read) lock, waiting out any window in which no usable producer exists (KTD7, R15).
+     * <p>
+     * The wait for availability happens BEFORE the read lock is taken and is re-checked after, so the
+     * {@link ProducingLock} returned is always a held read lock and {@code cleanUpContext} stays its single release
+     * point. While the producer is being replaced the bounded wait on the lock does not time out - it re-waits - so an
+     * outage never surfaces to the user function as a produce-lock timeout. The wait ends with
+     * {@link ProducerInvalidatedException} when the replacement fails terminally, the manager is closed, or the
+     * processor is shutting down, so a record that can never be produced fails instead of holding the shutdown up.
+     */
     protected ProducingLock acquireProduceLock(PollContextInternal<K, V> context) throws java.util.concurrent.TimeoutException {
         ReentrantReadWriteLock.ReadLock readLock = producerTransactionLock.readLock();
         Duration produceLockTimeout = options.getProduceLockAcquisitionTimeout();
-        log.debug("Acquiring produce lock (timeout: {})...", produceLockTimeout);
-        boolean lockAcquired = false;
-        try {
-            lockAcquired = readLock.tryLock(produceLockTimeout.toMillis(), TimeUnit.MILLISECONDS);
-        } catch (InterruptedException e) {
-            throw new PCInternalRuntimeException("Interrupted while waiting to get produce lock (timeout was set to {})", e, produceLockTimeout);
+        while (true) {
+            recovery.awaitProducerAvailable();
+            log.debug("Acquiring produce lock (timeout: {})...", produceLockTimeout);
+            boolean lockAcquired;
+            try {
+                lockAcquired = readLock.tryLock(produceLockTimeout.toMillis(), TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                throw new PCInternalRuntimeException("Interrupted while waiting to get produce lock (timeout was set to {})", e, produceLockTimeout);
+            }
+            if (!lockAcquired) {
+                if (isReplacing()) {
+                    log.debug("Produce lock wait elapsed while the producer is being replaced - waiting again rather than failing the record");
+                    continue;
+                }
+                throw new java.util.concurrent.TimeoutException(msg("Timeout while waiting to get produce lock (was set to {}). " +
+                        "Commit taking too long? Try increasing the produce lock timeout.", produceLockTimeout));
+            }
+            if (isProducerAvailable()) {
+                java.util.OptionalLong dispatchedAt = context.replayGenerationAtDispatch();
+                if (dispatchedAt.isPresent() && dispatchedAt.getAsLong() != replayGeneration()) {
+                    // dispatched before a replay put lower offsets back into its shard: producing now would put this
+                    // record ahead of them in the replacement's transaction. Release the hold this method took -
+                    // the lock is never handed out, so nothing else would - and fail the batch so it re-queues
+                    // behind the restored work; ordered selection then takes the lower offset first.
+                    readLock.unlock();
+                    throw new ProducerInvalidatedException("The producer was replaced and the work its aborted transaction " +
+                            "discarded was put back into processing while this record was on its way to the produce lock: " +
+                            "it re-queues behind that work so ordered shards produce the earlier offset first", recovery.conditionUnderRecovery());
+                }
+                log.debug("Produce lock acquired (context: {}).", context.getOffsets());
+                return new ProducingLock(context, readLock);
+            }
+            // the producer went away between the availability check and the lock: park again, without the lock
+            readLock.unlock();
         }
+    }
 
-        if (lockAcquired) {
-            log.debug("Produce lock acquired (context: {}).", context.getOffsets());
-        } else {
-            throw new java.util.concurrent.TimeoutException(msg("Timeout while waiting to get produce lock (was set to {}). " +
-                    "Commit taking too long? Try increasing the produce lock timeout.", produceLockTimeout));
+    /**
+     * @return the producer in use
+     * @throws ProducerInvalidatedException while none exists - the paths that reach here without going through
+     *                                      {@link #acquireProduceLock} are the commit paths, which check
+     *                                      {@link #isProducerAvailable()} first, so this is a backstop
+     */
+    private ProducerWrapper<K, V> producer() {
+        ProducerWrapper<K, V> current = producerWrapper;
+        if (current == null) {
+            throw new ProducerInvalidatedException("No usable producer while the replacement is being built", recovery.conditionUnderRecovery());
         }
-
-        log.trace("Produce lock acquired.");
-        return new ProducingLock(context, readLock);
+        return current;
     }
 
     /**
@@ -241,7 +319,12 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
      * Wait for all in flight records to be ack'd before continuing, so they are all in the tx.
      */
     private void flush() {
-        producerWrapper.flush();
+        ProducerWrapper<K, V> current = producerWrapper;
+        if (current == null) {
+            log.debug("No producer to flush: the replacement is being built");
+            return;
+        }
+        current.flush();
     }
 
     /**
@@ -270,15 +353,25 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
         // so that more messages don't sneak into this tx block - the consumer records of which won't yet be
         // in this offset collection
         ensureCommitLockHeld();
+        if (!isProducerAvailable()) {
+            // reachable from the revoke-path commit during an outage; the control thread does not attempt commits then
+            throw new ProducerInvalidatedException("Commit skipped: no usable producer while the replacement is built", recovery.conditionUnderRecovery());
+        }
 
         //
-        lazyMaybeBeginTransaction(); // if not using a produce flow or if no records sent yet, a tx will need to be started here (as no records are being produced)
         try {
-            producerWrapper.sendOffsetsToTransaction(offsetsToSend, groupMetadata);
+            lazyMaybeBeginTransaction(); // if not using a produce flow or if no records sent yet, a tx will need to be started here (as no records are being produced)
+        } catch (RuntimeException e) {
+            throw invalidatedOrRethrow(e, false);
+        }
+        try {
+            producer().sendOffsetsToTransaction(offsetsToSend, groupMetadata);
         } catch (ProducerFencedException e) {
             // todo consider wrapping all client calls with a catch and new exception in the ProducerWrapper, so can get stack traces
             //  see APIException#fillInStackTrace
-            throw new PCInternalRuntimeException(e);
+            throw invalidatedOrRethrow(e, true);
+        } catch (RuntimeException e) {
+            throw invalidatedOrRethrow(e, false);
         }
 
         // see {@link KafkaProducer#commit} this can be interrupted and is safe to retry
@@ -293,13 +386,13 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
                 throw new PCInternalRuntimeException(msg, lastErrorSavedForRethrow);
             }
             try {
-                if (producerWrapper.isMockProducer()) {
+                if (producer().isMockProducer()) {
                     commitTransaction();
                 } else {
                     // TODO talk about alternatives to this brute force approach for retrying committing transactions
                     boolean retrying = retryCount > 0;
                     if (retrying) {
-                        if (producerWrapper.isTransactionCompleting()) {
+                        if (producer().isTransactionCompleting()) {
                             // try wait again
                             commitTransaction();
                         }
@@ -321,6 +414,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
                 }
 
                 committed = true;
+                recovery.commitSucceeded();
                 if (retryCount > 0) {
                     log.warn("Commit success, but took {} tries.", retryCount);
                 }
@@ -356,7 +450,98 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
     }
 
     private void commitTransaction() {
-        producerWrapper.commitTransaction();
+        try {
+            producer().commitTransaction();
+        } catch (RuntimeException e) {
+            throw invalidatedOrRethrow(e, false);
+        }
+    }
+
+    /**
+     * The commit path as a detection site (the produce path has its own, in
+     * {@code ParallelEoSStreamProcessor#processAndProduceResults}, and the revoke-path commit arrives here too).
+     * <p>
+     * Where PC can recover, a recoverable condition found anywhere in {@code failure}'s cause chain is recorded and
+     * the operation unwinds with {@link ProducerInvalidatedException}. Where it cannot - the caller supplied a
+     * finished {@link Producer} instance - the outcome is what it was before recovery existed:
+     * {@link ProducerFencedException} from {@code sendOffsetsToTransaction} wrapped as an internal error, everything
+     * else propagating as it arrived. That includes {@code TimeoutException}, which the commit retry loop must still
+     * see raw.
+     *
+     * @param wrapFencedAsInternal the pre-recovery treatment at the send-offsets site only
+     * @return the exception to throw; never null
+     */
+    private RuntimeException invalidatedOrRethrow(RuntimeException failure, boolean wrapFencedAsInternal) {
+        Optional<ProducerInvalidatedException> invalidated = recordIfRecoverable(failure);
+        if (invalidated.isPresent()) {
+            return invalidated.get();
+        }
+        if (wrapFencedAsInternal && failure instanceof ProducerFencedException) {
+            return new PCInternalRuntimeException(failure);
+        }
+        return failure;
+    }
+
+    /**
+     * The replacement half of recovery, for the control thread's {@link ProducerRecoveryPass} and for tests that
+     * drive a recovery step by step. What this manager's own paths need of it is delegated below.
+     */
+    public ProducerRecovery<K, V> recovery() {
+        return recovery;
+    }
+
+    /** @see ProducerRecovery#recordIfRecoverable(Throwable) */
+    public Optional<ProducerInvalidatedException> recordIfRecoverable(Throwable failure) {
+        return recovery.recordIfRecoverable(failure);
+    }
+
+    /** @see ProducerRecovery#canRecover() */
+    public boolean canRecover() {
+        return recovery.canRecover();
+    }
+
+    /** @see ProducerRecovery#isProducerAvailable() */
+    public boolean isProducerAvailable() {
+        return recovery.isProducerAvailable();
+    }
+
+    /** @see ProducerRecovery#replayGeneration() */
+    public long replayGeneration() {
+        return recovery.replayGeneration();
+    }
+
+    /** @see ProducerRecovery#isReplacing() */
+    public boolean isReplacing() {
+        return recovery.isReplacing();
+    }
+
+    /** @see ProducerRecovery#getConsecutiveRecoveriesWithoutCommit() */
+    public int getConsecutiveRecoveriesWithoutCommit() {
+        return recovery.getConsecutiveRecoveriesWithoutCommit();
+    }
+
+    /** @see ProducerRecovery#setSuspensionEndsWhen(BooleanSupplier) */
+    public void setSuspensionEndsWhen(BooleanSupplier shuttingDown) {
+        recovery.setSuspensionEndsWhen(shuttingDown);
+    }
+
+    /**
+     * Recovery's first step, under the write lock it holds: takes the invalidated producer away, leaving this manager
+     * with none until {@link #publishProducer} - every path that needs one meanwhile parks or unwinds.
+     *
+     * @return the producer discarded, or null when none was in use
+     */
+    ProducerWrapper<K, V> discardProducer() {
+        ProducerWrapper<K, V> discarded = producerWrapper;
+        producerWrapper = null;
+        return discarded;
+    }
+
+    /**
+     * Recovery's last step, outside the lock: the replacement is initialised and in use from here on.
+     */
+    void publishProducer(ProducerWrapper<K, V> replacement) {
+        producerWrapper = replacement;
     }
 
     private void beginTransaction() {
@@ -375,7 +560,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
          // retriable tx
          none
          */
-        producerWrapper.beginTransaction();
+        producer().beginTransaction();
     }
 
     /**
@@ -383,11 +568,17 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
      */
     public void close(Duration timeout) {
         log.debug("Closing producer, assuming no more in flight...");
+        recovery.markTerminal(); // releases any worker parked during an outage
+        ProducerWrapper<K, V> current = producerWrapper;
+        if (current == null) {
+            log.debug("No producer to close: it was discarded during recovery and no replacement was built");
+            return;
+        }
         // Nothing in the transaction cleanup may prevent the Producer being closed: leaking it (IO thread,
         // sockets, buffers) outlives every failure that can get us here, and doClose's finally marks the
         // instance CLOSED either way.
         try {
-            if (options.isUsingTransactionalProducer() && !producerWrapper.isTransactionReady()) {
+            if (options.isUsingTransactionCommitMode() && !current.isTransactionReady()) {
                 boolean commitLockHeld = false;
                 try {
                     acquireCommitLock();
@@ -430,11 +621,11 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
     }
 
     private void closeProducer(Duration timeout) {
-        producerWrapper.close(timeout);
+        producer().close(timeout);
     }
 
     private void abortTransaction() {
-        producerWrapper.abortTransaction();
+        producer().abortTransaction();
     }
 
     private void acquireCommitLock() throws java.util.concurrent.TimeoutException, InterruptedException {
@@ -466,7 +657,8 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
         }
     }
 
-    private void releaseCommitLock() {
+    /** Package-private for recovery, which enters the write lock directly and must leave it the same way. */
+    void releaseCommitLock() {
         log.debug("Releasing commit lock...");
         ReentrantReadWriteLock.WriteLock writeLock = producerTransactionLock.writeLock();
         if (!producerTransactionLock.isWriteLockedByCurrentThread())

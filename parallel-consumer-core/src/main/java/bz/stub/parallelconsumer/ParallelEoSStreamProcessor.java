@@ -9,6 +9,7 @@ import bz.stub.parallelconsumer.internal.utils.TimeUtils;
 import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.internal.PCInternalRuntimeException;
 import bz.stub.parallelconsumer.internal.PCModule;
+import bz.stub.parallelconsumer.internal.ProducerInvalidatedException;
 import bz.stub.parallelconsumer.internal.ProducerManager;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -17,6 +18,7 @@ import org.apache.kafka.clients.producer.RecordMetadata;
 import org.apache.kafka.common.errors.InvalidPidMappingException;
 import pl.tlinkowski.unij.api.UniLists;
 
+import java.util.Optional;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Future;
@@ -67,7 +69,8 @@ public class ParallelEoSStreamProcessor<K, V> extends AbstractParallelEoSStreamP
     public void pollAndProduceMany(Function<PollContext<K, V>, List<ProducerRecord<K, V>>> userFunction,
                                    Consumer<ConsumeProduceResult<K, V, K, V>> callback) {
         if (!getOptions().isProducerSupplied()) {
-            throw new IllegalArgumentException("To use the produce flows you must supply a Producer in the options");
+            throw new IllegalArgumentException("To use the produce flows you must supply producerConfig for PC to build " +
+                    "a Producer from (or a Producer instance) in the options");
         }
 
         // wrap user func to add produce function
@@ -134,20 +137,38 @@ public class ParallelEoSStreamProcessor<K, V> extends AbstractParallelEoSStreamP
                 }
                 return null; // return from timer function
             });
-        } catch (InvalidPidMappingException invalidPidMappingException) {
-            log.error("Closing parallel Consumer due to InvalidPidMappingException", invalidPidMappingException);
-            this.closeOnException(invalidPidMappingException);
-            // Rethrow, or runUserFunctionInternal marks every WorkContainer in this batch SUCCEEDED and returns
-            // an empty result list - records whose output was never produced, recorded as done. Today nothing
-            // commits that verdict only because closeOnException blocks this worker until the instance is
-            // CLOSED; the verdict is wrong regardless, and must not depend on that. Wrapped like the arm below
-            // so the failure travels the same route as any other produce failure.
-            throw new PCInternalRuntimeException("Producer id mapping invalid - the instance is closing, and this "
-                    + "batch is failed so its offsets are not committed", invalidPidMappingException);
         } catch (Exception e) {
-            throw new PCInternalRuntimeException("Error while waiting for produce results", e);
+            throw produceFailureFor(pm, e);
         }
         return results;
+    }
+
+    /**
+     * The produce path as a detection site (R8, R9, R11, R18, R19). Where PC can recover, a recoverable condition
+     * anywhere in the failure's cause chain - the send future raises it inside {@code ExecutionException}, which is
+     * the shape the field report (astubbs#411, confluentinc#830) actually has - is recorded on the
+     * {@link ProducerManager} and this record fails, returning through the mailbox for retry; the control thread
+     * recovers on its next pass. Where PC cannot recover, the producer-instance path, the outcome is what
+     * confluentinc#839 made it: a synchronous {@link InvalidPidMappingException} closes the instance, and anything
+     * else is an ordinary produce failure of this record.
+     * <p>
+     * One thing does change on the instance path, inherited from astubbs#262: the close used to swallow the
+     * exception, so every record in the batch was marked succeeded and the close-time commit published offsets for
+     * output that was never produced. The close now rethrows, so the batch is failed and those offsets stay where
+     * they were.
+     */
+    private RuntimeException produceFailureFor(ProducerManager<K, V> pm, Exception failure) {
+        Optional<ProducerInvalidatedException> invalidated = pm.recordIfRecoverable(failure);
+        if (invalidated.isPresent()) {
+            return invalidated.get();
+        }
+        if (failure instanceof InvalidPidMappingException) {
+            log.error("Closing parallel Consumer due to InvalidPidMappingException - PC cannot rebuild a producer it " +
+                    "did not build; supply producerConfig instead of a producer instance and it recovers", failure);
+            this.closeOnException(failure);
+            return new PCInternalRuntimeException("Producer id mapping invalid, and no recovery is possible on the producer-instance path", failure);
+        }
+        return new PCInternalRuntimeException("Error while waiting for produce results", failure);
     }
 
     @Override

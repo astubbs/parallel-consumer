@@ -12,9 +12,11 @@ import bz.stub.parallelconsumer.*;
 import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import bz.stub.parallelconsumer.state.WorkContainer;
+import bz.stub.parallelconsumer.state.PartitionState;
 import bz.stub.parallelconsumer.state.WorkManager;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.binder.jvm.ExecutorServiceMetrics;
+import com.facebook.infer.annotation.ThreadConfined;
 import lombok.*;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
@@ -114,6 +116,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
     @Getter(PROTECTED)
     private final Optional<ProducerManager<K, V>> producerManager;
+
+    /**
+     * Present only where recovery can run: a producer this instance built, under the transactional commit mode.
+     */
+    private final Optional<ProducerRecoveryPass<K, V>> producerRecoveryPass;
 
     /**
      * All consumer access goes through ConsumerManager (which wraps with ThreadConfinedConsumer).
@@ -396,12 +403,20 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
 
         if (options.isProducerSupplied()) {
             this.producerManager = Optional.of(module.producerManager());
-            if (options.isUsingTransactionalProducer())
+            // a worker parked on the produce lock during a producer outage is released as soon as this instance
+            // leaves RUNNING or PAUSED, so a close during the outage does not wait out the shutdown timeout (R15)
+            this.producerManager.get().setSuspensionEndsWhen(() -> state != RUNNING && state != State.PAUSED);
+            if (options.isUsingTransactionCommitMode()) {
                 this.committer = this.producerManager.get();
-            else
+                this.producerRecoveryPass = Optional.of(new ProducerRecoveryPass<>(this.producerManager.get().recovery(),
+                        () -> state, this::replayWorkDiscardedByAbortedTransaction, this::closeWith));
+            } else {
                 this.committer = this.brokerPollSubsystem;
+                this.producerRecoveryPass = Optional.empty();
+            }
         } else {
             this.producerManager = Optional.empty();
+            this.producerRecoveryPass = Optional.empty();
             this.committer = this.brokerPollSubsystem;
         }
         //Initialize metrics for this class once all the objects are created
@@ -1344,6 +1359,8 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     protected <R> void controlLoop(Function<PollContextInternal<K, V>, List<R>> userFunction,
                                    Consumer<R> callback) throws TimeoutException, ExecutionException, InterruptedException {
+        maybeRecoverProducer();
+
         maybeWakeupPoller();
 
         final boolean shouldTryCommitNow = maybeAcquireCommitLock();
@@ -1462,6 +1479,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private void commitOffsetsReportingPollerDeath() throws TimeoutException, InterruptedException {
         try {
             commitOffsetsThatAreReady();
+        } catch (ProducerInvalidatedException producerInvalidated) {
+            // not a failure of this thread and not a poller problem: the broker reported the producer invalid, the
+            // condition is recorded, and the next pass of this loop recovers (KTD3, KTD4)
+            log.debug("Commit unwound because the producer was reported invalid; recovery runs on the next control loop pass: {}",
+                    producerInvalidated.getMessage());
         } catch (PCInternalRuntimeException commitFailure) {
             try {
                 brokerPollSubsystem.supervise();
@@ -1502,7 +1524,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * @return true if committing should either way be attempted now
      */
     private boolean maybeAcquireCommitLock() throws TimeoutException, InterruptedException {
-        final boolean shouldTryCommitNow = isTimeToCommitNow() && wm.isDirty() && !isRebalanceInProgress.get();
+        final boolean shouldTryCommitNow = isTimeToCommitNow() && wm.isDirty() && !isRebalanceInProgress.get() && !isProducerBeingReplaced();
         // could do this optimistically as well, and only get the lock if it's time to commit, so is not frequent
         if (shouldTryCommitNow && options.isUsingTransactionCommitMode()) {
             // get into write lock queue, so that no new work can be started from here on
@@ -1520,7 +1542,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         int gotWorkCount = 0;
 
         //
-        if (state == RUNNING || state == DRAINING) {
+        if ((state == RUNNING || state == DRAINING) && !isProducerBeingReplaced()) {
             if (isWorkerPoolShutDown()) {
                 // don't take work there is nowhere to run - taking it would only get it dropped at the submit,
                 // uncommitted, for redelivery after rebalance
@@ -1661,6 +1683,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         log.trace("Sending work ({}) to pool", batch);
         // snapshot at submit time, on the controller thread - which is already running under the caller's context
         final Map<String, String> submittersDiagnosticContext = mdcPropagation.capture();
+        if (options.isUsingTransactionCommitMode()) {
+            // stamped here, on the thread that also runs the replay, so "dispatched before the replay" is a total
+            // order the produce lock can check (ProducerManager#acquireProduceLock); stamping on the worker would
+            // leave a batch queued in the pool across a replay unstamped
+            producerManager.ifPresent(pm -> {
+                long replayGeneration = pm.replayGeneration();
+                batch.forEach(wc -> wc.markDispatchedAtReplayGeneration(replayGeneration));
+            });
+        }
         Future outputRecordFuture;
         try {
             outputRecordFuture = workerThreadPool.get().submit(() -> {
@@ -1941,16 +1972,49 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         workMailBox.drainTo(results, size);
 
         log.trace("Processing drained work {}...", results.size());
+        // Every drained result is landed before a failure is rethrown. A successful-work listener is user code
+        // that runs inside handleFutureResult; a throw there used to leave the results behind it in this local
+        // queue, unreachable - in flight forever, with no retry and no redelivery. On the ordinary pass the throw
+        // still ends the instance; on the recovery pass, which retries the drain, the results it left behind
+        // would have been the very records the replay exists to put back.
+        RuntimeException firstFailure = null;
         for (var action : results) {
-            if (action.isNewConsumerRecords()) {
-                wm.registerWork(action.getConsumerRecords());
-            } else {
-                WorkContainer<K, V> work = action.getWorkContainer();
-                MDC.put(MDC_WORK_CONTAINER_DESCRIPTOR, work.toString());
-                wm.handleFutureResult(work);
-                MDC.remove(MDC_WORK_CONTAINER_DESCRIPTOR);
+            try {
+                if (action.isNewConsumerRecords()) {
+                    wm.registerWork(action.getConsumerRecords());
+                } else {
+                    WorkContainer<K, V> work = action.getWorkContainer();
+                    MDC.put(MDC_WORK_CONTAINER_DESCRIPTOR, work.toString());
+                    try {
+                        wm.handleFutureResult(work);
+                    } finally {
+                        MDC.remove(MDC_WORK_CONTAINER_DESCRIPTOR);
+                    }
+                }
+            } catch (RuntimeException failure) {
+                firstFailure = (RuntimeException) firstOrSuppress(firstFailure, failure); // first is null or a RuntimeException, so the cast holds
             }
         }
+        if (firstFailure != null) {
+            throw firstFailure;
+        }
+    }
+
+    /**
+     * The step of a recovery that runs under the producer write lock, after the invalidated producer is discarded
+     * (KTD4, KTD5): land every result already in the mailbox - each worker that produced into the aborted transaction
+     * has mailboxed its result, which holding the write lock guarantees - so the ledger is complete, then put the
+     * ledger's records back into processing. The drain is what makes the replay complete: a result still in the
+     * mailbox is a record whose offset would otherwise be committed for output the broker discarded. Package-visible
+     * so the drain-then-replay order is pinned by a test rather than by the one call site's comment.
+     *
+     * @return how many records the replay put back
+     */
+    @ThreadConfined(PartitionState.CONTROL_THREAD)
+    int replayWorkDiscardedByAbortedTransaction() {
+        assertOnControlThread("the replay of work an aborted transaction discarded");
+        processWorkCompleteMailBox(Duration.ZERO);
+        return wm.restoreWorkDiscardedByAbortedTransaction();
     }
 
     /**
@@ -1973,14 +2037,64 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                 Duration effectiveRetryDelay = lowestScheduled.toMillis() < retryDelay.toMillis() ? retryDelay : lowestScheduled;
                 Duration result = timeBetweenCommits.toMillis() < effectiveRetryDelay.toMillis() ? timeBetweenCommits : effectiveRetryDelay;
                 log.debug("Not enough work in flight, while work is waiting to be retried - so will only sleep until next retry time of {} (lowestScheduled = {})", result, lowestScheduled);
-                return result;
+                return capAtNextRecoveryAttempt(result); // same cap as the commit path below, for the same reason
             }
         }
 
         //
         Duration effectiveCommitAttemptDelay = getTimeToNextCommitCheck();
         log.debug("Calculated next commit time in {}", effectiveCommitAttemptDelay);
-        return effectiveCommitAttemptDelay;
+        return capAtNextRecoveryAttempt(effectiveCommitAttemptDelay);
+    }
+
+    /**
+     * While the producer is being replaced nothing else wakes this loop - no work is distributed, so no results
+     * arrive, and no commit is due - so the wait is capped at the time to the next recovery attempt (KTD7).
+     */
+    private Duration capAtNextRecoveryAttempt(Duration wait) {
+        return producerManager
+                .flatMap(pm -> pm.recovery().timeUntilNextRecoveryAttempt(Instant.now()))
+                .filter(untilAttempt -> untilAttempt.compareTo(wait) < 0)
+                .orElse(wait);
+    }
+
+    private boolean isProducerBeingReplaced() {
+        return options.isUsingTransactionCommitMode() && producerManager.map(ProducerManager::isReplacing).orElse(false);
+    }
+
+    /**
+     * The recovery pass, at the top of every control loop pass, where the instance built its own transactional
+     * producer: {@link ProducerRecoveryPass} owns it. Visible for testing - the state gate is driven directly,
+     * because the window between CLOSING and the manager closing is on this thread only.
+     */
+    @ThreadConfined(PartitionState.CONTROL_THREAD)
+    void maybeRecoverProducer() {
+        assertOnControlThread("the producer recovery pass");
+        producerRecoveryPass.ifPresent(ProducerRecoveryPass::run);
+    }
+
+    /**
+     * The confinement the recovery pass and the ledger replay declare with {@code @ThreadConfined}, asserted rather
+     * than trusted: once a control thread exists, only it may run them. Before one exists - an instance never
+     * started - nothing runs concurrently, so there is nothing to confine, and a test may drive them directly.
+     */
+    private void assertOnControlThread(String what) {
+        Thread control = blockableControlThread;
+        if (control != null && Thread.currentThread() != control) {
+            throw new IllegalStateException(msg("{} is confined to the control thread '{}' but was called on '{}'",
+                    what, control.getName(), Thread.currentThread().getName()));
+        }
+    }
+
+    /**
+     * How a terminal recovery outcome ends the instance: the failure it closes with, if none is recorded yet, then
+     * CLOSING - which is also what releases the workers parked on the produce lock.
+     */
+    private void closeWith(Exception failure) {
+        if (this.failureReason == null) {
+            this.failureReason = failure;
+        }
+        transitionToClosing();
     }
 
     private boolean isIdlingOrRunning() {
@@ -2097,9 +2211,18 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             // to avoid, reached through a different door. addToMailbox is in a finally for the same
             // reason: returning the record is the part that must happen.
             Throwable bookkeepingFailed = null;
+            // A batch that could not be produced because the producer is being replaced is deferred, not failed:
+            // the producer, not the record, is what stopped it, so no attempt is counted against the record and
+            // no retry delay applies. A user's retry-delay function or dead-letter policy reads that history
+            // through RecordContext, and a record must not be dead-lettered for being in flight during a recovery.
+            boolean deferredForRecovery = e instanceof ProducerInvalidatedException;
             for (var wc : workContainerBatch) {
                 try {
-                    wc.onUserFunctionFailure(e);
+                    if (deferredForRecovery) {
+                        wc.deferForRecovery();
+                    } else {
+                        wc.onUserFunctionFailure(e);
+                    }
                 } catch (Throwable userCodeThrew) {
                     bookkeepingFailed = firstOrSuppress(bookkeepingFailed, userCodeThrew);
                 }
@@ -2146,6 +2269,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                     if (log.isDebugEnabled()) {
                         log.debug("Explicit " + PCRetriableException.class.getSimpleName()
                                 + " caught, logging at DEBUG only. " + failureLine, context.summariseForLog(), e);
+                    }
+                } else if (e instanceof ProducerInvalidatedException) {
+                    // not a failure of the user's function: the producer is being replaced and the batch re-queues.
+                    // Summary for the same reason as the arms beside it - recovery re-queues at full rate.
+                    if (log.isDebugEnabled()) {
+                        log.debug("Batch deferred for producer recovery, returning to mailbox without a failure recorded. Context: {}",
+                                context.summariseForLog(), e);
                     }
                 } else {
                     log.error(failureLine, context.summariseForLog(), e);

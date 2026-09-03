@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.state;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import com.facebook.infer.annotation.ThreadConfined;
 import bz.stub.parallelconsumer.internal.*;
 import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
@@ -93,6 +94,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
     private final Map<TopicPartition, Counter> succeededRecordsCounters = new ConcurrentHashMap<>();
     private final Map<TopicPartition, Counter> failedRecordsCounters = new ConcurrentHashMap<>();
 
+    @Getter
     private final PCMetrics pcMetrics;
 
     public WorkManager(PCModule<K, V> module,
@@ -248,13 +250,32 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         pm.onOffsetCommitSuccess(committed);
     }
 
+    /**
+     * After a transaction was aborted, puts back every record whose output it discarded (R13). Control thread only,
+     * under the producer write lock and after the mailbox has been drained - the ordering
+     * {@link PartitionState#restoreCompletedButUncommittedWork()} explains.
+     *
+     * @return how many records were put back
+     */
+    @ThreadConfined(PartitionState.CONTROL_THREAD)
+    public int restoreWorkDiscardedByAbortedTransaction() {
+        int restored = pm.restoreCompletedButUncommittedWork();
+        if (restored > 0) {
+            log.info("Restored {} record(s) to processing whose output an aborted transaction discarded; they will be processed again", restored);
+        }
+        return restored;
+    }
+
     public void onFailureResult(WorkContainer<K, V> wc) {
         onFailureResult(wc, pm.getPartitionState(wc.getTopicPartition()));
     }
 
     private void onFailureResult(WorkContainer<K, V> wc, PartitionState<K, V> partitionState) {
         // error occurred, put it back in the queue if it can be retried
-        incrementCounterIfPresent(failedRecordsCounters, wc.getTopicPartition());
+        if (!wc.isDeferredForRecovery()) {
+            // a delivery deferred for a producer recovery is not a failure of the record, and is not counted as one
+            incrementCounterIfPresent(failedRecordsCounters, wc.getTopicPartition());
+        }
         wc.endFlight();
         pm.onFailure(wc, partitionState);
         // Re-validate against the LIVE map immediately before the retry re-queue - the staleness checkpoint's
@@ -270,6 +291,8 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         // Skipping the re-queue is the safe direction: the partition's next owner redelivers the record.
         if (checkIfWorkIsStale(wc)) {
             log.debug("Not re-queueing failed work for retry - its partition was revoked mid-flight, so the retry belongs to the partition's next owner. {}", wc);
+        } else if (wc.isDeferredForRecovery()) {
+            sm.onDeferredForRecovery(wc);
         } else {
             sm.onFailure(wc);
         }

@@ -2412,6 +2412,43 @@ load-sensitive, so its stability cannot be read off a single green run - and the
 alternative astubbs#421 measured next gives each shard its own VM, which does not move this rate <!-- post-merge: checked -->
 at all.
 
+## 2026-09-03, `NO_PROGRESS` on a stacked producer-ownership branch, in a scenario the stack does not touch
+
+<!-- post-merge: checked-begin - a dated capture, named by run and seed -->
+`ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger` on the `Chaos Pain Suite 4/4` shard of
+[run 33715914092](https://github.com/astubbs/parallel-consumer/actions/runs/33715914092), head
+`646d13eb3` of astubbs#420 (rungs 2-4 of astubbs#225, stacked above recovery). The probe:
+`NO_PROGRESS: fleet consumed count stuck at 98505/100000 for 30s (bound 30s)`, no other detector
+fired, run summary consumed 99254. **Replay seed `980443902370766447`**:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=980443902370766447
+
+What the branch changes is producer construction and recovery under the transactional commit mode;
+this scenario runs `PERIODIC_CONSUMER_ASYNCHRONOUS` with no producer, so none of it is on the path.
+The recorded history shows the same scenario green one minute later on astubbs#410, which carries
+the identical engine code, and green on the surrounding heads of four other branches. Same reading
+as the 2026-08-26 `NO_PROGRESS` capture: a seed that draws the interleaving, not the branch. The
+seed replay was not run; it is the control arm to run if this seed is ever drawn again.
+<!-- post-merge: checked-end -->
+
+## 2026-09-03, second capture on the same stacked branch, next head - and its seed replays clean
+
+<!-- post-merge: checked-begin - a dated capture, named by run and seed -->
+The same shard on the next head of astubbs#420 (`f75f4ee07`,
+[run 33717741761](https://github.com/astubbs/parallel-consumer/actions/runs/33717741761)), a
+different arm: no probe fired; the `all messages consumed under churn` wait timed out at its five
+minutes with the run summary at 99097 consumed and a non-gating `CLASS2_STALL/LAG_STAGNATION` on one
+partition. **Seed `4706937442040553228`.** The control arm the previous capture named was run: the
+seed replayed on the same tree on the author's box passed in about two and a half minutes, 100409
+consumed, no violation and no observation. So the seed does not reproduce the stall by itself; the
+stall needs the runner as well, which is the shape every earlier replay in this file has had. Two
+consecutive failures on this branch against a pass on astubbs#410's identical engine code the same
+hour is recorded as a rate, not a cause: the scenario's path does not include anything the branch
+changes. Not run: the same seed on astubbs#410's tree, which a clean replay on this tree makes
+uninformative.
+<!-- post-merge: checked-end -->
+
 ## Delete when
 
 The `CLASS2_STALL` entries above are superseded by this section and kept only as the record of how a

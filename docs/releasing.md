@@ -104,8 +104,15 @@ the point: read as a set, they get a common account of what shipped rather than 
 weeks apart from re-mined commit logs.
 
 ```bash
-ls docs/inflight/issue-response-*.md
+ls docs/inflight/*issue-response*.md
 ```
+
+The glob is deliberately loose. Drafts come in two shapes - one file per issue
+(`issue-response-<NNN>.md`) and, for a PR that closes several at once, one bundle named for its
+release (`release-<version>-issue-response-drafts.md`). The tighter `issue-response-*.md` matched
+only the first and silently dropped the bundle, while the release note named the bundle and not the
+singles: two partial indexes, each complete-looking on its own. Run this one command and trust nothing
+that lists drafts by name.
 
 Post each to its issue, then `git rm` it - **posting is what deletes a draft, not merging**, and
 `docs/inflight/AGENTS.md` owns that rule and the incident behind it. Re-read each one against what

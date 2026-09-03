@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.state;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumer;
+import com.facebook.infer.annotation.ThreadConfined;
 import bz.stub.parallelconsumer.internal.BrokerPollSystem;
 import bz.stub.parallelconsumer.internal.EpochAndRecordsMap;
 import bz.stub.parallelconsumer.internal.PCModule;
@@ -45,6 +46,12 @@ import static lombok.AccessLevel.*;
 @ToString
 @Slf4j
 public class PartitionState<K, V> {
+
+    /**
+     * The thread the aborted-transaction replay is confined to, as {@code ThreadConfined} names it: the control
+     * thread, which also stamps the replay generation on every dispatch, so the two are totally ordered.
+     */
+    public static final String CONTROL_THREAD = "pc-control";
 
     /**
      * Symbolic value for a parameter which is initialised as having an offset absent (instead of using Optional or
@@ -203,12 +210,23 @@ public class PartitionState<K, V> {
      */
     private boolean stateChangedSinceCommitStart = false;
 
+    /**
+     * The completed-but-uncommitted ledger (R13, KTD5): what {@link #onSuccess(long)} would otherwise drop, kept until
+     * the commit carrying it succeeds, so an aborted transaction's work can be put back. The retaining kind in
+     * transactional commit mode, the no-op kind otherwise - chosen once here rather than tested per completion. Its
+     * own class carries its monitor and its thread-safety invariant.
+     */
+    private final UncommittedCompletions<K, V> uncommittedCompletions;
+
 
     public PartitionState(long newEpoch,
                           PCModule<K, V> pcModule,
                           TopicPartition topicPartition,
                           OffsetMapCodecManager.HighestOffsetAndIncompletes offsetData) {
         this.module = pcModule;
+        this.uncommittedCompletions = module.options().isUsingTransactionCommitMode()
+                ? new UncommittedCompletions<>()
+                : UncommittedCompletions.none();
 
         this.tp = topicPartition;
         this.partitionsAssignmentEpoch = newEpoch;
@@ -239,6 +257,7 @@ public class PartitionState<K, V> {
     public void onOffsetCommitSuccess(OffsetAndMetadata committed) { //NOSONAR
         lastCommittedOffset = committed.offset();
         setClean();
+        uncommittedCompletions.onCommitSuccess();
     }
 
     private void setClean() {
@@ -273,6 +292,10 @@ public class PartitionState<K, V> {
         return incompleteOffsets.size();
     }
 
+    /**
+     * @see #onSuccess(WorkContainer) which is what the engine calls; this overload keeps the record out of the ledger
+     *         and exists for the tests that drive offsets directly
+     */
     public void onSuccess(long offset) {
         //noinspection OptionalAssignedToNull - null check to see if key existed
         boolean removedFromIncompletes = this.incompleteOffsets.remove(offset) != null; // NOSONAR
@@ -281,6 +304,64 @@ public class PartitionState<K, V> {
         updateHighestSucceededOffsetSoFar(offset);
 
         setDirty();
+    }
+
+    /**
+     * Records a completed container: the offset leaves the incomplete set, and in transactional commit mode the
+     * record enters the completed-but-uncommitted ledger until the commit carrying it succeeds.
+     */
+    public void onSuccess(WorkContainer<K, V> work) {
+        onSuccess(work.offset());
+        uncommittedCompletions.record(work.offset(), work.getCr());
+    }
+
+    /**
+     * Puts every completed-but-uncommitted record back into processing, after the transaction that carried its
+     * output was aborted (R13, KTD5). Each record goes back through the pair
+     * {@link #maybeRegisterNewPollBatchAsWork} uses for a fresh poll batch - a new {@link WorkContainer} at the
+     * partition's current epoch into its shard, then the record back into {@link #incompleteOffsets} - so
+     * {@link #isRecordPreviouslyCompleted} answers false for it again, {@link #getOffsetHighestSequentialSucceeded()}
+     * drops below it, and no offset from the aborted transaction can be committed. The partition is marked dirty so
+     * the next commit publishes the lowered frontier.
+     * <p>
+     * <b>Cleared suspicion, 2026-09-02: a container completing after the replay cannot target a restored offset.</b>
+     * The suspicion: {@link #onSuccess(long)} asserts the offset was still incomplete, so a late-arriving completion
+     * for a restored offset would either trip that assert or silently re-complete a record the replay just put back.
+     * The discriminator is what the caller does before calling this: recovery holds the producer write lock, so no
+     * worker is between {@code beginProducing} and {@code cleanUpContext}, and it drains the mailbox first - so every
+     * container that produced into the aborted transaction has already reached {@code handleFutureResult} and is
+     * either in this ledger (success) or the retry queue (failure) before the replay runs. A record on the
+     * {@code poll} flow takes no produce lock, but produced nothing, so nothing of it was discarded and its late
+     * completion targets an offset that is not in the ledger. What would reopen it: calling this outside the write
+     * lock, or before the drain - nothing gates that but the one call site in
+     * {@code AbstractParallelEoSStreamProcessor}.
+     * <p>
+     * Confined to the control thread - declared for RacerD by the annotation, and asserted at the one entry point,
+     * {@code AbstractParallelEoSStreamProcessor#replayWorkDiscardedByAbortedTransaction}. The ledger's monitor is
+     * not held across the replay itself, which enters the shard map's per-key lock and must not do so while holding
+     * it.
+     *
+     * @return how many records were put back
+     */
+    @ThreadConfined(PartitionState.CONTROL_THREAD)
+    public int restoreCompletedButUncommittedWork() {
+        Map<Long, ConsumerRecord<K, V>> discarded = uncommittedCompletions.snapshotInOffsetOrder();
+        if (discarded.isEmpty()) {
+            return 0;
+        }
+        long epoch = getPartitionsAssignmentEpoch();
+        for (ConsumerRecord<K, V> record : discarded.values()) {
+            getShardManager().addWorkContainer(epoch, record);
+            addNewIncompleteRecord(record);
+        }
+        // forgotten only once every entry is back in processing: a throw mid-loop leaves the ledger intact for the
+        // next pass, and both registrations tolerate a repeat (the shard keeps its resident, the incomplete set is a
+        // put), so replaying an entry twice costs nothing
+        uncommittedCompletions.forget(discarded.keySet());
+        setDirty();
+        log.debug("Restored {} completed-but-uncommitted record(s) to processing for {} after an aborted transaction; commit frontier is now {}",
+                discarded.size(), tp, getOffsetToCommit());
+        return discarded.size();
     }
 
     public void onFailure(WorkContainer<K, V> work) {
@@ -473,6 +554,7 @@ public class PartitionState<K, V> {
             // setting the flag so that any subsequent offset completed while commit is being performed could mark state as dirty
             // and retain the dirty state on commit completion.
             stateChangedSinceCommitStart = false;
+            uncommittedCompletions.snapshotForCommit(); // the same guard for the ledger: only what this commit carries is trimmed on its success
             return of(createOffsetAndMetadata());
         }
         return empty();

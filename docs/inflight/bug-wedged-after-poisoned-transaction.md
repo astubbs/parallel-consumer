@@ -92,3 +92,14 @@ while:
 Until that decision is taken, a small unit test asserting that a poisoned transaction is never
 re-begun would at least freeze today's behaviour, so a future recovery fix shows up as a visible
 change rather than a silent one.
+
+## Decision taken, 2026-09-02: abort-and-replace, for the broker-reported conditions
+
+The open design decision above is taken by astubbs#225's plan,
+`docs/plans/2026-09-02-001-feat-recoverable-producer-fencing-plan.md`: for the conditions the broker
+reports against the producer itself - fenced, stale epoch, invalid or expired producer id, out-of-order
+sequence, lost generation - PC aborts what it can, discards the producer, builds a replacement under the
+same `transactional.id`, and replays the work the abort discarded. That plan's "Inherited from
+astubbs#262" section records what it took from this note. A transaction poisoned by a cause outside
+that set (the `RecordTooLargeException` case above) is not covered by it and stays as described here;
+the recovery machinery it builds is where that follow-up belongs.

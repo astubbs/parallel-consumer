@@ -16,6 +16,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -125,6 +126,19 @@ public class PollContextInternal<K, V> {
      */
     public List<WorkContainer<K, V>> getWorkContainers() {
         return streamWorkContainers().collect(Collectors.toList());
+    }
+
+    /**
+     * @return the producer replay generation the control thread stamped on this batch at dispatch, for the produce
+     *         lock to compare against; empty when no container carries one - a batch that did not come through the
+     *         control loop's dispatch, which opts out of the check
+     * @see WorkContainer#getDispatchedAtReplayGeneration()
+     */
+    public OptionalLong replayGenerationAtDispatch() {
+        return streamWorkContainers()
+                .mapToLong(WorkContainer::getDispatchedAtReplayGeneration)
+                .filter(generation -> generation != WorkContainer.NEVER_DISPATCHED)
+                .min();
     }
 
     /**

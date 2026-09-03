@@ -62,7 +62,11 @@ public class ParallelConsumerOptions<K, V> {
 
     /**
      * A finished producer instance for the produce flows. Supplying a producer is only needed if using the produce
-     * flows; the alternative is {@link #producerConfig}, from which PC builds the producer itself.
+     * flows; the alternative is {@link #producerConfig}, from which PC builds the producer itself - and a
+     * replacement, when the broker reports the producer invalid. A finished instance carries no configuration to
+     * rebuild from, so on this path those conditions (fenced, an expired producer id, a stale epoch, a lost
+     * generation) keep their pre-recovery behaviour: a shutdown on the commit path, and on the produce path whatever
+     * the condition's shape produces today.
      *
      * @see ParallelStreamProcessor
      */
@@ -73,6 +77,10 @@ public class ParallelConsumerOptions<K, V> {
      * {@code new KafkaProducer<>(config)}: any {@code ProducerConfig} key, serializers included, exactly as it would
      * be passed to that constructor. In {@link CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER} set
      * {@code transactional.id} here, as you would when building the producer yourself.
+     * <p>
+     * On this path a producer the broker reports invalid is recovered: PC builds another from this same
+     * configuration, {@code transactional.id} included, and initialising the replacement is what fences the producer
+     * it replaces.
      * <p>
      * The alternative to {@link #producer}; supplying both fails validation. Excluded from {@link #toString()}, as
      * the map may carry credentials.
@@ -611,7 +619,8 @@ public class ParallelConsumerOptions<K, V> {
     }
 
     /**
-     * @return true when the {@link #producer} instance was supplied, rather than {@link #producerConfig}
+     * @return true when the {@link #producer} instance was supplied, rather than {@link #producerConfig} - the path
+     *         on which PC cannot recover an invalidated producer
      */
     public boolean isProducerInstanceSupplied() {
         return producer != null;

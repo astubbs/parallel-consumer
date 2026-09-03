@@ -24,11 +24,15 @@ Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutio
 |---|---|---|
 <!-- post-merge: checked - the row states the fix and the lift as things that happened -->
 | `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` | 1 seen (2026-08-12) | Not from the original scan - found while babysitting astubbs#287. **Fixed by astubbs#265**, which deleted the wall-clock assertion rather than repairing it. astubbs#262, its owner, lifted the quarantine and deleted the registry entry - see below |
+| `AmbientProbeExtensionTest.headroomIsReportedOnAPassingTestToo`, `headroomOutcomeComesFromTheWatcherPhaseNotTheEndOfTheTestMethod`, `headroomIsSilentWithoutADeadlineAndWithoutAMeasurement` | 4 of 5 local runs (2026-09-02) | Found while verifying the producer-recovery work (astubbs#225) locally; that change does not touch the class. UNDIAGNOSED - see below |
 | `JStreamParallelEoSStreamProcessorTest.testConsumeAndProduce` and `.testFlatMapProduce` | 1 seen (2026-09-01) | Not from the original scan - found in a **local** core unit run on a parallel re-cut of astubbs#207, not on astubbs#207 itself. Both failed together on produced-record count (`Expected size: 1/2 but was: 0`), i.e. the returned stream carried nothing. **Mechanism now known and owned by astubbs#116** - see below | <!-- post-merge: checked -->
+| `LoadFactorCeilingReportingTest.fixedMessageBufferSizeDoesNotWarnOnEveryPass` | 5 seen (2026-09-02, and four times 2026-09-03, all local full runs) | Its WARN capture on the processor's shared logger caught a user-function failure line from an instance an earlier class left running; passes alone and beside `UserFunctionFailureLoggingTest`. Same shape as the `AmbientProbeExtensionTest` row - see below |
 | `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 5 seen (2026-08-18, 2026-08-19, 2026-08-25, 2026-09-01, 2026-09-02) | Not from the original scan - each found while babysitting a branch. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third, fourth and fifth sightings independently carry the **same three-way key collision** in the failing batch contents, which points at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
+| `Chaos Pain Suite` and `Lincheck` lanes - `Could not find or load main class org.apache.maven.wrapper.MavenWrapperMain` | 2 seen (2026-09-03: astubbs#410 chaos on [run 33700215189](https://github.com/astubbs/parallel-consumer/actions/runs/33700215189), astubbs#426 Lincheck on [run 33705127539](https://github.com/astubbs/parallel-consumer/actions/runs/33705127539)) | Not a test - the LANE fails before Maven starts. `.mvn/wrapper/maven-wrapper.jar` is gitignored and `mvnw` downloads it from Maven Central on first use, with `--quiet`, so a failed or partial download leaves no error and no class. Every other job in the same run passed, so it is the download on that runner, not the tree; the chaos lane passed on the next head. Durable fix, for a CI PR on master: commit the jar, or switch the wrapper to `only-script` so there is no jar to fetch. <!-- post-merge: checked - dated sightings on named runs -->
+| `TransactionTimeoutsTest.commitTimeout(int, int, List)[2]` (the long-multiplier arm) | 1 seen (2026-09-03, astubbs#410, [run 33718892721](https://github.com/astubbs/parallel-consumer/actions/runs/33718892721)) | Committed offsets `[8]` where `[8, 12]` was expected: the shutdown commit that carries the slowed record's offset did not land inside the assertion's window. On a docs-only head, with the identical engine code passing on the branch stacked above it in the same minute; `codecov flaky` already lists the variant. Shape: the test's own javadoc says the long arm races the shutdown timeout by design. <!-- post-merge: checked - dated sighting on a named run --> |
 | `Mutation Tests (PIT, PR-scoped)` lane | 1 seen (2026-09-02, astubbs#207, [run 33610711974](https://github.com/astubbs/parallel-consumer/actions/runs/33610711974)) | Not a test - the LANE hit its `timeout-minutes: 30` cap and was cancelled, on a **markdown-only** delta from a head where it had scored in 19m18s with the same class set. The cap has about a third headroom over a normal run, so it will flap on a slow runner. `continue-on-error: true`, so it never gates a merge - but a cancelled row reads like a failure <!-- post-merge: checked --> |
-| `ManagedPCInstanceLifecycleTest.rapidToggleShouldNotCreateDuplicateInstances` | 1 seen (2026-09-02, astubbs#207, [job 100175277225](https://github.com/astubbs/parallel-consumer/actions/runs/33607572165/job/100175277225)) | Not from the original scan - **arrived on master with astubbs#29 and failed on the first PR to merge it**. `consumeCount` 0, repetition 1 of 5, `forkCount=4`, `probe clean`. Every wait in the test is a fixed sleep, and its assertion names a cause it cannot discriminate - see below <!-- post-merge: checked --> |
-| `RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed` | 4 seen (2026-09-01; 2026-09-03 three times - once on a producer branch, twice in a row on astubbs#429, whose same head then passed on a deliberate re-run) | Not from the original scan - found while babysitting astubbs#257. Failed its **saturation/pause-point setup guard**, not the confluentinc#909 signature assertion, so it proves nothing about the defect it reproduces - see below <!-- post-merge: checked --> |
+| `ManagedPCInstanceLifecycleTest.rapidToggleShouldNotCreateDuplicateInstances` | 2 seen (2026-09-02, astubbs#207, [job 100175277225](https://github.com/astubbs/parallel-consumer/actions/runs/33607572165/job/100175277225); 2026-09-03, astubbs#410, [job 100508674056](https://github.com/astubbs/parallel-consumer/actions/runs/33710182789/job/100508674056), `consumeCount` 0 again, passing on three sibling heads within minutes) | Not from the original scan - **arrived on master with astubbs#29 and failed on the first PR to merge it**. `consumeCount` 0, repetition 1 of 5, `forkCount=4`, `probe clean`. Every wait in the test is a fixed sleep, and its assertion names a cause it cannot discriminate - see below <!-- post-merge: checked --> |
+| `RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed` | 7 seen (2026-09-01; 2026-09-03 six times: on astubbs#420, [run 33706716163](https://github.com/astubbs/parallel-consumer/actions/runs/33706716163), twice in a row on astubbs#429 whose same head then passed on a deliberate re-run, and three times on astubbs#410, the last on [run 33716898092](https://github.com/astubbs/parallel-consumer/actions/runs/33716898092) with a green run between - the recorded history since astubbs#429 landed reads red on about one head in four across branches that carry it and green on the ones that do not, which is too few runs to attribute but is the next thing to check, [run 33710182789](https://github.com/astubbs/parallel-consumer/actions/runs/33710182789) and [run 33711953542](https://github.com/astubbs/parallel-consumer/actions/runs/33711953542) - same setup-guard failure each time, probe clean; the recorded history shows it red on an unrelated branch the same hour and green on ten other heads in the same window, including astubbs#420, a superset of astubbs#410. astubbs#410 does not touch the consumer-sync registration path this test drives) | Not from the original scan - found while babysitting astubbs#257. Failed its **saturation/pause-point setup guard**, not the confluentinc#909 signature assertion, so it proves nothing about the defect it reproduces - see below <!-- post-merge: checked --> |
 | `ParallelEoSStreamProcessorTest.processInKeyOrder` | 8 seen locally (2026-09-01) across three branches, 1 in 3 isolated runs; the input-data failure separately **1 of 8 on unmodified `master`** | **Two DIFFERENT failures under one test name, and the documented fix is already in the tree.** See below - this one is not a fresh flake, it is a solved one still firing. The second failure now has a control arm on master and a source-level lead, so classify from those rather than re-measuring |
 
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
@@ -395,6 +399,47 @@ changes is the cost: this is the second day running that the flake failed a PR's
 lane outright, each time on a branch that could not have caused it, so it now charges a CI round to
 work that has nothing to do with it. That is the condition under which a cheap unrun experiment
 stops being deferrable.
+<!-- post-merge: checked-end -->
+
+### `AmbientProbeExtensionTest` headroom cases - a captured line from a neighbouring test method
+
+Seen 2026-09-02 while verifying the producer-recovery work (astubbs#225) locally, whose diff does not
+touch `AmbientProbeExtensionTest` or the extension it tests. Rule 2 (master-state, not PR-state) was
+settled by a control arm rather than a rate: the same class was run on the branch tip *before* that
+day's two new commits (a detached worktree at the merge commit) and failed there too.
+
+```
+headroomIsReportedOnAPassingTestToo:124  value of: iterable.size()  expected: 1  but was: 2
+iterable was: [PC-DEADLINE-HEADROOM test=mockedTest() ... outcome=FAILED,
+               PC-DEADLINE-HEADROOM test=mockedTest() ... outcome=PASSED]
+```
+
+Five local runs: the full core suite passed once (the baseline) and failed once (two
+cases); three classes together failed with three; the class alone failed with two; the control arm failed with three. **The shape is a capture that
+holds another test method's line** - the FAILED line belongs to a different mocked test than the one
+asserting - so the first suspect is an appender that outlives its method, or two methods sharing the
+`PC-DEADLINE-HEADROOM` logger without the `@ResourceLock` the environment-dump cases carry. Not
+diagnosed; nothing was changed. The count varying between runs (2 or 3) says the order of the
+methods decides which capture sees the stray line.
+
+### `LoadFactorCeilingReportingTest` - a leaked instance from an earlier class logs into its capture
+
+Seen 2026-09-02 in one local full run of the core suite on the producer-recovery branch (astubbs#225),
+about forty seconds after `UserFunctionFailureLoggingTest` finished. The class is `@Isolated`, so no
+other class ran beside it; the line it captured is the user-function failure summary
+(`... registering WC as failed, returning to mailbox. Context: input-0.56...-0: 1 record, offset 0`),
+which some earlier class's still-running control thread emitted on the shared processor logger after
+its own class had ended. Passes alone, passes paired with `UserFunctionFailureLoggingTest`, and the
+recorded history on its own branch is all-pass, so the leak is an instance not closed by a test in the
+same fork, not this test. `@Isolated` cannot protect a capture from a thread that outlives its class;
+the fix is in whichever test leaks, once identified - the surefire report timestamps name the
+candidates that ran in the preceding minute.
+
+<!-- post-merge: checked-begin - a dated sighting, past tense, on branches named as they were -->
+Seen three times more on 2026-09-03, in local full runs of the core suite on two branches of the same
+stack (twice on the recovery branch re-cut onto astubbs#426, once on astubbs#420 re-based above it), each
+time passing alone immediately afterwards. Same shape: a captured line from an earlier class; nothing in
+either diff touches the load factor. Four sightings in two days, all local, none yet in CI.
 <!-- post-merge: checked-end -->
 
 ### `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` - a helper defect, not a test defect

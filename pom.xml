@@ -377,6 +377,19 @@
             <version>${error-prone.version}</version>
             <scope>provided</scope>
         </dependency>
+        <!-- Supplies @ThreadConfined, which RacerD (the infer lane, bin/infer-test.sh) reads: a method or
+             field so marked is taken to run on the one thread it names, so its accesses are not reported as
+             racing with each other, and an unmarked access to the same state elsewhere still is. It is a
+             declaration the analyser consumes, not one it verifies - the runtime assertion beside each use
+             is what verifies it. @GuardedBy cannot say this: it names a lock, and control-thread-only state
+             holds none. `provided` for the same reason as the entry above. The rule:
+             parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md -->
+        <dependency>
+            <groupId>com.facebook.infer.annotation</groupId>
+            <artifactId>infer-annotation</artifactId>
+            <version>0.18.0</version>
+            <scope>provided</scope>
+        </dependency>
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>

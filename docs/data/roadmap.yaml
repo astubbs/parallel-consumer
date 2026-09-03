@@ -181,19 +181,31 @@ entries:
     related: astubbs#116
 
   - id: survive-producer-fencing
-    title: Abort and rejoin when the producer is fenced, rather than dying
+    title: Recover the producer when the broker invalidates it, rather than dying
     serves: [reliability]
     horizon: next-0x
     blocks_1_0: false
-    stage: idea
+    stage: poc
+    stage_delivery: draft
     stage_detail: >-
-      Mechanism analysis banked in the inflight note - the fatal path and the Kafka Streams
-      precedent are mapped; no design yet.
+      Implemented on astubbs#410 to the plan's Definition of Done: PC builds its own transactional producer
+      from configuration, detects the broker-reported conditions on both paths, aborts, replays the
+      completed-but-uncommitted ledger, and rebuilds under the same transactional.id; proven at the unit level
+      (fenced-during-commit was red before the change) and on a real coordinator by ProducerFencingRecoveryIT,
+      with the recovery guarantee registered as a transactional claim. Not yet run in anger, so not
+      "implemented"; the producer-instance path keeps its old behaviour.
     why_now: >-
-      Fencing is an ordinary consequence of a rebalance under transactions and it currently kills the
-      instance. Kafka Streams treats the equivalent as a migrated task and rejoins.
-    done_when: A fenced producer causes an abort and rejoin, with the instance still running afterwards.
+      Fencing is an ordinary consequence of a rebalance under transactions, and a broker can expire an
+      idle producer id outright; either way PC dies on the commit path and spins on the produce path.
+      Kafka Streams treats the equivalent as a migrated task and rebuilds its producer. The one field
+      report (astubbs#411) asked for exactly this.
+    done_when: >-
+      A producer the broker has invalidated is replaced and processing continues, with no offset from
+      the aborted transaction committed and its work processed again. Applies where PC builds the
+      producer; supplying a Producer instance keeps today's behaviour.
     tracking: astubbs#225
+    related: astubbs#411
+    pull_request: astubbs#410
 
   - id: current-java-and-kafka
     title: Run on current Java and current Kafka

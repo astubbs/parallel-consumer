@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.state;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder;
+import com.facebook.infer.annotation.ThreadConfined;
 import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.internal.BrokerPollSystem;
 import bz.stub.parallelconsumer.internal.EpochAndRecordsMap;
@@ -346,7 +347,20 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
      * checkpoint-3 torn read (see {@code WorkManager#handleFutureResult}).
      */
     public void onSuccess(WorkContainer<K, V> wc, PartitionState<K, V> partitionState) {
-        partitionState.onSuccess(wc.offset());
+        partitionState.onSuccess(wc);
+    }
+
+    /**
+     * @return how many completed-but-uncommitted records were put back into processing across the assigned partitions
+     * @see PartitionState#restoreCompletedButUncommittedWork()
+     */
+    @ThreadConfined(PartitionState.CONTROL_THREAD)
+    public int restoreCompletedButUncommittedWork() {
+        int restored = 0;
+        for (var state : getAssignedPartitions().values()) {
+            restored += state.restoreCompletedButUncommittedWork();
+        }
+        return restored;
     }
 
     /**
