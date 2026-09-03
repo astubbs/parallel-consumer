@@ -111,6 +111,74 @@ in-process engine uses. **The broker is the mechanism by which an agentless depl
 the fidelity it gave up** - and it earns it one integration at a time, which is exactly the
 incremental shape the adoption ramp below wants.
 
+## The third topology: bundled - and the broker inside the library
+
+Added 2026-09-03, from the owner. The record so far has two topologies: **embedded** (in your
+application) and **standalone** (beside your stack). This adds a third - **bundled**: a Hasten
+distribution with Kafka inside it, run by people who want the runtime and do not want to run Kafka.
+Prior art: nothing on any ref proposes it, and the handoff's product shape says the opposite in as
+many words - *"a globally coordinated runtime with no runtime cluster"*. So this is an inversion of
+the record, taken deliberately, and it does not disturb the other two: nobody who has Kafka is asked
+to run anything new, which is the forcing-versus-offering line above applied once more.
+
+**The persona, settled with the owner: the appliance.** Not the durable-execution buyer (Temporal,
+Restate), not a Kafka-distribution buyer, but the standalone persona above who will not stand up
+Kafka to get a scheduler and a token broker. That collapses standalone and bundled for them - the
+standalone process *is* the bundle - and it bounds what the bundled broker has to carry: **Hasten's
+own topics only** (coordination, catalog, resources, skipped state), which are small and
+low-throughput. Application records never transit it, per
+[`core-fleet-capacity-coordination.md`](core-fleet-capacity-coordination.md) claim 7. Embedding a
+broker to carry control state is a different proposition from embedding one to carry traffic.
+
+**Two things the bundle must be, from rules already on the record.** The Kafka inside is stock and
+replaceable ([`core-nile-boundary.md`](core-nile-boundary.md): never replace the specialist), so
+bring-your-own-Kafka stays a configuration switch and the bundle is packaging, never a fork. And it
+passes [`core-internal-machinery-as-features.md`](core-internal-machinery-as-features.md)'s AWS
+test only through the dev loop: the lighthouse and every quickstart need a Kafka that exists with
+zero setup, so a single-process Hasten-with-a-KRaft-node is the artefact built regardless, and
+production-hardening it is the marginal step. KRaft combined mode - broker and controller in one
+JVM - makes the single process real today.
+
+**Self-hosted bundling hides Kafka's name, not Kafka's operations.** Storage, replication,
+retention and upgrades are all still the operator's; the tin says Hasten. The persona's actual
+sentence - *does not want to run Kafka* - is delivered only by a **hosted offering**, which makes
+"hosted, perhaps?" the load-bearing half of the idea rather than an afterthought, and a business
+rather than a feature. It is recorded as the second commercial-shape candidate beside the
+OSS/enterprise split in [`core-engine-thesis.md`](core-engine-thesis.md).
+
+### The broker inside the client library - an open question, not a verdict
+
+The owner's follow-on: what happens if the broker is embedded in the client library itself, so
+three instances of your application *are* a three-node cluster and there is no separate thing to
+run at all? That is "Kafka as the only cluster" read to its limit - **no cluster at all**, the
+strongest possible form of embedded-not-cluster, and a genuinely new answer to the line above.
+Recorded as a question with its considerations, at the owner's request:
+
+- **With a stateful broker, application lifecycle and storage lifecycle collide.** A broker expects
+  stable identity, stable storage and a lifetime of months; an application is redeployed,
+  autoscaled and killed. A rolling deploy becomes a partition reassignment, a scale-in a
+  decommission, the pod needs a volume and a stable name, and a pause or crash in *your* code takes
+  a broker with it. Hazelcast's embedded mode is the precedent to study: "your app is the cluster"
+  was its original shape, and client/server mode was added because of rolling deploys. It also
+  puts a floor under scale-in - instance count cannot drop below replication factor - noted in
+  [`core-scale-in-proof.md`](core-scale-in-proof.md).
+- **With a diskless broker, most of that dissolves.** If the log lives in object storage and the
+  in-process broker is a stateless cache and coordinator, it can live and die with the application.
+  The cost is produce latency in the hundreds of milliseconds, which is the wrong trade for
+  streaming and may be the right one for the appliance persona, who is doing grants and
+  coordination. The upside nobody stateful gets: the instance that owns a partition for scheduling
+  also holds its data locally - scheduler, ownership and log co-locate. **Not available in Apache
+  Kafka yet**: KIP-1150 (diskless topics) was accepted 2026-03-02 as an umbrella; its implementation
+  KIPs are still under discussion and the only running implementation is a vendor fork. The
+  direction is voted, the code is not.
+- **The alternative to weigh against both: embed Raft, not Kafka**, for coordination topics only -
+  far less baggage. Against it, law 4 in [`../w2-vision.md`](../w2-vision.md): one implementation
+  of intelligence. The coordination plane is written against Kafka topics; an embedded Kafka keeps
+  one substrate, an embedded Raft is a second.
+
+What is not decided is which of these the appliance persona actually needs, and whether the
+question is worth answering before diskless Kafka exists to answer it with.
+
 ## Which features survive the boundary - a test, not a list
 
 The owner's open question is what else works without being inside. A list would rot; the test is:

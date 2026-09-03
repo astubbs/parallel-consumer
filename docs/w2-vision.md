@@ -93,7 +93,9 @@ named with it.
    resource; the line between forcing and offering a per-call decision is it at the deployment. Its
    failure mode is the law with the global half removed: the local controller keeps discovering
    alone, which is what a conventional adaptive limiter does, so losing the fleet degrades rather than
-   stalls - for participants that have a local controller to fall back to.
+   stalls - for participants that have a local controller to fall back to. Read to its limit the
+   law allows *no cluster at all* - the broker inside the application - which is the open question
+   the standalone note's third topology carries.
    [`core-fleet-capacity-coordination.md`](inflight/core-fleet-capacity-coordination.md) ·
    [`core-shared-execution-resources.md`](inflight/core-shared-execution-resources.md) ·
    [`core-auto-scaling.md`](inflight/core-auto-scaling.md) ·
@@ -416,5 +418,6 @@ named here for the first time). Consult this before expanding any track.
 ## Open decisions, all the owner's
 
 Product name (trademark clearance first) and the W2/Voice codename question; the OSS/enterprise
-split hypothesis; STRATEGY.md adoption; PC-inside-Streams timing (ruled post-lighthouse);
+split hypothesis, and the hosted-offering shape beside it; STRATEGY.md adoption; PC-inside-Streams
+timing (ruled post-lighthouse);
 "Merge 367" disposition. Each is recorded where it arose - this file only lists them.

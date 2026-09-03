@@ -38,7 +38,10 @@ cache and placement, while real scale-in triggers a rebalance that may concentra
 partitions, force state restore, or expose a partition-placement ceiling. "Proven safe" may only
 be displayed when the proof also canaries the actual ownership/state transition or simulates the
 post-removal assignment and restore cost; the admission-constraint counterfactual alone proves
-capacity headroom, not removal safety.
+capacity headroom, not removal safety. **One constraint this proof cannot see today (2026-09-03):** if the
+broker is ever embedded in the application instances - the open question in
+[`core-standalone-deployment.md`](core-standalone-deployment.md) - instance count gains a floor at
+the replication factor, and removing below it loses durability rather than throughput.
 
 Caveat to keep: a scale-in proof is valid for the traffic it ran under. It must state its window
 and confidence ("proven safe at Tuesday-morning load"), and the seasonality dimension of

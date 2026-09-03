@@ -90,7 +90,11 @@ Recorded here because each is a candidate refinement of the thesis section this 
   decision telemetry; enterprise centre: the company-wide resource graph, governance/RBAC, global
   QoS/contracts, cross-cluster control, SLO history, cloud inventory/pricing, cost optimization,
   audit. A hypothesis for the owner, recorded so the eventual decision starts from a written
-  candidate. Paired with the authority ladder the handoff names for every consequential control:
+  candidate. A second candidate shape arrived 2026-09-03: a **hosted offering**, because the
+  bundled topology in
+  [`core-standalone-deployment.md`](core-standalone-deployment.md) delivers "does not want to run
+  Kafka" only when someone else runs it. Paired with the authority ladder the handoff names for
+  every consequential control:
   **Observe -> Recommend -> Shadow -> Enforce**, and progressive declaration (discover what is
   safe; declare only what is unknowable; delegate control explicitly).
 - **One demo, many presentations - candidate strategy material in its own right** (owner,
