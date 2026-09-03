@@ -80,11 +80,22 @@ esac
 # where it belongs and where this scan will find it.
 #
 # $OUT is excluded belt-and-braces, so a future widening cannot make the index index itself.
+#
+# `src/docs/` IS EXCLUDED FOR THE SAME REASON AS .adoc/.md, and needs saying separately because the
+# extension list does not cover it: `src/docs/development/upstream-map.yaml` is DOCUMENTATION that
+# happens to be YAML, so it arrived through the '*.yaml' glob above while being exactly the case the
+# paragraph above rejects. Its branch-accounting notes QUOTE markers as evidence - "still carries
+# `// todo refactored to constant in the remove statics branch`" is the point being made about a
+# branch - and the index already lists those same markers from their .java source. Indexing the
+# quotation duplicates the entry and inflates the count, which is the documented pathology rather
+# than a new one. It contributed nothing to the index before this exclusion:
+# `git show HEAD:docs/todo-index.md | grep src/docs/` was empty.
 list_files() {
     git ls-files \
         '*.java' '*.sh' '*.xml' '*.yml' '*.yaml' \
         | grep -v "^${SELF}$" \
         | grep -v "^${OUT}$" \
+        | grep -v '^src/docs/' \
         | LC_ALL=C sort
 }
 
