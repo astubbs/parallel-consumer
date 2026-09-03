@@ -164,9 +164,10 @@ public class ParallelConsumerOptions<K, V> {
          * message replay may cause duplicates in external systems which is unavoidable - external systems must be
          * idempotent).
          * <p>
-         * The default commit interval {@link AbstractParallelEoSStreamProcessor#KAFKA_DEFAULT_AUTO_COMMIT_FREQUENCY}
+         * The default commit interval {@link ParallelConsumerOptions#DEFAULT_COMMIT_INTERVAL}
          * gets automatically reduced from the default of 5 seconds to 100ms (the same as Kafka Streams <a
          * href=https://docs.confluent.io/platform/current/streams/developer-guide/config-streams.html">commit.interval.ms</a>).
+         * The reduction applies only when no interval was set; an interval set explicitly is kept, whatever its value.
          * Reducing this configuration places higher load on the broker, but will reduce (but cannot eliminate) replay
          * upon failure. Note also that when using transactions in Kafka, consumption in {@code READ_COMMITTED} mode is
          * blocked up to the offset of the first STILL open transaction. Using a smaller commit frequency reduces this
@@ -239,10 +240,16 @@ public class ParallelConsumerOptions<K, V> {
      */
     public static final int KAFKA_DEFAULT_AUTO_COMMIT_INTERVAL_MS = 5000;
 
+    /**
+     * The commit interval when none is set and the commit mode is not transactional - Kafka's own auto-commit
+     * interval. See {@link #getCommitInterval()} for how an unset interval resolves.
+     */
     public static final Duration DEFAULT_COMMIT_INTERVAL = ofMillis(KAFKA_DEFAULT_AUTO_COMMIT_INTERVAL_MS);
 
-    /*
-     * The same as Kafka Streams
+    /**
+     * The commit interval when none is set and the commit mode is {@link CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER} -
+     * the same as Kafka Streams' {@code commit.interval.ms}. Applies ONLY when no interval was set; a value set
+     * explicitly is kept even when it equals {@link #DEFAULT_COMMIT_INTERVAL} (astubbs#422).
      */
     public static final Duration DEFAULT_COMMIT_INTERVAL_FOR_TRANSACTIONS = ofMillis(100);
 
@@ -276,9 +283,36 @@ public class ParallelConsumerOptions<K, V> {
 
     /**
      * Time between commits. Using a higher frequency (a lower value) will put more load on the brokers.
+     * <p>
+     * Leave it unset to take the default, which depends on the commit mode: {@link #DEFAULT_COMMIT_INTERVAL} normally,
+     * {@link #DEFAULT_COMMIT_INTERVAL_FOR_TRANSACTIONS} under {@link CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER}. A
+     * value you set is always kept - including one equal to either default - because "unset" is the absence of a
+     * value, never inferred from the value itself. (Inferring it by reference identity against the constant treated an
+     * explicit {@code DEFAULT_COMMIT_INTERVAL} as unset; inferring it by {@code equals} would have treated every
+     * explicit five seconds as unset - astubbs#422.)
      */
-    @Builder.Default
-    private Duration commitInterval = DEFAULT_COMMIT_INTERVAL;
+    private Duration commitInterval;
+
+    /**
+     * Never null, and never throws: an unset interval resolves here, from the commit mode, so every reader - the
+     * engine, {@code toString}, a caller inspecting options before constructing a processor - sees the effective value
+     * whether or not {@link #validate()} has run.
+     * <p>
+     * The mode test is written constant-first rather than as {@link #isUsingTransactionCommitMode()} so that a
+     * {@code commitMode} explicitly built as null resolves to the non-transactional default instead of throwing.
+     * Reading options has never been able to fail and must not start now: a null commit mode is a misconfiguration,
+     * but it is {@link #validate()}'s to reject, at the point that already names the option.
+     *
+     * @return the commit interval in effect
+     */
+    public Duration getCommitInterval() {
+        if (commitInterval != null) {
+            return commitInterval;
+        }
+        return PERIODIC_TRANSACTIONAL_PRODUCER.equals(commitMode)
+                ? DEFAULT_COMMIT_INTERVAL_FOR_TRANSACTIONS
+                : DEFAULT_COMMIT_INTERVAL;
+    }
 
     /**
      * @deprecated only settable during {@code deprecation phase} - use
@@ -484,18 +518,11 @@ public class ParallelConsumerOptions<K, V> {
     }
 
     private void transactionsValidation() {
-        boolean commitInternalHasNotBeenSet = getCommitInterval() == DEFAULT_COMMIT_INTERVAL;
-
         if (isUsingTransactionCommitMode()) {
             if (producer == null) {
                 throw new IllegalArgumentException(msg("Cannot set {} to Transaction Producer mode ({}) without supplying a Producer instance",
                         Fields.commitMode,
                         commitMode));
-            }
-
-            // update commit frequency
-            if (commitInternalHasNotBeenSet) {
-                this.commitInterval = DEFAULT_COMMIT_INTERVAL_FOR_TRANSACTIONS;
             }
         }
 

@@ -7,12 +7,16 @@ package bz.stub.parallelconsumer;
 
 import bz.stub.parallelconsumer.internal.DynamicLoadFactor;
 import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
+import org.apache.kafka.clients.producer.Producer;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 
 import java.time.Duration;
 
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 import static org.apache.kafka.clients.consumer.OffsetResetStrategy.EARLIEST;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -108,5 +112,108 @@ class ParallelConsumerOptionsTest {
                 .build();
 
         options.validate();
+    }
+
+    /*
+     * The cases below are the explicit half of the truth table for "unset is the absence of a value, never inferred
+     * from the value itself" (astubbs#422), plus the one way a caller can return an options object to unset after it
+     * has been built. The unset-from-the-builder half is already proved, in the same module and the same suite, by
+     * TransactionalBulkCommitTest#transactionalModeWithNoExplicitCommitIntervalResolvesTo100ms and
+     * #nonTransactionalModeKeepsTheFiveSecondDefault - the claim C5 arms - so it is not restated here.
+     *
+     * Each asserts the literal duration rather than the DEFAULT_* constant, as those arms do: comparing the resolved
+     * value to the constant would still pass if the constant moved and the javadoc were left behind. Each calls
+     * validate() first, so they also show that validation does not disturb the resolution.
+     */
+
+    /**
+     * The guard against the rejected {@code equals} fix. A fresh five-second {@link Duration} is {@code equals} to
+     * {@link ParallelConsumerOptions#DEFAULT_COMMIT_INTERVAL} but is a value the user chose, so it must be kept.
+     */
+    @Tag("transactions")
+    @Test
+    @ProvesClaim(TransactionalClaim.COMMIT_INTERVAL_AUTO_REDUCED)
+    void explicitFiveSecondsInTransactionalModeIsKept() {
+        var options = optionsBuilder()
+                .producer(Mockito.mock(Producer.class))
+                .commitMode(PERIODIC_TRANSACTIONAL_PRODUCER)
+                .commitInterval(Duration.ofSeconds(5))
+                .build();
+
+        options.validate();
+
+        assertWithMessage("a fresh Duration equal to the default is explicit and must be kept - this is the case an "
+                        + "equals-based check would have broken")
+                .that(options.getCommitInterval())
+                .isEqualTo(Duration.ofSeconds(5));
+    }
+
+    /**
+     * The astubbs#422 reproduction. Handing the builder the very constant the default is built from used to be
+     * indistinguishable from handing it nothing, so the value was silently replaced with 100ms - fifty times the
+     * broker load configured, with no log line.
+     */
+    @Tag("transactions")
+    @Test
+    @ProvesClaim(TransactionalClaim.COMMIT_INTERVAL_AUTO_REDUCED)
+    void explicitDefaultConstantInTransactionalModeIsKept() {
+        var options = optionsBuilder()
+                .producer(Mockito.mock(Producer.class))
+                .commitMode(PERIODIC_TRANSACTIONAL_PRODUCER)
+                .commitInterval(ParallelConsumerOptions.DEFAULT_COMMIT_INTERVAL)
+                .build();
+
+        options.validate();
+
+        assertWithMessage("passing the default constant explicitly is still a choice the user made, so it must "
+                        + "survive transactional mode's auto-reduction (astubbs#422)")
+                .that(options.getCommitInterval())
+                .isEqualTo(Duration.ofSeconds(5));
+    }
+
+    /**
+     * Null is the sentinel for "unset", so the deprecated setter can put an already-built options object back into
+     * that state - and the getter has to resolve it there too. Worth its own case because it is the only path that
+     * reaches the null branch after construction, and because the resolved value is dereferenced unguarded in the
+     * control loop, so a null escaping here would surface as an NPE in commit scheduling rather than as a wrong
+     * interval.
+     */
+    @Tag("transactions")
+    @Test
+    void clearingTheIntervalThroughTheDeprecatedSetterReturnsItToUnset() {
+        var options = optionsBuilder()
+                .producer(Mockito.mock(Producer.class))
+                .commitMode(PERIODIC_TRANSACTIONAL_PRODUCER)
+                .commitInterval(Duration.ofSeconds(5))
+                .build();
+
+        options.validate();
+        options.setCommitInterval(null);
+
+        assertWithMessage("clearing the interval means unset, so it resolves from the commit mode again rather than "
+                        + "returning null or keeping the value that was just cleared")
+                .that(options.getCommitInterval())
+                .isEqualTo(Duration.ofMillis(100));
+    }
+
+    /**
+     * Reading options has never been able to fail, and moving the unset resolution into
+     * {@link ParallelConsumerOptions#getCommitInterval()} must not change that. The builder accepts an explicit null
+     * commit mode - it is a misconfiguration, and {@link ParallelConsumerOptions#validate()} is what rejects it - but
+     * until then the getter has to answer rather than throw, exactly as the generated accessor it replaced did.
+     */
+    @Test
+    void aNullCommitModeIsRejectedByValidationRatherThanByTheGetter() {
+        var options = optionsBuilder()
+                .commitMode(null)
+                .build();
+
+        assertWithMessage("a null commit mode is not transactional as far as an unset interval is concerned, so the "
+                        + "getter answers with Kafka's default instead of throwing")
+                .that(options.getCommitInterval())
+                .isEqualTo(Duration.ofSeconds(5));
+
+        assertThrows(NullPointerException.class, options::validate,
+                "and validation is still where a null commit mode stops the run");
     }
 }

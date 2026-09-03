@@ -930,9 +930,8 @@ Each claim in both lists has a negative control that was observed to fail: the m
 The terminally-failed-send case above used to leave a *partial* result set visible to a `read_committed` consumer, silently, because a producer callback threw and pre-empted the Kafka client's own transition of the transaction into an abortable state.
 It was found by these tests and fixed; the test that found it is now the regression test.
 
-*Known gap, not fixed:* the commit-interval default is applied by comparing your configured value against the default by reference identity, so explicitly setting `commitInterval(Duration.ofSeconds(5))` - the same value as the non-transactional default - is treated as "not set" and silently replaced with 100ms.
-Any other explicit value survives.
-See `docs/inflight/bug-commit-interval-identity-check.md`.
+The commit-interval default used to be applied by comparing your configured value against the default by reference identity, so `commitInterval(ParallelConsumerOptions.DEFAULT_COMMIT_INTERVAL)` in transactional mode was treated as "not set" and silently replaced with 100ms - fifty times the broker load configured, with no log line.
+Found by this register, fixed in astubbs/parallel-consumer#422: unset is now the absence of a value, and any value you set is kept, whatever it equals.
 
 One guarantee is attributed rather than re-proved here, and is marked as such in the register: the commit-lock timeout failing fast.
 It is covered by an existing test, but no negative control was observed for it, so it is not recorded as proved.
