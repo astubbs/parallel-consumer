@@ -404,7 +404,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             // a worker parked on the produce lock during a producer outage is released as soon as this instance
             // leaves RUNNING or PAUSED, so a close during the outage does not wait out the shutdown timeout (R15)
             this.producerManager.get().setSuspensionEndsWhen(() -> state != RUNNING && state != State.PAUSED);
-            if (options.isUsingTransactionalProducer()) {
+            if (options.isUsingTransactionCommitMode()) {
                 this.committer = this.producerManager.get();
                 this.producerRecoveryPass = Optional.of(new ProducerRecoveryPass<>(this.producerManager.get(),
                         () -> state, this::replayWorkDiscardedByAbortedTransaction, this::closeWith));
