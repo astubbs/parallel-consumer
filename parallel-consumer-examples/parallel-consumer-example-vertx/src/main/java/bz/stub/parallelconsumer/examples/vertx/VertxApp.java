@@ -6,8 +6,9 @@ package bz.stub.parallelconsumer.examples.vertx;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
-import bz.stub.parallelconsumer.vertx.JStreamVertxParallelStreamProcessor;
 import bz.stub.parallelconsumer.vertx.VertxParallelEoSStreamProcessor.RequestInfo;
+import bz.stub.parallelconsumer.vertx.JStreamVertxParallelStreamProcessor;
+import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.kafka.clients.consumer.Consumer;
@@ -36,6 +37,8 @@ public class VertxApp {
 
     JStreamVertxParallelStreamProcessor<String, String> parallelConsumer;
 
+    Thread resultConsumer;
+
 
     void run() {
         Consumer<String, String> kafkaConsumer = getKafkaConsumer();
@@ -60,11 +63,12 @@ public class VertxApp {
             Map<String, String> params = UniMaps.of("recordKey", consumerRecord.key(), "payload", consumerRecord.value());
             return new RequestInfo("localhost", port, "/api", params); // <1>
         });
-        // end::example[]
 
-        resultStream.forEach(x -> {
-            log.info("From result stream: {}", x);
-        });
+        resultConsumer = new Thread(() -> // <2>
+                resultStream.forEach(result -> log.info("From result stream: {}", result)),
+                "vertx-result-stream-consumer");
+        resultConsumer.start();
+        // end::example[]
 
     }
 
@@ -72,8 +76,10 @@ public class VertxApp {
         return 8080;
     }
 
+    @SneakyThrows
     void close() {
         this.parallelConsumer.closeDrainFirst();
+        resultConsumer.join(); // the stream ends when the consumer closes, so this returns
     }
 
     protected void postSetup() {
