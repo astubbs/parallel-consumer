@@ -558,12 +558,17 @@ You can also optionally provide a callback function to be run after the message(
 [source,java,indent=0]
 include::{project_root}/parallel-consumer-examples/parallel-consumer-example-core/src/main/java/bz/stub/parallelconsumer/examples/core/CoreApp.java[tag=exampleProduce]
 
+[[callbacks-vs-streams]]
 ==== Callbacks vs Streams
 
 You have the option to either use callbacks to be notified of events, or use the `Streaming` versions of the API, which use the `java.util.stream.Stream` system:
 
 * `JStreamParallelStreamProcessor`
 * `JStreamVertxParallelStreamProcessor`
+
+IMPORTANT: The returned stream is *live*. It yields each result as it is produced and waits in between, and it ends when you close the consumer -- after delivering whatever was already queued.
+So consume it on a thread that can stay with it, as the Vert.x example below does; consuming it is what keeps the result queue drained.
+A consumer that walks away early leaves nobody draining, which is what caused link:https://github.com/confluentinc/parallel-consumer/issues/912[confluentinc#912].
 
 In future versions, we plan to look at supporting other streaming systems like https://github.com/ReactiveX/RxJava[RxJava] via modules.
 
@@ -604,6 +609,8 @@ include::{project_root}/parallel-consumer-examples/parallel-consumer-example-ver
 ----
 
 <1> Simply return an object representing the request, the Vert.x HTTP engine will handle the rest, using it's non-blocking engine
+<2> The stream is live -- it waits for results and ends when the consumer is closed -- so it gets a thread of its own rather than blocking startup.
+Consuming it is what keeps the result queue drained; `close()` then joins this thread once the stream has ended.
 
 See the link:{project_root}/parallel-consumer-examples/parallel-consumer-example-vertx/src/main/java/bz/stub/parallelconsumer/examples/vertx/VertxApp.java[Vert.x example] project, and it's test.
 

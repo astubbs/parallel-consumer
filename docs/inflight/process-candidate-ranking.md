@@ -70,8 +70,6 @@ Collisions are in `pr-blockers-and-collisions.md`. The ranked backlog and full v
   for them is the wrong one for their deployment. Kafka's client throws a retriable exception and
   lets the caller choose; PC only terminates. Research, both sides of the upstream argument, and why
   fixing astubbs#177 does not close it: `core-commit-failure-seam.md`.
-- **`confluentinc#912` vertx leak** - branch done, needs rebase + PR (`branch-912-vertx-leak.md`). Best
-  immediate pick.
 - **Auto-scaling (astubbs#227)** - runtime-discovered per-instance concurrency; candidate killer
   feature alongside key ordering, priority raised 2026-08-18 (`core-auto-scaling.md`). Spec
   stage; two bitrotted prototypes to mine; async-timing metrics fix is the prerequisite.

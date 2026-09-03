@@ -96,8 +96,8 @@ This is a rule because a filename cannot be qualified. Prose has
 number below the threshold is a coin flip between two repos that both have one. A filename is bare by
 construction, so the convention is the only thing standing between a reader and the wrong issue.
 
-**Older names predate this and disagree** - `bug-857-family.md` and `branch-912-vertx-leak.md` carry
-confluentinc numbers, `perf-192-followups.md` carries a fork one. They are left alone rather than
+**Older names predate this and disagree** - `bug-857-family.md` carries a
+confluentinc number, `perf-192-followups.md` carries a fork one. They are left alone rather than
 swept, because renaming a note breaks every citation of it for no gain in what the note says. Read an
 existing number by its prefix and check it; write new ones the way this section says.
 

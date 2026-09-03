@@ -184,6 +184,13 @@ class VertxTest extends VertxBaseUnitTest {
         awaitLatch(latch);
 
         // verify
+
+        // Read this before closing: it is about the running processor, and closing drains the retries away.
+        long workRemainingWhileRunning = vertxAsync.workRemaining();
+
+        // The result stream is live, so close to end it before collecting. Not drain-first: the queued
+        // work here is a deliberately failing request that would be retried.
+        vertxAsync.closeDontDrainFirst();
         var collect = futureStream.map(JStreamVertxParallelEoSStreamProcessor.VertxCPResult::getAsr).collect(Collectors.toList());
         assertThat(collect).hasSize(1);
         Future<HttpResponse<Buffer>> actual = collect.get(0).onComplete(x -> {
@@ -198,7 +205,7 @@ class VertxTest extends VertxBaseUnitTest {
             tc.completeNow();
         })));
 
-        Assertions.assertThat(vertxAsync.workRemaining()).isEqualTo(1); // two failed requests still in queue for retry
+        Assertions.assertThat(workRemainingWhileRunning).isEqualTo(1); // two failed requests still in queue for retry
     }
 
     @Test
@@ -328,6 +335,8 @@ class VertxTest extends VertxBaseUnitTest {
 
     private List<AsyncResult<HttpResponse<Buffer>>> getResults(
             Stream<JStreamVertxParallelEoSStreamProcessor.VertxCPResult<String, String>> futureStream) {
+        // The result stream is live, so close to end it before collecting.
+        vertxAsync.closeDrainFirst();
         var collect = futureStream.map(JStreamVertxParallelEoSStreamProcessor.VertxCPResult::getAsr).collect(Collectors.toList());
         return blockingGetResults(collect);
     }
