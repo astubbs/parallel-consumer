@@ -8,12 +8,57 @@
 // `freshnessWarnings` has two consumers and they rendered it identically, down to the eleven-space
 // continuation indent and the one id that prints NOTE instead of WARNING. That was the second copy
 // of a shared primitive appearing on the same branch that wrote the rule against it.
+//
+// THE DOCS FAMILY RENDERS IN bin/lib/docs-views.mjs - the divergence header, the injected-block
+// frame, the corpus shape, the session index. It imports the three helpers below that both files
+// need (`plural`, `formatWarnings`, `addedSizeText`); nothing here imports it back.
 
-const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`
+export const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`
 
 export function formatWarnings(warnings) {
     if (!warnings.length) return ''
     return `${warnings.map((w) => `  ${w.id === 'head-behind' ? 'NOTE' : 'WARNING'}: ${w.lines.join('\n           ')}`).join('\n')}\n`
+}
+
+/**
+ * THE FOUR-WAY `added` CLASSIFICATION, WORDED ONCE PER PLACE IT APPEARS. `addedSinceMergeBase`
+ * answers null (no merge-base to compare against), `{diffFailed}` (the diff command failed, which
+ * is not "no change"), `{newFile}` (the branch created the file after diverging) or `{added,
+ * removed}`; three renderers each carried their own ternary over those four cases, and a fifth
+ * case added to the query would have been classified in one and fallen through the others. The
+ * wording is a style row, so each caller's output is exactly what it was.
+ */
+const ADDED_SIZE_STYLES = {
+    // `formatDrift`'s cluster label.
+    drift: {
+        none: 'differs (no merge-base version to compare against)',
+        failed: 'size UNKNOWN - the diff command failed, which is not "no change"',
+        created: 'added on this branch, after it diverged',
+        delta: (a) => `+${a.added} -${a.removed} since its merge-base`,
+    },
+    // The parenthetical after the copy state in the divergence header: nothing when unknown.
+    copy: {
+        none: '',
+        failed: ' (size unknown - the diff failed)',
+        created: ' (created on this branch)',
+        delta: (a) => ` (+${a.added} -${a.removed} since its merge-base)`,
+    },
+    // The padded size column of the header's largest-versions rows.
+    header: {
+        none: 'size unknown (no merge-base)',
+        failed: 'size unknown (diff failed)',
+        created: 'created after diverging',
+        delta: (a) => `+${a.added} -${a.removed}`,
+    },
+}
+
+/** @param {'drift'|'copy'|'header'} style which caller's wording to use */
+export function addedSizeText(a, style) {
+    const s = ADDED_SIZE_STYLES[style]
+    if (!a) return s.none
+    if (a.diffFailed) return s.failed
+    if (a.newFile) return s.created
+    return s.delta(a)
 }
 
 export function formatFind(hits, query, index) {
@@ -63,15 +108,18 @@ export function formatDrift(d) {
             + `- on ${plural(d.divergent.reduce((n, c) => n + c.refs.length, 0), 'ref')}.`)
         out.push('  Sizes are against each branch\'s MERGE-BASE, so they say what the branch added, not how far')
         out.push(`  ${d.baseline} has moved since.\n`)
-        for (const c of d.divergent) {
-            const a = c.added
-            out.push(cluster(c, !a ? 'differs (no merge-base version to compare against)'
-                : a.diffFailed ? 'size UNKNOWN - the diff command failed, which is not "no change"'
-                    : a.newFile ? 'added on this branch, after it diverged'
-                        : `+${a.added} -${a.removed} since its merge-base`))
-        }
+        for (const c of d.divergent) out.push(cluster(c, addedSizeText(c.added, 'drift')))
     }
 
+    // A version held ONLY by a tag or a refs/backup ref was listed above as if it were a branch,
+    // with a merge-base size and a "branch name" nobody can check out. It is preserved on purpose,
+    // so it gets its own line - present, because the corpus looks everywhere, and labelled.
+    if ((d.preserved ?? []).length > 0) {
+        out.push(`  Preserved, not in flight: ${plural(d.preserved.length, 'version')} held only by archival refs `
+            + `(${[...new Set(d.preserved.flatMap((p) => p.kinds))].join(', ')}):`)
+        for (const p of d.preserved) out.push(`      ${p.blob.slice(0, 9)}  ${p.refs.join(', ')}`)
+        out.push('')
+    }
     if (d.behind.versions > 0) {
         out.push(`  Not shown: ${plural(d.behind.versions, 'version')} on ${plural(d.behind.refs, 'ref')} `
             + `that ${d.baseline} itself once held - those branches are simply behind, which is`)

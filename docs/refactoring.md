@@ -76,6 +76,12 @@ at as of the seed date (` @abcdef12`); re-resolve if a branch has since moved.
 
 ---
 
+- **`JStreamParallelEoSStreamProcessor`'s javadoc overstates one guarantee.** It says queued results
+  are delivered rather than discarded, which holds for an ordinary close but not for the
+  `shutdownNow()` branch: that can make `isClosedOrFailed()` true while a worker can still enqueue, so
+  a result produced in that window is dropped. Narrow the sentence to the path it actually covers, or
+  make the branch match the claim. From astubbs#116, which stated it in the PR rather than the code.
+
 ## Breaking changes queued for next major version
 
 **The gate is currently OPEN: `0.6.0.0` is that major, it is unreleased, and it is the release being
@@ -118,8 +124,22 @@ refactors below, which are non-breaking and can land at any point in any line.
   (`public void setCommitInterval`, `private final Duration defaultMessageRetryDelay`,
   `isUsingTransactionalProducer`) **and retire the temporary Kafka-compat work-around flag**
   (`ignoreReflectiveAccessExceptionsForAutoCommitDisabledCheck`) - `ParallelConsumerOptions.java`.
-- **Remove the JStream API** (deprecate first) - design ref
-  `origin/refactor/deprecate-jstream` @8a8f6508.
+- **DONE, landing with astubbs/parallel-consumer#116: the `Stream` returned by
+  `pollProduceAndStream` / `vertxHttpReqInfoStream` now blocks until the processor closes.** It used
+  to return almost immediately, because the queue-to-`Stream` bridge ended the stream on the first
+  momentarily-empty poll - which is what `Spliterator.tryAdvance` returning `false` means, and it is
+  the confluentinc#912 OOM: results produced afterwards piled up behind a consumer that had already
+  walked away. A caller that collected on the calling thread and read a size got whatever had been
+  produced so far; the same caller now waits for close. **No compatibility path is offered and none
+  should be** - the old shape did not deliver the caller's results, so there is no correct behaviour
+  to preserve. Callers consume on their own thread, as the Vert.x example now shows. Recorded here
+  rather than only in the commit, because this section is what the release notes are assembled from.
+- ~~**Remove the JStream API** (deprecate first)~~ - **WITHDRAWN 2026-09-03, owner's call.** The
+  removal was queued while the API was broken in the way above; deprecating something because it does
+  not work is a different argument from deprecating something that does. It works now, so it stays,
+  and astubbs#116 removed the deprecation it had added to all four types. Design ref
+  the archive tag `archive/refactor/deprecate-jstream` (branch deleted 2026-09-03) is kept for whoever
+  revisits the question on its merits.
 - **Rename the enum to the standard pattern** (public enum rename) -
   `origin/refactor/minor-changes` @193bbf80.
 - **Rehome `LongPollingMockConsumer` out of `bz.stub.parallelconsumer.internal.utils`.** astubbs#159 /
@@ -184,6 +204,14 @@ diagnosing the mirror rather than while reading the file:
 
 Large, mostly interdependent, several **undecided**. Most trace to confluentinc#200.
 Do not start one casually.
+
+### `corpusIndex` lists each distinct docs tree with one `ls-tree` - the next lever is unpulled
+
+`bin/lib/notes.mjs` resolves every ref's `docs/` tree in one `cat-file --batch-check` and lists each
+distinct tree once, which is what brought the session-start hook back inside its budget. If a
+measurement ever asks for more, the next lever is parsing the distinct trees through one batched
+`cat-file` per depth instead of one `ls-tree` per tree. Not pulled: `node bin/inflight.mjs --perf docs`
+prints the figures, and none demands it.
 
 ### The portable-mtime probe exists three times
 
@@ -260,14 +288,37 @@ cosmetic - see the last bullet.*
 - Background and the full commit record:
   `docs/solutions/architecture-patterns/two-threads-one-consumer-why-the-commit-seam-keeps-deadlocking.md`.
 
-### Decompose the God class - `AbstractParallelEoSStreamProcessor` (1533 lines)
+### Decompose the God class - `AbstractParallelEoSStreamProcessor`
 - Control loop + lifecycle/state machine + commit orchestration + threading +
   rebalance listener + deprecated options in one class. Design ref: draft
-  `confluentinc#488`. Branch `origin/refactor/state-machine` @8f90da8a (extract the lifecycle
-  state machine). Do alongside the [confluentinc#200](https://github.com/confluentinc/parallel-consumer/issues/200) (mirror astubbs#142) work; high risk.
+  `confluentinc#488`. Do alongside the [confluentinc#200](https://github.com/confluentinc/parallel-consumer/issues/200) (mirror astubbs#142) work; high risk.
+- **Size is deliberately not written down here.** It was recorded as 1533 lines and was still being
+  cited as that after the class had grown by most of a thousand - a stale figure reads as current
+  state forever, and nothing goes red. Ask instead:
+  `wc -l parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java`
+- **And one argument built on that figure is now falsified, which is worth more than the figure.**
+  `docs/ideation/2026-08-17-actor-collection-revival-ideation.html` reasons from "the file has moved
+  one line in 3.5 years, which is the clearest evidence that branch-shaped goals don't move it", and
+  proposes tracking progress by that line count. Measured 2026-09-03: the class was 1534 lines at
+  that ideation's own date and is over a thousand lines larger now - it moved in a fortnight what the
+  argument said it had not moved in three and a half years. The dated record is left as written, per
+  `docs/citations.md`; the correction belongs here, where the live decision is. It does not weaken the
+  case for decomposing - it inverts the reason. The class is not inert, it is accreting, and a
+  line-count target measures growth this section did not predict rather than progress against it.
+- **Two branches already attempted it, and one of them got much further** (both catalogued in
+  `branch_accounting` in `src/docs/development/upstream-map.yaml`; `bin/inflight.mjs branch <name>`
+  answers from any checkout):
+  - `origin/refactor/state-machine` @8f90da8a - extracts the lifecycle state machine only.
+  - `origin/refactor/control-loop` @c3a0f28ae - **the furthest any attempt reached**: it compiles,
+    with tests migrated and a review pass. It cuts along **`ControlLoop` / `Controller` /
+    `StateMachine` / `PCWorkerPool` / `WorkMailbox`**. Those five names are the useful part: this
+    section argues about *whether* to split without recording what a working split actually cut
+    along, and someone starting fresh would re-derive the seams rather than start from a set that
+    was shown to compile. `origin/refactor/controller-extract-base` was a marker for this work and
+    was deleted 2026-09-03 (an ancestor of master, nothing lost).
 - **Landing this unblocks whole-FILE static analysis, and it can be taken piecemeal.** The
   new-code analysis profile is scoped to changed *lines* rather than changed *files* purely because
-  of size: touching a 1533-line class would otherwise inherit every latent finding in it. Line
+  of size: touching a class this large would otherwise inherit every latent finding in it. Line
   scoping is the weaker choice - it misses a finding reported away from the edit that caused it - so
   each file that comes down to a reviewable size can be promoted to file scoping on its own, without
   waiting for the whole decomposition.
@@ -919,8 +970,10 @@ astubbs#228 (confluentinc#24, distributed rate limiting); ideation:
   make sense to have a producer facade." Don't revisit.
 - `origin/features/consumer-interface` @e67833f8, `origin/refactor/interface` @400643c8 - Consumer /
   interface naming (→ cohesive-API draft `confluentinc#303`).
-- `origin/refactor/deprecate-jstream` @8a8f6508 - deprecate the JStream API (breaking removal is
-  queued under *Breaking changes queued for next major version*).
+- `archive/refactor/deprecate-jstream` @8a8f6508 (branch deleted 2026-09-03) - deprecate the JStream
+  API. **The queued removal was withdrawn on 2026-09-03** - see the struck-through entry under *Breaking changes queued for next
+  major version* for why. The branch is kept as the design record for whoever argues the case on the
+  API's merits rather than on the defect astubbs#116 fixed.
 - `origin/move-cons-to-pc` @f25256cf - move the consumer into PC (old/new styles verified equal).
 - `origin/refactor/minor-changes` @193bbf80 - rename enum to the standard pattern (breaking; see
   *Breaking changes queued for next major version*).

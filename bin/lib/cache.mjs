@@ -43,6 +43,11 @@ const POLICY = {
     // is not cached: an empty corpus would read as "no flakes recorded" - a false negative in the
     // dangerous direction, which is the same reason `pr-branch.json` refuses to cache "no PR".
     'codecov-tests.json': { maxAgeMs: 10 * 60 * 1000, cacheEmpty: false },
+    // The last failure of each context-query delivery (the plan's KTD13): a hook that fails open
+    // prints nothing to the agent, so this is the only place the failure exists, and bare
+    // `inflight docs` reads it back as a one-line notice. Seven days, so a record does not outlive
+    // the session that could act on it; an empty map is a legitimate "nothing failed" and is stored.
+    'delivery-failures.json': { maxAgeMs: 7 * 24 * 60 * 60 * 1000, cacheEmpty: true },
 }
 const DEFAULT_POLICY = { maxAgeMs: 60 * 60 * 1000, cacheEmpty: false }
 
@@ -126,4 +131,47 @@ export function cacheClear({ all = false, known = knownCaches() } = {}) {
         try { rmSync(join(cacheDir(), e.name)); bytes += e.bytes } catch { /* already gone */ }
     }
     return { removed: doomed.map((e) => e.name), bytes }
+}
+
+// --- Delivery failures - the record a fail-open hook leaves behind. ------------------------------
+//
+// Every delivery of the document context query fails OPEN: an error prints nothing to the agent's
+// context and never blocks the read or the prompt (the plan's R20). That is the right posture for a
+// hook, and it has a cost this record pays: a hook that has been broken for a week looks exactly
+// like a hook with nothing to say. So a delivery that catches an error writes its name, the reason
+// and the time here, a later success of the SAME delivery clears its entry, and bare
+// `inflight docs` prints a one-line notice while any entry exists (R26).
+//
+// ONE MAP, KEYED BY DELIVERY, so a flapping hook holds one entry rather than a growing list, and the
+// age limit is per entry as well as per file: the policy row's seven days bounds the file, and a
+// reader drops an entry older than that even when a fresher entry kept the file young.
+
+const DELIVERY_FAILURES = 'delivery-failures.json'
+
+/** Every recorded failure younger than the policy's age limit: `{ [delivery]: {reason, time} }`. */
+export function deliveryFailures() {
+    const raw = cacheRead(DELIVERY_FAILURES)
+    if (!raw || typeof raw !== 'object') return {}
+    const limit = Date.now() - policyFor(DELIVERY_FAILURES).maxAgeMs
+    return Object.fromEntries(Object.entries(raw)
+        .filter(([, v]) => v && typeof v === 'object' && Date.parse(v.time) >= limit))
+}
+
+/** Record `delivery`'s latest failure. Never throws: the record is a courtesy, not the answer. */
+export function recordDeliveryFailure(delivery, reason) {
+    const now = { ...deliveryFailures(), [delivery]: { reason: String(reason), time: new Date().toISOString() } }
+    cacheWrite(DELIVERY_FAILURES, now)
+}
+
+/**
+ * Forget `delivery`'s failure, because it just succeeded. Writes only when there was something to
+ * forget - the common case is a healthy hook, and a healthy hook must not touch the disk per call.
+ */
+export function clearDeliveryFailure(delivery) {
+    const current = deliveryFailures()
+    if (!(delivery in current)) return
+    const { [delivery]: cleared, ...rest } = current
+    // `cleared` is the entry being dropped; nothing reads it, and the destructure is the removal.
+    void cleared
+    cacheWrite(DELIVERY_FAILURES, rest)
 }

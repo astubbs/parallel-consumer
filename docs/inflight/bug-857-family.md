@@ -2412,6 +2412,36 @@ load-sensitive, so its stability cannot be read off a single green run - and the
 alternative astubbs#421 measured next gives each shard its own VM, which does not move this rate <!-- post-merge: checked -->
 at all.
 
+## 2026-09-03, the `ZOMBIE_MEMBER` arm on a PR whose diff holds no Java at all - a control arm the branch supplies for free
+
+**Same class, the protocol-unresponsive arm.** `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger`,
+killed by a gating probe violation: *`ZOMBIE_MEMBER/REBALANCE_BLOCKED`: group `group-1-1393237041`
+dwelling in `PreparingRebalance` for 15s (bound 15s) - a member is not answering the rebalance
+(protocol-unresponsive)*. The run settled with `consumed=100618` against the correctness ledger and no
+other violation; peaks `rebalanceDwell=15482ms drainDuration=11394ms lagStagnation=27609ms
+instanceStall=28712ms`, so neither the Class 2 bound nor the `INSTANCE_STALL` detector was anywhere
+near firing. The test took 158s; the class 180s. `Chaos Pain Suite 4/4` on a GitHub-hosted runner, one
+fork, its own VM - the gate's own configuration.
+
+**What makes this sighting worth a line: the branch it fired on changes no Java and no pom.**
+astubbs/parallel-consumer#419 is the docs context query - Node tooling under `bin/`, two hooks, and <!-- post-merge: checked -->
+documents. `git diff --name-only origin/master...HEAD` filtered to `*.java` and `pom.xml` is empty.
+The Java under test is therefore master's at merge base `558fcfbc9`, byte for byte, which is the
+control arm the earlier entries had to dispatch by hand: this is a master-state firing of the
+`ZOMBIE_MEMBER` arm, observed on a PR lane without any change in the product or the harness to
+suspect. It attaches to the unattributed `ZOMBIE_MEMBER` list above - the twentieth sighting's
+question, whether the co-occurrence with any branch is coincidence, gets one more "coincidence" datum.
+<!-- post-merge: checked-begin - a dated sighting against a run id and a job id, both durable -->
+[run 33711378531](https://github.com/astubbs/parallel-consumer/actions/runs/33711378531), job
+100511491045, artifact `chaos-suite-reports-2701-shard4`, head `6e1a19b12`.
+<!-- post-merge: checked-end -->
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=2935533165547308183
+
+Not replayed: the eighth sighting's seed replayed clean and the 2026-09-02 seeds did too, so a single
+replay would settle nothing either way. Recorded so the rate is counted, per the section above.
+
 ## Delete when
 
 The `CLASS2_STALL` entries above are superseded by this section and kept only as the record of how a
