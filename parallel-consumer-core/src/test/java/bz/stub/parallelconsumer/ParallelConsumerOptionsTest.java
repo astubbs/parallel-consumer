@@ -127,6 +127,24 @@ class ParallelConsumerOptionsTest {
      */
 
     /**
+     * Transactional mode needs a producer to get past validation, so every case below would otherwise repeat the same
+     * builder chain and differ only in the interval.
+     *
+     * @param commitInterval the interval to configure, or null for the unset case
+     */
+    private ParallelConsumerOptions<String, String> validatedTransactionalOptions(Duration commitInterval) {
+        var options = optionsBuilder()
+                .producer(Mockito.mock(Producer.class))
+                .commitMode(PERIODIC_TRANSACTIONAL_PRODUCER)
+                .commitInterval(commitInterval)
+                .build();
+
+        options.validate();
+
+        return options;
+    }
+
+    /**
      * The guard against the rejected {@code equals} fix. A fresh five-second {@link Duration} is {@code equals} to
      * {@link ParallelConsumerOptions#DEFAULT_COMMIT_INTERVAL} but is a value the user chose, so it must be kept.
      */
@@ -134,13 +152,7 @@ class ParallelConsumerOptionsTest {
     @Test
     @ProvesClaim(TransactionalClaim.COMMIT_INTERVAL_AUTO_REDUCED)
     void explicitFiveSecondsInTransactionalModeIsKept() {
-        var options = optionsBuilder()
-                .producer(Mockito.mock(Producer.class))
-                .commitMode(PERIODIC_TRANSACTIONAL_PRODUCER)
-                .commitInterval(Duration.ofSeconds(5))
-                .build();
-
-        options.validate();
+        var options = validatedTransactionalOptions(Duration.ofSeconds(5));
 
         assertWithMessage("a fresh Duration equal to the default is explicit and must be kept - this is the case an "
                         + "equals-based check would have broken")
@@ -157,13 +169,7 @@ class ParallelConsumerOptionsTest {
     @Test
     @ProvesClaim(TransactionalClaim.COMMIT_INTERVAL_AUTO_REDUCED)
     void explicitDefaultConstantInTransactionalModeIsKept() {
-        var options = optionsBuilder()
-                .producer(Mockito.mock(Producer.class))
-                .commitMode(PERIODIC_TRANSACTIONAL_PRODUCER)
-                .commitInterval(ParallelConsumerOptions.DEFAULT_COMMIT_INTERVAL)
-                .build();
-
-        options.validate();
+        var options = validatedTransactionalOptions(ParallelConsumerOptions.DEFAULT_COMMIT_INTERVAL);
 
         assertWithMessage("passing the default constant explicitly is still a choice the user made, so it must "
                         + "survive transactional mode's auto-reduction (astubbs#422)")
@@ -181,13 +187,8 @@ class ParallelConsumerOptionsTest {
     @Tag("transactions")
     @Test
     void clearingTheIntervalThroughTheDeprecatedSetterReturnsItToUnset() {
-        var options = optionsBuilder()
-                .producer(Mockito.mock(Producer.class))
-                .commitMode(PERIODIC_TRANSACTIONAL_PRODUCER)
-                .commitInterval(Duration.ofSeconds(5))
-                .build();
+        var options = validatedTransactionalOptions(Duration.ofSeconds(5));
 
-        options.validate();
         options.setCommitInterval(null);
 
         assertWithMessage("clearing the interval means unset, so it resolves from the commit mode again rather than "
