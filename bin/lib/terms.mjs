@@ -254,9 +254,18 @@ export function matchDocs(terms, { areas = DOC_AREAS, bodyCap = BODY_CAP_PER_TER
     // git grep exits 1 for "no match" and >1 for a real error; only the latter is a problem.
     if (!res.ok && res.status > 1) return cannot(`git grep failed (status ${res.status}) - results are NOT trustworthy`)
 
+    // AN ISSUE NUMBER IS A WHOLE NUMBER. The fixed-string grep above finds `#41` inside `#411`,
+    // `#416` and `#419` - on this repository that made `#41` an eighteen-hit term whose first two
+    // hits were about `#411` - so the attribution below is what decides which term a line names: an
+    // issue term (`#` and digits, nothing to escape) needs a non-digit after it, and a line that
+    // names no term at all is dropped before it can put its document into the result. Any other
+    // term keeps the plain case-folded containment the grep itself used.
+    const lowerTerms = terms.map((t) => t.toLowerCase())
+    const issueMatchers = terms.map((t) => (/^#\d+$/.test(t) ? new RegExp(`${t}(?![0-9])`, 'i') : null))
+    const namesTerm = (text, lower, n) => (issueMatchers[n] ? issueMatchers[n].test(text) : lower.includes(lowerTerms[n]))
+
     // `ref:path:line:text`. A ref name never holds ':'; a path could only pathologically.
     const byPath = new Map()
-    const lowerTerms = terms.map((t) => t.toLowerCase())
     for (const hit of lines(res.out)) {
         const i = hit.indexOf(':')
         const j = hit.indexOf(':', i + 1)
@@ -267,12 +276,14 @@ export function matchDocs(terms, { areas = DOC_AREAS, bodyCap = BODY_CAP_PER_TER
         const lineNo = Number(hit.slice(j + 1, k))
         const text = hit.slice(k + 1)
         if (!Number.isInteger(lineNo)) continue
-        const tier = tierOfLine(lineNo, text)
         const lower = text.toLowerCase()
+        const named = terms.filter((t, n) => namesTerm(text, lower, n))
+        if (named.length === 0) continue
+        const tier = tierOfLine(lineNo, text)
         if (!byPath.has(path)) byPath.set(path, { path, tier: 'body', terms: new Set(), refs: new Set(), heading: null })
         const doc = byPath.get(path)
         doc.refs.add(ref)
-        for (let n = 0; n < terms.length; n++) if (lower.includes(lowerTerms[n])) doc.terms.add(terms[n])
+        for (const t of named) doc.terms.add(t)
         if (TIER_RANK[tier] > TIER_RANK[doc.tier]) doc.tier = tier
         // The document's own title, when the term sits in it: the cheapest title read there is.
         if (doc.heading === null && /^#\s/.test(text)) doc.heading = text.replace(/^#\s+/, '').trim()

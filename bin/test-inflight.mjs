@@ -174,10 +174,10 @@ const report = (ok, label) => {
     if (!ok) failures++
 }
 
-/** Run a front door (real or mutant) as a subprocess - the CLI contract is a process-level fact. */
 /** A command that RAN, whatever it found - exit 0. `could not run` is 2. */
 const r0 = (r) => r.code === 0
 
+/** Run a front door (real or mutant) as a subprocess - the CLI contract is a process-level fact. */
 function invoke(binDir, args, opts = {}) {
     const r = spawnSync(process.execPath, [join(binDir, 'inflight.mjs'), ...args], { encoding: 'utf8', ...opts })
     return { code: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}` }
@@ -192,6 +192,7 @@ const termsLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'terms.mjs
 const tagsLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'inflight-tags.mjs')).href)
 const docsShapeLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'docs-shape.mjs')).href)
 const cacheLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'cache.mjs')).href)
+const docsCommandsLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'docs-commands.mjs')).href)
 
 /**
  * Source with comments removed, so a check about CODE is not answered by prose. The first cut of
@@ -2652,6 +2653,24 @@ const CHECKS = [
             "if (!tips.ok) return cannot('cannot list refs - is this a git repository?')",
             'if (!tips.ok) return { ...result, ok: true }'),
     },
+    {
+        id: 'match-docs-an-issue-number-is-not-found-inside-a-longer-one',
+        why: 'the fixed-string grep finds `#41` inside `#411`, `#416` and `#419`; on this repository that made `#41` an eighteen-hit term whose first two hits were about `#411`, and a document whose only match is the longer number must not be a hit at all',
+        run: async (binDir) => {
+            const t = await termsLib(binDir)
+            return inDir(termsFixture(), () => {
+                // issue-refs: exempt-begin
+                const short = t.matchDocs(['#41'])
+                if (!short.ok || short.hits.length !== 1 || short.hits[0].path !== 'docs/inflight/issue-41.md') return false
+                if (short.hits[0].terms.length !== 1 || short.hits[0].terms[0] !== '#41') return false
+                // The longer number is still its own term, unharmed by the boundary.
+                const long = t.matchDocs(['#419'])
+                return long.ok && long.hits.length === 1 && long.hits[0].path === 'docs/inflight/issue-419.md'
+                // issue-refs: exempt-end
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'terms.mjs'), '(?![0-9])', ''),
+    },
     // ---------------------------------------------------------------------------------------------
     // THE BRANCH HALF OF THE QUERY - terms from the branch's own facts, the block the session hook
     // injects. docs/plans/2026-09-03-001-feat-inflight-docs-context-query-plan.md, unit U7.
@@ -2739,7 +2758,7 @@ const CHECKS = [
     },
     {
         id: 'docs-for-branch-defaults-to-head-and-says-so-on-the-baseline',
-        why: 'the hook passes no ref, so HEAD is the branch it answers for; on master there is nothing to look up and the one line saying so is not a block',
+        why: 'the hook passes no ref, so HEAD is the branch it answers for; on master there is nothing to look up, and the one line saying so is a note on stderr - the hook captures stdout and injected it into every master session while it was printed there',
         run: async (binDir) => {
             const git = windowGit(termsFixture())
             const wt = mkdtempSync(join(tmpdir(), 'inflight-for-branch-wt-'))
@@ -2757,11 +2776,18 @@ const CHECKS = [
                 const onBranch = invoke(binDir, ['docs', 'for-branch'], { cwd: wt, env })
                 if (onBranch.code !== 0 || !onBranch.out.startsWith('docs context: branch facts')) return false
                 if (!onBranch.out.includes('- The drainer workstream  docs/inflight/ci-drainer.md  (off baseline)')) return false
-                const onMaster = invoke(binDir, ['docs', 'for-branch'], { cwd: termsFixture(), env })
-                if (onMaster.code !== 0 || onMaster.out.includes('docs context: branch facts')) return false
-                if (!onMaster.out.includes('on the baseline - nothing to look up')) return false
-                const explicit = invoke(binDir, ['docs', 'for-branch', 'master'], { cwd: wt, env })
-                return explicit.code === 0 && explicit.out.includes('on the baseline - nothing to look up') && !explicit.out.includes('branch facts')
+                // On the baseline the note is the whole answer, and it is on STDERR: stdout, which
+                // the session hook captures, is empty.
+                const onMaster = spawnSync(process.execPath, [join(binDir, 'inflight.mjs'), 'docs', 'for-branch'], { cwd: termsFixture(), encoding: 'utf8', env })
+                if (onMaster.status !== 0 || onMaster.stdout !== '') return false
+                if (!onMaster.stderr.includes('docs for-branch: master is on the baseline - nothing to look up')) return false
+                const explicit = spawnSync(process.execPath, [join(binDir, 'inflight.mjs'), 'docs', 'for-branch', 'master'], { cwd: wt, encoding: 'utf8', env })
+                if (explicit.status !== 0 || explicit.stdout !== '' || !explicit.stderr.includes('on the baseline - nothing to look up')) return false
+                // The library returns the note and emits nothing: the front door owns the channel.
+                const dc = await docsCommandsLib(binDir)
+                const emitted = []
+                const direct = await inDir(wt, () => dc.docsForBranch(['master'], (s) => emitted.push(s)))
+                return direct.ok === true && emitted.length === 0 && typeof direct.note === 'string' && direct.note.includes('nothing to look up')
             } finally {
                 git('worktree', 'remove', '--force', wt)
             }

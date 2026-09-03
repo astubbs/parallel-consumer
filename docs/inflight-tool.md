@@ -235,10 +235,10 @@ searches for `#857`, `commit-lock`, `ProducerManager` and the PR's own `#NNN` - 
 an issue reference collapses to its bare core, because that is the substring all of them contain.
 <!-- issue-refs: exempt-end --> The PR facts come from
 the tool's cache only - a session start never calls `gh` - so on a fresh cache the branch name is
-all it has, and it says so in the terms line. On the baseline (`master`, `origin/master`, or a
-detached head) it prints one line saying there is nothing to look up; when the terms match nothing,
-stdout is empty - the hook's silence is the answer - and the coverage (which terms, how many refs,
-that an empty result is not proof) goes to stderr for whoever ran it by hand.
+all it has, and it says so in the terms line. Stdout carries the block or nothing - the hook's
+silence is the answer. On the baseline (`master`, `origin/master`, or a detached head) one line
+saying there is nothing to look up goes to stderr; when the terms match nothing, the coverage (which
+terms, how many refs, that an empty result is not proof) goes to stderr for whoever ran it by hand.
 
 ## Finding work that will be lost if nobody acts
 

@@ -17,8 +17,10 @@
 // index` and `docs for-branch` write it under the names below and clear it on their next success;
 // bare `docs` prints whatever is recorded.
 //
-// Returns `{ok, reason?}` and emits through the caller's `emit`; never exits, never decides a
-// code. bin/inflight.mjs owns the process boundary.
+// Returns `{ok, reason?, note?}` and emits through the caller's `emit`; never prints, never exits,
+// never decides a code. bin/inflight.mjs owns the process boundary, and with it the channels: what
+// is emitted is the answer, on stdout; a `note` is a sentence for whoever ran the command by hand,
+// which the front door prints to stderr so a hook capturing stdout never injects it.
 
 import { INVALIDATING_WARNINGS, baseline, blobContents, blobsForPath, exec, freshnessWarnings, refTips } from './git.mjs'
 import { clearDeliveryFailure, deliveryFailures, recordDeliveryFailure } from './cache.mjs'
@@ -137,10 +139,11 @@ is all it has, and the first body line says which terms were used and whether a 
 \`git grep\` over the live refs - the same query as the prompt-terms hook, the same document lines
 and the same marks.
 
-<ref> defaults to the checked-out branch. On the baseline - master, origin/master, a detached head -
-it prints one line saying there is nothing to look up, exit 0. When the terms match nothing, stdout
-is EMPTY (the hook's silence is the answer) and the coverage - the terms, the ref count, and that an
-empty result is not proof - goes to stderr; exit 0.
+<ref> defaults to the checked-out branch. Stdout carries the block or NOTHING - the hook captures it
+and injects whatever it gets, so its silence is the answer. On the baseline - master, origin/master,
+a detached head - one line saying there is nothing to look up goes to stderr, exit 0. When the terms
+match nothing, the coverage - the terms, the ref count, and that an empty result is not proof - goes
+to stderr; exit 0.
 
   bin/inflight.mjs docs for-branch
   bin/inflight.mjs docs for-branch fix/857-commit-lock`
@@ -322,10 +325,14 @@ export function docsForBranch(args, emit) {
     }
     // `rev-parse --abbrev-ref` answers `HEAD` for a detached head: on no workstream, so
     // nothing to look up - the same reading `docs index` makes when it pins nothing.
+    // NOTHING TO SHOW IS A `note`, NEVER AN EMIT. Everything emitted here is the block the
+    // session hook captures from stdout and injects verbatim, so a sentence for the person who
+    // ran this by hand - the baseline, no identifier, no match - goes back as `note` for the front
+    // door to print on stderr. While the baseline case was emitted, every session on master
+    // opened with "master is on the baseline - nothing to look up".
     const name = ref.replace(/^origin\//, '')
     if (ref === 'HEAD' || name === 'master' || ref === baseline()) {
-        emit(`docs for-branch: ${ref} is on the baseline - nothing to look up`)
-        return { ok: true }
+        return { ok: true, note: `docs for-branch: ${ref} is on the baseline - nothing to look up` }
     }
     // Cache or nothing: this runs at every session start, where a gh call is both over the
     // budget and a draw on the rate limit every parallel session shares.
@@ -334,10 +341,9 @@ export function docsForBranch(args, emit) {
     const source = pr ? `${ref} and its PR #${pr.number}` : `${ref} (no PR in the cache)`
     const terms = termsFromBranch(ref, { prs: prs.map })
     // Silence, not a failure record: a branch named by plain words carries no identifier,
-    // and the coverage line still says what was looked at, to stderr, for whoever asked.
+    // and the coverage line still says what was looked at, for whoever asked.
     if (terms.length === 0) {
-        console.error(`docs for-branch: ${source} yields no identifier-shaped term - nothing searched`)
-        return { ok: true }
+        return { ok: true, note: `docs for-branch: ${source} yields no identifier-shaped term - nothing searched` }
     }
     const m = matchDocs(terms)
     if (!m.ok) return cannot(m.reason)
@@ -347,10 +353,12 @@ export function docsForBranch(args, emit) {
     const marked = m.hits.filter((h) => h.onBaseline !== null)
     const more = m.hits.length - marked.length + m.truncated
     if (marked.length === 0) {
-        console.error(`docs for-branch: terms from ${source} - ${terms.join(', ')} - name no document across `
-            + `${m.refsSearched} live ref(s). Not proof of absence: headings alone never justify an empty result, `
-            + 'and a cold PR cache means the title was never searched for.')
-        return { ok: true }
+        return {
+            ok: true,
+            note: `docs for-branch: terms from ${source} - ${terms.join(', ')} - name no document across `
+                + `${m.refsSearched} live ref(s). Not proof of absence: headings alone never justify an empty result, `
+                + 'and a cold PR cache means the title was never searched for.',
+        }
     }
     const body = [`terms from ${source}: ${terms.join(', ')}`, formatMatchBody(m, marked, { label: 'them', more })].join('\n')
     emit(sourceFrame('branch', ref, body, `bin/inflight.mjs prior-art --headings ${termsAsArgv(terms)}`))

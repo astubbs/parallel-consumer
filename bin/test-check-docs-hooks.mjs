@@ -201,6 +201,23 @@ try {
   fs.rmSync(shimLog, { force: true });
   expectSilent('a Read outside the corpus', read('g2', path.join(fx.dir, 'notes.txt'), fx.dir, shimEnv));
   check('...and it made no git call', !fs.existsSync(shimLog), `git was called: ${fs.existsSync(shimLog) ? fs.readFileSync(shimLog, 'utf8') : ''}`);
+
+  console.log('many paths in one event, one ref listing:');
+  // The refs and the baseline are the same for every path one event names, so the hook resolves
+  // them once and threads them into each query, as matchDocs does. Before it did, every path
+  // listed every ref again: a four-path Bash read measured 613-793 ms against the 500 ms budget,
+  // with `for-each-ref` alone at 119 ms a call on this repository. The four paths are committed,
+  // so each is a full query - an uncommitted file takes the same route, but this is the dear one.
+  const FOURTH = 'docs/plans/2026-01-02-001-second.md';
+  fx.write(FOURTH, '# A second plan\n\nmore steps\n');
+  fx.commit('a fourth corpus file');
+  const FOUR = [NOTE, 'docs/solutions/ci/sol.md', 'docs/plans/2026-01-01-001-plan.md', FOURTH];
+  const fourCtx = contextOf('g3', bash('g3', `cat ${FOUR.join(' ')}`, fx.dir, shimEnv));
+  check('control: a Bash command naming four corpus files answers for all four', FOUR.every((p) => fourCtx.includes(`divergence header for ${p}`)), fourCtx || '<silence>');
+  const shimCalls = fs.existsSync(shimLog) ? fs.readFileSync(shimLog, 'utf8').split('\n').filter(Boolean) : [];
+  check('control: the shim logged the four-path read\'s git calls', shimCalls.length > 0, 'the shim was not on the path');
+  const refListings = shimCalls.filter((l) => l.startsWith('for-each-ref')).length;
+  check('...and the refs were listed exactly once for the four paths', refListings === 1, `for-each-ref was called ${refListings} time(s)`);
   fs.rmSync(shimDir, { recursive: true, force: true });
 
   console.log('once per session per divergence state:');

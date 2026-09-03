@@ -412,16 +412,6 @@ function lastFetch(commonDir) {
 }
 
 /**
- * Reasons the answers below may be stale, as data.
- *
- * A complete search of a stale corpus is still a false negative, and it reads exactly like a
- * complete search of a current one. Both incidents behind these are real: a session worked from the
- * main checkout while master advanced 151 commits underneath it, and every working-tree read
- * answered for that snapshot without saying so.
- *
- * @returns {{id: string, lines: string[]}[]}
- */
-/**
  * The freshness warnings that VOID an answer rather than date it. `no-baseline` is not staleness,
  * it is a declaration that the run is unreliable; the others say the ref set itself is partial.
  * The rest - a stale or narrow fetch, a main checkout, HEAD behind - date the answer, and a
@@ -432,6 +422,16 @@ function lastFetch(commonDir) {
  */
 export const INVALIDATING_WARNINGS = new Set(['no-baseline', 'never-fetched', 'shallow'])
 
+/**
+ * Reasons the answers below may be stale, as data.
+ *
+ * A complete search of a stale corpus is still a false negative, and it reads exactly like a
+ * complete search of a current one. Both incidents behind these are real: a session worked from the
+ * main checkout while master advanced 151 commits underneath it, and every working-tree read
+ * answered for that snapshot without saying so.
+ *
+ * @returns {{id: string, lines: string[]}[]}
+ */
 export function freshnessWarnings(base, refCount) {
     const warnings = []
     const warn = (id, ...text) => warnings.push({ id, lines: text })

@@ -128,29 +128,9 @@ export const cvOpts = (args) => {
 const NOTES_AREA = DOC_AREAS.filter((a) => a.dir === NOTES_DIR)
 
 /**
- * The registry.
- *
- * `when` is the sentence an agent needs to decide whether this is the tool - it answers "should I
- * reach for this now", which a name alone cannot.
- *
- * `run` takes the remaining argv and an `emit` for streaming, and returns `{ok, reason?}`. It never
- * exits and never decides a code: a search that ran and found nothing is `ok: true`, because "no
- * hits" and "could not look" are different answers and this repo has been bitten by conflating them.
- *
- * A command may instead carry `sub`, a nested registry. That is deliberately how the word "in-flight"
- * is disambiguated rather than by renaming the tool: `inflight note drift` is unmistakably about ONE
- * NOTE, while `inflight stranded` is a question about the whole directory. The product keeps its name
- * and the vocabulary does the work - Antony's call, and the right one, because the collision was only
- * ever between two senses of a word this repo already uses for both.
- *
- * @typedef {{name: string, summary: string, when: string, usage: string,
- *            sub?: Command[],
- *            run?: (args: string[], emit: (s: string) => void) => {ok: boolean, reason?: string}}} Command
- * @type {Command[]}
- */
-/**
  * The `docs` subcommands, held apart so the bare call can print their `when` lines without
  * restating them. Bodies and text in bin/lib/docs-commands.mjs; only the placement is here.
+ * @type {Command[]}
  */
 const DOCS_SUB = [
     {
@@ -190,6 +170,30 @@ const DOCS_SUB = [
     },
 ]
 
+/**
+ * The registry.
+ *
+ * `when` is the sentence an agent needs to decide whether this is the tool - it answers "should I
+ * reach for this now", which a name alone cannot.
+ *
+ * `run` takes the remaining argv and an `emit` for streaming, and returns `{ok, reason?, note?}`.
+ * It never exits and never decides a code: a search that ran and found nothing is `ok: true`,
+ * because "no hits" and "could not look" are different answers and this repo has been bitten by
+ * conflating them. `note` is a sentence for whoever ran the command by hand - "nothing to look up",
+ * the coverage of an empty result - that the front door prints to STDERR, so a hook capturing
+ * stdout for injection gets the block or nothing; `reason` is what ok:false could not do.
+ *
+ * A command may instead carry `sub`, a nested registry. That is deliberately how the word "in-flight"
+ * is disambiguated rather than by renaming the tool: `inflight note drift` is unmistakably about ONE
+ * NOTE, while `inflight stranded` is a question about the whole directory. The product keeps its name
+ * and the vocabulary does the work - Antony's call, and the right one, because the collision was only
+ * ever between two senses of a word this repo already uses for both.
+ *
+ * @typedef {{name: string, summary: string, when: string, usage: string,
+ *            sub?: Command[],
+ *            run?: (args: string[], emit: (s: string) => void) => {ok: boolean, reason?: string, note?: string}}} Command
+ * @type {Command[]}
+ */
 const COMMANDS = [
     {
         name: 'prior-art',
@@ -678,8 +682,12 @@ if (invokedDirectly()) {
     const perf = argv.includes('--perf')
     if (perf) perfStart()
 
-    const { ok, reason } = dispatch(argv.filter((a) => a !== '--perf'), (s) => console.log(s))
+    const { ok, reason, note } = dispatch(argv.filter((a) => a !== '--perf'), (s) => console.log(s))
     if (reason) (ok ? console.log : console.error)(reason)
+    // A note is for the person at the terminal, never for the hook capturing stdout: the
+    // session-start hook injected "master is on the baseline - nothing to look up" into every
+    // session while `docs for-branch` said it on stdout.
+    if (note) console.error(note)
     // stderr, so a caller piping stdout gets exactly what it would without the flag.
     if (perf) console.error(perfReport())
     process.exitCode = ok ? 0 : 2

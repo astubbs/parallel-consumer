@@ -1576,6 +1576,12 @@ master_out=$(PC_INFLIGHT_CACHE_DIR="$empty_pr_cache" CLAUDE_PROJECT_DIR="$nc_tmp
 assert "on master the hook exits 0" 0 "$?"
 master_blocks=$(grep -c '^docs context: branch facts$' <<<"$master_out")
 assert "on master there is no branch-facts block" 0 "$master_blocks"
+# ...and no stray line from the command in its place. The hook captures stdout and injects whatever
+# it gets, so the "nothing to look up" sentence `docs for-branch` says for a human at a terminal
+# belongs on stderr: on stdout it opened every master session with it, and the frame check above
+# never noticed because a bare sentence is not a block.
+master_notes=$(grep -c '^docs for-branch:' <<<"$master_out")
+assert "on master the hook injects no docs for-branch note" 0 "$master_notes"
 # ...while the index beside it still rendered - silence on the block is not silence on the session.
 case "$master_out" in *'A well-tagged bug'*) got=rendered ;; *) got=missing ;; esac
 assert "on master the index is still rendered" rendered "$got"

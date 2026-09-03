@@ -97,6 +97,9 @@ export function buildDocsFixture() {
  *   master            docs/inflight/gadget-01.md .. gadget-14.md, each carrying an
  *                     `<!-- inflight-impact: GadgetFlange -->` marker - more frontmatter-tier hits
  *                     than the hook shows, so the `+N more` tail is reachable
+ *   master            docs/inflight/issue-41.md naming `#41` and docs/inflight/issue-419.md naming
+ *                     `#419` - one issue number a prefix of the other, so the fixed-string grep
+ *                     finds both for `#41` and the attribution has to tell them apart
  *
  * Built on top of `buildDocsFixture` rather than inside it, for the reason that function gives:
  * the drift checks assert exact ref and version counts on the shared corpus, and a fifth live ref
@@ -113,6 +116,10 @@ export function buildTermsFixture() {
         const nn = String(i).padStart(2, '0')
         write(`docs/inflight/gadget-${nn}.md`, `# Gadget ${nn}\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: GadgetFlange -->\nbody\n`)
     }
+    // issue-refs: exempt-begin
+    write('docs/inflight/issue-41.md', '# Issue forty-one\n\n<!-- inflight-type: task -->\n\ncloses #41 for good\n')
+    write('docs/inflight/issue-419.md', '# Issue four-nineteen\n\n<!-- inflight-type: task -->\n\ntracked as #419\n')
+    // issue-refs: exempt-end
     commit('documents for the prompt-keyword query')
 
     git('checkout', '-q', '-b', 'terms-only', 'master')

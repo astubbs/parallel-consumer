@@ -26,7 +26,11 @@
 // is found. Seven git processes make up the difference when it fires: the branch name, the blob at
 // HEAD, the working-tree file's hash, and the four the summary tier costs (refs, blobs, history,
 // one merge-base and diff). There is no warm state: each firing is a fresh process, and the query
-// keeps no corpus cache (KTD5).
+// keeps no corpus cache (KTD5). A Bash command naming FOUR corpus files - MAX_PATHS, the most one
+// event answers for - costs about 460 ms (456-468 over five runs, same host, same method): the
+// refs, the baseline and the branch name are resolved once per tree and threaded into every
+// query, and what remains per path is its own blob, its hash, and the summary tier's four. Before
+// that hoist each path listed every ref again, and the same read measured 613-793 ms.
 //
 // ONCE PER SESSION PER STATE (KTD4). The seen key is the path, the committed blob at HEAD and the
 // sorted set of divergent blobs; a repeat read is silent until that set changes, and a change -
@@ -125,12 +129,34 @@ async function main() {
   if (found.length === 0) return;
 
   // Loaded only now: the silent path above must cost Node's start and nothing else.
-  const [{ drift }, { exec, workingTreeBlob }, { formatDivergenceHeader, sourceFrame }, { clearDeliveryFailure }] = await Promise.all([
+  const [{ drift }, { baseline, exec, refTips, workingTreeBlob }, { formatDivergenceHeader, sourceFrame }, { clearDeliveryFailure }] = await Promise.all([
     import('../../bin/lib/notes.mjs'),
     import('../../bin/lib/git.mjs'),
     import('../../bin/lib/docs-views.mjs'),
     import('../../bin/lib/cache.mjs'),
   ]);
+
+  // THE REFS, THE BASELINE AND THE BRANCH NAME ARE RESOLVED ONCE PER TREE, NOT ONCE PER PATH. They
+  // are the same answer for every path in one event, and `drift` re-asks git for the first two
+  // when it is not handed them - a `for-each-ref` at 119 ms and a `rev-parse` per path, which is
+  // how a four-path Bash read measured 613-793 ms against the 500 ms budget while a single path
+  // sat at 210 ms. Keyed by tree because the paths a Bash command names may resolve to different
+  // checkouts, and a ref listing belongs to the repository it was taken in. matchDocs in
+  // bin/lib/terms.mjs threads the same pair through its hit loop for the same reason. Resolved
+  // lazily, inside the loop, so the process is already in the right tree when git is asked.
+  const resolvedPerTree = new Map();
+  const treeFacts = (tree) => {
+    if (!resolvedPerTree.has(tree)) {
+      const tips = refTips();
+      if (!tips.ok) throw new Error(`${tree}: cannot list refs - is this a git repository?`);
+      // The branch name, so the header can say "adds-heading's OWN divergent version" rather than
+      // "HEAD's"; a detached HEAD has no short name and is reported as HEAD.
+      const symbolic = exec('git', ['symbolic-ref', '--short', '--quiet', 'HEAD']);
+      const ref = symbolic.ok && symbolic.out.trim() ? symbolic.out.trim() : 'HEAD';
+      resolvedPerTree.set(tree, { tips: tips.tips, base: baseline(), ref });
+    }
+    return resolvedPerTree.get(tree);
+  };
 
   const store = seenStore('docs-divergence', String(ev.session_id || ''));
   const blocks = [];
@@ -138,10 +164,7 @@ async function main() {
     // Every bin/lib call reads git from the process's directory, so the process goes to the tree
     // the event named - never the session's.
     process.chdir(f.tree);
-    // The branch name, so the header can say "adds-heading's OWN divergent version" rather than
-    // "HEAD's"; a detached HEAD has no short name and is reported as HEAD.
-    const symbolic = exec('git', ['symbolic-ref', '--short', '--quiet', 'HEAD']);
-    const ref = symbolic.ok && symbolic.out.trim() ? symbolic.out.trim() : 'HEAD';
+    const { tips, base, ref } = treeFacts(f.tree);
     const head = exec('git', ['rev-parse', '--verify', '--quiet', `HEAD:${f.rel}`]);
     // An untracked or freshly created file has no committed blob; the query then reports that no
     // ref carries the path, which is the true state of a note nobody has committed yet.
@@ -156,7 +179,7 @@ async function main() {
       uncommitted = onDisk !== blob;
     }
 
-    const d = drift(f.rel, { detail: 'summary', at: blob ? { ref, blob } : { ref } });
+    const d = drift(f.rel, { detail: 'summary', at: blob ? { ref, blob } : { ref }, tips, base });
     if (d.ok === false) throw new Error(`${f.rel}: ${d.reason}`);
 
     const key = [f.rel, blob ?? 'uncommitted', ...(d.divergent ?? []).map((c) => c.blob).sort()].join(' ');
