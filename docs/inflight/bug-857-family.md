@@ -2412,6 +2412,26 @@ load-sensitive, so its stability cannot be read off a single green run - and the
 alternative astubbs#421 measured next gives each shard its own VM, which does not move this rate <!-- post-merge: checked -->
 at all.
 
+## 2026-09-03, `NO_PROGRESS` on a stacked producer-ownership branch, in a scenario the stack does not touch
+
+<!-- post-merge: checked-begin - a dated capture, named by run and seed -->
+`ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger` on the `Chaos Pain Suite 4/4` shard of
+[run 33715914092](https://github.com/astubbs/parallel-consumer/actions/runs/33715914092), head
+`646d13eb3` of astubbs#420 (rungs 2-4 of astubbs#225, stacked above recovery). The probe:
+`NO_PROGRESS: fleet consumed count stuck at 98505/100000 for 30s (bound 30s)`, no other detector
+fired, run summary consumed 99254. **Replay seed `980443902370766447`**:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=980443902370766447
+
+What the branch changes is producer construction and recovery under the transactional commit mode;
+this scenario runs `PERIODIC_CONSUMER_ASYNCHRONOUS` with no producer, so none of it is on the path.
+The recorded history shows the same scenario green one minute later on astubbs#410, which carries
+the identical engine code, and green on the surrounding heads of four other branches. Same reading
+as the 2026-08-26 `NO_PROGRESS` capture: a seed that draws the interleaving, not the branch. The
+seed replay was not run; it is the control arm to run if this seed is ever drawn again.
+<!-- post-merge: checked-end -->
+
 ## Delete when
 
 The `CLASS2_STALL` entries above are superseded by this section and kept only as the record of how a
