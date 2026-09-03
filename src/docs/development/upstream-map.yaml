@@ -544,8 +544,8 @@ entries:
   - id: upstream-pr-log-noise
     group: logging-ux
     summary: Trim noisy user-function / RemovedPartitionState logging
-    fork: {branches: [fix/log-verbosity-batch], prs: [203], fork_issues: [169, 170, 238], status: pr-open}
-    upstream: {repo: confluentinc/parallel-consumer, issues: [640, 57], prs: [918, 919], related: [629, 631], status: mixed, last_checked: 2026-08-07}
+    fork: {branches: [fix/log-verbosity-batch, fix/168-commit-error-line-keeps-identifiers], prs: [203], fork_issues: [168, 169, 170, 238], status: pr-open}
+    upstream: {repo: confluentinc/parallel-consumer, issues: [640, 57, 629], prs: [918, 919], related: [631], status: mixed, last_checked: 2026-09-03}
     adoc_anchor: null
     notes: >
       Found by the 2026-07-28 sweep. #919 trims the user-function error log / moves
@@ -565,6 +565,17 @@ entries:
       (bz.stub.parallelconsumer.internal.utils.RecordBatchSummary) with the full object
       left at DEBUG. The wider #57 umbrella (the ~224 debug/trace call sites) is
       untouched, so this entry stays open after astubbs#203 lands.
+      2026-09-03: astubbs#203 MERGED (2026-09-02) -- this entry had gone on saying
+      `pr-open` about it, which is the stale-manifest failure docs/upstream.md
+      describes; corrected here rather than left for a sweep. astubbs#168 /
+      confluentinc#629 joins the same family on branch
+      fix/168-commit-error-line-keeps-identifiers: the commit-failure ERROR line in
+      ConsumerOffsetCommitter keeps every topic/partition/offset and reduces the
+      per-partition metadata to its length (RecordBatchSummary.summariseCommit), with
+      the unabridged map moved to DEBUG. #629 moves from `related` to `issues` because
+      the fork is now acting on it rather than noting it. The deferral WARN siblings in
+      the same class are handed to astubbs#352 -- see
+      docs/inflight/bug-deferred-commit-warn-names-no-offsets.md.
 
 
   - id: issue-402-max-load-factor-log-noise

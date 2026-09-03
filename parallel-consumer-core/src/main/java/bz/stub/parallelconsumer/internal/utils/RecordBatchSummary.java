@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.internal.utils;
 
 import lombok.experimental.UtilityClass;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 
 import java.util.Collection;
@@ -17,7 +18,8 @@ import java.util.stream.Collectors;
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 
 /**
- * Renders a batch of polled records as a short, <b>bounded</b> description, for use in log lines.
+ * Renders a batch of polled records, or the offsets a commit carried, as a short, <b>bounded</b> description, for use
+ * in log lines.
  * <p>
  * A log line that interpolates a whole batch - or a whole {@code PollContext} - grows with
  * {@code max.poll.records} and with the number of assigned partitions, so log tooling truncates it and the
@@ -32,6 +34,7 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  * @author Antony Stubbs
  * @see <a href="https://github.com/astubbs/parallel-consumer/issues/169">#169 - dropped batch WARN</a>
  * @see <a href="https://github.com/astubbs/parallel-consumer/issues/170">#170 - user function failure ERROR</a>
+ * @see <a href="https://github.com/astubbs/parallel-consumer/issues/168">#168 - commit failure ERROR</a>
  */
 @UtilityClass
 public class RecordBatchSummary {
@@ -46,9 +49,12 @@ public class RecordBatchSummary {
     /**
      * Hoisted rather than rebuilt per call: {@link Comparator#comparing} plus {@link Comparator#thenComparingInt}
      * allocates two composed comparators, and this is reached from a log line on a failure path.
+     * <p>
+     * Wildcarded in the value so every rendering here sorts the same way - it reads only the key, and
+     * {@code Stream.sorted(Comparator<? super T>)} accepts it for any entry type.
      */
-    private static final Comparator<Map.Entry<TopicPartition, List<Long>>> BY_TOPIC_THEN_PARTITION = Comparator
-            .comparing((Map.Entry<TopicPartition, List<Long>> entry) -> entry.getKey().topic())
+    private static final Comparator<Map.Entry<TopicPartition, ?>> BY_TOPIC_THEN_PARTITION = Comparator
+            .comparing((Map.Entry<TopicPartition, ?> entry) -> entry.getKey().topic())
             .thenComparingInt(entry -> entry.getKey().partition());
 
     /**
@@ -134,6 +140,40 @@ public class RecordBatchSummary {
                 pluralise(recordCount, "record"),
                 pluralise(partitionCount, "partition"),
                 detail);
+    }
+
+    /**
+     * @param offsets what a commit carried, keyed by partition - the map handed to the consumer's
+     *                {@code commitSync}/{@code commitAsync}, and handed back to its callback
+     * @return e.g. {@code 2 partitions: my-topic-0: offset 1000, 812 chars of metadata; my-topic-1: offset 5, no
+     * metadata}. <b>EVERY</b> partition and its offset is named - they are what astubbs#168 asked for, and there is
+     * one entry per partition, so the line's cost per partition is fixed and the
+     * {@value #MAX_PARTITIONS_LISTED} cap the batch renderings apply deliberately is not. Only the metadata is
+     * reduced, to its length: it is PC's base64-encoded offset map, up to
+     * {@code OffsetMapCodecManager.DefaultMaxMetadataSize} per partition, unreadable without decoding, and its
+     * length is itself the diagnostic when a commit is rejected for it. The leader epoch is omitted - PC never sets
+     * one. A single-partition commit renders as just that entry, since the total would only repeat it
+     */
+    public static String summariseCommit(Map<TopicPartition, OffsetAndMetadata> offsets) {
+        if (offsets.isEmpty()) {
+            return pluralise(0, "partition");
+        }
+        String detail = offsets.entrySet().stream()
+                .sorted(BY_TOPIC_THEN_PARTITION)
+                .map(entry -> summariseCommitEntry(entry.getKey(), entry.getValue()))
+                .collect(Collectors.joining("; "));
+        if (offsets.size() == 1) {
+            return detail;
+        }
+        return msg("{}: {}", pluralise(offsets.size(), "partition"), detail);
+    }
+
+    private static String summariseCommitEntry(TopicPartition topicPartition, OffsetAndMetadata offsetAndMetadata) {
+        String metadata = offsetAndMetadata.metadata(); // never null - the constructor substitutes "" for null
+        String metadataNote = metadata.isEmpty()
+                ? "no metadata"
+                : msg("{} chars of metadata", metadata.length());
+        return msg("{}: offset {}, {}", topicPartition, offsetAndMetadata.offset(), metadataNote);
     }
 
     private static String pluralise(long count, String noun) {

@@ -8,17 +8,24 @@ A log line that interpolates a record batch, a partition map or a state object g
 part that identified the event. The line is still emitted, and still reads as if it reported
 something - which is why this is filed as misdirection rather than as noise.
 
-**The pair behind astubbs#169 and astubbs#170 is fixed; the rest of the class is live in
-`parallel-consumer-core`.** The two worth doing next are named below, and the **dismissals matter as
-much as the hits** - several lines have this shape and are correct as they are. The search is
+**The lines behind astubbs#169, astubbs#170 and astubbs#168 are fixed; the rest of the class is live
+in `parallel-consumer-core`.** The one worth doing next is named below, and the **dismissals matter
+as much as the hits** - several lines have this shape and are correct as they are. The search is
 written down so it is not repeated; re-run it with
 `grep -rnE 'log\.(warn|error)' --include=*.java parallel-consumer-core/src/main` and read what each
 line interpolates.
 
 <!-- post-merge: checked-begin -->
-The fixed pair, and the shape a fix takes, are astubbs#203 (astubbs#169 / confluentinc#631 in
+The fixed lines, and the shape a fix takes, are astubbs#203 (astubbs#169 / confluentinc#631 in
 `RemovedPartitionState`, astubbs#170 / confluentinc#640 in `AbstractParallelEoSStreamProcessor`):
 a bounded summary on the operator-facing line, the unabridged object one level down at `DEBUG`.
+
+astubbs#168 / confluentinc#629 in `ConsumerOffsetCommitter` followed, on branch
+`fix/168-commit-error-line-keeps-identifiers`, with the one variation the fix shape allows: **no
+partition cap**.
+A commit map holds one entry per partition and the partitions are exactly what astubbs#168 asked
+for, so every one stays named and only the per-entry `metadata` is reduced - to its length, which is
+itself the diagnostic when a commit is rejected for its size.
 <!-- post-merge: checked-end -->
 
 **`bz.stub.parallelconsumer.internal.utils.RecordBatchSummary` is the shared renderer - reuse it
@@ -32,10 +39,10 @@ statement is at the right *level*; this note is about how much a statement rende
 Whether a hostile `toString()` can escape a log call is a third axis again, owned by
 [`core-blanket-safe-logging.md`](core-blanket-safe-logging.md).
 
-## The two worth doing next, worst first
+## The one worth doing next
 
-Both are strictly worse than the pair already fixed - one is at `WARN`, the other at `ERROR`,
-where the fixed pair's replacement detail sits at `DEBUG`.
+It is strictly worse than the lines already fixed: it renders at `WARN`, where their replacement
+detail sits at `DEBUG`, and what it renders is not only long but a disclosure.
 
 - **`state/PartitionStateManager.java`**, anchor `or is this a race? Please file a GH issue` -
   renders a whole `PartitionState` at **WARN**. `PartitionState` is Lombok `@ToString` with no
@@ -48,17 +55,6 @@ where the fixed pair's replacement detail sits at `DEBUG`.
   which also fixes the two other sites that render a `PartitionState`:
   `internal/AbstractParallelEoSStreamProcessor.java`, anchor `Partitions revoked {}, state: {}`, and
   `state/PartitionStateManager.java`, anchor `Reassignment of previously revoked partition`.
-
-- **`internal/ConsumerOffsetCommitter.java`**, anchor `Error committing offsets: {}, exception: ` -
-  renders `Map<TopicPartition, OffsetAndMetadata>` at **ERROR**. PC writes its encoded offset map
-  into that metadata, capped per partition at `OffsetMapCodecManager.DefaultMaxMetadataSize`, so the
-  line is partitions x up to 4KB of base64 on the occasion you most need it intact.
-
-  **Do not summarise the map away.** astubbs#168 (confluentinc#629) asked for exactly the topic,
-  partition and offset this line carries, and its fork-status note records the line as the
-  implementation of that request - so a fix keeps every identifier and drops or caps only the
-  `metadata` string that `OffsetAndMetadata.toString()` drags along. Re-read astubbs#168 before
-  touching it.
 
 ## Checked and dismissed - reasons, so the search is not repeated
 

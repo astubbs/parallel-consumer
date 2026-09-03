@@ -5,8 +5,12 @@ package bz.stub.parallelconsumer.internal.utils;
  */
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
+import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceAccessMode;
+import org.junit.jupiter.api.parallel.ResourceLock;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -15,6 +19,7 @@ import java.util.Map;
 
 import static com.google.common.truth.Truth.assertThat;
 import static bz.stub.parallelconsumer.internal.utils.RecordBatchSummary.MAX_PARTITIONS_LISTED;
+import static bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.DefaultMaxMetadataSize;
 import static java.util.Arrays.asList;
 import static java.util.Collections.emptyList;
 import static java.util.Collections.nCopies;
@@ -22,10 +27,15 @@ import static java.util.Collections.singletonList;
 
 /**
  * The point of {@link RecordBatchSummary} is that its output stays SHORT as the batch grows, so these tests assert the
- * exact rendering <em>and</em> that the length stops growing - see astubbs#169 / astubbs#170.
+ * exact rendering <em>and</em> that the length stops growing - see astubbs#169 / astubbs#170, and astubbs#168 for the
+ * commit rendering, where what is bounded is the cost <em>per partition</em> rather than the number of them named.
  *
  * @author Antony Stubbs
  */
+// the commit cases read OffsetMapCodecManager.DefaultMaxMetadataSize, which is a MUTABLE static that
+// OffsetEncodingBackPressureTest and OffsetEncodingBackPressureUnitTest write; this module runs tests concurrently,
+// so a read of it is only stable under the lock those two already take for writing
+@ResourceLock(value = OffsetMapCodecManager.METADATA_DATA_SIZE_RESOURCE_LOCK, mode = ResourceAccessMode.READ)
 class RecordBatchSummaryTest {
 
     private static final TopicPartition TP = new TopicPartition("my-topic", 3);
@@ -133,6 +143,68 @@ class RecordBatchSummaryTest {
         assertThat(summary).startsWith("500000 records across 500 partitions: ");
         assertThat(summary).contains("and " + (PARTITIONS - MAX_PARTITIONS_LISTED) + " more partitions");
         assertThat(summary.length()).isLessThan(ceilingFor(longestName));
+    }
+
+    @Test
+    void commitSummaryNamesEveryPartitionAndOffsetAndOnlyTheLengthOfMetadata() {
+        String maximumMetadata = String.join("", nCopies(DefaultMaxMetadataSize, "x"));
+        Map<TopicPartition, OffsetAndMetadata> offsets = new HashMap<>();
+        offsets.put(new TopicPartition("b-topic", 0), new OffsetAndMetadata(9, ""));
+        offsets.put(new TopicPartition("a-topic", 2), new OffsetAndMetadata(5, maximumMetadata));
+        offsets.put(new TopicPartition("a-topic", 1), new OffsetAndMetadata(1, "abc"));
+
+        String summary = RecordBatchSummary.summariseCommit(offsets);
+
+        assertThat(summary).isEqualTo(
+                "3 partitions: "
+                        + "a-topic-1: offset 1, 3 chars of metadata; "
+                        + "a-topic-2: offset 5, " + DefaultMaxMetadataSize + " chars of metadata; "
+                        + "b-topic-0: offset 9, no metadata");
+        // the encoded offset map is the unbounded part - its length is the diagnostic, its content is not
+        assertThat(summary).doesNotContain("xxxx");
+        assertThat(summary).doesNotContain("OffsetAndMetadata{");
+    }
+
+    @Test
+    void commitSummaryOfOnePartitionDoesNotRepeatItselfInTotals() {
+        Map<TopicPartition, OffsetAndMetadata> offsets = new HashMap<>();
+        offsets.put(TP, new OffsetAndMetadata(1000));
+
+        assertThat(RecordBatchSummary.summariseCommit(offsets)).isEqualTo("my-topic-3: offset 1000, no metadata");
+    }
+
+    @Test
+    void emptyCommitSummarisesAsNoPartitions() {
+        assertThat(RecordBatchSummary.summariseCommit(new HashMap<>())).isEqualTo("0 partitions");
+    }
+
+    /**
+     * The regression this rendering exists to prevent, and the reason it applies no partition cap: the identifiers
+     * are what astubbs#168 asked for, so every partition stays named however many there are, and what must not grow
+     * is the cost of each one. A commit map carries one entry per partition, and every entry here carries the
+     * largest offset map PC will ever write.
+     * <p>
+     * Derived the way {@link #ceilingFor} is, from what the rendering actually emits rather than from a particular
+     * topic name: an entry is {@code <topic>-<partition>: offset <offset>, <length> chars of metadata; }, whose
+     * fixed part is under 64 characters beyond the topic name even at a 10-digit partition, a 19-digit offset and a
+     * 4-digit length.
+     */
+    @Test
+    void commitSummaryCostPerPartitionDoesNotDependOnMetadataSize() {
+        String longestName = String.join("", nCopies(LONGEST_LEGAL_TOPIC_NAME, "x"));
+        String maximumMetadata = String.join("", nCopies(DefaultMaxMetadataSize, "y"));
+        Map<TopicPartition, OffsetAndMetadata> offsets = new HashMap<>(PARTITIONS);
+        for (int partition = 0; partition < PARTITIONS; partition++) {
+            offsets.put(new TopicPartition(longestName, partition), new OffsetAndMetadata(partition, maximumMetadata));
+        }
+
+        String summary = RecordBatchSummary.summariseCommit(offsets);
+
+        assertThat(summary).startsWith(PARTITIONS + " partitions: ");
+        // no cap: the last partition is named just as the first is
+        assertThat(summary).contains(longestName + "-" + (PARTITIONS - 1) + ": offset " + (PARTITIONS - 1));
+        assertThat(summary).doesNotContain("yyyyyyyy");
+        assertThat(summary.length()).isLessThan(PARTITIONS * (longestName.length() + 64) + 32);
     }
 
     /**
