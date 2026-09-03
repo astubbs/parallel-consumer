@@ -40,7 +40,7 @@
 import { blobContents, blobsForPath, refKind } from './git.mjs'
 import { INFLIGHT_IMPACT_ORDER, classifyNote } from './inflight-tags.mjs'
 import { NOTES_DIR, REPO } from './repo.mjs'
-import { INFLIGHT_GROUPS, inflightGroupOf } from './docs-shape.mjs'
+import { DIRECTORY_DOCS_RE, DOCUMENT_RE, INFLIGHT_GROUPS, inflightGroupOf } from './docs-shape.mjs'
 
 /** The standing ruling this command diffs against. Read, never written. */
 export const REGISTER_PATH = `${NOTES_DIR}/process-candidate-ranking.md`
@@ -171,20 +171,52 @@ export function registerBlob(index) {
 }
 
 /**
- * What the register NAMES, in the two literal forms it uses - and nothing inferred beyond them.
+ * What the register NAMES, one ENTRY at a time - never one document at a time.
  *
- * Filenames, because the ready-picks half cites notes by name; and `astubbs#<number>`, because the
- * ranked half leads every line with a number rather than a filename. A delta keyed on filenames
- * alone would report the notes the register actually ranks as unranked - the finding firing hardest
- * exactly where the register is doing its job.
+ * THE WHOLE-DOCUMENT SCAN WAS WRONG IN BOTH DIRECTIONS, and both were live on the real register.
+ * Matching `astubbs#<n>` anywhere turned continuation lines, cross-references and the register's own
+ * "What is NOT on this list" paragraph into ranked entries: every number the delta reported as
+ * resolving to nothing was a false positive, and two of them were real entries whose notes the same
+ * run had already resolved by FILENAME. In the other direction, a note was suppressed from the
+ * unranked half on the strength of the sentence "fixing astubbs#177 does not close it" - prose about
+ * a note, read as a ranking of it.
  *
- * A register entry named only in prose is out of the parse's reach. That is stated rather than
- * guessed at: a heuristic that matched prose would silently claim coverage it does not have.
+ * So an entry is a LIST ITEM, and the citations on that one line belong to it. An entry is satisfied
+ * when either half resolves, which is what stops a number being called unresolvable while the
+ * filename beside it resolves.
+ *
+ * A FILENAME IS ONLY A NOTE'S when it is bare or under `docs/inflight/`. `docs/merge-checklist.md`
+ * matched the old pattern and rendered as a ranked entry that is `absent` - an instruction to delete
+ * a live cross-reference, indistinguishable from the real case that row exists for.
+ *
+ * Both spellings of the number count: `AGENTS.md` mandates the fully qualified form for anything
+ * posted to GitHub, and the register already uses it once.
  */
 export function parseRegister(text) {
-    const names = new Set((text.match(/[a-z][a-z0-9]*-[a-z0-9-]+\.md/g) ?? []))
-    const numbers = new Set((text.match(/astubbs#(\d+)/g) ?? []).map((m) => Number(m.slice('astubbs#'.length))))
-    return { names, numbers }
+    // AN ENTRY IS A LIST ITEM INCLUDING ITS CONTINUATION LINES, not one physical line. This register
+    // routinely opens an item with the number and names the note two lines down - both of the
+    // entries a line-scoped parse got wrong (`astubbs#227`, `astubbs#317`) carry their filename on a
+    // continuation - so scoping to the marker line reported them as citing a note that does not
+    // exist. A continuation is an indented line; any non-indented line ends the item, which is what
+    // keeps the register's own "What is NOT on this list" paragraph out of the last entry.
+    const items = []
+    for (const line of (text ?? '').split('\n')) {
+        if (/^\s*(?:\d+\.|[-*])\s/.test(line)) items.push(line)
+        else if (items.length > 0 && /^\s+\S/.test(line)) items[items.length - 1] += `\n${line}`
+        else if (/\S/.test(line)) items.push('')
+    }
+    const entries = []
+    for (const item of items) {
+        if (!/^\s*(?:\d+\.|[-*])\s/.test(item)) continue
+        const names = []
+        for (const m of item.matchAll(/(?<prefix>[\w./-]*\/)?(?<name>[a-z][a-z0-9]*-[a-z0-9-]+\.md)/g)) {
+            const prefix = m.groups.prefix ?? ''
+            if (prefix === '' || prefix === `${NOTES_DIR}/`) names.push(m.groups.name)
+        }
+        const numbers = [...item.matchAll(/astubbs(?:\/parallel-consumer)?#(\d+)/g)].map((m) => Number(m[1]))
+        if (names.length > 0 || numbers.length > 0) entries.push({ names, numbers })
+    }
+    return { entries }
 }
 
 /**
@@ -217,6 +249,11 @@ export function rank(index, { prs, register, group = null }) {
     // note is placed by a version that is still open work and the row NAMES the refs that disagree.
     const plan = []
     for (const [path, versions] of index.byPath) {
+        // THE SAME MEMBERSHIP GUARD `docsShape` APPLIES, imported rather than restated. Without it
+        // this walked `index.byPath` raw and ranked `docs/inflight/CLAUDE.md` as open work - so the
+        // two surfaces disagreed about what the corpus even contains, which is the failure this
+        // module's header claims importing `inflightGroupOf` prevents.
+        if (!DOCUMENT_RE.test(path) || DIRECTORY_DOCS_RE.test(path)) continue
         const carrying = new Set()
         for (const refs of versions.values()) for (const r of refs) carrying.add(r)
         const all = [...carrying].sort()
@@ -270,7 +307,11 @@ export function rank(index, { prs, register, group = null }) {
         const name = path.slice(NOTES_DIR.length + 1)
         byName.set(name, { path, group: key, note })
         const numbered = numberFor(path, chosen.text)
-        if (numbered && numbered.kind === 'issue') {
+        // NOT AN UPSTREAM-ATTRIBUTED NUMBER. The register keys its numbers as `astubbs#<n>`, so a
+        // note whose own text says the number is confluentinc's must not satisfy a fork entry -
+        // that is the wrong-reference-that-resolves failure `numberFor` was extended to prevent,
+        // and the discriminating field is computed one line above.
+        if (numbered && numbered.kind === 'issue' && numbered.attribution !== 'upstream') {
             if (!byNumber.has(numbered.value)) byNumber.set(numbered.value, [])
             byNumber.get(numbered.value).push(name)
         }
@@ -332,6 +373,12 @@ export function rank(index, { prs, register, group = null }) {
 
     for (const rows of buckets.values()) rows.sort((a, b) => a.path.localeCompare(b.path))
 
+    const computed = delta(register, { byName, byNumber, buckets, group })
+    // WHICH ROWS THE REGISTER ALREADY NAMES, marked on the row itself. The scoped list previously
+    // gave a count and then every row with nothing saying which were which, so the
+    // register-versus-corpus distinction the delta exists to draw was unavailable at every scope.
+    for (const rows of buckets.values()) for (const row of rows) row.ranked = computed.rankedNames.has(row.name)
+
     const groups = RANKED_GROUPS
         .filter((k) => buckets.get(k).length > 0)
         .filter((k) => group === null || k === group)
@@ -354,80 +401,69 @@ export function rank(index, { prs, register, group = null }) {
         prsOk: prs.ok === true,
         prsReason: prs.ok ? null : (prs.reason ?? 'the pull-request snapshot did not answer'),
         scoped: group,
-        delta: delta(register, { byName, byNumber, buckets, group }),
+        delta: computed,
     }
 }
 
 /**
  * The register delta - the deliverable.
  *
- * Two halves, and they are asymmetric on purpose. What the register ranks is a handful of entries,
- * so every one of them is listed with the reason it needs attention. What the register does NOT name
- * is nearly every open note in the repository, so listing it unscoped would be the whole-corpus dump
- * this command exists to avoid, arriving under the name "delta" - it is a count per group until a
- * group scopes the call.
+ * ENTRY-SCOPED, because the register cites a note by filename AND by number on the same line. Asking
+ * the two halves independently reported one entry twice when it went stale, and called a number
+ * unresolvable while the filename beside it resolved. An entry is satisfied when EITHER half names
+ * open work in an impact bucket.
+ *
+ * The two halves are asymmetric on purpose. What the register ranks is a handful of entries, so each
+ * one that needs attention is listed with the reason. What it does NOT name is nearly every open
+ * note in the repository, so that half is a count per group until a group scopes the call - listing
+ * it unscoped would be the whole-corpus dump this command exists to avoid, under the name "delta".
  */
 function delta(register, { byName, byNumber, buckets, group }) {
     // A REGISTER THAT COULD NOT BE READ IS A FAILED RUN, not an empty delta. The caller emits
     // everything that did run and then fails, the way `refactor-window` reports an unmeasurable
     // candidate.
     if (register.ok !== true) {
-        return { ok: false, reason: register.reason ?? 'the register could not be read', ranked: [], byNumber: [], unranked: [], unrankedCounts: [], unresolvable: [] }
-    }
-    const { names, numbers } = parseRegister(register.text ?? '')
-
-    // A NUMBER CAN RESOLVE TO MORE THAN ONE NOTE, and picking one silently is a confidently wrong
-    // answer. Filenames get recycled and renamed here - a note and its own renamed predecessor sit
-    // on different refs carrying the same positional number - so a map keeping the last writer
-    // reported the register's live entry as stale, naming the dead copy. The register's entry is
-    // SATISFIED when any candidate is open work in an impact bucket; only when none is does it
-    // become a finding, and then it names every candidate rather than choosing between them.
-    const rankedNames = new Set(names)
-    const unresolvable = []
-    const byNumberRows = []
-    for (const n of [...numbers].sort((a, b) => a - b)) {
-        const candidates = byNumber.get(n) ?? []
-        if (candidates.length === 0) { unresolvable.push(n); continue }
-        for (const nm of candidates) rankedNames.add(nm)
-        const satisfied = candidates.some((nm) => INFLIGHT_IMPACT_ORDER.includes(byName.get(nm)?.group))
-        if (!satisfied) {
-            byNumberRows.push({
-                number: n,
-                names: candidates.slice().sort(),
-                reason: candidates.length > 1
-                    ? 'several notes carry this number, and none is open work in an impact bucket'
-                    : (byName.get(candidates[0])?.group ?? 'absent'),
-            })
+        return {
+            ok: false, reason: register.reason ?? 'the register could not be read',
+            stale: [], unrankedCounts: [], recognised: 0, rankedNames: new Set(),
         }
     }
+    const { entries } = parseRegister(register.text)
 
-    // What the register ranks that is not open work waiting in an impact bucket. The REASON is the
-    // finding: gone needs deleting from the register, deferred needs a schedule decision, and one
-    // no impact bucket claims needs a tag. Reporting all three as "not open" would turn three
-    // different actions into one shrug.
-    // FILENAMES ONLY. `rankedNames` also holds every note a register NUMBER resolved to, and those
-    // are reported by `byNumberRows` with the collision handling above - iterating the union here
-    // reported a number's stale twin a second time, as though the register had named it by name.
-    const ranked = []
-    for (const name of [...names].sort()) {
-        const hit = byName.get(name)
-        if (!hit) { ranked.push({ name, reason: 'absent' }); continue }
-        if (RANKED_GROUPS.includes(hit.group) && hit.group !== 'feature' && hit.group !== 'unmatched') continue
-        ranked.push({ name, reason: hit.group, path: hit.path })
+    // Every note any entry cites, by either half - these are the notes the register HAS named, and
+    // are therefore not reported as unranked whatever else is true of them.
+    const rankedNames = new Set()
+    for (const e of entries) {
+        for (const n of e.names) rankedNames.add(n)
+        for (const num of e.numbers) for (const nm of (byNumber.get(num) ?? [])) rankedNames.add(nm)
     }
 
-    const listUnranked = group !== null
-    const unranked = []
+    const isOpenWork = (name) => INFLIGHT_IMPACT_ORDER.includes(byName.get(name)?.group)
+
+    // What the register ranks that is NOT open work waiting in an impact bucket. The REASON is the
+    // finding: gone needs deleting from the register, deferred needs a schedule decision, and one no
+    // impact bucket claims needs a tag. Reporting all three as "not open" turns three different
+    // actions into one shrug.
+    const stale = []
+    for (const e of entries) {
+        const cited = [...e.names, ...e.numbers.flatMap((n) => byNumber.get(n) ?? [])]
+        if (cited.some(isOpenWork)) continue
+        const known = cited.filter((nm) => byName.has(nm))
+        stale.push({
+            cites: [...e.names, ...e.numbers.map((n) => `astubbs#${n}`)],
+            reason: known.length > 0 ? byName.get(known[0]).group : 'absent',
+        })
+    }
+
     const unrankedCounts = []
     for (const [key, rows] of buckets) {
         if (group !== null && key !== group) continue
         const missing = rows.filter((row) => !rankedNames.has(row.name))
-        if (missing.length === 0) continue
-        unrankedCounts.push({ key, count: missing.length })
-        if (listUnranked) unranked.push(...missing.map((row) => ({ path: row.path, name: row.name, group: key, title: row.title })))
+        if (missing.length > 0) unrankedCounts.push({ key, count: missing.length })
     }
 
-    // `ok: true` rather than a re-test of `register.ok`: the guard at the top of this function has
-    // already returned for every other case, so a conditional here reads as logic that cannot fire.
-    return { ok: true, reason: null, ranked, byNumber: byNumberRows, unranked, unrankedCounts, unresolvable: unresolvable.sort((a, b) => a - b) }
+    // HOW MUCH OF THE REGISTER THE PARSE ACTUALLY SAW. Zero recognised entries and zero findings
+    // renders identically to a register everything agrees with - the found-nothing / could-not-look
+    // collapse, moved from the git walk to the parse.
+    return { ok: true, reason: null, stale, unrankedCounts, recognised: entries.length, rankedNames }
 }

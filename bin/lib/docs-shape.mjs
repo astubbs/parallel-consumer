@@ -31,9 +31,9 @@ import { NOTES_DIR } from './repo.mjs'
 import { INFLIGHT_IMPACT_ORDER, classifyNote, titleOf } from './inflight-tags.mjs'
 
 /** A directory's own rules file is not one of the documents an area holds - the index's guard, ported. */
-const DIRECTORY_DOCS_RE = /\/(AGENTS|CLAUDE|README)\./
+export const DIRECTORY_DOCS_RE = /\/(AGENTS|CLAUDE|README)\./
 /** Both extensions, because the plan contract allows an artifact to be `.html`. */
-const DOCUMENT_RE = /\.(md|html)$/
+export const DOCUMENT_RE = /\.(md|html)$/
 
 /** The word an agent types for an area: the directory's last segment - `inflight`, `solutions`, `plans`. */
 const areaKey = (dir) => dir.split('/').pop()

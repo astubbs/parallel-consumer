@@ -494,17 +494,17 @@ export function formatRank(r) {
         out.push('  Everything below is the grouping alone - not a statement that the register agrees with it.\n')
     } else {
         out.push(`the register (${'docs/inflight/process-candidate-ranking.md'}) against the corpus:\n`)
-        if (d.ranked.length === 0 && d.byNumber.length === 0) out.push('  nothing it ranks has stopped being open work.')
-        else {
-            out.push('  ranked, but no longer open work in an impact bucket:')
-            for (const e of d.ranked) out.push(`      ${e.name.padEnd(52)}${e.reason}`)
-        }
-        for (const e of d.byNumber) {
-            out.push(`      astubbs#${e.number}`.padEnd(58) + e.reason)
-            if (e.names.length > 1) for (const nm of e.names) out.push(`          ${nm}`)
-        }
-        if (d.unresolvable.length > 0) {
-            out.push(`  ranked by a number that resolves to no note on any ref: ${d.unresolvable.map((n) => `astubbs#${n}`).join(', ')}`)
+        if (d.recognised === 0) {
+            // ZERO RECOGNISED ENTRIES IS NOT AGREEMENT. The parse reads list items citing a note
+            // filename or an `astubbs#<n>`; a register saying neither is out of its reach, and
+            // saying nothing here would render that as a register everything agrees with.
+            out.push('  the register was READ but the parse recognised no entry in it - so the delta below')
+            out.push('  is not a finding about the register, it is the parse not reaching it.')
+        } else if (d.stale.length === 0) {
+            out.push(`  ${plural(d.recognised, 'entry')} recognised; nothing it ranks has stopped being open work.`)
+        } else {
+            out.push(`  ${plural(d.recognised, 'entry')} recognised. Ranked, but no longer open work in an impact bucket:`)
+            for (const e of d.stale) out.push(`      ${e.cites.join(' / ').padEnd(52)}${e.reason}`)
         }
         if (d.unrankedCounts.length > 0) {
             out.push('', '  open and NOT named by the register:')
@@ -525,6 +525,8 @@ export function formatRank(r) {
             out.push(`      ${row.name}`)
             if (row.title) out.push(`          "${row.title}"`)
             out.push(`          ${carriage(row, r)}`)
+            // Which side of the delta this row is on, on the row - not only as a count above.
+            if (row.ranked) out.push('          the register already names this one')
             if (row.number) {
                 const which = { fork: 'this fork', upstream: 'confluentinc', unknown: 'NOT attributable from the filename - try both' }
                 out.push(`          number in the filename: ${row.number.value} (${which[row.number.attribution]})`)

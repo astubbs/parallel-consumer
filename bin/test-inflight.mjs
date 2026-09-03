@@ -3196,7 +3196,7 @@ const CHECKS = [
             return inRankFixture(async () => {
                 const r = await rankIndex(binDir)
                 if (!r.ok) return false
-                const why = new Map(r.delta.ranked.map((e) => [e.name, e.reason]))
+                const why = new Map(r.delta.stale.map((e) => [e.cites.join(' / '), e.reason]))
                 return why.get('bug-gone-forever.md') === 'absent'
                     && why.get('bug-parked-thing.md') === 'deferred'
                     && why.get('bug-closed-thing.md') === 'closed'
@@ -3204,7 +3204,10 @@ const CHECKS = [
                     && !why.has('bug-open-stall.md')
             })
         },
-        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'), "reason: 'absent'", "reason: 'closed'"),
+        // Collapsing every reason to one is the defect: gone, deferred and untagged need different
+        // actions, and one shrug hides which.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'),
+            "known.length > 0 ? byName.get(known[0]).group : 'absent'", "'absent'"),
     },
     {
         id: 'rank-counts-a-note-the-register-ranks-by-number-as-ranked',
@@ -3214,10 +3217,12 @@ const CHECKS = [
             return inRankFixture(async () => {
                 const r = await rankIndex(binDir)
                 if (!r.ok) return false
-                const unranked = new Set(r.delta.unranked.map((e) => e.path))
-                return !unranked.has('docs/inflight/core-141-numbered-thing.md')
-                    && r.delta.unresolvable.includes(999)
-                    && !r.delta.unresolvable.includes(141)
+                // The 141 entry is satisfied by the note the number resolves to, so it is not a
+                // finding; the 999 entry resolves to nothing and is reported as absent.
+                const stale = r.delta.stale.map((e) => e.cites.join(' / '))
+                return r.delta.rankedNames.has('core-141-numbered-thing.md')
+                    && stale.includes('astubbs#999')
+                    && !stale.some((c) => c.includes('astubbs#141'))
             })
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'), 'const numbered = positionalNumber(path)', 'const numbered = null'),
@@ -3231,12 +3236,15 @@ const CHECKS = [
                 const bare = await rankIndex(binDir)
                 const scoped = await rankIndex(binDir, 'stall')
                 if (!bare.ok || !scoped.ok) return false
-                return bare.delta.unranked.length === 0 && bare.delta.unrankedCounts.length > 0
-                    && scoped.delta.unranked.length > 0
-                    && scoped.delta.unranked.every((e) => e.group === 'stall')
+                // Unscoped is a count per group; scoped narrows to the one group asked for.
+                return bare.delta.unrankedCounts.length > 1
+                    && scoped.delta.unrankedCounts.length === 1
+                    && scoped.delta.unrankedCounts[0].key === 'stall'
             })
         },
-        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'), 'const listUnranked = group !== null', 'const listUnranked = true'),
+        // Ignoring the scope is the defect - every group's count comes back on a scoped call.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'),
+            'if (group !== null && key !== group) continue', 'if (false) continue'),
     },
     {
         id: 'rank-fails-the-run-when-the-register-could-not-be-read',
@@ -3267,11 +3275,11 @@ const CHECKS = [
                 // 141 resolves to the open `crash` note AND to a dead twin sitting in `unmatched`.
                 // The register's entry is satisfied by the open one, so neither is a finding - and
                 // above all the dead twin is never named as the reason the entry is stale.
-                const named = JSON.stringify(bare.delta.byNumber) + JSON.stringify(bare.delta.ranked)
-                const unranked = new Set(scoped.delta.unranked.map((e) => e.name))
+                const named = JSON.stringify(bare.delta.stale)
                 return !named.includes('bug-141-older-name.md')
-                    && !bare.delta.byNumber.some((e) => e.number === 141)
-                    && !unranked.has('bug-141-older-name.md')
+                    && !named.includes('astubbs#141')
+                    // Both candidates of the number count as named, so neither is called unranked.
+                    && scoped.delta.rankedNames.has('bug-141-older-name.md')
             })
         },
         // Keeping only ONE candidate per number is the defect: the dead twin wins and is reported.
@@ -3378,6 +3386,92 @@ const CHECKS = [
         mutate: (binDir) => patch(join(binDir, 'lib', 'views.mjs'),
             'out.push(`          bin/inflight.mjs docs show ${row.path}`)', 'out.push(\'\')'),
     },
+    {
+        id: 'rank-reads-the-register-by-entry-not-by-scanning-the-whole-document',
+        why: "scanning the document for `astubbs#<n>` turned prose, cross-references and the register's own \"What is NOT on this list\" paragraph into ranked entries, and any hyphenated .md token into a phantom one. Both directions were wrong on the real register: every number reported as resolving to nothing was a false positive, two of them were entries whose filename the same run resolved, and a live note was suppressed from the unranked half by the sentence \"fixing astubbs#177 does not close it\"",
+        run: async (binDir) => {
+            const { parseRegister, rank } = await rankLib(binDir)
+            // Prose is not an entry, and a doc outside docs/inflight/ is not a note.
+            const prose = parseRegister('What is NOT on this list: astubbs#857, and see docs/merge-checklist.md.')
+            if (prose.entries.length !== 0) return false
+            // A list item owns its CONTINUATION lines - this register opens with the number and
+            // names the note two lines down, which a line-scoped parse split in half.
+            const wrapped = parseRegister('- **astubbs#227** - a thing\n  named here: `core-auto-scaling.md`.\n')
+            if (wrapped.entries.length !== 1) return false
+            const [e] = wrapped.entries
+            if (!(e.numbers.includes(227) && e.names.includes('core-auto-scaling.md'))) return false
+
+            return inRankFixture(async () => {
+                const r = await rankIndex(binDir)
+                if (!r.ok) return false
+                const stale = r.delta.stale.map((x) => x.cites.join(' / '))
+                // The fixture's register mentions astubbs#857 and docs/merge-checklist.md in PROSE.
+                return !stale.some((c) => c.includes('857') || c.includes('merge-checklist'))
+                    // The qualified spelling, with its filename on a continuation line, resolves.
+                    && r.delta.rankedNames.has('pr-207-a-pr-note.md')
+                    && r.delta.recognised > 0
+            })
+        },
+        // Scanning the whole document again is the defect - prose becomes an entry.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'),
+            "if (/^\\s*(?:\\d+\\.|[-*])\\s/.test(line)) items.push(line)", 'if (true) items.push(line)'),
+    },
+    {
+        id: 'rank-says-when-the-parse-recognised-no-register-entry-at-all',
+        why: 'the parse reads list items citing a note filename or a number; a register saying neither is out of its reach, and rendering that as "nothing it ranks has stopped being open work" is the found-nothing / could-not-look collapse moved from the git walk to the parse, at exit 0',
+        run: async (binDir) => {
+            const { rank, registerBlob } = await rankLib(binDir)
+            const { formatRank } = await views(binDir)
+            return inRankFixture(async () => {
+                const index = await rankCorpus(binDir)
+                const prose = rank(index, { prs: NO_PRS, register: { ok: true, text: 'all prose, no entries here.' } })
+                if (!prose.ok || prose.delta.recognised !== 0) return false
+                const shown = formatRank(prose)
+                return /parse recognised no entry/.test(shown) && !/nothing it ranks/.test(shown)
+                    // It still RAN - this is a coverage statement, not a failure.
+                    && prose.delta.ok === true && registerBlob(index).ok === true
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'views.mjs'), 'if (d.recognised === 0) {', 'if (false) {'),
+    },
+    {
+        id: 'rank-reports-a-branch-that-disagrees-about-a-note-rather-than-picking-one',
+        why: "reporting the disagreement instead of resolving it to one status is this command's whole reason for existing - `ci-inflight-next-commands.md` states the axis as flow with git, do not suppress it - and nothing asserted on the field or its rendered line at all. On the real corpus it is live: a data-loss note is open on the branch that owns the bug and closed on a branch that fixed something adjacent",
+        run: async (binDir) => {
+            const { formatRank } = await views(binDir)
+            return inRankFixture(async () => {
+                const r = await rankIndex(binDir, 'stall')
+                if (!r.ok) return false
+                const row = rankRow(r, 'bug-open-only-on-an-archive')
+                if (!row) return false
+                // The live branch closed it; the tag still has it open. Both readings survive.
+                const closedElsewhere = row.disagreement.some((dis) => dis.group === 'closed')
+                return closedElsewhere && row.group === 'stall'
+                    && /DISAGREEMENT: on .* this note reads as closed, not stall/.test(formatRank(r))
+            })
+        },
+        // Reporting only the chosen version's group is the defect: the disagreement disappears.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'),
+            '.filter((g) => g !== key)', '.filter(() => false)'),
+    },
+    {
+        id: 'rank-refuses-an-unknown-option-and-an-impact-with-no-value',
+        why: 'every malformed form here fails quietly and plausibly - an unknown flag dropped by a startsWith filter runs a different query than the one typed, and `--impact` with nothing after it scoped to undefined. The sibling `docs show` guards both and this had neither',
+        run: async (binDir) => refuses(binDir, ['rank', '--nonsense'], 'unknown option')
+            && refuses(binDir, ['rank', '--impact'], 'needs a group after it'),
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+            "if (unknown.length) return { ok: false, reason: `rank: unknown option(s)", 'if (false) return { ok: false, reason: `rank: unknown option(s)'),
+    },
+    {
+        id: 'rank-answers-an-unknown-group-with-the-valid-names-and-exit-0',
+        why: 'an unknown group is a question, not a failure - the shape `docs list` already uses, so a typo prints the command that would have worked rather than a usage wall. Exit 0 because it RAN',
+        run: async (binDir) => {
+            const r = invoke(binDir, ['rank', '--impact', 'no-such-group'], { cwd: rankFixture() })
+            return r0(r) && r.out.includes('bin/inflight.mjs rank --impact stall') && r.out.includes("no group 'no-such-group'")
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+            'if (group !== null && !RANKED_GROUPS.includes(group)) {', 'if (false) {'),
+    },
 ]
 
 /**
@@ -3470,7 +3564,16 @@ function rankFixture() {
         '- `bug-closed-thing.md` - closed',
         '- `core-no-impact.md` - open, but no impact bucket claims it',
         '- astubbs#141 - ranked by NUMBER, and the note that carries it is open',
-        '- astubbs#999 - resolves to no note on any ref', '',
+        '- astubbs#999 - resolves to no note on any ref',
+        // The number opens the item and the filename lands on a CONTINUATION line, which is how
+        // this register actually writes its ranked half.
+        '- **astubbs/parallel-consumer#207** - the qualified spelling, and the note is named',
+        '  two lines down: `pr-207-a-pr-note.md`.',
+        '',
+        // NOT ENTRIES. Prose mentioning a number, and a citation of a doc outside docs/inflight -
+        // both were read as ranked entries by a whole-document scan.
+        'What is NOT on this list: astubbs#857 has its fix written, and see docs/merge-checklist.md.',
+        '',
     ].join('\n'))
     commit('the rank corpus')
 
