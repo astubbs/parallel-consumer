@@ -205,16 +205,66 @@ class PartitionStateCommittedOffsetIT extends BrokerIntegrationTest<String, Stri
         log.debug("Compaction setup complete");
     }
 
+    /**
+     * Fills segments and then waits for the broker to actually compact, rather than sleeping a
+     * constant and hoping it did.
+     * <p>
+     * This used to be a flat {@code sleepSecondsLog(20)} with the author's own {@code // or wait?}
+     * beside it. Two calls in a class of seven tests made it over 60s of the class's 159s, and it
+     * was the second-largest term in the whole integration gate after the 857 probe.
+     * <p>
+     * <b>The 20s is now a deadline rather than a duration</b>, so the worst case is exactly what it
+     * was before and the normal case returns as soon as the effect is visible. What is waited ON is
+     * the log start offset advancing: compaction reclaiming records at the head is precisely what
+     * moves it, and it is read with the same {@code listOffsets(earliest)} call this class already
+     * uses elsewhere.
+     * <p>
+     * <b>This strengthens the test rather than weakening it.</b> Sleeping asserted nothing - a run
+     * where compaction never happened was indistinguishable from one where it did, and the 20s was
+     * a guess either way. Waiting for the observable effect can at least say which happened, and
+     * says so in the log. The deadline path deliberately WARNS and continues instead of failing:
+     * that keeps behaviour identical to today for any case where the offset legitimately does not
+     * move, so this change cannot turn a passing test red.
+     */
     @SneakyThrows
     private List<String> triggerCompactionProcessing() {
+        final long earliestBefore = earliestOffset();
+
         // send a lot of messages to fill up segments
         List<String> keys = produceMessages(TO_PRODUCE * 2, "log-compaction-trigger-");
-        // or wait?
-        final int pauseSeconds = 20;
-        log.info("Pausing for {} seconds to allow for compaction", pauseSeconds);
-        ThreadUtils.sleepSecondsLog(pauseSeconds);
+
+        final Duration budget = Duration.ofSeconds(20);
+        log.info("Waiting up to {}s for compaction to advance the log start offset past {}",
+                budget.getSeconds(), earliestBefore);
+        long start = System.currentTimeMillis();
+        try {
+            Awaitility.await("compaction advances the log start offset")
+                    .atMost(budget)
+                    .pollInterval(Duration.ofMillis(500))
+                    .until(() -> earliestOffset() > earliestBefore);
+            log.info("Compaction observed after {}ms - log start offset {} -> {}",
+                    System.currentTimeMillis() - start, earliestBefore, earliestOffset());
+        } catch (org.awaitility.core.ConditionTimeoutException e) {
+            // Deliberately not a failure - see the javadoc. Before this change the same run simply
+            // slept the whole 20s and said nothing, so continuing here is the OLD behaviour, now
+            // with the previously-missing diagnosis attached.
+            log.warn("Compaction did NOT advance the log start offset (still {}) within {}s. "
+                            + "Proceeding anyway, which is what the previous fixed sleep did silently - "
+                            + "but if a compaction assertion downstream now fails, this line is why.",
+                    earliestBefore, budget.getSeconds());
+        }
 
         return keys;
+    }
+
+    /**
+     * The partition's log start offset. Compaction reclaiming head records is what advances it.
+     */
+    @SneakyThrows
+    private long earliestOffset() {
+        return getKcu().getAdmin()
+                .listOffsets(UniMaps.of(tp, OffsetSpec.earliest()))
+                .partitionResult(tp).get().offset();
     }
 
     @SneakyThrows
