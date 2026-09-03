@@ -3027,6 +3027,10 @@ const CHECKS = [
     // --- `rank` --------------------------------------------------------------------------------
     {
         id: 'rank-openness-follows-the-marker-not-the-word-inside-it',
+        // ANCHORED ON THE RANKABLE SET, not on the not-rankable one derived from it: the
+        // `!buckets.has(key)` guard beside that derivation absorbs a mutation there and the control
+        // goes green while asserting nothing. Widening what counts as rankable is the edit that
+        // actually lets a state-carrying note through.
         why: "`classifyNote` sets `open` from the PRESENCE of a state marker, so a note declaring `inflight-state: open - <reason>` is not open - and one is on the baseline today. A requirement written as a list of state words (closed/blocked/deferred/parked) would keep it, and the two readings disagree with nothing in the output to say which happened",
         run: async (binDir) => {
             const { rank } = await rankLib(binDir)
@@ -3044,7 +3048,8 @@ const CHECKS = [
             })
         },
         // Reading openness off the WORDS keeps `bug-says-open`, which is the whole finding.
-        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'), "new Set(['closed', 'deferred', 'registers'])", "new Set(['registers'])"),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'),
+            "[...INFLIGHT_IMPACT_ORDER, 'feature', 'unmatched']", '[...INFLIGHT_GROUP_ORDER]'),
     },
     {
         id: 'rank-emits-open-notes-no-impact-bucket-claimed-rather-than-dropping-them',
@@ -3472,6 +3477,74 @@ const CHECKS = [
         mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
             'if (group !== null && !RANKED_GROUPS.includes(group)) {', 'if (false) {'),
     },
+    {
+        id: 'rank-does-not-answer-from-the-baseline-when-a-live-ref-says-the-note-is-open',
+        why: "the baseline preference beat a still-open version unconditionally, so a note deferred on the baseline and OPEN on a live branch vanished from its group AND the delta told the register it was deferred - on the baseline's word, with no ref named anywhere. Answering from the baseline while a live ref says otherwise is the failure this whole command exists to prevent, and it is worse than a missing row because the delta actively prescribes the wrong disposition. Reproduced on the real corpus with core-auto-scaling.md before the fix",
+        run: async (binDir) => {
+            const { formatRank } = await views(binDir)
+            return inRankFixture(async () => {
+                const r = await rankIndex(binDir, 'crash')
+                if (!r.ok) return false
+                const row = rankRow(r, 'core-deferred-here-open-there')
+                if (!row) return false
+                return row.group === 'crash'
+                    // Read from the branch that has it open, and the row says so rather than
+                    // claiming every branch cut from the baseline carries this.
+                    && row.readFromBaseline === false
+                    && row.disagreement.some((dis) => dis.group === 'deferred')
+                    // And the delta must NOT be telling the register it is deferred.
+                    && !r.delta.stale.some((e) => e.cites.join(' ').includes('core-deferred-here-open-there'))
+                    && /NOT .*- the baseline's copy is not open work/.test(formatRank(r))
+            })
+        },
+        // Preferring the baseline unconditionally is the defect.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'),
+            'const pool = rankable.length > 0 ? rankable : ordered', 'const pool = ordered'),
+    },
+    {
+        id: 'rank-does-not-let-a-note-no-live-ref-carries-satisfy-a-register-entry',
+        why: 'asking only the group let an entry be satisfied by a note preserved on a tag, so the delta could report nothing has stopped being open work a few lines above its own row saying that note is reachable from nothing live',
+        run: async (binDir) => {
+            const { rank, registerBlob } = await rankLib(binDir)
+            return inRankFixture(async () => {
+                const index = await rankCorpus(binDir)
+                // The archive-only note is `stall` and reachable from no live ref.
+                const r = rank(index, { prs: NO_PRS, register: { ok: true, text: '- `bug-archived-only.md` - ranked\n' } })
+                if (!r.ok) return false
+                const row = rankRow(r, 'bug-archived-only')
+                return !!row && row.preserved === true
+                    // Ranked, and NOT satisfied - the entry is a finding, not an all-clear.
+                    && r.delta.stale.some((e) => e.cites.includes('bug-archived-only.md'))
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'),
+            'return !!hit && hit.live && INFLIGHT_IMPACT_ORDER.includes(hit.group)',
+            'return !!hit && INFLIGHT_IMPACT_ORDER.includes(hit.group)'),
+    },
+    {
+        id: 'rank-states-how-much-of-the-register-the-parse-reached',
+        why: 'a bare "N entries recognised" reads as a complete reading of the register and is not - the ready-picks half cites bare and upstream numbers this parse does not read. The count was quoted to a human as a complete reading before the denominator existed',
+        run: async (binDir) => {
+            const { rank } = await rankLib(binDir)
+            const { formatRank } = await views(binDir)
+            return inRankFixture(async () => {
+                const index = await rankCorpus(binDir)
+                const r = rank(index, {
+                    prs: NO_PRS,
+                    register: { ok: true, text: '- `bug-open-stall.md` - read\n- see confluentinc#40 - NOT read\n' },
+                })
+                if (!r.ok) return false
+                const shown = formatRank(r)
+                return r.delta.items === 2 && r.delta.recognised === 1
+                    && /1 entry of 2 list items recognised/.test(shown)
+                    && /outside the delta entirely/.test(shown)
+                    // And never the broken plural it used to print.
+                    && !/entrys/.test(shown)
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'views.mjs'),
+            'return `${entries} of ${d.items} list items recognised`', 'return `${entries} recognised`'),
+    },
 ]
 
 /**
@@ -3556,6 +3629,10 @@ function rankFixture() {
     // today and its `0600` is the release version 0.6.0.0 - the position rule alone matched it and
     // would have printed `gh issue view 600`, a reference that RESOLVES to the wrong thing.
     note('release-0600-blockers', `# A release version, not an issue\n\n${tags('task', 'release-gate')}\nbody\n`)
+    // DEFERRED ON THE BASELINE, OPEN ON A LIVE BRANCH (added below). The baseline preference dropped
+    // this from its group entirely AND told the register it was deferred, on the baseline's word,
+    // with no ref named - the same defect as the first-sorted-live-ref one, a layer up.
+    note('core-deferred-here-open-there', `# Deferred on the baseline\n\n${tags('feature', 'crash', 'deferred - after v6')}\nbody\n`)
     write('docs/inflight/process-candidate-ranking.md', [
         '# Next candidates, ranked', '', '<!-- inflight-type: register -->', '',
         '- `bug-open-stall.md` - open, so no delta row',
@@ -3563,6 +3640,7 @@ function rankFixture() {
         '- `bug-parked-thing.md` - deferred',
         '- `bug-closed-thing.md` - closed',
         '- `core-no-impact.md` - open, but no impact bucket claims it',
+        '- `core-deferred-here-open-there.md` - deferred on the baseline, open on a live ref',
         '- astubbs#141 - ranked by NUMBER, and the note that carries it is open',
         '- astubbs#999 - resolves to no note on any ref',
         // The number opens the item and the filename lands on a CONTINUATION line, which is how
@@ -3593,6 +3671,13 @@ function rankFixture() {
     // CLOSED ON EVERY LIVE REF, STILL OPEN ON A TAG. The chosen version is then the tag's while the
     // path's live refs are a disjoint set - which crashed the row on an undefined read ref until the
     // read ref was derived from the chosen version's OWN refs. Reproduced before the fix.
+    git('checkout', '-q', '-b', 'open-on-a-branch', 'master')
+    note('core-deferred-here-open-there', `# Deferred on the baseline\n\n${tags('feature', 'crash')}\nopen here\n`)
+    commit('open on a live branch, deferred on the baseline')
+    git('update-ref', 'refs/remotes/origin/open-on-a-branch', git('rev-parse', 'HEAD'))
+    git('checkout', '-q', 'master')
+    git('branch', '-q', '-D', 'open-on-a-branch')
+
     git('checkout', '-q', '-b', 'closed-live-copy', 'master')
     note('bug-open-only-on-an-archive', `# Closed live, open on a tag\n\n${tags('bug', 'stall', 'closed - done here')}\nbody\n`)
     commit('closed on the live branch')

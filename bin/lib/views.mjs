@@ -479,6 +479,11 @@ export function formatRank(r) {
     const out = []
     const cmd = (g) => `bin/inflight.mjs rank --impact ${g}`
 
+    if (r.unreadableRefs.length > 0) {
+        out.push(`  COULD NOT LIST the notes on ${plural(r.unreadableRefs.length, 'ref')}, so this answer does not cover them:`)
+        out.push(`      ${r.unreadableRefs.slice(0, 5).join(', ')}${r.unreadableRefs.length > 5 ? ', ...' : ''}`)
+        out.push('')
+    }
     if (r.unreadable.length > 0) {
         out.push(`  COULD NOT READ ${plural(r.unreadable.length, 'note')} that the ref listing named - this answer is INCOMPLETE:`)
         for (const p of r.unreadable) out.push(`      ${p}`)
@@ -501,9 +506,9 @@ export function formatRank(r) {
             out.push('  the register was READ but the parse recognised no entry in it - so the delta below')
             out.push('  is not a finding about the register, it is the parse not reaching it.')
         } else if (d.stale.length === 0) {
-            out.push(`  ${plural(d.recognised, 'entry')} recognised; nothing it ranks has stopped being open work.`)
+            out.push(`  ${coverage(d)}; nothing it recognises has stopped being open work.`)
         } else {
-            out.push(`  ${plural(d.recognised, 'entry')} recognised. Ranked, but no longer open work in an impact bucket:`)
+            out.push(`  ${coverage(d)}. Ranked, but no longer open work in an impact bucket:`)
             for (const e of d.stale) out.push(`      ${e.cites.join(' / ').padEnd(52)}${e.reason}`)
         }
         if (d.unrankedCounts.length > 0) {
@@ -534,7 +539,11 @@ export function formatRank(r) {
             }
             // NOT `d` - that is the delta, thirty lines up in this same function.
             for (const dis of row.disagreement) {
-                out.push(`          DISAGREEMENT: on ${dis.ref} this note reads as ${dis.group}, not ${row.group}`)
+                // NAMING AN ARCHIVE AS IF IT WERE A BRANCH sends a reader to check out a tag. The
+                // rule is three lines up in this file's own carriage sentence; the line printing it
+                // did not follow it.
+                const where = dis.archival ? `${dis.ref} (an ARCHIVE)` : dis.ref
+                out.push(`          DISAGREEMENT: on ${where} this note reads as ${dis.group}, not ${row.group}`)
             }
             // EVERY LEVEL PRINTS THE NEXT LEVEL'S COMMAND - the front door's whole interface, and
             // what `docs list inflight <impact>` already does for the same rows. Without it a reader
@@ -565,6 +574,23 @@ export function formatRank(r) {
 }
 
 /**
+ * How much of the register the parse actually reached, never a bare numerator.
+ *
+ * "11 entries recognised" reads as a complete reading of the register and is not: the ready-picks
+ * half cites bare `#40` and `confluentinc#...` numbers this parse does not reach. Saying the
+ * denominator, and what the unreached items look like, is the difference between a coverage
+ * statement and a claim. (It also stops `plural` making "entrys", which it did.)
+ */
+function coverage(d) {
+    const entries = d.recognised === 1 ? '1 entry' : `${d.recognised} entries`
+    const outside = d.items - d.recognised
+    return `${entries} of ${d.items} list items recognised`
+        + (outside > 0
+            ? ` - the other ${outside} cite something this parse does not read (a bare number, or an upstream one), so they are outside the delta entirely`
+            : '')
+}
+
+/**
  * The one sentence that must never read as ownership.
  *
  * On the baseline, carriage is evidence of nothing - every branch cut from it carries the note. Off
@@ -572,7 +598,14 @@ export function formatRank(r) {
  * fact about the BRANCH rather than about the note's subject.
  */
 function carriage(row, r) {
-    if (row.onBaseline) return `on ${r.baseline} - every branch cut from it carries this, so carriage names no owner`
+    // THE REF ACTUALLY READ, not the path's on-baseline fact. A note deferred on the baseline and
+    // open on a branch is read from that branch, and the every-branch-carries-it sentence would be a
+    // lie about the row whose whole point is that branch.
+    if (row.readFromBaseline) return `on ${r.baseline} - every branch cut from it carries this, so carriage names no owner`
+    if (row.onBaseline) {
+        return `read from ${row.readRef}, NOT ${r.baseline} - the baseline's copy is not open work, this ref's is`
+            + ` - CARRIES the note, which is not the same as fixing what it describes`
+    }
     const pr = row.pr ? `  [astubbs/parallel-consumer#${row.pr.number} ${row.pr.state}]` : (row.prKnown ? '' : '  [PR state UNKNOWN]')
     const where = row.preserved
         ? `preserved only on ${row.readRef} - an archive, so nothing here will land it`

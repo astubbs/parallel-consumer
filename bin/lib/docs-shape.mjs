@@ -52,7 +52,7 @@ export const INFLIGHT_GROUPS = {
 }
 
 /** Every in-flight group key in presentation order. */
-const INFLIGHT_GROUP_ORDER = ['registers', ...INFLIGHT_IMPACT_ORDER, 'feature', 'unmatched', 'closed', 'deferred']
+export const INFLIGHT_GROUP_ORDER = ['registers', ...INFLIGHT_IMPACT_ORDER, 'feature', 'unmatched', 'closed', 'deferred']
 
 const impactRank = (impact) => {
     const i = INFLIGHT_IMPACT_ORDER.indexOf(impact)

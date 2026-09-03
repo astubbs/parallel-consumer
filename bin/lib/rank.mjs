@@ -40,7 +40,7 @@
 import { blobContents, blobsForPath, refKind } from './git.mjs'
 import { INFLIGHT_IMPACT_ORDER, classifyNote } from './inflight-tags.mjs'
 import { NOTES_DIR, REPO } from './repo.mjs'
-import { DIRECTORY_DOCS_RE, DOCUMENT_RE, INFLIGHT_GROUPS, inflightGroupOf } from './docs-shape.mjs'
+import { DIRECTORY_DOCS_RE, DOCUMENT_RE, INFLIGHT_GROUPS, INFLIGHT_GROUP_ORDER, inflightGroupOf } from './docs-shape.mjs'
 
 /** The standing ruling this command diffs against. Read, never written. */
 export const REGISTER_PATH = `${NOTES_DIR}/process-candidate-ranking.md`
@@ -62,8 +62,15 @@ export const RANKED_GROUPS = [...INFLIGHT_IMPACT_ORDER, 'feature', 'unmatched']
  * `registers` are consulted and never completed; `closed` and `deferred` carry a state marker. The
  * counts still appear, because an enumeration that does not say what it left out is a false negative
  * wearing the authority of a completed check.
+ *
+ * DERIVED FROM THE OWNING TAXONOMY, not hand-listed beside it. These two sets have to PARTITION
+ * everything `inflightGroupOf` can return: a group in neither made `buckets.get(key)` undefined and
+ * `.push` throw, and the front door has no top-level try/catch, so the process exited 1 - neither of
+ * its two documented codes, and a caller testing for 2 would read that as a successful run. Deriving
+ * the complement means a group added to `docs-shape.mjs` lands here as not-rankable and is COUNTED,
+ * which is the safe direction; the guard below covers anything outside the taxonomy entirely.
  */
-const NOT_RANKABLE = new Set(['closed', 'deferred', 'registers'])
+const NOT_RANKABLE = new Set(INFLIGHT_GROUP_ORDER.filter((k) => !RANKED_GROUPS.includes(k)))
 
 /**
  * The number a note's filename carries in the `<area>-<NNN>-<slug>` position, or null.
@@ -146,9 +153,16 @@ function chooseVersion(seen, { onBaseline, readable, baseline }) {
         ...v.refs.map((r) => readable.indexOf(r)).filter((i) => i >= 0).concat([Number.MAX_SAFE_INTEGER]),
     )
     const ordered = seen.slice().sort((a, b) => readOrder(a) - readOrder(b))
-    return (onBaseline ? ordered.find((v) => v.refs.includes(baseline)) : null)
-        ?? ordered.find((v) => RANKED_GROUPS.includes(v.group))
-        ?? ordered[0]
+    // A VERSION THAT IS STILL OPEN WORK BEATS THE BASELINE'S, and the baseline only breaks ties
+    // among those. Preferring the baseline unconditionally was the same defect as the
+    // first-sorted-live-ref one, a layer up and worse: `core-auto-scaling.md` is deferred on the
+    // baseline and OPEN with `inflight-impact: throughput` on a live branch, so the note vanished
+    // from its group AND the delta told the register it was deferred - on the baseline's word, with
+    // no ref named anywhere. Answering from the baseline while a live ref says otherwise is the
+    // failure this whole command exists to prevent.
+    const rankable = ordered.filter((v) => RANKED_GROUPS.includes(v.group))
+    const pool = rankable.length > 0 ? rankable : ordered
+    return (onBaseline ? pool.find((v) => v.refs.includes(baseline)) : null) ?? pool[0]
 }
 
 /**
@@ -216,7 +230,11 @@ export function parseRegister(text) {
         const numbers = [...item.matchAll(/astubbs(?:\/parallel-consumer)?#(\d+)/g)].map((m) => Number(m[1]))
         if (names.length > 0 || numbers.length > 0) entries.push({ names, numbers })
     }
-    return { entries }
+    // THE DENOMINATOR SHIPS WITH THE NUMERATOR. A count of recognised entries with nothing to
+    // compare it against reads as a complete reading of the register, and it is not: the ready-picks
+    // half cites bare `#40` and `confluentinc#...` numbers, which this parse does not reach and
+    // deliberately does not guess at. `items` is every list item seen, recognised or not.
+    return { entries, items: items.filter((i) => /^\s*(?:\d+\.|[-*])\s/.test(i)).length }
 }
 
 /**
@@ -305,7 +323,7 @@ export function rank(index, { prs, register, group = null }) {
         const note = chosen.note
         const key = chosen.group
         const name = path.slice(NOTES_DIR.length + 1)
-        byName.set(name, { path, group: key, note })
+        byName.set(name, { path, group: key, note, live: live.length > 0 })
         const numbered = numberFor(path, chosen.text)
         // NOT AN UPSTREAM-ATTRIBUTED NUMBER. The register keys its numbers as `astubbs#<n>`, so a
         // note whose own text says the number is confluentinc's must not satisfy a fork entry -
@@ -316,7 +334,9 @@ export function rank(index, { prs, register, group = null }) {
             byNumber.get(numbered.value).push(name)
         }
 
-        if (NOT_RANKABLE.has(key)) {
+        // `!buckets.has(key)` is the belt to the derivation's braces: a group from outside the
+        // taxonomy altogether is counted rather than throwing on an undefined bucket.
+        if (NOT_RANKABLE.has(key) || !buckets.has(key)) {
             excluded.set(key, (excluded.get(key) ?? 0) + 1)
             continue
         }
@@ -324,7 +344,10 @@ export function rank(index, { prs, register, group = null }) {
         // What the OTHER versions say, so one status never hides a disagreement between branches.
         const disagreement = [...new Set(seen.map((v) => v.group))]
             .filter((g) => g !== key)
-            .map((g) => ({ group: g, ref: seen.find((v) => v.group === g).refs[0] }))
+            .map((g) => {
+                const ref = seen.find((v) => v.group === g).refs[0]
+                return { group: g, ref, archival: archival.get(ref) === true }
+            })
 
         // FROM THE CHOSEN VERSION'S OWN REFS, never the path-level `readable`. Those two sets can be
         // disjoint: a note closed on every live ref but still open on a preserved tag makes
@@ -347,9 +370,14 @@ export function rank(index, { prs, register, group = null }) {
             group: key,
             impact: note.impact,
             onBaseline,
+            // WHETHER THE VERSION BEING READ IS THE BASELINE'S, which is not the same as the path
+            // being on the baseline: a note deferred on the baseline and open on a branch is now
+            // read from that branch, and the "every branch cut from it carries this" sentence would
+            // be a lie about a row whose whole point is the branch.
+            readFromBaseline: readRef === index.baseline,
             // Carriage, never ownership - the one thing this command refuses to infer.
             relation: 'carries',
-            carryingRefs: onBaseline ? [] : all,
+            carryingRefs: readRef === index.baseline ? [] : all,
             readRef,
             // TWO DIFFERENT FACTS, and collapsing them loses the useful half. `preserved` says no
             // live ref carries this note AT ALL. `readRefArchival` says the version being read is on
@@ -398,6 +426,10 @@ export function rank(index, { prs, register, group = null }) {
         groups,
         excluded: [...excluded].map(([key, count]) => ({ key, count, label: INFLIGHT_GROUPS[key] ?? key })),
         unreadable,
+        // REFS WHOSE NOTE LISTING FAILED, from the corpus index that already computed them and had
+        // no consumer. A ref that could not be listed carries an unknown number of notes, so an
+        // answer that does not name it is a could-not-look wearing the authority of a found-nothing.
+        unreadableRefs: index.unreadableRefs ?? [],
         prsOk: prs.ok === true,
         prsReason: prs.ok ? null : (prs.reason ?? 'the pull-request snapshot did not answer'),
         scoped: group,
@@ -425,10 +457,10 @@ function delta(register, { byName, byNumber, buckets, group }) {
     if (register.ok !== true) {
         return {
             ok: false, reason: register.reason ?? 'the register could not be read',
-            stale: [], unrankedCounts: [], recognised: 0, rankedNames: new Set(),
+            stale: [], unrankedCounts: [], recognised: 0, items: 0, rankedNames: new Set(),
         }
     }
-    const { entries } = parseRegister(register.text)
+    const { entries, items } = parseRegister(register.text)
 
     // Every note any entry cites, by either half - these are the notes the register HAS named, and
     // are therefore not reported as unranked whatever else is true of them.
@@ -438,7 +470,13 @@ function delta(register, { byName, byNumber, buckets, group }) {
         for (const num of e.numbers) for (const nm of (byNumber.get(num) ?? [])) rankedNames.add(nm)
     }
 
-    const isOpenWork = (name) => INFLIGHT_IMPACT_ORDER.includes(byName.get(name)?.group)
+    // OPEN WORK MEANS REACHABLE WORK. Asking only the group let an entry be satisfied by a note no
+    // live ref carries, so the delta could print "nothing it ranks has stopped being open work" a
+    // few lines above its own row saying that note is preserved on a tag.
+    const isOpenWork = (name) => {
+        const hit = byName.get(name)
+        return !!hit && hit.live && INFLIGHT_IMPACT_ORDER.includes(hit.group)
+    }
 
     // What the register ranks that is NOT open work waiting in an impact bucket. The REASON is the
     // finding: gone needs deleting from the register, deferred needs a schedule decision, and one no
@@ -465,5 +503,5 @@ function delta(register, { byName, byNumber, buckets, group }) {
     // HOW MUCH OF THE REGISTER THE PARSE ACTUALLY SAW. Zero recognised entries and zero findings
     // renders identically to a register everything agrees with - the found-nothing / could-not-look
     // collapse, moved from the git walk to the parse.
-    return { ok: true, reason: null, stale, unrankedCounts, recognised: entries.length, rankedNames }
+    return { ok: true, reason: null, stale, unrankedCounts, recognised: entries.length, items, rankedNames }
 }
