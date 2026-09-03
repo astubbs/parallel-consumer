@@ -79,26 +79,109 @@ ranking. Where a note sits is `inflight-state`'s job; what it is ranked against 
 New prefixes are fine when something genuinely does not fit **and names an area, not a status**. Do
 not add subdirectories - the prefix is the grouping.
 
+### The number, when a note has one
+
+A note that maps to exactly one issue puts that number between the area and the slug -
+`<area>-<NNN>-<slug>.md`, as in `core-139-public-api-thread-safety-contract.md`. It is optional; the
+slug alone is fine for notes that belong to no single issue, and the population-level and register
+notes carry none.
+
+**The number is always this fork's**, never confluentinc's. Two reasons, and the second is the
+binding one: it is the number `gh issue view` resolves without `-R`, and it is the only one that
+always exists - every upstream issue is mirrored here, but plenty of fork issues have no upstream
+counterpart, so upstream numbering cannot name the whole directory.
+
+This is a rule because a filename cannot be qualified. Prose has
+[`docs/issue-references.md`](../issue-references.md) and a gate behind it, precisely because a bare
+number below the threshold is a coin flip between two repos that both have one. A filename is bare by
+construction, so the convention is the only thing standing between a reader and the wrong issue.
+
+**Older names predate this and disagree** - `bug-857-family.md` and `branch-912-vertx-leak.md` carry
+confluentinc numbers, `perf-192-followups.md` carries a fork one. They are left alone rather than
+swept, because renaming a note breaks every citation of it for no gain in what the note says. Read an
+existing number by its prefix and check it; write new ones the way this section says.
+
+`pr-` is the deliberate exception: its number is a fork **PR**, which is what that prefix is for.
+
 ## Rules
 
 - **Track only what is currently OPEN**, plus cross-branch context a future branch should inherit.
-  When something closes, **`git rm` its file**. Do not rewrite it into a "FIXED/DONE" narrative:
-  making a stale entry *accurate* is the wrong move. If it leaves open follow-ups, shrink the file to
-  those and rename it.
-- **Work your current PR resolves is tracked by that PR - delete its file in that PR.** Never leave a
-  "delete this when #NN merges" marker on `master`. The merge is exactly when nobody is looking here,
-  so the marker outlives the work and the next reader inherits a stale note that reads as live.
+  Do not rewrite a closed item into a "FIXED/DONE" narrative: making a stale entry *accurate* is the
+  wrong move.
+- **When your PR resolves what a note tracks, that note has stopped describing reality - so bring it
+  back in touch, in that PR. Deleting is one of four outcomes, not the rule.** Take them in order:
+  - **Migrate what outlives the work, first.** A finding, a measurement, a decision or a rejected
+    alternative still true after this PR lands has a durable owner - `docs/refactoring.md` for a
+    deferred refactor small enough to be a line, `docs/solutions/` for a solved problem,
+    `CONCEPTS.md` for vocabulary, the topic doc for a rule. A note is where knowledge is *staged*,
+    not where it is buried.
+  - **Keep the note when live content remains**, shrunk to what is still open and renamed if its
+    area changed. A note is not obliged to die with the PR that prompted it.
+  - **Split when what remains is a different item** - open a new note for it and `git rm` the old
+    one, so one item per file survives the transition.
+  - **`git rm` it only when nothing left in it is both true and unowned elsewhere.**
+
+  Never leave a "delete this when #NN merges" marker on `master`. The merge is exactly when nobody
+  is looking here, so the marker outlives the work and the next reader inherits a stale note that
+  reads as live.
+- **A PR earns its working note at its first commit, not its last.** A `pr-` note (or `branch-`,
+  until a PR number exists) opened at the start costs one file and collects each finding where it
+  happens; opened at the end it is a reconstruction. astubbs#29 ran for months without one - its
+  findings landed in topic docs or nowhere, and several survived only because the owner asked the
+  right question before they were lost. The PR template's checklist box asks for the note, so a
+  missing one is caught at PR-open rather than never; `N/A` is honest for a PR that carries nothing
+  `gh` cannot show.
 - **Known problems with the code on this branch belong here**, even when a GitHub issue exists - link
   the issue and keep it short. An agent picking up work scans this directory; it will not read every
   issue on the tracker. An unrecorded defect is one the next session rediscovers, or ships on top of.
-- **Never write down what a command can answer.** Open PRs are `gh pr list`; branch divergence is
-  `git rev-list --left-right --count`; worktrees are `bin/worktree-status.sh`. Copying those here
-  creates a second tracker that is wrong within a day and that a reader cannot tell is wrong. Record
-  what no command knows: why something is parked, what blocks it, which decision is pending, what
-  collides.
-- **No committed index.** An index file would be edited by every PR, which is the problem this
-  directory exists to solve. `ls docs/inflight/` and `grep -r` are the index. (`docs/todo-index.md` is
-  the cautionary case: committed, generated, and stale until a reviewer caught it on astubbs#110.)
+- **Never write down what a command can answer** - and that includes **counts of any kind**, not just
+  git facts. Open PRs are `gh pr list`; branch divergence is `git rev-list --left-right --count`;
+  worktrees are `bin/worktree-status.sh`; analyser findings are the ratchet file or a re-run; how many
+  notes carry a label is `grep -l ... | wc -l`. Copying those here creates a second tracker that is
+  wrong within a day and that a reader cannot tell is wrong.
+
+  **The counts case is the one that keeps slipping through**, because it fires while you are writing
+  up a measurement you just took - the number feels like the finding, so the rule reads as if it does
+  not apply. It applies hardest there. Name the shape and the command that yields the number:
+  "the largest group is null derefs, all from one method" plus a reproduce line beats a table of
+  totals that is wrong the first time someone fixes one. Rough language is correct, not lazy.
+
+  Record what no command knows: why something is parked, what blocks it, which decision is pending,
+  what collides.
+- **No committed index OF THESE NOTES.** An index of the notes would be edited by every PR, which is
+  the problem this directory exists to solve. `ls docs/inflight/` and `grep -r` are the index.
+  (`docs/todo-index.md` is the cautionary case: committed, generated, and stale until a reviewer
+  caught it on astubbs#110.)
+
+  **[`issue-index.md`](issue-index.md) is not that**, and is here on purpose - do not delete it
+  citing the rule above. It indexes GITHUB ISSUES, not notes, so no PR edits it except one that
+  regenerates it deliberately, and the churn the rule guards against cannot arise. It exists because
+  `gh issue list --state all` is the most-skipped of the root `AGENTS.md` prior-art checks - an agent
+  must think of querying GitHub, whereas it greps by reflex. It is dated, it says twice that it goes
+  stale silently, and it sends the reader to `gh issue view` before acting, which is what keeps it a
+  discovery aid rather than the second tracker "never write down what a command can answer" forbids.
+  Regenerate with `bin/issue-index.sh`; the script's header records why it has no `--check` gate.
+- **A note that maps to a GitHub issue carries a DRAFT response to that issue before its PR merges**
+  (operator ruling, 2026-08-25). The agents who did the work hold the best context at merge time; by
+  release time it has to be re-mined from commit logs. Draft in the branch as an
+  `issue-response-<NNN>.md` file, and **post only on explicit instruction** - the never-post-unasked
+  rule is untouched. The aspiration behind it: every GitHub issue should have a mapped inflight note,
+  so no issue's resolution moment passes uncaptured.
+
+  **A DRAFT IS NOT DELETED WITH ITS PR. It is deleted when it is posted, and not before** - the
+  drafts accumulate here and are consumed by one sweep before a release, which posts them together
+  with a common view of what shipped. This entry read "delete the drafts with the note" until
+  2026-08-26, and that plus "post only on explicit instruction" meant a draft nobody was asked about
+  before the merge was destroyed **at the merge** - the exact moment nobody is looking, which is the
+  failure this whole directory is organised against, and the one
+  [`the four outcomes`](#what-belongs-here-and-what-belongs-in-docsrefactoringmd) above was written
+  to stop. It cost three separate rounds of an agent asking the owner to post-or-lose a draft that
+  was never meant to be at risk.
+
+  **The name carries the ISSUE number, not the PR's**, for the same reason: the draft outlives the PR
+  that wrote it, so a `pr-NN-` prefix would name something gone by the time anyone posts it. It is
+  also the exception to "the prefix names an area": `issue-response-` names a *lifecycle stage* with
+  exactly one exit, and the sweep is what empties it.
 - **If you are given new guidance about how these notes are written, update this file too**, so other
   sessions inherit the rule instead of rediscovering it.
 
@@ -123,11 +206,12 @@ file when it fails) and the session index - so a value here and a value there mu
 change this table and that lib in the same commit.
 <!-- file-refs: N/A - the tag gate and its shared vocabulary lib ship in astubbs#324; this doc is their owner and lands first, so the notes it describes are never explained by a retired scheme -->
 
-Three fields, as HTML comments after the heading. Only `inflight-type` is always required:
+The fields are HTML comments after the heading. Only `inflight-type` is always required:
 
 ```markdown
 <!-- inflight-type: bug -->
 <!-- inflight-impact: stall -->
+<!-- inflight-labels: concurrency -->
 <!-- inflight-state: closed - will not do -->
 ```
 
@@ -167,6 +251,13 @@ Three fields, as HTML comments after the heading. Only `inflight-type` is always
 already says the latter. The impact answers the question a reader actually has, and it spans
 prefixes - `misdirection` covers notes filed under `ci-`, `test-`, `branch-`, `deps-` and `static-`.
 
+**A single consequence axis was tried and rejected - do not re-propose it.**
+`<!-- inflight-class: X -->` folded kind and consequence into one field, so it could not say that a
+feature addressing a crash belongs beside the crashes - the case `bin/lib/inflight-tags.sh`'s header
+names when it explains why the impact sets are partitioned by type. The three axes here are its
+successor and carry the sentence above forward unchanged. Branch
+`ci/inflight-index-by-type-and-priority`, merged superseded into astubbs#400.
+
 The impacts, in the order `.claude/hooks/inject-recorded-knowledge.sh` presents them at session
 start. **The order is not severity - signal integrity comes first**, because you cannot judge the
 state of the code through instruments that lie, and acting on a false green is worse than acting on
@@ -198,6 +289,31 @@ is "what does it cost me to not know?". An open PR is not its own impact: not kn
 you a collision, so it is `coordination`. This rule exists because the first draft added an
 `active-work` value and had to remove it. `candidate` and `decided-no` were removed for the same
 reason - the first is `type: feature`, the second is a `state`.
+
+- **`inflight-labels`** - what the note is about **mechanically**. Optional, space-separated,
+  multiple allowed, validated against a closed set. This is a third axis and deliberately neither of
+  the other two: the **filename prefix** says the AREA, the **impact** says the CONSEQUENCE, and
+  neither can answer *"show me the concurrency work"* - because concurrency notes live under `bug-`,
+  `core-`, `static-`, `test-` alike, and their consequences are already spread across `stall`,
+  `data-loss`, `crash` and `reliability`.
+
+  **The set is closed on purpose.** A free-text field becomes tag soup within a month and then
+  partitions nothing, which is the failure this whole scheme exists to prevent. Add a value by
+  reading the corpus and finding a group the existing values cannot express - the way the impacts
+  were derived - and put it in `bin/lib/inflight-tags.sh` AND this table in the same commit.
+  `bin/check-inflight-tags.sh` validates each value separately, so one typo names itself instead of
+  silently founding a group of one.
+
+  | Label | Means | Does NOT mean |
+  |---|---|---|
+  | `concurrency` | The note's subject is a race, a deadlock, memory visibility, lock discipline, or the tooling that hunts them | A note that merely says "blocked" or "blocker" - those are schedule words, and they are why an unqualified grep for `lock` overcounts this group by roughly eight times |
+
+  **Why it starts at one value.** One is what the corpus justifies: a small minority of notes are
+  concurrency-shaped, which is the band where a label partitions usefully rather than matching
+  everything. A second speculative value would be inventing a group and hoping, which the paragraph
+  above forbids. `grep -l 'inflight-labels:.*concurrency' docs/inflight/*.md | grep -v AGENTS` is the index - the
+  `grep -v` is not optional, because this file documents the label and so matches itself. It is the
+  count too, which is why none is written here.
 
 **Add a value when the corpus needs one, do not force a note into a poor fit** - the set was derived
 by reading the notes, not chosen in advance. Add it to this table AND to `bin/lib/inflight-tags.sh`

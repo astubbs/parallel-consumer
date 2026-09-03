@@ -16,6 +16,7 @@ import java.util.Arrays;
 import java.util.List;
 
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.methods;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 
 /**
@@ -87,17 +88,30 @@ public class TestConventionRules {
                 }
             };
 
+    /**
+     * Whether surefire's default includes would collect a class with this simple name.
+     * <p>
+     * The single source of truth for that question. It is asked from two places that must not be allowed to drift -
+     * the {@link #HAVE_A_NAME_SUREFIRE_COLLECTS} condition below, and
+     * {@code TransactionalClaimCoverageTest#claimProofsMustLiveWhereATestRunnerWillFindThem}, which asks it of the
+     * class owning a claim proof. If surefire's includes or this repo's convention ever change, they change here
+     * once rather than in each copy, so a class cannot pass one gate while failing the other.
+     *
+     * @param simpleName the class's simple name, not its fully qualified one
+     */
+    public static boolean surefireCollects(String simpleName) {
+        // mirrors surefire's default includes
+        return simpleName.startsWith("Test")
+                || simpleName.endsWith("Test")
+                || simpleName.endsWith("Tests")
+                || simpleName.endsWith("TestCase");
+    }
+
     private static final ArchCondition<JavaClass> HAVE_A_NAME_SUREFIRE_COLLECTS =
             new ArchCondition<JavaClass>("be named so surefire collects it") {
                 @Override
                 public void check(JavaClass javaClass, ConditionEvents events) {
-                    String name = javaClass.getSimpleName();
-                    // mirrors surefire's default includes
-                    boolean collected = name.startsWith("Test")
-                            || name.endsWith("Test")
-                            || name.endsWith("Tests")
-                            || name.endsWith("TestCase");
-                    if (!collected) {
+                    if (!surefireCollects(javaClass.getSimpleName())) {
                         events.add(SimpleConditionEvent.violated(javaClass, javaClass.getName()
                                 + " has test methods but its name matches none of surefire's default includes "
                                 + "(Test*, *Test, *Tests, *TestCase), so it is never executed - rename it"));
@@ -143,6 +157,33 @@ public class TestConventionRules {
                     // integrationTests packages (exempted above, since failsafe selects those by package), so
                     // this rule evaluates against an empty set there. That is a pass, not a violation -
                     // without this, ArchUnit's verifyNoEmptyShouldIfEnabled fails those modules.
+                    .allowEmptyShould(true);
+
+    /**
+     * A single-character method name tells a reader nothing, and it is nearly always a fixture builder -
+     * the identifier a test file repeats more than any other. The codebase had exactly ONE
+     * ({@code d(...)} in {@code KeyOrderLedgerIT}, since renamed to {@code delivery(...)}), so this rule
+     * costs nothing and forecloses the whole class.
+     *
+     * <p>It is here rather than in a {@code bin/check-*.sh} gate because ArchUnit already runs in every
+     * module's normal test suite - no new script, no new CI job, and the failure arrives at the
+     * developer who wrote it. SpotBugs was the other candidate and is the wrong tool: it detects bugs,
+     * not naming.
+     *
+     * <p>Worth recording WHY a rule this trivial is worth having. That {@code d(...)} survived three
+     * Claude review rounds and a Fable simplify-and-review pass whose maintainability reviewer returned
+     * findings on that exact file. It was found by a human, reading. Naming is precisely the class of
+     * defect automated review is weakest at - and precisely the class a cheap mechanical rule catches
+     * perfectly.
+     */
+    @ArchTest
+    static final ArchRule test_methods_must_have_names_longer_than_one_character =
+            methods()
+                    .should().haveNameNotMatching("^.$")
+                    .because("a one-character method name says nothing, and the identifier a fixture "
+                            + "builder is called by is the most-read name in a test file")
+                    // Modules whose tests live only in integrationTests packages import no classes here,
+                    // so the rule evaluates against an empty set - a pass, not a violation.
                     .allowEmptyShould(true);
 
 }

@@ -41,13 +41,14 @@ for e in $(registry_entries); do
     cls=${e%%.*}
     method=""
     case "$e" in *.*) method=${e#*.} ;; esac
-    f=$(quarantined_files | while read -r qf; do
-            [ "$(basename "$qf" .java)" = "$cls" ] && { echo "$qf"; break; }
-        done)
+    # NOT an inline `quarantined_files | while ... break` - that shape aborted this script under
+    # `set -e` in exactly the no-match case the branch below reports, so the gate refused with no
+    # message at all. quarantine-common.sh's header owns the mechanism and the control arm.
+    f=$(quarantined_file_for_class "$cls")
     if [ -z "$f" ]; then
         echo "DRIFT: $REGISTRY lists $e but no @Quarantined annotation found in a class named $cls - stale entry; delete it (rule 3: annotation and entry go together)."
         drift=1
-    elif [ -n "$method" ] && ! grep -qE "[[:space:]]$method[[:space:]]*\(" "$f"; then
+    elif [ -n "$method" ] && ! grep -qE "[[:space:]]${method}[[:space:]]*\(" "$f"; then
         echo "DRIFT: $REGISTRY lists $e but no method '$method' exists in $f - stale method entry; fix or delete it."
         drift=1
     fi

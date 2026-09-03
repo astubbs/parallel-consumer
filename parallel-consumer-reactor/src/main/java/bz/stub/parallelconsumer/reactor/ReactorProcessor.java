@@ -10,6 +10,7 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.PollContext;
 import bz.stub.parallelconsumer.PollContextInternal;
 import bz.stub.parallelconsumer.internal.ExternalEngine;
+import bz.stub.parallelconsumer.internal.MdcPropagation;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -17,18 +18,21 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.reactivestreams.Publisher;
 import pl.tlinkowski.unij.api.UniLists;
 import reactor.core.Disposable;
+import reactor.core.Exceptions;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import static bz.stub.parallelconsumer.internal.UserFunctions.carefullyRun;
+import static bz.stub.parallelconsumer.internal.utils.ThrowableUtils.logWithoutEscaping;
 
 /**
  * Adapter for using Project Reactor as the asynchronous execution engine
@@ -88,7 +92,15 @@ public class ReactorProcessor<K, V> extends ExternalEngine<K, V> {
      */
     public void react(Function<PollContext<K, V>, Publisher<?>> reactorFunction) {
 
+        final MdcPropagation mdc = getMdcPropagation();
+
         Function<PollContextInternal<K, V>, List<Object>> wrappedUserFunc = pollContext -> {
+
+            // this wrapper runs on the worker thread, where the caller's context is established; the user's function
+            // and the terminal signals below run on the Reactor scheduler, so the context is carried explicitly.
+            // Note: this covers the invocation of the user's function and our own completion handling - propagation
+            // through the operators of the Publisher they return is Reactor's own concern (io.micrometer:context-propagation)
+            final Map<String, String> schedulerContext = mdc.capture();
 
             if (log.isTraceEnabled()) {
                 log.trace("Record list ({}), executing void function...",
@@ -102,25 +114,37 @@ public class ReactorProcessor<K, V> extends ExternalEngine<K, V> {
             pollContext.streamWorkContainers()
                     .forEach(x -> x.setWorkType(REACTOR_TYPE));
 
-            // Completion is bound to the TERMINAL signal, not to onNext. A record's work is done when its
-            // publisher finishes, whether or not it produced anything - Mono.empty(), a Mono<Void> from
-            // Mono.fromRunnable(..), a Flux that filtered everything away. Wiring onComplete to the onNext
-            // consumer instead loses every such record: it is never completed, so it holds its in-flight slot
-            // forever, and once maxConcurrency slots are held the engine stops selecting work and the consumer
-            // stalls with no exception and nothing in the log. It also over-completes a publisher that emits
-            // more than once, decrementing the in-flight counter once per item.
-            // The Mutiny engine already has these semantics (MutinyProcessor#onRecord); the two engines are
-            // offered as interchangeable, so they must agree on what "produced no value" means.
-            Disposable flux = Mono.fromCallable(() -> carefullyRun(reactorFunction, pollContext.getPollContext()))
+            Disposable flux = Mono.fromCallable(() -> {
+                        try (var mdcScope = mdc.enter(schedulerContext)) {
+                            return carefullyRun(reactorFunction, pollContext.getPollContext());
+                        }
+                    })
                     .flatMapMany(it -> it)
                     .doOnNext(signal -> log.trace("doOnNext {}", signal))
                     .subscribeOn(getScheduler())
-                    .subscribe(
-                            // items are the user's business, not ours - already traced by doOnNext above
-                            ignored -> {
+                    // Three arguments, not two, and that is load-bearing. The two-argument overload has no
+                    // completion callback, so onComplete was wired as the ON NEXT consumer: a Publisher emitting
+                    // several elements retired its records once per element, and one completing EMPTY - Mono.empty(),
+                    // or a user function returning null - retired them never, leaving the record uncommitted, its
+                    // in-flight accounting leaked, and (since the dispatch ceiling landed) its dispatch permit gone
+                    // for the life of the process. Retiring on the terminal signal is once per flight in every case.
+                    // MutinyProcessor's subscribe().with(onItem, onFailure, onCompletion) already had this shape.
+                    //
+                    // Each TERMINAL callback runs under the caller's context - they execute on the Reactor
+                    // scheduler, not the worker thread that captured it. The element consumer is deliberately not
+                    // wrapped: it is neither the user's function nor terminal handling, which is the boundary this
+                    // propagation covers, and `doOnNext` above is unwrapped for the same reason.
+                    .subscribe(signal -> log.trace("Reactor element {}", signal),
+                            throwable -> {
+                                try (var mdcScope = mdc.enter(schedulerContext)) {
+                                    onError(pollContext, throwable);
+                                }
                             },
-                            throwable -> onError(pollContext, throwable),
-                            () -> onComplete(pollContext));
+                            () -> {
+                                try (var mdcScope = mdc.enter(schedulerContext)) {
+                                    onComplete(pollContext);
+                                }
+                            });
 
             log.trace("asyncPoll - user function finished ok.");
             return UniLists.of(flux);
@@ -140,15 +164,16 @@ public class ReactorProcessor<K, V> extends ExternalEngine<K, V> {
     }
 
     private void onError(PollContextInternal<K, V> pollContext, Throwable throwable) {
-        if (throwable instanceof PCRetriableException) {
-            log.debug("Reactor fail signal", throwable);
-        } else {
-            log.error("Reactor fail signal", throwable);
-        }
-        pollContext.streamWorkContainers().forEach(wc -> {
-            wc.onUserFunctionFailure(throwable);
-            addToMailbox(pollContext, wc);
-        });
+        onAsyncFailure(pollContext, throwable, "Reactor fail signal");
+    }
+
+    /**
+     * Reactor repackages what it propagates, and core cannot name reactor's wrapper types - so peel with reactor's
+     * own helper before the retriable classification looks at what is underneath.
+     */
+    @Override
+    protected Throwable unwrapFrameworkWrapper(Throwable throwable) {
+        return Exceptions.unwrap(throwable);
     }
 
     private Scheduler getScheduler() {

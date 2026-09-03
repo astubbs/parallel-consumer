@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Antony Stubbs and contributors
+
 // Unit tests for file-ref-gate.js. Run by the PR Checklist job before the gate itself, so a broken
 // rule fails loudly rather than silently passing - or failing - every PR.
 //
@@ -55,6 +57,69 @@ check("a markdown link to a missing neighbour is flagged", () => {
   assert.deepStrictEqual(hits.map((h) => h.ref), ["../gate-that-left.md"]);
 });
 
+// ------------------------------------------- rule 1: single-segment markdown link targets
+//
+// This is the exact bug that shipped on this branch: docs/inflight/core-stale-arrival-guard-needs-
+// a-null-safety-decision.md linked to a sibling note that has never existed, and the gate passed,
+// because `foo.md` and `./foo.md` both have exactly one path segment and TOKEN requires two. A
+// same-directory markdown link is the house style for docs/inflight/'s dense cross-linking, so this
+// was the single most likely place for the defect to bite - and precisely where the gate was blind.
+
+check("a same-directory markdown link to a file that exists is not flagged", () => {
+  const tree = treeOf("docs/inflight/sibling.md");
+  assert.deepStrictEqual(
+    danglingRefs(file("docs/inflight/x.md", "see [it](sibling.md) and [it again](./sibling.md)"), tree),
+    []);
+});
+
+check("a same-directory markdown link to a file that does not exist IS flagged - the whole point", () => {
+  // The regression case: without the fix this was silently unreadable as a citation at all, so it
+  // never resolved OR failed - it simply never existed as far as the gate was concerned.
+  const tree = treeOf("docs/inflight/x.md");
+  const hits = danglingRefs(file("docs/inflight/x.md", "see [it](gone-sibling.md)"), tree);
+  assert.deepStrictEqual(hits.map((h) => h.ref), ["gone-sibling.md"]);
+});
+
+// A single-segment target that exists ANYWHERE in the tree, not just beside the citing file, is
+// deliberately not a failing case here: resolves()'s third route - the path-tail shorthand - would
+// legitimately catch `sibling.md` against `some/other/dir/sibling.md` too. That is pre-existing,
+// intentional behaviour (see "resolves as a path tail" above), not something this change should
+// try to make stricter - a multi-segment relative target is the case that actually isolates the
+// directory-relative route, since ".." never survives as a real tree suffix.
+check("a `../other-dir/` markdown link resolves relative to the citing file, one dir up", () => {
+  const tree = treeOf("docs/other-dir/thing.md");
+  assert.deepStrictEqual(
+    danglingRefs(file("docs/inflight/x.md", "see [it](../other-dir/thing.md)"), tree), []);
+});
+
+check("an anchor-only link target is not a path", () => {
+  assert.deepStrictEqual(citationsIn("see [the section below](#anchor)"), []);
+});
+
+check("a URL or mailto link target is somebody else's resource, not a repo path", () => {
+  assert.deepStrictEqual(citationsIn("see [ci.md](https://github.com/astubbs/pc/blob/master/x.md)"), []);
+  assert.deepStrictEqual(citationsIn("mail [me](mailto:a@b.com)"), []);
+});
+
+check("a link target's #anchor fragment is stripped before resolution", () => {
+  const tree = treeOf("docs/inflight/file.md");
+  assert.deepStrictEqual(
+    danglingRefs(file("docs/inflight/x.md", "see [it](file.md#section)"), tree), [],
+    "the file exists once the fragment is stripped");
+  // And the negative arm, which is the one that actually proves the fragment was stripped: if it
+  // were left on, `gone.md#section` would never match HAS_EXTENSION at all and would silently be
+  // read as not-a-citation - passing for the wrong reason, the same way the bug shipped.
+  const hits = danglingRefs(file("docs/inflight/x.md", "see [it](gone.md#section)"), treeOf());
+  assert.deepStrictEqual(hits.map((h) => h.ref), ["gone.md"]);
+});
+
+check("prose outside a markdown link still needs two segments - the guard this rule must not weaken", () => {
+  // Both are real lines this repo writes. Neither sits inside `](...)`, so the relaxation above
+  // must not reach them - this is the regression the two-segment rule exists to prevent.
+  assert.deepStrictEqual(citationsIn("Set.removeAll is called here, not add()"), []);
+  assert.deepStrictEqual(citationsIn("check-all.sh: no gate failed"), []);
+});
+
 check("every line counts, not only the ones a change touched", () => {
   // The whole point of scanning the tree: a citation nobody has edited for months is still a
   // citation, and deleting what it points at is how it breaks. An added-lines gate cannot see that.
@@ -97,6 +162,11 @@ check("a bare filename is not a path", () => {
 check("globs, placeholders and elisions are patterns, not paths", () => {
   assert.deepStrictEqual(citationsIn("the bin/check-*.sh scripts"), []);
   assert.deepStrictEqual(citationsIn("name it bin/check-foo.sh and it is granted"), []);
+  // CASE-INSENSITIVE, and asserted because it stopped being so once. The word list was a `/i`
+  // literal until it was concatenated into a `new RegExp(a + b)` that took no flags, and nothing
+  // went red: no case here used a capitalised placeholder, so `Foo.md` quietly became a citation.
+  assert.deepStrictEqual(citationsIn("name it bin/check-FOO.sh and it is granted"), []);
+  assert.deepStrictEqual(citationsIn("see docs/Bar.md for the shape"), []);
   assert.deepStrictEqual(citationsIn("run bin/<name>.sh"), []);
   assert.deepStrictEqual(citationsIn("parallel-consumer-core/.../chaostests/ChaosConductor.java"), []);
 });
@@ -117,6 +187,21 @@ check("a link writes its target twice and is one finding, not two", () => {
   assert.strictEqual(hits.length, 1);
 });
 
+// A ONE-CHARACTER LOWERCASE FILENAME is an illustrative name without the word - `docs/x.md`,
+// `docs/a.md`. This module's own header writes two of them, and the quarantine script tests embed
+// `tracking = "docs/x.md"` inside string literals describing a synthetic repo. Lowercase because a
+// java file is named for its class: `.../internal/A.java` is a plausible real path, `docs/a.md` is
+// not a plausible real document.
+check("a one-character lowercase filename is a placeholder, not a citation", () => {
+  assert.deepStrictEqual(citationsIn('tracking = "docs/x.md"'), []);
+  assert.deepStrictEqual(citationsIn("a pointer for docs/a.md says nothing about docs/b.md"), []);
+  assert.deepStrictEqual(citationsIn("parallel-consumer-core/src/main/java/bz/stub/A.java"),
+    ["parallel-consumer-core/src/main/java/bz/stub/A.java"],
+    "a capitalised one-character java class is a real path, not a placeholder");
+  assert.deepStrictEqual(citationsIn("docs/inflight/ab.md"), ["docs/inflight/ab.md"],
+    "two characters is a name, not a placeholder");
+});
+
 check("a real directory containing 'example' is not treated as a placeholder", () => {
   // The placeholder list must not swallow parallel-consumer-examples/.
   assert.deepStrictEqual(
@@ -129,9 +214,10 @@ check("a URL is somebody else's file, and cannot leak a token from its path", ()
 });
 
 check("only citing file types are scanned", () => {
-  // A .java import is the compiler's business; a .yml path fragment is usually a key, not a file.
-  assert.deepStrictEqual(danglingRefs(file("src/A.java", "import bz.stub.nope/Gone.java;"), TREE),
-                         []);
+  // A .yml path fragment is usually a key, not a file, and nothing in a .png is prose. `.java` used
+  // to be on this list and no longer is - see the java section at the foot of this file.
+  assert.deepStrictEqual(danglingRefs(file("src/a.yml", "runs: bin/nope.sh"), TREE), []);
+  assert.deepStrictEqual(danglingRefs(file("docs/img.png", "bin/nope.sh"), TREE), []);
 });
 
 check("an exempt document is skipped entirely", () => {
@@ -382,13 +468,94 @@ check("html is scanned as a citing file", () => {
   assert.ok(CITING_FILE.test("docs/ideation/a.html"), "an .html document must be scanned");
   assert.ok(CITING_FILE.test("x.md") && CITING_FILE.test("x.adoc") && CITING_FILE.test("x.txt"),
     "the formats that already worked must keep working");
-  assert.ok(!CITING_FILE.test("x.java") && !CITING_FILE.test("x.png"),
-    "code and binaries are still not citing documents");
+  assert.ok(!CITING_FILE.test("x.png") && !CITING_FILE.test("x.yml"),
+    "binaries and config are still not citing documents");
 
   const docs = file("docs/ideation/d.html", "<code>docs/inflight/gone.md</code>");
   const found = danglingRefs(docs, treeOf("docs/inflight/here.md"));
   assert.ok(found.length === 1, "a dangling path inside html must be reported");
   assert.ok(found[0].ref === "docs/inflight/gone.md");
+});
+
+// ---------------------------------------------------------------- java is a citing file
+//
+// SAME FAILURE AS .html, SAME FIX. Javadoc and comments cite `docs/...` paths as prose exactly the
+// way markdown does, and the gate could not see the file at all - astubbs/parallel-consumer#342
+// carries a javadoc citing `docs/inflight/perf-throughput-regression-since-0-3.md`, a note that
+// exists only on another branch, and nothing said so.
+//
+// The argument for the exclusion was that "a .java file's imports are the compiler's problem". It
+// was never true of TOKEN: an import is a DOTTED package name with no `/` in it, so the
+// two-segment rule cannot fire on one. The first two cases below pin that, because it is the whole
+// reason this is safe to turn on.
+
+check("a java import is not a citation - the claim the old exclusion rested on", () => {
+  assert.deepStrictEqual(citationsIn("import bz.stub.parallelconsumer.state.ShardKey;"), []);
+  assert.deepStrictEqual(citationsIn("import static org.assertj.core.api.Assertions.assertThat;"), []);
+  assert.deepStrictEqual(citationsIn("package bz.stub.parallelconsumer.internal;"), []);
+  assert.deepStrictEqual(citationsIn("import java.util.concurrent.ConcurrentHashMap;"), []);
+});
+
+check("a whole java file of imports produces no findings", () => {
+  const docs = file("parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/A.java",
+    "package bz.stub.parallelconsumer;",
+    "",
+    "import bz.stub.parallelconsumer.internal.ConsumerManager;",
+    "import org.apache.kafka.clients.consumer.ConsumerRecord;",
+    "",
+    "class A {}");
+  assert.deepStrictEqual(danglingRefs(docs, TREE), []);
+});
+
+check("java IS a citing file", () => {
+  assert.ok(CITING_FILE.test("parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/A.java"),
+    "a .java file must be scanned");
+});
+
+check("a javadoc citation that resolves is not flagged", () => {
+  const docs = file("parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/A.java",
+    " * The reasoning lives in docs/ci.md, and bin/build.sh runs it.");
+  assert.deepStrictEqual(danglingRefs(docs, TREE), []);
+});
+
+// THE RED CONTROL. A gate that passes everything is indistinguishable from a gate that is not
+// looking, so the dangling case is asserted as directly as the clean one - this is the exact shape
+// of the astubbs/parallel-consumer#342 javadoc, a path that exists only on another branch.
+check("a dangling javadoc citation IS flagged", () => {
+  const docs = file("parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/A.java",
+    " * Measurements: docs/inflight/perf-throughput-regression-since-0-3.md");
+  const hits = danglingRefs(docs, TREE);
+  assert.deepStrictEqual(hits.map((h) => h.ref),
+    ["docs/inflight/perf-throughput-regression-since-0-3.md"]);
+  assert.strictEqual(hits[0].file,
+    "parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/A.java:1");
+});
+
+// Code cites repo paths too, and those are worth checking for the same reason prose is: a renamed
+// script leaves `@Quarantined(tracking = "docs/...")` and `REPO_ROOT.resolve("bin/...")` pointing at
+// nothing, and both are silent until something runs.
+check("a repo path in java CODE is checked, not just in comments", () => {
+  const good = file("parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/T.java",
+    '    @Quarantined(reason = "diagnosed", tracking = "docs/ci.md")');
+  assert.deepStrictEqual(danglingRefs(good, TREE), []);
+
+  const bad = file("parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/T.java",
+    '    String lane = read(REPO_ROOT.resolve("bin/gone.sh"));');
+  assert.deepStrictEqual(danglingRefs(bad, TREE).map((h) => h.ref), ["bin/gone.sh"]);
+});
+
+// The paragraph marker has to work in java or the escape does not exist where the new findings are.
+// `//` is the natural place for it, and the paragraph is the contiguous block of code around it -
+// which in java is a statement block, not a prose paragraph. Read UPWARD from the marker, as in
+// markdown, so it excuses the fixture line above it and nothing after the blank line.
+check("the line opt-out works in a java file", () => {
+  const docs = file("parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/T.java",
+    '    Files.write(fixture.resolve("module/src/test-integration/java/SomeIT.java"),',
+    "    // file-refs: N/A - a path inside the temporary fixture repo, not a path in this one",
+    "",
+    '    String lane = read(REPO_ROOT.resolve("bin/gone.sh"));');
+  assert.deepStrictEqual(danglingRefs(docs, TREE).map((h) => h.ref), ["bin/gone.sh"],
+    "the marker covers its own block and nothing past the blank line");
 });
 
 console.log("\n" + run + " assertions passed");

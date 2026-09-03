@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Antony Stubbs and contributors
+
 // Flags a repo file path cited in the docs that does not exist. Whole tree, every PR.
 //
 // House convention (AGENTS.md -> "Cite by anchor, never by line number") tells authors to cite a
@@ -83,11 +85,66 @@ const LINE_OPT_OUT = /file-refs:\s*N\/?A\b\s*-\s*[A-Za-z]/i;
 // Matched at segment and stem boundaries so `bin/foo.sh`, `bin/check-foo.sh` and `docs/bar.md` are
 // all covered, while `parallel-consumer-examples/` - a real directory containing "example" - is
 // not. Deliberately a short, closed list: anything longer starts swallowing real filenames.
-const PLACEHOLDER = /(?:^|[/\-_.])(?:foo|bar|baz|qux|quux)(?:[/\-_.]|$)/i;
+//
+// A ONE-CHARACTER LOWERCASE FILENAME is the same thing without the word: `docs/x.md`, `docs/a.md`,
+// `docs/b.md` are how this repo writes "some document" when the identity of the document is not the
+// point - this module's own header does it twice ("a pointer for docs/a.md says nothing about
+// docs/b.md"), and the quarantine script tests embed `tracking = "docs/x.md"` inside java string
+// literals describing a synthetic repo. No tracked file has a single-character stem.
+//
+// LOWERCASE, and that is not cosmetic: a java file is named for its class and classes are
+// capitalised, so `.../internal/A.java` is a plausible real path while `docs/a.md` is not a
+// plausible real document. A single DIGIT stem is in for the same reason from the other side - no
+// java class may start with one, so `docs/1.md` is illustrative too. Anchored at the FILENAME
+// rather than at any segment, so a short DIRECTORY segment - `src/a/b/Thing.java` - is untouched.
+//
+// TWO REGEXES RATHER THAN ONE ALTERNATION, because their FLAGS differ and JavaScript has no inline
+// flag syntax to vary case-sensitivity within a pattern. Written as one `new RegExp(a + b)` the
+// word list silently lost the `/i` it had carried since it was a literal, so `Foo.md` in a worked
+// example started being read as a real citation - a regression a concatenated regex makes invisible
+// and no test caught, because no case exercised an uppercase placeholder word. There are now two.
+const PLACEHOLDER_WORD = /(?:^|[/\-_.])(?:foo|bar|baz|qux|quux)(?:[/\-_.]|$)/i;
+const PLACEHOLDER_SHORT_NAME = /\/[a-z0-9]\.[a-z0-9]+$/;
+
+const isPlaceholder = (token) => PLACEHOLDER_WORD.test(token) || PLACEHOLDER_SHORT_NAME.test(token);
 
 // Tokens that are patterns rather than paths: globs, `<placeholders>`, shell/CI interpolation, and
 // the elided `.../` form docs use to shorten a long package path.
 const NOT_A_PATH = /[*?<>${}|]|\.\.\./;
+
+// A markdown link's TARGET - the text inside `](...)` - is unambiguously a path, never prose, so a
+// single-segment target like `](sibling.md)` is read as a citation even though the identical bare
+// token in running prose ("the README.md says otherwise") is not. The two-segment rule on TOKEN
+// exists to keep prose containing a dot - `Set.removeAll`, `check-all.sh: message` - from being
+// misread as a path; none of that prose sits inside `](...)`, so relaxing the rule there carries
+// none of the risk it guards against. This is the ONLY place it is relaxed - a bare one-segment
+// token outside a link is still not a citation.
+//
+// The gap this closes: this branch shipped a same-directory link in docs/inflight/ to a file that
+// has never existed, and the gate passed - `foo.md` and `./foo.md` both have exactly one path
+// segment, so TOKEN never fired on either. GitHub resolves such a link relative to the citing
+// file's directory, which is exactly resolves()'s second route; this only has to hand it the
+// target.
+const MD_LINK_TARGET = /]\(([^)\s]+)\)/g;
+
+// A URI scheme (`mailto:`, `tel:`, ...) or an in-page anchor (`#section`) is not a repo path.
+// `https?://`, `ftp://`, `www.` and `mailto:` are already gone by the time this runs - URLS strips
+// them from the whole line first - so this only has to catch what is left: a bare anchor, or a
+// scheme URLS does not happen to list.
+const NOT_A_LINK_PATH = /^#|^[A-Za-z][A-Za-z0-9+.-]*:/;
+
+// A link may point at `file.md#section` - the repo path plus an in-document anchor. The anchor is
+// not part of what GitHub resolves as a file, so it is stripped before the target is checked for
+// an extension or handed to resolves().
+function stripFragment(target) {
+  const i = target.indexOf("#");
+  return i === -1 ? target : target.slice(0, i);
+}
+
+// The same rule TOKEN enforces at its own tail - a citation must carry a real file extension - is
+// reapplied here once the anchor is gone, so a link to a directory (`](docs/inflight)`) is left
+// alone for the same reason bare directory prose is.
+const HAS_EXTENSION = new RegExp(String.raw`\.(?:${EXTENSIONS.join("|")})$`);
 
 // A token is only a repo path if it STARTS one. These characters immediately before it mean it is
 // the tail of something longer that this repo does not own: an absolute host path
@@ -111,6 +168,11 @@ const TAIL_OF_SOMETHING_ELSE = /[/~}$\\]/;
 const REVISION = String.raw`(?:[0-9a-f]{7,40}|HEAD|master|origin/[\w.-]+)(?:[~^]\d*)*`;
 
 const GIT_REVISION = new RegExp(`${REVISION}:$`);
+// Hoisted alongside GIT_REVISION rather than built inside historyPointersIn's per-line loop. It was
+// recompiled once per line, which cost nothing while only prose was scanned and is a per-line
+// allocation across the whole java tree now that .java is a citing file. `matchAll` does not mutate
+// a shared regex's lastIndex, so reuse is safe - the same way TOKEN and MD_LINK_TARGET are reused.
+const HISTORY_POINTER = new RegExp(`${REVISION}:([A-Za-z0-9_.@/-]+)`, "g");
 
 // The PR-wide form. Deliberately looser than LINE_OPT_OUT - any non-blank reason will do - because
 // the `-->` hole that rule guards against needs an HTML comment to open it, and this one must START
@@ -125,13 +187,28 @@ function isExempt(path) {
   return EXEMPT_PATHS.some((re) => re.test(path));
 }
 
-// Only text files carry citations, and only their added lines are this PR's responsibility. A .java
-// file's imports are the compiler's problem, not this gate's.
+// WHICH FILES CARRY CITATIONS. Prose does, whatever it is written in - and this list has now been
+// wrong twice in the same direction, so the rule is stated rather than the list.
+//
 // `.html` IS A CITING FILE. It was excluded, so a path inside one was never checked - and a rename
 // left `docs/ideation/2026-08-17-distributed-throttling-ideation.html` pointing at a note that no
 // longer existed, silently, because the gate could not see the file at all (astubbs#323 review).
 // The ideation documents cite notes and scripts the same way prose does; the format is not the point.
-const CITING_FILE = /\.(md|adoc|txt|html)$/i;
+//
+// `.java` IS A CITING FILE, for the same reason and against the same argument. The excuse for
+// leaving it out was that "a .java file's imports are the compiler's problem, not this gate's" -
+// and that does not survive contact with TOKEN. A Java import is a dotted package name,
+// `bz.stub.parallelconsumer.state.ShardKey`, with no `/` in it at all, so the two-segment rule
+// cannot fire on one; the exclusion bought nothing and cost the javadoc. Javadoc and comments cite
+// `docs/...` paths as prose exactly the way markdown does - astubbs/parallel-consumer#342 carries a
+// javadoc citing `docs/inflight/perf-throughput-regression-since-0-3.md`, a file that exists only
+// on another branch - and code cites them too, in `@Quarantined(tracking = "docs/...")` and in
+// `REPO_ROOT.resolve("bin/...")`. Nothing checked any of it.
+//
+// `.sh` is the remaining known gap, recorded in docs/inflight/ci-copyright-gate-review-leftovers.md
+// and deliberately not closed here: it wants its own pass over the shell corpus, not a third
+// one-off extension.
+const CITING_FILE = /\.(md|adoc|txt|html|java)$/i;
 
 function normalise(path) {
   const parts = [];
@@ -160,10 +237,22 @@ function citationsIn(line) {
   const out = new Set();
   for (const m of clean.matchAll(TOKEN)) {
     const token = m[0];
-    if (NOT_A_PATH.test(token) || PLACEHOLDER.test(token)) continue;
+    if (NOT_A_PATH.test(token) || isPlaceholder(token)) continue;
     if (m.index > 0 && TAIL_OF_SOMETHING_ELSE.test(clean[m.index - 1])) continue;
     if (GIT_REVISION.test(clean.slice(0, m.index))) continue;
     out.add(token);
+  }
+  // The single-segment case TOKEN cannot see at all: `](sibling.md)`. Everything TOKEN already
+  // caught (multi-segment link targets like `../ci.md`) is re-derived here too and simply dedupes
+  // via the Set - this loop does not need to know which targets are "new".
+  for (const m of clean.matchAll(MD_LINK_TARGET)) {
+    const raw = m[1];
+    if (NOT_A_LINK_PATH.test(raw)) continue;
+    const target = stripFragment(raw);
+    if (!target || NOT_A_PATH.test(target) || isPlaceholder(target)) continue;
+    if (TAIL_OF_SOMETHING_ELSE.test(target[0])) continue;
+    if (!HAS_EXTENSION.test(target)) continue;
+    out.add(target);
   }
   return [...out];
 }
@@ -236,7 +325,7 @@ function resolves(citation, citingFile, tree) {
 function historyPointersIn(lines) {
   const out = new Set();
   for (const line of lines || []) {
-    for (const m of line.matchAll(new RegExp(`${REVISION}:([A-Za-z0-9_.@/-]+)`, "g"))) {
+    for (const m of line.matchAll(HISTORY_POINTER)) {
       out.add(normalise(m[1]));
     }
   }

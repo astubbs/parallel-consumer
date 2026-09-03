@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
 # Publishes a SNAPSHOT to Maven Central after the "CI" workflow passes on master.
 #
 # master is ALWAYS a -SNAPSHOT. Real releases are cut by release.yml (tag-as-truth), NOT here.

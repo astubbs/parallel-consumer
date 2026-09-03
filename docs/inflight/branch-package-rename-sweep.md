@@ -215,12 +215,22 @@ come after.
 
 ### The 38 branches
 
-Open PRs, excluding astubbs#1 (`codeql`, 2021) and astubbs#8 (`features/retry-dlq`, 2022) as too old, astubbs#277 (the rename
-plan itself) and astubbs#280 (the tooling).
+Open PRs, excluding astubbs#8 (`features/retry-dlq`, 2022) as too old, astubbs#277 (the rename
+plan itself) and astubbs#280 (the tooling). astubbs#1 (`codeql`) was on that too-old list until its
+branch was reset onto renamed master and repurposed as documentation, so it carries no Java and
+needs no sweep.
+
+<!-- post-merge: checked-begin -->
+**This roster is the set of open PRs at the time the plan was written, not a live worklist** - the
+status above is "planned, not started", so a row whose PR has since merged records what the sweep
+was scoped to cover and needs no edit when that happens. `gh pr list` answers which are still open.
+<!-- post-merge: checked-end -->
+
+<!-- post-merge: checked-begin -->
 
 | PR | head ref | PR | head ref |
 |---|---|---|---|
-| 29 | `bugs/857-paused-consumption-multi-consumers-bug` | 226 | `feats/health-check-api` |
+| 29 | `bugs/857-paused-consumption-multi-consumers-bug` | 226 | `feats/health-check-api` | <!-- post-merge: checked -->
 | 31 | `fix/909-stale-container-replacement` | 256 | `ci/issue-first-response` |
 | 38 | `dependabot/maven/junit.version-6.0.3` | 257 | `fix/produce-lock-double-release` |
 | 51 | `features/enable-virtual-threads` | 260 | `test/commit-assertion-repeat-tolerance` |
@@ -240,6 +250,9 @@ plan itself) and astubbs#280 (the tooling).
 | 207 | `fix/offset-encoding-policy-bypass` | 290 | `test/apache-kafka-broker-image` |
 | | | 292 | `fix/chaos-harness-double-start-race` |
 | | | 293 | `feats/proxy-requirements` |
+<!-- post-merge: checked-end -->
+
+<!-- post-merge: checked-end -->
 
 **astubbs#266, astubbs#268, astubbs#269 and astubbs#271 touch the five near-identical
 `TestConventionsArchTest.java` files.** Neither rehearsal exercised a branch that genuinely edits them
@@ -336,6 +349,8 @@ invented a fix, so it cost one investigation rather than 33 divergent resolution
 
 Counts are out of the 37 branches attempted.
 
+<!-- post-merge: checked-begin -->
+
 | | What | Branches | Resolution |
 |---|---|---|---|
 | A | `asyncconsumer` javadoc has no rule | all | verbatim replacement, already in the procedure |
@@ -344,6 +359,8 @@ Counts are out of the 37 branches attempted.
 | D | the README regen inlines the frozen CHANGELOG | 4 | apply astubbs#113's replacement; verified on astubbs#105 |
 | E | the accelerators URL reads as a package path | 2 | delete the line |
 | F | a prose guard whose sentence the branch never had | 2 attempted, ~121 repo-wide | **fixed in the tooling** |
+
+<!-- post-merge: checked-end -->
 
 A fifth instance of the same shape turned up in the tail, and it is worth naming because it is the one
 that does **not** announce itself as a refusal. On the four oldest branches — the same four as class D —
@@ -369,6 +386,7 @@ those same files and stamps the line in, so it healed the debt rather than hidin
 finding the content commit as the one that added the line. Expect this on any branch carrying that debt,
 and check which commit added the line before believing either story.
 
+<!-- post-merge: checked-begin -->
 **C is the one that will bite again outside this project.** `git checkout <ref> -- <file>` is a
 whole-file overwrite, so a branch that had registered its own file provenance in
 `bin/check-copyright-headers.sh` lost it. The failure then surfaces four steps downstream — copyright
@@ -376,6 +394,7 @@ fails, so `mvnw` fails, so the README regen is skipped, so the README keeps its 
 completeness check fails — and reads as "the rename broke something". astubbs#202 traced the whole
 cascade back to one deleted line. The procedure warned about taking too few files; it did not warn that
 taking them is destructive to what the branch had added.
+<!-- post-merge: checked-end -->
 
 **F was a genuine tool defect and was fixed rather than worked around**, because it does not scale: the
 orphan refusal sat before the `--defer-prose` check, so the flag meaning "prose is master's problem"

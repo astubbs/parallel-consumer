@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.ConcurrentModificationException;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -93,7 +94,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
      * path in the first place - when a send fails asynchronously, Kafka's own {@code ProducerBatch} catches and logs
      * whatever a callback throws, so it was already inert there in both modes.
      */
-    // TODO(refactor): InternalRuntimeException misnames a failed send; throw a specific subclass and rename `exception` to `sendFailure`
+    // TODO(refactor): PCInternalRuntimeException misnames a failed send; throw a specific subclass and rename `exception` to `sendFailure`
     //  The whole summary must stay on the TODO line itself: bin/todo-index.sh indexes only that physical
     //  line, so anything wrapped onto a continuation is dropped from docs/todo-index.md.
     //  Detail, including why the subclass alone is not enough: docs/refactoring.md, internal/ProducerManager.java.
@@ -112,7 +113,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
             if (exception != null) {
                 log.error("Error producing result message", exception);
                 if (!usingTransactions) {
-                    throw new InternalRuntimeException("Error producing result message", exception);
+                    throw new PCInternalRuntimeException("Error producing result message", exception);
                 }
             }
         };
@@ -210,7 +211,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
         try {
             lockAcquired = readLock.tryLock(produceLockTimeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
-            throw new InternalRuntimeException("Interrupted while waiting to get produce lock (timeout was set to {})", e, produceLockTimeout);
+            throw new PCInternalRuntimeException("Interrupted while waiting to get produce lock (timeout was set to {})", e, produceLockTimeout);
         }
 
         if (lockAcquired) {
@@ -276,7 +277,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
         } catch (ProducerFencedException e) {
             // todo consider wrapping all client calls with a catch and new exception in the ProducerWrapper, so can get stack traces
             //  see APIException#fillInStackTrace
-            throw new InternalRuntimeException(e);
+            throw new PCInternalRuntimeException(e);
         }
 
         // see {@link KafkaProducer#commit} this can be interrupted and is safe to retry
@@ -288,7 +289,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
             if (retryCount > arbitrarilyChosenLimitForArbitraryErrorSituation) {
                 String msg = msg("Retired too many times ({} > limit of {}), giving up. See error above.", retryCount, arbitrarilyChosenLimitForArbitraryErrorSituation);
                 log.error(msg, lastErrorSavedForRethrow);
-                throw new InternalRuntimeException(msg, lastErrorSavedForRethrow);
+                throw new PCInternalRuntimeException(msg, lastErrorSavedForRethrow);
             }
             try {
                 if (producerWrapper.isMockProducer()) {
@@ -301,7 +302,13 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
                             // try wait again
                             commitTransaction();
                         }
-                        boolean transactionModeIsReady = lastErrorSavedForRethrow == null || !lastErrorSavedForRethrow.getMessage().contains("Invalid transition attempted from state READY to state COMMITTING_TRANSACTION");
+                        // getMessage() is nullable, and this runs while already handling an error - an exception with
+                        // no message (an NPE from the producer, say) turned the recovery path into a second failure.
+                        // The null-check above guards the reference, not the message.
+                        String lastErrorMessage = lastErrorSavedForRethrow == null
+                                ? ""
+                                : Objects.toString(lastErrorSavedForRethrow.getMessage(), "");
+                        boolean transactionModeIsReady = !lastErrorMessage.contains("Invalid transition attempted from state READY to state COMMITTING_TRANSACTION");
                         if (transactionModeIsReady) {
                             // try again
                             log.error("Transaction was already in READY state - tx completed between interrupt and retry");
@@ -470,7 +477,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
      */
     private void ensureProduceStarted() {
         if (options.isUsingTransactionCommitMode() && producerTransactionLock.getReadHoldCount() < 1) {
-            throw new InternalRuntimeException("Need to call #beginProducing first");
+            throw new ProduceLockNotHeldException("Need to call #beginProducing first");
         }
     }
 
@@ -484,9 +491,16 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
         private final ReentrantReadWriteLock.ReadLock produceLock;
 
         /**
-         * Unlocks the produce lock
+         * Unlocks the produce lock.
+         * <p>
+         * Public rather than protected because a rejected hand-over has to release the hold it is refusing:
+         * {@link PollContextInternal#setProducingLock} throws when a context already owns a lock, and no caller
+         * releases the hold it was passing in on that throw path. Without a release reachable from there, the guard
+         * would swap a silently orphaned first hold for a loudly orphaned second one - the same permanent block on
+         * the next commit's write-lock acquisition, which is exactly what that guard exists to prevent. Reported by
+         * Codex review on astubbs#262.
          */
-        protected void unlock() {
+        public void unlock() {
             produceLock.unlock();
             log.debug("Unlocking produce lock (context: {}).", context.getOffsets());
         }

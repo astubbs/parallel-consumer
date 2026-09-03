@@ -201,7 +201,19 @@ public class ManagedPCInstance implements Runnable {
             }
 
             // started flag is set in start(), not here — prevents double-submission
-            log.info("Running consumer instance {}", instanceId);
+
+            // The commit mode and ordering are logged HERE, from the harness, rather than left to
+            // PC's own "Options: {}" boot line: that line is on `bz.stub.parallelconsumer`, pinned
+            // to warn by the test log config, so it never appears and the mode a run actually used
+            // is unobservable after the fact. `bz.stub.parallelconsumer.integrationTests` is at
+            // info, so this one is always in the log and in the siloed harness stream. Scripts read
+            // it to report the mode a soak OBSERVED instead of the mode it believed it requested.
+            // That distinction is load-bearing: a long soak selects modes by rotation, and a run that
+            // silently never reached the mode you were hunting looks identical to one that reached it
+            // and found nothing. A 214-cycle overnight run turned out to be 129 SYNC, 85 ASYNC and
+            // zero transactional - which is only discoverable from a line like this one.
+            log.info("Running consumer instance {} with commitMode={} ordering={}",
+                    instanceId, config.commitMode, config.order);
 
             Properties consumerProps = new Properties();
             consumerProps.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, config.maxPoll);
@@ -214,17 +226,37 @@ public class ManagedPCInstance implements Runnable {
             }
             KafkaConsumer<String, String> newConsumer = kcu.createNewConsumer(false, consumerProps);
 
-            this.parallelConsumer = new ParallelEoSStreamProcessor<>(ParallelConsumerOptions.<String, String>builder()
+            // A TRANSACTIONAL INSTANCE NEEDS A PRODUCER, and the absence of these three lines is the
+            // whole reason the chaos suite has never had a transactional scenario.
+            //
+            // The fleet has always been parameterised by commit mode - config.commitMode is passed
+            // straight through - so the mode LOOKED reachable, and the gap read as a deliberate
+            // exclusion rather than a missing capability. It was not: PERIODIC_TRANSACTIONAL_PRODUCER
+            // requires a producer to be supplied, one was never wired, so any scenario asking for it
+            // would have failed at construction. Nobody asked, so nobody found out.
+            //
+            // That gap matters more than its size. astubbs/parallel-consumer#44 - the only issue
+            // upstream ever labelled a VERIFIED BUG - lives in this mode, as does the unbounded
+            // revoke wait tracked in docs/inflight/bug-857-transactional-revoke-wait.md, and the
+            // chaos suite could not reach either of them.
+            //
+            // Wired ONLY for the mode that requires it, deliberately: handing a producer to the
+            // consumer-commit modes would change what every existing scenario exercises, and those
+            // scenarios' calibration is the expensive part of this suite.
+            var optionsBuilder = ParallelConsumerOptions.<String, String>builder()
                     .ordering(config.order)
                     .consumer(newConsumer)
                     .commitMode(config.commitMode)
-                    .maxConcurrency(config.maxConcurrency)
-                    .build());
+                    .maxConcurrency(config.maxConcurrency);
+            if (config.commitMode == CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER) {
+                optionsBuilder.producer(kcu.createNewProducer(config.commitMode));
+            }
+            this.parallelConsumer = new ParallelEoSStreamProcessor<>(optionsBuilder.build());
 
             // every incarnation gets its own fresh WorkManager, so this never double-registers; the
             // instance-level counter deliberately spans incarnations (see workResultsReturned)
-            this.parallelConsumer.getWm().getSuccessfulWorkListeners()
-                    .add(wc -> workResultsReturned.incrementAndGet());
+            this.parallelConsumer.getWm()
+                    .addSuccessfulWorkListener(wc -> workResultsReturned.incrementAndGet());
 
             this.parallelConsumer.setTimeBetweenCommits(Duration.ofSeconds(1));
             this.parallelConsumer.setMyId(Optional.of("PC-" + instanceId));

@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Antony Stubbs and contributors
+
 // Flags an UNQUALIFIED `#NN` on ADDED lines, where the number is low enough to be ambiguous.
 //
 // House convention (AGENTS.md -> Issue references): below #1000 a reference must say which repo it
@@ -27,6 +29,11 @@
 
 // Below this, a reference is ambiguous and must name its repo. At or above it, only this fork has
 // such a number, so a bare `#NNNN` is unambiguous.
+// Read by bin/check-branch-self-reference.sh as well, which is NOT obvious from here: that gate
+// matches a bare `#NNN` self-reference precisely because this constant cannot be relied on to force
+// qualification forever. Lowering it, or fork PR numbers passing it, changes what that gate sees.
+// The dependency is one-way and deliberate - nothing here should read that gate - but a change to
+// this number is worth a glance at it.
 const QUALIFY_BELOW = 1000;
 
 // Files where a bare #NN legitimately means upstream, so the rule must NOT fire.

@@ -1,6 +1,7 @@
 # Control-thread and worker-pool contract debts
 
 <!-- inflight-type: task -->
+<!-- inflight-labels: concurrency -->
 <!-- inflight-impact: reliability -->
 <!-- inflight-state: deferred - after v6, no defect currently attributed to it -->
 

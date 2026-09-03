@@ -23,6 +23,10 @@ permissions:
   contents: read
   pull-requests: write
   checks: write
+  # The throughput check reads recent `perf baseline (master)` runs and downloads their artifacts to
+  # build its reference, which is a different workflow's runs - that needs actions: read. Without it
+  # the check cannot list them and correctly reports "cannot run" rather than inventing a baseline.
+  actions: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
@@ -89,8 +93,73 @@ jobs:
             name: "Performance Tests"
             cmd: "bin/performance-test.sh"
             timeout: 60
+          # Lincheck - scheduler-controlled concurrency testing over the state classes. It existed
+          # without running ANYWHERE: six test classes, a runner script, and no workflow referencing
+          # them, while every CI script passed -Dexcluded.groups=...,lincheck. Built in astubbs#347 and
+          # never wired up, which is the "a test that never runs is not a passing test" case AGENTS.md
+          # names - and nothing went red for a week to say so.
+          #
+          # GATING, and the argument has to be made about the arms this lane actually has. A Lincheck
+          # violation is a real finding rather than a timing wobble, but "the model checker explores
+          # interleavings deterministically" is not why - NO model-checking arm over a product class
+          # runs here at all. They are blocked on Lincheck 3.7 rewriting a Lombok
+          # @EqualsAndHashCode(callSuper = true) super.hashCode() into a recursing self-call, which
+          # LincheckSuperHashCodeProbeTest tracks and fires when it is fixed. What licenses gating is
+          # that the three arms asserting NO violation - RetryQueue, ShardManager, WorkManager - need
+          # no hit to pass, so their bounds are a straight cost with no rate to price, and a red is a
+          # statement about the code.
+          #
+          # THE RISK WORTH NAMING is the INVERTED arms, which still need Lincheck to FIND something:
+          # PartitionStateLincheckTest, and LincheckToolchainProbeTest, the control that says whether
+          # the toolchain is instrumenting anything. Those depend on a stress hit rate measured 3.4x
+          # apart across two machines (docs/inflight/test-lincheck-lane-open-items.md), priced on the
+          # machine that wrote them rather than a hosted runner. If this entry flakes, that is where to
+          # look - and the fix is NOT a retry: this repo removed surefire reruns because they hid three
+          # flakes. Demote to advisory before masking anything, and read
+          # docs/solutions/best-practices/reverting-half-a-fix-is-not-a-control-2026-09-01.md before
+          # concluding a quiet inverted arm means its bug is still there.
+          #
+          # EXCEPT LincheckToolchainProbeTest, which may NEVER be demoted to advisory. It is the lane's
+          # positive control - its whole job is to say whether Lincheck instrumented anything - so an
+          # advisory probe means every other zero in this lane is uninterpretable and the lane reports
+          # green having proved nothing. That is the failure astubbs#347's unwired harnesses were, one
+          # layer along. If the probe stops firing, the lane is broken and must go red until it is fixed;
+          # docs/solutions/best-practices/a-stress-probe-is-an-instrument-you-built-not-a-test.md owns why.
+          #
+          # 7m42s measured on ubuntu-latest (about 2m50s locally), nearly all of it
+          # WorkManagerLincheckTest, whose inverted arm cannot stop early and always pays its full
+          # bound. bin/lincheck-test.sh's header owns the five flags that each fail silently on their
+          # own.
+          - suite: lincheck
+            name: "Lincheck"
+            cmd: "bin/lincheck-test.sh"
+            timeout: 20
+
+          # Chaos Pain Suite - the per-PR ambient tripwire. It ran on the self-hosted `highcpu` box
+          # until 2026-08-26, on the premise that it needed many real cores to provoke anything.
+          # Measured head-to-head on the SAME commit (d8beb162f), that premise did not survive:
+          # hosted 13m59s vs self-hosted 12m16s, both green. 14% of wall-clock is not worth a shared
+          # physical machine, and the sharing was the root of every scheduling problem the highcpu
+          # lane had - a hosted runner gives each job its own VM, so co-residency cannot happen.
+          #
+          # bin/chaos-test.sh needed no change to move here, which is the tell that the premise was
+          # never load-bearing: it passes no forkCount and no -Dparallel-tests, so the suite was
+          # never configured to exploit those cores.
+          #
+          # GATING, like the suite it replaces: a chaos RED is a real finding, so this entry is
+          # deliberately NOT `optional`. bin/chaos-test.sh excludes @Quarantined scenarios (the
+          # Quarantine Lane owns them) and flags a zero-tests-selected window loudly in the job
+          # summary rather than impersonating a green - read that before trusting a pass.
+          # On-demand seeded hunts (specific seed/reps) stay in chaos-pain.yml.
+          - suite: chaos
+            name: "Chaos Pain Suite"
+            cmd: "bin/chaos-test.sh"
+            timeout: 60
     name: "${{ matrix.name }}"
     runs-on: ubuntu-latest
+    # NO continue-on-error: every suite in this matrix gates. If you add an advisory trial lane, give
+    # the entry an `optional` key and set `continue-on-error: ${{ matrix.optional == 'true' }}` -
+    # actionlint rejects a matrix property no entry defines, so the expression cannot sit here unused.
     timeout-minutes: ${{ matrix.timeout }}
     steps:
       - uses: actions/checkout@v6
@@ -107,24 +176,278 @@ jobs:
             setup-java-Linux-x64-maven-
       - name: ${{ matrix.name }}
         run: ${{ matrix.cmd }}
-      - name: Upload coverage to Codecov
+
+      # CHAOS ONLY. The self-hosted lane used to upload these as
+      # `highcpu-fast-feedback-reports-Chaos Pain Suite-*`; moving chaos here would otherwise have
+      # dropped them silently - a regression nothing goes red for. They are load-bearing for
+      # diagnosis rather than a nicety: a chaos failure is read out of the failsafe XML, and
+      # docs/solutions/workflow-issues/gh-run-view-log-truncation.md exists because the job LOG is
+      # unreliable for this suite - the artifact survives where the log stream does not. Cited from
+      # docs/inflight/bug-857-family.md; keep the name greppable if you rename it.
+      - name: Upload chaos test reports
+        if: always() && matrix.suite == 'chaos'
+        uses: actions/upload-artifact@v7
+        with:
+          name: chaos-suite-reports-${{ github.run_number }}
+          path: '**/target/*-reports/*.xml'
+          retention-days: 14
+
+      # Runs BEFORE the upload so a regression cannot cost us the evidence of it: `if: always()` on
+      # the upload below means the artifact lands either way, but ordering it after keeps the failing
+      # case's data on the run rather than depending on that flag staying correct.
+      # `continue-on-error` so the REPORT still posts when the check fails - a red verdict is the one
+      # somebody most needs to read, and a step that dies before writing its report hides exactly that.
+      # The job is still failed by the "Fail on throughput regression" step below.
+      - name: Throughput regression check
+        id: throughput
+        if: always() && matrix.suite == 'performance'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # CAPTURE THE EXIT CODE, because the check has a FOUR-value contract (0 pass, 1 regression,
+        # 2 cannot run, 3 nothing in scope) and `steps.*.outcome` collapses all of them to
+        # success/failure. Reading only `outcome` made the job announce "reported a regression" for a
+        # bootstrapping run that reported nothing of the sort.
+        run: |
+          set +e
+          node bin/check-throughput-regression.mjs
+          code=$?
+          set -e
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      # Posted as a comment rather than left in the job log, because a number nobody retrieves is a
+      # number nobody has. The duplication checks already comment here; this follows them.
+      - name: Post the throughput report
+        # SAME-REPOSITORY PRs ONLY. On a fork PR GitHub downgrades GITHUB_TOKEN to read-only, so the
+        # comment write 403s - and because this sits in the REQUIRED Performance Tests job, that failure
+        # would fail the check even when the lane and the verdict are both green. The report still lands
+        # as an artifact for fork PRs; only the comment is skipped.
+        if: always() && matrix.suite == 'performance' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        # THE SAME REASONING AS THE SIBLING STEP ABOVE, and it was missing here while that one had it.
+        # This step is REPORTING, not measuring: it makes one or two GitHub API writes inside the
+        # REQUIRED Performance Tests job, so a rate limit, a 500, or a script exception would fail the
+        # required check for a reason that has nothing to do with the lane or the verdict. The comment
+        # is the nice-to-have; the job's own result is not. A failure here is still visible - the step
+        # goes red in the job - it just does not take the check down with it.
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs')
+            const path = 'target/throughput-report.md'
+            if (!fs.existsSync(path)) return
+            const body = fs.readFileSync(path, 'utf8')
+
+            // THIS STEP IS WHERE THE COMMENT MECHANICS WERE MEASURED, AND THEY ARE NO LONGER HERE.
+            // .github/scripts/throughput-report-comment.js carries what is throughput's own - the
+            // markers and the delta - and configures .github/scripts/sticky-report-comment.js, which
+            // owns the five behaviours every report needs: paginated Bot-only lookup of our own last
+            // comment, reading its payload back, update-in-place versus post-fresh on a status change,
+            // retire-before-create, and the sha/run/time stamp. Both modules carry the reasoning and
+            // the measurements behind each, and both have self-tests the PR Checklist job runs.
+            //
+            // They moved out of this YAML when the quarantine lane needed the identical behaviours.
+            // Copying them is precisely how the original defects reached two steps at once - the
+            // SpotBugs step below was written by copying this one, and inherited the missing
+            // pagination and the missing author filter with it. Inline JavaScript is also untestable,
+            // which is the second half of the argument.
+            //
+            // `require` of a repo file works because github-script runs with the workspace checked
+            // out; .github/workflows/pr-checklist.yml loads its gate modules the same way.
+            const report = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/throughput-report-comment.js`)
+            await report.post({ github, context, core, body })
+
+      # Exit 1 is a regression. Exit 2 is the check being UNABLE to measure, which this repo treats as
+      # never-a-pass ("a skip is not a pass") - so it also fails, with its own message, because a lane
+      # that silently stops measuring is the failure mode the whole PR exists to remove. Exit 3
+      # (nothing in scope) and 0 pass.
+      # ADVISORY, NOT BLOCKING - deliberately, and this step is the record of why. The 0.50/0.70 bounds
+      # were calibrated against a normalised share, and re-measuring after review corrected the control
+      # set showed normalising ADDS noise on one machine: raw subject 13.4%, share 16.6-17.2%. Bounds
+      # derived from a quantity noisier than the raw measurement are not bounds anybody should be
+      # blocked on. The report still posts, so a red verdict is visible and arguable; it just does not
+      # fail the required check.
+      #
+      # FLIP IT BY DELETING `false &&` BELOW, once a fresh master-lane series confirms the bounds
+      # against the corrected control. That is one line, and it is the whole gate on the gate.
+      - name: Throughput verdict (advisory - see comment above)
+        if: always() && false && matrix.suite == 'performance' && steps.throughput.outputs.code == '1'
+        run: |
+          echo "The throughput check reported a regression - see the report comment on this PR." >&2
+          exit 1
+
+      - name: Fail when the throughput check could not run
+        if: always() && matrix.suite == 'performance' && steps.throughput.outputs.code == '2'
+        run: |
+          echo "The throughput check could not measure - see its output above. Not a pass." >&2
+          exit 1
+
+      # PERFORMANCE ONLY, and the retention is deliberately not the chaos lane's 14 days above.
+      # Those reports diagnose ONE failure and are read within days. These are the accumulation
+      # itself: docs/inflight/perf-throughput-regression-gate.md defers a throughput gate until
+      # somebody has seen the real spread, and until this step existed the only surviving copy of any
+      # number was the PC-THROUGHPUT lines inside the job log - which is exactly the artefact
+      # docs/solutions/workflow-issues/gh-run-view-log-truncation.md says truncates silently when read
+      # the obvious way. A short window here would defeat the purpose of collecting at all.
+      #
+      # THE GATE IS NO LONGER DEFERRED - this workflow now runs it, and a red verdict fails the required
+      # Performance Tests job. What remains open is retention: artifacts expire, so the reference is
+      # bounded by the number of recent master runs still holding one, and a long quiet period on master
+      # shrinks it. Storing a durable series was considered and declined - no data branch, no write grant
+      # (operator decision, 2026-09-01) - so the accumulating-artifact design is the open follow-up.
+      # Per-METHOD timings, which the job log does not carry - see the comment on the same step in
+      # perf-baseline.yml for why class granularity is the weaker instrument.
+      - name: Upload failsafe reports
+        if: always() && matrix.suite == 'performance'
+        uses: actions/upload-artifact@v7
+        with:
+          name: performance-failsafe-xml-${{ github.run_number }}
+          path: '**/target/failsafe-reports/*.xml'
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: Upload throughput summary
+        if: always() && matrix.suite == 'performance'
+        uses: actions/upload-artifact@v7
+        with:
+          name: performance-throughput-${{ github.run_number }}
+          path: '**/target/performance-throughput.txt'
+          retention-days: 90
+          if-no-files-found: warn
+
+      # THE GLOB WAS INERT - the same defect, and the same fix, as the test-results collector below.
+      # codecov-action does not expand `**` and nothing routes `files:` through a shell, so the
+      # pattern arrived literally, matched nothing, and the CLI fell back to its own tree-wide
+      # search. That fallback produced a PLAUSIBLE answer rather than an empty one, which is what let
+      # it survive review: on master's full build it found every jacoco report in the tree, so `unit`
+      # and `integration` each received both halves and reported the SAME number, while a PR's suite
+      # job has only produced its own half. The per-flag gates then compared unlike sets, and failed
+      # on branches that changed no Java. docs/ci.md -> "The per-flag gates, and why they failed"
+      # carries the measured table.
+      #
+      # BOTH PATTERNS STAY HERE, deliberately. Which halves a given suite job actually produces is
+      # the open question in docs/inflight/ci-codecov-flags-not-like-for-like.md, and narrowing it is
+      # a separate change. Expanding a pattern that matched nothing does not answer it - the job now
+      # uploads exactly the reports it produced, and nothing else.
+      - name: Collect jacoco report files for Codecov
         if: always()
+        id: coverage
+        run: |
+          files=$(find . -type f \
+            \( -path '*/target/site/jacoco/jacoco.xml' \
+            -o -path '*/target/site/jacoco-it/jacoco.xml' \) | paste -sd, -)
+          # HEREDOC DELIMITER, not `echo`. `find` output is filenames, and a filename may legally
+          # contain a newline - which in the plain form injects an extra step-output line. GitHub
+          # documents this delimiter form for exactly that reason.
+          {
+            echo "files<<__CE_FILES__"
+            printf '%s\n' "$files"
+            echo "__CE_FILES__"
+          } >> "$GITHUB_OUTPUT"
+          if [ -z "$files" ]; then
+            echo "::warning::no jacoco reports found - skipping the coverage upload"
+          else
+            echo "found $(printf '%s\n' "$files" | tr ',' '\n' | wc -l) jacoco report(s) to upload"
+          fi
+
+      - name: Upload coverage to Codecov
+        # Skipped when the collector found nothing, rather than handing the action an empty `files:`
+        # - an empty value is exactly what re-opens the tree-wide fallback described above.
+        if: always() && steps.coverage.outputs.files != ''
         uses: codecov/codecov-action@v5
         with:
-          files: '**/target/site/jacoco/jacoco.xml,**/target/site/jacoco-it/jacoco.xml'
+          files: ${{ steps.coverage.outputs.files }}
+          # The second lock: even if `files` is somehow unusable, never let the CLI go looking for
+          # jacoco reports on its own again.
+          disable_search: true
+          flags: ${{ matrix.suite }}
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      # TEST RESULTS, NOT COVERAGE - a separate Codecov product and a separate upload. It ingests the
+      # JUnit XML surefire and failsafe already write, and gives failure RATES and flake identification
+      # over time.
+      #
+      # WHY THIS REPO WANTS IT, specifically. Flake data here is currently reconstructed BY HAND from CI
+      # logs that expire: largeNumberOfInstances's one-in-ten rate came from a bespoke overnight script
+      # on an idle box, three sightings were transcribed into docs/inflight/ before their logs aged out,
+      # and docs/quarantined-tests.md demands "a recorded sighting ledger" that a human maintains. This
+      # accumulates the same thing automatically and durably.
+      #
+      # ALL FOUR SUITES ON PURPOSE. Chaos and performance are the noisiest, and that is exactly where the
+      # flakes live - excluding them would omit the data this exists for.
+      #
+      # `!cancelled()` rather than `always()`: a FAILED test run is the interesting upload, so this must
+      # survive the step before it failing; a cancelled job has nothing worth sending.
+      #
+      # IF THIS GOES QUIET, IT WILL DO SO SILENTLY. The coverage upload above reported success for four
+      # months while Codecov could not read the repository at all - the action authenticates with a
+      # token, which needs no repo access, so ingest "worked" while everything downstream did nothing.
+      # Judge this by whether rates appear in the dashboard, never by a green step.
+      # The uploader's CLI does NOT expand `**` itself, and nothing passes these through a shell, so
+      # a glob handed to `files:` arrives literally and matches nothing. The first run proved it:
+      # `Some files were not found --- {"not_found_files": ["**/target/surefire-reports/TEST-*.xml", ...]}`
+      # followed by `Found 55 test_results files` - the config was inert and the CLI had silently
+      # fallen back to its own tree-wide `*test*.xml` search, which swept up 18 logback CONFIG files
+      # (logback-test.xml, logback-integration-test.xml, logback-temp-test.xml) alongside 39 genuine
+      # reports. The step was green throughout. Expanding here is what makes `files:` mean anything.
+      - name: Collect test report files for Codecov
+        if: ${{ !cancelled() }}
+        id: testreports
+        run: |
+          files=$(find . -type f \
+            \( -path '*/target/surefire-reports/TEST-*.xml' \
+            -o -path '*/target/failsafe-reports/TEST-*.xml' \) | paste -sd, -)
+          # HEREDOC DELIMITER, not `echo`. `find` output is filenames, and a filename may
+          # legally contain a newline - which in the plain form injects an extra step-output
+          # line. GitHub documents this delimiter form for exactly that reason.
+          {
+            echo "files<<__CE_FILES__"
+            printf '%s\n' "$files"
+            echo "__CE_FILES__"
+          } >> "$GITHUB_OUTPUT"
+          if [ -z "$files" ]; then
+            echo "::warning::no surefire/failsafe reports found - skipping the test-results upload"
+          else
+            # `printf '%s\n'`, not `printf '%s'`: `wc -l` counts newlines, so without the trailing
+            # one this reported N-1 and the log undercounted by one every time.
+            echo "found $(printf '%s\n' "$files" | tr ',' '\n' | wc -l) report file(s) to upload"
+          fi
+
+      - name: Upload test results to Codecov
+        # Skipped when the collector found nothing, rather than letting the CLI fall back to its
+        # tree-wide search - an empty `files:` is exactly what produced the junk sweep above.
+        if: ${{ !cancelled() && steps.testreports.outputs.files != '' }}
+        uses: codecov/codecov-action@v5
+        with:
+          report_type: test_results
+          files: ${{ steps.testreports.outputs.files }}
+          # The second lock on the junk sweep: even if `files` is somehow unusable, never let the
+          # CLI go looking for `*test*.xml` on its own again.
+          disable_search: true
           flags: ${{ matrix.suite }}
           token: ${{ secrets.CODECOV_TOKEN }}
 
   # Mutation testing (PIT). ci-mutation-test.sh scopes to the classes CHANGED vs the PR base
   # (GITHUB_BASE_REF), so it's fast enough for the 2-core hosted runner - the full internal.* sweep would
-  # time out here (which is why it used to be self-hosted-only). Advisory / non-gating.
+  # time out here (which is why it used to be self-hosted-only).
+  #
+  # ADVISORY ABOUT SCORES, NOT ABOUT ITSELF. `continue-on-error: true` stays - it keeps a mutation
+  # result from failing the workflow run, while the check ROW still renders red when the step fails
+  # (measured, see docs/inflight/ci-mutation-lane-skip-reads-as-a-pass.md). So red was always
+  # honest here and green never was: measured 2026-08-25 over the last 40 pull_request runs of this
+  # workflow, 40 green ticks and zero mutants scored, because every path out of the script exited 0.
+  # The step below reads bin/ci-mutation-test.sh's exit code instead and reacts to each state
+  # separately - survivors still fail nothing, but a lane that could not run, or ran and measured
+  # nothing, now goes red. The exit-code contract lives in that script's header;
+  # docs/inflight/ci-mutation-testing.md has the measurement.
   mutation:
     if: github.event_name == 'pull_request'
     needs: prepare-deps
     name: "Mutation Tests (PIT, PR-scoped)"
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    continue-on-error: true      # advisory - never gates merge
+    continue-on-error: true      # advisory - never gates merge; a failed STEP still reddens the row
     steps:
       - uses: actions/checkout@v6
         with:
@@ -140,8 +463,25 @@ jobs:
           key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
           restore-keys: |
             setup-java-Linux-x64-maven-
+      - name: Self-test the mutation verdict
+        # Ahead of the lane it protects, the same ordering repo-hygiene.yml and pr-checklist.yml use.
+        # Seconds, no maven: it feeds canned PIT logs through the verdict and asserts the exit codes.
+        run: bash bin/test-ci-mutation-test.sh
+
       - name: Mutation testing (changed classes only)
-        run: bin/ci-mutation-test.sh
+        run: |
+          set +e
+          bin/ci-mutation-test.sh
+          rc=$?
+          set -e
+          case "$rc" in
+            0) echo "PIT scored mutants - see the job summary for the survivor list." ;;
+            3) echo "::notice::PIT had nothing in scope: no core main-source class in a decidable package changed." ;;
+            2) echo "::error::PIT could not run, or ran and scored nothing. This is a broken lane, not a clean PR."
+               exit 1 ;;
+            *) echo "::error::PIT exited ${rc}."
+               exit "$rc" ;;
+          esac
 
   # Quarantine AUDIT: the seconds-fast enforcement job on every PR - registry drift and broken owner
   # claims are real, actionable errors that turn it red. It does NOT run any tests (that is
@@ -212,11 +552,35 @@ jobs:
             setup-java-Linux-x64-maven-
       - name: Build and Test (Kafka 4.x)
         run: bin/ci-build.sh '[3.9.1,5)'
-      - name: Upload coverage to Codecov
+      # Same inert-`**` fix as the `test` matrix upload, whose step comment carries the reasoning.
+      # This job is `if: false` today, so nothing here is exercised - which is precisely why it is
+      # fixed now: re-enabling it for the Kafka 4.x work would otherwise reintroduce the defect
+      # under a flag nobody is watching.
+      - name: Collect jacoco report files for Codecov
         if: always()
+        id: coverage
+        run: |
+          files=$(find . -type f \
+            \( -path '*/target/site/jacoco/jacoco.xml' \
+            -o -path '*/target/site/jacoco-it/jacoco.xml' \) | paste -sd, -)
+          # Heredoc delimiter, not `echo` - a filename may legally contain a newline.
+          {
+            echo "files<<__CE_FILES__"
+            printf '%s\n' "$files"
+            echo "__CE_FILES__"
+          } >> "$GITHUB_OUTPUT"
+          if [ -z "$files" ]; then
+            echo "::warning::no jacoco reports found - skipping the coverage upload"
+          else
+            echo "found $(printf '%s\n' "$files" | tr ',' '\n' | wc -l) jacoco report(s) to upload"
+          fi
+
+      - name: Upload coverage to Codecov
+        if: always() && steps.coverage.outputs.files != ''
         uses: codecov/codecov-action@v5
         with:
-          files: '**/target/site/jacoco/jacoco.xml,**/target/site/jacoco-it/jacoco.xml'
+          files: ${{ steps.coverage.outputs.files }}
+          disable_search: true
           flags: ak-experimental
           token: ${{ secrets.CODECOV_TOKEN }}
 
@@ -318,9 +682,101 @@ jobs:
           compare_with_base: true
           max_increase: 10
 
+  # Meta's Infer, every Java checker it ships - not just RacerD. RacerD is the only detector here
+  # that finds races WITHOUT being told where to look: Error Prone's GuardedBy only fires where
+  # somebody wrote the annotation, and this codebase has none, so the racing-double seam tests can
+  # only re-prove seams already found by hand. RacerD infers which locks protect which state from
+  # how the code uses them, and it is still why this lane exists. Alongside it, bin/infer-test.sh
+  # also runs pulse (null derefs, resource leaks), starvation (deadlock via lock-order inversion),
+  # and the checkers enabled by --annotation-reachability --bufferoverrun --cost --loop-hoisting
+  # --scope-leakage - `--racerd-only` used to disable everything but RacerD, including two checkers
+  # that are on by default, which is why the flag is gone and the lane was renamed from RacerD to
+  # Infer to match what it actually runs.
+  #
+  # AN IDENTITY SET, not a count. config/infer-known-findings.txt records which findings are known,
+  # keyed on bug type plus class.method. A bare count ceiling could not distinguish "one finding
+  # fixed" from "one finding swapped for a different one" - both leave the total unchanged - which an
+  # independent cross-model review caught, and which is the same reports-green-while-it-changed class
+  # this lane exists to police. One line per known identity, checked in, so both directions are a
+  # visible diff.
+  #
+  # Fails BOTH ways: a new identity is a new finding, and a known one that stops firing means
+  # somebody fixed it without ratcheting the file.
+  infer:
+    if: github.event_name == 'pull_request'
+    name: "static: infer"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: prepare-deps
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - name: Restore Maven cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            setup-java-Linux-x64-maven-
+
+      # Keyed on the version alone - the toolchain changes only when we bump it, which makes this a
+      # better cache key than the pom-hash ones above. Unpacked it is ~950 MB, so the TARBALL is what
+      # gets cached and it is unpacked per run: the repo-wide cache budget is 10 GB and several jobs
+      # already hold ~/.m2.
+      - name: Restore the Infer toolchain
+        id: infer-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/infer-dist/infer.tar.xz
+          key: infer-linux-x86_64-v1.3.0
+
+      - name: Download Infer
+        if: steps.infer-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/infer-dist
+          curl -sSL --fail -o ~/infer-dist/infer.tar.xz \
+            https://github.com/facebook/infer/releases/download/v1.3.0/infer-linux-x86_64-v1.3.0.tar.xz
+
+      # Runs UNCONDITIONALLY, not only on a cache miss, because the cache is the mutable half. A
+      # fresh download arrives over TLS from a pinned release URL; a restored one arrives from a
+      # writable store keyed by a string anyone with write access to a branch can populate. Verifying
+      # only what was just downloaded would check the half that is already the safer of the two, and
+      # then unpack the other half unexamined.
+      #
+      # The digest was taken from two independent fetches of the pinned URL and the tarball confirmed
+      # to be an Infer distribution. If this step ever fails, do not "fix" it by re-recording the
+      # digest from whatever arrived - that is the failure mode it exists to catch. Bump the cache key
+      # to force a clean download and see whether the digest returns; a genuine upstream re-cut of a
+      # published tag is the rarer explanation and should be confirmed against the release page.
+      - name: Verify the Infer archive against its pinned digest
+        run: |
+          echo "02be62ba931cb43e2d42bbf7abf4bd9a410cf8464cce5453934e25c90a825850  $HOME/infer-dist/infer.tar.xz" \
+            | sha256sum --check --strict -
+
+      - name: Unpack and confirm it runs
+        run: |
+          mkdir -p ~/infer
+          tar -xJf ~/infer-dist/infer.tar.xz -C ~/infer --strip-components=1
+          ~/infer/bin/infer --version
+
+      # Asserts the ceiling in both directions. Analysis itself is ~11s over core's 73 files; the
+      # timeout is for the download on a cache miss.
+      # INFER_BIN and INFER_JDK are set here rather than in an `env:` block on purpose. An earlier
+      # version set all three in `env:` AND overrode two of them inline, so the env values were dead
+      # - and worse, wrong: INFER_BIN pointed at the workspace, while the unpack step above puts the
+      # toolchain in $HOME/infer. Deleting the inline prefix, which is exactly what a later tidy-up
+      # would do, would have pointed the lane at nothing. `$HOME` and `$JAVA_HOME` are not available
+      # to `env:` at all, which is what forced the inline form in the first place.
+      - name: Infer
+        run: INFER_BIN="$HOME/infer/bin/infer" INFER_JDK="$JAVA_HOME" bash bin/infer-test.sh
+
   # SpotBugs static analysis - finds null derefs, concurrency issues, resource leaks.
-  # Uses a baseline from the base branch so only NEW bugs introduced by the PR are
-  # reported. The baseline is generated by the push build and cached.
+  # Whole reactor, main AND test code, with fb-contrib and find-sec-bugs detectors loaded.
+  # Suppression is by rule in config/spotbugs-exclude.xml; the registry that justifies every entry is
+  # docs/inflight/static-spotbugs-rule-registry.md.
   spotbugs:
     if: github.event_name == 'pull_request'
     name: "static: spotbugs"
@@ -340,25 +796,35 @@ jobs:
           key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
           restore-keys: |
             setup-java-Linux-x64-maven-
-      - name: Restore SpotBugs baseline
-        id: spotbugs-baseline
-        uses: actions/cache/restore@v4
-        with:
-          path: .spotbugs-baseline.xml
-          key: spotbugs-baseline-${{ github.base_ref }}-${{ hashFiles('**/src/main/**/*.java') }}
-          restore-keys: |
-            spotbugs-baseline-${{ github.base_ref }}-
-            spotbugs-baseline-
+      # No baseline restore, and no baseline job: suppression is by RULE now, in the checked-in
+      # config/spotbugs-exclude.xml the pom points at, with every entry justified in
+      # docs/inflight/static-spotbugs-rule-registry.md. The job this replaces regenerated an exclude
+      # filter on every push to master, keyed on class + method + bug type, and recorded nothing
+      # about what it swallowed.
+      #
+      # test-compile, not compile: the pom sets includeTests, and target/test-classes has to exist
+      # for that to mean anything. Whole reactor, not `-pl parallel-consumer-core -am` - `-am` adds
+      # only the parent pom, so vertx, reactor, mutiny and the examples went unanalysed.
+      #
+      # `spotbugs:check` IS THE REPORTING HALF, and it is not optional. `spotbugs:spotbugs` writes
+      # spotbugsXml.xml and prints not one finding - the build log says "Skipping ... report goal"
+      # and nothing else - so every bit of reporting was GitHub-side: annotations, the sticky comment,
+      # the check run. Anyone running the build locally got total silence over hundreds of findings,
+      # which review caught by asking the obvious question nobody had: "do they at least get reported,
+      # and in the mvn build output?"
+      #
+      # `failOnError=false` keeps it advisory, so this changes what the lane SAYS and not what it
+      # gates - the staged position the rule registry documents, with its own trigger for making
+      # findings blocking. What `check` adds that neither the annotations nor the sticky comment give
+      # is the RULE NAME on every line, which is the one thing needed to tier a finding in that
+      # registry:
+      #   [ERROR] Medium: ... UTAO_JUNIT_ASSERTION_ODDITIES_ACTUAL_CONSTANT
+      #
+      # Not bound to a lifecycle phase on purpose: SpotBugs at effort=Max over the whole reactor is
+      # minutes, and paying that on every local `mvn test` would get the plugin switched off. Run the
+      # same two goals by hand when you want the list.
       - name: Compile and run SpotBugs
-        run: |
-          EXCLUDE_ARG=""
-          if [ -f .spotbugs-baseline.xml ]; then
-            EXCLUDE_ARG="-Dspotbugs.excludeFilterFile=.spotbugs-baseline.xml"
-            echo "Using baseline — only new bugs will be reported"
-          else
-            echo "No baseline found — reporting all bugs (first run on this base branch)"
-          fi
-          ./mvnw --batch-mode -Pci compile spotbugs:spotbugs $EXCLUDE_ARG -pl parallel-consumer-core -am
+        run: ./mvnw --batch-mode -Pci test-compile spotbugs:spotbugs spotbugs:check -Dspotbugs.failOnError=false
       - name: Post SpotBugs annotations on PR
         if: always()
         uses: jwgmeligmeyling/spotbugs-github-action@v1.2
@@ -367,12 +833,16 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Post SpotBugs summary to PR
         if: always()
+        # A COMMENT WRITE MUST NOT FAIL THE JOB - the same reasoning as the throughput step above, and
+        # missing here for the same reason it was missing there. This step summarises analysis that has
+        # already run and already posted its annotations, so a rate limit or a 500 while posting would
+        # fail the lane for something that is not the lane's business.
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
             const { execSync } = require('child_process');
-            const hasBaseline = fs.existsSync('.spotbugs-baseline.xml');
             const files = execSync('find . -path "*/target/spotbugsXml.xml" -type f').toString().trim().split('\n').filter(f => f);
             let body;
             if (files.length === 0) {
@@ -384,21 +854,44 @@ jobs:
                 const matches = content.match(/<BugInstance/g);
                 totalBugs += matches ? matches.length : 0;
               }
-              const baselineNote = hasBaseline
-                ? ' (new bugs only — baseline from base branch excluded)'
-                : ' (no baseline available — showing all bugs)';
+              const baselineNote = ' (rule-level exclusions only - see docs/inflight/static-spotbugs-rule-registry.md)';
               if (totalBugs === 0) {
                 body = `## :white_check_mark: SpotBugs Report\n\nNo bugs found${baselineNote}.\n`;
               } else {
                 body = `## :warning: SpotBugs Report\n\n**${totalBugs} bug(s) found**${baselineNote}. See the annotations on the Files Changed tab for details.\n`;
               }
             }
-            const comments = await github.rest.issues.listComments({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number });
-            const existing = comments.data.find(c => c.body.includes('SpotBugs Report'));
+            // THE LOOKUP IS SHARED, and this step is half the reason the module exists. It carried
+            // its own copy of the throughput step's lookup - because it was written by copying it -
+            // and inherited both of that copy's defects with it. The module's header owns the
+            // reasoning for each; the summary is that `listComments` returns 30 per page oldest-first
+            // (so the bug is latent until a sticky comment is born on a busy PR, then duplicates on
+            // EVERY push), and that matching any comment containing "SpotBugs Report" would overwrite
+            // a HUMAN who wrote about SpotBugs before the bot first posted.
+            //
+            // The marker stays the bare string rather than becoming an HTML comment: changing it
+            // would orphan every SpotBugs comment already live on an open PR, leaving the stale one
+            // beside a fresh one - which is the failure this whole PR is about.
+            const sticky = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/sticky-report-comment.js`)
+            const { owner, repo } = context.repo
+            const issue_number = context.issue.number
+            const existing = await sticky.findExisting({ github, owner, repo, issue_number, marker: 'SpotBugs Report' })
+
+            // STAMPED FOR THE SAME REASON THE THROUGHPUT COMMENT IS. This one updates in place too, so
+            // "no bugs found" can sit unchanged for weeks with nothing on it to say a run happened.
+            // It does NOT get the fresh-comment-on-status-change behaviour: that is a judgement about
+            // whether a clean-to-dirty SpotBugs transition deserves a new comment, and nobody has made
+            // it. Adding the stamp needs no such decision; adding the posting rule does.
+            const stamped = body + sticky.stampFor({
+              serverUrl: context.serverUrl, owner, repo,
+              prNumber: context.payload.pull_request.number,
+              headSha: context.payload.pull_request.head.sha,
+              runId: context.runId,
+            })
             if (existing) {
-              await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body });
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: stamped });
             } else {
-              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
+              await github.rest.issues.createComment({ owner, repo, issue_number, body: stamped });
             }
 
   # Dependency vulnerability scanning - GitHub's own dependency review
@@ -418,57 +911,6 @@ jobs:
           allow-dependencies-licenses: pkg:githubactions/actions/github-script
 
   # ── Push Builds (master) ───────────────────────────────────────────────
-
-  # Generate SpotBugs baseline for PR comparisons. Runs on every push to
-  # master so PR builds can exclude known bugs and only report new ones.
-  spotbugs-baseline:
-    if: github.event_name == 'push'
-    name: "static: spotbugs baseline"
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    needs: prepare-deps
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-java@v5
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-      - name: Restore Maven cache
-        uses: actions/cache/restore@v4
-        with:
-          path: ~/.m2/repository
-          key: setup-java-Linux-x64-maven-${{ hashFiles('**/pom.xml') }}
-          restore-keys: |
-            setup-java-Linux-x64-maven-
-      - name: Compile and generate SpotBugs XML
-        run: ./mvnw --batch-mode -Pci compile spotbugs:spotbugs -pl parallel-consumer-core -am
-      - name: Convert SpotBugs results to exclude filter
-        run: |
-          # Transform the SpotBugs XML into an exclude filter that can be
-          # passed to future runs via -Dspotbugs.excludeFilterFile. Each
-          # BugInstance becomes a Match element keyed on class + method + bug type.
-          python3 -c "
-          import xml.etree.ElementTree as ET, sys
-          tree = ET.parse('parallel-consumer-core/target/spotbugsXml.xml')
-          root = tree.getroot()
-          out = ET.Element('FindBugsFilter')
-          for bug in root.findall('.//BugInstance'):
-              match = ET.SubElement(out, 'Match')
-              cls = bug.find('Class')
-              method = bug.find('Method')
-              if cls is not None:
-                  ET.SubElement(match, 'Class', name=cls.get('classname', ''))
-              if method is not None:
-                  ET.SubElement(match, 'Method', name=method.get('name', ''))
-              ET.SubElement(match, 'Bug', pattern=bug.get('type', ''))
-          ET.ElementTree(out).write('.spotbugs-baseline.xml', xml_declaration=True, encoding='utf-8')
-          print(f'Baseline: {len(root.findall(\".//BugInstance\"))} bugs excluded')
-          "
-      - name: Cache SpotBugs baseline
-        uses: actions/cache/save@v4
-        with:
-          path: .spotbugs-baseline.xml
-          key: spotbugs-baseline-${{ github.ref_name }}-${{ hashFiles('**/src/main/**/*.java') }}
 
   # Single full build on default Kafka version to gate SNAPSHOT publishing.
   # Uses the same ci-build.sh script that PRs use for Kafka compat testing.
@@ -493,10 +935,76 @@ jobs:
             setup-java-Linux-x64-maven-
       - name: Build and Test
         run: bin/ci-build.sh
-      - name: Upload coverage to Codecov
+      # PER-SUITE FLAGS, MATCHING THE PR LANE - because the base and the head have to be measured
+      # the same way for a coverage COMPARISON to mean anything, and they were not.
+      #
+      # This job is `push`-only and uploaded everything under one `default` flag, while a PR runs the
+      # `test` matrix and uploads `unit`, `integration`, `performance`, `lincheck`, `chaos` - and no
+      # `default` at all. So codecov compared a PR total built from the suite flags against a base
+      # total built from `default`: disjoint measurement sets, differing by more than `codecov.yml`'s
+      # 1% threshold, on identical code. Observed on astubbs/parallel-consumer#400, a docs-and-tooling
+      # PR touching ZERO Java: Files 90 -> 90, Lines 4822 -> 4822, Branches 463 -> 463, and a reported
+      # -3.53%. Nothing had changed; the two sides were counting different things.
+      #
+      # NOT CARRYFORWARD FLAGS, which is the reflexive fix. Carrying master's `default` into a PR's
+      # total merges a STALE master measurement of the same code, so a genuine drop in any line that
+      # measurement covered is masked. That trades a noisy false positive for a silent false negative,
+      # and this repository has spent too long removing the second kind to add one back here.
+      #
+      # `clean verify` passes through both `test` and `post-integration-test`, so the pom's `report`
+      # and `report-integration` executions both run: jacoco/ is the surefire (unit) half and
+      # jacoco-it/ the failsafe (integration) half, which is exactly the split the PR lane makes with
+      # two separate jobs.
+      #
+      # ONE COLLECTOR, TWO OUTPUTS - and this is the site the inert `**` hurt most. Both steps below
+      # declared one half each, both patterns matched nothing, and the CLI's tree-wide fallback then
+      # handed BOTH halves to BOTH flags; the tell was master's two flags reporting an identical
+      # figure, which can only happen if they hold the same data. The split has to be real here,
+      # because it is the base half of every `codecov/project/unit` and `codecov/project/integration`
+      # comparison. The `test` matrix upload's step comment carries the rest of the diagnosis.
+      #
+      # The two halves are collected in one step rather than two because this is one job; keeping the
+      # outputs separate is what preserves the per-flag split.
+      - name: Collect jacoco report files for Codecov
         if: always()
+        id: coverage
+        run: |
+          unit=$(find . -type f -path '*/target/site/jacoco/jacoco.xml' | paste -sd, -)
+          integration=$(find . -type f -path '*/target/site/jacoco-it/jacoco.xml' | paste -sd, -)
+          # Heredoc delimiters, not `echo` - a filename may legally contain a newline, which in the
+          # plain form injects an extra step-output line.
+          {
+            echo "unit<<__CE_FILES__"
+            printf '%s\n' "$unit"
+            echo "__CE_FILES__"
+            echo "integration<<__CE_FILES__"
+            printf '%s\n' "$integration"
+            echo "__CE_FILES__"
+          } >> "$GITHUB_OUTPUT"
+          report_half() {
+            if [ -z "$2" ]; then
+              echo "::warning::no jacoco reports found for the $1 half - skipping that upload"
+            else
+              echo "$1: found $(printf '%s\n' "$2" | tr ',' '\n' | wc -l) report(s) to upload"
+            fi
+          }
+          report_half unit "$unit"
+          report_half integration "$integration"
+      - name: Upload unit coverage to Codecov
+        # Skipped rather than handed an empty `files:`, which is what re-opens the tree-wide search.
+        if: always() && steps.coverage.outputs.unit != ''
         uses: codecov/codecov-action@v5
         with:
-          files: '**/target/site/jacoco/jacoco.xml,**/target/site/jacoco-it/jacoco.xml'
-          flags: default
+          files: ${{ steps.coverage.outputs.unit }}
+          # The second lock on the split: never let the CLI re-widen this flag to the whole tree.
+          disable_search: true
+          flags: unit
+          token: ${{ secrets.CODECOV_TOKEN }}
+      - name: Upload integration coverage to Codecov
+        if: always() && steps.coverage.outputs.integration != ''
+        uses: codecov/codecov-action@v5
+        with:
+          files: ${{ steps.coverage.outputs.integration }}
+          disable_search: true
+          flags: integration
           token: ${{ secrets.CODECOV_TOKEN }}
