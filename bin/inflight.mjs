@@ -529,6 +529,12 @@ value is the reasoning attached to the order, which no computed scheme carries.
             if (at >= 0 && (args[at + 1] === undefined || args[at + 1].startsWith('--'))) {
                 return { ok: false, reason: 'rank: --impact needs a group after it' }
             }
+            // A REPEATED FLAG IS AMBIGUOUS, refused rather than silently resolved - the same guard
+            // `cvOpts` above makes for `--branch`, and for the same reason: taking the first and
+            // dropping the rest answers a different question than the one that was typed.
+            if (args.filter((a) => a === '--impact').length > 1) {
+                return { ok: false, reason: 'rank: --impact given more than once - which one did you mean?' }
+            }
             const group = at >= 0 ? args[at + 1] : null
             // AN UNKNOWN GROUP IS NOT AN ERROR, it is a question answered with the valid names -
             // the shape `docs list` already uses, so a typo prints the command that would have
@@ -549,6 +555,12 @@ value is the reasoning attached to the order, which no computed scheme carries.
             // is reported after everything that did run, the way refactor-window reports a candidate
             // it could not measure. "The delta was empty" and "the delta never ran" are different.
             if (!r.delta.ok) return { ok: false, reason: `rank: the register delta did not run - ${r.delta.reason}` }
+            // A NOTE THE REF LISTING NAMED AND `cat-file` DID NOT RETURN means part of the corpus was
+            // not read. Everything that did run is above; the exit code says the answer is partial,
+            // because a dropped note is exactly the silence this command exists to prevent.
+            if (r.unreadable.length > 0) {
+                return { ok: false, reason: `rank: could not read ${r.unreadable.length} listed note(s) - the answer above is incomplete` }
+            }
             return { ok: true }
         },
     },

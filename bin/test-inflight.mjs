@@ -215,6 +215,12 @@ async function rankIndex(binDir, group = null) {
     return rank(index, { prs: NO_PRS, register: registerBlob(index), group })
 }
 
+/** One row out of whichever group holds it, by note filename stem. */
+const rankRow = (r, stem) => r.groups.flatMap((g) => g.rows).find((x) => x.name === `${stem}.md`)
+
+/** Every row across every group - for the assertions that are about the whole set. */
+const rankRows = (r) => r.groups.flatMap((g) => g.rows)
+
 /**
  * Source with comments removed, so a check about CODE is not answered by prose. The first cut of
  * `library-never-exits-the-process` grepped raw text and failed on the comment that states the rule
@@ -3080,9 +3086,8 @@ const CHECKS = [
             return inRankFixture(async () => {
                 const r = await rankIndex(binDir)
                 if (!r.ok) return false
-                const row = (stem) => r.groups.flatMap((g) => g.rows).find((x) => x.path === `docs/inflight/${stem}.md`)
-                const onBase = row('bug-open-stall')
-                const branchOnly = row('bug-branch-only-stall')
+                const onBase = rankRow(r, 'bug-open-stall')
+                const branchOnly = rankRow(r, 'bug-branch-only-stall')
                 if (!onBase || !branchOnly) return false
                 return onBase.onBaseline === true && branchOnly.onBaseline === false
                     && branchOnly.readRef === 'origin/carries-a-note'
@@ -3098,11 +3103,15 @@ const CHECKS = [
             return inRankFixture(async () => {
                 const r = await rankIndex(binDir)
                 if (!r.ok) return false
-                const row = r.groups.flatMap((g) => g.rows).find((x) => x.path === 'docs/inflight/bug-archived-only.md')
+                const row = rankRow(r, 'bug-archived-only')
                 return !!row && row.preserved === true && row.readRef === 'preserved/rank'
             })
         },
-        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'), 'const readable = live.length > 0 ? live : all', 'const readable = live'),
+        // The read ref now comes from the CHOSEN version's own refs, so the mutation that breaks
+        // this is dropping its archival fallback - a note no live ref carries then resolves to
+        // nothing. (The earlier anchor on the path-level `readable` stopped being load-bearing for
+        // this assertion when the crash fix moved the lookup, and the control went quietly vacuous.)
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'), ': chosen.refs[0])', ': chosenLive[0])'),
     },
     {
         id: 'rank-never-prints-a-pr-number-as-an-issue',
@@ -3112,18 +3121,28 @@ const CHECKS = [
             return inRankFixture(async () => {
                 const r = await rankIndex(binDir)
                 if (!r.ok) return false
-                const row = (stem) => r.groups.flatMap((g) => g.rows).find((x) => x.path === `docs/inflight/${stem}.md`)
-                const pr = row('pr-207-a-pr-note')
-                const issue = row('core-141-numbered-thing')
-                const none = row('bug-open-stall')
+                const pr = rankRow(r, 'pr-207-a-pr-note')
+                const issue = rankRow(r, 'core-141-numbered-thing')
+                const none = rankRow(r, 'bug-open-stall')
                 if (!pr || !issue || !none) return false
-                return pr.number.kind === 'pull-request' && pr.number.command.includes('gh pr view 207')
-                    && issue.number.kind === 'issue' && issue.number.command.includes('gh issue view 141')
-                    && issue.number.command.includes('-R astubbs/parallel-consumer')
+                const legacy = rankRow(r, 'bug-857-legacy-number')
+                if (!legacy) return false
+                return pr.number.kind === 'pull-request' && pr.number.commands[0].includes('gh pr view 207')
+                    && issue.number.kind === 'issue'
+                    // Nothing in this note names 141 qualified, so no repository is claimed and BOTH
+                    // lookups are offered rather than one guessed.
+                    && issue.number.attribution === 'unknown' && issue.number.commands.length === 2
+                    // This one's own text says confluentinc#857, so it is attributed and gets ONE.
+                    && legacy.number.attribution === 'upstream' && legacy.number.commands.length === 1
+                    && legacy.number.commands[0].includes('-R confluentinc/parallel-consumer')
                     && none.number === null
             })
         },
-        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'), "path.startsWith(`${NOTES_DIR}/pr-`)", 'false'),
+        // Attributing every number to the fork is the defect: the legacy note's confluentinc
+        // number then prints a fork lookup, which is the reference that resolves to the wrong thing.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'),
+            "const upstream = new RegExp(`confluentinc#${numbered}(?!\\\\d)`).test(text)",
+            'const upstream = false'),
     },
     {
         id: 'rank-never-claims-a-branch-or-pull-request-fixes-a-note',
@@ -3135,7 +3154,7 @@ const CHECKS = [
                 if (!r.ok) return false
                 const rendered = JSON.stringify(r.groups)
                 return !/\bfix(es|ed)\b/i.test(rendered) && !/\bowns?\b/i.test(rendered)
-                    && r.groups.flatMap((g) => g.rows).every((row) => row.relation === 'carries')
+                    && rankRows(r).every((row) => row.relation === 'carries')
             })
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'), "relation: 'carries'", "relation: 'fixed-by'"),
@@ -3149,7 +3168,7 @@ const CHECKS = [
                 const idx = await rankCorpus(binDir)
                 const bad = rank(idx, { prs: { ok: false, reason: 'gh unavailable', map: new Map() }, register: { ok: true, text: '' } })
                 if (!bad.ok) return false
-                const rows = bad.groups.flatMap((g) => g.rows)
+                const rows = rankRows(bad)
                 return bad.prsOk === false && rows.length > 0 && rows.every((row) => row.prKnown === false)
             })
         },
@@ -3269,12 +3288,76 @@ const CHECKS = [
                 const prs = { ok: true, map: new Map([['carries-a-note', { number: 4242, state: 'OPEN', title: 't' }]]) }
                 const r = rank(index, { prs, register: registerBlob(index) })
                 if (!r.ok) return false
-                const row = r.groups.flatMap((g) => g.rows).find((x) => x.name === 'bug-branch-only-stall.md')
+                const row = rankRow(r, 'bug-branch-only-stall')
                 return !!row && row.readRef === 'origin/carries-a-note' && row.pr !== null && row.pr.number === 4242
             })
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'),
             "prs.map.get(readRef.replace(/^origin\\//, ''))", 'prs.map.get(readRef)'),
+    },
+    {
+        id: 'rank-does-not-read-a-zero-padded-version-as-an-issue-number',
+        why: "`release-0600-blockers.md` is on the baseline and its `0600` is the release version 0.6.0.0, but the identifier POSITION alone matched it - so the row printed `gh issue view 600`, a reference that RESOLVES to the wrong issue, which AGENTS.md calls worse than a broken one. An issue number is never zero-padded, so the leading zero is the discriminator",
+        run: async (binDir) => {
+            const { rank } = await rankLib(binDir)
+            return inRankFixture(async () => {
+                const r = await rankIndex(binDir)
+                if (!r.ok) return false
+                const row = rankRow(r, 'release-0600-blockers')
+                // It still appears as open work - only its NUMBER is refused.
+                return !!row && row.number === null
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'), '/^[a-z]+-([1-9]\\d*)-/', '/^[a-z]+-(\\d+)-/'),
+    },
+    {
+        id: 'rank-refuses-a-repeated-impact-flag-rather-than-taking-the-first',
+        why: "taking the first `--impact` and dropping the rest answers a different question than the one typed, with no diagnostic - the exact shape `cvOpts` in the same file already guards for `--branch` and names in its own comment",
+        run: async (binDir) => refuses(binDir, ['rank', '--impact', 'stall', '--impact', 'crash'], 'given more than once'),
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+            "if (args.filter((a) => a === '--impact').length > 1) {", 'if (false) {'),
+    },
+    {
+        id: 'rank-reads-a-note-that-is-open-only-on-an-archival-ref',
+        why: "a note closed on every LIVE ref but still open on a preserved tag makes the chosen version's refs and the path's live refs disjoint sets - the read ref came back undefined and the row threw `Cannot read properties of undefined (reading 'replace')`. Reproduced against a purpose-built corpus before the fix, and the row must also SAY the ref is an archive or it reads as a branch somebody could go and work on",
+        run: async (binDir) => {
+            const { rank } = await rankLib(binDir)
+            return inRankFixture(async () => {
+                const r = await rankIndex(binDir)
+                if (!r.ok) return false
+                const row = rankRow(r, 'bug-open-only-on-an-archive')
+                return !!row && row.readRef === 'preserved/still-open' && row.readRefArchival === true
+                    // Something LIVE carries it, so this is NOT the preserved-everywhere case.
+                    && row.preserved === false
+            })
+        },
+        // The original defect: derive the read ref from the PATH's live refs rather than the chosen
+        // version's own, and the lookup misses entirely.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'),
+            '(chosenLive.length > 0 ? chosenLive[0] : chosen.refs[0])',
+            'chosen.refs.find((r) => readable.includes(r))'),
+    },
+    {
+        id: 'rank-reports-a-note-it-could-not-read-rather-than-dropping-it',
+        why: "`blobContents` can return ok overall while ONE blob comes back `missing` - a partial clone, a gc race, corruption - even though the ref listing just named it. Treating that as \"no note here\" drops a note from the backlog with no accounting, which is the failure-rendering-as-an-empty-result shape this file is written against",
+        run: async (binDir) => {
+            const { rank } = await rankLib(binDir)
+            return inRankFixture(async () => {
+                const index = await rankCorpus(binDir)
+                // One path's blobs are replaced with a sha that resolves to nothing, so `cat-file`
+                // returns `missing` for it while every other note reads normally.
+                const gone = 'docs/inflight/bug-open-stall.md'
+                const missing = new Map(index.byPath)
+                missing.set(gone, new Map([['0000000000000000000000000000000000000000', ['master']]]))
+                const r = rank({ ...index, byPath: missing }, { prs: NO_PRS, register: { ok: true, text: '' } })
+                if (!r.ok) return false
+                const rows = rankRows(r).map((x) => x.path)
+                return r.unreadable.includes(gone) && !rows.includes(gone)
+            })
+        },
+        // Dropping it silently is the defect - the note vanishes and nothing says so.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'rank.mjs'),
+            'if (seen.length === 0) { unreadable.push(path); continue }', 'if (seen.length === 0) { continue }'),
     },
 ]
 
@@ -3352,6 +3435,14 @@ function rankFixture() {
     note('core-no-impact', `# A feature with no impact\n\n${tags('feature', '')}\nbody\n`)
     note('core-141-numbered-thing', `# A numbered note\n\n${tags('bug', 'crash')}\nbody\n`)
     note('pr-207-a-pr-note', `# A note about a pull request\n\n${tags('task', 'ci')}\nbody\n`)
+    // A PRE-CONVENTION name whose number is confluentinc's, and whose own text says so - the
+    // shape `bug-857-family.md` has on the baseline. Attributing it to the fork prints a lookup
+    // that RESOLVES to the wrong issue the moment this fork's counter passes it.
+    note('bug-857-legacy-number', `# The confluentinc#857 family\n\n${tags('bug', 'reliability')}\nbody\n`)
+    // A ZERO-PADDED number in the identifier position. `release-0600-blockers.md` is on the baseline
+    // today and its `0600` is the release version 0.6.0.0 - the position rule alone matched it and
+    // would have printed `gh issue view 600`, a reference that RESOLVES to the wrong thing.
+    note('release-0600-blockers', `# A release version, not an issue\n\n${tags('task', 'release-gate')}\nbody\n`)
     write('docs/inflight/process-candidate-ranking.md', [
         '# Next candidates, ranked', '', '<!-- inflight-type: register -->', '',
         '- `bug-open-stall.md` - open, so no delta row',
@@ -3376,6 +3467,21 @@ function rankFixture() {
     git('update-ref', 'refs/remotes/origin/carries-a-note', git('rev-parse', 'HEAD'))
     git('checkout', '-q', 'master')
     git('branch', '-q', '-D', 'carries-a-note')
+
+    // CLOSED ON EVERY LIVE REF, STILL OPEN ON A TAG. The chosen version is then the tag's while the
+    // path's live refs are a disjoint set - which crashed the row on an undefined read ref until the
+    // read ref was derived from the chosen version's OWN refs. Reproduced before the fix.
+    git('checkout', '-q', '-b', 'closed-live-copy', 'master')
+    note('bug-open-only-on-an-archive', `# Closed live, open on a tag\n\n${tags('bug', 'stall', 'closed - done here')}\nbody\n`)
+    commit('closed on the live branch')
+    git('update-ref', 'refs/remotes/origin/closed-live-copy', git('rev-parse', 'HEAD'))
+    git('checkout', '-q', '-b', 'to-archive', 'master')
+    note('bug-open-only-on-an-archive', `# Closed live, open on a tag\n\n${tags('bug', 'stall')}\nstill open here\n`)
+    commit('open, preserved on a tag')
+    git('tag', 'preserved/still-open')
+    git('checkout', '-q', 'master')
+    git('branch', '-q', '-D', 'to-archive')
+    git('branch', '-q', '-D', 'closed-live-copy')
 
     // Held ONLY by a tag: preserved on purpose, so it has no live ref to be read from.
     git('checkout', '-q', '-b', 'to-tag', 'master')

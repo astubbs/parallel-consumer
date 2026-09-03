@@ -40,7 +40,7 @@
 import { blobContents, blobsForPath, refKind } from './git.mjs'
 import { INFLIGHT_IMPACT_ORDER, classifyNote } from './inflight-tags.mjs'
 import { NOTES_DIR, REPO } from './repo.mjs'
-import { inflightGroupOf } from './docs-shape.mjs'
+import { INFLIGHT_GROUPS, inflightGroupOf } from './docs-shape.mjs'
 
 /** The standing ruling this command diffs against. Read, never written. */
 export const REGISTER_PATH = `${NOTES_DIR}/process-candidate-ranking.md`
@@ -65,48 +65,90 @@ export const RANKED_GROUPS = [...INFLIGHT_IMPACT_ORDER, 'feature', 'unmatched']
  */
 const NOT_RANKABLE = new Set(['closed', 'deferred', 'registers'])
 
-/** A short label per group, for the view. Impact groups are their own name. */
-const GROUP_LABELS = {
-    feature: 'feature - proposed, no consequence attached',
-    unmatched: 'unmatched - inflight-type or inflight-impact missing or misspelt',
-    registers: 'registers - consulted, never completed',
-    closed: 'closed or blocked - carries a state that is neither deferred nor parked',
-    deferred: 'deferred - decided, not now',
-}
-
 /**
  * The number a note's filename carries in the `<area>-<NNN>-<slug>` position, or null.
  *
- * POSITION ONLY, never a bare digit scan: `release-0600-blockers.md` and
- * `ci-broker-container-exit-126-is-undiagnosable.md` both contain digits that are not identifiers,
- * and a scan that picked them up would hand a reader a command resolving to an unrelated issue.
+ * POSITION ONLY, never a bare digit scan. `ci-broker-container-exit-126-is-undiagnosable.md` has
+ * digits that are not an identifier, and several hyphenated segments precede them, so the position
+ * rule excludes it - a scan that picked it up would hand a reader a command for an unrelated issue.
+ *
+ * NO LEADING ZERO, and that is not cosmetic: `release-0600-blockers.md` is on the baseline today and
+ * `0600` is the release version 0.6.0.0, not an issue. The position rule alone matched it and would
+ * have printed `gh issue view 600`, which resolves - and AGENTS.md's rule is that a wrong reference
+ * which resolves is worse than a broken one. An issue number is never zero-padded, so the leading
+ * zero is the exact discriminator.
+ *
+ * WHAT THIS STILL CANNOT TELL APART, stated rather than papered over:
+ * `upstream-2023-sweep-manual-review.md` yields `2023`, which is a year. Nothing in the filename
+ * distinguishes a year from an issue number, and inventing a plausible-range test would be a guess.
+ * What bounds the damage is `numberFor`: the note's own text has to name that number qualified
+ * before a single repository is claimed for it, and a year is named by nothing, so the row prints
+ * both lookups and says it cannot attribute the number. If that ever stops being true, this is the
+ * place.
  */
 function positionalNumber(path) {
-    const m = /^[a-z]+-(\d+)-/.exec(path.slice(NOTES_DIR.length + 1))
+    const m = /^[a-z]+-([1-9]\d*)-/.exec(path.slice(NOTES_DIR.length + 1))
     return m ? Number(m[1]) : null
 }
 
 /**
- * What a filename's number is, and the command that looks it up - without claiming a repository.
+ * What a filename's number is, which repository it belongs to when that is provable, and the
+ * command(s) that look it up.
  *
  * `docs/inflight/AGENTS.md` states the convention and its exceptions in the same breath: the number
  * is normally this fork's issue, `pr-` is the deliberate exception whose number is a fork PULL
- * REQUEST, and names predating the convention carry confluentinc numbers. Only the `pr-` case is
- * mechanically distinguishable, so it is the only one asserted; the rest print the fork-qualified
- * command and the view carries the caveat once. AGENTS.md's own rule is that a wrong reference
- * which resolves is worse than a broken one, so nothing here says which repository owns a number.
+ * REQUEST, and names predating the convention carry confluentinc numbers. The filename alone cannot
+ * separate the last case, so attribution comes from the note's own text and the row prints both
+ * commands when the note does not say. Three outcomes: `fork`, `upstream`, `unknown`.
  */
-function numberFor(path) {
+function numberFor(path, text) {
     const numbered = positionalNumber(path)
     if (numbered === null) return null
     const isPullRequest = path.startsWith(`${NOTES_DIR}/pr-`)
+    if (isPullRequest) {
+        return { value: numbered, kind: 'pull-request', attribution: 'fork', commands: [`gh pr view ${numbered} -R ${REPO}`] }
+    }
+    // THE NOTE'S OWN TEXT IS THE ONLY THING THAT CAN ATTRIBUTE THE NUMBER. The filename cannot: the
+    // convention says the number is this fork's, and `docs/inflight/AGENTS.md` names in the same
+    // breath the pre-convention notes where it is confluentinc's - `bug-857-family.md` is on the
+    // baseline today and its own title reads "The confluentinc#857 family". Printing the
+    // fork-qualified command for that one is a reference that RESOLVES to the wrong thing the moment
+    // this fork's counter passes 857, which AGENTS.md calls worse than a broken reference.
+    //
+    // So the row asks the note. A qualified mention of ITS OWN number attributes it; one qualified
+    // both ways, or neither, is unattributable and gets both commands rather than a guess.
+    const fork = new RegExp(`astubbs#${numbered}(?!\\d)`).test(text)
+    const upstream = new RegExp(`confluentinc#${numbered}(?!\\d)`).test(text)
+    const attribution = fork && !upstream ? 'fork' : (upstream && !fork ? 'upstream' : 'unknown')
+    const forkCmd = `gh issue view ${numbered} -R ${REPO}`
+    const upstreamCmd = `gh issue view ${numbered} -R confluentinc/parallel-consumer`
     return {
         value: numbered,
-        kind: isPullRequest ? 'pull-request' : 'issue',
-        command: isPullRequest
-            ? `gh pr view ${numbered} -R ${REPO}`
-            : `gh issue view ${numbered} -R ${REPO}`,
+        kind: 'issue',
+        attribution,
+        commands: attribution === 'fork' ? [forkCmd] : (attribution === 'upstream' ? [upstreamCmd] : [forkCmd, upstreamCmd]),
     }
+}
+
+/**
+ * Which version of a note decides its row.
+ *
+ * The baseline's own when the note is on the baseline; otherwise the first still-rankable version in
+ * read order, so a branch that closed its copy cannot delete the note from a backlog another branch
+ * still has open. Read order is the position of a version's earliest ref in `readable`, so "first"
+ * means the ref the note would be read from rather than an arbitrary blob.
+ *
+ * Extracted because the three chained expressions computed one thing and the read-order helper had
+ * to dodge this module's own exported `rank`; a name is better than a trailing underscore.
+ */
+function chooseVersion(seen, { onBaseline, readable, baseline }) {
+    const readOrder = (v) => Math.min(
+        ...v.refs.map((r) => readable.indexOf(r)).filter((i) => i >= 0).concat([Number.MAX_SAFE_INTEGER]),
+    )
+    const ordered = seen.slice().sort((a, b) => readOrder(a) - readOrder(b))
+    return (onBaseline ? ordered.find((v) => v.refs.includes(baseline)) : null)
+        ?? ordered.find((v) => RANKED_GROUPS.includes(v.group))
+        ?? ordered[0]
 }
 
 /**
@@ -153,9 +195,9 @@ export function parseRegister(text) {
  *
  * @param {object} index a `corpusIndex` result, scoped to the notes area
  * @param {{prs: {ok: boolean, map: Map, reason?: string}, register: {ok: boolean, text?: string, reason?: string},
- *          group?: string|null, snapshotAgeMs?: number|null}} opts
+ *          group?: string|null}} opts
  */
-export function rank(index, { prs, register, group = null, snapshotAgeMs = null }) {
+export function rank(index, { prs, register, group = null }) {
     // A FAILED WALK IS NOT AN EMPTY BACKLOG. Two P0s found while building this front door were both
     // a failure rendering as a confident empty result, which is why exit 0 and exit 2 differ.
     if (!index.ok) return { ok: false, reason: index.reason ?? 'the corpus index did not build' }
@@ -199,6 +241,7 @@ export function rank(index, { prs, register, group = null, snapshotAgeMs = null 
     if (!read.ok) return { ok: false, reason: 'git could not read the note blobs' }
 
     const buckets = new Map(RANKED_GROUPS.map((k) => [k, []]))
+    const unreadable = []
     const excluded = new Map()
     const byName = new Map()
     const byNumber = new Map()
@@ -209,25 +252,24 @@ export function rank(index, { prs, register, group = null, snapshotAgeMs = null 
                 const text = read.contents.get(v.blob)
                 if (text === undefined) return null
                 const note = classifyNote(text, path)
-                return { ...v, note, group: inflightGroupOf(note) }
+                // TEXT TRAVELS WITH THE VERSION. `numberFor` needs the deciding version's own words
+                // to attribute its number, and reaching for the loop-local `text` at the call site
+                // was a ReferenceError that crashed the command on any numbered note.
+                return { ...v, note, text, group: inflightGroupOf(note) }
             })
             .filter(Boolean)
-        if (seen.length === 0) continue
+        // A BLOB `ls-tree` LISTED AND `cat-file` DID NOT RETURN is a read that FAILED, not a note
+        // that is not there - a partial clone, a gc race, corruption. Dropping it silently is the
+        // empty-backlog-from-a-failure shape this whole file is written against, so it is named and
+        // the run reports that it could not look.
+        if (seen.length === 0) { unreadable.push(path); continue }
 
-        // The version that decides the row: the baseline's own when the note is on the baseline;
-        // otherwise the first still-rankable one in sorted-ref order, so a branch that closed its
-        // copy cannot delete the note from a backlog another branch still has open.
-        const rank_ = (v) => Math.min(...v.refs.map((r) => readable.indexOf(r)).filter((i) => i >= 0).concat([Number.MAX_SAFE_INTEGER]))
-        const ordered = seen.slice().sort((a, b) => rank_(a) - rank_(b))
-        const chosen = (onBaseline ? ordered.find((v) => v.refs.includes(index.baseline)) : null)
-            ?? ordered.find((v) => RANKED_GROUPS.includes(v.group))
-            ?? ordered[0]
-
+        const chosen = chooseVersion(seen, { onBaseline, readable, baseline: index.baseline })
         const note = chosen.note
         const key = chosen.group
         const name = path.slice(NOTES_DIR.length + 1)
         byName.set(name, { path, group: key, note })
-        const numbered = numberFor(path)
+        const numbered = numberFor(path, chosen.text)
         if (numbered && numbered.kind === 'issue') {
             if (!byNumber.has(numbered.value)) byNumber.set(numbered.value, [])
             byNumber.get(numbered.value).push(name)
@@ -243,12 +285,19 @@ export function rank(index, { prs, register, group = null, snapshotAgeMs = null 
             .filter((g) => g !== key)
             .map((g) => ({ group: g, ref: seen.find((v) => v.group === g).refs[0] }))
 
-        // NO `?? chosen.refs[0]` FALLBACK. `readable` is non-empty by construction - it is the live
-        // refs, or every ref when none is live - and a fallback here silently did the archival
-        // rule's job, so removing it is what leaves that rule with a control that can fail.
+        // FROM THE CHOSEN VERSION'S OWN REFS, never the path-level `readable`. Those two sets can be
+        // disjoint: a note closed on every live ref but still open on a preserved tag makes
+        // `chooseVersion` pick the tag's version, while `readable` holds only the live refs - so the
+        // lookup found nothing and the row crashed on `readRef.replace(...)`. Reproduced before this
+        // was written; `rank-reads-a-note-that-is-open-only-on-an-archival-ref` holds the line.
+        //
+        // Live refs of the chosen version first, so a version carried by both is read from somewhere
+        // a reader can go; its own first ref otherwise, which is the archival case and is why the
+        // preserved row can name a tag at all.
+        const chosenLive = chosen.refs.filter((r) => !archival.get(r))
         const readRef = onBaseline && chosen.refs.includes(index.baseline)
             ? index.baseline
-            : chosen.refs.find((r) => readable.includes(r))
+            : (chosenLive.length > 0 ? chosenLive[0] : chosen.refs[0])
 
         buckets.get(key).push({
             path,
@@ -261,7 +310,13 @@ export function rank(index, { prs, register, group = null, snapshotAgeMs = null 
             relation: 'carries',
             carryingRefs: onBaseline ? [] : all,
             readRef,
+            // TWO DIFFERENT FACTS, and collapsing them loses the useful half. `preserved` says no
+            // live ref carries this note AT ALL. `readRefArchival` says the version being read is on
+            // an archive even though something live carries the note - which happens when every live
+            // copy is closed and an open one survives on a tag. A row that named the tag without
+            // saying it was one would read as a branch somebody could go and work on.
             preserved: live.length === 0,
+            readRefArchival: archival.get(readRef) === true,
             disagreement,
             number: numbered,
             // KEYED ON THE BARE BRANCH NAME. `prsByBranch` maps `headRefName`, which never carries
@@ -280,20 +335,24 @@ export function rank(index, { prs, register, group = null, snapshotAgeMs = null 
     const groups = RANKED_GROUPS
         .filter((k) => buckets.get(k).length > 0)
         .filter((k) => group === null || k === group)
-        .map((k) => ({ key: k, label: GROUP_LABELS[k] ?? k, rows: buckets.get(k) }))
+        .map((k) => ({ key: k, label: INFLIGHT_GROUPS[k] ?? k, rows: buckets.get(k) }))
 
     return {
         ok: true,
         baseline: index.baseline,
-        refsTotal: index.refs.length,
-        liveRefs: index.refs.filter((r) => !refKind(r.full).archival).length,
+        // SHAPED LIKE `docsShape`'s, so `scopeLine` renders the same sentence for both rather than
+        // each carrying its own copy of the tool's core disclaimer. Counted FROM THE MAP ALREADY
+        // BUILT, not a second `refKind` pass over every ref.
+        refs: {
+            total: index.refs.length,
+            live: [...archival.values()].filter((isArchival) => !isArchival).length,
+            archival: [...archival.values()].filter(Boolean).length,
+        },
         groups,
-        groupNames: RANKED_GROUPS.filter((k) => buckets.get(k).length > 0)
-            .map((k) => ({ key: k, count: buckets.get(k).length })),
-        excluded: [...excluded].map(([key, count]) => ({ key, count, label: GROUP_LABELS[key] ?? key })),
+        excluded: [...excluded].map(([key, count]) => ({ key, count, label: INFLIGHT_GROUPS[key] ?? key })),
+        unreadable,
         prsOk: prs.ok === true,
         prsReason: prs.ok ? null : (prs.reason ?? 'the pull-request snapshot did not answer'),
-        snapshotAgeMs,
         scoped: group,
         delta: delta(register, { byName, byNumber, buckets, group }),
     }
@@ -368,5 +427,7 @@ function delta(register, { byName, byNumber, buckets, group }) {
         if (listUnranked) unranked.push(...missing.map((row) => ({ path: row.path, name: row.name, group: key, title: row.title })))
     }
 
-    return { ok: register.ok === true, reason: null, ranked, byNumber: byNumberRows, unranked, unrankedCounts, unresolvable: unresolvable.sort((a, b) => a - b) }
+    // `ok: true` rather than a re-test of `register.ok`: the guard at the top of this function has
+    // already returned for every other case, so a conditional here reads as logic that cannot fire.
+    return { ok: true, reason: null, ranked, byNumber: byNumberRows, unranked, unrankedCounts, unresolvable: unresolvable.sort((a, b) => a - b) }
 }

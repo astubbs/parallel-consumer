@@ -15,6 +15,18 @@
 
 export const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`
 
+/**
+ * WHAT WAS SEARCHED, in one sentence, for every command that answers across the refs.
+ *
+ * It lives here rather than beside either caller because it is the tool's core disclaimer - a
+ * complete search of a stale corpus reads exactly like a complete search of a current one - and a
+ * second copy of it would drift. `bin/lib/docs-views.mjs` owned it and `formatRank` restated it;
+ * both now read the same sentence. Takes anything carrying `refs: {total, live, archival}` and
+ * `baseline`, which is the shape `docsShape` and `rank` both return.
+ */
+export const refsText = (shape) => `${shape.refs.total} refs (${shape.refs.live} live, ${shape.refs.archival} archival); baseline ${shape.baseline}.`
+export const scopeLine = (shape) => `searched ${refsText(shape)} Read from the refs, never the working tree.`
+
 export function formatWarnings(warnings) {
     if (!warnings.length) return ''
     return `${warnings.map((w) => `  ${w.id === 'head-behind' ? 'NOTE' : 'WARNING'}: ${w.lines.join('\n           ')}`).join('\n')}\n`
@@ -467,6 +479,11 @@ export function formatRank(r) {
     const out = []
     const cmd = (g) => `bin/inflight.mjs rank --impact ${g}`
 
+    if (r.unreadable.length > 0) {
+        out.push(`  COULD NOT READ ${plural(r.unreadable.length, 'note')} that the ref listing named - this answer is INCOMPLETE:`)
+        for (const p of r.unreadable) out.push(`      ${p}`)
+        out.push('')
+    }
     if (!r.prsOk) {
         out.push(`  WARNING: ${r.prsReason} - pull-request state below is UNKNOWN, not absent.\n`)
     }
@@ -508,9 +525,14 @@ export function formatRank(r) {
             out.push(`      ${row.name}`)
             if (row.title) out.push(`          "${row.title}"`)
             out.push(`          ${carriage(row, r)}`)
-            if (row.number) out.push(`          number in the filename: ${row.number.command}`)
-            for (const d of row.disagreement) {
-                out.push(`          DISAGREEMENT: on ${d.ref} this note reads as ${d.group}, not ${row.group}`)
+            if (row.number) {
+                const which = { fork: 'this fork', upstream: 'confluentinc', unknown: 'NOT attributable from the filename - try both' }
+                out.push(`          number in the filename: ${row.number.value} (${which[row.number.attribution]})`)
+                for (const c of row.number.commands) out.push(`              ${c}`)
+            }
+            // NOT `d` - that is the delta, thirty lines up in this same function.
+            for (const dis of row.disagreement) {
+                out.push(`          DISAGREEMENT: on ${dis.ref} this note reads as ${dis.group}, not ${row.group}`)
             }
         }
         out.push('')
@@ -521,12 +543,8 @@ export function formatRank(r) {
     if (r.excluded.length > 0) {
         out.push(`  not work waiting to be ranked: ${r.excluded.map((e) => `${e.count} ${e.key}`).join(', ')}`)
     }
-    if (r.groups.some((g) => g.rows.some((row) => row.number))) {
-        out.push('  A filename number is NOT attributed to a repository: `pr-` is a fork pull request, and names')
-        out.push('  predating the convention carry confluentinc numbers (docs/inflight/AGENTS.md owns both).')
-    }
-    out.push(`\n  searched ${plural(r.refsTotal, 'ref')} (${r.liveRefs} live); baseline ${r.baseline}. Read from the refs,`)
-    out.push('  never the working tree - so an empty group means nothing on any ref carries one, not that your checkout has none.')
+    out.push(`\n  ${scopeLine(r)}`)
+    out.push('  An empty group means nothing on any ref carries one, not that your checkout has none.')
     return out.join('\n')
 }
 
@@ -542,6 +560,10 @@ function carriage(row, r) {
     const pr = row.pr ? `  [astubbs/parallel-consumer#${row.pr.number} ${row.pr.state}]` : (row.prKnown ? '' : '  [PR state UNKNOWN]')
     const where = row.preserved
         ? `preserved only on ${row.readRef} - an archive, so nothing here will land it`
-        : `carried by ${plural(row.carryingRefs.length, 'ref')}, read from ${row.readRef}${pr}`
+        // READ FROM AN ARCHIVE WHILE SOMETHING LIVE CARRIES IT: every live copy is closed and the
+        // open one survives on a tag. Naming the tag without saying it is one reads as a branch
+        // somebody could go and work on.
+        : `carried by ${plural(row.carryingRefs.length, 'ref')}, read from ${row.readRef}`
+            + `${row.readRefArchival ? ' (an ARCHIVE - the live copies are closed)' : ''}${pr}`
     return `${where} - CARRIES the note, which is not the same as fixing what it describes`
 }

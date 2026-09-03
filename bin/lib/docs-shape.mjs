@@ -39,7 +39,11 @@ const DOCUMENT_RE = /\.(md|html)$/
 const areaKey = (dir) => dir.split('/').pop()
 
 /** The in-flight groups that are not impacts, in the index's order around the impact list. */
-const INFLIGHT_GROUPS = {
+/**
+ * The label for each non-impact group. EXPORTED because `rank` renders the same groups: a second
+ * copy of this taxonomy had already drifted in four of its five entries before it was noticed.
+ */
+export const INFLIGHT_GROUPS = {
     registers: 'registers - standing documents, consult before choosing work',
     feature: 'feature - proposed, no consequence attached',
     unmatched: 'unmatched - no group claimed them: inflight-type or inflight-impact missing or misspelt',
