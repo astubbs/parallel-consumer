@@ -174,9 +174,12 @@ rather than being deleted.
 
 ### `AmbientProbeExtensionTest` - two tests, one global logger, run concurrently
 
+<!-- post-merge: checked-begin -->
 Found while babysitting astubbs#116, whose merge had touched `AmbientProbeExtension` itself - so the
 first question was whether that merge broke it. It did not, and the control arm is what settles it
-rather than argument.
+rather than argument. That PR is cited as where the sighting came from, which stays true once it
+lands; the flake is not its to own.
+<!-- post-merge: checked-end -->
 
 **Reproduce it, which is the unusual part - this one does not need luck:**
 
@@ -202,13 +205,17 @@ process-global, not test-scoped - so while both are inside their `try`, each cap
 The `outcome=FAILED` line belongs to the sibling test. Each method's own assertion is correct; what is
 missing is that only one of them may hold the capture at a time.
 
+<!-- post-merge: checked-begin -->
 **Control arm.** With astubbs#116's own change to `JStreamLiveResultStreamTest` reverted entirely, both
 runs above still failed 2 of 2 - so the flake is inherited, and that PR only perturbed scheduling.
-`AmbientProbeExtension.java` (main) is untouched by it in any way that reaches this.
+`AmbientProbeExtension.java` (main) was untouched by it in any way that reaches this.
+<!-- post-merge: checked-end -->
 
-**Not fixed here, deliberately.** `bin/check-pr-analysis-surfaces.sh` calls this class inherited for
-astubbs#116, and this directory's rule is that inherited findings go to a register rather than being
-bulk-fixed in a PR that happens to meet them. The fix is test-isolation, not a product change - forcing
+<!-- post-merge: checked-begin -->
+**Not fixed by the PR that found it, deliberately.** `bin/check-pr-analysis-surfaces.sh` classified this
+class as inherited for astubbs#116, and this directory's rule is that inherited findings go to a
+register rather than being bulk-fixed by a PR that happens to meet them.
+<!-- post-merge: checked-end --> The fix is test-isolation, not a product change - forcing
 these two methods onto one thread, or giving `LogCapture` a per-test scope - and whoever takes it should
 check the other `LogCapture` users for the same shape rather than patching these two.
 
