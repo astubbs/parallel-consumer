@@ -63,7 +63,13 @@ Feature drafts with likely manifest homes (attribute, then back-fill the entry):
 - `features/key-partition-combine` - check against `sweep-2023-null-key-ordering` before assuming
 - `features/extend-functional` - likely confluentinc#303 (adoc C6); `sweep-2023-api-shape` is the
   nearest entry but its issues are confluentinc#175/confluentinc#372 - verify before attaching
-- `feats/jstream-bounded-blocking-buffer` - relates to `refactor/deprecate-jstream`?
+<!-- post-merge: checked-begin -->
+- `feats/jstream-bounded-blocking-buffer` - relates to `refactor/deprecate-jstream`, which was archived
+  and deleted 2026-09-03 (`archive/refactor/deprecate-jstream`). Both were reaching for the same thing
+  from opposite ends - bound the buffer, or retire the API whose buffer it is - and astubbs#116 took a
+  third route: it fixed the stream that made the buffer grow, so neither branch's premise survived
+  intact. Worth reading before reviving this one.
+<!-- post-merge: checked-end -->
 
 Newly preserved upstream tips whose CONTENT was never assessed (read before judging):
 

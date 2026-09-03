@@ -132,8 +132,8 @@ refactors below, which are non-breaking and can land at any point in any line.
   removal was queued while the API was broken in the way above; deprecating something because it does
   not work is a different argument from deprecating something that does. It works now, so it stays,
   and astubbs#116 removed the deprecation it had added to all four types. Design ref
-  `origin/refactor/deprecate-jstream` @8a8f6508 is kept for whoever revisits the question on its
-  merits.
+  the archive tag `archive/refactor/deprecate-jstream` (branch deleted 2026-09-03) is kept for whoever
+  revisits the question on its merits.
 - **Rename the enum to the standard pattern** (public enum rename) -
   `origin/refactor/minor-changes` @193bbf80.
 - **Rehome `LongPollingMockConsumer` out of `bz.stub.parallelconsumer.internal.utils`.** astubbs#159 /
@@ -933,8 +933,8 @@ astubbs#228 (confluentinc#24, distributed rate limiting); ideation:
   make sense to have a producer facade." Don't revisit.
 - `origin/features/consumer-interface` @e67833f8, `origin/refactor/interface` @400643c8 - Consumer /
   interface naming (→ cohesive-API draft `confluentinc#303`).
-- `origin/refactor/deprecate-jstream` @8a8f6508 - deprecate the JStream API. **The queued removal was
-  withdrawn on 2026-09-03** - see the struck-through entry under *Breaking changes queued for next
+- `archive/refactor/deprecate-jstream` @8a8f6508 (branch deleted 2026-09-03) - deprecate the JStream
+  API. **The queued removal was withdrawn on 2026-09-03** - see the struck-through entry under *Breaking changes queued for next
   major version* for why. The branch is kept as the design record for whoever argues the case on the
   API's merits rather than on the defect astubbs#116 fixed.
 - `origin/move-cons-to-pc` @f25256cf - move the consumer into PC (old/new styles verified equal).
