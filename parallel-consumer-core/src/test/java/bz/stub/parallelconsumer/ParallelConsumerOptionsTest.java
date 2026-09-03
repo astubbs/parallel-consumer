@@ -7,11 +7,14 @@ package bz.stub.parallelconsumer;
 
 import bz.stub.parallelconsumer.internal.DynamicLoadFactor;
 import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
+import org.apache.kafka.clients.producer.Producer;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 
 import java.time.Duration;
 
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
 import static com.google.common.truth.Truth.assertThat;
 import static org.apache.kafka.clients.consumer.OffsetResetStrategy.EARLIEST;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -59,6 +62,65 @@ class ParallelConsumerOptionsTest {
         //
         assertThat(pc.getTimeBetweenCommits()).isEqualTo(testFreq);
         assertThat(options.getCommitInterval()).isEqualTo(testFreq);
+    }
+
+    /**
+     * {@code transactionsValidation} decides "did the user set a commit interval?" by reference identity
+     * ({@code getCommitInterval() == DEFAULT_COMMIT_INTERVAL}), not {@code equals}. {@link Duration} never interns -
+     * confirmed directly (JDK 17): {@code Duration.ofSeconds(5) == Duration.ofMillis(5000)} is {@code false} even
+     * though they are {@code equals}. So any explicitly-constructed value, including one numerically equal to the
+     * default, is a different object from the constant and is correctly kept. This guards the identity check against
+     * a well-intentioned but wrong fix to {@code equals()}: that would make this exact case - a user who explicitly
+     * asks for 5 seconds under transactions - get silently reduced to 100ms, which contradicts
+     * {@code docs/features/commit-interval.yaml}'s documented boundary that an explicitly set value is kept.
+     */
+    @Test
+    void explicitCommitIntervalEqualToDefaultIsKeptUnderTransactions() {
+        var explicit = Duration.ofSeconds(5);
+        var options = optionsBuilder()
+                .commitMode(PERIODIC_TRANSACTIONAL_PRODUCER)
+                .producer(Mockito.mock(Producer.class))
+                .commitInterval(explicit)
+                .build();
+
+        options.validate();
+
+        assertThat(options.getCommitInterval()).isEqualTo(explicit);
+    }
+
+    /**
+     * The reference-identity check's one genuine failure mode: a user who explicitly hands back the public
+     * {@code DEFAULT_COMMIT_INTERVAL} constant itself - the same object, not merely an equal value - is
+     * indistinguishable from never having called {@code commitInterval(...)} at all, and gets silently reduced to
+     * the 100ms transactional default despite the explicit call.
+     */
+    @Test
+    void explicitCommitIntervalReusingTheDefaultConstantIsKeptUnderTransactions() {
+        var options = optionsBuilder()
+                .commitMode(PERIODIC_TRANSACTIONAL_PRODUCER)
+                .producer(Mockito.mock(Producer.class))
+                .commitInterval(ParallelConsumerOptions.DEFAULT_COMMIT_INTERVAL)
+                .build();
+
+        options.validate();
+
+        assertThat(options.getCommitInterval()).isEqualTo(ParallelConsumerOptions.DEFAULT_COMMIT_INTERVAL);
+    }
+
+    /**
+     * Sibling case: an options instance that never sets a commit interval at all still gets the shorter
+     * transactional default substituted in - so the fix above cannot simply disable the auto-reduction.
+     */
+    @Test
+    void unsetCommitIntervalIsAutoReducedUnderTransactions() {
+        var options = optionsBuilder()
+                .commitMode(PERIODIC_TRANSACTIONAL_PRODUCER)
+                .producer(Mockito.mock(Producer.class))
+                .build();
+
+        options.validate();
+
+        assertThat(options.getCommitInterval()).isEqualTo(ParallelConsumerOptions.DEFAULT_COMMIT_INTERVAL_FOR_TRANSACTIONS);
     }
 
     /**

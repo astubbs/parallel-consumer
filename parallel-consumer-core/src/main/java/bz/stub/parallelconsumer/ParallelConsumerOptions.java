@@ -12,6 +12,7 @@ import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.Tags;
+import lombok.AccessLevel;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.ToString;
@@ -276,9 +277,18 @@ public class ParallelConsumerOptions<K, V> {
 
     /**
      * Time between commits. Using a higher frequency (a lower value) will put more load on the brokers.
+     * <p>
+     * Left {@code null} until the user (or the deprecated setter) explicitly provides a value - resolved to
+     * {@link #DEFAULT_COMMIT_INTERVAL} by {@link #getCommitInterval()}. {@code null} is the "did the user set this?"
+     * signal that {@link #transactionsValidation()} reduces under transactions; it is deliberately not an object
+     * reference or value comparison against {@link #DEFAULT_COMMIT_INTERVAL} - see that method's javadoc.
      */
-    @Builder.Default
-    private Duration commitInterval = DEFAULT_COMMIT_INTERVAL;
+    @Getter(AccessLevel.NONE)
+    private Duration commitInterval;
+
+    public Duration getCommitInterval() {
+        return commitInterval == null ? DEFAULT_COMMIT_INTERVAL : commitInterval;
+    }
 
     /**
      * @deprecated only settable during {@code deprecation phase} - use
@@ -483,8 +493,18 @@ public class ParallelConsumerOptions<K, V> {
         loadFactorValidation();
     }
 
+    /**
+     * "Did the user set a commit interval?" is answered by the raw {@link #commitInterval} field being
+     * {@code null}, never by comparing the resolved {@link #getCommitInterval()} value - by reference (the previous
+     * approach) or by {@link Duration#equals}. Reference comparison broke the one time a caller passed back the
+     * {@link #DEFAULT_COMMIT_INTERVAL} constant object itself: identical to the unset case, so an explicit call was
+     * silently reduced to the transactional default anyway. {@code equals} would be worse, not a fix: any explicit
+     * value that merely happens to number 5 seconds - a fresh {@code Duration.ofSeconds(5)}, never {@code ==} to the
+     * constant - would then also be silently reduced, exactly the failure {@code docs/features/commit-interval.yaml}
+     * documents as not happening ("an explicitly set value is kept").
+     */
     private void transactionsValidation() {
-        boolean commitInternalHasNotBeenSet = getCommitInterval() == DEFAULT_COMMIT_INTERVAL;
+        boolean commitIntervalHasNotBeenSet = commitInterval == null;
 
         if (isUsingTransactionCommitMode()) {
             if (producer == null) {
@@ -494,7 +514,7 @@ public class ParallelConsumerOptions<K, V> {
             }
 
             // update commit frequency
-            if (commitInternalHasNotBeenSet) {
+            if (commitIntervalHasNotBeenSet) {
                 this.commitInterval = DEFAULT_COMMIT_INTERVAL_FOR_TRANSACTIONS;
             }
         }
