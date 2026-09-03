@@ -1160,7 +1160,15 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
                             ThrowableUtils.describeWithRootCause(e), e));
         }
 
-        producerManager.ifPresent(x -> x.close(timeout));
+        try {
+            producerManager.ifPresent(x -> x.close(timeout));
+        } catch (Exception e) {
+            ThrowableUtils.logWithoutEscaping(e, () ->
+                    log.warn("Failed to close the Kafka producer - its IO thread, sockets and buffers may be " +
+                            "left running in this JVM until it exits. Shutdown continues; this cannot fail the " +
+                            "close. Cause: {}",
+                            ThrowableUtils.describeWithRootCause(e), e));
+        }
     }
 
     /**
