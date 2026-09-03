@@ -211,6 +211,29 @@ class PcBuiltProducerTest {
         verify(producer).close(any(Duration.class));
     }
 
+    /**
+     * The wrapper's transactional discovery reads a {@code KafkaProducer} field reflectively, and a subclass does not
+     * declare it - so a factory returning a subclass (an instrumenting subclass, say) fails at the wrapper, one frame
+     * after the contract checks, with nobody else holding the producer it just built. Found by the review of
+     * astubbs#426; the rung-1 guard is the try around {@code ProducerWrapper.forPcBuilt} here.
+     */
+    @Test
+    void aProducerBuiltForAWrapperThatFailsToConstructIsClosed() {
+        var closed = new java.util.concurrent.atomic.AtomicBoolean();
+        ProducerFactory<String, String> subclassingFactory = config -> new KafkaProducer<String, String>(config, new StringSerializer(), new StringSerializer()) {
+            @Override
+            public void close(Duration timeout) {
+                closed.set(true);
+                super.close(timeout);
+            }
+        };
+        var module = moduleWith(subclassingFactory, minimalConfig(), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
+
+        assertThrows(NoSuchFieldException.class, module::producerWrap);
+
+        assertWithMessage("the built producer is PC's alone, so PC closes it").that(closed.get()).isTrue();
+    }
+
     @Test
     void theInstancePathWrapsTheCallersProducerAndOffersNoReplacement() {
         @SuppressWarnings("unchecked")

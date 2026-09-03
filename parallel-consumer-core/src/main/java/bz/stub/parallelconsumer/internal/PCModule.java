@@ -149,14 +149,21 @@ public class PCModule<K, V> {
             ProducerWrapper<K, V> wrapper = ProducerWrapper.forPcBuilt(options(), producer, transactional);
             log.info("Built producer from configuration (transactional: {}): {}", transactional, ProducerConfigRedaction.render(resolved));
             return wrapper;
-        } catch (RuntimeException rejected) {
-            // the producer failed the construction check and will never be used - do not leak its threads
-            try {
-                producer.close(Duration.ZERO);
-            } catch (RuntimeException closeFailed) {
-                log.debug("Closing a rejected producer failed", closeFailed);
-            }
+        } catch (Throwable rejected) {
+            // The producer failed the construction check, or the wrapper could not be built around it - a subclass of
+            // KafkaProducer does not declare the field transactional discovery reads, and that reflective failure is
+            // a checked exception thrown sneakily, which is why this is Throwable. Either way it will never be used:
+            // do not leak its threads.
+            closeQuietly(producer, "a rejected producer");
             throw rejected;
+        }
+    }
+
+    private void closeQuietly(Producer<K, V> producer, String what) {
+        try {
+            producer.close(Duration.ZERO);
+        } catch (RuntimeException closeFailed) {
+            log.debug("Closing {} also failed", what, closeFailed);
         }
     }
 
@@ -176,18 +183,14 @@ public class PCModule<K, V> {
             ProducerWrapper<K, V> wrapper = producerWrap();
             try {
                 this.producerManager = new ProducerManager<>(wrapper, consumerManager(), workManager(), options(), replacementProducerWrap());
-            } catch (RuntimeException | Error constructionFailed) {
+            } catch (Throwable constructionFailed) {
                 // The manager's constructor registers a gauge and initialises transactions, either of which can
                 // throw (a coordinator that is not there yet, say). On the configuration path the producer it was
                 // handed is PC's own, nobody else holds it, and the processor that failed to construct is never
                 // returned to the caller - so without this, every failed start-up leaks a producer and its network
                 // thread. The caller's own instance is the caller's to close.
                 if (!options().isProducerInstanceSupplied()) {
-                    try {
-                        wrapper.close(Duration.ZERO);
-                    } catch (RuntimeException closeFailed) {
-                        log.debug("Closing the producer built for a manager that failed to construct also failed", closeFailed);
-                    }
+                    closeQuietly(wrapper, "the producer built for a manager that failed to construct");
                 }
                 throw constructionFailed;
             }
