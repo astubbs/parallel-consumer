@@ -7,6 +7,12 @@ Measured on CI, by dispatching maven.yml's own `workflow_dispatch` harness with 
 on one branch per sample. There is no faithful local proxy: the lane is TestContainers brokers on a
 hosted runner, and the `unit-gate` run's 2-CPU Docker replica does not extend to Docker-in-Docker.
 
+> **Read the postscript at the end before acting on anything here.** Two later batches overturned
+> parts of this document: the baseline's "16s spread" understated the noise by nearly an order of
+> magnitude, the 4% comparison threshold derived from it was never justified, and the compaction
+> poll listed below as open work was tried and is a proven no-op. The measurements and the
+> reasoning above are left as they were taken; the postscript says which conclusions survived.
+
 ## Headline
 
 **Raising `forkCount` from 4 to 6 makes this lane slower, not faster** - 469s of failsafe against a
@@ -152,3 +158,74 @@ the `unit-gate` run built a **2-CPU Docker replica** to imitate this runner, con
 asserted. One `nproc` line in the CI step would settle it permanently, and it would change how those
 older conclusions should be read. This investigation did not need the answer: H1 and H3 measured the
 oversubscription directly.
+
+---
+
+## Postscript: this lane's wall time cannot resolve a 20-second change
+
+Two further batches were run after the section above was written. They overturn part of it, and the
+correction is more useful than the original claim.
+
+### The noise floor, measured properly
+
+**Three CONCURRENT samples of identical code spread 119 seconds: 563 / 575 / 682.** That is roughly
+eleven times the largest effect the remaining hypotheses were worth.
+
+The baseline at the top of this document reported a 16s spread and a comparison threshold was set
+from it. **That number measured almost nothing.** Three samples dispatched together share fleet
+conditions and are correlated; their agreement describes within-minute reproducibility, not the
+run-to-run variance that matters when arms are compared. A later batch of three concurrent samples
+of *near-identical work* disagreed by 82s, and the batch after that put identical code 119s apart.
+
+Decomposed, the variance is not in the work. It is in **fork packing efficiency** - how well four
+forks fill - which none of the changes tried here touch:
+
+| arm | work | failsafe | efficiency |
+|---|---:|---:|---:|
+| control (master) | 1491 | 413 | **3.61x** |
+| build-skip | 1451 | 478 | 3.04x |
+| compaction poll | 1455 | 485 | 3.00x |
+
+Same base, same fork count, same 42 classes, dispatched together. The residual is which VM each job
+drew.
+
+### A retraction
+
+An earlier reading of this run reported `prebuild_seconds` as cleanly separating a ~10s effect (43
+against a control of 52). It did not. The control has since been measured at 41, with its own
+samples spanning 41-57. **That separation was drift with a convenient sign.** No metric this
+harness collects - `job_seconds`, `core_failsafe_seconds`, `prebuild_seconds` or
+`class_time_total` - resolves an effect of ~10-40s on this lane.
+
+### What the logs settled that the timings could not
+
+With wall-clock useless at this scale, both remaining changes were judged by **counting artefacts
+and log lines** instead:
+
+- **Skipping javadoc, sources and delombok WORKS**: a run with the flags builds **0 javadoc jars
+  against 9** without, and delombok reports skipping **11 times against 2**. It provably does less
+  work and therefore cannot be slower, which is the whole basis on which it was taken. The first cut
+  of it also carried a real bug - `-Dsource.skip=true` is not a property maven-source-plugin reads
+  (it wants `maven.source.skip`), so sources jars were still built in both arms and nothing in the
+  timings could have revealed it.
+- **The compaction poll is a NO-OP**: it logged "Compaction did NOT advance" four times out of four,
+  so it never fired and paid the full 20s deadline every call. Dropped rather than merged. The
+  detector was wrong - log compaction need not advance the log start offset - and the open question
+  it exposed is recorded in
+  [`docs/inflight/test-compaction-wait-has-no-observable.md`](../inflight/test-compaction-wait-has-no-observable.md).
+
+### The conclusion that follows
+
+**Incremental optimisation of this job is not measurable.** Effects of 10-40s are real but invisible,
+and no affordable sample count changes that: the variance is in the fleet, not in the sampling.
+
+That is an argument for a structural change rather than more tuning. Sharding is the only lever
+whose effect would exceed 119s, and
+[`docs/inflight/ci-shard-the-integration-gate.md`](../inflight/ci-shard-the-integration-gate.md)
+carries it with the ordering argument - the serial build work is what each shard re-pays, so cutting
+it first is what makes sharding pay.
+
+**And the method generalises past this lane.** When an effect sits below the noise floor, the way
+forward is not more samples; it is to stop measuring the aggregate and start counting the thing the
+change actually does. Nine javadoc jars became zero. Four compaction waits fired zero times. Neither
+fact needed a stopwatch, and neither could have been read off one.

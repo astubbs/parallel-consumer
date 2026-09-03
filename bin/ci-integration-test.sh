@@ -25,9 +25,35 @@ set -euo pipefail
 # silent no-op for unit tests). Keep in sync with the pom excluded.groups default - the two lists
 # drifting is silent in the direction that matters: a lane the pom excludes but this does not runs
 # here, in the GATING suite, which is how the Lincheck lane would have arrived if nobody looked.
+# The publishing artefacts are dead weight in a TEST lane. delombok, javadoc:jar and source:jar
+# are bound in the root pom's always-active <build> section rather than behind the release
+# profile, so `clean verify` builds a javadoc jar and a sources jar for all eleven modules on
+# every run. Nothing here consumes either.
+#
+# TAKEN ON FIRST PRINCIPLES, NOT ON A MEASUREMENT, and the distinction is the point. The skips
+# provably do less work - a run with them builds 0 javadoc jars against 9 without, and delombok
+# reports skipping 11 times against 2 - so this cannot be slower. But the saving is around 10s of
+# a ~600s job, and this lane's wall time cannot resolve it: three CONCURRENT samples of IDENTICAL
+# code spread 119 seconds, roughly 11x the effect. Do not go looking for this in a before/after
+# timing; it is not visible there and never will be.
+#
+# Property names matter, and two of the three are non-obvious: maven-source-plugin reads
+# maven.source.skip (NOT source.skip, which silently does nothing and shipped in the first cut of
+# this change), and lombok-maven-plugin reads lombok.delombok.skip. Verify a change to these by
+# counting artefacts in the log, never by timing the job.
+#
+# Deliberately NOT skipped: compiler:testCompile, 60s. It looks like the same waste, since
+# -DskipUTs=true means the unit tests never run - but the integration sources import 19 classes
+# out of src/test/java, including ParallelEoSStreamProcessorTestBase and its transitive tail, so
+# that compilation is load-bearing. Checked before spending a CI run on it.
+#
+# docs/plans/2026-09-03-001-investigate-integration-gate-wall-time.md holds the measurements.
 ./mvnw --batch-mode \
   -Pci \
   clean verify \
   -DskipUTs=true \
+  -Dmaven.javadoc.skip=true \
+  -Dmaven.source.skip=true \
+  -Dlombok.delombok.skip=true \
   -Dexcluded.groups=performance,chaos,quarantined,lincheck \
   "$@"
