@@ -15,8 +15,10 @@ write-up initially understated.
 ## The uncovered case
 
 The demotion's argument was that `INSTANCE_STALL/NO_WORK_COMPLETED` carries the liveness property the
-lag bound only approximated. It does - **at instance granularity**. It is re-armed by any returned
-work result, so an instance whose other shards keep completing never fires it.
+lag bound only approximated. It does - **at instance granularity**. It is re-armed by any SUCCESSFUL
+work result (`ProgressProbe#INSTANCE_STALL_BOUND` owns the exact wording, and it is narrower than the
+"any returned work result" this note used to say - a failure and a revoked-partition drop both return
+a result and re-arm nothing), so an instance whose other shards keep completing never fires it.
 
 So this shape is now covered by nothing that gates:
 
