@@ -105,6 +105,30 @@ race. That note was being dropped with no accounting, which is the failure-rende
 result shape this whole file is organised against. Unreadable paths are now named and the run says
 the answer is incomplete.
 
+## The register is prose, and a scan cannot tell a ranking from a sentence about one
+
+The first cut parsed the register by scanning the whole document for `astubbs#<n>` and for any
+hyphenated `.md` token. That is wrong in both directions at once, and both were live:
+
+- Prose became entries. Continuation lines, cross-references and the register's own "What is NOT on
+  this list" paragraph all read as rankings, so **every** number the delta reported as resolving to
+  nothing was a false positive. A citation of a doc outside `docs/inflight/` became a phantom entry
+  reported as `absent` - an instruction to delete a live cross-reference.
+- A sentence suppressed a finding. "fixing astubbs#177 does not close it" marked that note as ranked,
+  so it vanished from the unranked half.
+
+An entry is a **list item including its continuation lines**, and the citations on it belong to it.
+That last clause is not a detail: this register opens an item with the number and names the note two
+lines down, so a line-scoped parse split both of the entries it got wrong. An entry is satisfied when
+either half resolves, which is what stops a number being called unresolvable while the filename
+beside it resolves.
+
+The general lesson for anything that reads these documents: **they are written for people, so a
+regex over the whole file will find the vocabulary in prose that discusses the thing as readily as
+in the thing itself.** Anchor to the structure - the list item, the marker, the heading - and say in
+the output how much of the document the parse actually recognised, because a parse that reached
+nothing renders identically to a document everything agrees with.
+
 ## Citing the interface rule is not following it
 
 The command's own help text says every level of this front door prints the next level's commands -
