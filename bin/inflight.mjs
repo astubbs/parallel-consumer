@@ -189,7 +189,10 @@ function showDocument(args, emit) {
 
     const prs = prsByBranch()
     // gh being unavailable is not "these branches have no PR" - the same line note drift prints.
-    if (!prs.ok) emit(`  WARNING: ${prs.reason} - PR facts in the header are UNKNOWN, not absent.\n`)
+    // INSIDE the header box, never before the page: the first line of `docs show` names the ref
+    // shown, and the checks pin that. Emitting the warning first was invisible on a machine with an
+    // authenticated gh and broke the first-line contract on CI, where there is none.
+    if (!prs.ok) warnings.push({ id: 'gh-unavailable', lines: [`${prs.reason} - PR facts in the header are UNKNOWN, not absent.`] })
     const d = drift(path, { prs: prs.map, at: selected === null ? null : { ref: selected, blob } })
     if (d.ok === false) return { ok: false, reason: `docs show: ${d.reason}` }
     if (!d.found) {
