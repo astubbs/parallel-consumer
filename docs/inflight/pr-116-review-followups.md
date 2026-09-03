@@ -62,17 +62,24 @@ review) but because two review threads block merge and one of them attacks the r
    class's guarded close a no-op on the already-CLOSED state. Genuine teardown failures are now
    hidden across every Vert.x test. Guard the swallow on already-closed-or-failed, mirroring
    `AbstractParallelEoSStreamProcessorTestBase`.
-6. **`docs/features/result-models.yaml` still labels this PR the JStream deprecation.** The same
-   diff rewrote the adjacent `boundaries` bullet and left
-   `label: JStream deprecation and its reasoning` pointing here. Same drift in
-   `docs/data/roadmap.yaml`, whose `Removing the JStream API entirely` entry still tracks astubbs#116.
+6. ~~**`docs/features/result-models.yaml` still labels this PR the JStream deprecation.**~~ **DONE,
+   2026-09-03.** Both entries described work this PR stopped doing. `result-models.yaml`'s label is
+   now *The live result stream, and why it blocks until close*, and `roadmap.yaml`'s
+   `Removing the JStream API entirely` records the owner's decision below rather than an open
+   deprecation.
 
-**Open decision, nobody else's to make:** the returned `Stream` changed from "returns almost
-immediately" to "blocks until close" on a published API, with no version signal or overload. That is
-the correct fix and it should stay - the question is whether it ships with a version bump plus
-release-note callout, a bounded/timeout overload for callers who cannot move consumption to their own
-thread, a long-wait WARN so the hang describes itself, or nothing. Deprecating the JStream module at
-all is still deliberately undecided and is a separate question.
+**DECIDED 2026-09-03 by the owner, both halves.** The returned `Stream` changed from "returns almost
+immediately" to "blocks until close" on a published API.
+
+- **It ships as a documented break, with no compatibility path.** 0.6.0.0 is a breaking major and is
+  the release being cut, so the gate is open. No bounded/timeout overload, no long-wait WARN: the old
+  shape did not deliver the caller's results, so there is no correct behaviour to preserve and nothing
+  to fall back to. Recorded in `docs/refactoring.md` under *Breaking changes queued for next major
+  version*, which is what the release notes are assembled from.
+- **The JStream API is NOT deprecated, and its queued removal is withdrawn.** The removal was queued
+  while the API was broken; deprecating something because it does not work is a different argument
+  from deprecating something that does. It works now, so it stays. This PR had already removed the
+  deprecation from all four types; the queue entry and the roadmap entry now say so too.
 
 **Two review claims were checked and rejected**, so do not re-raise them: the shared
 `VertxCPResultBuilder` in `JStreamVertxParallelEoSStreamProcessor` is unchanged upstream code and its
@@ -83,3 +90,13 @@ Also still true: the queue is unbounded, so a merely-slower consumer still grows
 The `shutdownNow()` branch can make `isClosedOrFailed()` true while a worker can still enqueue, so
 the javadoc's "queued results are delivered, not discarded" is stated more strongly than that path
 supports.
+
+**The two SpotBugs findings on lines this PR wrote are settled, 2026-09-03** - `bin/check-pr-analysis-surfaces.sh`
+wants each fixed or answered, and both are answered rather than fixed, in
+[`static-spotbugs-rule-registry.md`](static-spotbugs-rule-registry.md) where SpotBugs decisions live.
+`EXS_EXCEPTION_SOFTENING_RETURN_FALSE` on `tryAdvance` is a correct site: the `Spliterator` contract
+gives it a `boolean` and no checked exception, so ending the stream and restoring the flag is the only
+shape available - and it is now mutation-checked. `IICU_INCORRECT_INTERNAL_CLASS_USE` fires on the test
+importing a helper that lives under `internal.utils`, so it is reporting the package layout, not misuse.
+Neither rule was switched off: the registry's own contract makes the off set one-way, and one correct
+site does not justify a tree-wide exclusion.

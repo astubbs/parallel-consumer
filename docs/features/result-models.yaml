@@ -42,5 +42,5 @@ references:
     path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelStreamProcessor.java
   - label: Streaming-results API
     path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/JStreamParallelStreamProcessor.java
-  - label: JStream deprecation and its reasoning
+  - label: The live result stream, and why it blocks until close
     url: https://github.com/astubbs/parallel-consumer/pull/116

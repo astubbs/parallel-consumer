@@ -118,8 +118,22 @@ refactors below, which are non-breaking and can land at any point in any line.
   (`public void setCommitInterval`, `private final Duration defaultMessageRetryDelay`,
   `isUsingTransactionalProducer`) **and retire the temporary Kafka-compat work-around flag**
   (`ignoreReflectiveAccessExceptionsForAutoCommitDisabledCheck`) - `ParallelConsumerOptions.java`.
-- **Remove the JStream API** (deprecate first) - design ref
-  `origin/refactor/deprecate-jstream` @8a8f6508.
+- **DONE, landing with astubbs/parallel-consumer#116: the `Stream` returned by
+  `pollProduceAndStream` / `vertxHttpReqInfoStream` now blocks until the processor closes.** It used
+  to return almost immediately, because the queue-to-`Stream` bridge ended the stream on the first
+  momentarily-empty poll - which is what `Spliterator.tryAdvance` returning `false` means, and it is
+  the confluentinc#912 OOM: results produced afterwards piled up behind a consumer that had already
+  walked away. A caller that collected on the calling thread and read a size got whatever had been
+  produced so far; the same caller now waits for close. **No compatibility path is offered and none
+  should be** - the old shape did not deliver the caller's results, so there is no correct behaviour
+  to preserve. Callers consume on their own thread, as the Vert.x example now shows. Recorded here
+  rather than only in the commit, because this section is what the release notes are assembled from.
+- ~~**Remove the JStream API** (deprecate first)~~ - **WITHDRAWN 2026-09-03, owner's call.** The
+  removal was queued while the API was broken in the way above; deprecating something because it does
+  not work is a different argument from deprecating something that does. It works now, so it stays,
+  and astubbs#116 removed the deprecation it had added to all four types. Design ref
+  `origin/refactor/deprecate-jstream` @8a8f6508 is kept for whoever revisits the question on its
+  merits.
 - **Rename the enum to the standard pattern** (public enum rename) -
   `origin/refactor/minor-changes` @193bbf80.
 - **Rehome `LongPollingMockConsumer` out of `bz.stub.parallelconsumer.internal.utils`.** astubbs#159 /
