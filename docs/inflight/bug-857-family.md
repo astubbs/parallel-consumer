@@ -2355,12 +2355,35 @@ also kept beside the optimisation run's experiment log).
       -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=1630088991107806597
 
 **Control arms, dispatched the same hour on the same runner class, prediction stated first.** Two
-seeded replays of the whole suite: one fork (run 33698964025) and two forks (run 33698941244). If two
-forks manufacture the stall by starving the control thread, the one-fork arm passes and the two-fork
-arm fails again; if both fail, the seed reproduces a real stall independent of the lane shape; if
-both pass, the seed is not a deterministic reproducer on this runner either, which is what the
-2026-09-02 replay on a 32-core box found. The outcome is in astubbs#421's description; this <!-- post-merge: checked -->
-section is the seed's durable home either way.
+seeded replays of the whole suite: one fork (run 33698964025) and two forks (run 33698941244). The
+prediction: if two forks manufacture the stall by starving the control thread, the one-fork arm
+passes and the two-fork arm fails again; if both fail, the seed reproduces a real stall independent
+of the lane shape; if both pass, the seed is not a deterministic reproducer on this runner either,
+which is what the 2026-09-02 replay on a 32-core box found.
+
+**Both predicted branches were refuted.** The two-fork arm PASSED (646s, every class green,
+`ChaosChurnStormIT` 277s). The one-fork arm - the gate exactly as it runs today - FAILED, on the same
+class and the same seed but a *different* gating detector:
+
+    NO_PROGRESS: fleet consumed count stuck at 97726/100000 for 30s (bound 30s)
+
+killed fail-fast at 76s into the class, `consumed=97906` at teardown, four partitions frozen 65s
+with lag 450-1000, peaks `rebalanceDwell=3311ms lagStagnation=66028ms`, zero Class 2 observations
+(the run was too short for that bound). As with every sighting above, the gating line is in the
+failure message and not in the autopsy's violations list.
+<!-- post-merge: checked-begin - a dated sighting against a run id and a job id, both durable -->
+Run 33698964025, job 100473972911, artifact `chaos-suite-reports-2618`; the class's XML is kept
+beside the optimisation run's experiment log as well.
+<!-- post-merge: checked-end -->
+
+**So the seed has real reproducing power on this runner class and the failure is not a property of
+forking**: two reds in three runs of `1630088991107806597` on `ChaosChurnStormIT`, once under two
+forks and once under one, on two detectors (`INSTANCE_STALL` then `NO_PROGRESS`), with a pass in
+between. That is a stronger position than either 2026-09-02 seed reached, both of which replayed
+clean once. Whether the one-fork red would have drained is unknown - `NO_PROGRESS` is fail-fast -
+and `-Dchaos.diagnoseStallRecovery=true` on this seed is the next experiment; the class javadoc says
+a run that stays FLAT is the finding. Recorded here rather than acted on: the lane-speed work that <!-- post-merge: checked -->
+surfaced it (astubbs#421) is the wrong place to chase a product stall.
 
 **Why it matters beyond the tally.** Three firings on one fork in a month is the rate the gate
 already has. An in-job parallel lane adds CPU contention exactly where this detector is
