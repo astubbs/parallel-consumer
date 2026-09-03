@@ -151,6 +151,10 @@ What differs, and it is mechanical:
   exchange for owning no semantics, and the endpoint's availability is therefore part of the product
   for this persona in a way it is not for the other.
 
+The pacer's schedule has a shape of its own - staggered division, in
+[`core-distributed-throttling.md`](core-distributed-throttling.md) - and this persona gets it for
+free, because being told *when* is the only thing it ever asked for.
+
 **"Participate in global scheduling" is what they get, not what they ask for.** Nobody asks to
 participate in anything; they ask why they are slow, or how hard they can push. Coverage of the
 non-Kafka half arrives as a byproduct - the same shape as the firehose in mechanism 2.
@@ -212,7 +216,10 @@ powerful"**:
   out to decide something larger too - see the embedded-not-cluster section of
   [`core-standalone-deployment.md`](core-standalone-deployment.md). And the paced persona above
   sits at the batch-of-one end by construction, so the dial is now a choice between two customers,
-  not a semantics question with no one on one side of it.
+  not a semantics question with no one on one side of it. A third axis arrived 2026-09-03: a grant
+  may carry a **phase** - staggered division, owned by
+  [`core-distributed-throttling.md`](core-distributed-throttling.md) - which is a property of the
+  resource contract rather than of the caller.
 - **Anything about which telemetry systems, which protocol, or what the endpoint looks like.**
 
 ## One collision to avoid

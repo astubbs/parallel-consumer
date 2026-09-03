@@ -51,6 +51,52 @@ never rediscovered experimentally per deployment - which is the min-composition 
 restated with the service as the scope. The governance view ("requested 170, allocated 100, per
 function") belongs to [`web-control-plane.md`](web-control-plane.md).
 
+**Addition from the owner, 2026-09-03: staggered division - a grant gains a phase.** Four
+tokens a second, spread as one every 250ms instead of four at the top of the second; each shard
+assigned its own slot; random jitter *within* the slot so shards sharing one do not align.
+
+Prior art, stated so no novelty claim escapes: **spreading one process's permits evenly is the
+leaky bucket as a meter**, and Guava's `RateLimiter`, GCRA (redis-cell in the ideation's table) and
+nginx's `limit_req` without `nodelay` all do it - it is thirty years old from ATM traffic shaping.
+**What none of them can do is coordinate the *phase* across shards.** Four shards each smoothly
+emitting one a second are collectively bursty - all four fire at :000 - and assigning shard *k* to
+slot *k* is time-division multiplexing, which no limiter product offers because none of them owns
+the shards. The enforcement fork above already names the mechanism: idea 2's per-shard gate with
+`availableAt` deferral *is* pacing once the `availableAt` values are spread rather than clustered
+and the shard owner hands each shard its offset. Round-robin allocation (KTD9 in the language-proxy
+plan) already staggers in *sequence*; giving each position a time is the whole addition. Jitter's
+job falls out of the same picture: with more participants than slots, the ones sharing a slot need
+spreading, and *bounded* jitter keeps them inside it - the grant-path sibling of idea 7.
+
+The interval rule, settled with the owner: **never pace faster than you can serve** - the interval is
+the larger of `1/limit` and the observed service time. That subsumes "pace only when the limit
+binds": when our own capacity is the constraint the natural rate is already under the limit and the
+rule is inert, which is the min-composition of ceilings restated with time. Two riders: a resource
+that declares burst tolerance may be granted up to it within a slot, so pacing is the default only
+for resources whose window shape is unknown; and jitter is uniform within the slot band, never
+across it.
+
+**Where the value actually lands, and what it costs.** A downstream token bucket *tolerates* bursts
+up to its bucket size - Stripe at 100/s with burst 100 is content with 100 at :000 - so smoothing
+gains nothing there. It wins against sliding-window downstreams, where an edge burst (four at :900
+and four at 1:000) reads as eight-in-a-second and is refused; against concurrency-limited or
+latency-sensitive downstreams, where arrival smoothness *is* capacity; and for our own aggregate
+honesty. It *costs* the burst exploitation the adaptive controller was designed to find (idea 8's
+rationale). So it is a per-resource option, not a default, and it is the first grant property that
+belongs to the resource contract rather than to the caller.
+
+**The generalisation is the part that reaches everything.** Pacing is not a rate-limiter feature
+here; it is an eligibility predicate with a time -
+[`core-scheduled-intent.md`](core-scheduled-intent.md) already says retry backoff is "an admission
+predicate, nothing more", and a paced grant is the same predicate on the grant. **A credit becomes a
+time-slot allocation, and rate limiting becomes scheduling** - the third axis on a grant after
+hard-ceiling-versus-overshoot and batch-of-one-versus-N
+([`core-non-kafka-participants.md`](core-non-kafka-participants.md)). What it costs each client
+shape: inside PC, nothing new, the scheduler already holds work for eligibility; for the paced
+persona, nothing at all - the trigger stream *is* the pacer and this is what its schedule looks
+like; for a delegated-credit client, enforcement moves client-side in the Guava shape, with only the
+phase offset coming from the shard owner.
+
 Idea 7 (decorrelated retry jitter) is independently shippable and needs none of these.
 Next step when picked up: ce-brainstorm idea 8's scope boundary (what ships in the controller
 vs the standalone strategies) into requirements.
