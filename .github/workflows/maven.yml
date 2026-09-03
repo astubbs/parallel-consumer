@@ -97,13 +97,37 @@ jobs:
             timeout: 15
             scenarios: ""
             shard: ""
+          # INTEGRATION RUNS AS TWO JOBS: one named heavy set, one catch-all defined by
+          # subtraction. bin/ci-integration-test.sh owns the list (HEAVY_CLASSES) and both entries
+          # go through it, so the two shards cannot select differently - the same single-entry-point
+          # rule the chaos matrix follows below.
+          #
+          # NOT four balanced bins like chaos. A balanced split has to be re-sized as the suite
+          # changes and fails silently when it is not: a new class belongs to no bin and stops
+          # running. Here `rest` is the complement of the list, so a new test runs by default.
+          #
+          # The heavy set is ONE class because one class is the constraint:
+          # Rebalance857CommitSyncDeadlockProbeIT is @RepeatedTest(20) at ~342s, forks cannot split
+          # a class, so whichever shard holds it cannot finish sooner than that. Projected critical
+          # path ~498s against ~620s for the single job - about -20%, with each job re-paying ~156s
+          # of serial build and job overhead. Splitting that class four ways (measured green on
+          # optimize/ig-exp002-probesplit, not adopted) would move the floor to ~160s and roughly
+          # double this; the heavy set should then be RE-DERIVED from measured per-class times, not
+          # extended by guess.
+          #
+          # Forked (process-parallel) mode: each JVM fork gets its own TestContainers broker, so
+          # tests don't contend one shared broker. Reliable AND parallel, without masking anything.
+          # See docs/solutions/test-flakiness/. forkCount=4 is a measured CEILING - 6 was slower and
+          # destabilising (docs/plans/2026-09-03-001-investigate-integration-gate-wall-time.md).
+          - suite: integration
+            name: "Integration Tests (heavy)"
+            cmd: "INTEGRATION_SHARD=heavy bin/ci-integration-test.sh -DforkCount=4 -DreuseForks=true"
+            timeout: 60
+            scenarios: ""
+            shard: ""
           - suite: integration
             name: "Integration Tests"
-            # Forked (process-parallel) mode: each JVM fork gets its own TestContainers
-            # broker, so tests don't contend one shared broker. Reliable AND parallel,
-            # without masking anything (each test runs on an uncontended broker). See
-            # docs/solutions/test-flakiness/. forkCount=4 matches the self-hosted measurement.
-            cmd: "bin/ci-integration-test.sh -DforkCount=4 -DreuseForks=true"
+            cmd: "INTEGRATION_SHARD=rest bin/ci-integration-test.sh -DforkCount=4 -DreuseForks=true"
             timeout: 60
             scenarios: ""
             shard: ""

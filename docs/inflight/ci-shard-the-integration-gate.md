@@ -4,9 +4,19 @@
 <!-- inflight-impact: ci -->
 
 The `Integration Tests` lane is the PR build's critical path - 620s against ~500s for the next
-slowest. Sharding it across N runner jobs, the way the Chaos Pain Suite already is, is the lever
-that would actually halve it. **Deliberately deferred, not undecided**: the free serial work goes
-first, because it makes every future shard cheaper.
+slowest. Sharding it across runner jobs is the lever that actually moves it.
+
+**BEING IMPLEMENTED in astubbs/parallel-consumer#440**, as one named heavy set plus a catch-all
+rather than the Chaos Pain Suite's four balanced bins. This note keeps what is still open; the
+shape and its measurement live with that PR.
+
+**A BLOCKING PREREQUISITE, and it is not in the diff.** `Integration Tests` is a required status
+check in the `master` ruleset; `Integration Tests (heavy)` is not, and adding a job does not add a
+requirement. Merging the split without adding the new context to the ruleset makes
+`Rebalance857CommitSyncDeadlockProbeIT` NON-GATING - a PR could go red on it and still merge. That
+is the same shape as the Lincheck harnesses that existed without running anywhere, and nothing goes
+red to announce it. There is no naming trick that avoids this: each matrix entry produces its own
+check context, so whichever job keeps the required name, the other one is ungated.
 
 ## Why this is the remaining lever, and why it was not taken first
 
