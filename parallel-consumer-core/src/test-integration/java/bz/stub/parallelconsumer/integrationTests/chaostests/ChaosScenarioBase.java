@@ -318,7 +318,8 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> i
                     pc.getParallelConsumer().close();
                 }
             } catch (Exception e) {
-                log.warn("Settle-close of instance {}: {}", pc.getInstanceId(), e.getMessage());
+                log.warn("Settle-close of instance {}: {}: {}", pc.getInstanceId(),
+                        e.getClass().getSimpleName(), e.getMessage()); // type too - a null-message TimeoutException is the common case here
             }
         }
     }
