@@ -258,6 +258,57 @@ a note present on the baseline now; a note whose blob lives there under another 
 proven exactly); and a note the baseline's history once held, which landed and was `git rm`d when its
 work closed. What survives is genuinely unlanded.
 
+## Deciding what to pick up next, without re-reading the whole corpus
+
+```
+node bin/inflight.mjs rank
+node bin/inflight.mjs rank --impact data-loss
+```
+
+The bare call is the delta plus the map: what the standing ranking in
+`docs/inflight/process-candidate-ranking.md` and the corpus disagree about, then each group with the
+command that lists it. `--impact <group>` lists one group's rows.
+
+**The grouping is not what is new here.** `docs list inflight <impact>` already reads every ref,
+keeps open notes, groups them by impact and names the branch an off-baseline note was read from.
+What `rank` adds is the carrying branch's pull request, whether that branch is live or an archive,
+the number in the filename, an accounting of the open notes no impact bucket claimed, and the delta
+- which is the point, because it turns the next ranking pass from "read every note" into "look at
+these few disagreements".
+
+**Carriage is not ownership, and that distinction is most of the value.** A note travels on the
+branch that produced it, so which branch carries it is cheap to know and which branch *fixes what it
+describes* is not available at all. Every row says `CARRIES`:
+
+```
+core-revoke-commit-skips-the-work-mailbox-drain.md
+    "The revoke-path commit does not drain the work mailbox first"
+    carried by 3 refs, read from origin/fix/803-bound-transactional-revoke-wait
+        [astubbs/parallel-consumer#408 OPEN] - CARRIES the note, which is not the same as
+        fixing what it describes
+    DISAGREEMENT: on debug/revoke-commit-mailbox-drain this note reads as closed, not data-loss
+```
+
+That pull request is on the branch carrying the note and does **not** fix the bug the note
+describes - the note's own text says the bug predates it. A row reading "owned by that pull
+request" would be
+confidently wrong, so no row here ever says it.
+
+**A disagreement is reported rather than resolved.** The same note is open on the branch that owns
+the bug and closed on a branch that fixed something adjacent. Reading one version would answer for
+whichever ref sorted first and silently drop the note from the backlog; the note is placed by a
+version that is still open work, and the other reading is named. One status is a summary that has
+thrown away the shape of the disagreement.
+
+**A filename's number is printed without a repository.** `docs/inflight/AGENTS.md` makes the
+`<area>-<NNN>-<slug>` number this fork's issue, `pr-` the exception whose number is a fork pull
+request, and names predating the convention carriers of confluentinc numbers. Only the `pr-` case is
+mechanically distinguishable, so it is the only one asserted - a wrong reference that resolves is
+worse than a broken one.
+
+The register is read from the baseline's blob, never your working tree, and is never written: its
+value is the reasoning attached to the order, which no computed scheme carries.
+
 ## Locating a note you can only half-name
 
 ```
