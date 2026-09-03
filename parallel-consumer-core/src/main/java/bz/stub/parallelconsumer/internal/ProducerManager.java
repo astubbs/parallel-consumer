@@ -980,7 +980,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
             log.debug("No producer to close: it was discarded during recovery and no replacement was built");
             return;
         }
-        if (options.isUsingTransactionalProducer() && !current.isTransactionReady()) {
+        if (options.isUsingTransactionCommitMode() && !current.isTransactionReady()) {
             try {
                 acquireCommitLock();
             } catch (java.util.concurrent.TimeoutException | InterruptedException e) {
