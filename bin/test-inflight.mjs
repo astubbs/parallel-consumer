@@ -374,6 +374,40 @@ function buildMixedFixture() {
 let DOCS = null
 const docsFixture = () => (DOCS ??= buildDocsFixture().dir)
 
+/**
+ * The corpus fixture plus the two situations `docs show`'s ref selection is specified against and
+ * the shared fixture does not hold: a path carried by SEVERAL live refs and an archival ref that
+ * SORTS FIRST (`aa-parked` < `yy-live` < `zz-live`, so a selection that forgot the live filter
+ * picks the tag), and a path held by a tag alone. Its own repository for the reason
+ * bin/lib/fixture-repos.mjs gives: the drift checks assert exact counts on the shared one.
+ */
+let DOCS_SHOW = null
+function buildDocsShowFixture() {
+    const { dir, git, commit, write } = buildDocsFixture()
+    const parkInTag = (branch, tag, rel, body) => {
+        git('checkout', '-q', '-b', branch, 'master')
+        write(rel, body)
+        commit(`parked in ${tag}`)
+        git('tag', tag)
+        git('checkout', '-q', 'master')
+        git('branch', '-q', '-D', branch)
+    }
+    git('checkout', '-q', '-b', 'yy-live', 'master')
+    write('docs/inflight/parked.md', '# Parked\n\nfirst live copy\n')
+    commit('first live copy')
+    git('checkout', '-q', '-b', 'zz-live', 'master')
+    write('docs/inflight/parked.md', '# Parked\n\nsecond live copy\n')
+    commit('second live copy')
+    git('checkout', '-q', 'master')
+    parkInTag('to-tag-parked', 'aa-parked', 'docs/inflight/parked.md', '# Parked\n\ntagged copy\n')
+    parkInTag('to-tag-only', 'aa-tagonly', 'docs/inflight/tag-only.md', '# Tag only\n\nx\n')
+    return dir
+}
+const docsShowFixture = () => (DOCS_SHOW ??= buildDocsShowFixture())
+
+/** The document half of a `docs show` page: everything after the separator that names the ref. */
+const bodyShown = (out, path, ref) => out.split(`--- ${path} @ ${ref} ---`)[1] ?? null
+
 const views = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'views.mjs')).href)
 const perfOf = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'perf.mjs')).href)
 
@@ -1878,6 +1912,128 @@ const CHECKS = [
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'views.mjs'),
             '    const rest = `bin/inflight.mjs note drift ${d.path}`', "    const rest = 'bin/inflight.mjs note drift'"),
+    },
+    // ---------------------------------------------------------------------------------------------
+    // `docs show` AND `docs header` - the tool's own channel for the divergence header.
+    // docs/plans/2026-09-03-001-feat-inflight-docs-context-query-plan.md, unit U3.
+    // ---------------------------------------------------------------------------------------------
+    {
+        id: 'docs-show-prefers-the-baseline-copy-under-a-header-that-matches-note-drift',
+        why: 'a document shown from the first branch that happens to carry it, under a header counting something else, is the stale-copy incident with a tool badge on it',
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            const dir = docsShowFixture()
+            const path = 'docs/inflight/note.md'
+            const r = invoke(binDir, ['docs', 'show', path], { cwd: dir })
+            if (r.code !== 0 || !r.out.trim()) return false
+            // The first line names the ref shown; the baseline carries this note, so it is master.
+            if (!/\bmaster\b/.test(r.out.split('\n')[0])) return false
+            const d = await inDir(dir, () => n.drift(path, { prs: new Map() }))
+            if (!d.found || !r.out.includes(`${d.divergent.length} divergent versions`)) return false
+            const body = bodyShown(r.out, path, 'master')
+            // The baseline's copy: the note's own body line, and none of what a branch added.
+            return body !== null && body.includes('\nbody\n') && !body.includes('## What the branch learned')
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+            '(lookup.blobs.has(base) ? base : liveCarriers[0] ?? null)', '(liveCarriers[0] ?? null)'),
+    },
+    {
+        id: 'docs-show-falls-back-to-the-first-sorted-live-carrier',
+        why: 'a note the baseline lacks has no canonical copy; "first in sorted ref order" is the one choice an agent can predict and repeat',
+        run: async (binDir) => {
+            const dir = docsShowFixture()
+            const only = invoke(binDir, ['docs', 'show', 'docs/inflight/branch-only.md'], { cwd: dir })
+            if (only.code !== 0 || !/only-here/.test(only.out.split('\n')[0])) return false
+            if (!(bodyShown(only.out, 'docs/inflight/branch-only.md', 'only-here') ?? '').includes('# Only here')) return false
+            const parked = invoke(binDir, ['docs', 'show', 'docs/inflight/parked.md'], { cwd: dir })
+            if (parked.code !== 0 || !/yy-live/.test(parked.out.split('\n')[0])) return false
+            return (bodyShown(parked.out, 'docs/inflight/parked.md', 'yy-live') ?? '').includes('first live copy')
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+            'const liveCarriers = carriers.filter((r) => liveSet.has(r)).sort()',
+            'const liveCarriers = carriers.filter((r) => liveSet.has(r)).sort().reverse()'),
+    },
+    {
+        id: 'docs-show-never-selects-an-archival-carrier-by-default-and-ref-overrides',
+        why: 'a tag is where this repository parks work before a re-cut; showing it as the document is presenting preserved history as the live one',
+        run: async (binDir) => {
+            const dir = docsShowFixture()
+            const tagOnly = 'docs/inflight/tag-only.md'
+            const parked = invoke(binDir, ['docs', 'show', tagOnly], { cwd: dir })
+            // Ran, named the archival carrier and the flag that reaches it, and showed no body.
+            if (parked.code !== 0 || !parked.out.includes('aa-tagonly') || !parked.out.includes('--ref')) return false
+            if (bodyShown(parked.out, tagOnly, 'aa-tagonly') !== null) return false
+            const asked = invoke(binDir, ['docs', 'show', tagOnly, '--ref', 'aa-tagonly'], { cwd: dir })
+            if (asked.code !== 0 || !(bodyShown(asked.out, tagOnly, 'aa-tagonly') ?? '').includes('# Tag only')) return false
+            const other = invoke(binDir, ['docs', 'show', 'docs/inflight/note.md', '--ref', 'adds-heading'], { cwd: dir })
+            if (other.code !== 0 || !/adds-heading/.test(other.out.split('\n')[0])) return false
+            return (bodyShown(other.out, 'docs/inflight/note.md', 'adds-heading') ?? '').includes('## What the branch learned')
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+            'const liveCarriers = carriers.filter((r) => liveSet.has(r)).sort()',
+            'const liveCarriers = carriers.filter(() => true).sort()'),
+    },
+    {
+        id: 'docs-header-is-docs-show-header-only',
+        why: 'the hook names docs header as its more command; if that prints a different header from docs show, the two channels disagree about the same file',
+        run: async (binDir) => {
+            const dir = docsShowFixture()
+            const path = 'docs/inflight/note.md'
+            const header = invoke(binDir, ['docs', 'header', path], { cwd: dir })
+            const show = invoke(binDir, ['docs', 'show', path, '--header-only'], { cwd: dir })
+            if (header.code !== 0 || show.code !== 0 || !header.out.trim()) return false
+            // A header, and only a header: no document body follows either.
+            if (!header.out.includes('=== divergence:') || bodyShown(header.out, path, 'master') !== null) return false
+            return header.out === show.out
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+            "run: (args, emit) => showDocument([...args, '--header-only'], emit)",
+            'run: (args, emit) => showDocument(args, emit)'),
+    },
+    {
+        id: 'docs-show-says-what-it-searched-and-cannot-run-outside-a-repo',
+        why: 'a path on no ref is a result and must name the refs it covered; a repository git cannot read is not, and exit 0 there is the worst failure class this tool has',
+        run: async (binDir) => {
+            const dir = docsShowFixture()
+            const missing = invoke(binDir, ['docs', 'show', 'docs/inflight/never-written.md'], { cwd: dir })
+            if (missing.code !== 0 || !/refs searched/.test(missing.out)) return false
+            const outside = mkdtempSync(join(tmpdir(), 'inflight-docs-notarepo-'))
+            return [['docs', 'show', 'docs/inflight/x.md'], ['docs', 'header', 'docs/inflight/x.md']]
+                .every((args) => {
+                    const r = invoke(binDir, args, { cwd: outside })
+                    return r.code === 2 && r.out.trim().length > 0
+                })
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+            "if (!tips.ok) return { ok: false, reason: 'docs show: cannot list refs - is this a git repository?' }",
+            'if (!tips.ok) return { ok: true }'),
+    },
+    {
+        id: 'docs-show-outside-the-corpus-names-the-areas-it-covers',
+        why: 'a README shown with a divergence header would be a claim the query never measured; saying which areas it covers is the answer, and it is not an error',
+        run: async (binDir) => {
+            const dir = docsShowFixture()
+            const r = invoke(binDir, ['docs', 'show', 'README.md'], { cwd: dir })
+            if (r.code !== 0) return false
+            return ['docs/inflight', 'docs/solutions', 'docs/plans'].every((area) => r.out.includes(area))
+                && !r.out.includes('=== divergence:')
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+            "if (!inCorpus(path)) {\n        emit(", "if (!inCorpus(path)) {\n        return { ok: false, reason: 'mutant' }\n        emit("),
+    },
+    {
+        id: 'help-lists-docs-show-and-docs-header',
+        why: 'the read-time hook tells an agent to run docs header; a command help cannot find is one the agent will not trust',
+        run: async (binDir) => {
+            const help = invoke(binDir, ['help'])
+            if (help.code !== 0 || !help.out.includes('docs show') || !help.out.includes('docs header')) return false
+            return [['docs', 'show'], ['docs', 'header']].every((sub) => {
+                const usage = invoke(binDir, ['help', ...sub])
+                return usage.code === 0 && usage.out.includes(`Usage: bin/inflight.mjs ${sub.join(' ')}`)
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
+            "                name: 'header',", "                name: 'hdr',"),
     },
 ]
 

@@ -115,6 +115,18 @@ const copyStateText = (d) => {
     }
 }
 
+/**
+ * LARGEST FIRST, by what the version ADDED - the evidence of knowledge, not of recency. A version
+ * whose size is unknown sorts last rather than being given a fabricated position. One function,
+ * because the header's preview and the "more" command under it must agree on which version is
+ * the one to look at next: `drift` returns clusters most-carried first, and a suggestion built on
+ * that order pointed at a stale integration branch's copy under a preview naming a different one.
+ */
+const largestFirst = (divergent) => {
+    const size = (c) => (c.added && Number.isInteger(c.added.added) ? c.added.added : -1)
+    return [...divergent].sort((a, b) => size(b) - size(a) || b.liveRefs.length - a.liveRefs.length)
+}
+
 const scopeText = (d) => `${d.refsTotal} refs searched (${d.liveRefsTotal} live, ${d.archivalRefsTotal} archival)`
 
 /**
@@ -154,10 +166,7 @@ export function formatDivergenceHeader(d, { tier = 'summary', top = 3, warnings 
         out.push(`  preserved, not in flight: ${plural(preserved, 'version')} held only by ${[...new Set(d.preserved.flatMap((p) => p.kinds))].join(', ')} refs - `
             + d.preserved.map((p) => p.refs.join(', ')).join('; '))
     }
-    // LARGEST FIRST, by what the version ADDED - the evidence of knowledge, not of recency. A version
-    // whose size is unknown sorts last rather than being given a fabricated position.
-    const size = (c) => (c.added && Number.isInteger(c.added.added) ? c.added.added : -1)
-    const shown = [...d.divergent].sort((a, b) => size(b) - size(a) || b.liveRefs.length - a.liveRefs.length).slice(0, top)
+    const shown = largestFirst(d.divergent).slice(0, top)
     if (shown.length > 0) out.push(`  largest ${shown.length === 1 ? 'version' : `${shown.length} versions`}, by what each added:`)
     for (const c of shown) {
         const a = c.added
@@ -196,6 +205,43 @@ export function sourceFrame(kind, subject, body, moreCommand) {
     // a silent fallback label would defeat the one job the label has.
     const label = toLabel ? toLabel(subject) : `docs context: UNKNOWN SOURCE ${kind}`
     return [label, body.trimEnd(), `more: ${moreCommand}`].join('\n')
+}
+
+/**
+ * THE PAGE `docs show` PRINTS - and, with no body, exactly what `docs header` prints. One renderer
+ * for both, so the two commands cannot disagree about the same file: the hook names `docs header`
+ * as its "more" command, and a header there that differed from the one above the document would be
+ * two answers to one question.
+ *
+ * THE FIRST LINE NAMES THE REF SHOWN (the plan's KTD11), before the frame. The body that follows
+ * reads identically whichever branch it came from, so a page that does not open with "from
+ * adds-heading" is read as the file in the working tree - which is the stale-copy incident with a
+ * tool badge on it. `ref` null means no live ref carries the path: the page then says which
+ * archival refs hold it and how to ask for one, and shows no body, because a tag is where this
+ * repository parks work before a re-cut and presenting it as the document is presenting preserved
+ * history as live.
+ *
+ * The "more" command is the next thing an agent would actually run: the largest divergent version
+ * this page is not already showing - the one the preview above it put first - else the full drift.
+ *
+ * @param {object} d the result of `drift()` at the full tier, found
+ * @param {{ref: string|null, warnings?: object[], archivalCarriers?: string[], body?: string|null}} opts
+ */
+export function formatDocsShow(d, { ref, warnings = [], archivalCarriers = [], body = null } = {}) {
+    const from = ref === null
+        ? `${d.path}: on NO live ref - held only by archival refs ${archivalCarriers.join(', ')}; show one with --ref`
+        : `${d.path} from ${ref}` + (ref === d.baseline ? ' - the baseline'
+            : d.onBaseline ? ` - NOT the baseline; ${d.baseline} has its own copy`
+                : ` - ${d.baseline} does not carry this path`)
+    const other = ref === null ? null : largestFirst(d.divergent).find((c) => !c.liveRefs.includes(ref))
+    const next = ref === null ? `bin/inflight.mjs docs show ${d.path} --ref ${archivalCarriers[0]}`
+        : other ? `bin/inflight.mjs docs show ${d.path} --ref ${other.liveRefs[0]}`
+            : `bin/inflight.mjs note drift ${d.path}`
+    const out = [from, sourceFrame('header', d.path, formatDivergenceHeader(d, { tier: 'full', warnings }), next)]
+    // The separator names path AND ref again, because the page can be long and the body is what
+    // gets copied out of it.
+    if (body !== null) out.push('', `--- ${d.path} @ ${ref} ---`, body.trimEnd())
+    return out.join('\n')
 }
 
 export function formatStranded(clusters, index) {

@@ -48,6 +48,69 @@ else its own name. Sizes are against each branch's merge-base, so the number say
 The filtering is most of the value: for that note, 198 of the 274 carrying refs are merely behind.
 Reporting them would bury the two dozen that actually differ.
 
+## Reading a document as the corpus holds it, not as your checkout does
+
+```
+node bin/inflight.mjs docs show docs/inflight/bug-857-family.md
+```
+
+The file in your working tree is *one* version of that note. On the fork's most-shared note there
+are two dozen others on live branches, each carrying content the baseline has never held, and
+`cat` shows none of that: it shows the copy your branch happens to hold, and says nothing about
+whether that copy is the baseline's, your branch's own edit, or one of the two dozen. That is the
+incident the divergence header exists for - a session edited a stale copy of a note and every
+working-tree read answered for that copy without saying so.
+
+The read-time hook prints one line about this whenever a file under `docs/inflight/`,
+`docs/solutions/` or `docs/plans/` is read. `docs show` is the same query at full size, and the
+page has three parts, in the order an agent needs them:
+
+```
+docs/inflight/bug-857-family.md from origin/master - the baseline
+docs context: divergence header for docs/inflight/bug-857-family.md
+=== divergence: docs/inflight/bug-857-family.md ===
+  25 divergent versions on 131 live refs carry content origin/master has NEVER held; 614 refs searched (561 live, 53 archival)
+  this copy is the baseline's version (origin/master)
+  preserved, not in flight: 1 version held only by tag refs - backup/pr57-pre-split
+  largest 3 versions, by what each added:
+    +600 -9        experiment/857-deadlock-control-arm-do-not-merge, origin/experiment/857-deadlock-control-arm-do-not-merge
+        adds: "## Commit mode decides which defect can explain a sighting", ...
+    ...
+  the rest: bin/inflight.mjs note drift docs/inflight/bug-857-family.md
+more: bin/inflight.mjs docs show docs/inflight/bug-857-family.md --ref experiment/857-deadlock-control-arm-do-not-merge
+
+--- docs/inflight/bug-857-family.md @ origin/master ---
+# Bug 857 family
+...
+```
+
+**The first line names the ref shown, and the choice is a rule, not a guess.** The baseline when it
+carries the path; otherwise the first live ref carrying it, in sorted order, so two agents asking on
+two machines get the same copy. `--ref <ref>` picks any other, and the header then describes *that*
+copy's state - the baseline's version, that branch's own edit, or branch-only.
+
+**Divergence is the only claim the header makes.** It never says a version is newer. It says how many
+distinct versions exist on live refs, which branches and pull requests carry the largest, how much
+each added against its own merge-base, and *what* - the headings it added, or its first added line
+when it added no heading. Evidence, ordered by size, and the command for the rest.
+
+**Archival refs are searched and reported, never shown by default.** A version held only by a tag
+or a `refs/backup` ref is *preserved*: that is where this repository parks work before a re-cut, and
+serving it as the document would present history as the live copy. The header names it by ref kind;
+`--ref` reaches it when that is what you want.
+
+**An empty answer says what it covered.** A path on no ref prints the ref set it searched - size, and
+the live-versus-archival split - because "on none of 614 refs" is a result and a blank line is not. A
+path outside the three corpus areas says so and claims nothing, since the query is not defined there.
+
+```
+node bin/inflight.mjs docs header docs/inflight/bug-857-family.md
+```
+
+The header alone - byte for byte what `docs show --header-only` prints. It is the "more" command the
+read-time hook names under its one-line summary, and the pull form for an agent on a host without
+hooks: run it before acting on a document, and you have seen what the hook would have shown.
+
 ## Finding work that will be lost if nobody acts
 
 ```

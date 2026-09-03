@@ -47,15 +47,15 @@ import { fileURLToPath } from 'node:url'
 
 import { perfReport, perfStart } from './lib/perf.mjs'
 
-import { baseline, freshnessWarnings, refTips } from './lib/git.mjs'
+import { baseline, blobContents, blobsForPath, freshnessWarnings, refTips } from './lib/git.mjs'
 import { cacheClear, cacheStatus, knownCaches } from './lib/cache.mjs'
 import { corpusIndex, drift, findNotes, prsByBranch, stranded } from './lib/notes.mjs'
 import { DOC_AREAS, NOTES_DIR } from './lib/repo.mjs'
 import { branchView, commitGraph, trackingGap } from './lib/branches.mjs'
 import { loadCandidates, refactorWindow } from './lib/refactor-window.mjs'
 import {
-    formatBranch, formatCache, formatCoverage, formatDrift, formatFind, formatFlakes,
-    formatRefactorWindow, formatSlowest, formatStranded, formatTimeline, formatWarnings,
+    formatBranch, formatCache, formatCoverage, formatDivergenceHeader, formatDocsShow, formatDrift, formatFind,
+    formatFlakes, formatRefactorWindow, formatSlowest, formatStranded, formatTimeline, formatWarnings,
 } from './lib/views.mjs'
 import { coverage, flakeCandidates, slowest, testTimeline } from './lib/codecov.mjs'
 import {
@@ -114,6 +114,99 @@ export const cvOpts = (args) => {
  * `note find` and `stranded` answering exactly what they answered before the default widened.
  */
 const NOTES_AREA = DOC_AREAS.filter((a) => a.dir === NOTES_DIR)
+
+/** Under one of the three corpus areas - the only paths the divergence query is defined for. */
+const inCorpus = (path) => DOC_AREAS.some((a) => path.startsWith(`${a.dir}/`))
+
+/** Once, because the `docs` row and its bare run both print it. */
+const DOCS_USAGE = `Usage: bin/inflight.mjs docs show <path> [--ref <ref>] [--header-only]
+       bin/inflight.mjs docs header <path> [--ref <ref>]
+
+The docs corpus - docs/inflight/, docs/solutions/, docs/plans/ - read across EVERY ref, never the
+working tree. Bare \`docs\` has no answer yet; the subcommands do:
+
+  show    one document with its divergence header, from the right ref
+  header  the header alone - what the read-time hook shows, in full`
+
+/**
+ * `docs show` - and `docs header`, which is this with `--header-only` appended.
+ *
+ * WHICH REF IS SHOWN (the plan's KTD11): the baseline when it carries the path, else the first
+ * carrying LIVE ref in sorted order, and `--ref` overrides both. Archival refs - tags, refs/backup -
+ * are never chosen by default: a tag is where this repository parks work before a re-cut, and a
+ * document served from one is preserved history wearing the look of the live copy. The selection
+ * asks git the narrow question itself (one `cat-file --batch-check` over every ref) rather than
+ * reading the carriers off the drift clusters, because those list behind-only refs only under
+ * `--all` and a note absent from the baseline now may still have versions the baseline once held.
+ *
+ * The header is the full tier of the same query the read-time hook runs at the summary tier, so
+ * what an agent sees on read and what it asks for here cannot count different versions.
+ */
+function showDocument(args, emit) {
+    const KNOWN = new Set(['--ref', '--header-only'])
+    const unknown = args.filter((a) => a.startsWith('--') && !KNOWN.has(a))
+    if (unknown.length) return { ok: false, reason: `docs show: unknown option(s): ${unknown.join(', ')} - known: --ref <ref>, --header-only` }
+    const refAt = args.indexOf('--ref')
+    // -1 is a sentinel, not an index - cvOpts above carries the incident.
+    const refValueAt = refAt >= 0 ? refAt + 1 : -1
+    const requested = refAt >= 0 ? args[refValueAt] : null
+    if (refAt >= 0 && (requested === undefined || requested.startsWith('--'))) return { ok: false, reason: 'docs show: --ref needs a ref after it' }
+    const headerOnly = args.includes('--header-only')
+    const path = args.filter((a, i) => !a.startsWith('--') && i !== refValueAt)[0]?.replace(/^\.\//, '')
+    if (!path) return { ok: false, reason: 'docs show: give a document path (see: note find, prior-art)' }
+    if (!inCorpus(path)) {
+        emit(`${path} is outside the areas this command covers - ${DOC_AREAS.map((a) => `${a.dir}/`).join(', ')} - `
+            + 'so nothing was searched and no divergence is claimed for it')
+        return { ok: true }
+    }
+
+    const tips = refTips()
+    if (!tips.ok) return { ok: false, reason: 'docs show: cannot list refs - is this a git repository?' }
+    const base = baseline()
+    if (!base) return { ok: false, reason: 'docs show: neither origin/master nor master resolves - no baseline to compare against' }
+    const warnings = freshnessWarnings(base, tips.tips.length)
+    const lookup = blobsForPath(tips.tips.map((t) => t.ref), path)
+    if (!lookup.ok) return { ok: false, reason: `docs show: cannot read ${path} across refs - the object lookup failed` }
+    const liveSet = new Set(tips.tips.filter((t) => !t.archival).map((t) => t.ref))
+    const carriers = [...lookup.blobs.keys()]
+    const liveCarriers = carriers.filter((r) => liveSet.has(r)).sort()
+    const archivalCarriers = carriers.filter((r) => !liveSet.has(r)).sort()
+    const selected = requested ?? (lookup.blobs.has(base) ? base : liveCarriers[0] ?? null)
+    let blob = selected === null ? null : lookup.blobs.get(selected) ?? null
+    if (requested !== null && blob === null) {
+        // Not a tip - a sha, HEAD, an ancestor - but still something git can read at that path.
+        const one = blobsForPath([requested], path)
+        blob = one.ok ? one.blobs.get(requested) ?? null : null
+        if (blob === null) {
+            // A count and a few names, not the list: on the most-shared note that list is several
+            // hundred refs long, and an error nobody can read is an error nobody acts on.
+            const sample = liveCarriers.slice(0, 5).join(', ') + (liveCarriers.length > 5 ? ` and ${liveCarriers.length - 5} more` : '')
+            const held = carriers.length === 0 ? 'no ref carries it'
+                : `${carriers.length} refs carry it (${liveCarriers.length} live, ${archivalCarriers.length} archival)${sample ? `, e.g. ${sample}` : ''}`
+            return { ok: false, reason: `docs show: ${requested} does not carry ${path} - ${held}` }
+        }
+    }
+
+    const prs = prsByBranch()
+    // gh being unavailable is not "these branches have no PR" - the same line note drift prints.
+    if (!prs.ok) emit(`  WARNING: ${prs.reason} - PR facts in the header are UNKNOWN, not absent.\n`)
+    const d = drift(path, { prs: prs.map, at: selected === null ? null : { ref: selected, blob } })
+    if (d.ok === false) return { ok: false, reason: `docs show: ${d.reason}` }
+    if (!d.found) {
+        // Names the ref set it covered, so an absence reads as a search that ran and not as proof.
+        emit(formatDivergenceHeader(d, { tier: 'full', warnings }))
+        emit('Nothing is a result here: this searched every ref, not the working tree. Try: bin/inflight.mjs note find <fuzzy>')
+        return { ok: true }
+    }
+    let body = null
+    if (!headerOnly && selected !== null) {
+        const contents = blobContents([blob])
+        if (!contents.ok || !contents.contents.has(blob)) return { ok: false, reason: `docs show: cannot read ${selected}:${path}` }
+        body = contents.contents.get(blob)
+    }
+    emit(formatDocsShow(d, { ref: selected, warnings, archivalCarriers, body }))
+    return { ok: true }
+}
 
 /**
  * The registry.
@@ -231,6 +324,53 @@ carries that the baseline does not, else the branch name. Nothing is summarised 
                 },
             },
         ],
+    },
+    {
+        name: 'docs',
+        summary: 'the docs corpus across every ref - a document with its divergence header, or the header alone',
+        when: 'you are about to act on anything under docs/inflight, docs/solutions or docs/plans',
+        usage: DOCS_USAGE,
+        sub: [
+            {
+                name: 'show',
+                summary: 'one document with its full divergence header, from the baseline or the first live ref carrying it',
+                when: 'a read-time header said other branches hold versions of this file, or you want the copy the baseline has rather than the one checked out',
+                usage: `Usage: bin/inflight.mjs docs show <path> [--ref <ref>] [--header-only]
+
+Prints the header, then the document from ONE ref, and the first line names which: the baseline when
+it carries the path, else the first carrying live ref in sorted order. Archival refs - tags,
+refs/backup - are never chosen by default; they are reported as preserved, and --ref reaches them.
+
+The header is the full tier of the query the read-time hook runs at the summary tier: how many
+distinct divergent versions exist on live refs, which branches and PRs carry the largest, what each
+added - headings, else its first added line - and which ref set was searched. Divergence is the only
+claim it makes; nothing here says a version is newer.
+
+--ref <ref>     show that ref's copy (and describe THAT copy's state in the header)
+--header-only   the header alone - the same text as \`docs header\`
+
+  bin/inflight.mjs docs show docs/inflight/bug-857-family.md
+  bin/inflight.mjs docs show docs/inflight/bug-857-family.md --ref origin/feats/hasten-micro-mvp`,
+                run: showDocument,
+            },
+            {
+                name: 'header',
+                summary: 'the full divergence header for one document, without the document',
+                when: 'the read-time hook named this as its "more" command, or you have no hooks and want what they would have shown',
+                usage: `Usage: bin/inflight.mjs docs header <path> [--ref <ref>]
+
+Exactly what \`docs show --header-only\` prints: which ref the header describes, how many distinct
+divergent versions live refs carry and which branches and PRs hold the largest, what each added,
+anything preserved only in archival refs, and the ref set searched. An agent on a host without
+hooks runs this before acting on a document; with hooks, this is the "more" the read-time line
+points at.
+
+  bin/inflight.mjs docs header docs/inflight/bug-857-family.md`,
+                run: (args, emit) => showDocument([...args, '--header-only'], emit),
+            },
+        ],
+        // A bare call has not answered anything yet, so it is a usage error like every other one.
+        run: () => ({ ok: false, reason: DOCS_USAGE }),
     },
     {
         name: 'branch',
