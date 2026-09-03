@@ -39,8 +39,8 @@ import { spawnSync } from 'node:child_process'
 import { buildDocsFixture, buildTermsFixture, windowGit, windowRepo } from './lib/fixture-repos.mjs'
 import { chdir, cwd } from 'node:process'
 import {
-    cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, symlinkSync, utimesSync,
-    writeFileSync,
+    cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync,
+    utimesSync, writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { mkdtempSync as mkTmp } from 'node:fs'
@@ -3519,18 +3519,29 @@ for (const c of CHECKS) {
     // that reaches for `lib/` or `inflight.mjs` is unchanged.
     const root = mkdtempSync(join(tmpdir(), 'inflight-selftest-'))
     const tmp = join(root, 'bin')
-    cpSync(BIN, tmp, { recursive: true })
-    cpSync(join(BIN, '..', '.claude', 'hooks'), join(root, '.claude', 'hooks'), { recursive: true })
+    // EVERY MUTANT IS A FULL COPY OF bin/ PLUS THE HOOKS, and none of them were ever removed - so a
+    // run left one copy per check behind, for good. Measured on this machine before the `finally`
+    // below existed: 20 GB of `inflight-selftest-*` directories from accumulated runs, on a disk the
+    // pre-commit hook was already warning was 94% full. `du -sh "${TMPDIR}"/inflight-selftest-* |
+    // tail -1` is the check. The leak grows with the suite, so it got worse every time a check was
+    // added; the `continue` path below leaked too, which is why the cleanup is a `finally` rather
+    // than a line at the end of the body.
     try {
-        c.mutate(tmp)
-    } catch (e) {
-        report(false, `mutant of ${c.id} COULD NOT BE BUILT - ${e.message}`)
-        continue
+        cpSync(BIN, tmp, { recursive: true })
+        cpSync(join(BIN, '..', '.claude', 'hooks'), join(root, '.claude', 'hooks'), { recursive: true })
+        try {
+            c.mutate(tmp)
+        } catch (e) {
+            report(false, `mutant of ${c.id} COULD NOT BE BUILT - ${e.message}`)
+            continue
+        }
+        let stillGreen
+        // A mutant that crashes the check is red, which is the point.
+        try { stillGreen = await c.run(tmp) } catch { stillGreen = false }
+        report(!stillGreen, `mutant of ${c.id} goes red`)
+    } finally {
+        rmSync(root, { recursive: true, force: true })
     }
-    let stillGreen
-    // A mutant that crashes the check is red, which is the point.
-    try { stillGreen = await c.run(tmp) } catch { stillGreen = false }
-    report(!stillGreen, `mutant of ${c.id} goes red`)
 }
 
 console.log()
