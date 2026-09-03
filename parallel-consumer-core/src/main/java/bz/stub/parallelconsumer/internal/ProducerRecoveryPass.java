@@ -28,14 +28,14 @@ import java.util.function.Supplier;
  * <p>
  * Its own class rather than a method of the processor, so the two halves of a recovery read side by side: the
  * lock-and-replay step here, which needs the processor's mailbox and state, and the replacement in
- * {@link ProducerManager}, which needs the producer. The processor hands it the three things it needs and nothing
+ * {@link ProducerRecovery}, which needs the producer. The processor hands it the three things it needs and nothing
  * else.
  */
 @Slf4j
 @RequiredArgsConstructor
 class ProducerRecoveryPass<K, V> {
 
-    private final ProducerManager<K, V> pm;
+    private final ProducerRecovery<K, V> recovery;
 
     /** The instance's current state, read on every pass. */
     private final Supplier<State> state;
@@ -59,14 +59,14 @@ class ProducerRecoveryPass<K, V> {
             log.debug("Not recovering the producer: the instance is {}", current);
             return;
         }
-        if (!pm.isRecoveryAttemptDue(Instant.now())) {
+        if (!recovery.isRecoveryAttemptDue(Instant.now())) {
             return;
         }
         try {
-            if (pm.pendingInvalidation().isPresent() || pm.isReplayOwed()) {
+            if (recovery.pendingInvalidation().isPresent() || recovery.isReplayOwed()) {
                 boolean entered;
                 try {
-                    entered = pm.beginReplacement();
+                    entered = recovery.beginReplacement();
                 } catch (InterruptedException wokeUp) {
                     // This thread's own wake-up, not a stop signal: notifySomethingToDo interrupts the control thread
                     // whenever the write lock is not HELD, and it is not held while this pass is waiting for it - a
@@ -84,19 +84,19 @@ class ProducerRecoveryPass<K, V> {
                 }
                 try {
                     int restored = replayWorkDiscardedByAbortedTransaction.getAsInt();
-                    pm.replayCompleted(restored); // only now: a throw above leaves the replay owed, and the next pass runs it first
+                    recovery.replayCompleted(restored); // only now: a throw above leaves the replay owed, and the next pass runs it first
                 } finally {
-                    pm.releaseCommitLockAfterReplacement();
+                    recovery.releaseCommitLockAfterReplacement();
                 }
             }
-            ReplacementOutcome outcome = pm.completeReplacement();
+            ReplacementOutcome outcome = recovery.completeReplacement();
             if (outcome.isTerminal()) {
                 closeWith.accept(outcome.getFailure());
             }
         } catch (RuntimeException e) {
             log.error("Producer recovery pass failed unexpectedly; it will be attempted again on a later pass: {}",
                     ThrowableUtils.describeWithRootCause(e), e);
-            pm.deferAfterFailedPass("the recovery pass failed with " + e.getClass().getName());
+            recovery.deferAfterFailedPass("the recovery pass failed with " + e.getClass().getName());
         } catch (Error fatal) {
             // Not retried, and not left to the supervisor either: its catch is Exception, so an Error would leave
             // the instance RUNNING with every worker parked on the produce lock for good. Leave RUNNING first - that

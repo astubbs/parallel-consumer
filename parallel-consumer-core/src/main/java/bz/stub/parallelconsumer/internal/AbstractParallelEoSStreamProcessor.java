@@ -406,7 +406,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             this.producerManager.get().setSuspensionEndsWhen(() -> state != RUNNING && state != State.PAUSED);
             if (options.isUsingTransactionCommitMode()) {
                 this.committer = this.producerManager.get();
-                this.producerRecoveryPass = Optional.of(new ProducerRecoveryPass<>(this.producerManager.get(),
+                this.producerRecoveryPass = Optional.of(new ProducerRecoveryPass<>(this.producerManager.get().recovery(),
                         () -> state, this::replayWorkDiscardedByAbortedTransaction, this::closeWith));
             } else {
                 this.committer = this.brokerPollSubsystem;
@@ -2041,7 +2041,7 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      */
     private Duration capAtNextRecoveryAttempt(Duration wait) {
         return producerManager
-                .flatMap(pm -> pm.timeUntilNextRecoveryAttempt(Instant.now()))
+                .flatMap(pm -> pm.recovery().timeUntilNextRecoveryAttempt(Instant.now()))
                 .filter(untilAttempt -> untilAttempt.compareTo(wait) < 0)
                 .orElse(wait);
     }

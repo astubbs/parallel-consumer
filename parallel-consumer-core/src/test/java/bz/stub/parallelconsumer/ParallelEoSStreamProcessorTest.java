@@ -9,6 +9,7 @@ import bz.stub.parallelconsumer.internal.utils.*;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.internal.ProducerManager;
+import bz.stub.parallelconsumer.internal.ProducerRecovery;
 import bz.stub.parallelconsumer.internal.State;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -136,7 +137,7 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
 
     /**
      * The four produce-path shapes of an invalid producer (R9, R18, R19), all driven through a mocked
-     * {@link ProducerManager}. Every variant here mocks either the SYNCHRONOUS throw from
+     * {@link ProducerManager} whose recovery half is a mock too. Every variant here mocks either the SYNCHRONOUS throw from
      * {@link ProducerManager#produceMessages} or the send future failing; the real wrapped shape - kafka-clients'
      * {@code FutureRecordMetadata.valueOrError} raising {@code ExecutionException} - is what the future variants
      * reproduce, and {@code RecoverableProducerConditionTest} pins the unwrapping itself.
@@ -148,10 +149,14 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         producerManagerField.setAccessible(true);
         producerManagerField.set(pc, Optional.of(producerManager));
         when(producerManager.beginProducing(any())).thenReturn(mock(ProducerManager.ProducingLock.class));
-        when(producerManager.canRecover()).thenReturn(canRecover);
-        // the detect-and-record step is the real one, so the tests below see the mock's canRecover() and can verify
-        // recordInvalidation() the way they always did
-        when(producerManager.recordIfRecoverable(any())).thenCallRealMethod();
+        @SuppressWarnings("unchecked")
+        ProducerRecovery<String, String> recovery = mock(ProducerRecovery.class);
+        when(producerManager.recovery()).thenReturn(recovery);
+        // the manager delegates detection to its recovery half, where the detect-and-record step is the real one,
+        // so the tests below see the mock's canRecover() and verify recordInvalidation() on recovery()
+        when(producerManager.recordIfRecoverable(any())).thenAnswer(invocation -> recovery.recordIfRecoverable(invocation.getArgument(0)));
+        when(recovery.canRecover()).thenReturn(canRecover);
+        when(recovery.recordIfRecoverable(any())).thenCallRealMethod();
         return producerManager;
     }
 
@@ -193,7 +198,7 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
 
         Assertions.assertThat(pcSpy.getFailureCause().equals(invalidPidMappingException)).isTrue();
         Assertions.assertThat(State.CLOSED.equals(stateOf(pcSpy))).isTrue();
-        verify(producerManager, never()).recordInvalidation(any());
+        verify(producerManager.recovery(), never()).recordInvalidation(any());
     }
 
     /**
@@ -222,7 +227,7 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         verify(producerManager, timeout(10_000).atLeast(2)).produceMessages(any());
         awaitForSomeLoopCycles(2);
         assertCommits(of(), "the batch whose output was never produced is failed, so nothing is committed");
-        verify(producerManager, never()).recordInvalidation(any());
+        verify(producerManager.recovery(), never()).recordInvalidation(any());
     }
 
     /**
@@ -252,7 +257,7 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
 
         parallelConsumer.pollAndProduceMany((record) -> of(new ProducerRecord<>("outputTopic", record.key(), record.value())));
 
-        verify(producerManager, timeout(10_000).atLeastOnce()).recordInvalidation(invalidPidMappingException);
+        verify(producerManager.recovery(), timeout(10_000).atLeastOnce()).recordInvalidation(invalidPidMappingException);
         awaitForSomeLoopCycles(2);
         Assertions.assertThat(parallelConsumer.getFailureCause()).isNull();
         Assertions.assertThat(stateOf(parallelConsumer)).isEqualTo(State.RUNNING);
@@ -277,7 +282,7 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         parallelConsumer.pollAndProduceMany((record) -> of(new ProducerRecord<>("outputTopic", record.key(), record.value())));
 
         verify(producerManager, timeout(10_000).atLeast(3)).produceMessages(any());
-        verify(producerManager, never()).recordInvalidation(any());
+        verify(producerManager.recovery(), never()).recordInvalidation(any());
         Assertions.assertThat(parallelConsumer.getFailureCause()).isNull();
         Assertions.assertThat(stateOf(parallelConsumer)).isEqualTo(State.RUNNING);
     }
