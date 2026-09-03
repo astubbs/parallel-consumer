@@ -234,6 +234,26 @@ class PcBuiltProducerTest {
         assertWithMessage("the built producer is PC's alone, so PC closes it").that(closed.get()).isTrue();
     }
 
+    /**
+     * The close is best effort: a producer that fails to close as well must not hide the failure that made PC close
+     * it, which is the one the caller has to act on.
+     */
+    @Test
+    void aBuiltProducerWhoseCloseAlsoFailsStillSurfacesTheConstructionFailure() {
+        ProducerFactory<String, String> factory = config -> new KafkaProducer<String, String>(config, new StringSerializer(), new StringSerializer()) {
+            @Override
+            public void close(Duration timeout) {
+                super.close(timeout);
+                throw new IllegalStateException("close failed too");
+            }
+        };
+        var module = moduleWith(factory, minimalConfig(), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
+
+        var thrown = assertThrows(NoSuchFieldException.class, module::producerWrap);
+
+        assertThat(thrown).hasMessageThat().contains("transactionManager");
+    }
+
     @Test
     void theInstancePathWrapsTheCallersProducerAndOffersNoReplacement() {
         @SuppressWarnings("unchecked")
