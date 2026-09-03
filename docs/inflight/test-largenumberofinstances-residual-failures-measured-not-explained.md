@@ -494,3 +494,18 @@ commit that cannot succeed mid-rebalance, or `consumerManager.close()` inside `d
 on the path and the logs show the commit failing; neither has been isolated. **The fix should not be
 chosen before that is pinned**, because "keep polling until the consumer is closed" and "do not
 block the close on a commit that cannot land" are different repairs.
+
+
+## The chaos monkey's victim selection was excluding one instance - fixed elsewhere, 2026-09-04
+
+Noticed while reading the monkey during this investigation: `submitChaosMonkey` drew
+`(int) ((size - 1) * Math.random())`, which is `0 .. size - 2`, so the highest-indexed secondary was
+**never** toggled - excluded outright rather than merely unlikely. One instance in the fleet never
+churned.
+
+**It is not the cause of the stall**, and nothing here depends on it: the stall reproduces with ten
+instances closing at once, and the excluded instance is one the monkey simply never touched. It is
+recorded here because it **changes what this profile measures**, and this note owns the profile's
+rate. Fixed in astubbs/parallel-consumer#441, which deliberately does not re-measure - so **the
+2/30 baseline above was taken with the old selection**, and a rate compared across that merge is not
+comparing like with like.
