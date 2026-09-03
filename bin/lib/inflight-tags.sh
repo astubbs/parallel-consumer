@@ -7,7 +7,9 @@
 # each value MEANS; this file owns which values exist, for both consumers:
 #
 #   - bin/check-inflight-tags.sh          - the gate: rejects a tag outside these sets
-#   - .claude/hooks/inject-recorded-knowledge.sh - the session index: groups open notes by them
+#   - bin/lib/inflight-tags.mjs            - the Node port, which the session index
+#     (`bin/inflight.mjs docs index`, what .claude/hooks/inject-recorded-knowledge.sh injects) and
+#     bare `docs` group notes by; a parity self-test sources THIS file and fails on any difference
 #
 # The two used to carry private copies, each annotated "these WILL drift" - and the failure mode of
 # drift is the worst one this system has: a value the gate accepts but the index cannot place files

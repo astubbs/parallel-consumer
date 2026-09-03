@@ -213,8 +213,11 @@ and the traps that voided earlier experiments.
   [`docs/solutions/workflow-issues/prior-art-lives-on-branches-2026-09-01.md`](docs/solutions/workflow-issues/prior-art-lives-on-branches-2026-09-01.md).
 - **The titles are already in your context**, injected at session start by
   `.claude/hooks/inject-recorded-knowledge.sh` - so "I did not know it existed" is not available as
-  an excuse. **That index is branch-scoped too**, and says so along with the count it cannot show
-  you; it narrows the search, it does not complete it.
+  an excuse. **That index is corpus-scoped**: it is `bin/inflight.mjs docs index`, rendered from
+  every live ref, with branch-only documents grouped under the branch set carrying them. What it
+  cannot show is a version preserved only in an archival ref (a tag, `refs/backup`) -
+  `bin/inflight.mjs stranded` names those - and it lists titles, not contents; it narrows the
+  search, it does not complete it.
 - **Grep the mechanism, not the symptom.** The failing test's name is the weakest search term
   available. Search the class, the lock, the option, the exception, the log line.
 - **A test's own javadoc is prior art, and the commands above will not find it.** The chaos

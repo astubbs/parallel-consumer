@@ -412,6 +412,50 @@ function buildDocsShowFixture() {
 }
 const docsShowFixture = () => (DOCS_SHOW ??= buildDocsShowFixture())
 
+/**
+ * The corpus fixture plus the shapes the session index is specified against: a WORKSTREAM - one
+ * branch carrying several notes, a solution and a plan the baseline has never had, which R18 says
+ * must appear as one heading naming the branch - and two more single-note branches, so the
+ * off-baseline in-flight groups number four (workstream, only-here, second, third) and a line cap
+ * has a tail to collapse. Its own repository for the reason bin/lib/fixture-repos.mjs gives.
+ */
+let DOCS_INDEX = null
+function buildDocsIndexFixture() {
+    const { dir, git, commit, write } = buildDocsFixture()
+    const task = (title) => `# ${title}\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\nbody\n`
+    git('checkout', '-q', '-b', 'feats/workstream', 'master')
+    write('docs/inflight/ws-a.md', task('Workstream note A'))
+    write('docs/inflight/ws-b.md', task('Workstream note B'))
+    write('docs/inflight/ws-c.md', task('Workstream note C'))
+    write('docs/solutions/ci/ws-sol.md', '# A workstream solution\n\nfixed\n')
+    write('docs/plans/2026-03-03-001-ws-plan.md', '# A workstream plan\n\nsteps\n')
+    commit('a workstream master never had')
+    git('checkout', '-q', '-b', 'feats/second', 'master')
+    write('docs/inflight/second.md', task('Second branch note'))
+    commit('one note')
+    git('checkout', '-q', '-b', 'feats/third', 'master')
+    write('docs/inflight/third.md', task('Third branch note'))
+    commit('one note')
+    git('checkout', '-q', 'master')
+    return dir
+}
+const docsIndexFixture = () => (DOCS_INDEX ??= buildDocsIndexFixture())
+
+/** A corpus whose index is comfortably over a 64 KiB pipe buffer: enough long titles on master. */
+let BIG_INDEX = null
+function buildBigIndexFixture() {
+    const { dir, commit } = windowRepo()
+    mkdirSync(join(dir, 'docs', 'inflight'), { recursive: true })
+    const filler = 'a title long enough that six hundred of them overflow the pipe buffer this fixture exists to overflow'
+    for (let i = 0; i < 600; i++) {
+        writeFileSync(join(dir, 'docs', 'inflight', `note-${String(i).padStart(3, '0')}.md`),
+            `# Note ${i} ${filler}\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\nbody\n`)
+    }
+    commit('six hundred notes')
+    return dir
+}
+const bigIndexFixture = () => (BIG_INDEX ??= buildBigIndexFixture())
+
 /** The document half of a `docs show` page: everything after the separator that names the ref. */
 const bodyShown = (out, path, ref) => out.split(`--- ${path} @ ${ref} ---`)[1] ?? null
 
@@ -2228,10 +2272,12 @@ const CHECKS = [
             if (t.titleOf('---\ntitle: "Race: the drainer ran twice"\ntags: [x]\n---\n# Some heading\n', 'docs/solutions/ci/a.md') !== 'Race: the drainer ran twice') return false
             if (t.titleOf("---\ntitle: 'it''s quoted'\n---\n", 'docs/solutions/ci/a.md') !== "it''s quoted") return false
             if (t.titleOf('intro\n# The heading\n\ntitle: not frontmatter\n', 'docs/plans/2026-01-01-001-p.md') !== 'The heading') return false
+            // A note is named by its heading even when a handoff frontmatter carries another title.
+            if (t.titleOf('---\ntitle: "The frontmatter sentence"\n---\n# The heading sentence\n', 'docs/inflight/handoff-x.md') !== 'The heading sentence') return false
             return t.titleOf('no heading at all\n', 'docs/plans/2026-01-01-001-p.md') === '2026-01-01-001-p'
         },
         mutate: (binDir) => patch(join(binDir, 'lib', 'inflight-tags.mjs'),
-            '    const fm = /^---\\r?\\n([\\s\\S]*?)\\r?\\n---/.exec(text)', '    const fm = null'),
+            ' ? null : /^---\\r?\\n([\\s\\S]*?)\\r?\\n---/.exec(text)', ' ? null : null'),
     },
     {
         id: 'help-lists-docs-list-with-its-when-line',
@@ -2246,6 +2292,141 @@ const CHECKS = [
             return usage.code === 0 && usage.out.includes('Usage: bin/inflight.mjs docs list')
         },
         mutate: (binDir) => patch(join(binDir, 'inflight.mjs'), "        name: 'list',", "        name: 'ls',"),
+    },
+    // ---------------------------------------------------------------------------------------------
+    // THE SESSION INDEX - `docs index`, what .claude/hooks/inject-recorded-knowledge.sh injects.
+    // docs/plans/2026-09-03-001-feat-inflight-docs-context-query-plan.md, unit U6. The hook's own
+    // cases, and the equivalence check against the pre-migration hook, are in
+    // bin/test-check-agent-hooks.sh; these cover the command.
+    // ---------------------------------------------------------------------------------------------
+    {
+        id: 'docs-index-lists-an-off-baseline-workstream-as-one-heading-naming-its-branch-set',
+        why: 'a workstream\'s notes on one branch are one fact, not one line each - the plan\'s R18 and its acceptance example AE6; the heading has to name the branch or the reader cannot go there',
+        run: async (binDir) => {
+            const r = invoke(binDir, ['docs', 'index'], { cwd: docsIndexFixture() })
+            if (r.code !== 0 || !r.out.trim()) return false
+            // ONE heading for the workstream in the in-flight area - once per area it touches, so
+            // three in all for a branch carrying a note, a solution and a plan - with every one
+            // of its notes directly under it.
+            const inflight = r.out.split('# In flight only on branches')[1]?.split('\n# ')[0] ?? ''
+            if (inflight.split('\n').filter((l) => l === '## only on feats/workstream').length !== 1) return false
+            if (r.out.split('\n').filter((l) => l === '## only on feats/workstream').length !== 3) return false
+            const section = inflight.split('## only on feats/workstream\n')[1].split('\n## ')[0]
+            if (!['Workstream note A', 'Workstream note B', 'Workstream note C'].every((t) => section.includes(`- [task] ${t}`))) return false
+            // The on-baseline listing keeps the hook's headings, so a grep an agent learned still works.
+            return ['# Open work - what it costs you to not know', '## ci', '# Dated plans and investigations', '## 2026-01']
+                .every((h) => r.out.includes(`${h}\n`)) && r.out.startsWith('docs context: session index\n')
+        },
+        // Only the first path of each cluster is grouped; the rest silently vanish from the index.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'views.mjs'),
+            'for (const p of c.paths) setOf.set(p, key)', 'for (const p of c.paths.slice(0, 1)) setOf.set(p, key)'),
+    },
+    {
+        id: 'docs-index-max-lines-collapses-the-tail-to-a-count-equal-to-the-groups-omitted',
+        why: 'a cap that silently drops groups is the partial index the hook was rewritten to end; the count is what makes the omission visible, so a wrong count is a lie about the corpus',
+        run: async (binDir) => {
+            const dir = docsIndexFixture()
+            // Four in-flight branch sets exist off the baseline (workstream, only-here, second, third).
+            // Twelve lines is four per area: the workstream group (heading, three notes, blank) fits
+            // with the solutions area's spare line and nothing after it does.
+            const capped = invoke(binDir, ['docs', 'index', '--max-lines', '12'], { cwd: dir })
+            if (capped.code !== 0) return false
+            const inflight = capped.out.split('# In flight only on branches')[1]?.split('\n# ')[0] ?? ''
+            const shown = inflight.split('\n').filter((l) => l.startsWith('## only on ')).length
+            if (shown !== 1 || !inflight.includes('... 3 more branch sets holding 3 documents, past the 12-line cap')) return false
+            if (!inflight.includes('bin/inflight.mjs docs list inflight')) return false
+            // Uncapped, every set is shown and no count line appears anywhere.
+            const full = invoke(binDir, ['docs', 'index', '--max-lines', '1000'], { cwd: dir })
+            const all = full.out.split('# In flight only on branches')[1]?.split('\n# ')[0] ?? ''
+            if (full.code !== 0 || all.split('\n').filter((l) => l.startsWith('## only on ')).length !== 4 || /more branch set/.test(full.out)) return false
+            const bad = invoke(binDir, ['docs', 'index', '--max-lines', 'lots'], { cwd: dir })
+            return bad.code === 2
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'views.mjs'), '                omitted++\n', '                omitted += 2\n'),
+    },
+    {
+        id: 'docs-index-reads-on-baseline-titles-from-the-baseline-blob-not-the-working-tree',
+        why: 'the plan\'s KTD16: an index built on a checkout behind the baseline must not be wrong, so the copy the checkout holds is never what is listed - the equivalence check in the hook suite classifies the one title that differs for exactly this reason',
+        run: async (binDir) => {
+            const dir = docsFixture()
+            const note = join(dir, 'docs', 'inflight', 'note.md')
+            const committed = readFileSync(note, 'utf8')
+            writeFileSync(note, committed.replace('# The note', '# The note, retitled in the working tree'))
+            try {
+                const r = invoke(binDir, ['docs', 'index'], { cwd: dir })
+                return r.code === 0 && r.out.includes('- [task] The note\n') && !r.out.includes('retitled in the working tree')
+            } finally {
+                writeFileSync(note, committed)
+            }
+        },
+        // The shape reads the working-tree file whenever one exists, which is the old hook's scan.
+        mutate: (binDir) => {
+            const f = join(binDir, 'lib', 'docs-shape.mjs')
+            patch(f, "import { blobContents } from './git.mjs'", "import { existsSync, readFileSync } from 'node:fs'\nimport { blobContents } from './git.mjs'")
+            patch(f, "const text = batch.contents.get(w.blob) ?? ''",
+                "const text = existsSync(w.path) ? readFileSync(w.path, 'utf8') : (batch.contents.get(w.blob) ?? '')")
+        },
+    },
+    {
+        id: 'the-front-door-drains-a-large-page-before-exiting',
+        why: 'process.exit() drops stdout still queued on a pipe, so a page over 64 KiB read through $(...) arrived cut at exactly 65536 bytes with exit 0 - the session hook lost its plans section this way; only setting exitCode lets the loop drain',
+        run: async (binDir) => {
+            // The source half holds on every platform; the behavioural half reproduces the cut
+            // where pipes are asynchronous (macOS), and merely passes where they are not (Linux).
+            const src = code(join(binDir, 'inflight.mjs'))
+            if (src.includes('process.exit(') || !src.includes('process.exitCode')) return false
+            const dir = bigIndexFixture()
+            const tool = join(binDir, 'inflight.mjs')
+            const file = join(dir, 'page.txt')
+            const direct = spawnSync('bash', ['-c', 'node "$1" docs index > "$2"', '_', tool, file], { cwd: dir, encoding: 'utf8' })
+            if (direct.status !== 0) return false
+            const bytes = readFileSync(file).length
+            if (bytes <= 65536) return false // the fixture is not big enough to show anything
+            const captured = spawnSync('bash', ['-c', 'x=$(node "$1" docs index 2>/dev/null); printf "%s\\n" "$x"', '_', tool], { cwd: dir, encoding: 'utf8' })
+            return captured.status === 0 && Buffer.byteLength(captured.stdout) === bytes
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'), '    process.exitCode = ok ? 0 : 2\n', '    process.exit(ok ? 0 : 2)\n'),
+    },
+    {
+        id: 'docs-index-records-its-own-failure-and-clears-it-on-the-next-success',
+        why: 'the hook that calls this fails open, so without the record (the plan\'s KTD13) a session whose index never rendered looks like one with nothing to list; a record that outlives the fix is the same lie the other way',
+        run: async (binDir) => {
+            const cache = await cacheLib(binDir)
+            const cacheDir = mkdtempSync(join(tmpdir(), 'inflight-index-cache-'))
+            const env = { ...process.env, PC_INFLIGHT_CACHE_DIR: cacheDir }
+            const withCache = (fn) => {
+                const before = process.env.PC_INFLIGHT_CACHE_DIR
+                process.env.PC_INFLIGHT_CACHE_DIR = cacheDir
+                try { return fn() } finally {
+                    if (before === undefined) delete process.env.PC_INFLIGHT_CACHE_DIR
+                    else process.env.PC_INFLIGHT_CACHE_DIR = before
+                }
+            }
+            const outside = mkdtempSync(join(tmpdir(), 'inflight-index-notarepo-'))
+            const failed = invoke(binDir, ['docs', 'index'], { cwd: outside, env })
+            if (failed.code !== 2 || !withCache(() => 'session index' in cache.deliveryFailures())) return false
+            // Another delivery's record is printed; the index's own is cleared by this success.
+            withCache(() => cache.recordDeliveryFailure('read-time header', 'stub reason'))
+            const ok = invoke(binDir, ['docs', 'index'], { cwd: docsFixture(), env })
+            if (ok.code !== 0 || !ok.out.includes('DELIVERY FAILED: read-time header - stub reason')) return false
+            if (ok.out.includes('DELIVERY FAILED: session index')) return false
+            return withCache(() => !('session index' in cache.deliveryFailures()))
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'), '            clearDeliveryFailure(INDEX_DELIVERY)\n', ''),
+    },
+    {
+        id: 'help-lists-docs-index-with-its-when-line',
+        why: 'the hook names this command as the way to get the list on a host without hooks; a command help cannot find is one the agent will not trust',
+        run: async (binDir) => {
+            const help = invoke(binDir, ['help'])
+            if (help.code !== 0) return false
+            const lines = help.out.split('\n')
+            const at = lines.findIndex((l) => /^ {2}docs index\b/.test(l))
+            if (at < 0 || !/^\s+when: \S/.test(lines[at + 1] ?? '')) return false
+            const usage = invoke(binDir, ['help', 'docs', 'index'])
+            return usage.code === 0 && usage.out.includes('Usage: bin/inflight.mjs docs index') && usage.out.includes('--max-lines')
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'), "        name: 'index',", "        name: 'idx',"),
     },
     // ---------------------------------------------------------------------------------------------
     // THE PROMPT HALF OF THE QUERY - term extraction in isolation, then one grep over the live refs.

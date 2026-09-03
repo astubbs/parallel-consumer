@@ -16,9 +16,9 @@ on the text the agent writes; folding the existing write-time solutions hook ont
 
 **Related notes this work touches, and how:**
 
-- [`ci-inflight-absorbs-the-query-half.md`](ci-inflight-absorbs-the-query-half.md) - the session
-  index row migrates here (its "start with the session index" paragraph). Update that row when it
-  lands, do not duplicate it here.
+- [`ci-inflight-absorbs-the-query-half.md`](ci-inflight-absorbs-the-query-half.md) - its session
+  index row is resolved by this work: the hook now renders the three corpus areas from
+  `inflight docs index` and keeps only the sections outside the corpus in bash.
 - [`ci-inflight-next-commands.md`](ci-inflight-next-commands.md) - its corpus-scope section was stale
   (the enumeration already looks everywhere) and is corrected here; the header reports archival-only
   versions as preserved.
@@ -30,5 +30,10 @@ on the text the agent writes; folding the existing write-time solutions hook ont
 - Every delivery publishes its measured cold cost in its own header before it ships; the budgets
   are in the plan's cost decision. The full-tier header pays one diff per divergent cluster for the
   preview, which `note drift` now pays too - flag it if that command's wall-clock matters.
-- The session-index migration (U6) holds the bash tag vocabulary and the Node port together with a
-  parity test until the tag gate itself moves to Node, which is deferred.
+- The tag vocabulary exists twice, in `bin/lib/inflight-tags.sh` for the gates and in
+  `bin/lib/inflight-tags.mjs` for the index, held equal by a parity self-test. The bash file is the
+  source of truth today; the cheaper end state is the Node file as the source with the shell library
+  derived from it, which is queued for this PR's simplify pass.
+- Session start is inside its budget but with little headroom, and almost all of it is one
+  `ls-tree` per ref inside `corpusIndex`. The lever - dedupe refs by their `docs/` tree object,
+  since most tips share one - is named in the hook header and not yet pulled.

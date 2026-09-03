@@ -17,30 +17,45 @@ what migrates: each script keeps its policy and loses only its reading.
 
 ## What migrates, and why each one
 
+<!-- post-merge: checked-begin -->
 | Script | Lines | The query inside it |
 |---|---|---|
 | `.claude/hooks/inject-branch-context.sh` | 654 | a branch's commits, handoff notes, PR body and comments - `branchFacts()` already answers most of it |
-| `.claude/hooks/inject-recorded-knowledge.sh` | 437 | ~250 of them parse three tag axes and group by impact order. It **already runs a cross-ref `git grep`** to count branch-only documents - the prior-art fan-out, reimplemented in bash |
+| `.claude/hooks/inject-recorded-knowledge.sh` | 437 | **Migrated** (astubbs/parallel-consumer#419): the three corpus areas are rendered by `bin/inflight.mjs docs index` and the hook keeps only the framing and the non-corpus sections. Its own cross-ref `git grep` and its `for-each-ref` enumeration are gone with it |
 | `.claude/hooks/check-merge-outstanding-work.sh` | 364 | reads notes and `gh` to decide whether background work is live |
 | `bin/check-branch-self-reference.sh` | 360 | whether a note names the branch or PR it sits on |
 | `.claude/hooks/remind-inflight-on-push.sh` | 239 | what a PR's own note still says is open - `note find` plus a read |
 | `bin/check-inflight-tags.sh` | 169 | parses every note, then fails. Already shares `bin/lib/inflight-tags.sh` with the index - the split is right and is done in bash |
 | `bin/issue-index.sh` | 127 | GitHub to tree; the tunnel's first half, and it should share the tool's cache |
+<!-- post-merge: checked-end -->
 
-**Start with the session index, because it gains a capability rather than just losing lines.** It is
-branch-scoped today and says so apologetically - *"this list is what the CURRENT BRANCH carries, and
-that is not all of it"*. Over the corpus index it can be **corpus-scoped**: `stranded` at session
-start would put the 42-note language-proxy cluster in front of an agent that currently cannot learn
-it exists.
+<!-- post-merge: checked-begin -->
+**The session index went first, and it gained the capability this paragraph predicted.** It was
+branch-scoped and said so apologetically - *"this list is what the CURRENT BRANCH carries, and that
+is not all of it"*. It is **corpus-scoped** now (astubbs/parallel-consumer#419, unit U6 of
+[the docs context query plan](../plans/2026-09-03-001-feat-inflight-docs-context-query-plan.md)):
+the hook calls `bin/inflight.mjs docs index`, which renders the three areas from the refs, and the
+language-proxy cluster that an agent on master could not learn existed is one heading naming its
+branch set, under the in-flight area. What did NOT move is the framing and the sections outside
+the corpus - the repo-level registers, ideation, the test-hardening audits - which the hook still
+reads from the working tree by design (the plan's R17). An equivalence check in
+`bin/test-check-agent-hooks.sh` runs the pre-migration hook at a pinned commit against the current
+checkout and asserts every title it listed is in the new index.
 
-**One instance of the widened-corpus defect is still in bash, and this note owns it.**
-`.claude/hooks/inject-recorded-knowledge.sh` runs its own `git for-each-ref ... refs/heads
-refs/remotes/origin` - the exact narrow enumeration the tool has since dropped, so its cross-ref
-document count silently excludes tags and `refs/backup`. Found by the same-defect sweep at merge
-prep and deliberately not fixed there: widening it changes what the hook injects into every
-session, which needs its own before-and-after rather than a one-word edit ridden in on a tooling PR.
-It is the strongest argument in this note - the hook does not need widening, it needs to stop having
-its own enumeration.
+**The widened-corpus defect this note owned in the hook went with the scan.** The hook's own
+`git for-each-ref ... refs/heads refs/remotes/origin` - the narrow enumeration the tool had
+dropped, which made its cross-ref count silently exclude tags and `refs/backup` - was not widened,
+it was deleted: the hook no longer enumerates anything, and the command's first lines state the
+ref set searched and the archival split. That was the argument here and it held.
+
+**Two things the migration found that this note now records.** The front door called
+`process.exit()`, which on macOS drops stdout still queued on a pipe, so any page over 64 KiB read
+through `$(...)` arrived cut at exactly 65536 bytes with exit 0 - the hook lost its plans section
+before anything noticed; it sets `process.exitCode` now and a self-test holds the line. And the
+index's cold cost is the `corpusIndex` build, one `git ls-tree` per ref, which on a loaded host sits
+at the 8 s session-start budget; a build that deduplicated refs by their `docs/` tree object would
+cut most of those calls, and is the lever if the budget is breached.
+<!-- post-merge: checked-end -->
 
 
 ## Also queued: the low-disk warner, which is not a query at all

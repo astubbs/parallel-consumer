@@ -26,24 +26,60 @@
 # document, no bodies - because the failure being fixed is not knowing the document EXISTS. Once a
 # title is in context, the agent's own grep does the rest.
 #
+# A THIN WRAPPER OVER `bin/inflight.mjs docs index`, since the docs context query landed (the plan
+# in docs/plans/2026-09-03-001-feat-inflight-docs-context-query-plan.md, KTD8). The three corpus
+# areas - solutions, in-flight notes, plans - are rendered by that command, CORPUS-SCOPED: it reads
+# every live ref, so a note that exists only on an unmerged branch is listed under the branch set
+# carrying it, where this hook's own `find` and `grep` over the working tree could never see it. The
+# grouping, the headings and the impact order are the ones this file used to compute in bash; they
+# live in bin/lib/views.mjs (`formatDocsIndex`) and bin/lib/inflight-tags.mjs now, and this file
+# keeps only what is NOT corpus: the framing, the repo-level registers, the ideation documents and
+# the test-hardening audits, all still read from the working tree (R17). The hook no longer sources
+# bin/lib/inflight-tags.sh - the vocabulary reaches it through the command, and the Node copy is
+# held equal to the shell one by a parity self-test in bin/test-inflight.mjs.
+#
+# COST, MEASURED COLD, end to end, on the slowest developer host (an Apple Silicon laptop, 613
+# refs), against the 8 s session-start budget (the plan's R19, KTD5). Three runs each, same
+# window, the pre-migration hook materialised at its last commit beside this one:
+#
+#   quiet host    before 8.4 s to 12.6 s      after 6.9 s to 7.6 s
+#   loaded host   before 7.5 s to  8.0 s      after 8.2 s to  9.1 s   (two self-test suites running)
+#
+# Before, most of the time was one `git grep` across every ref for a count this hook no longer
+# prints. After, almost all of it is the index build - one `git ls-tree` per ref, which
+# bin/lib/notes.mjs owns and `bin/inflight.mjs --perf docs index` itemises (613 calls, six
+# seconds of the seven). Bare `docs` costs the same build. The lever if the budget is breached is
+# a build that deduplicates refs by their `docs/` tree object before listing; the plan's stop
+# condition is half again over budget, which no measurement here approached.
+# Re-measure with `time CLAUDE_PROJECT_DIR=$PWD .claude/hooks/inject-recorded-knowledge.sh`.
+#
 # Tool-neutral where it can be: the knowledge lives in the documents, and this only enumerates them.
-# Codex and anything else reading AGENTS.md gets the same rule, just without the reminder.
+# Codex and anything else reading AGENTS.md gets the same rule, just without the reminder - and the
+# same list, from `node bin/inflight.mjs docs index`.
 #
 # Never fails a session: any error prints nothing and exits 0. A broken reminder must not be a
-# broken session.
+# broken session. When the command cannot run - no `node` on PATH, or the corpus cannot be read -
+# the framing is printed with ONE line saying the three areas are missing and how to get them, and
+# the non-corpus sections follow; the old bash scan is never fallen back to, because a partial
+# index that reads as complete is the failure this hook exists to end.
 
 set -uo pipefail
 
 # RESOLVED BEFORE ANYTHING cd's. This script cd's to the project root further down, after which a
 # BASH_SOURCE-relative path no longer resolves - so `bash .claude/hooks/inject-recorded-knowledge.sh`
-# from the repo root silently sourced nothing and exited 0, which is the exact invocation this
-# index prints for agents to re-run.
+# from the repo root silently resolved nothing and exited 0, which is the exact invocation this
+# index prints for agents to re-run. The tool is resolved from this hook's own location, not
+# $CLAUDE_PROJECT_DIR - the code belongs to the checkout the hook ships in, the notes to the project.
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INFLIGHT_TOOL="${HOOK_DIR}/../../bin/inflight.mjs"
 
 
 root="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)}" || exit 0
 [ -n "$root" ] && [ -d "$root/docs" ] || exit 0
 cd "$root" 2>/dev/null || exit 0
+# A tree that does not look like this repository gets nothing, not a notice: the notice below is
+# for a checkout that HAS the corpus and could not render it.
+[ -d docs/solutions ] || exit 0
 
 # ALSO WRITTEN TO A FILE, so an agent can grep the index instead of re-reading it whole. The headings
 # are real markdown (`#` sections, `##` groups) precisely so `grep '^##'` gives the shape and
@@ -59,14 +95,11 @@ emit() {
 }
 
 # A directory's own AGENTS.md/CLAUDE.md/README is not one of the documents these blocks list, and
-# every scan over docs/ needs the same guard - the eight docs/inflight scans below already carry it.
-# Without it the rules doc lists as a solution, a plan, an ideation document or an audit, under a
-# heading telling you to read it as one. Nothing goes red; the index just quietly says something
-# false. Anchored on `/` so a real document named e.g. `writing-agents.md` is not swallowed.
+# every scan over docs/ needs the same guard. Without it the rules doc lists as an ideation document
+# or an audit, under a heading telling you to read it as one. Nothing goes red; the index just
+# quietly says something false. Anchored on `/` so a real document named e.g. `writing-agents.md`
+# is not swallowed. The three corpus areas carry the same guard inside bin/lib/docs-shape.mjs.
 DIRECTORY_DOCS_RE='/(AGENTS|CLAUDE|README)\.'
-
-solutions=$(find docs/solutions -name '*.md' -type f 2>/dev/null | grep -vE "$DIRECTORY_DOCS_RE" | sort)
-[ -n "$solutions" ] || exit 0
 
 emit "# Already solved here - read before you diagnose"
 emit ""
@@ -77,341 +110,77 @@ emit "you know what exists; grep the ones that look close. Skipping this is the 
 emit "skipped, and its failure is silent - you rediscover the problem and it feels like progress."
 emit ""
 
-# THIS INDEX IS BRANCH-SCOPED, AND SAYING SO IS THE POINT.
+# THIS INDEX IS CORPUS-SCOPED, AND SAYING SO IS STILL THE POINT.
 #
-# Every enumeration in this file - `find docs/solutions`, `find docs/plans`, `grep -rl docs/inflight`
-# - reads the WORKING TREE, so it lists what the current branch carries and nothing else. Most of
-# this repo's documentation has never landed on master: notes, plans and write-ups are authored on
-# the branch that produced them and stay there until that branch merges, which many never do.
+# Its predecessor read the working tree, listed what the current branch carried, and confessed the
+# gap with a count - because most of this repo's documentation has never landed on master: notes,
+# plans and write-ups are authored on the branch that produced them and stay there until that
+# branch merges, which many never do. On 2026-09-01 a session investigating
+# astubbs/parallel-consumer#44 ran all six AGENTS.md checks from master, got a plausible-looking
+# set of hits, and missed a decomposition plan, an architecture write-up on the exact seam under
+# investigation, and a sibling-defect note - all of them branch-only, none of them findable by any
+# command the table gave it.
 #
-# An index that is silently partial is worse than no index, because it reads as complete. On
-# 2026-09-01 a session investigating astubbs/parallel-consumer#44 ran all six AGENTS.md checks from
-# master, got a plausible-looking set of hits, and missed a decomposition plan, an architecture
-# write-up on the exact seam under investigation, and a sibling-defect note - all of them
-# branch-only, none of them findable by any command the table gave it.
-#
-# So the block below states the gap in the same breath as the list, and names the one command that
-# closes it. Cost is one `git grep` across every ref, in a single process.
-branch_only_note=$(
-    set -uo pipefail
-    refs=$(git for-each-ref --format='%(refname:short)' refs/heads refs/remotes/origin 2>/dev/null \
-        | grep -v '/HEAD$') || exit 0
-    [ -n "$refs" ] || exit 0
-    baseline=origin/master
-    git rev-parse --verify --quiet "$baseline" >/dev/null 2>&1 || baseline=master
-    # shellcheck disable=SC2086 # word splitting is how the ref list reaches git grep
-    everywhere=$(git grep -l -I -E '.|^$' $refs -- 'docs/' 2>/dev/null | cut -d: -f2- | sort -u | wc -l) || exit 0
-    here=$(git ls-tree -r --name-only "$baseline" -- docs/ 2>/dev/null | wc -l) || exit 0
-    [ "$everywhere" -gt 0 ] && [ "$here" -gt 0 ] && [ "$everywhere" -gt "$here" ] || exit 0
-    echo "$((everywhere - here)) $everywhere"
-) || branch_only_note=""
+# The command below closes that gap rather than confessing it: it lists every document on every
+# live ref, and its own first lines state the ref set it searched and the one thing it cannot show
+# (a version preserved only in an archival ref). So the framing here says what the list IS, and
+# leaves the numbers to the command, which is the only thing that measured them.
+emit "**This list is CORPUS-SCOPED: every live branch, not just the one checked out.** Documents that"
+emit "exist only on unmerged branches are listed under the branch set carrying them, and no"
+emit "working-tree grep can reach those - \`bin/inflight.mjs docs show <path>\` prints one from the"
+emit "branch that holds it, and \`bin/inflight.mjs prior-art <mechanism>\` searches all of them."
+emit ""
 
-if [ -n "$branch_only_note" ]; then
-    set -- $branch_only_note
-    emit "**This list is what the CURRENT BRANCH carries, and that is not all of it.** \`$1\` of the"
-    emit "\`$2\` documents under \`docs/\` across every ref exist only on branches that have not merged,"
-    emit "so nothing below names them and no working-tree grep can reach them. To search all of it:"
+# THE THREE CORPUS AREAS, FROM THE TOOL. Stdout only, in one read, so a partial render is never
+# emitted: the command prints its whole page or exits non-zero with the reason on stderr, and
+# nothing here has an opinion about which. `node` absent is the same outcome as a failed run - the
+# notice names both - and the outcome is never the old bash scan.
+corpus_index=""
+if command -v node >/dev/null 2>&1; then
+    corpus_index=$(node "$INFLIGHT_TOOL" docs index 2>/dev/null) || corpus_index=""
+fi
+if [ -n "$corpus_index" ]; then
+    emit "$corpus_index"
     emit ""
-    emit "    node bin/inflight.mjs prior-art <mechanism> [<mechanism>...]"
-    emit ""
-    emit "Run it before concluding \"no prior art\" - that conclusion is otherwise a false negative"
-    emit "wearing the authority of a completed check."
+else
+    emit "**DELIVERY FAILED: session index** - \`node bin/inflight.mjs docs index\` did not run here (no \`node\`"
+    emit "on PATH, or the corpus could not be read), so the solutions, in-flight notes and plans are NOT"
+    emit "listed below. Nothing else will tell you what exists: run \`node bin/inflight.mjs docs\` yourself,"
+    emit "and if that fails too its exit reason is the fault to fix."
     emit ""
 fi
 
-current=""
-while IFS= read -r f; do
-    category=$(basename "$(dirname "$f")")
-    if [ "$category" != "$current" ]; then
-        emit ""
-        emit "## ${category}"
-        current="$category"
-    fi
-    # The frontmatter title if there is one, else the first heading, else the filename.
-    # A frontmatter title is YAML, so it is quoted whenever it contains a colon or an apostrophe -
-    # and this repo's titles routinely do. Strip the wrapping, or the index shows the quotes.
-    title=$(sed -n 's/^title:[[:space:]]*//p' "$f" 2>/dev/null | head -1 \
-              | sed 's/^"//;s/"$//;s/^'"'"'//;s/'"'"'$//')
-    [ -n "$title" ] || title=$(sed -n 's/^# //p' "$f" 2>/dev/null | head -1)
-    [ -n "$title" ] || title=$(basename "$f" .md)
-    emit "- ${title}  \`${f}\`"
-done <<< "$solutions"
-
-emit ""
-
-# INFLIGHT, GROUPED BY WHAT IT COSTS YOU TO NOT KNOW - not alphabetically, and not by filename.
-#
-# Three decisions are baked in here, all of them about signal rather than budget (measured: every
-# path under docs/ is ~2.8k tokens, less than the solutions block above, so nothing here is a
-# space saving).
-#
-#   1. TITLES, NOT SLUGS. Sampled across the whole corpus, 66 of 70 titles carry information the
-#      filename does not - and crucially it is STATUS and NEXT ACTION, which a filename structurally
-#      cannot hold: "done, no PR", "one result worth keeping, then delete", "may have a contaminated
-#      control arm". Knowing a note exists is not the same as knowing whether it is still live. The
-#      filename is dropped; grep the title when you want the file.
-#
-#   2. GROUPED BY CATEGORY, because the prefix IS the type field - docs/inflight/AGENTS.md says the
-#      prefix is the point, so listing titles alone would throw that away. The heading restores it.
-#
-#   3. ORDERED BY COST OF NOT KNOWING, high priority first within each group. A known product defect
-#      outranks a candidate idea; parked work is last because it is deferred BY DECISION. An
-#      alphabetical list puts `branch-` above `bug-`, which is exactly backwards.
-#
-# docs/inflight/AGENTS.md owns what each tag MEANS; the machine-readable sets are sourced from
-# bin/lib/inflight-tags.sh, shared with the gate (bin/check-inflight-tags.sh) so this index and the
-# gate cannot drift apart. Resolved from this hook's own location, not $CLAUDE_PROJECT_DIR - the
-# vocabulary belongs to the code, the notes to the project. Missing lib = say nothing, exit 0,
-# the same never-break-a-session contract as every other failure here.
-. "${HOOK_DIR}/../../bin/lib/inflight-tags.sh" 2>/dev/null || exit 0
-inflight_title() { # <file> -> its heading, else its slug
-    local t
-    t=$(sed -n 's/^# //p' "$1" 2>/dev/null | head -1)
-    [ -n "$t" ] || t=$(basename "$1" .md)
-    printf '%s' "$t"
-}
-
-# bug first (defects in shipped code), tooling next (fires on everyone), then tests, then
-# cross-branch state, then the long tail, then candidates, and parked last.
-# THREE FIELDS, because one was doing three jobs. `inflight-type` says what KIND of item it is
-# (bug/feature/task - this directory is a file-backed issue tracker, so use a tracker's vocabulary);
-# `inflight-impact` says what it COSTS you to not know, which only bugs and tasks carry; and
-# `inflight-state` is disposition, ABSENT meaning open. Collapsing those into one field produced
-# classes like "candidate" and "decided-no", which are states wearing a class's clothes.
-#
-# ORDER IS NOT SEVERITY. Signal integrity first: you cannot judge the code through instruments that
-# lie, so `misdirection` outranks `blind-spot` and both outrank any product defect. Bugs before
-# tasks before features - what is broken before what is owed before what is wanted.
-
-emitted=""
-# REQUIRE THE WHOLE MARKER, not the bare substring. A note that merely MENTIONS
-# `inflight-state:` in its prose - one quoting this convention, or the gate's own output - was
-# read as CLOSED and rolled into the "not shown" count. The note then appeared only as a
-# mislabelled number telling you to delete it, which is exactly the omission this index claims
-# its filters cannot make.
-is_open()    { ! grep -q 'inflight-state:[^>]*-->' "$1" 2>/dev/null; }
-
-# DEFERRED IS NOT CLOSED. Any state beginning with the word `deferred` means "decided, not now" - the
-# reason that follows says not-now-until-what (`deferred - after v6`), so it is greppable by version.
-# Deferred work is listed at the BOTTOM, in its own section, using the same impact order as open work.
-#
-# The rule that makes this a schedule rather than a label: ALL non-deferred work happens before ANY
-# deferred work, so running out of open work IS the trigger to re-read this section. It also means
-# nothing needs re-tagging when a version ships - a note is only touched when the decision about it
-# actually changes.
-# ANYWHERE INSIDE THE MARKER, not anchored to the front. Requiring the word immediately after the
-# colon meant `parked - deferred` matched neither this nor is_open, and two notes fell out of the
-# index entirely. The position of the word carries no meaning - only its presence does - so matching
-# on position was inventing a rule the writer never agreed to. Bounded by `-->` so prose mentioning
-# the word elsewhere in the note cannot trigger it.
-# PARKED IS DEFERRED. Antony's ruling, and it settles a split that was only ever accidental: the two
-# words named the same disposition - work that is real, not now - but only one of them was recognised,
-# so a note saying `parked` was filed with `closed` and `blocked` under "not shown". Matching either
-# word means the writer picks whichever reads better and neither choice strands the note.
-DEFERRED_RE='inflight-state:[^>]*\(deferred\|parked\)[^>]*-->'
-is_deferred() { grep -q "$DEFERRED_RE" "$1" 2>/dev/null; }
-# Prints the WHOLE state, not the part after a keyword: `parked` and `deferred` are the same
-# disposition, they can appear in either order or mid-sentence, and anchoring to one of them printed
-# an empty reason for every note that used the other. The state text IS the reason.
-deferred_reason() { sed -n 's/.*inflight-state:[[:space:]]*\([^>]*\)-->.*/\1/p' "$1" 2>/dev/null | head -1 | sed 's/[[:space:]]*$//'; }
-
-emit_group_impactless() { # <type> <full-heading-incl-hashes> - only notes of this type carrying NO impact
-    local files hits=""
-    files=$(grep -rl "inflight-type:[[:space:]]*$1[[:space:]]*-->" docs/inflight --include='*.md' 2>/dev/null \
-              | grep -v 'AGENTS.md' | sort)
-    while IFS= read -r f; do
-        [ -n "$f" ] || continue
-        is_open "$f" || continue
-        grep -q 'inflight-impact:[[:space:]]*[a-z-]\+[[:space:]]*-->' "$f" && continue
-        hits="${hits}- $(inflight_title "$f")"$'\n'
-        emitted="${emitted}${f}"$'\n'
-    done <<< "$files"
-    [ -n "$hits" ] || return
-    emit "$2"
-    printf '%s' "$hits"
+# THE REPO-LEVEL REGISTERS, which are not inflight notes and so can carry no tag - but are the
+# four an agent most often needs and would otherwise never be told about. Working tree, by
+# design: they are not corpus documents (R17), and they exist on every branch.
+registers=""
+[ -f docs/refactoring.md ]                        && registers="${registers}- The deferred-work backlog, and the TODO/FIXME triage  \`docs/refactoring.md\`"$'\n'
+[ -f docs/quarantined-tests.md ]                  && registers="${registers}- Tests currently held out of the gating suites  \`docs/quarantined-tests.md\`"$'\n'
+[ -f docs/todo-index.md ]                         && registers="${registers}- Generated inventory of every marker in the tree  \`docs/todo-index.md\`"$'\n'
+[ -f src/docs/development/upstream-map.yaml ]     && registers="${registers}- Fork-to-upstream mapping - a BACKLOG to chisel down, not just a reference  \`src/docs/development/upstream-map.yaml\`"$'\n'
+if [ -n "$registers" ]; then
+    emit "# Registers outside docs/inflight/ - standing documents, consult before choosing work"
     emit ""
-}
-
-emit_registers() { # every open note typed `register`, whatever impact it carries
-    local files hits=""
-    # ORDERED BY THE SAME IMPACT SCALE as open work, so one ordering principle governs the whole
-    # index. A register carrying `misdirection` - a ledger of flakes nobody tracked - is read before
-    # one carrying `deps-debt`. Registers with no impact come last: they cost nothing to leave unread
-    # until you need them. Without this the impact on a register was carried and ignored, which is
-    # decorative state, and decorative state drifts.
-    local ordered="" imp
-    for imp in $INFLIGHT_IMPACT_ORDER; do
-        ordered="${ordered}$(grep -rl "inflight-type:[[:space:]]*register[[:space:]]*-->" docs/inflight --include='*.md' 2>/dev/null \
-                  | grep -v 'AGENTS.md' | xargs -r grep -l "inflight-impact:[[:space:]]*${imp}[[:space:]]*-->" 2>/dev/null | sort)"$'\n'
-    done
-    ordered="${ordered}$(grep -rl "inflight-type:[[:space:]]*register[[:space:]]*-->" docs/inflight --include='*.md' 2>/dev/null \
-              | grep -v 'AGENTS.md' | xargs -r grep -L "inflight-impact:" 2>/dev/null | sort)"$'\n'
-    files="$ordered"
-    while IFS= read -r f; do
-        [ -n "$f" ] || continue
-        is_open "$f" || continue
-        # PATH AS WELL AS TITLE. A register is something you go and OPEN - "Next candidates, ranked"
-        # tells you it exists and not where it is, and these are the documents most likely to be
-        # wanted immediately rather than recognised and deferred.
-        hits="${hits}- $(inflight_title "$f")  \`${f}\`"$'\n'
-        emitted="${emitted}${f}"$'\n'
-    done <<< "$files"
-
-    emit "# Registers - standing documents, consult before choosing work"
+    emit "Consulted, never completed, and untagged because they are not in-flight notes."
     emit ""
-    emit "Consulted, never completed. Read these before picking up anything below."
-    emit ""
-    [ -n "$hits" ] && printf '%s' "$hits"
-
-    # THE REPO-LEVEL REGISTERS, which are not inflight notes and so can carry no tag - but are the
-    # four an agent most often needs and would otherwise never be told about.
-    local extra=""
-    [ -f docs/refactoring.md ]                        && extra="${extra}- The deferred-work backlog, and the TODO/FIXME triage  \`docs/refactoring.md\`"$'\n'
-    [ -f docs/quarantined-tests.md ]                  && extra="${extra}- Tests currently held out of the gating suites  \`docs/quarantined-tests.md\`"$'\n'
-    [ -f docs/todo-index.md ]                         && extra="${extra}- Generated inventory of every marker in the tree  \`docs/todo-index.md\`"$'\n'
-    [ -f src/docs/development/upstream-map.yaml ]     && extra="${extra}- Fork-to-upstream mapping - a BACKLOG to chisel down, not just a reference  \`src/docs/development/upstream-map.yaml\`"$'\n'
-    [ -n "$extra" ] && printf '%s' "$extra"
-    emit ""
-}
-
-emit_impact_group() { # <impact> - every open note with this impact, whatever its type
-    local files hits=""
-    files=$(grep -rl "inflight-impact:[[:space:]]*$1[[:space:]]*-->" docs/inflight --include='*.md' 2>/dev/null \
-              | grep -v 'AGENTS.md' | sort)
-    while IFS= read -r f; do
-        [ -n "$f" ] || continue
-        is_open "$f" || continue
-        local t
-        t=$(sed -n 's/.*inflight-type:[[:space:]]*\([a-z]*\)[[:space:]]*-->.*/\1/p' "$f" | head -1)
-        # Registers have their own section above; listing them here as well would double-count them
-        # and put a document to consult among the work it ranks.
-        [ "$t" = "register" ] && continue
-        hits="${hits}- [${t}] $(inflight_title "$f")"$'\n'
-        emitted="${emitted}${f}"$'\n'
-    done <<< "$files"
-    [ -n "$hits" ] || return
-    emit "## $1"
-    printf '%s' "$hits"
-    emit ""
-}
-
-# GROUPED BY IMPACT, NOT BY TYPE. A feature that exists to prevent a crash has to appear beside the
-# crashes; grouping by type first buried it under "proposed work" where nobody ranking the day's work
-# would look. The type is still printed on each line, so nothing is lost by leading with the cost.
-# REGISTERS FIRST. They are what you consult to decide what to work on - a ranked backlog, a
-# collision list - so burying them among the work they rank is backwards.
-emit_registers
-
-emit "# Open work - what it costs you to not know"
-    emit ""
-    emit "One file per item under \`docs/inflight/\`, grouped by impact across every type."
-emit ""
-
-for imp in $INFLIGHT_IMPACT_ORDER; do
-    emit_impact_group "$imp"
-done
-# ONLY the features that carried no impact - the rest already appeared under theirs. Without this
-# guard a feature with an impact is listed TWICE, once beside its consequence and once here, which
-# both inflates the index and undoes the point of grouping by cost.
-emit_group_impactless feature "## feature - proposed, no consequence attached"
-
-# ANY OPEN NOTE THAT MATCHED NO GROUP IS LISTED, LOUDLY. The loops above iterate the values this repo
-# knows about, so a typo'd or invented inflight-type/inflight-impact matches nothing and the note
-# would vanish from the index - silently, and precisely because the filter worked. Same failure as
-# the exclusion count below, one level in: the grouping itself can hide things. Listed by name rather
-# than counted, because an unmatched note is a bug in its tags and the fix needs to know which file.
-unmatched=""
-while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    is_open "$f" || continue
-    grep -qxF "$f" <<<"$emitted" && continue
-    unmatched="${unmatched}- $(inflight_title "$f")  \`${f}\`"$'\n'
-done <<< "$(find docs/inflight -maxdepth 1 -name '*.md' -type f 2>/dev/null | grep -vE '(AGENTS|CLAUDE)\.md' | sort)"
-if [ -n "$unmatched" ]; then
-    emit "## unmatched - no group claimed them"
-    emit ""
-    emit "Their \`inflight-type\` or \`inflight-impact\` is missing or misspelt:"
-    printf '%s' "$unmatched"
+    printf '%s' "$registers"
+    [ -n "$INFLIGHT_INDEX_FILE" ] && printf '%s' "$registers" >> "$INFLIGHT_INDEX_FILE"
     emit ""
 fi
-
-# THE FILTER MUST ADMIT WHAT IT HID. Notes carrying a state are excluded - a closed item presented as
-# open is misdirection by this repo's own taxonomy - but a view that silently shrinks is
-# indistinguishable from one with nothing to hide. One line of count keeps the undone-cleanup backlog
-# visible without letting it occupy the index. Same rule as "no silent caps" for a bounded workflow.
-# Deferred notes are NOT in this count - they have their own section below. Counting them here would
-# tell you to delete work that was deliberately scheduled.
-# NAMED, NOT COUNTED. A bare number is how a note disappears: two notes tagged `parked - deferred`
-# matched neither `is_open` nor `is_deferred` - the latter wants the word immediately after the colon -
-# so they fell out of both sections into this line and lost their titles entirely. Found in review of
-# astubbs#323, introduced by that PR's own tagging pass. Counting is the filter hiding its own
-# omissions, which is the exact failure this index claims it cannot make; listing them by name means
-# a note whose state nothing recognises still appears, wearing the state that stranded it.
-excluded=$(grep -rl 'inflight-state:[^>]*-->' docs/inflight --include='*.md' 2>/dev/null | grep -v 'AGENTS.md' \
-           | xargs -r grep -L "$DEFERRED_RE" 2>/dev/null | sort || true)
-if [ -n "$excluded" ]; then
-    emit "# Not shown above - closed or blocked"
-    emit ""
-    emit "Listed rather than counted: a number cannot tell you a note fell here by accident. Delete or migrate them."
-    emit ""
-    while IFS= read -r f; do
-        [ -n "$f" ] || continue
-        st=$(sed -n 's/.*inflight-state:[[:space:]]*\([^>]*\)-->.*/\1/p' "$f" | head -1 | sed 's/[[:space:]]*$//')
-        emit "- $(inflight_title "$f")  _${st}_  \`${f}\`"
-    done <<< "$excluded"
-    emit ""
-fi
-
-# DEFERRED WORK, last, and never merely counted. It is decided work with a stated trigger, so hiding
-# it behind a number would lose the schedule; putting it above open work would compete with it.
-emit_deferred() {
-    local hits="" imp f files
-    for imp in $INFLIGHT_IMPACT_ORDER ""; do
-        if [ -n "$imp" ]; then
-            files=$(grep -rl "inflight-impact:[[:space:]]*${imp}[[:space:]]*-->" docs/inflight --include='*.md' 2>/dev/null | grep -v 'AGENTS.md' | sort)
-        else
-            files=$(grep -rL 'inflight-impact:' docs/inflight/*.md 2>/dev/null | grep -v 'AGENTS.md' | sort)
-        fi
-        while IFS= read -r f; do
-            [ -n "$f" ] || continue
-            is_deferred "$f" || continue
-            hits="${hits}- [${imp:-no impact}] $(inflight_title "$f")  _$(deferred_reason "$f")_"$'\n'
-        done <<< "$files"
-    done
-    [ -n "$hits" ] || return
-    emit "# Deferred - decided, not now"
-    emit ""
-    emit "All non-deferred work happens first. Running out of open work above is the trigger to re-read this."
-    emit ""
-    printf '%s' "$hits"
-    emit ""
-}
-emit_deferred
-
-emit "# Dated plans and investigations"
-    emit ""
-    emit "\`docs/plans/\` - the method that settled a question of this shape before:"
-# Both extensions: the unified plan contract allows an artifact to be .md OR .html, so a bare
-# -name '*.md' silently hides every HTML plan. Extension stripped then de-duplicated, because a plan
-# converted between formats can leave both files behind and listing it twice reads as two plans.
-# The explicit `-` stdin operand is master's BSD fix (astubbs#341) - a bare `paste -sd,` reads no
-# input on macOS and the list silently comes out empty.
-plans=$(find docs/plans -type f \( -name '*.md' -o -name '*.html' \) 2>/dev/null \
-    | grep -vE "$DIRECTORY_DOCS_RE" \
-    | sed -E 's#^docs/plans/##; s#\.(md|html)$##' | sort -u | paste -sd, - | sed 's/,/, /g')
-emit "${plans:-(none)}"
-emit ""
 
 # Ideation documents - the ranked directions, the REJECTION TABLE and the prior-art autopsies behind
 # a piece of work. They were invisible here until 2026-08-24 on two counts at once: this directory
-# was never scanned, and every artifact in it is .html while the scans above matched only .md. The
-# cost was not hypothetical - the adaptive-concurrency design was drafted, committed and offered for
-# review having cited this directory's throttling document without opening it, and the document
+# was never scanned, and every artifact in it is .html while the scans of the day matched only .md.
+# The cost was not hypothetical - the adaptive-concurrency design was drafted, committed and offered
+# for review having cited this directory's throttling document without opening it, and the document
 # already held three API constraints that design violated and one decision it contradicted.
 #
 # The rejection table is the specific reason this block exists. Ideas rejected WITH REASONS are the
 # cheapest prior art in the repo and the least likely to be found, because nothing links to a
 # rejected idea and no symptom search returns one - you rediscover it by proposing it again.
+#
+# The explicit `-` stdin operand is master's BSD fix (astubbs#341) - a bare `paste -sd,` reads no
+# input on macOS and the list silently comes out empty.
 ideation=$(find docs/ideation -type f \( -name '*.html' -o -name '*.md' \) 2>/dev/null \
     | grep -vE "$DIRECTORY_DOCS_RE" \
     | sed -E 's#^docs/ideation/##; s#\.(html|md)$##' | sort -u | paste -sd, - | sed 's/,/, /g')

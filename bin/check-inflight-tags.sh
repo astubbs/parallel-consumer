@@ -23,10 +23,11 @@
 
 set -uo pipefail
 
-# The sets live in bin/lib/inflight-tags.sh, shared with the session index
-# (.claude/hooks/inject-recorded-knowledge.sh) so the gate can never accept a tag the index cannot
-# place. The lib also explains why the bug/task partition exists. Resolve it from this script's own
-# location BEFORE the cd below - the self-test runs this gate inside a fixture repo.
+# The sets live in bin/lib/inflight-tags.sh, whose Node port (bin/lib/inflight-tags.mjs) the session
+# index (`bin/inflight.mjs docs index`) groups by - held equal by a parity self-test, so the gate can
+# never accept a tag the index cannot place. The lib also explains why the bug/task partition
+# exists. Resolve it from this script's own location BEFORE the cd below - the self-test runs this
+# gate inside a fixture repo.
 # shellcheck source=lib/inflight-tags.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/inflight-tags.sh" || exit 1
 
@@ -86,7 +87,7 @@ for f in docs/inflight/*.md; do
     state=$(sed -n 's/.*inflight-state:[[:space:]]*\([^>]*\)-->.*/\1/p' "$f" | head -1 | sed 's/[[:space:]]*$//')
 
     if [ -z "$state" ] && grep -q 'inflight-state:.*-->' "$f"; then
-        note "$f \"$(note_title "$f")\": inflight-state reason contains '>' - the session index (is_open in .claude/hooks/inject-recorded-knowledge.sh) cannot parse that marker and would list the note as OPEN. Reword without '>'"
+        note "$f \"$(note_title "$f")\": inflight-state reason contains '>' - the session index (STATE_MARKER_RE in bin/lib/inflight-tags.mjs, read by \`bin/inflight.mjs docs index\`) cannot parse that marker and would list the note as OPEN. Reword without '>'"
     fi
 
     if [ -z "$type" ]; then

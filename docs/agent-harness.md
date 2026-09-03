@@ -599,10 +599,10 @@ would miss the subagent row entirely.
 **A degraded read is LOUD, never short.** A section that cannot be built says `COULD NOT BE BUILT` or
 `UNKNOWN` and names the reason, instead of being omitted - because a shorter block that reads
 complete is indistinguishable from a healthy one, which is this hook's own failure signature. That is
-measured here rather than assumed: `inject-recorded-knowledge.sh` uses GNU-only `xargs -r`, and under
-a BSD `xargs` its Registers section drops from 13 entries to 4 while closed notes get relabelled as
-mis-tagged. That defect belongs to astubbs/parallel-consumer#341's class and is fixed there, not
-here. Distinguishing a *confirmed* absence from a failure matters just as much in the other
+measured here rather than assumed: `inject-recorded-knowledge.sh` used GNU-only `xargs -r` while its
+scan was bash, and under a BSD `xargs` its Registers section dropped from 13 entries to 4 while closed
+notes got relabelled as mis-tagged. That defect belonged to astubbs/parallel-consumer#341's class and
+was fixed there, not here; the scan has since moved into `bin/inflight.mjs docs index`. Distinguishing a *confirmed* absence from a failure matters just as much in the other
 direction: `gh` exits non-zero for "this branch has no PR" exactly as it does for offline, so the
 no-PR case is read off stderr and reported as a fact - otherwise every fresh branch prints an alarm,
 and an alarm that is always on gets scrolled past.

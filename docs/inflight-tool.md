@@ -88,10 +88,10 @@ carries its state, because a disposition without its reason reads as an abandonm
 area or group is not an error: the valid names come back, each as the command that would have
 worked, and the exit is 0.
 
-**The counts are corpus counts, not working-tree counts, which is the point.** The session index at
-the top of your context lists what the *current branch* carries; this lists what exists on any live
-ref, reading on-baseline documents from the baseline's own blob and off-baseline ones from the first
-sorted live ref carrying them - so a shape built on a checkout behind the baseline is not wrong. An
+**The counts are corpus counts, not working-tree counts, which is the point.** This lists what
+exists on any live ref - as does the session index at the top of your context, which is `docs
+index` below - reading on-baseline documents from the baseline's own blob and off-baseline ones
+from the first sorted live ref carrying them, so a shape built on a checkout behind the baseline is not wrong. An
 in-flight note is placed by its markers, read the same way, and the vocabulary that places it is
 held equal to the gate's shell library by a self-test that sources the shell file. The cost is one
 `ls-tree` per ref plus one `cat-file --batch` for every document, several seconds here, paid on
@@ -165,6 +165,57 @@ node bin/inflight.mjs docs header docs/inflight/bug-857-family.md
 The header alone - byte for byte what `docs show --header-only` prints. It is the "more" command the
 read-time hook names under its one-line summary, and the pull form for an agent on a host without
 hooks: run it before acting on a document, and you have seen what the hook would have shown.
+
+## The session-start index, on demand
+
+```
+node bin/inflight.mjs docs index
+```
+
+What `.claude/hooks/inject-recorded-knowledge.sh` puts in front of every Claude Code session for
+`docs/solutions/`, `docs/inflight/` and `docs/plans/` - the whole title list, corpus-scoped. On a
+host without hooks this is the pull form; with hooks it is the refresh. The on-baseline part keeps
+the headings the hook has always printed, so a grep an agent learned still works (`grep '^## crash'`,
+`sed -n '/^# Open work/,/^# /p'`): solutions under `## <category>`, in-flight notes under
+`# Registers`, `# Open work` by impact, `# Not shown above` and `# Deferred`, plans under
+`# Dated plans and investigations` by month. The off-baseline part is new, and it is grouped by
+the **branch set** carrying the documents, as `stranded` clusters them:
+
+```
+# In flight only on branches - grouped by the branch set carrying them, largest first
+
+## only on feats/inflight-docs-context-query - YOUR BRANCH
+- [feature] Inflight docs context query - header at read time, keyword injection, `inflight docs`  _blind-spot_
+
+## only on feats/hasten-micro-mvp, feats/ideate-distributed-throttling
+- [bug] ...
+...
+... <n> more branch sets holding <n> documents, past the 400-line cap (`docs index --max-lines <n>` raises it): bin/inflight.mjs docs list inflight
+```
+
+**A workstream is one heading, not one line per note.** A branch carrying forty notes is one fact
+about the repository, and the heading names the branches so a reader can go there - `docs show
+<path>` prints any one of them from the branch that holds it. The checked-out branch's own group is
+pinned first and marked, whatever its size, because it is what the working-tree scan this replaced
+always listed.
+
+**The cap is on the off-baseline groups only.** The on-baseline listing is never cut - the failure
+the index exists to end is not knowing a document exists, and a cap on the part every session
+already paid for would bring it back. Each area gets an equal share of `--max-lines` (unused share
+rolls to the next area); past it, the rest of an area collapses to a count and the `docs list`
+command that lists it, so the omission is visible and costs one line.
+
+**Titles come from the refs, never the working tree.** An on-baseline document is listed as the
+baseline holds it, so an index built on a checkout behind the baseline is not wrong - and a note
+whose title this branch changed is listed under its baseline title until the change lands. The
+hook's equivalence check names any title that differs for this reason rather than failing on it.
+
+**It states its own scope and its own failures.** The first lines say how many refs were searched,
+the live-versus-archival split, and the one thing the index cannot show (a version preserved only in
+an archival ref); a recorded delivery failure is printed as a notice, the same line bare `docs`
+prints. The hook itself adds one line when the command could not run at all - no `node`, or the
+corpus unreadable - and never falls back to a working-tree scan, because a partial index that reads
+as complete is the thing it replaced.
 
 ## Finding work that will be lost if nobody acts
 

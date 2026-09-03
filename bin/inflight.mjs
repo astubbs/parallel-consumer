@@ -30,11 +30,19 @@
 // deploys, the check-* gates - stay shell, and bin/AGENTS.md owns those. docs/inflight-tool.md, "If
 // it does not answer your question, change it", carries the full guidance and the three invariants.
 //
-// THIS IS THE ONLY FILE HERE THAT MAY CALL process.exit, and it does so once, at the bottom. The
+// THIS IS THE ONLY FILE HERE THAT MAY SET THE EXIT CODE, and it does so once, at the bottom. The
 // libraries return findings; the views render them; the exit code is a fact about a process and
 // belongs at the process boundary. A library that exits has decided something that is not its to
 // decide - and cannot then be called by a self-test, which is how the first cut of this split was
 // caught.
+//
+// IT SETS process.exitCode AND NEVER CALLS process.exit(). Node writes to a PIPED stdout
+// asynchronously, and process.exit() drops whatever is still queued - so a page over 64 KiB read
+// through `$(...)` or a pipe arrived cut off at exactly 65536 bytes, mid-line, with exit 0. The
+// session-start hook captures `docs index` that way and lost its plans section to this before
+// anything noticed; `the-front-door-drains-a-large-page-before-exiting` in bin/test-inflight.mjs
+// holds the line. Setting exitCode lets the event loop drain and exit on its own, which is the
+// same exit code by a route that cannot truncate.
 //
 // NOT A GATE, and deliberately not named `check-*`: bin/AGENTS.md grants that prefix to the review
 // agent by pattern, and this reaches the network through `gh`.
@@ -47,15 +55,16 @@ import { fileURLToPath } from 'node:url'
 
 import { perfReport, perfStart } from './lib/perf.mjs'
 
-import { baseline, blobContents, blobsForPath, freshnessWarnings, refTips } from './lib/git.mjs'
-import { cacheClear, cacheStatus, deliveryFailures, knownCaches } from './lib/cache.mjs'
+import { baseline, blobContents, blobsForPath, exec, freshnessWarnings, refTips } from './lib/git.mjs'
+import { cacheClear, cacheStatus, clearDeliveryFailure, deliveryFailures, knownCaches, recordDeliveryFailure } from './lib/cache.mjs'
 import { corpusIndex, drift, findNotes, prsByBranch, stranded } from './lib/notes.mjs'
 import { DOC_AREAS, NOTES_DIR } from './lib/repo.mjs'
 import { docsShape } from './lib/docs-shape.mjs'
 import { branchView, commitGraph, trackingGap } from './lib/branches.mjs'
 import { loadCandidates, refactorWindow } from './lib/refactor-window.mjs'
 import {
-    formatBranch, formatCache, formatCoverage, formatDivergenceHeader, formatDocsList, formatDocsShape, formatDocsShow,
+    formatBranch, formatCache, formatCoverage, formatDivergenceHeader, formatDocsIndex, formatDocsList, formatDocsShape,
+    formatDocsShow,
     formatDrift, formatFind, formatFlakes, formatRefactorWindow, formatSlowest, formatStranded, formatTimeline,
     formatWarnings,
 } from './lib/views.mjs'
@@ -141,7 +150,8 @@ walk from here to one document is copy and paste.
 
   list    the areas; one area's groups; or one group's documents, each with its \`docs show\`
   show    one document with its divergence header, from the right ref
-  header  the header alone - what the read-time hook shows, in full`
+  header  the header alone - what the read-time hook shows, in full
+  index   the session-start index for the three areas - every title, corpus-scoped`
 
 /**
  * The index, its stranded clusters and the shape over both - what bare `docs` and every `docs
@@ -152,10 +162,15 @@ walk from here to one document is copy and paste.
 function corpusShape() {
     const index = corpusIndex()
     if (!index.ok) return { ok: false, reason: index.reason }
-    const shape = docsShape({ index, stranded: stranded(index) })
+    const clusters = stranded(index)
+    const shape = docsShape({ index, stranded: clusters })
     if (!shape.ok) return shape
-    return { ok: true, shape, warnings: freshnessWarnings(index.baseline, index.refs.length) }
+    return { ok: true, shape, stranded: clusters, warnings: freshnessWarnings(index.baseline, index.refs.length) }
 }
+
+/** The name the session index records its failures under (the plan's KTD13) - what bare `docs` shows. */
+const INDEX_DELIVERY = 'session index'
+const DEFAULT_INDEX_MAX_LINES = 400
 
 /**
  * `docs show` - and `docs header`, which is this with `--header-only` appended.
@@ -331,6 +346,54 @@ points at.
 
   bin/inflight.mjs docs header docs/inflight/bug-857-family.md`,
         run: (args, emit) => showDocument([...args, '--header-only'], emit),
+    },
+    {
+        name: 'index',
+        summary: 'the session-start index for the three areas - every title, grouped as the hook groups them, corpus-scoped',
+        when: 'you want the whole list the session hook injects, refreshed, or are on a host without hooks and never saw it',
+        usage: `Usage: bin/inflight.mjs docs index [--max-lines <n>]
+
+What .claude/hooks/inject-recorded-knowledge.sh injects at session start for docs/solutions,
+docs/inflight and docs/plans - rendered from the refs, not the working tree, so it lists the whole
+corpus: on-baseline documents under the groups the index has always used (solutions by category,
+in-flight notes by the cost-of-not-knowing order with registers first and deferred last, plans by
+month), and documents that exist ONLY off the baseline under the branch set carrying them, as
+\`stranded\` clusters them, largest first.
+
+--max-lines <n>   the cap on the off-baseline groups across the whole index (default ${DEFAULT_INDEX_MAX_LINES});
+                  the on-baseline listing is never cut. Past the cap, the rest of an area collapses
+                  to a count and the \`docs list\` command that lists it.
+
+Cost: one index build, the same as bare \`docs\` - several seconds here, every call, no cache.
+
+  bin/inflight.mjs docs index
+  bin/inflight.mjs docs index --max-lines 100`,
+        run: (args, emit) => {
+            let maxLines = DEFAULT_INDEX_MAX_LINES
+            for (let i = 0; i < args.length; i++) {
+                if (args[i] !== '--max-lines') return { ok: false, reason: `docs index: unknown argument '${args[i]}'` }
+                const n = Number(args[++i])
+                if (!Number.isInteger(n) || n < 0) return { ok: false, reason: `docs index: --max-lines wants a whole number, not '${args[i]}'` }
+                maxLines = n
+            }
+            const built = corpusShape()
+            // Recorded, because the hook that calls this fails open: without the record a session
+            // whose index never rendered looks like one with nothing to list.
+            if (!built.ok) {
+                recordDeliveryFailure(INDEX_DELIVERY, built.reason)
+                return { ok: false, reason: `docs index: ${built.reason}` }
+            }
+            clearDeliveryFailure(INDEX_DELIVERY)
+            // The branch checked out, so its own notes are never the ones the cap drops: they are
+            // what the working-tree scan this replaced always listed. Detached HEAD names no
+            // branch and pins nothing, which is right - a detached checkout is on no workstream.
+            const head = exec('git', ['rev-parse', '--abbrev-ref', 'HEAD'])
+            const currentBranch = head.ok && head.out.trim() !== 'HEAD' ? head.out.trim() : null
+            emit(formatDocsIndex(built.shape, {
+                clusters: built.stranded, maxLines, currentBranch, warnings: built.warnings, failures: deliveryFailures(),
+            }))
+            return { ok: true }
+        },
     },
 ]
 
@@ -833,5 +896,5 @@ if (invokedDirectly()) {
     if (reason) (ok ? console.log : console.error)(reason)
     // stderr, so a caller piping stdout gets exactly what it would without the flag.
     if (perf) console.error(perfReport())
-    process.exit(ok ? 0 : 2)
+    process.exitCode = ok ? 0 : 2
 }

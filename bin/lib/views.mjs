@@ -9,6 +9,8 @@
 // continuation indent and the one id that prints NOTE instead of WARNING. That was the second copy
 // of a shared primitive appearing on the same branch that wrote the rule against it.
 
+import { INFLIGHT_IMPACT_ORDER } from './inflight-tags.mjs'
+
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`
 
 export function formatWarnings(warnings) {
@@ -294,15 +296,25 @@ export function formatDocsShape(shape, { warnings = [], failures = {}, commands 
         }
         out.push('')
     }
-    // ONE LINE PER RECORDED FAILURE (R26). A delivery that fails open prints nothing to the agent
-    // it failed, so this notice is the only place the failure exists outside the cache file.
+    out.push(...failureLines(failures))
+    out.push(scopeLine(shape))
+    return out.join('\n')
+}
+
+/**
+ * ONE LINE PER RECORDED FAILURE (R26), followed by a blank line when there were any. A delivery
+ * that fails open prints nothing to the agent it failed, so this notice is the only place the
+ * failure exists outside the cache file - and it is printed by BOTH bare `docs` and the session
+ * index, from one helper, so the two cannot word the same record differently.
+ */
+function failureLines(failures) {
+    const out = []
     for (const [delivery, f] of Object.entries(failures)) {
         out.push(`DELIVERY FAILED: ${delivery} - ${f.reason} (${f.time}). It fails open, so nothing else showed this; `
             + 'a later success of the same delivery clears it.')
     }
     if (Object.keys(failures).length > 0) out.push('')
-    out.push(scopeLine(shape))
-    return out.join('\n')
+    return out
 }
 
 /**
@@ -339,6 +351,226 @@ export function formatDocsList(shape, { area = null, group = null } = {}) {
         out.push(`        ${TOOL} docs show ${d.path}`)
     }
     return [...out, '', scopeLine(shape)].join('\n')
+}
+
+// --- The session index - `docs index`, what the session-start hook injects for the three areas. --
+//
+// THE HEADINGS ARE THE ONES THE BASH HOOK PRINTED, VERBATIM. The index moved here from
+// .claude/hooks/inject-recorded-knowledge.sh (the plan's KTD8), and an agent that learned to
+// `grep '^## crash'` or `sed -n '/^# Open work/,/^# /p'` over the injected text keeps working only
+// if the text it greps for did not move. The equivalence check in bin/test-check-agent-hooks.sh
+// runs the pre-migration hook at a pinned commit and asserts every title it listed is listed here;
+// these headings are its positive control.
+//
+// CORPUS-SCOPED, WHICH IS WHAT THE MOVE BOUGHT (R17). The hook read the working tree, so it listed
+// what the current branch carried and apologised for the rest with a count. This renders
+// `docsShape`, which reads the refs: on-baseline documents from the baseline's blob, off-baseline
+// ones from the first live ref carrying them. The on-baseline part keeps the hook's grouping; the
+// off-baseline part is new, and it is GROUPED BY THE BRANCH SET CARRYING IT (R18), as `stranded`
+// clusters it, because a workstream's forty notes on one branch are one fact, not forty lines.
+//
+// THE CAP IS ON THE NEW PART ONLY. The on-baseline listing is exactly as long as the hook's was and
+// is never cut - the failure the hook exists to fix is not knowing a document EXISTS, and a cap on
+// the part every session already paid for would reintroduce it. The off-baseline groups are taken
+// largest first until `maxLines` is spent; the rest of each area collapses to a count and the
+// command that lists them, so the omission is visible and costs one line.
+
+const INDEX_TOOL_MORE = `${TOOL} docs`
+
+/** The hook's area order, which is not `DOC_AREAS`'s: solved first, then work, then the plans. */
+const INDEX_AREA_ORDER = ['solutions', 'inflight', 'plans']
+
+/**
+ * A cluster's branch names: local and remote-tracking copies of one branch are one name, and the
+ * `backup/` branches this repository pushes before a force-push sort LAST - they are live refs
+ * (refs/heads, not refs/backup), so they belong in the set, but a label that opens with three of
+ * them hides the branch a reader could actually go and continue.
+ */
+const branchNames = (liveRefs) => [...new Set(liveRefs.map((r) => r.replace(/^origin\//, '')))]
+    .sort((a, b) => Number(a.startsWith('backup/')) - Number(b.startsWith('backup/')) || a.localeCompare(b))
+const branchSetLabel = (names) => (names.length > 3
+    ? `${names.slice(0, 3).join(', ')} and ${names.length - 3} more`
+    : names.join(', '))
+
+const planStem = (path) => path.replace(/^docs\/plans\//, '').replace(/\.(md|html)$/, '')
+const stemsLine = (docs) => docs.map((d) => planStem(d.path)).join(', ')
+
+/** The disposition a note line carries after its title: the impact, or the state that closed it. */
+const noteTail = (d) => {
+    if (!d.note) return ''
+    if (d.note.state && !d.note.open) return `  _${d.note.state}_`
+    return d.note.impact ? `  _${d.note.impact}_` : ''
+}
+
+/** One document as a line of the index, in the shape the hook gave that area's lines. */
+const INDEX_LINE = {
+    solutions: (d) => `- ${d.title}  \`${d.path}\``,
+    inflight: (d) => `- [${d.note?.type || 'untyped'}] ${d.title}${noteTail(d)}`,
+    plans: (d) => `- ${planStem(d.path)}`,
+}
+
+/** The on-baseline half of one area, as the hook rendered it. */
+const ON_BASELINE = {
+    solutions: (area, docs) => {
+        const out = []
+        for (const g of area.groups) {
+            const mine = docs.filter((d) => g.docs.includes(d))
+            if (mine.length === 0) continue
+            out.push(`## ${g.key}`, ...mine.map(INDEX_LINE.solutions), '')
+        }
+        return out
+    },
+    inflight: (area, docs) => {
+        const inGroup = (key) => area.groups.find((g) => g.key === key).docs.filter((d) => docs.includes(d))
+        const out = [
+            '# Registers - standing documents, consult before choosing work', '',
+            'Consulted, never completed. Read these before picking up anything below.', '',
+            // Path as well as title: a register is something you go and OPEN.
+            ...inGroup('registers').map((d) => `- ${d.title}  \`${d.path}\``), '',
+            '# Open work - what it costs you to not know', '',
+            'One file per item under `docs/inflight/`, grouped by impact across every type.', '',
+        ]
+        for (const g of area.groups) {
+            if (!INFLIGHT_IMPACT_ORDER.includes(g.key)) continue
+            const mine = inGroup(g.key)
+            if (mine.length === 0) continue
+            out.push(`## ${g.key}`, ...mine.map((d) => `- [${d.note.type}] ${d.title}`), '')
+        }
+        const feature = inGroup('feature')
+        if (feature.length > 0) out.push('## feature - proposed, no consequence attached', ...feature.map((d) => `- [${d.note.type}] ${d.title}`), '')
+        // Listed by name rather than counted: an unmatched note is a bug in its tags and the fix
+        // needs to know which file.
+        const unmatched = inGroup('unmatched')
+        if (unmatched.length > 0) {
+            out.push('## unmatched - no group claimed them', '', 'Their `inflight-type` or `inflight-impact` is missing or misspelt:',
+                ...unmatched.map((d) => `- ${d.title}  \`${d.path}\``), '')
+        }
+        const closed = inGroup('closed')
+        if (closed.length > 0) {
+            out.push('# Not shown above - closed or blocked', '',
+                'Listed rather than counted: a number cannot tell you a note fell here by accident. Delete or migrate them.', '',
+                ...closed.map((d) => `- ${d.title}  _${d.note.state}_  \`${d.path}\``), '')
+        }
+        const deferred = inGroup('deferred')
+        if (deferred.length > 0) {
+            out.push('# Deferred - decided, not now', '',
+                'All non-deferred work happens first. Running out of open work above is the trigger to re-read this.', '',
+                ...deferred.map((d) => `- [${d.note.impact || 'no impact'}] ${d.title}  _${d.note.state}_`), '')
+        }
+        return out
+    },
+    plans: (area, docs) => {
+        const out = ['# Dated plans and investigations', '', '`docs/plans/` - the method that settled a question of this shape before:']
+        let any = false
+        for (const g of area.groups) {
+            const mine = docs.filter((d) => g.docs.includes(d))
+            if (mine.length === 0) continue
+            any = true
+            out.push('', `## ${g.key}`, stemsLine(mine))
+        }
+        if (!any) out.push('(none)')
+        out.push('')
+        return out
+    },
+}
+
+const OFF_BASELINE_HEADING = {
+    solutions: '# Solved only on branches - grouped by the branch set carrying them, largest first',
+    inflight: '# In flight only on branches - grouped by the branch set carrying them, largest first',
+    plans: '# Plans only on branches - grouped by the branch set carrying them, largest first',
+}
+
+/**
+ * The off-baseline documents of one area as branch-set groups: `{names, docs}`, largest first.
+ * Two `stranded` clusters whose ref sets differ only by a remote-tracking copy name the same
+ * branches, and are one group here.
+ */
+function branchSetGroups(docs, clusters, currentBranch = null) {
+    const setOf = new Map() // path -> branch-set key
+    const namesOf = new Map()
+    for (const c of clusters) {
+        if (c.preserved) continue
+        const names = branchNames(c.liveRefs)
+        const key = names.join(' ')
+        namesOf.set(key, names)
+        for (const p of c.paths) setOf.set(p, key)
+    }
+    const groups = new Map()
+    for (const d of docs) {
+        const key = setOf.get(d.path)
+        if (key === undefined) continue // a document `docsShape` read from a ref no live cluster names: nothing to group it under
+        if (!groups.has(key)) groups.set(key, { names: namesOf.get(key), docs: [] })
+        groups.get(key).docs.push(d)
+    }
+    // THE CHECKED-OUT BRANCH'S OWN GROUP FIRST, and marked, whatever its size. The working-tree
+    // scan this replaced always listed the current branch's notes; a corpus-scoped index that
+    // dropped them under the cap would list every other workstream's notes and not yours.
+    for (const g of groups.values()) g.pinned = currentBranch !== null && g.names.includes(currentBranch)
+    return [...groups.values()].sort((a, b) => Number(b.pinned) - Number(a.pinned)
+        || b.docs.length - a.docs.length || a.names.join(' ').localeCompare(b.names.join(' ')))
+}
+
+/**
+ * @param {object} shape from `docsShape()`
+ * @param {{clusters: object[], maxLines?: number, currentBranch?: string|null, warnings?: object[],
+ *          failures?: Record<string, {reason: string, time: string}>}} opts
+ *   `clusters` from `stranded()` over the same index the shape was built on - the branch sets.
+ *   `maxLines` bounds the off-baseline groups across the whole index, never the on-baseline listing.
+ *   `currentBranch` pins the group carrying the checked-out branch's own documents ahead of the cap.
+ */
+export function formatDocsIndex(shape, { clusters, maxLines = 400, currentBranch = null, warnings = [], failures = {} } = {}) {
+    const out = []
+    const warn = formatWarnings(warnings)
+    if (warn) out.push(warn.trimEnd(), '')
+    out.push(...failureLines(failures))
+    out.push(`Corpus-scoped: ${plural(shape.documents, 'document')} across ${shape.areas.map((a) => `${a.dir}/`).join(', ')} on `
+        + `${shape.refs.total} refs (${shape.refs.live} live, ${shape.refs.archival} archival); baseline ${shape.baseline}. `
+        + `${shape.offBaseline} exist only on live branches that have not merged - no working-tree read reaches them, `
+        + 'and they are listed under the branches carrying them. Titles are read from the refs, never the working tree: '
+        + 'a document this checkout has edited is shown as the baseline holds it. What this cannot show is a version '
+        + `preserved only in an archival ref (a tag, refs/backup) - \`${TOOL} stranded\` names those.`, '')
+
+    // EACH AREA GETS AN EQUAL SHARE OF THE CAP, and what it does not spend rolls to the next. One
+    // shared budget in area order let the in-flight area, which holds most of the off-baseline
+    // corpus, spend the whole cap and collapse every branch-only plan to one count line - the
+    // smallest area paying for the largest.
+    const areas = INDEX_AREA_ORDER.map((k) => shape.areas.find((a) => a.key === k)).filter(Boolean)
+    const share = Math.floor(maxLines / Math.max(1, areas.length))
+    let carry = maxLines - share * areas.length
+    for (const area of areas) {
+        const allDocs = area.groups.flatMap((g) => g.docs)
+        out.push(...ON_BASELINE[area.key](area, allDocs.filter((d) => !d.offBaseline)))
+
+        let budget = share + carry
+        carry = 0
+        const groups = branchSetGroups(allDocs.filter((d) => d.offBaseline), clusters, currentBranch)
+        if (groups.length === 0) { carry = budget; continue }
+        out.push(OFF_BASELINE_HEADING[area.key], '')
+        let omitted = 0
+        let omittedDocs = 0
+        for (const g of groups) {
+            const heading = `## only on ${branchSetLabel(g.names)}${g.pinned ? ' - YOUR BRANCH' : ''}`
+            const lines = area.key === 'plans'
+                ? [heading, stemsLine(g.docs), '']
+                : [heading, ...g.docs.map(INDEX_LINE[area.key]), '']
+            // A group that does not fit is omitted with everything after it in this area: the
+            // groups are largest first, so the cap lands on the smallest and the tail stays a tail.
+            // The pinned group is never the one omitted, and it spends the budget it uses.
+            if (!g.pinned && (omitted > 0 || lines.length > budget)) {
+                omitted++
+                omittedDocs += g.docs.length
+                continue
+            }
+            budget = Math.max(0, budget - lines.length)
+            out.push(...lines)
+        }
+        if (omitted > 0) {
+            out.push(`... ${plural(omitted, 'more branch set')} holding ${plural(omittedDocs, 'document')}, past the ${maxLines}-line cap `
+                + `(\`docs index --max-lines <n>\` raises it): ${TOOL} docs list ${area.key}`, '')
+        }
+        carry = budget
+    }
+    return sourceFrame('index', null, out.join('\n'), INDEX_TOOL_MORE)
 }
 
 export function formatStranded(clusters, index) {

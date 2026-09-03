@@ -21,6 +21,8 @@
 //
 // No git, no printing, no process.exit: pure functions over a note's text.
 
+import { NOTES_DIR } from './repo.mjs'
+
 export const INFLIGHT_TYPES = ['bug', 'feature', 'task', 'register']
 
 export const INFLIGHT_BUG_IMPACTS = [
@@ -88,9 +90,16 @@ const first = (re, text) => {
  * the file opens with a frontmatter block (solutions carry one, and their titles are YAML, so the
  * quotes a colon or an apostrophe forces are stripped), else the first `# ` heading, else the
  * filename stem. Never empty, so a document always has a line to be listed on.
+ *
+ * AN IN-FLIGHT NOTE IS NAMED BY ITS HEADING, frontmatter or not. docs/inflight/AGENTS.md puts the
+ * note's markers "after the heading" - the heading is the note's identity - and the bash index
+ * always read notes that way. A handoff note carries a ce-handoff frontmatter whose `title:` is a
+ * different sentence from its `# ` line, and reading the frontmatter first named that one note
+ * differently from every session that had seen it; the equivalence check in
+ * bin/test-check-agent-hooks.sh caught it as the only title the old hook listed and this did not.
  */
 export function titleOf(text, path) {
-    const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)
+    const fm = path.startsWith(`${NOTES_DIR}/`) ? null : /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)
     if (fm) {
         const t = /^title:[ \t]*(.*)$/m.exec(fm[1])
         if (t) {
