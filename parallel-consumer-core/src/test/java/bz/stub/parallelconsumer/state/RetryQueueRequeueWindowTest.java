@@ -5,7 +5,6 @@ package bz.stub.parallelconsumer.state;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
-import bz.stub.parallelconsumer.internal.DynamicLoadFactor;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.MockConsumer;
@@ -68,31 +67,14 @@ class RetryQueueRequeueWindowTest {
      * the re-queue branch was the one taken. A test that only asserted the first would still pass if the check
      * had started answering "stale" for an unrelated reason, and would then be asserting nothing.
      */
-    static class RequeueWindowWorkManager extends WorkManager<String, String> {
-
-        private transient Runnable interference = () -> {
-            // not armed
-        };
-
-        private boolean armed;
-
-        private boolean raceFired;
+    static class RequeueWindowWorkManager extends RacingSeamWorkManager {
 
         private int liveCheckCalls;
 
         private boolean lastLiveCheckSaidStale;
 
         RequeueWindowWorkManager(PCModuleTestEnv module) {
-            super(module, new DynamicLoadFactor(2, 4));
-        }
-
-        void arm(Runnable interference) {
-            this.interference = interference;
-            this.armed = true;
-        }
-
-        boolean raceHasFired() {
-            return raceFired;
+            super(module);
         }
 
         int getLiveCheckCalls() {
@@ -108,11 +90,7 @@ class RetryQueueRequeueWindowTest {
             boolean answerFromTheLiveMap = super.checkIfWorkIsStale(workContainer);
             this.liveCheckCalls++;
             this.lastLiveCheckSaidStale = answerFromTheLiveMap;
-            if (armed) {
-                armed = false;
-                raceFired = true;
-                interference.run();
-            }
+            fireOnceIfArmed();
             return answerFromTheLiveMap;
         }
     }
