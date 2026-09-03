@@ -96,7 +96,12 @@ class ConsumerOffsetCommitterAsyncFailureLoggingTest {
             assertThat(errorLine).contains(TOPIC + "-1: offset 5, no metadata");
             assertThat(errorLine).doesNotContain(metadata);
             assertThat(errorLine).doesNotContain("OffsetAndMetadata{");
-            assertThat(errorLine.length()).isLessThan(300);
+            // Derived, not measured, and derived the way RecordBatchSummaryTest.commitSummaryCostPerPartitionDoesNotDependOnMetadataSize
+            // is: 64 characters per entry beyond the topic name covers "-<partition>: offset <offset>, <length> chars of
+            // metadata; " even at a 10-digit partition, a 19-digit offset and a 4-digit length, and 64 more covers the
+            // statement's own "Error committing offsets: ", ", exception: " and the summary's "N partitions: " prefix. The
+            // number that matters is what it is nowhere near: metadata.length(), which is what interpolating the map cost.
+            assertThat(errorLine.length()).isLessThan(2 * (TOPIC.length() + 64) + 64);
 
             // the exception is the other half of the diagnostic, and messagesAt() projects it away - so dropping the
             // trailing argument would leave every assertion above still passing
