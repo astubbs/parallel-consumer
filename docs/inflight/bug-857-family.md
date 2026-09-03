@@ -2385,6 +2385,27 @@ and `-Dchaos.diagnoseStallRecovery=true` on this seed is the next experiment; th
 a run that stays FLAT is the finding. Recorded here rather than acted on: the lane-speed work that <!-- post-merge: checked -->
 surfaced it (astubbs#421) is the wrong place to chase a product stall.
 
+**And a fourth firing the same day, on the sharded lane's own first PR run.** `Chaos Pain Suite 4/4`
+(the shard carrying `ChaosRevokeUnderWorkIT` and `ChaosChurnStormIT`, one fork, its own VM - the
+gate's configuration exactly), `ChaosChurnStormIT` killed by `INSTANCE_STALL/NO_WORK_COMPLETED`:
+*instance 0 holds work (queued=9, outForProcessing=50) but has returned no work result for 150s
+(bound 150s) at 21059 results returned*; the class ran 201s. A different seed, so not a replay of
+anything above:
+<!-- post-merge: checked-begin - a dated sighting against a run id and a job id, both durable -->
+[run 33701723196](https://github.com/astubbs/parallel-consumer/actions/runs/33701723196), job
+100482453445, artifact `chaos-suite-reports-2634-shard4`, head `2fefcb817`.
+<!-- post-merge: checked-end -->
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=4788502970202706178
+
+**That makes five gating firings of this detector on this class since 2026-08-25, four of them
+between 2026-09-02 and 2026-09-03, on three distinct seeds, every one on a GitHub-hosted runner, and
+all but one under the gate's own one-fork configuration.** The rate is now the property worth
+measuring, not any one seed: it is the quarantine question `docs/quarantined-tests.md` asks a
+sighting ledger to answer, and the recovery diagnostic on any of these seeds is the experiment that
+says whether the wedge is real or a 150s bound meeting load.
+
 **Why it matters beyond the tally.** Three firings on one fork in a month is the rate the gate
 already has. An in-job parallel lane adds CPU contention exactly where this detector is
 load-sensitive, so its stability cannot be read off a single green run - and the sharded
