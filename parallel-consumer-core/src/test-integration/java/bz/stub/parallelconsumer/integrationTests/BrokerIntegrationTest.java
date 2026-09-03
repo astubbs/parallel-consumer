@@ -167,8 +167,28 @@ public abstract class BrokerIntegrationTest<K, V> {
      */
     private final List<AutoCloseable> toClose = new ArrayList<>();
 
+    /**
+     * INSTRUMENTATION, ce-optimize integration-gate. Not a permanent fixture - it exists to answer one
+     * question the CI log cannot: how much of this lane's wall time is spent starting a broker.
+     * <p>
+     * Testcontainers logs its own startup duration on the {@code tc.<image>} logger, which this
+     * project's logback config filters out, so the cost was invisible. Rather than change logging
+     * config (which would alter what every test records), this reports JVM uptime at the moment the
+     * first test class in a fork finds the container running. Because the container is a static field
+     * started by the Testcontainers extension before any {@code @BeforeAll}, that uptime is
+     * fork-JVM-start plus image pull plus broker boot - which is exactly the per-fork fixed cost being
+     * hunted. It prints once per fork, so a forkCount=4 run yields four readings.
+     */
+    private static final java.util.concurrent.atomic.AtomicBoolean STARTUP_COST_REPORTED =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
     @BeforeAll
     static void followKafkaLogs() {
+        if (STARTUP_COST_REPORTED.compareAndSet(false, true)) {
+            long uptimeMs = java.lang.management.ManagementFactory.getRuntimeMXBean().getUptime();
+            log.info("BROKERPROBE: fork ready after {}ms of JVM uptime - container running={} image={}",
+                    uptimeMs, kafkaContainer.isRunning(), kafkaContainer.getDockerImageName());
+        }
         if (log.isDebugEnabled()) {
             FilteredTestContainerSlf4jLogConsumer logConsumer = new FilteredTestContainerSlf4jLogConsumer(log);
             kafkaContainer.followOutput(logConsumer);
