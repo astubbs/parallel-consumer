@@ -38,6 +38,12 @@
 #
 # Format: <count> <bug_type> <Class.method>
 1 INTEGER_OVERFLOW_L2 BackportUtils.readFully
+# controlLoop's read of lastCommitTime, through isTimeToCommitNow (a known identity of its own, below).
+# The same access reported at a second entry point: it fired on master, went quiet when the
+# completed-but-uncommitted ledger was extracted (astubbs#225), and came back when the recovery pass
+# moved into ProducerRecoveryPass. Which path RacerD summarises it under moves with the call graph;
+# the read is the same and is not a new race.
+1 THREAD_SAFETY_VIOLATION AbstractParallelEoSStreamProcessor.controlLoop
 1 NULLPTR_DEREFERENCE AbstractParallelEoSStreamProcessor.processWorkCompleteMailBox
 1 NULLPTR_DEREFERENCE PartitionStateManager.couldBeTakenAsWork
 1 NULLPTR_DEREFERENCE PartitionStateManager.getHighestSeenOffset
