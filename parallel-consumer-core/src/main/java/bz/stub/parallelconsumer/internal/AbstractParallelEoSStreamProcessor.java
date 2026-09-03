@@ -116,6 +116,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private final Optional<ProducerManager<K, V>> producerManager;
 
     /**
+     * Present only where recovery can run: a producer this instance built, under the transactional commit mode.
+     */
+    private final Optional<ProducerRecoveryPass<K, V>> producerRecoveryPass;
+
+    /**
      * All consumer access goes through ConsumerManager (which wraps with ThreadConfinedConsumer).
      * No raw Consumer<K,V> reference is held — enforced by ArchUnit. See confluentinc#857.
      */
@@ -399,12 +404,17 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             // a worker parked on the produce lock during a producer outage is released as soon as this instance
             // leaves RUNNING or PAUSED, so a close during the outage does not wait out the shutdown timeout (R15)
             this.producerManager.get().setSuspensionEndsWhen(() -> state != RUNNING && state != State.PAUSED);
-            if (options.isUsingTransactionalProducer())
+            if (options.isUsingTransactionalProducer()) {
                 this.committer = this.producerManager.get();
-            else
+                this.producerRecoveryPass = Optional.of(new ProducerRecoveryPass<>(this.producerManager.get(),
+                        () -> state, this::replayWorkDiscardedByAbortedTransaction, this::closeWith));
+            } else {
                 this.committer = this.brokerPollSubsystem;
+                this.producerRecoveryPass = Optional.empty();
+            }
         } else {
             this.producerManager = Optional.empty();
+            this.producerRecoveryPass = Optional.empty();
             this.committer = this.brokerPollSubsystem;
         }
         //Initialize metrics for this class once all the objects are created
@@ -2041,81 +2051,23 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     }
 
     /**
-     * Recovery from a producer the broker reported invalid, on this thread only and at the top of every pass
-     * (KTD4): when a condition is recorded, take the producer write lock, abort and discard the producer, drain the
-     * mailbox so every result of the aborted transaction is accounted for, replay the work that transaction
-     * discarded (KTD5), release the lock, and then - outside it - build and initialise the replacement (KTD7). A
-     * replacement that cannot be built yet is retried on a later pass with backoff; one that can never be built ends
-     * the instance, naming the transactional id. Nothing thrown here may escape: the supervisor treats an exception
-     * escaping {@link #controlLoop} as fatal, which is the outcome this exists to avoid.
-     * <p>
-     * Skipped once the instance is CLOSING or CLOSED: a close during an outage would otherwise wait on a rebuild
-     * that blocks up to {@code max.block.ms} for a producer nobody will use, and {@code ProducerManager.close}
-     * releases the parked workers on its own. DRAINING still recovers, because a drain needs a producer to finish
-     * the work in flight.
-     * <p>
-     * Visible for testing - the state gate is driven directly, because the window between CLOSING and the manager
-     * closing is on this thread only.
+     * The recovery pass, at the top of every control loop pass, where the instance built its own transactional
+     * producer: {@link ProducerRecoveryPass} owns it. Visible for testing - the state gate is driven directly,
+     * because the window between CLOSING and the manager closing is on this thread only.
      */
     void maybeRecoverProducer() {
-        if (!producerManager.isPresent() || !options.isUsingTransactionCommitMode()) {
-            return;
+        producerRecoveryPass.ifPresent(ProducerRecoveryPass::run);
+    }
+
+    /**
+     * How a terminal recovery outcome ends the instance: the failure it closes with, if none is recorded yet, then
+     * CLOSING - which is also what releases the workers parked on the produce lock.
+     */
+    private void closeWith(Exception failure) {
+        if (this.failureReason == null) {
+            this.failureReason = failure;
         }
-        if (state == State.CLOSING || state == CLOSED) {
-            log.debug("Not recovering the producer: the instance is {}", state);
-            return;
-        }
-        ProducerManager<K, V> pm = producerManager.get();
-        if (!pm.isRecoveryAttemptDue(Instant.now())) {
-            return;
-        }
-        try {
-            if (pm.pendingInvalidation().isPresent() || pm.isReplayOwed()) {
-                boolean entered;
-                try {
-                    entered = pm.beginReplacement();
-                } catch (InterruptedException wokeUp) {
-                    // This thread's own wake-up, not a stop signal: notifySomethingToDo interrupts the control thread
-                    // whenever the write lock is not HELD, and it is not held while this pass is waiting for it - a
-                    // worker holding the produce lock through its user function keeps the wait open for up to the
-                    // commit-lock timeout, and the rebalance that fenced the producer ends with onPartitionsAssigned,
-                    // which notifies. Shutdown travels in `state`, never in the flag. Clear it and return: the
-                    // condition stays recorded, so the next pass retries. Same shape as the mailbox poll's own catch.
-                    Thread.interrupted();
-                    log.debug("Interrupted while waiting for the producer write lock to begin recovery - a wake-up, not a " +
-                            "shutdown; the condition stays recorded and the next pass retries");
-                    return;
-                }
-                if (!entered) {
-                    return; // the wait elapsed; a retry is scheduled and the condition stays recorded
-                }
-                try {
-                    int restored = replayWorkDiscardedByAbortedTransaction();
-                    pm.replayCompleted(restored); // only now: a throw above leaves the replay owed, and the next pass runs it first
-                } finally {
-                    pm.releaseCommitLockAfterReplacement();
-                }
-            }
-            ReplacementOutcome outcome = pm.completeReplacement();
-            if (outcome.isTerminal()) {
-                if (this.failureReason == null) {
-                    this.failureReason = outcome.getFailure();
-                }
-                transitionToClosing();
-            }
-        } catch (RuntimeException e) {
-            log.error("Producer recovery pass failed unexpectedly; it will be attempted again on a later pass: {}", describeWithRootCause(e), e);
-            pm.deferAfterFailedPass("the recovery pass failed with " + e.getClass().getName());
-        } catch (Error fatal) {
-            // Not retried, and not left to the supervisor either: its catch is Exception, so an Error would leave
-            // the instance RUNNING with every worker parked on the produce lock for good. Leave RUNNING first - that
-            // is what releases them - and record why, then let it go.
-            if (this.failureReason == null) {
-                this.failureReason = new PCInternalRuntimeException("Producer recovery failed with an Error; the instance is closing", fatal);
-            }
-            transitionToClosing();
-            throw fatal;
-        }
+        transitionToClosing();
     }
 
     private boolean isIdlingOrRunning() {
