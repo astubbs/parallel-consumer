@@ -410,27 +410,48 @@ public class ShardManager<K, V> {
      * <b>Asking about residency before adding would only narrow the window</b> - it is another check-then-act,
      * and the sweep can land between that answer and the add exactly as it lands between the epoch check and
      * this call. Reversing the order closes it instead, because the last thing to happen is a REMOVAL driven by
-     * a read taken after the add, and the sweep's own action is also a removal. The four ways the two can
-     * interleave all settle with the pair whole:
+     * a read taken after the add, and the sweep's own action is also a removal.
+     * <p>
+     * <b>THIS ARGUMENT IS ORDERING-DEPENDENT, and the ordering it depends on is the sweep's, not this
+     * method's.</b> It holds against a sweep that removes from the SHARD first and the queue second - which is
+     * what {@link #removeWorkFromShardFor} and {@link #removeStaleContainers} both do today. That order is what
+     * makes the departure observable to the residency read <em>before</em> the sweep's queue removal happens,
+     * and every case below turns on it:
      * <ul>
      * <li>the sweep completes before the add - the residency read below sees a departed container and undoes
      *     the add;</li>
      * <li>the sweep starts after the residency read - it finds the container in the shard, so
      *     {@code removeWorkAtOffset} hands it back non-null and the paired queue removal runs;</li>
-     * <li>the sweep lands between the add and the residency read - its queue removal finds the entry this time
-     *     and takes it, and the read then undoes an add that is already gone (a no-op);</li>
+     * <li>the sweep lands between the add and the residency read - its shard removal has therefore already
+     *     happened, so the read sees a departed container and undoes the add (and the sweep's queue removal,
+     *     whichever side of the add it falls, is at worst a no-op);</li>
      * <li>the sweep's queue removal races the add itself - {@link RetryQueue} serialises them under its own
-     *     write lock, which reduces this to one of the two above.</li>
+     *     write lock, which reduces this to one of the above.</li>
      * </ul>
      * Once the read below sees a departed container the answer cannot go stale in the dangerous direction:
      * residency is by reference, and nothing ever re-inserts the same container instance.
      * <p>
+     * <b>A QUEUE-FIRST SWEEP DEFEATS IT, and one is in flight.</b> astubbs/parallel-consumer#431 - an open
+     * draft at the time of writing, so master is still shard-first - reverses the order deliberately: it asks
+     * the queue first with a non-blocking {@code tryRemove} so that a declined lock abandons the paired shard
+     * removal and the pair never splits, which is how it keeps the broker-poll thread out of a wait. Against
+     * that ordering this confirmation is not enough: the sweep's queue removal passes over an empty queue, the
+     * controller then adds and reads residency while the container is still resident, and the shard removal
+     * happens afterwards - so neither party removes the entry and the orphan is back.
+     * <p>
+     * <b>What astubbs#431 must add, and it is small</b>: repeat the queue removal AFTER the shard removal. That closes
+     * the half where the controller's add lands inside the sweep, while the confirmation here closes the half
+     * where the add arrives after the sweep has finished. Neither half is redundant and neither closes the
+     * other. {@code RetryQueueRequeueWindowTest.aQueueFirstSweepDefeatsTheOneShotConfirmation} models the
+     * queue-first ordering and asserts the orphan appears, so the two changes cannot pass each other silently;
+     * its matched control asserts shard-first does not.
+     * <p>
      * <b>This adds no lock and makes no thread wait.</b> The alternative - moving the shard map and the queue
      * under one lock - would put the broker-poll thread's rebalance callbacks behind the retry queue's fair
-     * lock, which is the wait astubbs/parallel-consumer#431 removed from that thread on purpose. Nothing here
+     * lock, which is the wait astubbs/parallel-consumer#431 exists to keep off that thread. Nothing here
      * touches the poll thread's side of the interleaving at all.
      * <p>
-     * <b>What would reopen it.</b> A future caller that adds to {@link #retryQueue} without a residency
+     * <b>What else would reopen it.</b> A future caller that adds to {@link #retryQueue} without a residency
      * confirmation after the add, or one that removes a container from a shard without removing it from the
      * queue. {@link ProcessingShard#addWorkContainer} is the second shape and is a KNOWN separate orphan route -
      * it displaces a stale resident with no queue removal, because the shard has no handle on the queue. That is

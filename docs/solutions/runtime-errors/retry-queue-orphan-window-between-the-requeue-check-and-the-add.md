@@ -93,15 +93,20 @@ the call. That is what made this a note rather than a patch.
 to the retry queue and *then* asks whether the container is still resident in its shard, undoing the
 add if it is not. The last thing to happen is a removal driven by a read taken *after* the add, and
 the competing sweep's own action is also a removal - so at least one of the two always observes the
-entry. The four interleavings:
+entry.
+
+**The argument is ordering-dependent, and the ordering is the sweep's.** It holds against a sweep
+that removes from the **shard first and the queue second**, which is what `removeWorkFromShardFor`
+and `removeStaleContainers` both do on master. That order is what makes the departure observable to
+the residency read *before* the sweep's queue removal. The four interleavings:
 
 - the sweep completes before the add - the residency read sees a departed container and undoes it;
 - the sweep starts after the residency read - it finds the container in the shard, so
   `removeWorkAtOffset` hands it back non-null and the paired queue removal runs;
-- the sweep lands between the add and the residency read - its queue removal finds the entry this
-  time and takes it, and the read then undoes an add that is already gone (a no-op);
+- the sweep lands between the add and the residency read - its shard removal has therefore already
+  happened, so the read sees a departed container and undoes the add;
 - the sweep's queue removal races the add itself - `RetryQueue` serialises them under its own write
-  lock, reducing this to one of the two above.
+  lock, reducing this to one of the above.
 
 Once the read sees a departed container the answer cannot go stale in the dangerous direction:
 residency is by **reference**, and nothing ever re-inserts the same container instance.
@@ -110,16 +115,44 @@ residency is by **reference**, and nothing ever re-inserts the same container in
 take the claim, then confirm residency, then hand it back if the container has left. The residency
 predicate is now `ProcessingShard.isResident`, shared by both.
 
-### It does not collide with astubbs/parallel-consumer#431
+## The relationship to astubbs/parallel-consumer#431, which is not merged
 
-That PR established that the **rebalance callbacks may not wait on the retry queue's lock** - they run
-on the broker-poll thread inside `consumer.poll()`, where the whole group waits, and it made them
-decline the lock rather than block on it. The obvious "proper" fix here - moving the shard map and the
-queue under one lock - would reverse that decision, because it puts the poll thread's revoke path
-behind the retry queue's fair lock.
+**astubbs#431 is an open draft, so master is still shard-first.** Anything describing the declining sweep as
+shipped - including the in-flight note that first recorded this defect - is describing astubbs#431's branch,
+not master. This defect is reachable on master today either way, and was reproduced there.
 
-The fix above adds no lock, and changes nothing on the poll thread's side of the interleaving. The
-controller does one extra map read and, in the rare losing case, one extra queue removal.
+**The design constraint astubbs#431 established is not violated by this fix.** That PR keeps the rebalance
+callbacks off any wait on the retry queue's lock - they run on the broker-poll thread inside
+`consumer.poll()`, where the whole group waits. The textbook fix here, moving the shard map and the
+queue under one lock, would reverse that decision. The fix above adds no lock and changes nothing on
+the poll thread's side; the controller does one extra map read and, in the losing case, one extra
+queue removal.
+
+**But astubbs#431's queue-first ordering defeats a one-shot confirmation, and the two changes must meet.**
+To decline the lock safely, astubbs#431 asks the queue first (`tryRemove`, non-blocking) so that a refusal
+abandons the paired shard removal and the pair never splits. `tryRemove` returns true when it
+acquired the lock, whether or not anything was present - deliberately, since "there was no entry" and
+"I removed the entry" are the same answer to the caller's question. So:
+
+1. sweep `tryRemove` - lock acquired, queue empty (the controller has not added yet), returns true;
+2. controller `retryQueue.add(wc)`;
+3. controller `isResident(wc)` -> **true**, the shard removal has not happened yet, so the add stands;
+4. sweep `removeWorkAtOffset` - the container leaves its shard.
+
+Orphan, through the few instructions between the sweep's two steps - which is precisely the widening
+the original note attributed to astubbs#431, and it turns out to matter more than the note thought.
+
+**What astubbs#431 must add is small: repeat the queue removal AFTER the shard removal.** That closes the
+half where the controller's add lands inside the sweep; the residency confirmation closes the half
+where the add arrives after the sweep has finished. Neither half is redundant and neither closes the
+other.
+
+`RetryQueueRequeueWindowTest.aQueueFirstSweepDefeatsTheOneShotConfirmation` models the queue-first
+ordering and **asserts the orphan appears** - red-by-design documentation, so the two changes cannot
+pass each other silently; when astubbs#431 lands with the paired removal, that assertion is inverted. Its
+matched control, `aShardFirstSweepIsCaughtByTheConfirmation`, runs the identical steps with only the
+sweep's internal order changed and asserts no orphan. Same magnitude, different position: the pair is
+what establishes the ordering as the responsible term.
 
 ## How it was established
 
@@ -131,8 +164,8 @@ the live check answered *not stale*), so an arm that stops exercising the window
 passing vacuously.
 
 **Predictions were stated before the run and all held, including the refutation.** Against unmodified
-master, three of the six arms were red - the two window arms and the drain arm - and the three that
-were predicted green were green: the load-gate characterisation, and both control arms.
+master, three of the six original arms were red - the two window arms and the drain arm - and the
+three that were predicted green were green: the load-gate characterisation, and both control arms.
 
 **Control arms, same magnitude and different position.** The same rebalance one seam *earlier*
 (checkpoint 3's lookup) is caught by the live check and produces no orphan - which is what isolates
@@ -140,9 +173,15 @@ this to the gap between the check and the add rather than to "a rebalance during
 general. The same rebalance one seam *later* leaves the pair whole, because the sweep then finds the
 container in its shard and takes the queue entry with it.
 
-**Ablation.** With the fix in place all six arms pass. Removing *only* the post-add residency undo,
+**Ablation.** With the fix in place all six pass. Removing *only* the post-add residency undo,
 leaving every other change in place, turns exactly those three arms red again and no others. One term
 changed, outcome flips.
+
+**The sweep-ordering pair, added after review raised the astubbs#431 interaction.** Two further arms run the
+sweep's two removals *around* the controller's re-queue, changing nothing but the order of those two
+removals: queue-first leaves the orphan, shard-first does not. That pair is what turns "astubbs#431 will
+defeat this" from a reading of the diff into a demonstrated result, and it is why the argument on
+`ShardManager.onFailure` now states its precondition instead of reading as ordering-independent.
 
 ## What would reopen it
 

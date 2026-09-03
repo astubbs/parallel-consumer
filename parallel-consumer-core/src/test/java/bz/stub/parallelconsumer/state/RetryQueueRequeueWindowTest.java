@@ -311,6 +311,88 @@ class RetryQueueRequeueWindowTest {
     }
 
     /**
+     * The two halves of the revoke sweep, run around the controller's re-queue, so the interleave that matters
+     * is placed by construction rather than raced for.
+     * <p>
+     * The production sweep does both in one call ({@code removeWorkFromShardFor}); these model it split, with
+     * {@code sm.onFailure} landing in the middle - which is the only interleaving either arm is about.
+     *
+     * @param queueFirst the order the sweep does its two removals in: {@code true} models
+     *                   astubbs/parallel-consumer#431's ordering, {@code false} models master's
+     */
+    private void sweepAroundTheRequeue(WorkContainer<String, String> wc, boolean queueFirst) {
+        var shard = wm.getSm().getShard(wm.getSm().computeShardKey(wc)).get();
+        Runnable queueRemoval = () -> wm.getSm().getRetryQueue().remove(wc);
+        Runnable shardRemoval = () -> shard.removeWorkAtOffset(wc.offset());
+
+        (queueFirst ? queueRemoval : shardRemoval).run();
+        wm.getSm().onFailure(wc);
+        (queueFirst ? shardRemoval : queueRemoval).run();
+    }
+
+    /**
+     * <b>The fix is ordering-dependent, and this is the arm that says so.</b> Master's sweep removes from the
+     * SHARD first and the queue second, and the argument on {@link ShardManager#onFailure} turns on that: the
+     * departure becomes observable to the residency read <em>before</em> the sweep's queue removal, so either
+     * the controller sees a departed container and undoes its add, or its add landed early enough for the
+     * sweep's queue removal to find it.
+     * <p>
+     * <b>astubbs/parallel-consumer#431 reverses that order</b> - it asks the queue first, declining rather than
+     * waiting, so that a refused lock abandons the paired shard removal and the pair never splits. Against that
+     * ordering a one-shot confirmation is defeated: the sweep's queue removal passes over an empty queue, the
+     * controller then adds and reads residency while the container is still in its shard, and the shard removal
+     * happens afterwards. Neither party removes the entry.
+     * <p>
+     * <b>This asserts the orphan APPEARS - it is red-by-design documentation, not an endorsement.</b> It is
+     * green today because astubbs#431 is an open draft and master is still shard-first. When astubbs#431 lands it must pair
+     * the removal - repeat the queue removal AFTER the shard removal, which closes this half while the
+     * residency confirmation closes the half where the controller's add arrives later - and this test must then
+     * be inverted to assert no orphan. It is written to fail loudly at that moment rather than let the two
+     * changes pass each other silently.
+     */
+    @Test
+    void aQueueFirstSweepDefeatsTheOneShotConfirmation() {
+        WorkContainer<String, String> wc = aFailedRecordTakenAsWork();
+
+        sweepAroundTheRequeue(wc, true);
+
+        assertWithMessage("PRECONDITION: the container must have left its shard, or there is no orphan to make")
+                .that(wm.getSm().getNumberOfRecordsInShards())
+                .isEqualTo(0L);
+
+        assertWithMessage("RED BY DESIGN: with the sweep removing from the QUEUE first, the residency read "
+                + "still sees a resident container and the add is not undone - so the entry is orphaned. When "
+                + "astubbs/parallel-consumer#431 lands it must repeat the queue removal after the shard "
+                + "removal, and this assertion must be inverted to isFalse()")
+                .that(wm.getSm().getRetryQueue().contains(wc))
+                .isTrue();
+    }
+
+    /**
+     * The matched control for the arm above: the identical steps, with only the sweep's internal order
+     * changed. Master's shard-first ordering keeps the pair whole, because the residency read that follows the
+     * add now observes a container that has already gone.
+     * <p>
+     * Same magnitude, different position - this pair is what establishes that the ordering is the responsible
+     * term, rather than anything else about the interleave.
+     */
+    @Test
+    void aShardFirstSweepIsCaughtByTheConfirmation() {
+        WorkContainer<String, String> wc = aFailedRecordTakenAsWork();
+
+        sweepAroundTheRequeue(wc, false);
+
+        assertWithMessage("PRECONDITION: the container must have left its shard")
+                .that(wm.getSm().getNumberOfRecordsInShards())
+                .isEqualTo(0L);
+
+        assertWithMessage("with the sweep removing from the SHARD first, the residency read after the add sees "
+                + "a departed container and takes the entry back out")
+                .that(wm.getSm().getRetryQueue().contains(wc))
+                .isFalse();
+    }
+
+    /**
      * P2 - control arm, same magnitude one seam EARLIER. The identical rebalance fired at staleness
      * checkpoint 3's lookup instead of at the live re-validation: {@code onFailureResult}'s live check then
      * sees the incremented epoch and drops the re-queue, which is astubbs#346's fix doing its job.
