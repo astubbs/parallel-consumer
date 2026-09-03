@@ -32,9 +32,9 @@ import static java.util.Collections.singletonList;
  *
  * @author Antony Stubbs
  */
-// the commit cases read OffsetMapCodecManager.DefaultMaxMetadataSize, which is a MUTABLE static that
-// OffsetEncodingBackPressureTest and OffsetEncodingBackPressureUnitTest write; this module runs tests concurrently,
-// so a read of it is only stable under the lock those two already take for writing
+// the commit cases read OffsetMapCodecManager.DefaultMaxMetadataSize, a MUTABLE static that
+// OffsetEncodingBackPressureTest and OffsetEncodingBackPressureUnitTest write. Taking the READ side of the lock those
+// two already hold for writing is the convention WorkManagerOffsetMapCodecManagerTest and OffsetEncodingTests follow.
 @ResourceLock(value = OffsetMapCodecManager.METADATA_DATA_SIZE_RESOURCE_LOCK, mode = ResourceAccessMode.READ)
 class RecordBatchSummaryTest {
 

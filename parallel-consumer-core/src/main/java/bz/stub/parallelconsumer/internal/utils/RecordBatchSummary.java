@@ -24,8 +24,13 @@ import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
  * A log line that interpolates a whole batch - or a whole {@code PollContext} - grows with
  * {@code max.poll.records} and with the number of assigned partitions, so log tooling truncates it and the
  * operator loses exactly the part that identified the event. These helpers keep what actually diagnoses it
- * (topic-partition, record count, offset range) and cap the number of partitions named individually, so the
- * line has a fixed upper bound however large the batch is. The unabridged dump belongs at {@code DEBUG}.
+ * (topic-partition, record count, offset range) and reduce the rest. The unabridged dump belongs at {@code DEBUG}.
+ * <p>
+ * <b>What is bounded differs by rendering, deliberately.</b> The <em>batch</em> renderings cap how many partitions
+ * are named individually ({@value #MAX_PARTITIONS_LISTED}), because a batch says nothing about how many partitions
+ * it spans. {@link #summariseCommit} does not cap, and instead bounds the cost of each entry: a commit map holds
+ * exactly one entry per partition, and naming every one of them is what astubbs#168 asked for - its own javadoc owns
+ * that reasoning.
  * <p>
  * The same defect is live on log lines this class has not been applied to yet;
  * {@code docs/inflight/bug-unbounded-log-lines.md} lists them with their anchors - including the ones deliberately
@@ -43,6 +48,9 @@ public class RecordBatchSummary {
      * The most partitions named individually before the summary collapses the rest into a count. A consumer can be
      * assigned thousands of partitions, and naming every one of them is the unbounded-line bug this class exists to
      * prevent.
+     * <p>
+     * Applies to the <b>batch</b> renderings only. {@link #summariseCommit} deliberately names every partition -
+     * see its javadoc for why that is bounded enough.
      */
     public static final int MAX_PARTITIONS_LISTED = 5;
 
@@ -155,17 +163,23 @@ public class RecordBatchSummary {
      * one. A single-partition commit renders as just that entry, since the total would only repeat it
      */
     public static String summariseCommit(Map<TopicPartition, OffsetAndMetadata> offsets) {
-        if (offsets.isEmpty()) {
+        int partitionCount = offsets.size();
+        if (partitionCount == 0) {
             return pluralise(0, "partition");
         }
+        if (partitionCount == 1) {
+            // the total would just repeat the single entry - returning here, before the sort and the join, is the
+            // same shape summariseOffsets(Map) takes for the same reason
+            Map.Entry<TopicPartition, OffsetAndMetadata> only = offsets.entrySet().iterator().next();
+            return summariseCommitEntry(only.getKey(), only.getValue());
+        }
+
         String detail = offsets.entrySet().stream()
                 .sorted(BY_TOPIC_THEN_PARTITION)
                 .map(entry -> summariseCommitEntry(entry.getKey(), entry.getValue()))
                 .collect(Collectors.joining("; "));
-        if (offsets.size() == 1) {
-            return detail;
-        }
-        return msg("{}: {}", pluralise(offsets.size(), "partition"), detail);
+
+        return msg("{}: {}", pluralise(partitionCount, "partition"), detail);
     }
 
     private static String summariseCommitEntry(TopicPartition topicPartition, OffsetAndMetadata offsetAndMetadata) {

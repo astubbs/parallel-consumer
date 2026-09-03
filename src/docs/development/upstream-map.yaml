@@ -544,7 +544,7 @@ entries:
   - id: upstream-pr-log-noise
     group: logging-ux
     summary: Trim noisy user-function / RemovedPartitionState logging
-    fork: {branches: [fix/log-verbosity-batch, fix/168-commit-error-line-keeps-identifiers], prs: [203], fork_issues: [168, 169, 170, 238], status: pr-open}
+    fork: {branches: [fix/log-verbosity-batch, fix/168-commit-error-line-keeps-identifiers], prs: [203], fork_issues: [168, 169, 170, 238], status: in-progress}
     upstream: {repo: confluentinc/parallel-consumer, issues: [640, 57, 629], prs: [918, 919], related: [631], status: mixed, last_checked: 2026-09-03}
     adoc_anchor: null
     notes: >
@@ -567,7 +567,11 @@ entries:
       untouched, so this entry stays open after astubbs#203 lands.
       2026-09-03: astubbs#203 MERGED (2026-09-02) -- this entry had gone on saying
       `pr-open` about it, which is the stale-manifest failure docs/upstream.md
-      describes; corrected here rather than left for a sweep. astubbs#168 /
+      describes; corrected here rather than left for a sweep. `pr-open` is now true
+      of nothing in this entry (203 merged, the 168 branch has no PR yet), so the
+      status is `in-progress` and returns to `pr-open` in the commit that opens that
+      PR. Upstream re-checked the same day: #629 and #640 open, #57 closed, so
+      `mixed` still holds. astubbs#168 /
       confluentinc#629 joins the same family on branch
       fix/168-commit-error-line-keeps-identifiers: the commit-failure ERROR line in
       ConsumerOffsetCommitter keeps every topic/partition/offset and reduces the

@@ -9,6 +9,8 @@ import bz.stub.parallelconsumer.internal.utils.LogCapture;
 import bz.stub.parallelconsumer.offsets.OffsetMapCodecManager;
 import bz.stub.parallelconsumer.state.WorkManager;
 import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.classic.spi.IThrowableProxy;
 import org.apache.kafka.clients.consumer.ConsumerGroupMetadata;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.consumer.OffsetCommitCallback;
@@ -28,6 +30,7 @@ import java.util.stream.Collectors;
 
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS;
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.truth.Truth.assertWithMessage;
 import static java.util.Collections.nCopies;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -46,23 +49,33 @@ import static org.mockito.Mockito.verify;
  *
  * @author Antony Stubbs
  */
-// SAME_THREAD, not @Isolated: ConsumerOffsetCommitter's logger is quiet and not on a timing-sensitive path, so
-// raising it does not perturb other classes, and every read here is already scoped to this class's own topic name -
-// LogCapture's second obligation. What scoping cannot fix is two captures of the SAME logger overlapping: the level
-// is shared state, so whichever closes first restores it to INFO and silently swallows the other's DEBUG line. That
-// is these two methods, and only SAME_THREAD separates them (observed - the DEBUG assertion read an empty list).
-// Same reasoning as LoadFactorCeilingReportingTest, which needs @Isolated on top because its logger is a busy one.
+// SAME_THREAD is the load-bearing one, and it fixes an OBSERVED failure, not a hypothetical: this module's pom sets
+// junit.jupiter.execution.parallel.mode.default=concurrent, so the METHODS of one class run in parallel with each
+// other. Both methods below capture the SAME logger, and LogCapture's level is shared state - whichever closes first
+// restores the level to INFO and silently swallows the other's DEBUG line, which is exactly how the DEBUG assertion
+// came to read an empty list. Scoping reads by topic name cannot fix that; only serialising the methods can.
+// Not @Isolated: that separates CLASSES, and the pom leaves mode.classes.default at JUnit's same_thread, so classes
+// do not overlap today anyway. LoadFactorCeilingReportingTest carries both because its logger is a busy one whose
+// raised level perturbs the timing-sensitive close/shutdown tests; ConsumerOffsetCommitter's is quiet.
 @Execution(ExecutionMode.SAME_THREAD)
-// DefaultMaxMetadataSize is a MUTABLE static that OffsetEncodingBackPressureTest and its unit sibling write; this
-// module runs tests concurrently, so reading it is only stable under the lock those two already take for writing
+// DefaultMaxMetadataSize is a MUTABLE static that OffsetEncodingBackPressureTest and its unit sibling write. Taking
+// the READ side of the lock those two already hold for writing is what WorkManagerOffsetMapCodecManagerTest and
+// OffsetEncodingTests do. Belt-and-braces rather than load-bearing while classes run sequentially - it is what keeps
+// this test correct if mode.classes.default is ever turned on, and it costs nothing.
 @ResourceLock(value = OffsetMapCodecManager.METADATA_DATA_SIZE_RESOURCE_LOCK, mode = ResourceAccessMode.READ)
 class ConsumerOffsetCommitterAsyncFailureLoggingTest {
 
     /**
-     * The logger is shared JVM-wide and this module runs tests concurrently, so every read is filtered on a string
-     * unique to this test - {@link LogCapture}'s second obligation.
+     * The logger is shared JVM-wide, so every read is filtered on a string unique to this test - {@link LogCapture}'s
+     * second obligation.
      */
     private static final String TOPIC = ConsumerOffsetCommitterAsyncFailureLoggingTest.class.getSimpleName();
+
+    /**
+     * The DEBUG detail line's own prefix. Read together with {@link #TOPIC} rather than on its own - it is shared
+     * text, so it identifies the statement while the topic identifies this test.
+     */
+    private static final String FULL_MAP_LINE = "Failed commit in full";
 
     @Test
     void asyncCommitFailureLineNamesEveryPartitionAndOffsetButNotTheMetadata() {
@@ -84,18 +97,27 @@ class ConsumerOffsetCommitterAsyncFailureLoggingTest {
             assertThat(errorLine).doesNotContain("OffsetAndMetadata{");
             assertThat(errorLine.length()).isLessThan(300);
 
+            // the exception is the other half of the diagnostic, and messagesAt() projects it away - so dropping the
+            // trailing argument would leave every assertion above still passing
+            assertThat(throwableOfOnlyEventAt(logs, Level.ERROR))
+                    .isEqualTo(RebalanceInProgressException.class.getName());
+
             // the unabridged map is still available, one level down, where it has to be asked for
-            assertThat(only(logs.messagesAt(Level.DEBUG), "Failed commit in full")).contains(metadata);
+            assertThat(only(linesMentioning(logs.messagesAt(Level.DEBUG), TOPIC), FULL_MAP_LINE)).contains(metadata);
         }
     }
 
     /**
      * Pairs with the test above so its {@code doesNotContain} assertions are not vacuous: the capture does see this
-     * committer's ERROR lines when there are any, so seeing none here is the {@code exception != null} guard working
-     * rather than a capture that reads nothing.
+     * committer's lines when there are any, so seeing none here is the {@code exception != null} guard working rather
+     * than a capture that reads nothing.
+     * <p>
+     * The DEBUG half is the one that matters. Both log statements sit behind that one guard, so moving or duplicating
+     * the unabridged dump outside it would put the whole map - every partition's metadata, the thing astubbs#168 is
+     * about - on the hot path of every SUCCESSFUL commit, while the test above still passed.
      */
     @Test
-    void asyncCommitSuccessLogsNothingAtError() {
+    void asyncCommitSuccessLogsNothingAtErrorAndDumpsNoOffsetMap() {
         var consumerMgr = consumerManagerMock();
         var committer = committerFor(consumerMgr);
         Map<TopicPartition, OffsetAndMetadata> offsets = twoPartitionCommit(largestOffsetMapPcWillWrite());
@@ -106,6 +128,7 @@ class ConsumerOffsetCommitterAsyncFailureLoggingTest {
             completeCallbackWith(consumerMgr, offsets, null);
 
             assertThat(linesMentioning(logs.messagesAt(Level.ERROR), TOPIC)).isEmpty();
+            assertThat(linesMentioning(logs.messagesAt(Level.DEBUG), FULL_MAP_LINE)).isEmpty();
         }
     }
 
@@ -155,6 +178,24 @@ class ConsumerOffsetCommitterAsyncFailureLoggingTest {
         var callback = ArgumentCaptor.forClass(OffsetCommitCallback.class);
         verify(consumerMgr).commitAsync(eq(offsets), callback.capture());
         callback.getValue().onComplete(offsets, exception);
+    }
+
+    /**
+     * @return the class name of the throwable attached to the one captured event at this level - what
+     * {@link LogCapture#messagesAt} cannot show, since it formats the message and drops the throwable
+     */
+    private static String throwableOfOnlyEventAt(LogCapture logs, Level level) {
+        List<ILoggingEvent> events = logs.events().stream()
+                .filter(event -> event.getLevel() == level)
+                .filter(event -> event.getFormattedMessage().contains(TOPIC))
+                .collect(Collectors.toList());
+        assertThat(events).hasSize(1);
+        IThrowableProxy thrown = events.get(0).getThrowableProxy();
+        // asserted rather than dereferenced, so dropping the trailing argument reports "no throwable attached" instead
+        // of an NPE inside the helper
+        assertWithMessage("no throwable attached to the %s event - was the exception argument dropped?", level)
+                .that(thrown).isNotNull();
+        return thrown.getClassName();
     }
 
     /**
