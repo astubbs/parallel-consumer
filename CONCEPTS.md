@@ -337,3 +337,8 @@ vocabulary keeps naming from different sides.
   is the poller pausing the broker subscription; and the Kafka consumer's own pause state is the
   authority the back-pressure pause manipulates. A user report of "paused consumption" typically
   describes none of them — a stall presenting as a pause — so the word alone attributes nothing.
+- **"Shard" names the engine's ordering unit, and the CI chaos lane borrows the word for its split
+  jobs.** The Shard entry above is the engine concept. A "chaos shard" in CI documentation is one of
+  the parallel jobs the Chaos Pain Suite is divided into, an ordinary test-sharding sense with no
+  relation to record ordering; when a sentence could mean either, say "chaos shard" or "shard job"
+  for the CI one.
