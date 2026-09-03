@@ -7,8 +7,11 @@ import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.domain.JavaMethod;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.platform.commons.support.AnnotationSupport;
 
+import java.lang.reflect.Method;
 import java.net.URISyntaxException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -33,6 +36,11 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * Deliberately broker-free and untagged, so it gates every default build - the same reasoning as
  * {@code ProgressProbeLedgerIT}: a register that is only checked when someone remembers to run a slow lane is
  * not a gate.
+ * <p>
+ * Being untagged is also what makes {@link #everyCoveredClaimMustHaveAProofThisRunCanSelect()} possible: this
+ * class keeps running in runs that deselect the proofs, which is precisely when someone needs to be told that the
+ * report below cannot mean what it appears to mean. Tagging it would buy silence in that case instead of an
+ * explanation, and would take the two source-drift checks - which depend on no test running at all - down with it.
  */
 class TransactionalClaimCoverageTest {
 
@@ -190,6 +198,12 @@ class TransactionalClaimCoverageTest {
      * is not hypothetical: quarantining is a sanctioned move in this repo and the default {@code excluded.groups}
      * drops the tag from the gating lanes, so an ordinary, correct quarantine would silently hollow out a claim.
      * The annotation on the owning class counts too - it disables or excludes every method in it.
+     * <p>
+     * Every rule here is about the code as WRITTEN, and so gives the same answer in every run - including the
+     * {@link Quarantined} one, which is a standing policy ("a claim proof may not be quarantined, because the
+     * gating lanes drop that tag") rather than a reading of the run in hand.
+     * {@link #everyCoveredClaimMustHaveAProofThisRunCanSelect()} asks the other question - what THIS run
+     * selected - so the two overlap on the default build and neither one subsumes the other. Do not collapse them.
      */
     @Test
     void claimProofsMustLiveWhereATestRunnerWillFindThem() {
@@ -236,5 +250,87 @@ class TransactionalClaimCoverageTest {
                 + "register asserting coverage nothing exercises")
                 .that(unreachable)
                 .isEmpty();
+    }
+
+    /**
+     * The claim-coverage check again, but asking what THIS run selected rather than what the code says.
+     * <p>
+     * {@link #everyClaimWeSayIsCoveredHasATestReferencingIt()} and the checks around it read the code as written,
+     * so they give the same answer in every run; this one reads the run in hand, and it exists because the two can
+     * disagree while both stay green. {@code pom.xml} documents overriding {@code -Dexcluded.groups}, and nearly
+     * every claim proof carries {@code @Tag("transactions")}: run
+     * {@code -Dexcluded.groups=transactions,performance,chaos} and no proof is ever selected, while this class -
+     * broker-free, untagged, and reading compiled annotations rather than results - still reports every claim
+     * covered, every parked claim explained and every sentence intact. A fully green register over a run that
+     * proved nothing, because the register's selection criteria and the proofs' selection criteria were disjoint.
+     * <p>
+     * Judged per CLAIM rather than per method, deliberately: a claim with two proofs, one of them tagged, is still
+     * proven in a run that drops the tagged one, and failing there would be the register reporting a gap it does
+     * not have. A claim with no proof at all is the sibling check's finding, not this one's, so it is left alone
+     * here rather than reported twice.
+     * <p>
+     * <b>What this can and cannot see.</b> Tag filters are the half that is shared: surefire and failsafe are both
+     * configured from the same {@code ${included.groups}}/{@code ${excluded.groups}} pair, so a tag verdict reached
+     * here holds for a proof in either lane. Lane selection is the half that is not - {@code bin/ci-unit-test.sh}
+     * passes {@code -DskipITs} and runs no integration proof at all - and checking that would contradict the
+     * register's design, which spans the two lanes deliberately (see {@link #compiledTestClasses}). So this asks
+     * only whether the tags would let a proof run, never whether this particular lane got to it.
+     */
+    @Test
+    void everyCoveredClaimMustHaveAProofThisRunCanSelect() {
+        RunTagFilter filter = RunTagFilter.ofCurrentRun();
+
+        Set<TransactionalClaim> selectable = EnumSet.noneOf(TransactionalClaim.class);
+        Map<TransactionalClaim, List<String>> deselected = new EnumMap<>(TransactionalClaim.class);
+        for (JavaMethod method : claimProvingMethods()) {
+            Set<String> tags = effectiveTagsOf(method);
+            boolean runWillSelect = filter.selects(tags);
+            String where = method.getOwner().getName() + "#" + method.getName();
+            for (TransactionalClaim claim : method.getAnnotationOfType(ProvesClaim.class).value()) {
+                if (runWillSelect) {
+                    selectable.add(claim);
+                } else {
+                    deselected.computeIfAbsent(claim, ignored -> new ArrayList<>())
+                            .add(where + " (" + filter.whyNotSelected(tags) + ")");
+                }
+            }
+        }
+
+        List<String> unexercised = new ArrayList<>();
+        for (TransactionalClaim claim : TransactionalClaim.values()) {
+            if (claim.getStatus().isCoverageEnforced()
+                    && !selectable.contains(claim)
+                    && deselected.containsKey(claim)) {
+                unexercised.add(claim.name() + " - every proof deselected: "
+                        + String.join(", ", deselected.get(claim)));
+            }
+        }
+
+        assertWithMessage("This run's tag filters deselected every proof of the claims below, so the coverage this "
+                + "register reports was not exercised by anything here (" + filter + "). Either stop excluding the "
+                + "tags that carry the claim proofs, or accept that the register cannot certify this run - it is "
+                + "reporting on tests that did not execute")
+                .that(unexercised)
+                .isEmpty();
+    }
+
+    /**
+     * The tags JUnit would apply to this method - its own, plus its declaring class's.
+     * <p>
+     * Resolved with JUnit's own {@link AnnotationSupport} rather than by matching {@code @Tag} annotations by hand,
+     * so the meta-annotated and inherited cases come out exactly as the launcher computes them - notably
+     * {@link Quarantined}, which is a {@code @Tag("quarantined")} CARRIER rather than a {@code @Tag} itself, and
+     * the tags a proof inherits from a superclass.
+     */
+    private static Set<String> effectiveTagsOf(JavaMethod method) {
+        Method reflected = method.reflect();
+        Set<String> tags = new LinkedHashSet<>();
+        for (Tag tag : AnnotationSupport.findRepeatableAnnotations(reflected, Tag.class)) {
+            tags.add(tag.value().trim());
+        }
+        for (Tag tag : AnnotationSupport.findRepeatableAnnotations(reflected.getDeclaringClass(), Tag.class)) {
+            tags.add(tag.value().trim());
+        }
+        return tags;
     }
 }
