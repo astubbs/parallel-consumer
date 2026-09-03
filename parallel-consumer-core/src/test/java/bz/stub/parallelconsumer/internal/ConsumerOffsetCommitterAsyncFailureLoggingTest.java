@@ -23,6 +23,7 @@ import org.junit.jupiter.api.parallel.ResourceAccessMode;
 import org.junit.jupiter.api.parallel.ResourceLock;
 import org.mockito.ArgumentCaptor;
 
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -202,13 +203,13 @@ class ConsumerOffsetCommitterAsyncFailureLoggingTest {
      * @return the one captured line mentioning {@code unique} - asserting there is exactly one, so a second matching
      * line is a failure rather than something silently discarded by a {@code findFirst()}
      */
-    private static String only(List<String> messages, String unique) {
+    private static String only(Collection<String> messages, String unique) {
         List<String> matches = linesMentioning(messages, unique);
         assertThat(matches).hasSize(1);
         return matches.get(0);
     }
 
-    private static List<String> linesMentioning(List<String> messages, String unique) {
+    private static List<String> linesMentioning(Collection<String> messages, String unique) {
         return messages.stream().filter(message -> message.contains(unique)).collect(Collectors.toList());
     }
 
