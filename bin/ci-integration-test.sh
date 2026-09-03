@@ -90,10 +90,17 @@ case "${INTEGRATION_SHARD:-}" in
         SHARD_ARGS=(-Dit.test="${HEAVY_CLASSES}" -Dfailsafe.failIfNoSpecifiedTests=false)
         ;;
     rest)
-        # Negated selection: failsafe takes `!Class` patterns, so the catch-all is the complement
-        # of the list above rather than a second list that could drift out of step with it.
-        SHARD_ARGS=(-Dit.test="$(echo "$HEAVY_CLASSES" | sed 's/[^,][^,]*/!&/g')" \
-                    -Dfailsafe.failIfNoSpecifiedTests=false)
+        # NOT -Dit.test=!Class. Setting it.test REPLACES failsafe's <includes>, and both test
+        # source roots compile into the same target/test-classes - so the negated form silently
+        # drops the `**/integrationTest*/**` restriction and runs the entire UNIT suite under
+        # failsafe too. Measured before this was understood: 168 classes and 981 tests instead of
+        # 42 and 204, critical path 782s against a 620s baseline, and the shard PASSED, because
+        # running more tests than you meant to fails nothing.
+        #
+        # it.excluded.classes feeds failsafe's <excludes> in the root pom, which leaves <includes>
+        # intact - so the catch-all is the complement of HEAVY_CLASSES *within the integration
+        # packages*, by construction rather than by hoping.
+        SHARD_ARGS=(-Dit.excluded.classes="$(echo "$HEAVY_CLASSES" | sed 's#[^,][^,]*#**/&.java#g')")
         ;;
     "") ;;  # whole suite - local runs and any caller that does not opt in
     *)
@@ -147,9 +154,25 @@ case "${INTEGRATION_SHARD:-}" in
         for c in ${HEAVY_CLASSES//,/ }; do
             if ls "${REPORTS_DIR}"/TEST-*."${c}".xml >/dev/null 2>&1; then
                 echo "ci-integration-test: FAILED - '${c}' is in HEAVY_CLASSES but ran in the 'rest' shard too." >&2
-                echo "  The negated selection is not excluding it, so both shards pay for it." >&2
+                echo "  Both shards are paying for it." >&2
                 exit 1
             fi
         done
         ;;
 esac
+
+# EVERY class that ran must live in an integrationTest package, in BOTH shards. This is the guard
+# that would have caught the it.test bug described above, and neither of the shard-specific checks
+# would have: they ask whether the RIGHT tests ran, and the failure there was 126 EXTRA ones. A
+# "ran at least N" gate cannot see that either - more is not fewer - which is why this asks about
+# provenance rather than count.
+if [ -n "${INTEGRATION_SHARD:-}" ]; then
+    strays=$(ls "${REPORTS_DIR}"/TEST-*.xml 2>/dev/null | grep -v '\.integrationTest' || true)
+    if [ -n "$strays" ]; then
+        echo "ci-integration-test: FAILED - the '${INTEGRATION_SHARD}' shard ran classes from outside" >&2
+        echo "  an integrationTest package. Failsafe's <includes> restriction has been lost - check" >&2
+        echo "  whether something set -Dit.test, which REPLACES it. Offenders:" >&2
+        printf '    %s\n' $strays >&2
+        exit 1
+    fi
+fi

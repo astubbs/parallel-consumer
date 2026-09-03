@@ -89,6 +89,9 @@
         <skipTests>false</skipTests>
         <skipITs>${skipTests}</skipITs>
         <skipUTs>${skipTests}</skipUTs>
+        <!-- Failsafe <excludes> for shard selection - see the failsafe plugin block. The default
+             deliberately matches no file, so an unset build runs the whole integration suite. -->
+        <it.excluded.classes>**/__no_class_matches_this__.java</it.excluded.classes>
 
         <!-- JUnit 5 test groups (failsafe). Override on the command line:
              -Dincluded.groups=performance    (run only performance tests)
@@ -1124,6 +1127,18 @@
                         <!-- Integration tests need to be in a package named `integrationTest` -->
                         <include>**/integrationTest*/**/*.java</include>
                     </includes>
+                    <!-- Shard selection for the catch-all lane. This exists rather than a
+                         -Dit.test=!Class because SETTING it.test REPLACES the <includes> above,
+                         and both source roots compile into the same target/test-classes - so
+                         `-Dit.test=!X` silently drops the integrationTest package restriction and
+                         runs the whole UNIT suite under failsafe as well. Measured: 168 classes
+                         and 981 tests instead of 42 and 204, and it passed, because running MORE
+                         tests fails nothing. An <excludes> leaves the include filter intact, so
+                         the catch-all stays inside the integration packages by construction.
+                         Default matches nothing. bin/ci-integration-test.sh is the only caller. -->
+                    <excludes>
+                        <exclude>${it.excluded.classes}</exclude>
+                    </excludes>
                     <jvm>${jvm.location}/bin/java</jvm>
                     <skipTests>${skipTests}</skipTests>
                     <skipITs>${skipITs}</skipITs>
