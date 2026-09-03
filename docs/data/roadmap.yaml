@@ -190,7 +190,7 @@ entries:
     stage_detail: >-
       Implemented on astubbs#410 to the plan's Definition of Done: PC builds its own transactional producer
       from configuration, detects the broker-reported conditions on both paths, aborts, replays the
-      completed-but-uncommitted ledger, and rebuilds under the same transactional.id; proven at the unit level
+      completed-but-uncommitted ledger, and rebuilds under the same derived id; proven at the unit level
       (fenced-during-commit was red before the change) and on a real coordinator by ProducerFencingRecoveryIT,
       with the recovery guarantee registered as a transactional claim. Not yet run in anger, so not
       "implemented"; the producer-instance path keeps its old behaviour.

@@ -4,146 +4,194 @@ package bz.stub.parallelconsumer.internal;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import org.apache.kafka.common.KafkaException;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.spy;
+import static org.mockito.ArgumentMatchers.any;
+import java.time.Duration;
+import static org.mockito.Mockito.verify;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
+import bz.stub.parallelconsumer.ProducerFactory;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerGroupMetadata;
+import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
-import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.junit.jupiter.api.Test;
 import pl.tlinkowski.unij.api.UniMaps;
 import pl.tlinkowski.unij.api.UniSets;
 
-import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
-import java.util.UUID;
-import java.util.function.Function;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.spy;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * The configuration path at the module (astubbs#225): what PC builds from the map, what the construction seam
- * receives, and that a producer PC built for a start-up that fails is closed rather than leaked.
+ * R2, R4, R6 at the module: what the factory receives, how often it is called, and that a replacement is only
+ * available on the configuration path (KTD2, KTD8).
  */
 class PcBuiltProducerTest {
 
+    private static final String GROUP = "app";
+
+    /** Every configuration the factory was handed, in order. */
+    private final List<Map<String, Object>> handedConfigs = new ArrayList<>();
+
+    private final ProducerFactory<String, String> capturingFactory = config -> {
+        handedConfigs.add(new HashMap<>(config));
+        return new MockProducer<>(true, new StringSerializer(), new StringSerializer());
+    };
+
     @SuppressWarnings("unchecked")
-    private static Consumer<String, String> consumerInGroup() {
+    private static Consumer<String, String> consumerInGroup(String groupId) {
         Consumer<String, String> consumer = mock(Consumer.class);
-        when(consumer.groupMetadata()).thenReturn(new ConsumerGroupMetadata("app"));
+        when(consumer.groupMetadata()).thenReturn(new ConsumerGroupMetadata(groupId));
         when(consumer.paused()).thenReturn(UniSets.of());
         return consumer;
     }
 
-    /**
-     * A literal address, not a hostname: the default seam builds a real KafkaProducer from this map, whose
-     * constructor resolves bootstrap.servers, and a hostname resolves on some networks and not on CI.
-     */
-    private static Map<String, Object> realProducerConfig(String transactionalId) {
-        var config = new java.util.HashMap<String, Object>();
-        config.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "127.0.0.1:1");
-        config.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
-        config.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
-        if (transactionalId != null) {
-            config.put(ProducerConfig.TRANSACTIONAL_ID_CONFIG, transactionalId);
-        }
-        return config;
-    }
-
-    private static ParallelConsumerOptions<String, String> optionsWith(Map<String, Object> producerConfig, CommitMode mode) {
-        return ParallelConsumerOptions.<String, String>builder()
-                .consumer(consumerInGroup())
+    private PCModule<String, String> moduleWith(ProducerFactory<String, String> factory, Map<String, Object> producerConfig, CommitMode mode) {
+        var options = ParallelConsumerOptions.<String, String>builder()
+                .consumer(consumerInGroup(GROUP))
                 .producerConfig(producerConfig)
+                .producerFactory(factory)
                 .commitMode(mode)
                 .build();
+        return new PCModule<>(options);
     }
 
-    /** A module whose construction seam is the given function, so a test can see the map or substitute the producer. */
-    private static PCModule<String, String> moduleBuildingWith(ParallelConsumerOptions<String, String> options,
-                                                              Function<Map<String, Object>, Producer<String, String>> seam) {
-        return new PCModule<>(options) {
-            @Override
-            protected Producer<String, String> buildProducer(Map<String, Object> producerConfig) {
-                return seam.apply(producerConfig);
-            }
-        };
+    private static Map<String, Object> minimalConfig() {
+        // A literal address, not a hostname: the default factory builds a real KafkaProducer from this map, whose
+        // constructor resolves bootstrap.servers. `broker` resolved on the author's network and nowhere else, and
+        // the two construction cases failed on every CI runner with "Failed to construct kafka producer".
+        return UniMaps.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "127.0.0.1:1");
+    }
+
+    /**
+     * Covers AE4.
+     */
+    @Test
+    void twoModulesDeriveDifferentIdsAndOneModuleReusesItsIdForEveryReplacement() {
+        var moduleA = moduleWith(capturingFactory, minimalConfig(), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
+        var moduleB = moduleWith(capturingFactory, minimalConfig(), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
+
+        // the wrappers themselves are not the subject - what the factory was handed is
+        var ignoredInitialA = moduleA.producerWrap();
+        var ignoredReplacementA1 = moduleA.replacementProducerWrap().get().build();
+        var ignoredReplacementA2 = moduleA.replacementProducerWrap().get().build();
+        var ignoredInitialB = moduleB.producerWrap();
+
+        assertThat(handedConfigs).hasSize(4);
+        String idA = (String) handedConfigs.get(0).get(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
+        assertThat(idA).startsWith(TransactionalIdDerivation.prefixFor(GROUP));
+        assertThat(handedConfigs.get(1).get(ProducerConfig.TRANSACTIONAL_ID_CONFIG)).isEqualTo(idA);
+        assertThat(handedConfigs.get(2).get(ProducerConfig.TRANSACTIONAL_ID_CONFIG)).isEqualTo(idA);
+        String idB = (String) handedConfigs.get(3).get(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
+        assertThat(idB).startsWith(TransactionalIdDerivation.prefixFor(GROUP));
+        assertWithMessage("two instances of the same application never share an id").that(idB).isNotEqualTo(idA);
+    }
+
+    /**
+     * Covers AE4.
+     */
+    @Test
+    void aCallerSetIdIsAbsentFromWhatTheFactoryReceives() {
+        var module = moduleWith(capturingFactory,
+                UniMaps.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "broker:9092", ProducerConfig.TRANSACTIONAL_ID_CONFIG, "callers-id"),
+                CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
+
+        var ignoredWrapper = module.producerWrap(); // what the factory received is the subject
+
+        assertThat(handedConfigs.get(0).get(ProducerConfig.TRANSACTIONAL_ID_CONFIG)).isNotEqualTo("callers-id");
+        assertThat((String) handedConfigs.get(0).get(ProducerConfig.TRANSACTIONAL_ID_CONFIG)).startsWith("pc-3-app-");
     }
 
     @Test
-    void theDefaultSeamBuildsATransactionalKafkaProducerFromTheMapAsGiven() {
-        var module = new PCModule<>(optionsWith(realProducerConfig("pc-test-" + UUID.randomUUID()), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER));
+    void inANonTransactionalModeTheFactoryReceivesNoTransactionalId() {
+        var module = moduleWith(capturingFactory,
+                UniMaps.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "broker:9092", ProducerConfig.TRANSACTIONAL_ID_CONFIG, "callers-id"),
+                CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS);
 
         var wrapper = module.producerWrap();
 
-        try {
-            assertThat(wrapper.isConfiguredForTransactions()).isTrue();
-            assertThat(wrapper.isMockProducer()).isFalse();
-        } finally {
-            wrapper.close(Duration.ZERO);
-        }
-    }
-
-    @Test
-    void theDefaultSeamBuildsANonTransactionalKafkaProducerWhenTheMapCarriesNoId() {
-        var module = new PCModule<>(optionsWith(realProducerConfig(null), CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS));
-
-        var wrapper = module.producerWrap();
-
-        try {
-            assertThat(wrapper.isConfiguredForTransactions()).isFalse();
-        } finally {
-            wrapper.close(Duration.ZERO);
-        }
-    }
-
-    @Test
-    void theSeamReceivesACopyOfTheCallersMapWithEveryKey() {
-        Map<String, Object> callers = UniMaps.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "broker:9092",
-                ProducerConfig.TRANSACTIONAL_ID_CONFIG, "callers-id");
-        var received = new java.util.concurrent.atomic.AtomicReference<Map<String, Object>>();
-        var module = moduleBuildingWith(optionsWith(callers, CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER), config -> {
-            received.set(config);
-            return new MockProducer<>(true, new StringSerializer(), new StringSerializer());
-        });
-
-        var wrapper = module.producerWrap();
-
-        assertThat(received.get()).containsExactlyEntriesIn(callers);
-        assertWithMessage("a copy, so an override editing it cannot edit the options")
-                .that(received.get()).isNotSameInstanceAs(callers);
-        assertThat(wrapper.isConfiguredForTransactions()).isTrue();
-        assertWithMessage("one producer per module").that(module.producerWrap()).isSameInstanceAs(wrapper);
-    }
-
-    @Test
-    void theInstancePathWrapsTheCallersProducerAndBuildsNothing() {
-        @SuppressWarnings("unchecked")
-        Producer<String, String> instance = mock(Producer.class);
-        var options = ParallelConsumerOptions.<String, String>builder()
-                .consumer(consumerInGroup())
-                .producer(instance)
-                .build();
-        var module = moduleBuildingWith(options, config -> {
-            throw new AssertionError("the instance path must not build a producer");
-        });
-
-        var wrapper = module.producerWrap();
-
+        assertThat(handedConfigs.get(0)).doesNotContainKey(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
         assertThat(wrapper.isConfiguredForTransactions()).isFalse();
-        wrapper.send(null);
-        verify(instance).send(null);
+    }
+
+    /**
+     * The id is resolved once per instance, so the WARN a caller-set id earns fires once, not once per rebuild: an
+     * operator watching a recovery loop sees the recovery lines, not a repeat of a start-up warning.
+     */
+    @Test
+    void aCallerSetIdIsWarnedAboutOnceAcrossAStartAndTwoReplacements() {
+        String callersId = "callers-id-" + java.util.UUID.randomUUID();
+        var module = moduleWith(capturingFactory,
+                UniMaps.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "broker:9092", ProducerConfig.TRANSACTIONAL_ID_CONFIG, callersId),
+                CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(TransactionalIdDerivation.class);
+        var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            var ignoredInitial = module.producerWrap();
+            var source = module.replacementProducerWrap().get();
+            var ignoredFirstReplacement = source.build();
+            var ignoredSecondReplacement = source.build();
+        } finally {
+            logger.detachAppender(appender);
+        }
+
+        long warnsNamingTheCallersId = appender.list.stream()
+                .filter(event -> event.getLevel().isGreaterOrEqual(ch.qos.logback.classic.Level.WARN))
+                .filter(event -> event.getFormattedMessage().contains(callersId))
+                .count();
+        assertThat(warnsNamingTheCallersId).isEqualTo(1);
+        assertThat(handedConfigs).hasSize(3);
+        assertWithMessage("every build received the same derived id")
+                .that(handedConfigs.stream().map(config -> config.get(ProducerConfig.TRANSACTIONAL_ID_CONFIG)).distinct().count()).isEqualTo(1);
+    }
+
+    @Test
+    void aFactoryReturningTheSameInstanceTwiceIsRejected() {
+        var shared = new MockProducer<>(true, new StringSerializer(), new StringSerializer());
+        ProducerFactory<String, String> cachingFactory = config -> shared;
+        var module = moduleWith(cachingFactory, minimalConfig(), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
+        var ignoredFirst = module.producerWrap(); // the first call is legitimate; the repeat is the defect
+
+        var thrown = assertThrows(ProducerFactoryContractException.class, () -> module.replacementProducerWrap().get().build());
+
+        assertThat(thrown).hasMessageThat().contains("ProducerFactory");
+        assertThat(thrown).hasMessageThat().contains("new");
+    }
+
+    /**
+     * A pool alternating two instances passes a last-only identity check on its third call, then fails
+     * initTransactions on a producer PC has already closed - forever, as a retriable failure. Every instance the
+     * factory ever returned is remembered.
+     */
+    @Test
+    void aFactoryReturningAnEarlierInstanceAgainIsRejectedNotOnlyTheImmediatelyPreviousOne() {
+        var a = new MockProducer<>(true, new StringSerializer(), new StringSerializer());
+        var b = new MockProducer<>(true, new StringSerializer(), new StringSerializer());
+        var pool = new ArrayList<>(Arrays.asList(a, b, a));
+        ProducerFactory<String, String> poolingFactory = config -> pool.remove(0);
+        var module = moduleWith(poolingFactory, minimalConfig(), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
+        var ignoredFirst = module.producerWrap(); // a
+        var ignoredSecond = module.replacementProducerWrap().get().build(); // b - legitimate
+
+        var thrown = assertThrows(ProducerFactoryContractException.class, () -> module.replacementProducerWrap().get().build());
+
+        assertThat(thrown).hasMessageThat().contains("already returned");
     }
 
     /**
@@ -155,7 +203,8 @@ class PcBuiltProducerTest {
     void aProducerBuiltForAManagerThatFailsToConstructIsClosed() {
         var producer = spy(new MockProducer<>(true, new StringSerializer(), new StringSerializer()));
         doThrow(new KafkaException("coordinator not available")).when(producer).initTransactions();
-        var module = moduleBuildingWith(optionsWith(realProducerConfig("pc-test"), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER), config -> producer);
+        ProducerFactory<String, String> factory = config -> producer;
+        var module = moduleWith(factory, minimalConfig(), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
 
         assertThrows(KafkaException.class, module::producerManager);
 
@@ -164,21 +213,21 @@ class PcBuiltProducerTest {
 
     /**
      * The wrapper's transactional discovery reads a {@code KafkaProducer} field reflectively, and a subclass does not
-     * declare it - so a producer built as a subclass (a user's instrumenting subclass, say) fails at the wrapper, one
-     * frame before the manager guard, with nobody else holding the producer PC just built. Found by the review of
-     * astubbs#426.
+     * declare it - so a factory returning a subclass (an instrumenting subclass, say) fails at the wrapper, one frame
+     * after the contract checks, with nobody else holding the producer it just built. Found by the review of
+     * astubbs#426; the rung-1 guard is the try around {@code ProducerWrapper.forPcBuilt} here.
      */
     @Test
     void aProducerBuiltForAWrapperThatFailsToConstructIsClosed() {
         var closed = new java.util.concurrent.atomic.AtomicBoolean();
-        var module = moduleBuildingWith(optionsWith(realProducerConfig("pc-test"), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER),
-                config -> new org.apache.kafka.clients.producer.KafkaProducer<String, String>(config) {
-                    @Override
-                    public void close(Duration timeout) {
-                        closed.set(true);
-                        super.close(timeout);
-                    }
-                });
+        ProducerFactory<String, String> subclassingFactory = config -> new KafkaProducer<String, String>(config, new StringSerializer(), new StringSerializer()) {
+            @Override
+            public void close(Duration timeout) {
+                closed.set(true);
+                super.close(timeout);
+            }
+        };
+        var module = moduleWith(subclassingFactory, minimalConfig(), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
 
         assertThrows(NoSuchFieldException.class, module::producerWrap);
 
@@ -191,37 +240,63 @@ class PcBuiltProducerTest {
      */
     @Test
     void aBuiltProducerWhoseCloseAlsoFailsStillSurfacesTheConstructionFailure() {
-        var module = moduleBuildingWith(optionsWith(realProducerConfig("pc-test"), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER),
-                config -> new org.apache.kafka.clients.producer.KafkaProducer<String, String>(config) {
-                    @Override
-                    public void close(Duration timeout) {
-                        super.close(timeout);
-                        throw new IllegalStateException("close failed too");
-                    }
-                });
+        ProducerFactory<String, String> factory = config -> new KafkaProducer<String, String>(config, new StringSerializer(), new StringSerializer()) {
+            @Override
+            public void close(Duration timeout) {
+                super.close(timeout);
+                throw new IllegalStateException("close failed too");
+            }
+        };
+        var module = moduleWith(factory, minimalConfig(), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
 
         var thrown = assertThrows(NoSuchFieldException.class, module::producerWrap);
 
         assertThat(thrown).hasMessageThat().contains("transactionManager");
     }
 
-    /**
-     * The caller's own instance is the caller's to close: they may hold it, and they never handed PC its lifecycle.
-     */
     @Test
-    void theCallersInstanceIsNotClosedWhenTheManagerFailsToConstruct() {
-        var instance = spy(new MockProducer<>(true, new StringSerializer(), new StringSerializer()));
-        doThrow(new KafkaException("coordinator not available")).when(instance).initTransactions();
+    void theInstancePathWrapsTheCallersProducerAndOffersNoReplacement() {
+        @SuppressWarnings("unchecked")
+        Producer<String, String> instance = mock(Producer.class);
         var options = ParallelConsumerOptions.<String, String>builder()
-                .consumer(consumerInGroup())
+                .consumer(consumerInGroup(GROUP))
                 .producer(instance)
-                .commitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER)
                 .build();
         var module = new PCModule<>(options);
 
-        assertThrows(KafkaException.class, module::producerManager);
+        var wrapper = module.producerWrap();
 
-        verify(instance, never()).close(any(Duration.class));
-        verify(instance, never()).close();
+        assertThat(module.replacementProducerWrap()).isEmpty();
+        assertThat(wrapper.isConfiguredForTransactions()).isFalse();
+        assertThat(handedConfigs).isEmpty();
+    }
+
+    /**
+     * KTD8: the factory contract is checked at construction, not discovered at the first transactional call.
+     */
+    @Test
+    void aFactoryThatDropsTheTransactionalIdFailsAtConstructionNamingTheContract() {
+        ProducerFactory<String, String> droppingFactory = config -> {
+            Map<String, Object> without = new HashMap<>(config);
+            without.remove(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
+            return new KafkaProducer<>(without, new StringSerializer(), new StringSerializer());
+        };
+        var module = moduleWith(droppingFactory, minimalConfig(), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
+
+        var thrown = assertThrows(ProducerFactoryContractException.class, module::producerWrap);
+
+        assertThat(thrown).hasMessageThat().contains("ProducerFactory");
+        assertThat(thrown).hasMessageThat().contains(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
+    }
+
+    @Test
+    void aFactoryThatHonoursTheMapPassesTheConstructionCheck() {
+        ProducerFactory<String, String> honestFactory = config -> new KafkaProducer<>(config, new StringSerializer(), new StringSerializer());
+        var module = moduleWith(honestFactory, minimalConfig(), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER);
+
+        var wrapper = module.producerWrap();
+
+        assertThat(wrapper.isConfiguredForTransactions()).isTrue();
+        wrapper.close();
     }
 }

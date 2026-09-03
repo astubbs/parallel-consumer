@@ -8,6 +8,7 @@ package bz.stub.parallelconsumer;
 import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.internal.DynamicLoadFactor;
 import bz.stub.parallelconsumer.internal.MdcPropagation;
+import bz.stub.parallelconsumer.internal.ProducerConfigRedaction;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tag;
@@ -67,26 +68,46 @@ public class ParallelConsumerOptions<K, V> {
      * rebuild from, so on this path those conditions (fenced, an expired producer id, a stale epoch, a lost
      * generation) keep their pre-recovery behaviour: a shutdown on the commit path, and on the produce path whatever
      * the condition's shape produces today.
+     * <p>
+     * Both ways are supported. What needs PC to build the producer - {@link #producerFactory}, and the recovery it
+     * exists for - refuses an instance at validation rather than degrading silently; supplying this together with
+     * {@link #producerConfig} fails validation too.
      *
      * @see ParallelStreamProcessor
      */
     private final Producer<K, V> producer;
 
     /**
-     * Producer configuration for the produce flows, from which PC builds its own producer with
-     * {@code new KafkaProducer<>(config)}: any {@code ProducerConfig} key, serializers included, exactly as it would
-     * be passed to that constructor. In {@link CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER} set
-     * {@code transactional.id} here, as you would when building the producer yourself.
+     * Producer configuration for the produce flows, from which PC builds - and, when the broker invalidates it,
+     * rebuilds - its own producer through {@link #producerFactory}. Any {@code ProducerConfig} key, serializers
+     * included, exactly as it would be passed to {@code new KafkaProducer<>(config)}.
      * <p>
-     * On this path a producer the broker reports invalid is recovered: PC builds another from this same
-     * configuration, {@code transactional.id} included, and initialising the replacement is what fences the producer
-     * it replaces.
+     * In {@link CommitMode#PERIODIC_TRANSACTIONAL_PRODUCER} PC sets {@code transactional.id} itself, to a value that
+     * is unique to this running instance and reused by every replacement producer, so a caller-set value does not
+     * take effect and is reported at WARN. The derived id is {@code pc-<L>-<group.id>-<uuid>}, where {@code <L>} is
+     * the decimal length of the consumer's {@code group.id}; the prefix {@code pc-<L>-<group.id>-} is stable for the
+     * group, so one prefixed TransactionalId ACL authorises every id PC derives for it, and the length field keeps one
+     * group's prefix from being a prefix of another's. In every other commit mode PC builds a non-transactional
+     * producer and removes any caller-set {@code transactional.id}.
      * <p>
-     * The alternative to {@link #producer}; supplying both fails validation. Excluded from {@link #toString()}, as
-     * the map may carry credentials.
+     * Values are never rendered raw: {@link #toString()} and every PC log line show only an allow-list of non-secret
+     * keys and redact the rest.
+     * <p>
+     * Mutually exclusive with {@link #producer}.
+     *
+     * @see ProducerFactory
      */
     @ToString.Exclude
     private final Map<String, Object> producerConfig;
+
+    /**
+     * Builds the producer from {@link #producerConfig}, and so requires it: a finished {@link #producer} instance
+     * carries no configuration for a factory to build from, and supplying both fails validation. Unset, PC builds a
+     * plain {@code KafkaProducer}; set it to wrap, instrument or substitute the producer. See {@link ProducerFactory}
+     * for the contract every implementation must keep.
+     */
+    @ToString.Exclude
+    private final ProducerFactory<K, V> producerFactory;
 
     /**
      * Path to Managed executor service for Java EE
@@ -542,19 +563,35 @@ public class ParallelConsumerOptions<K, V> {
     }
 
     /**
-     * Exactly one way of supplying a producer may be used: two producers cannot be resolved to one silently.
+     * Exactly one way of supplying a producer may be used, and what needs PC to build the producer refuses a finished
+     * instance here, at validation, rather than on the day it matters.
      */
     private void producerSourceValidation() {
         if (producer != null && producerConfig != null) {
-            throw new IllegalArgumentException(msg("Supply either a {} instance or {} for PC to build one from, not both",
+            throw new IllegalArgumentException(msg("Supply either a {} instance or {} for PC to build one from, not both - " +
+                            "they cannot be resolved to one producer silently.",
                     Fields.producer, Fields.producerConfig));
         }
+        if (producerFactory != null && producerConfig == null) {
+            throw new IllegalArgumentException(msg("{} builds the producer from {}, which was not supplied{}",
+                    Fields.producerFactory, Fields.producerConfig,
+                    producer != null
+                            ? msg(" - a finished {} instance carries no configuration for a factory to build from, so the two cannot be combined", Fields.producer)
+                            : ""));
+        }
+    }
+
+    /**
+     * The factory PC builds the producer with: the one supplied, or a plain {@code KafkaProducer}.
+     */
+    public ProducerFactory<K, V> effectiveProducerFactory() {
+        return producerFactory != null ? producerFactory : ProducerFactory.kafkaProducer();
     }
 
     private void transactionsValidation() {
         if (isUsingTransactionCommitMode()) {
             if (!isProducerSupplied()) {
-                throw new IllegalArgumentException(msg("Cannot set {} to Transaction Producer mode ({}) without supplying a Producer instance or {} for PC to build one from",
+                throw new IllegalArgumentException(msg("Cannot set {} to Transaction Producer mode ({}) without supplying {} for PC to build a Producer from (or a Producer instance)",
                         Fields.commitMode,
                         commitMode,
                         Fields.producerConfig));
@@ -611,8 +648,8 @@ public class ParallelConsumerOptions<K, V> {
     }
 
     /**
-     * @return true when the produce flows can be used - a finished instance, or a configuration for PC to build the
-     *         producer from
+     * @return true when the produce flows can be used - a configuration for PC to build the producer from, or a
+     *         finished instance
      */
     public boolean isProducerSupplied() {
         return producer != null || producerConfig != null;
@@ -624,6 +661,15 @@ public class ParallelConsumerOptions<K, V> {
      */
     public boolean isProducerInstanceSupplied() {
         return producer != null;
+    }
+
+    /**
+     * The configuration as it may be shown: allow-listed keys with their values, everything else redacted. This is
+     * what {@link #toString()} carries in place of the raw map.
+     */
+    @ToString.Include(name = "producerConfig")
+    private String producerConfigForDisplay() {
+        return ProducerConfigRedaction.render(producerConfig);
     }
 
     /**

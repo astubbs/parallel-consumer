@@ -11,10 +11,10 @@ import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.state.ShardManager;
 import bz.stub.parallelconsumer.state.WorkManager;
+import bz.stub.parallelconsumer.ProducerFactory;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.Consumer;
-import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 
@@ -22,7 +22,11 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.WeakHashMap;
+import java.util.Set;
+import java.util.Collections;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * Minimum dependency injection system, modled on how Dagger works.
@@ -66,8 +70,40 @@ public class PCModule<K, V> {
     private ProducerWrapper<K, V> producerWrapper;
 
     /**
-     * The wrapper around the producer PC uses: the caller's instance, or the one PC builds from
-     * {@link ParallelConsumerOptions#getProducerConfig()}.
+     * The suffix of every {@code transactional.id} this module derives: generated once, so the producer PC builds at
+     * start-up and every replacement it builds after a recovery share one id, and re-initialising a replacement
+     * fences exactly the producer it replaces.
+     */
+    private final UUID producerInstanceId = UUID.randomUUID();
+
+    /**
+     * Every producer the factory has handed back, held weakly and compared by identity: a factory returning any of
+     * them again is a caching or pooling factory, which breaks the contract {@link ProducerFactory} states. All of
+     * them, not the last one: a pool alternating two instances would pass a last-only check on its third call,
+     * then fail {@code initTransactions()} on a producer PC had already closed - and retry that forever as if it
+     * were transient. Weak, so a discarded producer is not kept alive by the check that rejects its return.
+     * Written on the constructing thread and, after that, only by the control thread's recovery pass.
+     */
+    private final Set<Producer<K, V>> producersHandedOut = Collections.newSetFromMap(new WeakHashMap<>());
+
+    /**
+     * The caller's producer configuration with the {@code transactional.id} PC derives set (or, in a non-transactional
+     * commit mode, removed). Resolved once: the producer PC starts with and every replacement it builds are made from
+     * the same map, and the WARN a caller-set id earns is emitted once per instance rather than once per rebuild.
+     */
+    private Map<String, Object> resolvedProducerConfig;
+
+    private Map<String, Object> resolvedProducerConfig() {
+        if (resolvedProducerConfig == null) {
+            resolvedProducerConfig = TransactionalIdDerivation.resolve(options().getProducerConfig(),
+                    options().isUsingTransactionCommitMode(), groupIdForDerivation(), producerInstanceId);
+        }
+        return resolvedProducerConfig;
+    }
+
+    /**
+     * The wrapper around the producer PC starts with - the caller's instance on the instance path, or the first
+     * producer built from configuration through the factory.
      */
     protected ProducerWrapper<K, V> producerWrap() {
         if (this.producerWrapper == null) {
@@ -80,42 +116,46 @@ public class PCModule<K, V> {
 
     /**
      * How a replacement producer is built after the broker invalidates the current one: present only where PC built
-     * the producer itself, because a caller's finished instance carries no configuration to rebuild from. Each call
-     * builds from the same configuration - the same {@code transactional.id} included, so that initialising the
-     * replacement fences the producer it replaces. The id travels with the source so a failure to build can name it.
+     * the producer itself, because a caller's finished instance carries no configuration to rebuild from. Each call of
+     * the supplier resolves the same configuration - the same derived {@code transactional.id} included - and asks
+     * the factory for a new producer.
      */
     public Optional<ReplacementProducerSource<K, V>> replacementProducerWrap() {
         if (options().isProducerInstanceSupplied()) {
             return Optional.empty();
         }
-        // null in a non-transactional commit mode, where the caller sets none
-        String transactionalId = (String) options().getProducerConfig().get(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
+        // null in a non-transactional commit mode, where resolve() removes the key
+        String transactionalId = (String) resolvedProducerConfig().get(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
         return Optional.of(new ReplacementProducerSource<>(this::buildProducerWrapperFromConfiguration, transactionalId));
     }
 
     private ProducerWrapper<K, V> buildProducerWrapperFromConfiguration() {
-        // a copy per call: the seam may read or edit it, and must not edit the options
-        Map<String, Object> config = new LinkedHashMap<>(options().getProducerConfig());
-        // run as user code is: the seam is overridable, and an Error from the constructor (a serializer's static
-        // initialiser failing, say) must surface as a failure of the build rather than escape every catch on the
-        // recovery path, leaving the instance RUNNING with its workers parked on the produce lock for good
-        Producer<K, V> producer = UserFunctions.carefullyRun(this::buildProducer, config);
-        return wrapPcBuilt(producer);
-    }
-
-    /**
-     * Wraps a producer PC just built, closing it if the wrapper cannot be constructed around it: the wrapper's
-     * transactional discovery reads a {@code KafkaProducer} field reflectively, and a subclass of
-     * {@code KafkaProducer} does not declare that field, so the constructor throws - and the producer, already
-     * running its network thread, is referenced by nobody else. Throwable, not RuntimeException: that reflective
-     * failure is a checked exception thrown sneakily, which a narrower catch lets straight through.
-     */
-    private ProducerWrapper<K, V> wrapPcBuilt(Producer<K, V> producer) {
+        boolean transactional = options().isUsingTransactionCommitMode();
+        // a copy per call: the map is the factory's to read, and a factory that mutates it must not mutate the memo
+        Map<String, Object> resolved = new LinkedHashMap<>(resolvedProducerConfig());
+        // user code, wrapped as every other user function is: a factory that throws an Error (a serializer's static
+        // initialiser failing, say) would otherwise escape every catch on the recovery path, leaving the instance
+        // RUNNING with its workers parked on the produce lock for good
+        Producer<K, V> producer = UserFunctions.carefullyRun(options().effectiveProducerFactory()::create, resolved);
+        if (producer == null) {
+            throw new ProducerFactoryContractException("The ProducerFactory returned null; every call must return a new Producer");
+        }
+        if (producersHandedOut.contains(producer)) {
+            throw new ProducerFactoryContractException("The ProducerFactory returned a producer it had already returned; every " +
+                    "call must return a new Producer, because PC discards the previous one when the broker invalidates it");
+        }
+        producersHandedOut.add(producer);
         try {
-            return new ProducerWrapper<>(options(), producer);
-        } catch (Throwable wrapFailed) {
-            closeQuietly(producer, "the producer built for a wrapper that failed to construct");
-            throw wrapFailed;
+            ProducerWrapper<K, V> wrapper = ProducerWrapper.forPcBuilt(options(), producer, transactional);
+            log.info("Built producer from configuration (transactional: {}): {}", transactional, ProducerConfigRedaction.render(resolved));
+            return wrapper;
+        } catch (Throwable rejected) {
+            // The producer failed the construction check, or the wrapper could not be built around it - a subclass of
+            // KafkaProducer does not declare the field transactional discovery reads, and that reflective failure is
+            // a checked exception thrown sneakily, which is why this is Throwable. Either way it will never be used:
+            // do not leak its threads.
+            closeQuietly(producer, "a rejected producer");
+            throw rejected;
         }
     }
 
@@ -127,14 +167,13 @@ public class PCModule<K, V> {
         }
     }
 
-    /**
-     * Constructs the producer on the configuration path: {@code new KafkaProducer<>(config)}, serializers and all,
-     * exactly as the caller would have. The substitution seam for a test that needs the producer PC builds to be a
-     * {@link org.apache.kafka.clients.producer.MockProducer}. The map is a copy, so an override may read or edit it
-     * without touching the options.
-     */
-    protected Producer<K, V> buildProducer(Map<String, Object> producerConfig) {
-        return new KafkaProducer<>(producerConfig);
+    private String groupIdForDerivation() {
+        var metadata = consumerManager().groupMetadata();
+        if (metadata == null || metadata.groupId() == null) {
+            throw new IllegalArgumentException("Cannot derive a transactional.id without the consumer's group.id - the " +
+                    "consumer must be configured with a group.id before PC can build a producer");
+        }
+        return metadata.groupId();
     }
 
     private ProducerManager<K, V> producerManager;
@@ -145,10 +184,11 @@ public class PCModule<K, V> {
             try {
                 this.producerManager = new ProducerManager<>(wrapper, consumerManager(), workManager(), options(), replacementProducerWrap());
             } catch (Throwable constructionFailed) {
-                // The manager's constructor initialises transactions, which can throw (a coordinator that is not
-                // there yet, say). A producer PC built is PC's to close: nobody else holds it, and the processor that
-                // failed to construct is never returned to the caller, so without this every failed start-up leaks
-                // a producer and its network thread. The caller's own instance is the caller's to close.
+                // The manager's constructor registers a gauge and initialises transactions, either of which can
+                // throw (a coordinator that is not there yet, say). On the configuration path the producer it was
+                // handed is PC's own, nobody else holds it, and the processor that failed to construct is never
+                // returned to the caller - so without this, every failed start-up leaks a producer and its network
+                // thread. The caller's own instance is the caller's to close.
                 if (!options().isProducerInstanceSupplied()) {
                     closeQuietly(wrapper, "the producer built for a manager that failed to construct");
                 }
