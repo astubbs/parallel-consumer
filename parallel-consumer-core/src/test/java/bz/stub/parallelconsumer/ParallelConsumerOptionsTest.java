@@ -65,14 +65,13 @@ class ParallelConsumerOptionsTest {
     }
 
     /**
-     * {@code transactionsValidation} decides "did the user set a commit interval?" by reference identity
-     * ({@code getCommitInterval() == DEFAULT_COMMIT_INTERVAL}), not {@code equals}. {@link Duration} never interns -
-     * confirmed directly (JDK 17): {@code Duration.ofSeconds(5) == Duration.ofMillis(5000)} is {@code false} even
-     * though they are {@code equals}. So any explicitly-constructed value, including one numerically equal to the
-     * default, is a different object from the constant and is correctly kept. This guards the identity check against
-     * a well-intentioned but wrong fix to {@code equals()}: that would make this exact case - a user who explicitly
-     * asks for 5 seconds under transactions - get silently reduced to 100ms, which contradicts
-     * {@code docs/features/commit-interval.yaml}'s documented boundary that an explicitly set value is kept.
+     * An explicit value that merely equals the default is still explicit. {@code transactionsValidation} answers
+     * "did the user set a commit interval?" from the raw field being {@code null}, so what the value equals or
+     * reference-matches never enters into it. This test pins the boundary {@code docs/features/commit-interval.yaml}
+     * documents - an explicitly set value is kept - against the one refactor that would silently break it: deciding
+     * "unset" by {@code Duration#equals} against {@code DEFAULT_COMMIT_INTERVAL}, which would reduce exactly this
+     * user's 5 seconds to 100ms. (The pre-fix {@code ==} check happened to pass this case too, because {@link Duration}
+     * never interns; that is history, not the reason the test exists.)
      */
     @Test
     void explicitCommitIntervalEqualToDefaultIsKeptUnderTransactions() {
@@ -89,10 +88,11 @@ class ParallelConsumerOptionsTest {
     }
 
     /**
-     * The reference-identity check's one genuine failure mode: a user who explicitly hands back the public
-     * {@code DEFAULT_COMMIT_INTERVAL} constant itself - the same object, not merely an equal value - is
-     * indistinguishable from never having called {@code commitInterval(...)} at all, and gets silently reduced to
-     * the 100ms transactional default despite the explicit call.
+     * Handing back the public {@code DEFAULT_COMMIT_INTERVAL} constant itself is an explicit call like any other, and
+     * is kept. This was the one case the pre-fix reference-identity check got wrong: the same object as the constant
+     * was indistinguishable from never calling {@code commitInterval(...)}, so it was silently reduced to the 100ms
+     * transactional default. The red arm of this test is that failure; tracking "was it set" as field nullness is
+     * what makes it pass.
      */
     @Test
     void explicitCommitIntervalReusingTheDefaultConstantIsKeptUnderTransactions() {
