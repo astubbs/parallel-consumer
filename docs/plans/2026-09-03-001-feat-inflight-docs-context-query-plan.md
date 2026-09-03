@@ -18,7 +18,7 @@ execution: code
 - **Product authority:** The Product Contract below owns what is built; its R-IDs win on behaviour. The Planning Contract owns how; its KTDs win on mechanism within the cited R constraints. The GitHub tunnel, the edge graph, an MCP adapter and any human-facing UI are not active scope (Scope Boundaries).
 - **Execution profile:** Implementation units land in U-ID order on branch `feats/inflight-docs-context-query` against draft PR astubbs/parallel-consumer#419; the header (U1, U2, U3) ships before any later unit starts.
 - **Stop conditions:** Stop and surface rather than guess when a hook event does not deliver context on the installed Claude Code version (U2's first step), when a measured cold cost exceeds its budget by more than half (R19), or when the tag-vocabulary parity test cannot be made to pass (U5).
-- **Tail ownership:** The executor owns tests, docs and the PR body updates named in each unit; the PR's working note `docs/inflight/pr-419-inflight-docs-context-query.md` records what stays open.
+- **Tail ownership:** The executor owns tests, docs and the PR body updates named in each unit; the PR's working note `pr-419-inflight-docs-context-query.md` (a `docs/inflight/` note retired at merge prep, when nothing in it was both live and unowned: its cost figures live in each hook header, the tree-batching shape in `bin/lib/notes.mjs`, the tag vocabulary rule in `docs/inflight/AGENTS.md`, the unpulled lever in `docs/refactoring.md`; squash-merged, so the note exists only in astubbs/parallel-consumer#419's branch history) records what stays open.
 
 ---
 
@@ -304,7 +304,7 @@ U1 → U2 → U3 ship as the header, in that order and before anything else (R4)
 - `docs/agent-harness.md` "What is wired up today" gains an entry per new hook, with what was verified and on which version.
 - `docs/inflight-tool.md` gains worked examples for `docs`, `docs show`, `docs header` and `docs index`.
 - `AGENTS.md` "Before you investigate" gains the row KTD14 names, and its session-index bullet stops calling the index branch-scoped once U6 lands.
-- `docs/inflight/ci-inflight-absorbs-the-query-half.md` and `docs/inflight/ci-inflight-next-commands.md` are updated in the units that resolve their rows; `docs/inflight/pr-419-inflight-docs-context-query.md` records what stays open.
+- `docs/inflight/ci-inflight-absorbs-the-query-half.md` and `docs/inflight/ci-inflight-next-commands.md` are updated in the units that resolve their rows; `pr-419-inflight-docs-context-query.md` (a `docs/inflight/` note retired at merge prep, when nothing in it was both live and unowned: its cost figures live in each hook header, the tree-batching shape in `bin/lib/notes.mjs`, the tag vocabulary rule in `docs/inflight/AGENTS.md`, the unpulled lever in `docs/refactoring.md`; squash-merged, so the note exists only in astubbs/parallel-consumer#419's branch history) records what stays open.
 
 ---
 
@@ -479,7 +479,7 @@ U1 → U2 → U3 ship as the header, in that order and before anything else (R4)
 - All gates in the Verification Contract green locally and in CI on the PR head.
 - Every hook's header states its budget and its measured cold cost; every negative-result path has a paired positive control.
 - `docs/agent-harness.md`, `docs/inflight-tool.md` and `AGENTS.md` updated as the Documentation notes state; `CONCEPTS.md` already carries "Divergent version".
-- The two inflight notes whose rows this work resolves are updated, and `docs/inflight/pr-419-inflight-docs-context-query.md` lists only what remains open.
+- The two inflight notes whose rows this work resolves are updated, and `pr-419-inflight-docs-context-query.md` (a `docs/inflight/` note retired at merge prep, when nothing in it was both live and unowned: its cost figures live in each hook header, the tree-batching shape in `bin/lib/notes.mjs`, the tag vocabulary rule in `docs/inflight/AGENTS.md`, the unpulled lever in `docs/refactoring.md`; squash-merged, so the note exists only in astubbs/parallel-consumer#419's branch history) lists only what remains open.
 - No scaffolding: no scratch fixtures outside the self-tests, no debug output, no leftover bash scan in the session hook.
 - The PR body and checklist reflect the final content honestly; `bin/check-pr-analysis-surfaces.sh 419` read.
 
