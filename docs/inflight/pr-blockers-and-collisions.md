@@ -72,9 +72,6 @@ either an amended note in the release section when 0.6.0.0 is cut, or a follow-u
 
 ### Decisions waiting on a human
 
-- **The commit-interval identity check** (`bug-commit-interval-identity-check.md`) - an explicit
-  `Duration.ofSeconds(5)` is silently replaced with 100ms. One-line fix, wants its own change so the
-  behaviour change is visible.
 - **Register hardening** (`next-transactional-register-hardening.md`) - ranked by how much false
   assurance each item buys. The top one is not subtle: `-Dexcluded.groups=transactions` is a
   documented, supported invocation that runs **zero** claim proofs while the register reports every
