@@ -214,4 +214,58 @@ class InstanceStallProbeIT {
         assertThat(violations).hasSize(1);
         assertThat(violations.get(0)).contains("instance 11");
     }
+
+    /**
+     * The detector's firing says an instance held work and completed nothing; only what happens
+     * AFTER says whether it was wedged or merely quiet. The recovery diagnostic could not make that
+     * call because it logs FLEET consumed/started only - so every {@code INSTANCE_STALL} sighting in
+     * {@code docs/inflight/test-857-churn-storm-async-stalls.md} is an unclassified one. This
+     * snapshot is what closes that, and it is asserted here because a diagnostic nobody checks is
+     * how the previous round of this investigation produced four unusable cycles.
+     */
+    @Test
+    void theInstanceSnapshotCarriesWhatClassifiesAFiring() {
+        FakeInstance stalled = new FakeInstance(0);
+        stalled.outForProcessing = 35; // the shape seed 6077035105695 reproduces: queued=0, work out
+        stalled.workResultsReturned = 24_834;
+        FakeInstance sibling = new FakeInstance(1);
+        sibling.queued = 12;
+        sibling.outForProcessing = 8;
+        sibling.workResultsReturned = 30_112;
+        ProgressProbe probe = probeWatching(stalled, sibling);
+
+        assertWithMessage("the firing's own numbers must be readable per instance, not just fleet-wide")
+                .that(probe.instanceProgressSnapshot()).isEqualTo(
+                        "0(live q=0 out=35 res=24834) 1(live q=12 out=8 res=30112)");
+
+        // the discriminating observation: this instance's completions moved and its held work drained,
+        // so it recovered rather than wedging - the question the fleet-level line cannot answer
+        stalled.workResultsReturned = 24_900;
+        stalled.outForProcessing = 0;
+        assertThat(probe.instanceProgressSnapshot()).contains("0(live q=0 out=0 res=24900)");
+    }
+
+    @Test
+    void aStoppedInstanceIsMarkedRatherThanOmitted() {
+        FakeInstance stopping = new FakeInstance(5);
+        stopping.queued = 40;
+        stopping.live = false;
+        ProgressProbe probe = probeWatching(stopping);
+
+        // the detector skips it, so the snapshot must SAY it was skipped - an omitted member reads as
+        // a fleet that never had it, which is the silence-is-not-evidence trap this suite keeps hitting
+        assertThat(probe.instanceProgressSnapshot()).isEqualTo("5(down q=40 out=0 res=0)");
+    }
+
+    @Test
+    void anUnreadableSnapshotSaysSoRatherThanReadingAsAnEmptyFleet() {
+        ProgressProbe probe = new ProgressProbe(null, "test-group", "test-topic", () -> 0L, 0)
+                .withInstanceProgress(() -> {
+                    throw new IllegalStateException("PC mid-construction");
+                });
+
+        // it is called from inside the awaitility condition, so it must neither throw the wait off
+        // course nor return "" - an empty string is indistinguishable from a fleet with no members
+        assertThat(probe.instanceProgressSnapshot()).contains("unreadable");
+    }
 }

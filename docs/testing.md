@@ -210,9 +210,12 @@ bound and then drain completely, the latter two being the seeds
 150s bound looks like *whatever crossed it* - the probe samples every 5s, so the number is bound plus
 detection latency and encodes no severity; do not read a tight cluster of them across runs as
 corroboration. And the liveness claim the bound was standing in for now belongs to
-`INSTANCE_STALL/NO_WORK_COMPLETED`, which watches COMPLETIONS - any returned work result re-arms it -
-so it structurally cannot fire on slow-but-progressing. A run where Class 2 observes and
-`INSTANCE_STALL` stays silent is measured slow, not wedged. `Class2ObservationIT` guards the routing;
+`INSTANCE_STALL/NO_WORK_COMPLETED`, which watches COMPLETIONS, so it does not fire on an instance
+that is finishing records however slowly. Read that as **only a SUCCESSFUL result re-arms it** -
+`onFailureResult` and the revoked-partition drop both return a work result and notify nothing, and
+the bound's arithmetic budgets for the second but not the first. `ProgressProbe#INSTANCE_STALL_BOUND`
+owns the detail, including why the budget is not established for W1's continuous churn. A run where
+Class 2 observes and `INSTANCE_STALL` stays silent is measured slow, not wedged. `Class2ObservationIT` guards the routing;
 it is untagged deliberately, so it gates every default integration build.
 
 **The demotion REDUCED per-shard coverage, and that is a known gap rather than a relocation.**

@@ -143,8 +143,19 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
      * record legitimately pins while the shard behind it completes work continuously - so a busy
      * fleet and a wedged fleet look identical to it (measured 2026-08-19, seed 4734674029169027864:
      * four arms all drained fully, three of four still tripped the 150s bound). This probe instead
-     * watches COMPLETIONS: any returned work result re-arms it, so it structurally cannot fire on an
-     * instance that is slow-but-progressing - only on one that is holding work and finishing nothing.
+     * watches COMPLETIONS, so it does not fire on an instance that is finishing records, however
+     * slowly.
+     * <p>
+     * <b>Precisely: only a SUCCESSFUL result re-arms it, and that is narrower than "any returned
+     * work result".</b> The harness re-arms through {@code WorkManager#addSuccessfulWorkListener},
+     * which only {@code onSuccessResult} fires. {@code onFailureResult} and the revoked-partition
+     * drop branch of {@code handleFutureResult} both return a work result and decrement the
+     * in-flight count while notifying nothing. The bound arithmetic below budgets for the second of
+     * those and not the first, so an instance whose work is all FAILING is, to this detector,
+     * indistinguishable from a wedged one. Nothing has yet shown that case reachable in the chaos
+     * scenarios (their user functions swallow interrupts and do not throw), which is why this is
+     * recorded here rather than treated as a defect - but it is an assumption, not a proof, and a
+     * scenario that adds a throwing user function invalidates it.
      * <p>
      * <b>Granularity is per INSTANCE, not per shard, and that is a reachability constraint, not the
      * ideal.</b> The owner's formulation is per shard ("no shard should go {@code INSTANCE_STALL_BOUND}
@@ -165,7 +176,15 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
      * user-function execution, so the longest legitimate GAP is one heaviest record - W1's 45s dwell,
      * 3.3x under the bound. The other legitimate quiet stretch is an eager storm, where completions
      * of revoked in-flight work are dropped as stale (no listener fire): storm (60s) plus one
-     * eviction horizon (30s) is 90s, still 60s under. Sharing {@link #LAG_STAGNATION_BOUND}'s 150s
+     * eviction horizon (30s) is 90s, still 60s under.
+     * <b>That 60s assumes a storm that ENDS.</b> W1 ({@code ChaosChurnStormIT}) leaves
+     * {@code useCooperativeAssignor} false and drives a membership change every 500-1500ms for the
+     * whole run, so its eager revocations are continuous rather than a bounded episode, and the
+     * headroom this paragraph computes is not established for that scenario. Whether the bound
+     * transfers to W1 is open, and it is the same transfer question
+     * {@code docs/inflight/test-no-progress-window-may-not-transfer-to-w1.md} raises for the
+     * fleet-level window. Settle it the way {@link #REBALANCE_DWELL_BOUND} was settled - against the
+     * healthy peak, which {@link #getPeakInstanceStallMs()} already reports on every run. Sharing {@link #LAG_STAGNATION_BOUND}'s 150s
      * figure is deliberate - it keeps the two detectors' verdicts comparable on the same run: a run
      * where Class 2 fires and this stays silent is measured slow-but-progressing, not wedged.
      */
@@ -532,6 +551,50 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
      * deterministically, broker-free, in both directions - the sampler thread calls it with
      * {@code Instant.now()}.
      */
+    /**
+     * One compact token per fleet member for a {@code -Dchaos.diagnoseStallRecovery=true} run's log:
+     * {@code <id>(live|down q=<queued> out=<outForProcessing> res=<workResultsReturned>)}.
+     * <p>
+     * <b>Why this exists.</b> An {@code INSTANCE_STALL/NO_WORK_COMPLETED} violation is a claim about
+     * ONE member, and the recovery diagnostic that settled the fleet-level
+     * {@code NO_PROGRESS} line logs fleet consumed/started only. Watching the fleet drain therefore
+     * says nothing about whether the accused instance recovered, so every instance-level sighting in
+     * {@code docs/inflight/test-857-churn-storm-async-stalls.md} is unclassified. The discriminating
+     * observation is this instance's own {@code res=} advancing and its {@code out=} draining after
+     * the firing, which is exactly what these tokens carry.
+     * <p>
+     * <b>Every member is rendered, including a stopped one</b> ({@code down}), which the detector
+     * itself skips. Omitting it would read as a fleet that never had that member - the
+     * silence-is-not-evidence trap recorded in
+     * {@code docs/solutions/best-practices/silence-from-an-instrument-that-could-not-have-spoken-is-not-evidence.md}.
+     * For the same reason a supplier that throws yields an {@code unreadable} marker rather than an
+     * empty string: this is called from inside an awaitility condition, so it must neither abort the
+     * wait nor let a failed read look like an empty fleet.
+     */
+    String instanceProgressSnapshot() {
+        var supplier = instanceProgressSupplier;
+        if (supplier == null) {
+            return "";
+        }
+        try {
+            StringBuilder rendered = new StringBuilder();
+            for (InstanceProgressView view : supplier.get()) {
+                if (rendered.length() > 0) {
+                    rendered.append(' ');
+                }
+                rendered.append(view.instanceId())
+                        .append(view.isLive() ? "(live q=" : "(down q=")
+                        .append(view.queuedInShards())
+                        .append(" out=").append(view.outForProcessing())
+                        .append(" res=").append(view.workResultsReturned())
+                        .append(')');
+            }
+            return rendered.toString();
+        } catch (Exception e) {
+            return "unreadable (" + e + ")";
+        }
+    }
+
     void sampleInstanceProgress(Instant now) {
         var supplier = instanceProgressSupplier;
         if (supplier == null) return; // not wired (ambient mode, or a scenario predating the probe)
