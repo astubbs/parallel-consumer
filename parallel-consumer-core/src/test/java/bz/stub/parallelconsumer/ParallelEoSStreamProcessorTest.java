@@ -141,12 +141,7 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         final InvalidPidMappingException invalidPidMappingException = new InvalidPidMappingException("InvalidPidMappingException exception");
 
         // use mocked producer manager
-        ProducerManager<String, String> producerManager = mock(ProducerManager.class);
-        Field producerManagerField = AbstractParallelEoSStreamProcessor.class.getDeclaredField("producerManager");
-        producerManagerField.setAccessible(true);
-        producerManagerField.set(pcSpy, Optional.of(producerManager));
-
-        when(producerManager.beginProducing(any())).thenReturn(mock(ProducerManager.ProducingLock.class));
+        ProducerManager<String, String> producerManager = mockProducerManagerInto(pcSpy);
         when(producerManager.produceMessages(any())).thenThrow(invalidPidMappingException);
 
         CountDownLatch latch = new CountDownLatch(1);
@@ -169,6 +164,60 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         state.setAccessible(true);
         Assertions.assertThat(State.CLOSED.equals(state.get(pcSpy))).isTrue();
 
+    }
+
+    /**
+     * Puts a Mockito mock in the processor's {@code producerManager} slot; {@code beginProducing} hands out a mock
+     * lock, which is all the produce path needs before it reaches {@code produceMessages}. Reflection because the
+     * field is private to {@link AbstractParallelEoSStreamProcessor} and there is no seam for injecting one after
+     * construction.
+     */
+    private ProducerManager<String, String> mockProducerManagerInto(ParallelEoSStreamProcessor<String, String> pc) throws Exception {
+        ProducerManager<String, String> producerManager = mock(ProducerManager.class);
+        Field producerManagerField = AbstractParallelEoSStreamProcessor.class.getDeclaredField("producerManager");
+        producerManagerField.setAccessible(true);
+        producerManagerField.set(pc, Optional.of(producerManager));
+        when(producerManager.beginProducing(any())).thenReturn(mock(ProducerManager.ProducingLock.class));
+        return producerManager;
+    }
+
+    /**
+     * The produce path's {@link InvalidPidMappingException} arm closes the instance; it must ALSO fail the batch.
+     * Before this, it returned an empty result list and every {@code WorkContainer} was marked succeeded - output
+     * never produced, offset eligible to commit.
+     * <p>
+     * {@code closeOnException} is stubbed to a no-op here so the batch's fate is observable on a live instance: a
+     * failed record is re-dispatched (so {@code produceMessages} is called again) and nothing is committed; a
+     * swallowed one is produced once, marked succeeded, and its offset is committed. On master the swallowed verdict
+     * never reaches a commit only because {@code closeOnException} blocks the worker until the instance is CLOSED -
+     * an accident of the close path, not a property of the verdict, which is exactly why the stub is here.
+     * <p>
+     * A consumer commit mode is used because the {@link ProducerManager} is a mock, so the commit has to be
+     * observable through the consumer spy; the mechanism under test - the batch verdict after a produce failure -
+     * does not depend on the commit mode.
+     */
+    @Test
+    @SneakyThrows
+    @ProvesClaim(TransactionalClaim.OFFSET_AND_RECORDS_ATOMIC)
+    public void invalidPidMappingFailsTheBatchInsteadOfMarkingItSucceeded() {
+        setupParallelConsumerInstance(getBaseOptions(PERIODIC_CONSUMER_ASYNCHRONOUS).toBuilder()
+                .defaultMessageRetryDelay(Duration.ofMillis(50))
+                .build());
+        primeFirstRecord(); // setupParallelConsumerInstance built a new client, so prime again
+        final ParallelEoSStreamProcessor<String, String> pcSpy = spy(parallelConsumer);
+        final InvalidPidMappingException pidMappingGone = new InvalidPidMappingException("pid mapping gone");
+        var producerManager = mockProducerManagerInto(pcSpy);
+        when(producerManager.produceMessages(any())).thenThrow(pidMappingGone);
+        doNothing().when(pcSpy).closeOnException(any()); // keep the instance alive so the verdict is observable
+
+        pcSpy.pollAndProduceMany(record -> of(new ProducerRecord<>("outputTopic", record.key(), record.value())));
+
+        verify(pcSpy, timeout(10_000).atLeastOnce()).closeOnException(pidMappingGone);
+        verify(producerManager, timeout(10_000).atLeast(2)).produceMessages(any()); // failed, so re-dispatched
+        awaitForSomeLoopCycles(2);
+        assertCommits(of(), "the batch whose output was never produced is failed, so nothing is committed");
+        assertWithMessage("the primed record is still an incomplete offset - it was never marked succeeded")
+                .that(pcSpy.getWm().getNumberOfIncompleteOffsets()).isEqualTo(1);
     }
 
 
