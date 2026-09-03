@@ -40,8 +40,9 @@ import static java.time.Duration.ofMillis;
  * If you want to go deeper, look at {@link #defaultMessageRetryDelay}, {@link #retryDelayProvider} and
  * {@link #commitMode}.
  * <p>
- * Note: The only required option is the {@link #consumer} ({@link #producer} is only needed if you use the Produce
- * flows). All other options have sensible defaults.
+ * Note: The only required option is the {@link #consumer} (a producer - {@link #producerConfig} for PC to build one
+ * from, or a {@link #producer} instance - is only needed if you use the Produce flows). All other options have
+ * sensible defaults.
  *
  * @author Antony Stubbs
  * @see #builder()
