@@ -72,11 +72,6 @@ either an amended note in the release section when 0.6.0.0 is cut, or a follow-u
 
 ### Decisions waiting on a human
 
-- **Two pre-existing main-code holes need their own PR**, written up with fix and test shapes in
-  `bug-eos-swallowed-produce-failures.md`. The `InvalidPidMappingException` one is the serious one: a
-  whole batch is marked *succeeded* and its offsets committed for records whose output was never
-  produced. Same shape as the defect astubbs#261 fixed, and the single exception to the rationale that
-  justified it.
 - **Register hardening** (`next-transactional-register-hardening.md`) - ranked by how much false
   assurance each item buys. The top one is not subtle: `-Dexcluded.groups=transactions` is a
   documented, supported invocation that runs **zero** claim proofs while the register reports every
