@@ -124,6 +124,14 @@ Checked and dismissed, with where:
   `try`, so the take-then-fail-then-release shape cannot arise.
 - **`BrokerPollSystem#closeAndWait`** - a wait rather than a multi-step teardown, and its one caller
   is guarded with a comment saying why the consumer close must still run.
+- **`brokerPollSubsystem.drain()`, the FIRST statement of `innerDoClose`** - structurally the same
+  shape and the worst one if it fired, because a throw there skips every remaining shutdown step, not
+  just the last. Left unguarded on the evidence: `drain()` sets a field and calls
+  `ConsumerManager#wakeup`, and `wakeup` is the one consumer method `ThreadConfinedConsumer`
+  deliberately does not guard ("left to the delegate (thread-safe per Kafka API)"), with no
+  documented throw. Guarding it would be a behaviour change to a step with no known failure and no
+  test, so it is recorded here rather than changed - if a throw is ever observed there, this is the
+  entry that says the shape was already understood.
 
 ## How each was shown red
 

@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.internal;
  */
 
 import bz.stub.parallelconsumer.*;
+import bz.stub.parallelconsumer.internal.utils.ThrowableUtils;
 import bz.stub.parallelconsumer.state.WorkManager;
 import lombok.Getter;
 import lombok.NonNull;
@@ -411,7 +412,18 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
             // most likely in; acquireCommitLock can throw an unchecked ConcurrentModificationException the arm
             // above does not cover. The broker has already discarded the transaction in every one of those, so
             // there is nothing the throw protects.
-            log.error("Exception cleaning up the transaction while closing - closing the Producer anyway", e);
+            // The ConcurrentModificationException case is the one that changes behaviour rather than only
+            // containing it: it means ANOTHER thread holds the write lock, i.e. the single-writer invariant is
+            // already broken by something else, and the producer is now closed rather than left running. That is
+            // the intended trade - a close that returns having left the Producer alive is the defect this method
+            // exists to stop, and the alternative leaves a live producer behind an instance marked CLOSED.
+            // logWithoutEscaping because e came from a producer the USER configured: rendering it runs their
+            // getCause/getMessage inside the logging binding, and an escape here would surface out of close() as a
+            // logging stack trace instead of this diagnosis - and read, one layer up, as the Producer having failed
+            // to close when the finally below in fact closed it.
+            ThrowableUtils.logWithoutEscaping(e, () ->
+                    log.error("Exception cleaning up the transaction while closing - closing the Producer anyway. "
+                            + "Cause: {}", ThrowableUtils.describeWithRootCause(e), e));
         } finally {
             closeProducer(timeout);
         }

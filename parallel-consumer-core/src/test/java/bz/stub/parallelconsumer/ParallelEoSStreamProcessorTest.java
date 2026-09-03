@@ -214,12 +214,20 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
 
         pcSpy.pollAndProduceMany(record -> of(new ProducerRecord<>("outputTopic", record.key(), record.value())));
 
-        verify(pcSpy, timeout(10_000).atLeastOnce()).closeOnException(pidMappingGone);
-        verify(producerManager, timeout(10_000).atLeast(2)).produceMessages(any()); // failed, so re-dispatched
-        awaitForSomeLoopCycles(2);
-        assertCommits(of(), "the batch whose output was never produced is failed, so nothing is committed");
-        assertWithMessage("the primed record is still an incomplete offset - it was never marked succeeded")
-                .that(pcSpy.getWm().getNumberOfIncompleteOffsets()).isEqualTo(1);
+        try {
+            verify(pcSpy, timeout(10_000).atLeastOnce()).closeOnException(pidMappingGone);
+            verify(producerManager, timeout(10_000).atLeast(2)).produceMessages(any()); // failed, so re-dispatched
+            awaitForSomeLoopCycles(2);
+            assertCommits(of(), "the batch whose output was never produced is failed, so nothing is committed");
+            assertWithMessage("the primed record is still an incomplete offset - it was never marked succeeded")
+                    .that(pcSpy.getWm().getNumberOfIncompleteOffsets()).isEqualTo(1);
+        } finally {
+            // The spy is a DIFFERENT object from parallelConsumer, and the base class's @AfterEach closes
+            // parallelConsumer - which never ran. With closeOnException stubbed out there is no other route to
+            // shutdown, so without this the spy's non-daemon control thread retries the throwing produce forever,
+            // inside a Surefire fork that reuseForks hands to every later test class in this module.
+            pcSpy.close();
+        }
     }
 
     /**

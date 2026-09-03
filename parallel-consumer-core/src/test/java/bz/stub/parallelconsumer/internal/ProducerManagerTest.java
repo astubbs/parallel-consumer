@@ -781,7 +781,11 @@ class ProducerManagerTest {
     void closeStillClosesTheProducerWhenTheCommitLockCannotBeAcquired() {
         setup(ParallelConsumerOptions.<String, String>builder()
                 .commitMode(PERIODIC_TRANSACTIONAL_PRODUCER)
-                .commitLockAcquisitionTimeout(ofMillis(500))); // failure-side wait: a slow CI can only lengthen it
+                // The produce lock is held for the whole of close() below, so tryLock can never succeed early: this
+                // is waited out in FULL on every passing run, not a failure-side ceiling. Kept short for that
+                // reason, and it cannot flake short - the read lock is provably held before close() is called, so
+                // the write lock is unavailable however fast or slow the machine is.
+                .commitLockAcquisitionTimeout(ofMillis(50)));
         var producerWrap = module.producerWrap();
         doReturn(false).when(producerWrap).isTransactionReady();
 
@@ -811,6 +815,11 @@ class ProducerManagerTest {
         } finally {
             releaseProduceLock.countDown();
             producing.join(ofSeconds(10).toMillis());
+            // Asserted, not just joined: a join that times out returns normally, so a hanging
+            // finishProducing would leak the thread and leave this test passing on everything else.
+            Truth.assertWithMessage("the produce-lock holder must have given the read lock back and finished")
+                    .that(producing.isAlive())
+                    .isFalse();
         }
     }
 
