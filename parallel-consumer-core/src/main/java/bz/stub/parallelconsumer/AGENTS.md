@@ -36,6 +36,34 @@ If the right fix is `volatile` or removing the sharing outright, there is no loc
 annotation to write. That is fine - the rule is "record the invariant you just established", not
 "add an annotation".
 
+## Declare thread confinement with `@ThreadConfined`, and assert it at the entry point
+
+`@GuardedBy` names a lock, so it cannot say "only one thread ever runs this" - and state that is
+confined rather than guarded holds no lock to name. Say it with Infer's `@ThreadConfined`, on a
+method, a field or a type, which RacerD reads: the accesses inside are taken as confined to that
+thread, so they are not reported as racing with each other, while an unannotated access to the same
+state elsewhere still is.
+
+**It is a declaration the analyser consumes and never checks, so pair it with a runtime assertion.**
+An annotation nobody enforces is a comment that silences a detector, which is worse than no
+annotation at all - RacerD believes it and stops looking. `RetryQueue.RetryQueueIterator` is the
+pattern: `@ThreadConfined(ThreadConfined.ANY)` on the type, `assertOnOwningThread` at the top of
+every entry point, and `RetryQueueIteratorConfinementTest` failing when the two disagree.
+`ThreadConfinedConsumer` is the older, hand-rolled version of the same idea for the poll thread.
+
+**`ThreadConfined.ANY` says "one thread, whichever one got here first"**, which is the honest value
+when the confining thread varies by caller - an object handed out per call, like that iterator. Name
+a thread instead only when the code really does pin one, and then the assertion has something
+specific to compare against.
+
+**Check the premise before you write it.** The declaration is only as good as the claim that the
+state is confined, and that claim is easy to get wrong from reading one method:
+`AbstractParallelEoSStreamProcessor.lastCommitTime` was described as control-thread-confined by
+every record that mentioned it, and is written by `tryCommitOffsetsOnRevoke()` on the poll thread.
+Grep every writer and every reader of the field, not the two the surrounding code shows you. Where
+it turns out not to be confined, `volatile` is usually the answer, and a modifier tripwire is what
+keeps it - see "Known shared state" below.
+
 ## Record a CLEARED suspicion in the javadoc, not only in the commit
 
 When you investigate a concurrency path and conclude it is safe, **write that conclusion where the
@@ -72,7 +100,11 @@ Do not re-derive these; they are measured and recorded.
 - **The non-volatile offenders** `ConsumerManager.commitRequested`, `RetryQueue.closed`, and
   `AbstractParallelEoSStreamProcessor.lastCommitTime` - `docs/refactoring.md`.
   `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled` was a fourth until astubbs#201
-  made it `volatile`.
+  made it `volatile`. **`RetryQueue.closed` came off the list a different way**: the iterator that
+  owns it holds a read lock only its opener can release, so it was already confined and the answer
+  was to declare and assert that (`@ThreadConfined(ANY)` plus `assertOnOwningThread`), not to make
+  it `volatile`. SpotBugs cannot read the declaration and still reports it - one of the two places
+  a detector here is now wrong on purpose.
 - **The torn-read family** - check-then-act and two-read divergence, which are a *different* class
   from unguarded access and are not what `@GuardedBy` addresses.
 

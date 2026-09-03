@@ -331,6 +331,12 @@ cosmetic - see the last bullet.*
     be visible to another: `ConsumerManager.commitRequested`, `RetryQueue.closed`.
     Was 3: `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled` is now
     `volatile` (astubbs#201), and SpotBugs no longer reports it.
+    **`RetryQueue.closed` is now a FALSE POSITIVE and stays listed for that reason.** The
+    iterator that owns it is `@ThreadConfined(ANY)` with a runtime guard
+    (`assertOnOwningThread`), so there is no second thread to be stale for - it never
+    could be, because the iterator holds a read lock only its opener can release.
+    SpotBugs reads no confinement annotation and will keep reporting it; do not "fix" it
+    with `volatile`, which would assert a sharing that does not exist.
   - **`AT_STALE_THREAD_WRITE` on an OBJECT reference, which no detector fired on - FIXED 2026-08-18
     on the astubbs#119 branch:**
     `ConsumerManager.metaCache` (`private ConsumerGroupMetadata metaCache;`) is written by the poll
