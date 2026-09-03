@@ -3,8 +3,9 @@
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-// Self-test for the document context query's hooks - today the read-time divergence header,
-// `.claude/hooks/inject-docs-divergence.mjs`; the prompt-keyword hook joins it when it lands.
+// Self-test for the document context query's hooks: the read-time divergence header,
+// `.claude/hooks/inject-docs-divergence.mjs`, and the prompt-keyword injection,
+// `.claude/hooks/inject-docs-for-prompt.mjs`.
 //
 // The shape is bin/test-check-solutions-hook.mjs's: every positive has a silent twin, every
 // invocation asserts the never-blocks contract (exit 0, no signal, nothing on stderr), and one
@@ -22,13 +23,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { buildDocsFixture, windowRepo } from './lib/fixture-repos.mjs';
+import { buildDocsFixture, buildTermsFixture, windowRepo } from './lib/fixture-repos.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // One literal path, not joined segments: bin/test-check-agent-hooks.sh proves every registered hook
 // is self-tested by finding `.claude/hooks/<name>` in test CODE, so the path has to be visible as one.
 const HOOK = path.join(root, '.claude/hooks/inject-docs-divergence.mjs');
+const PROMPT_HOOK = path.join(root, '.claude/hooks/inject-docs-for-prompt.mjs');
 const DELIVERY = 'read-time header';
+const PROMPT_DELIVERY = 'docs-for-prompt';
 
 const RUN = `t${process.pid}-${Math.floor(Date.now() % 1e6)}`;
 // The failure record goes to the tool's cache directory; this run gets its own, so a record left by
@@ -66,15 +69,17 @@ function runHook(caseName, payload, { env = {}, hook = HOOK } = {}) {
 
 const read = (caseName, filePath, cwd, opts) => runHook(caseName, { cwd, tool_name: 'Read', tool_input: { file_path: filePath } }, opts);
 const bash = (caseName, command, cwd, opts) => runHook(caseName, { cwd, tool_name: 'Bash', tool_input: { command } }, opts);
+/** The prompt hook, driven as the harness drives it: `prompt` in the payload, the UserPromptSubmit event. */
+const prompt = (caseName, text, cwd, opts = {}) => runHook(caseName, { cwd, hook_event_name: 'UserPromptSubmit', prompt: text }, { hook: PROMPT_HOOK, ...opts });
 
-/** The additionalContext out of an envelope, or '' - and a FAIL if stdout is non-empty but not an envelope. */
-function contextOf(label, out) {
+/** The additionalContext out of an envelope, or '' - and a FAIL if stdout is non-empty but not an envelope for `event`. */
+function contextOf(label, out, event = 'PostToolUse') {
   if (!out.trim()) return '';
   try {
     const env = JSON.parse(out);
     const ctx = env.hookSpecificOutput && env.hookSpecificOutput.additionalContext;
-    if (typeof ctx === 'string' && env.hookSpecificOutput.hookEventName === 'PostToolUse') return ctx;
-    console.log(`  FAIL ${label} - stdout is not a PostToolUse envelope: ${out.slice(0, 200)}`);
+    if (typeof ctx === 'string' && env.hookSpecificOutput.hookEventName === event) return ctx;
+    console.log(`  FAIL ${label} - stdout is not a ${event} envelope: ${out.slice(0, 200)}`);
   } catch {
     console.log(`  FAIL ${label} - stdout is not JSON: ${out.slice(0, 200)}`);
   }
@@ -82,9 +87,8 @@ function contextOf(label, out) {
   return '';
 }
 
-function expectFires(label, out, ...needles) {
+function expectContext(label, ctx, needles) {
   n += 1;
-  const ctx = contextOf(label, out);
   const missing = needles.filter((s) => !ctx.includes(s));
   if (ctx && missing.length === 0) console.log(`  ok   ${label}`);
   else {
@@ -92,6 +96,9 @@ function expectFires(label, out, ...needles) {
     fails += 1;
   }
 }
+
+const expectFires = (label, out, ...needles) => expectContext(label, contextOf(label, out), needles);
+const expectPromptFires = (label, out, ...needles) => expectContext(label, contextOf(label, out, 'UserPromptSubmit'), needles);
 
 function expectSilent(label, out) {
   n += 1;
@@ -308,6 +315,92 @@ try {
   expectFires('control: the rewired-but-unmutated copy still fires', read('m0', NOTE_ABS, fx.dir, { hook: intactPath }), '3 divergent versions');
   expectSilent('the mutant is silent on the positive case', read('m1', NOTE_ABS, fx.dir, { hook: mutantPath }));
   fs.rmSync(mutantDir, { recursive: true, force: true });
+
+  // =============================================================================================
+  // THE PROMPT-KEYWORD HOOK. Its own fixture: the corpus plus the documents each tier is specified
+  // against (bin/lib/fixture-repos.mjs's buildTermsFixture), driven from a payload whose cwd is the
+  // fixture while CLAUDE_PROJECT_DIR is this repository - so every positive here also proves the
+  // tree came from the payload, never the session root.
+  // =============================================================================================
+  console.log('\nthe prompt hook - a prompt naming a mechanism:');
+  const tfx = buildTermsFixture();
+  const SOLUTION = 'docs/solutions/ci/retry-queue.md';
+  expectPromptFires(
+    'a class named only in a branch-only solution\'s related_components field injects that title, off baseline',
+    prompt('p1', 'why does RetryQueueDrainer run twice per shard?', tfx.dir),
+    'docs context: prompt terms RetryQueueDrainer', 'The retry queue drained twice', SOLUTION, '(off baseline)',
+    'more: node bin/inflight.mjs prior-art --headings RetryQueueDrainer',
+  );
+  // `learned` is in the heading adds-heading's version of note.md added and in nothing on master:
+  // the path is on the baseline, the version that matched is not, so the mark is divergence.
+  expectPromptFires(
+    'a word carried only by a divergent version of a baseline note marks it divergent elsewhere, and the frame names every term',
+    prompt('p2', 'compare what the branch `learned` with WidgetSpinner', tfx.dir),
+    'prompt terms learned, WidgetSpinner', 'The note  docs/inflight/note.md  (divergent elsewhere)', 'A rollout plan  docs/plans/2026-02-02-001-widget.md',
+  );
+  expectSilent('a prompt naming a mechanism no document carries', prompt('p3', 'what does NoSuchMechanismAnywhere do?', tfx.dir));
+  expectSilent('a prompt sent from a directory that is not a checkout', prompt('p4', 'why does RetryQueueDrainer run twice?', nowhere));
+  expectSilent('a prompt naming a class, in a checkout with no corpus', prompt('p5', 'why does RetryQueueDrainer run twice?', bystander.dir));
+
+  console.log('the prompt hook - no git call before a term survives:');
+  const pShim = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-hooks-prompt-shim-'));
+  const pLog = path.join(pShim, 'calls.log');
+  fs.writeFileSync(path.join(pShim, 'git'), `#!/bin/sh\necho "$@" >> "${pLog}"\nexec "${realGit}" "$@"\n`, { mode: 0o755 });
+  const pShimEnv = { env: { PATH: `${pShim}${path.delimiter}${process.env.PATH}` } };
+  expectPromptFires('control: the shim sees the firing prompt\'s git calls', prompt('pg1', 'RetryQueueDrainer again', tfx.dir, pShimEnv), 'The retry queue drained twice');
+  const pCalls = fs.existsSync(pLog) ? fs.readFileSync(pLog, 'utf8').split('\n').filter(Boolean) : [];
+  check('control: the shim logged at least one call', pCalls.length > 0, 'the shim was not on the path');
+  check('...exactly one of them a grep, and none an ls-tree', pCalls.filter((c) => c.startsWith('grep ')).length === 1 && !pCalls.some((c) => c.startsWith('ls-tree')), pCalls.join(' | '));
+  fs.rmSync(pLog, { force: true });
+  expectSilent('a prompt with no identifier in it', prompt('pg2', 'please fix the tests and push', tfx.dir, pShimEnv));
+  check('...and it made no git call', !fs.existsSync(pLog), `git was called: ${fs.existsSync(pLog) ? fs.readFileSync(pLog, 'utf8') : ''}`);
+  fs.rmSync(pShim, { recursive: true, force: true });
+
+  console.log('the prompt hook - once per session per state:');
+  expectPromptFires('the first prompt naming a class in a session fires', prompt('pd', 'RetryQueueDrainer', tfx.dir), 'The retry queue drained twice');
+  expectSilent('the same prompt again in the same session', prompt('pd', 'RetryQueueDrainer', tfx.dir));
+  expectSilent('a different prompt naming the same document in that session', prompt('pd', 'is RetryQueueDrainer idempotent?', tfx.dir));
+  expectPromptFires('a new session is told again', prompt('pd2', 'RetryQueueDrainer', tfx.dir), 'The retry queue drained twice');
+
+  console.log('the prompt hook - capped, with the rest counted:');
+  const capped = contextOf('pc', prompt('pc', 'what is GadgetFlange?', tfx.dir), 'UserPromptSubmit');
+  const gadgetLines = capped.split('\n').filter((l) => l.startsWith('- Gadget ')).length;
+  check('a term matching more titles than the cap injects the cap', gadgetLines === 12, `${gadgetLines} title lines: ${capped}`);
+  check('...and a +N more line naming the count left', capped.includes('+2 more'), capped);
+  check('...and the frame closes with the prior-art command', capped.trimEnd().endsWith('more: node bin/inflight.mjs prior-art --headings GadgetFlange'), capped);
+
+  console.log('the prompt hook - failing open, with a record:');
+  check('no failure is recorded while the prompt hook is healthy', !(PROMPT_DELIVERY in failures()), JSON.stringify(failures()));
+  expectSilent('a forced git failure prints nothing', prompt('pf1', 'RetryQueueDrainer', tfx.dir, { env: { GIT_DIR: path.join(nowhere, 'not-a-repo') } }));
+  const prec = failures()[PROMPT_DELIVERY];
+  check('...and records the delivery, a reason and a time', prec && typeof prec.reason === 'string' && prec.reason.length > 0 && !Number.isNaN(Date.parse(prec.time)), JSON.stringify(failures()));
+  expectPromptFires('a following success still answers', prompt('pf2', 'RetryQueueDrainer', tfx.dir), 'The retry queue drained twice');
+  check('...and clears the record', !(PROMPT_DELIVERY in failures()), JSON.stringify(failures()));
+
+  console.log('the prompt hook - inputs it must survive rather than read, each silent AND exit 0:');
+  expectSilent('unparseable stdin', runHook('praw1', 'this is not json', { hook: PROMPT_HOOK }));
+  expectSilent('empty stdin', runHook('praw2', '', { hook: PROMPT_HOOK }));
+  expectSilent('a JSON scalar', runHook('praw3', '42', { hook: PROMPT_HOOK }));
+  expectSilent('a payload with no prompt', runHook('praw4', { cwd: tfx.dir, hook_event_name: 'UserPromptSubmit' }, { hook: PROMPT_HOOK }));
+  expectSilent('a prompt that is not a string', runHook('praw5', { cwd: tfx.dir, hook_event_name: 'UserPromptSubmit', prompt: ['RetryQueueDrainer'] }, { hook: PROMPT_HOOK }));
+
+  console.log('the prompt hook - the header comment states its budget and its measured cost:');
+  const psource = fs.readFileSync(PROMPT_HOOK, 'utf8');
+  check('the prompt hook names a budget in ms and a measured figure', /BUDGET: \d+ ms/.test(psource) && /MEASURED \d{4}-\d{2}-\d{2}/.test(psource));
+
+  console.log('the prompt hook - negative control, the suite cannot pass with term extraction broken:');
+  const pMutantDir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-hooks-prompt-mutant-'));
+  const pRewired = psource.replaceAll("'./lib/", `'${hooksLib}`).replaceAll("'../../bin/lib/", `'${binLib}`);
+  const pMutant = pRewired.replace('const terms = termsFromPrompt(ev.prompt);', 'const terms = [];');
+  check('the mutation applied', pMutant !== pRewired);
+  const pMutantPath = path.join(pMutantDir, 'inject-docs-for-prompt.mjs');
+  fs.writeFileSync(pMutantPath, pMutant);
+  const pIntactPath = path.join(pMutantDir, 'intact.mjs');
+  fs.writeFileSync(pIntactPath, pRewired);
+  expectPromptFires('control: the rewired-but-unmutated copy still fires', prompt('pm0', 'RetryQueueDrainer', tfx.dir, { hook: pIntactPath }), 'The retry queue drained twice');
+  expectSilent('the mutant is silent on the positive case', prompt('pm1', 'RetryQueueDrainer', tfx.dir, { hook: pMutantPath }));
+  fs.rmSync(pMutantDir, { recursive: true, force: true });
+  fs.rmSync(tfx.dir, { recursive: true, force: true });
 } finally {
   for (const w of [only, `${fx.dir}-adds-heading`]) {
     try { fx.git('worktree', 'remove', '--force', w); } catch { /* already gone, or never added */ }

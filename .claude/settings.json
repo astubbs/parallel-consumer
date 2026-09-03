@@ -144,6 +144,14 @@
             "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/inject-merge-checklist.sh\""
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/inject-docs-for-prompt.mjs\""
+          }
+        ]
       }
     ],
     "PostToolUse": [

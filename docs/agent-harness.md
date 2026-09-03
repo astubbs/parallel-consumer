@@ -271,7 +271,7 @@ merged as a no-op - `git ls-files | grep -c CLAUDE.md` returned **0**. The three
 negated individually rather than with a blanket `!CLAUDE.md`; the reasoning is in `.gitignore`
 itself, next to the rule.
 
-**`.claude/settings.json`** - eighteen hook scripts across twenty-one registrations, and the file is
+**`.claude/settings.json`** - nineteen hook scripts across twenty-two registrations, and the file is
 **tracked**. The entries below are the ones whose design decisions are worth recording here;
 `remind-inflight-on-push.sh` and `check-history-rewrite.sh` carry theirs in their own headers.
 The count is stated because it drifted: this said "five" while the file registered seven, which is
@@ -452,6 +452,21 @@ what this one got wrong was not calling the tool but owning the tool's correctne
   inject the thought at the decision, not to gate anything. Matching is deliberately broad on verbs
   and narrow on nouns: a false positive costs a few hundred tokens, a false negative costs the thing
   it exists to prevent.
+- `UserPromptSubmit` also runs `.claude/hooks/inject-docs-for-prompt.mjs`, the per-prompt delivery
+  of the document context query: when a prompt names a mechanism - a CamelCase class, a snake_case
+  or kebab-case name, a path, a backticked span, an issue number - it puts the titles and paths of
+  the documents carrying that name across every live ref beside the prompt, each marked
+  `(off baseline)` or `(divergent elsewhere)`, ranked frontmatter field first, then heading, then
+  body under a per-term cap, twelve titles at most with a `+N more` tail and the
+  `prior-art --headings` command for the rest. Silent when nothing matches; once per document per
+  divergence state per session. It runs `termsFromPrompt` and, only when a term survives, imports
+  the git-touching modules and runs `matchDocs` - one `git grep` over the live refs, never a
+  corpus-index build (both in `bin/lib/terms.mjs`); the marks come from the same `drift` summary
+  the read-time header uses. Budget 2500 ms cold when it fires and 100 ms on the silent path,
+  measured at about 1550 ms firing on `ProducerManager` and about 65 ms silent; the figures live in
+  its header, with the method and the knob for a slower host. **`UserPromptSubmit` delivering
+  `additionalContext` is already verified above** by `inject-merge-checklist.sh`, which uses the
+  same envelope; this hook adds no new delivery claim.
 
 - `PostToolUse` on `Bash` runs `.claude/hooks/after-push-check-ci.sh`. Why it has to be there
   rather than any earlier layer is above, under `PostToolUse`.

@@ -36,7 +36,7 @@
 
 import { spawnSync } from 'node:child_process'
 // The fixture repositories are shared with bin/test-check-docs-hooks.mjs; bin/lib/fixture-repos.mjs owns them.
-import { buildDocsFixture, windowGit, windowRepo } from './lib/fixture-repos.mjs'
+import { buildDocsFixture, buildTermsFixture, windowGit, windowRepo } from './lib/fixture-repos.mjs'
 import { chdir, cwd } from 'node:process'
 import {
     cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, symlinkSync, utimesSync,
@@ -188,6 +188,7 @@ const notes = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'notes.mjs'))
 const gitlib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'git.mjs')).href)
 const front = (binDir) => import(pathToFileURL(join(binDir, 'inflight.mjs')).href)
 const branches = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'branches.mjs')).href)
+const termsLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'terms.mjs')).href)
 
 /**
  * Source with comments removed, so a check about CODE is not answered by prose. The first cut of
@@ -373,6 +374,9 @@ function buildMixedFixture() {
 
 let DOCS = null
 const docsFixture = () => (DOCS ??= buildDocsFixture().dir)
+
+let TERMS = null
+const termsFixture = () => (TERMS ??= buildTermsFixture().dir)
 
 /**
  * The corpus fixture plus the two situations `docs show`'s ref selection is specified against and
@@ -2034,6 +2038,114 @@ const CHECKS = [
         },
         mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
             "                name: 'header',", "                name: 'hdr',"),
+    },
+    // ---------------------------------------------------------------------------------------------
+    // THE PROMPT HALF OF THE QUERY - term extraction in isolation, then one grep over the live refs.
+    // docs/plans/2026-09-03-001-feat-inflight-docs-context-query-plan.md, unit U4.
+    // ---------------------------------------------------------------------------------------------
+    {
+        id: 'terms-from-prompt-keeps-identifier-shapes-and-drops-prose',
+        why: 'a term that is prose matches the whole corpus and a term that is a class name matches its documents; the extractor is the whole difference between a signal and a wall',
+        run: async (binDir) => {
+            const t = await termsLib(binDir)
+            // `Broker` is the single-hump control the stop list does NOT also cover: `Kafka` is
+            // dropped twice over, so on its own it cannot tell the hump rule from the list. The bare
+            // issue number is the SUBJECT here - the extractor collapses every spelling to it.
+            // issue-refs: exempt-begin
+            const got = t.termsFromPrompt('Fix the ProducerManager commit_lock in bin/inflight.mjs, see astubbs#419 and `commit lock`; Kafka Broker Fix abc, then #419 again and ProducerManager again')
+            const kept = ['ProducerManager', 'commit_lock', 'bin/inflight.mjs', '#419', 'lock']
+            const dropped = ['the', 'Fix', 'fix', 'Kafka', 'Broker', 'abc', 'commit', 'astubbs#419', 'see']
+            if (!kept.every((k) => got.includes(k))) return false
+            if (dropped.some((d) => got.includes(d))) return false
+            // Deduplicated: the second ProducerManager and the second #419 add nothing.
+            if (got.filter((x) => x === 'ProducerManager').length !== 1 || got.filter((x) => x === '#419').length !== 1) return false
+            // issue-refs: exempt-end
+            // Capped in order of first appearance.
+            const many = Array.from({ length: t.MAX_TERMS + 5 }, (_, i) => `ClassName${i}Alpha`).join(' ')
+            const capped = t.termsFromPrompt(many)
+            if (capped.length !== t.MAX_TERMS || capped[0] !== 'ClassName0Alpha') return false
+            return t.termsFromPrompt('please fix the tests').length === 0 && t.termsFromPrompt('').length === 0
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'terms.mjs'),
+            '(t.match(/[A-Z]/g) ?? []).length >= 2', '(t.match(/[A-Z]/g) ?? []).length >= 1'),
+    },
+    {
+        id: 'match-docs-frontmatter-field-on-a-branch-only-solution-ranks-first-and-is-off-baseline',
+        why: 'a related_components field is a claim the author made on purpose; a branch-only solution naming the class is exactly the prior art the working tree cannot show',
+        run: async (binDir) => {
+            const t = await termsLib(binDir)
+            return inDir(termsFixture(), () => {
+                const m = t.matchDocs(['RetryQueueDrainer'])
+                if (!m.ok || m.hits.length !== 1 || m.refsSearched < 1) return false
+                const h = m.hits[0]
+                return h.path === 'docs/solutions/ci/retry-queue.md' && h.tier === 'frontmatter'
+                    && h.onBaseline === false && h.title === 'The retry queue drained twice'
+                    && h.terms.length === 1 && h.terms[0] === 'RetryQueueDrainer' && h.refs.includes('terms-only')
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'terms.mjs'),
+            '|| /^\\s+-\\s/.test(text)))', '|| false))'),
+    },
+    {
+        id: 'match-docs-heading-hit-ranks-as-heading-and-reads-the-title-from-the-blob',
+        why: 'a term in a `##` heading is not the title; the title has to be read, once, for the hits that are shown',
+        run: async (binDir) => {
+            const t = await termsLib(binDir)
+            return inDir(termsFixture(), () => {
+                const m = t.matchDocs(['WidgetSpinner'])
+                if (!m.ok || m.hits.length !== 1) return false
+                const h = m.hits[0]
+                return h.tier === 'heading' && h.onBaseline === true && h.divergent === false && h.title === 'A rollout plan'
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'terms.mjs'),
+            "if (/^#{1,6}\\s/.test(text)) return 'heading'", "if (/^#{1,6}\\s/.test(text)) return 'body'"),
+    },
+    {
+        id: 'match-docs-body-hits-are-capped-per-term-and-the-rest-counted',
+        why: 'a mechanism named in prose across forty notes is forty lines nobody reads; the cap keeps the block short and the count keeps the truncation honest',
+        run: async (binDir) => {
+            const t = await termsLib(binDir)
+            return inDir(termsFixture(), () => {
+                const m = t.matchDocs(['flux_capacitor'])
+                if (!m.ok || m.hits.length !== t.BODY_CAP_PER_TERM || m.truncated !== 5 - t.BODY_CAP_PER_TERM) return false
+                if (!m.hits.every((h) => h.tier === 'body')) return false
+                const wide = t.matchDocs(['flux_capacitor'], { bodyCap: 10 })
+                return wide.ok && wide.hits.length === 5 && wide.truncated === 0
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'terms.mjs'),
+            'budget.set(t, budget.get(t) - 1)', 'budget.set(t, budget.get(t) - 0)'),
+    },
+    {
+        id: 'match-docs-is-one-git-grep-and-no-ls-tree',
+        why: 'the per-prompt budget is 2500ms; a corpus-index build is five seconds on this repository, and one grep per term is one budget per term',
+        run: async (binDir) => {
+            const t = await termsLib(binDir)
+            const perf = await perfOf(binDir)
+            return inDir(termsFixture(), () => {
+                perf.perfReset()
+                const m = t.matchDocs(['RetryQueueDrainer', 'WidgetSpinner', 'flux_capacitor'])
+                const report = perf.perfReport()
+                return m.ok && callCount(report, 'git grep') === 1 && callCount(report, 'git ls-tree') === 0
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'terms.mjs'),
+            "    const res = exec('git', ['grep', '-n', '-i', '-F', ...patterns,",
+            "    const ignoredMutant = exec('git', ['ls-tree', 'HEAD'])\n    const res = exec('git', ['grep', '-n', '-i', '-F', ...patterns,"),
+    },
+    {
+        id: 'match-docs-outside-a-repository-cannot-answer-rather-than-finds-nothing',
+        why: 'ok:false is the only thing that separates "git could not run" from "no document names this", and the hook records the first and stays silent on the second',
+        run: async (binDir) => {
+            const t = await termsLib(binDir)
+            const outside = mkdtempSync(join(tmpdir(), 'inflight-terms-notarepo-'))
+            const m = await inDir(outside, () => t.matchDocs(['RetryQueueDrainer']))
+            return m.ok === false && typeof m.reason === 'string' && m.reason.length > 0 && m.hits.length === 0
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'terms.mjs'),
+            "if (!tips.ok) return cannot('cannot list refs - is this a git repository?')",
+            'if (!tips.ok) return { ...result, ok: true }'),
     },
 ]
 

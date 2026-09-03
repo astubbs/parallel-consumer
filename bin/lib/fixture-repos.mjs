@@ -82,3 +82,45 @@ export function buildDocsFixture() {
     git('branch', '-q', '-D', 'to-tag')
     return { dir, git, commit, write, NOTE }
 }
+
+/**
+ * THE CORPUS FIXTURE PLUS THE SHAPES THE PROMPT-KEYWORD QUERY IS SPECIFIED AGAINST, one per tier
+ * of the plan's R10 order, each under a name no other fixture document uses:
+ *
+ *   terms-only        docs/solutions/ci/retry-queue.md, whose frontmatter names `RetryQueueDrainer`
+ *                     in `related_components:` and whose body never does - a FRONTMATTER hit that
+ *                     master has never had
+ *   master            docs/plans/2026-02-02-001-widget.md, naming `WidgetSpinner` in a `##` heading
+ *                     only - a HEADING hit
+ *   master            docs/inflight/flux-1.md .. flux-5.md, naming `flux_capacitor` in body prose
+ *                     only - BODY hits, more of them than the per-term cap keeps
+ *   master            docs/inflight/gadget-01.md .. gadget-14.md, each carrying an
+ *                     `<!-- inflight-impact: GadgetFlange -->` marker - more frontmatter-tier hits
+ *                     than the hook shows, so the `+N more` tail is reachable
+ *
+ * Built on top of `buildDocsFixture` rather than inside it, for the reason that function gives:
+ * the drift checks assert exact ref and version counts on the shared corpus, and a fifth live ref
+ * would move them.
+ */
+export function buildTermsFixture() {
+    const fx = buildDocsFixture()
+    const { git, commit, write } = fx
+    write('docs/plans/2026-02-02-001-widget.md', '# A rollout plan\n\n## The WidgetSpinner rollout\n\nsteps\n')
+    for (let i = 1; i <= 5; i++) {
+        write(`docs/inflight/flux-${i}.md`, `# Flux note ${i}\n\n<!-- inflight-type: task -->\n\nthe flux_capacitor stalls here\n`)
+    }
+    for (let i = 1; i <= 14; i++) {
+        const nn = String(i).padStart(2, '0')
+        write(`docs/inflight/gadget-${nn}.md`, `# Gadget ${nn}\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: GadgetFlange -->\nbody\n`)
+    }
+    commit('documents for the prompt-keyword query')
+
+    git('checkout', '-q', '-b', 'terms-only', 'master')
+    write('docs/solutions/ci/retry-queue.md', [
+        '---', 'title: The retry queue drained twice', 'related_components:', '  - RetryQueueDrainer', '---',
+        '# The retry queue drained twice', '', 'the drainer ran once per shard and once per partition', '',
+    ].join('\n'))
+    commit('a solution master never had')
+    git('checkout', '-q', 'master')
+    return fx
+}
