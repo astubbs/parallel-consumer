@@ -41,6 +41,29 @@ un-cover anything - which is why this was left alone rather than guessed at. Nar
 per-suite `files` value in the matrix, and three of the five suites (`performance`, `lincheck`,
 `chaos`) would need their report shape established first rather than assumed.
 
+## 2026-09-03: a partial base report, which reads the same as a drop
+
+Third sighting of the same *shape*, and a different cause from either half above, so it goes here
+rather than being explained by them.
+
+`codecov/project/unit` went red on a PR whose Java changes were test-only and whose patch coverage
+Codecov itself reported as 100%: the unit flag read a large negative delta, and the project total
+read a large positive one at the same time. The base commit's whole report was SHORT - fewer files
+and fewer lines than both the master commit before it and the PR head, on a master commit that
+touched only `pom.xml` and docs, so no file could legitimately have left the report.
+
+**Read the base report before believing a flag delta**, rather than reasoning from the percentage:
+
+```bash
+curl -s https://api.codecov.io/api/v2/github/astubbs/repos/parallel-consumer/commits/<sha>/ \
+  | python3 -c 'import sys,json; t=json.load(sys.stdin)["totals"]; print(t["files"], t["lines"], t["coverage"])'
+```
+
+A base with fewer files than the commit before it is a truncated upload, and every flag comparison
+against it is meaningless in both directions. It self-corrects on master's next full upload, which
+is why nothing was changed for it - but a red that clears by itself is exactly the kind that gets
+attributed to the PR that happened to be open.
+
 ## Delete when
 
 A PR after this has merged shows `codecov/project/unit` and `codecov/project/integration` comparing
