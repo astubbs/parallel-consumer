@@ -97,10 +97,11 @@ Do not re-derive these; they are measured and recorded.
   `config/infer-known-findings.txt`, keyed on bug type plus `Class.method`. Fix one and **delete its
   line there**, or the lane fails telling you to. (There is no `RACERD_MAX_FINDINGS`; the bare count
   ceiling was replaced precisely because fixing one race and introducing another left it unchanged.)
-- **The non-volatile offenders** `ConsumerManager.commitRequested`, `RetryQueue.closed`, and
-  `AbstractParallelEoSStreamProcessor.lastCommitTime` - `docs/refactoring.md`.
-  `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled` was a fourth until astubbs#201
-  made it `volatile`. **`RetryQueue.closed` came off the list a different way**: the iterator that
+- **The non-volatile offenders**, now just `ConsumerManager.commitRequested` -
+  `docs/refactoring.md`. `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled` was fixed
+  by astubbs#201 and `lastCommitTime` the same way, both `volatile`, both with a modifier tripwire
+  (`PartitionStateDirtyFlagFenceTest` is the pattern) because nothing else goes red when a modifier
+  is dropped. **`RetryQueue.closed` came off the list a different way**: the iterator that
   owns it holds a read lock only its opener can release, so it was already confined and the answer
   was to declare and assert that (`@ThreadConfined(ANY)` plus `assertOnOwningThread`), not to make
   it `volatile`. SpotBugs cannot read the declaration and still reports it - one of the two places

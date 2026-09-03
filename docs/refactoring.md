@@ -231,13 +231,6 @@ them, do not copy them back.
   codebase contains no annotation. Every detector here is discovery and none prevents regression, so
   the annotation is what makes a fix permanent - write it with the fix.
 
-### `AbstractParallelEoSStreamProcessor.lastCommitTime` is read unsynchronised
-
-- Plain `Instant`, written in the commit path and read by `isTimeToCommitNow()` with no
-  happens-before edge. Found by RacerD 2026-08-25; **not previously in any ledger**. The poll thread
-  can read a stale value and mis-time a commit, on a codebase that already tracks commit-timeout
-  flakes. Not diagnosed further. Fix it with `@GuardedBy` per the policy above.
-
 ### Make the commit/close ownership polymorphism official - an interface, not a rename (SMALL, do any time)
 *Independent of the thread-model work below/above. No behaviour change, but do not file this as
 cosmetic - see the last bullet.*

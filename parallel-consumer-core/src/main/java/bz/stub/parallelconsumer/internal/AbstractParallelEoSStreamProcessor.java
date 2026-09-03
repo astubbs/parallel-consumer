@@ -241,9 +241,21 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private volatile Exception failureReason;
 
     /**
-     * Time of last successful commit
+     * Time of last successful commit.
+     * <p>
+     * <b>volatile, and NOT {@code @ThreadConfined} to the control thread, which is what it looks like.</b> The
+     * obvious reading is that only {@link #commitOffsetsThatAreReady()} writes it and only
+     * {@link #isTimeToCommitNow()} reads it, both on the control thread - and every record of this field
+     * stated exactly that until somebody grepped for it. {@link #tryCommitOffsetsOnRevoke()} writes it too, from
+     * inside {@link #onPartitionsRevoked}, which the broker POLL thread runs. Both writes are under
+     * {@code commitLock}; the read is not, so without this keyword the control thread has no happens-before
+     * edge to the poll thread's write and can miss a commit that did happen, then commit again immediately.
+     * Benign in effect - a redundant commit - but it is a cross-thread field either way, and declaring it
+     * confined would have been a false declaration that RacerD would then have believed.
+     * <p>
+     * Same shape and same fix as {@code lastWorkRequestWasFulfilled} (astubbs#201) and {@link #failureReason}.
      */
-    private Instant lastCommitTime;
+    private volatile Instant lastCommitTime;
 
     @Override
     public boolean isClosedOrFailed() {

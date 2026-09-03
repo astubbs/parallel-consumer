@@ -48,5 +48,3 @@
 1 NULLPTR_DEREFERENCE ProcessingShard.isWorkContainerStale
 1 NULLPTR_DEREFERENCE WorkManager.checkIfWorkIsStale
 1 NULLPTR_DEREFERENCE WorkManager.handleFutureResult
-1 THREAD_SAFETY_VIOLATION AbstractParallelEoSStreamProcessor.controlLoop
-1 THREAD_SAFETY_VIOLATION AbstractParallelEoSStreamProcessor.isTimeToCommitNow
