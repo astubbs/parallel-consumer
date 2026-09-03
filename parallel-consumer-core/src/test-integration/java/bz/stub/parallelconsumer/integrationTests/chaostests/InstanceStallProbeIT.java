@@ -77,7 +77,7 @@ class InstanceStallProbeIT {
      * the sampler thread is never started. */
     private static ProgressProbe probeWatching(FakeInstance... instances) {
         List<ProgressProbe.InstanceProgressView> views = new ArrayList<>(Arrays.asList(instances));
-        return new ProgressProbe(null, "test-group", "test-topic", () -> 0L, 0)
+        return ProgressProbe.forSeamTest("test-group", "test-topic")
                 .withInstanceProgress(() -> views);
     }
 
@@ -259,7 +259,7 @@ class InstanceStallProbeIT {
 
     @Test
     void anUnreadableSnapshotSaysSoRatherThanReadingAsAnEmptyFleet() {
-        ProgressProbe probe = new ProgressProbe(null, "test-group", "test-topic", () -> 0L, 0)
+        ProgressProbe probe = ProgressProbe.forSeamTest("test-group", "test-topic")
                 .withInstanceProgress(() -> {
                     throw new IllegalStateException("PC mid-construction");
                 });

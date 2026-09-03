@@ -172,8 +172,7 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> i
     /**
      * Per-poll diagnostic progress lines for a {@link #diagnosableWait} wait - only emitted under
      * {@code -Dchaos.diagnoseStallRecovery=true}, so they cost nothing in a gating run. Both fleet
-     * counters are
-     * needed because a completion counter alone cannot tell "nothing is finishing" from "nothing is
+     * counters are needed because a completion counter alone cannot tell "nothing is finishing" from "nothing is
      * happening": a fleet all sitting inside a heavy-tail dwell reads as a flat consumed line while
      * fully busy. {@code inFlight} (started-minus-consumed) is the difference that makes a flat line
      * interpretable.
