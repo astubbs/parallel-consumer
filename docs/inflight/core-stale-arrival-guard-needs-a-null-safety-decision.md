@@ -81,3 +81,22 @@ NullAway lane.
 Until both are answered, this stays parked. The mechanism it guards is documented in
 `PartitionState#epochIsStale`'s three-checkpoint javadoc, which also records why re-checking per
 record or consulting the live epoch closes nothing.
+
+## 2026-09-03: a fourth fixture, found by a harness rather than by the prototype
+
+Added beside the text above rather than over it - the decision is unchanged, its evidence is not.
+
+<!-- post-merge: checked-begin -->
+`ShardManagerLincheckTest` reached `ProcessingShard.isWorkContainerStale`'s unguarded deref of
+`PartitionStateManager.getPartitionState` and reported `NullPointerException` in CI. It is the same
+shape as the three fixtures named above - a harness driving a `PCModuleTestEnv` whose partition was
+never assigned - and it had simply never taken the branch before: the branch needs an arrival to find
+a RESIDENT at its offset, and until the declining revoke sweep landed (astubbs#431) a sweep always
+removed the resident and the empty shard with it. A sweep that DECLINES leaves the resident in place,
+so the next add takes the branch.
+
+Fixed as a fixture - the harness now assigns its partition, which is what its own constructor claims
+to model - so this note's policy question is untouched. What it adds is that the unguarded call is
+reachable from a *state the product deliberately creates*, not only from a test shortcut, which is a
+datum for the second bullet under "The decision needed".
+<!-- post-merge: checked-end -->
