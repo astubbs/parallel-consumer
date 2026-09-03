@@ -403,10 +403,12 @@ same fork, not this test. `@Isolated` cannot protect a capture from a thread tha
 the fix is in whichever test leaks, once identified - the surefire report timestamps name the
 candidates that ran in the preceding minute.
 
+<!-- post-merge: checked-begin - a dated sighting, past tense, on branches named as they were -->
 Seen three times more on 2026-09-03, in local full runs of the core suite on two branches of the same
 stack (twice on the recovery branch re-cut onto astubbs#426, once on astubbs#420 re-based above it), each
 time passing alone immediately afterwards. Same shape: a captured line from an earlier class; nothing in
 either diff touches the load factor. Four sightings in two days, all local, none yet in CI.
+<!-- post-merge: checked-end -->
 
 ### `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` - a helper defect, not a test defect
 
