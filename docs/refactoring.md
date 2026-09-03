@@ -933,8 +933,10 @@ astubbs#228 (confluentinc#24, distributed rate limiting); ideation:
   make sense to have a producer facade." Don't revisit.
 - `origin/features/consumer-interface` @e67833f8, `origin/refactor/interface` @400643c8 - Consumer /
   interface naming (→ cohesive-API draft `confluentinc#303`).
-- `origin/refactor/deprecate-jstream` @8a8f6508 - deprecate the JStream API (breaking removal is
-  queued under *Breaking changes queued for next major version*).
+- `origin/refactor/deprecate-jstream` @8a8f6508 - deprecate the JStream API. **The queued removal was
+  withdrawn on 2026-09-03** - see the struck-through entry under *Breaking changes queued for next
+  major version* for why. The branch is kept as the design record for whoever argues the case on the
+  API's merits rather than on the defect astubbs#116 fixed.
 - `origin/move-cons-to-pc` @f25256cf - move the consumer into PC (old/new styles verified equal).
 - `origin/refactor/minor-changes` @193bbf80 - rename enum to the standard pattern (breaking; see
   *Breaking changes queued for next major version*).
