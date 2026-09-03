@@ -3,11 +3,16 @@
 <!-- inflight-type: task -->
 <!-- inflight-impact: ci -->
 
+<!-- post-merge: checked-begin - both sentences name astubbs/parallel-consumer#439 explicitly and
+     are written in the past tense, so they stay true once that PR has merged and its branch is
+     gone. Nothing here says "this branch" or "this PR". -->
 The `Integration Tests` lane is the PR build's critical path at 10m20s on master, against ~8m for
-the next slowest. This branch carries a `ce-optimize` run against it.
+the next slowest. A `ce-optimize` run against it landed in astubbs/parallel-consumer#439.
 
-**What has LANDED on this branch:** the measurement of where the time goes, the 2x2 factorial that
-closed `forkCount` as a lever, two corrected stale claims, and a flake sighting. The full write-up
+**What astubbs/parallel-consumer#439 landed:** the measurement of where the time goes, the 2x2
+factorial that closed `forkCount` as a lever, two corrected stale claims, and a flake sighting.
+<!-- post-merge: checked-end -->
+The full write-up
 is [`docs/plans/2026-09-03-001-investigate-integration-gate-wall-time.md`](../plans/2026-09-03-001-investigate-integration-gate-wall-time.md);
 this note carries only what is still moving.
 
