@@ -1258,16 +1258,25 @@ registrations = sum(len(g["hooks"]) for groups in cfg["hooks"].values() for g in
 # not failing. A number nobody verifies is a number that rots, so both are verified here rather than
 # trusted to the next editor, and both are needed because one script can be registered against
 # several events.
-# Runs to twenty because a table that stops at the current count turns the next hook into a
+# Ran to twenty because a table that stops at the current count turns the next hook into a
 # self-test failure whose message reads like the doc is wrong - which is how this list ended one
 # short of the number the doc had to state. The literal symptom is worth knowing, because it does
-# not look like a missing entry: "says thirteen registrations; settings.json has 13".
-WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
-         "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
+# not look like a missing entry: "says thirteen registrations; settings.json has 13". And then the
+# twenty-first registration arrived, and the table stopping at twenty was the same defect one row
+# later - so the compounds are derived, not listed: "twenty-one" through "ninety-nine" from the tens
+# and units, and the regex admits the hyphen.
+UNITS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+         "eight": 8, "nine": 9}
+WORDS = {**UNITS, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
          "fourteen": 14, "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
-         "nineteen": 19, "twenty": 20}
+         "nineteen": 19}
+for tens_word, tens in (("twenty", 20), ("thirty", 30), ("forty", 40), ("fifty", 50),
+                        ("sixty", 60), ("seventy", 70), ("eighty", 80), ("ninety", 90)):
+    WORDS[tens_word] = tens
+    for unit_word, unit in UNITS.items():
+        WORDS["%s-%s" % (tens_word, unit_word)] = tens + unit
 doc = (root / "docs/agent-harness.md").read_text()
-m = re.search(r"`\.claude/settings\.json`\*\* - ([a-z]+) hook scripts across ([a-z]+) registrations", doc)
+m = re.search(r"`\.claude/settings\.json`\*\* - ([a-z-]+) hook scripts across ([a-z-]+) registrations", doc)
 if not m:
     problems.append("docs/agent-harness.md no longer states the settings.json script and registration counts")
 else:

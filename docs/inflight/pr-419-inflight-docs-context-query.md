@@ -27,9 +27,6 @@ on the text the agent writes; folding the existing write-time solutions hook ont
 
 **Open as the units land** (the plan's U-IDs are the order):
 
-- The read-time hook (U2) has to verify, on the installed Claude Code version, that a `PostToolUse`
-  hook on the Read tool delivers `additionalContext`; only the Bash half is verified today. The
-  fallback is `PreToolUse` allow-with-context for Read alone.
 - Every delivery publishes its measured cold cost in its own header before it ships; the budgets
   are in the plan's cost decision. The full-tier header pays one diff per divergent cluster for the
   preview, which `note drift` now pays too - flag it if that command's wall-clock matters.

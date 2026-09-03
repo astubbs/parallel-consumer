@@ -35,6 +35,8 @@
 // EXIT CODES: 0 all checks passed and every mutant went red; 1 otherwise.
 
 import { spawnSync } from 'node:child_process'
+// The fixture repositories are shared with bin/test-check-docs-hooks.mjs; bin/lib/fixture-repos.mjs owns them.
+import { buildDocsFixture, windowGit, windowRepo } from './lib/fixture-repos.mjs'
 import { chdir, cwd } from 'node:process'
 import {
     cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, symlinkSync, utimesSync,
@@ -258,21 +260,6 @@ async function aDriftedNote(binDir) {
 // Deliberately not the shared `buildFixture()`: that one is a corpus of in-flight NOTES, and these
 // need source files moving between two paths, which is the fork's package rename in miniature.
 
-function windowGit(dir) {
-    return (...args) => {
-        const r = spawnSync('git', args, { cwd: dir, encoding: 'utf8' })
-        if (r.status !== 0) throw new Error(`fixture: git ${args.join(' ')} failed: ${r.stderr}`)
-        return r.stdout.trim()
-    }
-}
-
-function windowRepo() {
-    const dir = mkdtempSync(join(tmpdir(), 'inflight-window-'))
-    const git = windowGit(dir)
-    git('init', '-q', '-b', 'master')
-    return { dir, git, commit: (m) => { git('add', '-A'); git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', m) } }
-}
-
 const lines = (n, tag) => `${Array.from({ length: n }, (_, i) => `line ${i} ${tag}`).join('\n')}\n`
 
 /**
@@ -384,57 +371,8 @@ function buildMixedFixture() {
     return dir
 }
 
-/**
- * A CORPUS THAT SPANS THE THREE DOCS AREAS, holding every state the divergence header reports.
- *
- *   master            docs/inflight/note.md, docs/solutions/ci/sol.md, docs/plans/2026-01-01-001-plan.md
- *   adds-heading      note.md plus a new `## ...` section - a divergent version that ADDED A HEADING
- *   adds-line         note.md plus one plain line - a divergent version that added NO heading
- *   only-here         docs/inflight/branch-only.md, which master has never had
- *   tag preserved/parked
- *                     note.md with content no live ref carries - its branch was deleted after
- *                     tagging, which is how this repository parks work before a re-cut
- *
- * ITS OWN REPOSITORY, NOT THE SHARED FIXTURE. The drift checks assert exact counts on shared.md
- * (`divergent.length === 1`), and the mutant phase re-runs every check against whatever the earlier
- * ones left behind - so growing that note's divergent set here would turn an unrelated check red
- * one phase later, with nothing pointing back at the cause.
- */
-function buildDocsFixture() {
-    const { dir, git, commit } = windowRepo()
-    const write = (rel, body) => {
-        mkdirSync(join(dir, dirname(rel)), { recursive: true })
-        writeFileSync(join(dir, rel), body)
-    }
-    const NOTE = '# The note\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\nbody\n'
-    write('docs/inflight/note.md', NOTE)
-    write('docs/solutions/ci/sol.md', '# A solved problem\n\nfixed\n')
-    write('docs/plans/2026-01-01-001-plan.md', '# A plan\n\nsteps\n')
-    commit('the corpus')
-
-    git('checkout', '-q', '-b', 'adds-heading')
-    write('docs/inflight/note.md', `${NOTE}\n## What the branch learned\n\ndetail\n`)
-    commit('add a heading')
-
-    git('checkout', '-q', '-b', 'adds-line', 'master')
-    write('docs/inflight/note.md', `${NOTE}one plain added line\n`)
-    commit('add a line')
-
-    git('checkout', '-q', '-b', 'only-here', 'master')
-    write('docs/inflight/branch-only.md', '# Only here\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\nz\n')
-    commit('a note master never had')
-
-    git('checkout', '-q', '-b', 'to-tag', 'master')
-    write('docs/inflight/note.md', `${NOTE}parked before a re-cut\n`)
-    commit('parked')
-    git('tag', 'preserved/parked')
-    git('checkout', '-q', 'master')
-    git('branch', '-q', '-D', 'to-tag')
-    return dir
-}
-
 let DOCS = null
-const docsFixture = () => (DOCS ??= buildDocsFixture())
+const docsFixture = () => (DOCS ??= buildDocsFixture().dir)
 
 const views = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'views.mjs')).href)
 const perfOf = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'perf.mjs')).href)

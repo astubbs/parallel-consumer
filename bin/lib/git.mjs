@@ -24,18 +24,29 @@ import { execFileSync } from 'node:child_process'
 import { perfRecord } from './perf.mjs'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 
-/** Run a command; return {ok, out, status}. Never throws - callers decide what a failure means. */
+/**
+ * Run a command; return {ok, out, err, status}. Never throws - callers decide what a failure means.
+ *
+ * STDERR IS CAPTURED, NOT INHERITED. execFileSync forwards a child's stderr to the parent's unless
+ * told otherwise, so every `fatal: not a git repository` git printed reached whoever ran the
+ * library - and for a hook, whose stderr the harness shows the user on some paths, that turned a
+ * fail-open silence into three lines of git noise (caught by bin/test-check-docs-hooks.mjs's
+ * forced-failure case). The text is returned as `err` rather than dropped: the reason a command
+ * failed is exactly what a caller rendering "could not answer" wants to say.
+ */
 export function exec(cmd, args, opts = {}) {
     // Timed on both paths: a command that FAILS still cost its time, and the failures are exactly
     // where an unexpected cost hides - a retry loop, a command dying slowly on a huge input.
     const t0 = Date.now()
     try {
-        const out = execFileSync(cmd, args, { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, ...opts })
+        const out = execFileSync(cmd, args, {
+            encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'], ...opts,
+        })
         perfRecord(`${cmd} ${args[0] ?? ''}`.trim(), Date.now() - t0)
-        return { ok: true, out, status: 0 }
+        return { ok: true, out, err: '', status: 0 }
     } catch (e) {
         perfRecord(`${cmd} ${args[0] ?? ''}`.trim(), Date.now() - t0)
-        return { ok: false, out: e.stdout ?? '', status: e.status ?? -1 }
+        return { ok: false, out: e.stdout ?? '', err: String(e.stderr ?? ''), status: e.status ?? -1 }
     }
 }
 
