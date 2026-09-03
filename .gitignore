@@ -71,6 +71,14 @@ CLAUDE.md
 
 # Package Files #
 *.jar
+# ...except the Maven wrapper's own bootstrap jar, which is meant to be checked in - the blanket
+# *.jar rule above swept it up by accident. Left ignored, every checkout re-downloads it from
+# Central through the --quiet fetch in mvnw's "Extension to allow automatically downloading the
+# maven-wrapper.jar" block, and a failed or partial download leaves no error and no class: the lane
+# dies with ClassNotFoundException on org.apache.maven.wrapper.MavenWrapperMain, ~11s in, before
+# Maven starts. Keep this negation and the jar in step with the maven-wrapper version pinned by
+# wrapperUrl in .mvn/wrapper/maven-wrapper.properties.
+!.mvn/wrapper/maven-wrapper.jar
 *.war
 *.nar
 *.ear
