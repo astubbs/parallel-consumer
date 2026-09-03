@@ -20,9 +20,8 @@ The fixed lines, and the shape a fix takes, are astubbs#203 (astubbs#169 / confl
 `RemovedPartitionState`, astubbs#170 / confluentinc#640 in `AbstractParallelEoSStreamProcessor`):
 a bounded summary on the operator-facing line, the unabridged object one level down at `DEBUG`.
 
-astubbs#168 / confluentinc#629 in `ConsumerOffsetCommitter` followed, on branch
-`fix/168-commit-error-line-keeps-identifiers`, with the one variation the fix shape allows: **no
-partition cap**.
+astubbs#168 / confluentinc#629 in `ConsumerOffsetCommitter` followed, in PR
+astubbs/parallel-consumer#428, with the one variation the fix shape allows: **no partition cap**.
 A commit map holds one entry per partition and the partitions are exactly what astubbs#168 asked
 for, so every one stays named and only the per-entry `metadata` is reduced - to its length, which is
 itself the diagnostic when a commit is rejected for its size.
