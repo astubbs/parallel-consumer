@@ -85,7 +85,10 @@ multiply. This whole feature is candidate STRATEGY.md material ("the engine
 every language re-implements badly" positioning) - fold in via ce-strategy when direction is
 confirmed.
 
-Prior art (design references, bitrotted - catalogued in `docs/refactoring.md` idea bank):
+Prior art (design references, bitrotted - catalogued in `docs/refactoring.md` idea bank, and since
+2026-09-03 also in `branch_accounting` in `src/docs/development/upstream-map.yaml`, which records what
+each branch contains and whether it landed - `bin/inflight.mjs branch <name>` answers the same from
+any checkout):
 `features/dynamic-concurrency-control` @6f85eac41 (Netflix concurrency-limits Gradient2Limit as
 the worker pool, auto-scale module extraction started, README section written) and
 `feature/auto-tuning-pressure` @f4aa09788 (hand-rolled self-tuning of backpressure; the
