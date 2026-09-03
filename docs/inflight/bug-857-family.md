@@ -2432,6 +2432,23 @@ as the 2026-08-26 `NO_PROGRESS` capture: a seed that draws the interleaving, not
 seed replay was not run; it is the control arm to run if this seed is ever drawn again.
 <!-- post-merge: checked-end -->
 
+## 2026-09-03, second capture on the same stacked branch, next head - and its seed replays clean
+
+<!-- post-merge: checked-begin - a dated capture, named by run and seed -->
+The same shard on the next head of astubbs#420 (`f75f4ee07`,
+[run 33717741761](https://github.com/astubbs/parallel-consumer/actions/runs/33717741761)), a
+different arm: no probe fired; the `all messages consumed under churn` wait timed out at its five
+minutes with the run summary at 99097 consumed and a non-gating `CLASS2_STALL/LAG_STAGNATION` on one
+partition. **Seed `4706937442040553228`.** The control arm the previous capture named was run: the
+seed replayed on the same tree on the author's box passed in about two and a half minutes, 100409
+consumed, no violation and no observation. So the seed does not reproduce the stall by itself; the
+stall needs the runner as well, which is the shape every earlier replay in this file has had. Two
+consecutive failures on this branch against a pass on astubbs#410's identical engine code the same
+hour is recorded as a rate, not a cause: the scenario's path does not include anything the branch
+changes. Not run: the same seed on astubbs#410's tree, which a clean replay on this tree makes
+uninformative.
+<!-- post-merge: checked-end -->
+
 ## Delete when
 
 The `CLASS2_STALL` entries above are superseded by this section and kept only as the record of how a
