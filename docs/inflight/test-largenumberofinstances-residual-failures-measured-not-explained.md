@@ -1,4 +1,10 @@
-# `largeNumberOfInstances`: the residual failures are measured now, and still not explained
+# `largeNumberOfInstances`: the residual failure is measured, reproduced, and now EXPLAINED
+
+**Filename deliberately unchanged, 2026-09-04.** It says "not explained" and that is no longer true -
+but it is cited from the `@Quarantined` annotation's `tracking` field, `docs/quarantined-tests.md`,
+`docs/refactoring.md`, two sibling notes and a solutions write-up. Renaming it now would break eight
+citations for a title that has to change again the moment the fix lands, so the claim is corrected
+here instead. This is the same trade `docs/inflight/test-retry-queue-behaviour-untested.md` took.
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: blind-spot -->
@@ -420,3 +426,71 @@ carrying `started` and `closePending` - the pair that answers this note's actual
 a harness-stopped instance mid-close reads `started=false, closePending=true` and a live one does
 not. It goes in the thrown message rather than only the log, because a CI log is truncated and a
 failsafe XML is not.
+
+
+## RESULT, 2026-09-04: the candidate is REFUTED and the mechanism is identified
+
+Both arms ran on the idle self-hosted `highcpu` box, sequentially, 30 iterations each.
+
+| arm | tree | failures |
+|---|---|---|
+| control (run 33752432746) | without astubbs/parallel-consumer#431 | **2 / 30** |
+| treatment (run 33802869646) | + that fix, nothing else | **1 / 30** |
+
+**The retry-queue lock is not the mechanism.** 2/30 against 1/30 is no difference worth a claim, and
+the treatment arm's failure carries the control's signature line for line. The prediction written
+above said both arms failing refutes the candidate; both arms failed, so it is refuted, and
+astubbs/parallel-consumer#431 should not be described anywhere as fixing this test. The control arm
+DID reproduce at 6.7%, consistent with the recorded one-in-ten, so the experiment had the power to
+show an effect and there was none.
+
+**A measurement trap this nearly walked into, recorded because it would have inverted the result.**
+The runner's `/tmp` persists, so the treatment artifact's tally contained **all 60 rows** - both
+arms - not its own 30. Read naively that is "3 failures in 60" and a halved rate. The `ref=` column
+in `bin/exp-measure-large-instances-failure-rate.sh` is the only reason the arms could be separated
+at all; `experiments.yml`'s header had predicted exactly this and called it a known limitation.
+
+### What the fleet diagnostic showed, which is the actual answer
+
+This note's standing question was whether the silent member is one the harness stopped or one still
+running. **It is one the harness stopped - and it is silent because of PC's close path.**
+
+In the worse control failure, **10 of 12 instances sat in `state=CLOSING`** with
+`closedOrFailed=false`, their last completed poll pass **23-25 seconds earlier**; the two survivors
+were `RUNNING` and polling 146ms earlier. The treatment failure is identical: ten
+`closePending=true`, the same two alive.
+
+The chain, every link observed:
+
+1. A chaos stop calls `pc.close()` -> `closeDontDrainFirst()` -> `transitionToClosing()`.
+2. `BrokerPollSystem.handlePoll()` is guarded on `runState == RUNNING || DRAINING`, so the instance
+   **stops calling `consumer.poll()` the moment it enters `CLOSING`** - while its `KafkaConsumer` is
+   still an open member of the group. The consumer is closed later, in `doClose()`.
+3. A member that does not poll does not send JoinGroup. The coordinator dwells in
+   `PreparingRebalance`: the recorded `ZOMBIE_MEMBER/REBALANCE_BLOCKED`, "a member is not answering".
+4. The close cannot finish either. All ten logged *"Execution or timeout exception while waiting for
+   the control thread to close cleanly (state was CLOSING)"*, while `ConsumerOffsetCommitter` filled
+   with `RebalanceInProgressException` - logged on `pc-broker-poll-PC-0` and `PC-11`, the only two
+   instances still running.
+5. So the rebalance waits on the closing members and the close waits on the rebalance. **After
+   `waitForClose` times out the PC stays in `CLOSING` for good** - consumer never closed, member
+   never leaves. That is why the detector reports `FLAT` rather than slow: it does not recover.
+
+**`DRAINING` does not have this problem, and that is the tell.** `drain()`'s own comment says the
+poller "must keep calling `consumer.poll()`" while draining, and `isCloseInProgress()` is documented
+as deliberately NOT true for `DRAINING` for that reason. `CLOSING` took the opposite choice, and the
+`closeDontDrainFirst()` path - which is what `close()` calls - goes straight there.
+
+### This is not a test-only defect
+
+Any application closing a PC instance while its group is rebalancing does this to its peers; a
+rolling restart of a PC fleet is the ordinary case. The test is aggressive enough to hit it reliably
+at ~7%, not doing something an application would not.
+
+### What is NOT yet established
+
+Which of the two calls in the closing instance actually holds it - `maybeDoCommit()` retrying a
+commit that cannot succeed mid-rebalance, or `consumerManager.close()` inside `doClose()`. Both are
+on the path and the logs show the commit failing; neither has been isolated. **The fix should not be
+chosen before that is pinned**, because "keep polling until the consumer is closed" and "do not
+block the close on a commit that cannot land" are different repairs.
