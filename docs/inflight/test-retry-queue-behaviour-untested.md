@@ -71,6 +71,14 @@ one waits for that head to leave the shard rather than being retired on the next
 whole throughout, so it is a delay and not an orphan. `ShardManager.removeWorkFromShardFor` owns the
 statement of it, under "what would reopen this"; do not restate it here.
 
+**And the Lincheck harness now models `tryRemove`**, which was the production removal route on both
+rebalance callbacks and unmodelled since the day it landed. How a refusal is modelled - it cannot be,
+so the operation loops until the lock is taken - is on the operation itself; the naive form was
+measured first and fails in seconds against a sequential specification in which the lock is always
+free. Control arm re-run for the new operation: dropping the write lock from `tryRemove` produces a
+violation (a `NullPointerException` out of `queueForRetry`, the two maps mutated concurrently), and
+`RetryQueue` was restored byte-identical afterwards.
+
 **Still open, and the reason this note stays:**
 
 - **`add` is last-write-wins with a *changed* retry-due time.** Untouched - and it is the normal shape
