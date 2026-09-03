@@ -486,6 +486,12 @@ const bigIndexFixture = () => (BIG_INDEX ??= buildBigIndexFixture())
 /** The document half of a `docs show` page: everything after the separator that names the ref. */
 const bodyShown = (out, path, ref) => out.split(`--- ${path} @ ${ref} ---`)[1] ?? null
 
+/** One malformed invocation refused: exit 2, and the reason exactly as the code states it - never a paraphrase. */
+const refuses = (binDir, args, reason, cwd) => {
+    const r = invoke(binDir, args, { cwd })
+    return r.code === 2 && r.out.includes(reason)
+}
+
 const views = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'views.mjs')).href)
 const docsViews = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'docs-views.mjs')).href)
 const perfOf = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'perf.mjs')).href)
@@ -2167,6 +2173,73 @@ const CHECKS = [
         mutate: (binDir) => patch(join(binDir, 'lib', 'docs-commands.mjs'),
             "if (!tips.ok) return { ok: false, reason: 'docs show: cannot list refs - is this a git repository?' }",
             'if (!tips.ok) return { ok: true }'),
+    },
+    // MALFORMED ARGUMENTS. Each validation branch refuses with the reason the code states, verbatim,
+    // and exit 2 - and each has a mutant, because a typo that lands in a wrong answer instead of a
+    // refusal is the answer-a-different-question class cvOpts was hardened against. The docs family
+    // never passes through cvOpts, so these branches are the only guard.
+    {
+        id: 'docs-show-refuses-a-repeated-ref-in-either-order',
+        why: 'a second --ref was silently dropped when it followed the path, and when it preceded the path its VALUE became the path and the command said a ref name was outside the areas - the answer-a-different-question shape cvOpts guards against',
+        run: async (binDir) => {
+            const dir = docsShowFixture()
+            const reason = 'docs show: --ref given more than once - which one did you mean?'
+            return [
+                ['docs', 'show', 'docs/inflight/note.md', '--ref', 'master', '--ref', 'adds-heading'],
+                ['docs', 'show', '--ref', 'master', '--ref', 'adds-heading', 'docs/inflight/note.md'],
+            ].every((args) => refuses(binDir, args, reason, dir))
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-commands.mjs'),
+            "if (args.filter((a) => a === '--ref').length > 1) return", 'if (false) return'),
+    },
+    {
+        id: 'docs-show-refuses-an-unknown-option',
+        why: 'an unknown flag dropped from the positionals would run the command with the option silently ignored',
+        run: async (binDir) => refuses(binDir, ['docs', 'show', 'docs/inflight/note.md', '--bogus-flag'],
+            'docs show: unknown option(s): --bogus-flag - known: --ref <ref>, --header-only', docsShowFixture()),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-commands.mjs'), 'if (unknown.length) return', 'if (false) return'),
+    },
+    {
+        id: 'docs-show-refuses-a-ref-flag-with-nothing-after-it',
+        why: 'a trailing --ref with no value would fall through to the default ref and show a copy the caller did not ask for',
+        run: async (binDir) => refuses(binDir, ['docs', 'show', 'docs/inflight/note.md', '--ref'], 'docs show: --ref needs a ref after it', docsShowFixture()),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-commands.mjs'),
+            "if (refAt >= 0 && (requested === undefined || requested.startsWith('--'))) return", 'if (false) return'),
+    },
+    {
+        id: 'docs-show-refuses-to-run-without-a-path',
+        why: 'the -1 sentinel arithmetic on refValueAt is the known trap here; with no path at all the refusal must name where to find one',
+        run: async (binDir) => refuses(binDir, ['docs', 'show'], 'docs show: give a document path (see: note find, prior-art)', docsShowFixture()),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-commands.mjs'), 'if (!path) return', 'if (false) return'),
+    },
+    {
+        id: 'docs-show-says-which-refs-carry-a-path-the-requested-ref-does-not',
+        why: 'a ref that does not carry the path is a refusal that has to name the refs which do, else the caller is left guessing at a ref set several hundred long',
+        run: async (binDir) => {
+            const dir = docsShowFixture()
+            const sha = windowGit(dir)('rev-parse', 'master')
+            const r = invoke(binDir, ['docs', 'show', 'docs/inflight/branch-only.md', '--ref', sha], { cwd: dir })
+            return r.code === 2 && r.out.includes(`docs show: ${sha} does not carry docs/inflight/branch-only.md - `)
+                && r.out.includes('refs carry it (1 live, 0 archival), e.g. only-here')
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-commands.mjs'), '        if (blob === null) {\n', '        if (false) {\n'),
+    },
+    {
+        id: 'docs-list-refuses-more-than-an-area-and-a-group',
+        why: 'a third positional silently ignored would list a level the caller did not name',
+        run: async (binDir) => refuses(binDir, ['docs', 'list', 'a', 'b', 'c'], "docs list: takes an area and at most one group, not 'a b c'", docsShowFixture()),
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-commands.mjs'), 'if (extra.length > 0) return', 'if (false) return'),
+    },
+    {
+        id: 'docs-for-branch-refuses-a-second-ref',
+        why: 'two refs would answer for the first and drop the second - the repeated-argument shape, on the command the session hook runs',
+        run: async (binDir) => {
+            const env = { ...process.env, PC_INFLIGHT_CACHE_DIR: mkdtempSync(join(tmpdir(), 'inflight-for-branch-cache-')) }
+            const r = invoke(binDir, ['docs', 'for-branch', 'ref1', 'ref2'], { cwd: docsShowFixture(), env })
+            return r.code === 2 && r.out.includes("docs for-branch: takes one ref at most, not 'ref1 ref2'")
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-commands.mjs'),
+            "if (args.length > 1 || args.some((a) => a.startsWith('--'))) {", "if (args.some((a) => a.startsWith('--'))) {"),
     },
     {
         id: 'docs-show-outside-the-corpus-names-the-areas-it-covers',

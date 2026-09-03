@@ -33,7 +33,7 @@
 // NEVER PRINTS, NEVER EXITS - bin/inflight.mjs and the hooks own the process boundary, and
 // bin/test-inflight.mjs asserts no library under bin/lib/ contains a process exit.
 
-import { baseline as baselineRef, exec, lines, refTips } from './git.mjs'
+import { INVALIDATING_WARNINGS, baseline as baselineRef, exec, freshnessWarnings, lines, refTips } from './git.mjs'
 import { blobTitles, drift } from './notes.mjs'
 import { DOC_AREAS } from './repo.mjs'
 
@@ -231,7 +231,9 @@ export function tierOfLine(lineNo, text) {
  * @param {string[]} terms
  * @param {{areas?: {dir: string}[], bodyCap?: number, markLimit?: number}} opts
  * @returns {{ok: boolean, reason?: string, terms: string[], baseline?: string, refsSearched: number,
- *   live: number, archival: number, hits: object[], truncated: number}}
+ *   live: number, archival: number, hits: object[], truncated: number, unreliable?: object[]}}
+ *   `unreliable` - the freshness warnings that void the marks (a shallow or never-fetched clone),
+ *   for the renderer to put in front of the count
  */
 export function matchDocs(terms, { areas = DOC_AREAS, bodyCap = BODY_CAP_PER_TERM, markLimit = MARK_LIMIT } = {}) {
     const result = { ok: false, terms, refsSearched: 0, live: 0, archival: 0, hits: [], truncated: 0 }
@@ -248,6 +250,11 @@ export function matchDocs(terms, { areas = DOC_AREAS, bodyCap = BODY_CAP_PER_TER
     const base = baselineRef()
     if (!base) return cannot('neither origin/master nor master resolves - no baseline to compare against')
     result.baseline = base
+    // ONLY THE WARNINGS THAT VOID THE ANSWER, once per call: the marks below come from the same
+    // partial history a shallow clone hands the read-time header, and the hook that renders them
+    // answers unasked. The renderer puts them in front of the count line; the dating warnings
+    // belong to the commands that print the full set.
+    result.unreliable = freshnessWarnings(base, live.length, { invalidatingOnly: true }).filter((w) => INVALIDATING_WARNINGS.has(w.id))
 
     const patterns = terms.flatMap((t) => ['-e', t])
     const res = exec('git', ['grep', '-n', '-i', '-F', ...patterns, ...live, '--', ...areas.map((a) => `${a.dir}/`)])

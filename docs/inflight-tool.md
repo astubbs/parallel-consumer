@@ -117,7 +117,10 @@ incident the divergence header exists for - a session edited a stale copy of a n
 working-tree read answered for that copy without saying so.
 
 The read-time hook prints one line about this whenever a file under `docs/inflight/`,
-`docs/solutions/` or `docs/plans/` is read. `docs show` is the same query at full size, and the
+`docs/solutions/` or `docs/plans/` is read - and on a shallow or never-fetched clone that line
+opens with `UNRELIABLE (<id> - run: <remedy>):`, because the count is computed against a
+truncated history; the prompt hook's count line carries the same prefix, and `docs show` prints
+the same warning in full inside its header. `docs show` is the same query at full size, and the
 page has three parts, in the order an agent needs them:
 
 ```

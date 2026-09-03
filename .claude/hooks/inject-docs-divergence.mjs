@@ -23,18 +23,34 @@
 // (200 ms before the working-tree hash moved to `git hash-object`, which is the one process the
 // change added); the silent path (a Read outside the corpus) about 70 ms, against 50 ms for a
 // bare `node -e 0` on the same host - because nothing git-touching is imported until a corpus file
-// is found. Seven git processes make up the difference when it fires: the branch name, the blob at
-// HEAD, the working-tree file's hash, and the four the summary tier costs (refs, blobs, history,
-// one merge-base and diff). There is no warm state: each firing is a fresh process, and the query
-// keeps no corpus cache (KTD5). A Bash command naming FOUR corpus files - MAX_PATHS, the most one
-// event answers for - costs about 460 ms (456-468 over five runs, same host, same method): the
-// refs, the baseline and the branch name are resolved once per tree and threaded into every
+// is found. Eight git processes make up the difference when it fires: the branch name, the
+// freshness probe (one `rev-parse` answering three flags), the blob at HEAD, the working-tree
+// file's hash, and the four the summary tier costs (refs, blobs, history, one merge-base and
+// diff). There is no warm state: each firing is a fresh process, and the query keeps no corpus
+// cache (KTD5). A Bash command naming FOUR corpus files - MAX_PATHS, the most one event answers
+// for - costs about 460 ms (456-468 over five runs, same host, same method): the refs, the
+// baseline, the branch name and the probe are resolved once per tree and threaded into every
 // query, and what remains per path is its own blob, its hash, and the summary tier's four. Before
 // that hoist each path listed every ref again, and the same read measured 613-793 ms.
+// RE-MEASURED 2026-09-03 when the probe was added, interleaved against the version without it,
+// nine runs each, on the same host at a load average of about 5: one path 237 ms against 229
+// before, four paths 508 ms against 509 - the probe is within the noise, and the absolute figures
+// on a loaded host are the host's (its own previous version measured 509 there, against the 456-468
+// above on the quiet one). `freshnessWarnings`'s full call cost 25 ms more; `invalidatingOnly`
+// exists because of that measurement.
 //
 // ONCE PER SESSION PER STATE (KTD4). The seen key is the path, the committed blob at HEAD and the
 // sorted set of divergent blobs; a repeat read is silent until that set changes, and a change -
-// another branch adding a version - makes the header fire again, because that is news.
+// another branch adding a version - makes the header fire again, because that is news. The keys
+// are written once, just before the envelope, for the paths in it: a key written per path inside
+// the loop marked a header seen that a later path's failure then kept from ever being shown.
+//
+// A PARTIAL REF SET IS SAID FIRST. On a shallow or never-fetched clone the baseline history the
+// divergent set is computed against is truncated, so a version the baseline once held counts as
+// content it has never held - a confident wrong count. The line then opens with `UNRELIABLE (<id>
+// - run: <remedy>):`, from the same INVALIDATING_WARNINGS classification `docs show` prints in full;
+// the dating warnings are not repeated here, because a hook whose silence must be earned cannot
+// cry wolf on every read.
 //
 // THE COMPARISON SUBJECT IS THE COMMITTED BLOB AT HEAD (KTD15), in the tree the event names - a
 // Read's file_path, a Bash command's path tokens resolved against its leading `cd`, then the
@@ -45,7 +61,15 @@
 // file under a corpus area counts; `cat "$f"`, a glob, or a path built by a pipeline is not
 // resolved, and the header promises nothing for those. Variables are refused rather than guessed
 // at for the reason pre-commit-gate.sh refuses `git -C "$W"`: the hook reads the command before
-// the shell expands it.
+// the shell expands it. And a directory change the leading-`cd` rule did not consume - a `cd` or
+// `pushd` later in the command, `git -C`, `--git-dir`, `GIT_DIR=` - keeps only the ABSOLUTE
+// tokens, because a relative one resolved against the payload's cwd names the session tree's copy
+// of a file the command read in another worktree (`namedPaths` carries the reasoning).
+//
+// PAST THE CAP, THE REST IS NAMED. Four paths are answered for; a fifth and beyond are listed on
+// one trailing line as not checked, each with its own `docs header` command, because an answer
+// that looks complete while a named path went unchecked is the truncated-but-plausible index the
+// session hook refuses to print.
 //
 // IT NEVER BLOCKS, AND IT NEVER PRINTS ON FAILURE (R20). Every failure path exits 0 with nothing
 // on stdout; the failure is recorded instead, in the tool's cache as `delivery-failures.json`
@@ -60,7 +84,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { readStdin, baseDir, treeContaining, seenStore, runFailingOpen } from './lib/hook-common.mjs';
+import { readStdin, baseDir, leadingCd, LEADING_CD, treeContaining, seenStore, runFailingOpen } from './lib/hook-common.mjs';
 import { DOC_AREAS } from '../../bin/lib/repo.mjs';
 
 /** The name this delivery records failures under; `inflight docs` prints it back. */
@@ -76,14 +100,32 @@ const unquote = (t) => t.replace(/^(["'])(.*)\1$/, '$2').replace(/[;|)&]+$/, '')
 /** A token the shell would pass through unchanged - no expansion, no option. */
 const literal = (t) => t.length > 0 && !/[$`*?[{]/.test(t) && !t.startsWith('-') && !t.startsWith('~');
 
-/** The paths this event names, before any of them is resolved. */
+/**
+ * A directory change that `leadingCd` did not consume: a `cd` or `pushd` as a command word anywhere
+ * past the leading literal one (a subshell's, a second segment's, or the leading one when its target
+ * was a variable and so refused), `git -C`, `--git-dir`, or a `GIT_DIR=` assignment. A relative
+ * token in such a command resolves against a tree this hook cannot name.
+ */
+const CHANGES_DIRECTORY = /(^|[\s;&|(`{])(cd|pushd)(\s|$)|\bgit\s+(?:-\S+\s+)*-C(\s|$)|--git-dir(=|\s)|(^|[\s;&|(`{])GIT_DIR=/;
+
+/**
+ * The paths this event names, before any of them is resolved.
+ *
+ * ONLY ABSOLUTE TOKENS SURVIVE A DIRECTORY CHANGE THE LEADING-cd RULE DID NOT CONSUME. Every
+ * worktree of this repository carries the same note paths, so `(cd <wt> && cat docs/inflight/x.md)`
+ * or `git -C <wt> diff -- docs/inflight/x.md` resolved against the payload cwd describes the SESSION
+ * tree's copy of a file the command read in another tree - the stale-copy incident, delivered with
+ * the hook's badge on it. Silence over a guess, the rule `leadingCd` applies to `cd "$W"`.
+ */
 function namedPaths(ev) {
   const ti = ev.tool_input || {};
   if (ev.tool_name === 'Read') {
     return typeof ti.file_path === 'string' && ti.file_path ? [ti.file_path] : [];
   }
   if (ev.tool_name === 'Bash' && typeof ti.command === 'string') {
-    return ti.command.split(/\s+/).map(unquote).filter(literal);
+    const tokens = ti.command.split(/\s+/).map(unquote).filter(literal);
+    const past = leadingCd(ti.command) === null ? ti.command : ti.command.replace(LEADING_CD, '');
+    return CHANGES_DIRECTORY.test(past) ? tokens.filter((t) => path.isAbsolute(t)) : tokens;
   }
   return [];
 }
@@ -127,9 +169,14 @@ async function main() {
     if (f && !found.some((g) => g.abs === f.abs)) found.push(f);
   }
   if (found.length === 0) return;
+  // The paths past the cap are NAMED at the end, never silently dropped: an answer that looks
+  // complete while a path the command named went unchecked is the truncated-but-plausible index
+  // the session hook refuses to print. Each carries its own `docs header` command instead.
+  const checked = found.slice(0, MAX_PATHS);
+  const dropped = found.slice(MAX_PATHS);
 
   // Loaded only now: the silent path above must cost Node's start and nothing else.
-  const [{ drift }, { baseline, exec, refTips, workingTreeBlob }, { formatDivergenceHeader, sourceFrame }, { clearDeliveryFailure }] = await Promise.all([
+  const [{ drift }, { INVALIDATING_WARNINGS, baseline, exec, freshnessWarnings, refTips, workingTreeBlob }, { formatDivergenceHeader, sourceFrame }, { clearDeliveryFailure }] = await Promise.all([
     import('../../bin/lib/notes.mjs'),
     import('../../bin/lib/git.mjs'),
     import('../../bin/lib/docs-views.mjs'),
@@ -153,18 +200,30 @@ async function main() {
       // "HEAD's"; a detached HEAD has no short name and is reported as HEAD.
       const symbolic = exec('git', ['symbolic-ref', '--short', '--quiet', 'HEAD']);
       const ref = symbolic.ok && symbolic.out.trim() ? symbolic.out.trim() : 'HEAD';
-      resolvedPerTree.set(tree, { tips: tips.tips, base: baseline(), ref });
+      const base = baseline();
+      // ONLY THE WARNINGS THAT VOID THE ANSWER, and only on the firing path. A shallow or
+      // never-fetched clone truncates the baseline history the divergent set is computed against
+      // (bin/lib/notes.mjs's baselineHistoryBlobs), so a version the baseline ONCE held is counted
+      // as content it has never held - a confident wrong count, from the one channel that answers
+      // unasked. The parallel-agent re-shallowing docs/agent-harness.md describes makes this a
+      // recurring state of the real clone, not a hypothetical. Rendered as the line's prefix. One
+      // git process; the filter is the contract, the option is what makes it one process.
+      const unreliable = freshnessWarnings(base, tips.tips.length, { invalidatingOnly: true }).filter((w) => INVALIDATING_WARNINGS.has(w.id));
+      resolvedPerTree.set(tree, { tips: tips.tips, base, ref, unreliable });
     }
     return resolvedPerTree.get(tree);
   };
 
   const store = seenStore('docs-divergence', String(ev.session_id || ''));
-  const blocks = [];
-  for (const f of found.slice(0, MAX_PATHS)) {
+  // Collected, not yet remembered: a later path can still throw, and a key written before the
+  // write would mark a header seen that nobody saw - silenced for the session, unprinted, which is
+  // the defect hook-common.mjs's seenStore comment names. Remembered once, just before the write.
+  const pending = [];
+  for (const f of checked) {
     // Every bin/lib call reads git from the process's directory, so the process goes to the tree
     // the event named - never the session's.
     process.chdir(f.tree);
-    const { tips, base, ref } = treeFacts(f.tree);
+    const { tips, base, ref, unreliable } = treeFacts(f.tree);
     const head = exec('git', ['rev-parse', '--verify', '--quiet', `HEAD:${f.rel}`]);
     // An untracked or freshly created file has no committed blob; the query then reports that no
     // ref carries the path, which is the true state of a note nobody has committed yet.
@@ -184,24 +243,36 @@ async function main() {
 
     const key = [f.rel, blob ?? 'uncommitted', ...(d.divergent ?? []).map((c) => c.blob).sort()].join(' ');
     if (store && store.has(key)) continue;
-    if (store) store.remember([key]);
 
-    blocks.push(sourceFrame(
-      'header',
-      f.rel,
-      formatDivergenceHeader(d, { tier: 'summary', uncommitted }),
-      `node bin/inflight.mjs docs header ${f.rel}`,
-    ));
+    pending.push({
+      key,
+      block: sourceFrame(
+        'header',
+        f.rel,
+        formatDivergenceHeader(d, { tier: 'summary', uncommitted, warnings: unreliable }),
+        `node bin/inflight.mjs docs header ${f.rel}`,
+      ),
+    });
   }
 
   // Reached only when every query answered: the record this clears is the one the catch below writes.
   clearDeliveryFailure(DELIVERY);
-  if (blocks.length === 0) return;
+  const lines = pending.map((p) => p.block);
+  // Every time, not once per session: nothing was learned about these paths, so there is no state
+  // to have seen. Printed even when every checked path was already shown, because the unchecked
+  // ones were not.
+  if (dropped.length > 0) {
+    const one = dropped.length === 1;
+    lines.push(`+${dropped.length} more corpus path${one ? '' : 's'} this command named ${one ? 'was' : 'were'} NOT checked `
+      + `(the header answers for at most ${MAX_PATHS} per command) - ask for each: ${dropped.map((d) => `node bin/inflight.mjs docs header ${d.rel}`).join(' ; ')}`);
+  }
+  if (lines.length === 0) return;
+  if (store && pending.length > 0) store.remember(pending.map((p) => p.key));
 
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: ev.hook_event_name || 'PostToolUse',
-      additionalContext: blocks.join('\n\n'),
+      additionalContext: lines.join('\n\n'),
     },
   }));
 }

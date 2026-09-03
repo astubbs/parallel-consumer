@@ -430,42 +430,61 @@ export const INVALIDATING_WARNINGS = new Set(['no-baseline', 'never-fetched', 's
  * main checkout while master advanced 151 commits underneath it, and every working-tree read
  * answered for that snapshot without saying so.
  *
- * @returns {{id: string, lines: string[]}[]}
+ * INVALIDATING ONLY, FOR THE CHANNELS THAT ANSWER UNASKED. The read-time header and the prompt
+ * hook need to know whether the ref set is partial - a shallow or never-fetched clone - and
+ * nothing about its age; the dating warnings are for the commands that print the full set. With
+ * `invalidatingOnly` the answer costs ONE git process (the probe below) instead of two, because
+ * `rev-list --count` is skipped, and only ids in INVALIDATING_WARNINGS come back. Measured on the
+ * read-time hook: the full call added about 25 ms to a four-path read that was already at its
+ * 500 ms budget.
+ *
+ * @param {{invalidatingOnly?: boolean}} [opts]
+ * @returns {{id: string, lines: string[], remedy?: string}[]} `remedy` - the command that lifts
+ *   it - on the warnings in INVALIDATING_WARNINGS only
  */
-export function freshnessWarnings(base, refCount) {
+export function freshnessWarnings(base, refCount, { invalidatingOnly = false } = {}) {
     const warnings = []
     const warn = (id, ...text) => warnings.push({ id, lines: text })
+    // A WARNING THAT VOIDS THE ANSWER CARRIES ITS REMEDY AS DATA. The full renderers print every
+    // line; the one-line ones - the read-time header's summary tier, a match block's count line -
+    // have room for the id and the command only, and must not print a confident count from a
+    // truncated ref set with nothing in front of it. Every id here is in INVALIDATING_WARNINGS.
+    const voids = (id, remedy, ...text) => warnings.push({ id, lines: [...text, `Run: ${remedy}`], remedy })
 
     if (!base) {
-        warn('no-baseline', 'neither origin/master nor master resolves in this checkout, so there is',
+        voids('no-baseline', 'git fetch origin master',
+            'neither origin/master nor master resolves in this checkout, so there is',
             'NO baseline to compare against. Every answer below is unreliable - a shallow or',
-            'single-ref clone is the usual cause. Run: git fetch origin master')
+            'single-ref clone is the usual cause.')
         return warnings
     }
 
-    const gitDir = exec('git', ['rev-parse', '--git-dir']).out.trim()
-    const commonDir = exec('git', ['rev-parse', '--git-common-dir']).out.trim()
-    if (!gitDir || !commonDir) {
-        // Both empty compare EQUAL, which used to print a confident "this is the MAIN CHECKOUT".
-        // A git that cannot answer `rev-parse` is not a diagnosis, it is a missing answer.
-        warn('git-unreadable', 'git could not answer `rev-parse --git-dir`; freshness below is UNKNOWN,',
-            'not clean. Everything this run reports may be answering for the wrong tree.')
-    } else if (gitDir === commonDir) {
-        warn('main-checkout',
-            'this is the MAIN CHECKOUT, which AGENTS.md says never to work in - several',
-            'sessions share it, so its HEAD can move between two of your own commands.',
-            'Cut a worktree: git worktree add .claude/worktrees/<name> -b <branch> origin/master')
+    // ONE PROBE FOR THE THREE FACTS: `rev-parse` answers its flags in argument order, one per line,
+    // and three processes for three one-word answers were most of what this function cost.
+    const probe = exec('git', ['rev-parse', '--git-dir', '--git-common-dir', '--is-shallow-repository']).out.split('\n')
+    const gitDir = (probe[0] ?? '').trim()
+    const commonDir = (probe[1] ?? '').trim()
+    const shallow = (probe[2] ?? '').trim() === 'true'
+    if (!invalidatingOnly) {
+        if (!gitDir || !commonDir) {
+            // Both empty compare EQUAL, which used to print a confident "this is the MAIN CHECKOUT".
+            // A git that cannot answer `rev-parse` is not a diagnosis, it is a missing answer.
+            warn('git-unreadable', 'git could not answer `rev-parse --git-dir`; freshness below is UNKNOWN,',
+                'not clean. Everything this run reports may be answering for the wrong tree.')
+        } else if (gitDir === commonDir) {
+            warn('main-checkout',
+                'this is the MAIN CHECKOUT, which AGENTS.md says never to work in - several',
+                'sessions share it, so its HEAD can move between two of your own commands.',
+                'Cut a worktree: git worktree add .claude/worktrees/<name> -b <branch> origin/master')
+        }
     }
-    if (exec('git', ['rev-parse', '--is-shallow-repository']).out.trim() === 'true') {
-        warn('shallow',
-            'SHALLOW clone - any commit search covers only the fetched depth.',
-            'Run: git fetch --unshallow')
+    if (shallow) {
+        voids('shallow', 'git fetch --unshallow', 'SHALLOW clone - any commit search covers only the fetched depth.')
     }
     const last = lastFetch(commonDir)
     if (!last) {
-        warn('never-fetched', 'no FETCH_HEAD and no packed-refs - this clone may never have fetched.',
-            "Run 'git fetch origin'.")
-    } else {
+        voids('never-fetched', 'git fetch origin', 'no FETCH_HEAD and no packed-refs - this clone may never have fetched.')
+    } else if (!invalidatingOnly) {
         const ageSeconds = (Date.now() - last.at) / 1000
         if (ageSeconds > 3600) {
             warn('stale-fetch',
@@ -481,6 +500,7 @@ export function freshnessWarnings(base, refCount) {
                 "is measuring the wrong thing. Run 'git fetch origin' for the whole set.")
         }
     }
+    if (invalidatingOnly) return warnings
     const behind = Number(exec('git', ['rev-list', '--count', `HEAD..${base}`]).out.trim() || '0')
     if (behind > 0) {
         warn('head-behind',

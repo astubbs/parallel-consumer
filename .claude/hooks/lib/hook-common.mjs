@@ -53,9 +53,11 @@ export function treeContaining(dir) {
  * exist. Rather than fall through to a wrong tree, an unexpandable `cd` yields null and the caller
  * moves to the next source. `~` is left alone for the same reason: the hook's HOME is the session's.
  */
+export const LEADING_CD = /^\s*cd\s+("([^"]+)"|'([^']+)'|(\S+))\s*(?:&&|;)/;
+
 export function leadingCd(command) {
   if (typeof command !== 'string') return null;
-  const m = command.match(/^\s*cd\s+("([^"]+)"|'([^']+)'|(\S+))\s*(?:&&|;)/);
+  const m = command.match(LEADING_CD);
   if (!m) return null;
   const target = m[2] ?? m[3] ?? m[4];
   if (/[$`~*?[{]/.test(target)) return null;

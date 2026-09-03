@@ -55,10 +55,26 @@ export const HEADER_TOP = 3
 const ADDS_SHOWN = 5
 
 /**
+ * THE ONE-LINE FORM OF A WARNING THAT VOIDS THE ANSWER, for the renderers with no room for the
+ * full text: the summary tier of the header and a match block's count line. A shallow or
+ * never-fetched clone truncates the history the divergent set is computed against, so the count
+ * that follows is confidently wrong - and the read-time hook is the one channel that answers
+ * without being asked. The id and the remedy go in FRONT, where a reader cannot take the count
+ * first. Callers pass only the invalidating warnings (INVALIDATING_WARNINGS in bin/lib/git.mjs
+ * classifies them); a dating warning here would cry wolf on every read.
+ *
+ * @param {{id: string, remedy?: string, lines: string[]}[]} warnings
+ */
+export const unreliablePrefix = (warnings) => (warnings.length === 0 ? ''
+    : `UNRELIABLE (${warnings.map((w) => `${w.id} - run: ${w.remedy ?? w.lines.at(-1)}`).join('; ')}): `)
+
+/**
  * @param {object} d the result of `drift()` at either tier
  * @param {{tier?: 'summary'|'full', top?: number, warnings?: {id: string, lines: string[]}[], uncommitted?: boolean}} [opts]
  *   `uncommitted` is the hook's finding that the working-tree file differs from the committed blob
  *   the query described (R24); the query cannot know it, so the caller says so and this prints it.
+ *   `warnings` print in full at the full tier; at the summary tier they become the UNRELIABLE
+ *   prefix, so pass only the invalidating ones there.
  */
 export function formatDivergenceHeader(d, { tier = 'summary', top = HEADER_TOP, warnings = [], uncommitted = false } = {}) {
     if (d.ok === false) return `${d.path}: could not answer - ${d.reason}`
@@ -77,7 +93,7 @@ export function formatDivergenceHeader(d, { tier = 'summary', top = HEADER_TOP, 
         : `on NO baseline ref (branch-only); ${plural(d.liveRefsCarrying, 'live ref')} carry it, ${plural(d.divergent.length, 'version')}`
 
     if (tier === 'summary') {
-        return `${d.path}: ${counts}; ${scopeText(d)}; ${copyStateText(d) ?? 'copy state not asked'}${preservedText}${edited}`
+        return `${unreliablePrefix(warnings)}${d.path}: ${counts}; ${scopeText(d)}; ${copyStateText(d) ?? 'copy state not asked'}${preservedText}${edited}`
     }
 
     const out = [`=== divergence: ${d.path} ===`]
@@ -162,7 +178,7 @@ export function formatDocHit(h) {
  */
 export function formatMatchBody(m, shown, { label, more }) {
     return [
-        `${m.hits.length + m.truncated} document(s) across ${m.refsSearched} live ref(s) name ${label}; ${shown.length} shown:`,
+        `${unreliablePrefix(m.unreliable ?? [])}${m.hits.length + m.truncated} document(s) across ${m.refsSearched} live ref(s) name ${label}; ${shown.length} shown:`,
         ...shown.map(formatDocHit),
         ...(more > 0 ? [`+${more} more`] : []),
     ].join('\n')

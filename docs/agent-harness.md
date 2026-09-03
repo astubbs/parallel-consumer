@@ -480,7 +480,7 @@ what this one got wrong was not calling the tool but owning the tool's correctne
   per divergence state; it fires again when another branch adds a version, because that is news.
   It imports `bin/lib/notes.mjs` directly and calls the same `drift` query `note drift` renders,
   so the hook and the command cannot disagree. Budget 500 ms cold, measured at about 240 ms
-  firing and about 100 ms silent; the figures live in its header, with the method.
+  firing on one path and about 70 ms silent; the figures live in its header, with the method.
 
   **`PostToolUse` on the Read tool delivers `additionalContext`, verified on 2.1.258 before the
   hook was written** - the *Settled by testing* entry below has the method. `PostToolUse` was
@@ -494,7 +494,16 @@ what this one got wrong was not calling the tool but owning the tool's correctne
   one the event names - a leading literal `cd`, then the payload's `cwd`, with
   `$CLAUDE_PROJECT_DIR` last, per the 2026-08-31 wrong-directory solution - and the shared
   derivation now lives in `.claude/hooks/lib/hook-common.mjs` with the per-session seen-store,
-  extracted from the solutions hook so there is one copy of each.
+  extracted from the solutions hook so there is one copy of each. **A directory change the
+  leading-`cd` rule did not consume keeps only absolute tokens**: after `(cd <wt> && cat
+  docs/inflight/x.md)`, `git -C <wt> diff -- docs/inflight/x.md`, a `pushd`, `--git-dir` or
+  `GIT_DIR=`, a relative path resolved against the payload's `cwd` would describe the session
+  tree's copy of a file the command read in another worktree - every worktree carries the same
+  note paths - so the relative tokens are dropped, silence over a guess. A command naming more
+  than four corpus paths gets headers for the first four and one trailing line naming how many
+  were not checked, with a `docs header` command for each; and on a shallow or never-fetched
+  clone the line opens with `UNRELIABLE (<id> - run: <remedy>):`, because the divergent set is
+  computed against a truncated history and the count that follows is confidently wrong.
 
   **It fails open, and leaves a record.** Every failure path exits 0 with nothing on stdout; the
   failure is written to the in-flight tool's cache (`delivery-failures.json`, seven-day policy)

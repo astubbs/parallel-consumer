@@ -140,6 +140,10 @@ fs.writeFileSync(path.join(fx.dir, 'notes.txt'), 'not a corpus file\n');
 const NOTE = 'docs/inflight/note.md';
 const NOTE_ABS = path.join(fx.dir, NOTE);
 const HEADER_CMD = `node bin/inflight.mjs docs header ${NOTE}`;
+// Two clones of the fixture, made where the shallow case needs them; declared here so the cleanup sees them.
+let shallow = null;
+let full = null;
+let neverFetched = null;
 
 try {
   console.log('the Read tool:');
@@ -185,7 +189,19 @@ try {
     bash('b6', `cd ${only} && cat ${NOTE}`, nowhere),
     `divergence header for ${NOTE}`, 'copy is', 'more: ',
   );
-  expectSilent('cd "$W" && cat <note> - a variable cd is refused rather than guessed', bash('b7', `cd "$W" && cat ${NOTE}`, nowhere, { env: { W: only } }));
+  // A DIRECTORY CHANGE THE LEADING-cd RULE DID NOT CONSUME drops every RELATIVE token: the command
+  // read the OTHER tree's copy, and every worktree of this repository carries the same note paths,
+  // so a relative token resolved against the payload cwd describes the wrong tree's copy with the
+  // hook's badge on it. The cwd here HOLDS the note, so silence is the rule and not an accident -
+  // the first cut of the `$W` case ran from a cwd without the note and could only ever pass.
+  expectSilent('cd "$W" && cat <note> - a variable cd is refused rather than resolved against the cwd', bash('b7', `cd "$W" && cat ${NOTE}`, fx.dir, { env: { W: only } }));
+  expectSilent('(cd <worktree> && cat <note>) - a subshell cd is not the leading cd', bash('b8', `(cd ${only} && cat ${NOTE})`, fx.dir));
+  expectSilent('git -C <worktree> diff -- <note> - a relative path in a git -C command', bash('b9', `git -C ${only} diff -- ${NOTE}`, fx.dir));
+  expectFires(
+    'control: an ABSOLUTE token in such a command still fires, for the tree it names',
+    bash('b10', `(cd ${only} && cat ${path.join(only, NOTE)})`, fx.dir),
+    `divergence header for ${NOTE}`, 'copy is',
+  );
 
   console.log('no git call before a corpus file is found:');
   // A `git` shim first on PATH that logs every invocation, then runs the real one. The positive
@@ -219,6 +235,19 @@ try {
   const refListings = shimCalls.filter((l) => l.startsWith('for-each-ref')).length;
   check('...and the refs were listed exactly once for the four paths', refListings === 1, `for-each-ref was called ${refListings} time(s)`);
   fs.rmSync(shimDir, { recursive: true, force: true });
+
+  console.log('past the cap, the rest is named rather than dropped:');
+  // Four is the cap. A fifth path is not checked - and an answer that looks complete while a
+  // named path went unchecked is the truncated-but-plausible index the session hook refuses to be.
+  const FIFTH = 'docs/plans/2026-01-03-001-fifth.md';
+  fx.write(FIFTH, '# A fifth plan\n\neven more steps\n');
+  fx.commit('a fifth corpus file');
+  check('control: four paths name nothing as unchecked', !fourCtx.includes('NOT checked'), fourCtx);
+  const fiveCtx = contextOf('g4', bash('g4', `cat ${[...FOUR, FIFTH].join(' ')}`, fx.dir));
+  check('control: the first four still answer', FOUR.every((p) => fiveCtx.includes(`divergence header for ${p}`)), fiveCtx || '<silence>');
+  const tail = fiveCtx.trimEnd().split('\n').at(-1) ?? '';
+  check('a fifth path is named on the trailing line, as unchecked, with its own header command', tail.includes('1 more corpus path') && tail.includes('NOT checked') && tail.includes(`node bin/inflight.mjs docs header ${FIFTH}`), tail);
+  check('...and it was not answered for', !fiveCtx.includes(`divergence header for ${FIFTH}`), fiveCtx);
 
   console.log('once per session per divergence state:');
   const first = read('dd', NOTE_ABS, fx.dir);
@@ -294,6 +323,40 @@ try {
     'at that path on none of', 'UNCOMMITTED edits',
   );
 
+  console.log('a partial ref set voids the count, and the line says so first:');
+  // A shallow clone sees only the fetched depth of the baseline's history, so a version the
+  // baseline ONCE held is classed divergent - a confident wrong count, and the hook is the one
+  // channel that answers without being asked. FIXTURE clones only: a repository hook refuses
+  // `git fetch --depth` against the real clone, and a shallow real clone is the incident itself.
+  // `file://`, because git silently ignores `--depth` on a plain local path.
+  shallow = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-hooks-shallow-'));
+  full = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-hooks-full-'));
+  const clone = (...args) => {
+    const r = spawnSync('git', ['clone', '-q', ...args], { encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`fixture clone failed: ${r.stderr}`);
+  };
+  clone('--depth', '1', '--no-single-branch', `file://${fx.dir}`, shallow);
+  clone(`file://${fx.dir}`, full);
+  check('control: the shallow clone is shallow', spawnSync('git', ['rev-parse', '--is-shallow-repository'], { cwd: shallow, encoding: 'utf8' }).stdout.trim() === 'true');
+  const UNRELIABLE = 'UNRELIABLE (shallow - run: git fetch --unshallow): ';
+  const shallowCtx = contextOf('sh1', read('sh1', path.join(shallow, NOTE), shallow));
+  check('a read in a shallow clone is prefixed UNRELIABLE, with the warning id and its remedy', shallowCtx.includes(`\n${UNRELIABLE}${NOTE}: `), shallowCtx || '<silence>');
+  const fullCtx = contextOf('sh2', read('sh2', path.join(full, NOTE), full));
+  check('control: the full clone of the same repository answers', fullCtx.includes(`divergence header for ${NOTE}`), fullCtx || '<silence>');
+  check('...with no UNRELIABLE prefix', !fullCtx.includes('UNRELIABLE'), fullCtx);
+  // The other invalidating state, in ITS OWN repository: no FETCH_HEAD and no packed-refs. Not the
+  // shared fixture, whose state here depends on the git version - 2.39 writes packed-refs when the
+  // fixture deletes its `to-tag` branch, so on the Linux lane that fixture counts as fetched. The
+  // precondition is asserted, so a git that packs refs on commit fails this loudly rather than
+  // letting the case pass on a repository that is not in the state it claims.
+  neverFetched = windowRepo();
+  fs.mkdirSync(path.join(neverFetched.dir, 'docs/inflight'), { recursive: true });
+  fs.writeFileSync(path.join(neverFetched.dir, NOTE), '# A note nobody fetched\n\nbody\n');
+  neverFetched.commit('a repository that has never fetched');
+  check('control: the never-fetched repository has no FETCH_HEAD and no packed-refs', !fs.existsSync(path.join(neverFetched.dir, '.git/FETCH_HEAD')) && !fs.existsSync(path.join(neverFetched.dir, '.git/packed-refs')));
+  const neverCtx = contextOf('sh3', read('sh3', path.join(neverFetched.dir, NOTE), neverFetched.dir));
+  check('a never-fetched clone is prefixed with that id and its remedy', neverCtx.includes(`\nUNRELIABLE (never-fetched - run: git fetch origin): ${NOTE}: `), neverCtx || '<silence>');
+
   console.log('failing open, with a record:');
   check('no failure is recorded while the hook is healthy', !(DELIVERY in failures()), JSON.stringify(failures()));
   const broken = read('f1', NOTE_ABS, fx.dir, { env: { GIT_DIR: path.join(nowhere, 'not-a-repo') } });
@@ -302,6 +365,23 @@ try {
   check('...and records the delivery, a reason and a time', rec && typeof rec.reason === 'string' && rec.reason.length > 0 && !Number.isNaN(Date.parse(rec.time)), JSON.stringify(failures()));
   expectFires('a following success still answers', read('f2', NOTE_ABS, fx.dir), '3 divergent versions');
   check('...and clears the record', !(DELIVERY in failures()), JSON.stringify(failures()));
+
+  console.log('a later path failing never marks an earlier one seen:');
+  // Two corpus paths in one command, the SECOND made to fail: a git shim that refuses to hash that
+  // one file, so its query throws after the first path's header was computed. A shim rather than
+  // `chmod 000`, because root reads a mode-000 file and the Linux lane runs as root.
+  const cascadeShim = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-hooks-cascade-shim-'));
+  const SECOND = 'docs/solutions/ci/sol.md';
+  fs.writeFileSync(path.join(cascadeShim, 'git'), `#!/bin/sh\ncase "$*" in *hash-object*${SECOND}*) exit 1;; esac\nexec "${realGit}" "$@"\n`, { mode: 0o755 });
+  const cascadeEnv = { env: { PATH: `${cascadeShim}${path.delimiter}${process.env.PATH}` } };
+  expectSilent('control: a command naming a path whose hash fails prints nothing', bash('cas', `cat ${NOTE} ${SECOND}`, fx.dir, cascadeEnv));
+  check('control: ...and records the second path as the failure', (failures()[DELIVERY]?.reason ?? '').includes(SECOND), JSON.stringify(failures()));
+  expectFires(
+    'the first path, computed but never shown, still fires on its next read in the same session',
+    read('cas', NOTE_ABS, fx.dir),
+    `divergence header for ${NOTE}`, '3 divergent versions',
+  );
+  // The shim stays for the cascade mutant below; the cleanup removes it.
 
   console.log('inputs the hook must survive rather than read - each MUST be silent AND exit 0:');
   expectSilent('unparseable stdin', runHook('raw1', 'this is not json'));
@@ -315,23 +395,43 @@ try {
   const source = fs.readFileSync(HOOK, 'utf8');
   check('the hook names a budget in ms and a measured figure', /BUDGET: \d+ ms/.test(source) && /MEASURED \d{4}-\d{2}-\d{2}/.test(source));
 
-  console.log('negative control - the suite cannot pass with the matching broken:');
-  // A copy of the hook with its corpus check emptied, imports rewritten to absolute URLs so the copy
-  // runs from a temp dir. The mutation is asserted to have applied: a control that silently failed
-  // to mutate would pass by proving nothing.
+  console.log('negative controls - the suite cannot pass with the hook broken:');
+  // Copies of the hook, imports rewritten to absolute URLs so each copy runs from a temp dir, ONE
+  // mutation each. Every mutation is asserted to have applied: a control that silently failed to
+  // mutate would pass by proving nothing. The intact rewired copy is the control for the rewiring.
   const mutantDir = fs.mkdtempSync(path.join(os.tmpdir(), 'docs-hooks-mutant-'));
   const hooksLib = pathToFileURL(path.join(root, '.claude/hooks/lib/')).href;
   const binLib = pathToFileURL(path.join(root, 'bin/lib/')).href;
   const rewired = source.replaceAll("'./lib/", `'${hooksLib}`).replaceAll("'../../bin/lib/", `'${binLib}`);
-  const mutant = rewired.replace('DOC_AREAS.some(', '[].some(');
-  check('the mutation applied', mutant !== rewired);
-  const mutantPath = path.join(mutantDir, 'inject-docs-divergence.mjs');
-  fs.writeFileSync(mutantPath, mutant);
+  const mutantHook = (label, from, to) => {
+    const mutated = rewired.replace(from, to);
+    check(`the ${label} mutation applied`, mutated !== rewired);
+    const file = path.join(mutantDir, `${label}.mjs`);
+    fs.writeFileSync(file, mutated);
+    return file;
+  };
   const intactPath = path.join(mutantDir, 'intact.mjs');
   fs.writeFileSync(intactPath, rewired);
   expectFires('control: the rewired-but-unmutated copy still fires', read('m0', NOTE_ABS, fx.dir, { hook: intactPath }), '3 divergent versions');
-  expectSilent('the mutant is silent on the positive case', read('m1', NOTE_ABS, fx.dir, { hook: mutantPath }));
+  const matching = mutantHook('matching', 'DOC_AREAS.some(', '[].some(');
+  expectSilent('the matching mutant is silent on the positive case', read('m1', NOTE_ABS, fx.dir, { hook: matching }));
+  // The cascade: remembering inside the loop again, before the write.
+  const cascade = mutantHook('cascade', '    if (store && store.has(key)) continue;\n', '    if (store && store.has(key)) continue;\n    if (store) store.remember([key]);\n');
+  expectSilent('control: the cascade mutant is silent when the second path fails', bash('mcas', `cat ${NOTE} ${SECOND}`, fx.dir, { ...cascadeEnv, hook: cascade }));
+  expectSilent('the cascade mutant never shows the first path again that session', read('mcas', NOTE_ABS, fx.dir, { hook: cascade }));
+  // Composition: relative tokens kept through an unconsumed directory change.
+  const composition = mutantHook('composition', 'return CHANGES_DIRECTORY.test(past) ? tokens.filter((t) => path.isAbsolute(t)) : tokens;', 'return tokens;');
+  expectFires('the composition mutant describes the session tree for (cd <worktree> && cat <note>)', bash('m2', `(cd ${only} && cat ${NOTE})`, fx.dir, { hook: composition }), `divergence header for ${NOTE}`);
+  // The partial ref set: warnings not handed to the renderer.
+  const unwarned = mutantHook('unwarned', 'warnings: unreliable }', 'warnings: [] }');
+  const unwarnedCtx = contextOf('m3', read('m3', path.join(shallow, NOTE), shallow, { hook: unwarned }));
+  check('the unwarned mutant answers from the shallow clone with no UNRELIABLE prefix', unwarnedCtx.includes(`divergence header for ${NOTE}`) && !unwarnedCtx.includes('UNRELIABLE'), unwarnedCtx || '<silence>');
+  // The cap: the dropped paths go unnamed.
+  const uncounted = mutantHook('uncounted', '  if (dropped.length > 0) {', '  if (false) {');
+  const uncountedCtx = contextOf('m4', bash('m4', `cat ${[...FOUR, FIFTH].join(' ')}`, fx.dir, { hook: uncounted }));
+  check('the uncounted mutant answers for four paths and names no fifth', FOUR.every((p) => uncountedCtx.includes(`divergence header for ${p}`)) && !uncountedCtx.includes('NOT checked'), uncountedCtx || '<silence>');
   fs.rmSync(mutantDir, { recursive: true, force: true });
+  fs.rmSync(cascadeShim, { recursive: true, force: true });
 
   // =============================================================================================
   // THE PROMPT-KEYWORD HOOK. Its own fixture: the corpus plus the documents each tier is specified
@@ -422,7 +522,7 @@ try {
   for (const w of [only, `${fx.dir}-adds-heading`]) {
     try { fx.git('worktree', 'remove', '--force', w); } catch { /* already gone, or never added */ }
   }
-  for (const d of [fx.dir, bystander.dir, nowhere, CACHE]) fs.rmSync(d, { recursive: true, force: true });
+  for (const d of [fx.dir, bystander.dir, nowhere, CACHE, shallow, full, neverFetched?.dir].filter(Boolean)) fs.rmSync(d, { recursive: true, force: true });
 }
 
 console.log('');

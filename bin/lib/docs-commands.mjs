@@ -211,6 +211,12 @@ export function showDocument(args, emit) {
     const KNOWN = new Set(['--ref', '--header-only'])
     const unknown = args.filter((a) => a.startsWith('--') && !KNOWN.has(a))
     if (unknown.length) return { ok: false, reason: `docs show: unknown option(s): ${unknown.join(', ')} - known: --ref <ref>, --header-only` }
+    // THE REPEATED-FLAG GUARD cvOpts CARRIES, for the same failure it was written against: with
+    // two `--ref`s, `indexOf` took the first and the second's VALUE fell through to the positionals
+    // - after the path it was silently dropped, before the path it BECAME the path, and the command
+    // answered that a ref name was outside the areas. Before any path resolution, so neither shape
+    // gets as far as an answer.
+    if (args.filter((a) => a === '--ref').length > 1) return { ok: false, reason: 'docs show: --ref given more than once - which one did you mean?' }
     const refAt = args.indexOf('--ref')
     // -1 is a sentinel, not an index - bin/inflight.mjs's cvOpts carries the incident.
     const refValueAt = refAt >= 0 ? refAt + 1 : -1
