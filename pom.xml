@@ -750,6 +750,17 @@
                         <excludeVulnerabilityId>CVE-2026-14683</excludeVulnerabilityId>
                         <excludeVulnerabilityId>CVE-2026-14686</excludeVulnerabilityId>
 
+                        <!-- org.latencyutils:LatencyUtils (via micrometer-core, beside HdrHistogram above
+                             and of the same kind). VulDB-assigned, published 2026-08-31, CVSS 1.9,
+                             "the attack needs to be launched locally": a local caller corrupting the
+                             pause detector's own histogram is not an attack on this library or its
+                             users. 2.0.3 is the newest release on Central (2014), so there is nothing
+                             to upgrade to, and it is transitive so it is not independently upgradable
+                             either. Not in GHSA, which is why Dependabot is silent.
+                             RETIRE WHEN: LatencyUtils publishes a fixed release, micrometer-core drops
+                             the dependency, or the record is rejected/withdrawn. -->
+                        <excludeVulnerabilityId>CVE-2026-82596</excludeVulnerabilityId>
+
                         <!-- io.netty:netty-codec-http (via vertx-core). No public record exists: not
                              in OSV, not in GHSA, and cveawg.mitre.org returns CVE_RECORD_DNE. The
                              neighbouring ids are the real Netty August 2026 batch (-59898, -59899,
