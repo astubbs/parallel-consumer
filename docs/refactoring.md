@@ -648,6 +648,19 @@ but not this.*
   means re-verifying the six classes already on the base, which is why it is here rather than folded
   into the PR that noticed it (astubbs#204).
 
+### Test infrastructure - the random chaos monkey can never pick its last victim
+
+- **`MultiInstanceRebalanceTest`'s `RANDOM_STORM` monkey never toggles the last secondary** - grep
+  `int instanceToGet` in `submitChaosMonkey`. It draws `(int) ((size - 1) * Math.random())`, and
+  because `Math.random()` is `[0, 1)` that yields `0 .. size - 2`, so the highest-indexed secondary
+  is excluded for the whole run rather than merely being unlikely. One instance in the fleet
+  therefore never churns, which quietly narrows what the capacity profile exercises: an
+  index-dependent bug on that instance cannot be drawn. The fix is `(int) (size * Math.random())`,
+  but it CHANGES WHAT THE PROFILE MEASURES - its pass rate is a recorded baseline
+  (`docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md`), so this
+  is not a free tidy-up and wants re-measuring beside it rather than slipping in with something
+  else. Noticed while reading the monkey during the rebalance-stall investigation.
+
 ### Test infrastructure - the `state` package's white-box harness is copied per class
 
 - **The base class now exists; three classes still open with the same lines instead of extending it** -

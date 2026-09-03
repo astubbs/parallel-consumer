@@ -341,3 +341,78 @@ work. Checking it costs reading the group's `rebalance.timeout.ms` against the p
 stopped or one still running, and the verdict still ends `no consumer diagnostic supplied` because
 `ProgressTracker.withDiagnostic(...)` is still never called. Two CI failures have now each been one
 wiring change away from saying what PC believed it was doing.
+
+## A candidate mechanism, and the two-arm experiment that will refute or support it - 2026-09-03
+
+**Written before the result, deliberately.** The prediction is stated here first so that a run which
+refutes it cannot be re-read afterwards as having supported something narrower.
+
+### The candidate
+
+The three sightings agree that a member stops answering the rebalance, and this note's open question
+has been *which* member. A live one now has a mechanism, and it survives every exclusion already
+recorded above:
+
+- `RetryQueue`'s lock is **fair** - `new ReentrantReadWriteLock(true)` (grep
+  `ReentrantReadWriteLock` in `RetryQueue.java`).
+- `RetryQueue.remove()` takes `writeLock().lock()` **unbounded** - no `tryLock`, no timeout.
+- It is reachable from the rebalance callbacks **on the broker-poll thread, inside
+  `consumer.poll()`** - which is where the whole group waits.
+- The controller thread holds the **read** lock for a whole scan (`ShardManager.getLowestRetryTime`,
+  grep `retryQueueIterator`) and takes the **write** lock on *every successful record*
+  (`ShardManager.onSuccess` -> `this.retryQueue.remove(wc)`).
+
+So the lock is on the hot path at this profile's record rate, it is fair, and a rebalance callback
+queues behind whatever holds it. A member that cannot get through its callback cannot send JoinGroup,
+and the coordinator dwells in `PreparingRebalance` - the recorded signature, with the whole
+assignment frozen rather than one shard wedged.
+
+**Crucially it is mode-independent**, which is what the two prior exclusions were not: the
+confluentinc#857 revoke deadlock closes only in `PERIODIC_CONSUMER_SYNC` and the transactional revoke
+wait is gated on transactional mode, whereas this profile is `PERIODIC_CONSUMER_ASYNCHRONOUS`.
+
+### This is not a new diagnosis - the defect is already fixed in an open PR nobody connected to it
+
+astubbs/parallel-consumer#431 fixes exactly this lock, on exactly these callback paths
+(`RetryQueue.tryRemove`, declining rather than waiting). It was found by the confluentinc#857
+**defect-class sweep**, not by this stall, and its own body describes the second edge as "one scan
+away from closing into a stall" - a near-miss found by pattern. Its `RetryQueueRebalancePathTest` is
+3/3 red against master, **two of the three timing out on the write lock**, and green after.
+
+**What is missing is the join between the two**: no run of `largeNumberOfInstances` has ever happened
+on a tree carrying that fix. The link is shape, not observation, and this note does not claim
+otherwise.
+
+### The prediction, stated now
+
+Two arms differing in **exactly** the three main-source files of astubbs/parallel-consumer#431
+(`RetryQueue`, `ShardManager`, `ProcessingShard`), both carrying the same new fleet diagnostic, both
+run by `bin/exp-measure-large-instances-failure-rate.sh 30` on the idle self-hosted `highcpu` box,
+**sequentially - never concurrently**, because two 12-instance fleets on one machine reproduce the
+overload confound that invalidated the 2026-08-28 sweep:
+
+- control `debug/largenumberofinstances-rebalance-stall` - **predicted to fail around 1 run in 10**,
+  reproducing the recorded rate and signature.
+- treatment `debug/lnoi-stall-with-431` - **predicted not to fail**, or to fail materially less
+  often.
+
+**What each outcome licenses, agreed before the data:**
+
+- Control fails at roughly the recorded rate and treatment does not: the retry-queue lock is
+  supported as the mechanism, and the flapper's fix is astubbs/parallel-consumer#431 rather than
+  anything new. Support, not proof - 30 runs cannot separate a large effect from a total one.
+- **Both fail**: the candidate is refuted and must be recorded as such here. The lock is then not
+  the mechanism, whatever its other merits, and the fleet diagnostic below is what the next sighting
+  has to work from.
+- **Neither fails**: nothing is learned about the mechanism, and the honest reading is that the box
+  was not the one that fails - the same weaker-than-it-looks result the nineteen desktop runs
+  produced. It is not evidence for the fix.
+
+### The instrumentation that lands with it
+
+`ProgressTracker.withDiagnostic` had **zero call sites in the whole tree**, which is why all three
+sightings end "no consumer diagnostic supplied". It is now wired to a per-instance fleet description
+carrying `started` and `closePending` - the pair that answers this note's actual open question, since
+a harness-stopped instance mid-close reads `started=false, closePending=true` and a live one does
+not. It goes in the thrown message rather than only the log, because a CI log is truncated and a
+failsafe XML is not.
