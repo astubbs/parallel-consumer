@@ -28,7 +28,7 @@ Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutio
 | `simpleBatchTest` in **all three** of `ReactorBatchTest`, `MutinyBatchTest` and `VertxBatchTest` | 5 seen (2026-08-18, 2026-08-19, 2026-08-25, 2026-09-01, 2026-09-02) | Not from the original scan - each found while babysitting a branch. Same Awaitility `ConditionTimeout`, same alias 'expected number of batches' (30s), same shared `BatchTestMethods` lambda. UNDIAGNOSED, but the third, fourth and fifth sightings independently carry the **same three-way key collision** in the failing batch contents, which points at the test's own randomised input - see below, and classify (contention vs product vs expectation) before touching |
 | `Mutation Tests (PIT, PR-scoped)` lane | 1 seen (2026-09-02, astubbs#207, [run 33610711974](https://github.com/astubbs/parallel-consumer/actions/runs/33610711974)) | Not a test - the LANE hit its `timeout-minutes: 30` cap and was cancelled, on a **markdown-only** delta from a head where it had scored in 19m18s with the same class set. The cap has about a third headroom over a normal run, so it will flap on a slow runner. `continue-on-error: true`, so it never gates a merge - but a cancelled row reads like a failure <!-- post-merge: checked --> |
 | `ManagedPCInstanceLifecycleTest.rapidToggleShouldNotCreateDuplicateInstances` | 1 seen (2026-09-02, astubbs#207, [job 100175277225](https://github.com/astubbs/parallel-consumer/actions/runs/33607572165/job/100175277225)) | Not from the original scan - **arrived on master with astubbs#29 and failed on the first PR to merge it**. `consumeCount` 0, repetition 1 of 5, `forkCount=4`, `probe clean`. Every wait in the test is a fixed sleep, and its assertion names a cause it cannot discriminate - see below <!-- post-merge: checked --> |
-| `RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed` | 4 seen (2026-09-01; 2026-09-03 three times - once on a producer branch, twice in a row on astubbs#429, whose same head then passed on a deliberate re-run) | Not from the original scan - found while babysitting astubbs#257. Failed its **saturation/pause-point setup guard**, not the confluentinc#909 signature assertion, so it proves nothing about the defect it reproduces - see below <!-- post-merge: checked --> |
+| `RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed` | 5+ seen (2026-09-01; 2026-09-03 repeatedly across unrelated branches - astubbs#429 twice in a row on one head that then passed on re-run, `docs/225-producer-fencing-brainstorm`, and astubbs#116). **Now has a same-day cross-branch control**: `bin/inflight.mjs codecov test freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed` shows it failing on two unrelated branches within an hour with the identical `mid-loop pause point (offset 25)` signature, while passing on both of those same branches at other commits - so it is master-state and test-side, not any one branch's regression | Not from the original scan - found while babysitting astubbs#257. Failed its **saturation/pause-point setup guard**, not the confluentinc#909 signature assertion, so it proves nothing about the defect it reproduces - see below <!-- post-merge: checked --> |
 | `AmbientProbeExtensionTest.headroomIsReportedOnAPassingTestToo` and `.headroomOutcomeComesFromTheWatcherPhaseNotTheEndOfTheTestMethod` | 2/2 isolated runs, 1 seen in a full core run (2026-09-02, local, astubbs#116) | **DIAGNOSED, and not a product defect** - two methods of one class each capture the *same process-global* logger with `LogCapture.of(AmbientProbeExtension.class)` while the suite runs them concurrently, so each sees the other's headroom line and the `hasSize(1)` assertion gets 2. Reproduces on demand - see below | <!-- post-merge: checked -->
 | `ParallelEoSStreamProcessorTest.processInKeyOrder` | 8 seen locally (2026-09-01) across three branches, 1 in 3 isolated runs; the input-data failure separately **1 of 8 on unmodified `master`** | **Two DIFFERENT failures under one test name, and the documented fix is already in the tree.** See below - this one is not a fresh flake, it is a solved one still firing. The second failure now has a control arm on master and a source-level lead, so classify from those rather than re-measuring |
 
@@ -222,6 +222,24 @@ check the other `LogCapture` users for the same shape rather than patching these
 Unowned.
 
 ### `RegistrationRaceStaleResidentIT` - the setup guard timed out, which is not the 909 assertion
+
+<!-- post-merge: checked-begin -->
+**Rule 2 is now satisfied, and nobody has acted on it.** As of 2026-09-03 the sightings span at
+least three unrelated branches on one day, always failing the same guard -
+`control thread must reach the mid-loop pause point (offset 25)`, `awaitPausePoint(...)
+expected to be true` at `RegistrationRaceStaleResidentIT.java:221` - and always passing on those
+same branches at neighbouring commits. That is the master-state evidence
+`docs/quarantined-tests.md` asks for, so this is a legitimate quarantine candidate under rule 2
+rather than an undiagnosed one under rule 1.
+
+**It is deliberately NOT quarantined here.** The test reproduces confluentinc#909 through the real
+registration path, so parking it costs a genuine reproduction, and the choice between that cost and
+a required check that fails a few times a day is the owner's rather than a babysitter's. What it
+needs first is the classification this section already asks for: the guard is a SETUP step, so the
+question is whether the control thread is merely slow to reach offset 25 under CI load, or whether
+something is actually preventing it - and only the second is a product defect. `codecov test` gives
+the per-commit history to bisect that from recorded runs rather than by re-running builds.
+<!-- post-merge: checked-end -->
 
 <!-- post-merge: checked-begin - names astubbs#257 in the past tense as the branch the sighting came
      from, which stays true once that work has landed -->
