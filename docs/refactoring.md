@@ -76,6 +76,12 @@ at as of the seed date (` @abcdef12`); re-resolve if a branch has since moved.
 
 ---
 
+- **`JStreamParallelEoSStreamProcessor`'s javadoc overstates one guarantee.** It says queued results
+  are delivered rather than discarded, which holds for an ordinary close but not for the
+  `shutdownNow()` branch: that can make `isClosedOrFailed()` true while a worker can still enqueue, so
+  a result produced in that window is dropped. Narrow the sentence to the path it actually covers, or
+  make the branch match the claim. From astubbs#116, which stated it in the PR rather than the code.
+
 ## Breaking changes queued for next major version
 
 **The gate is currently OPEN: `0.6.0.0` is that major, it is unreleased, and it is the release being

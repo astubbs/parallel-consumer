@@ -114,8 +114,19 @@ rework.
 astubbs#296 added to it anyway - deliberately, because the alternative was shipping a silent
 work-drop. Worth deciding explicitly whether further hardening here waits for the decomposition.
 
-Directly relevant to item 1: the `state` field these paths read is **non-volatile**, written by one
-thread and read by another.
+Directly relevant to item 1, **and half-corrected since this was written**: the `state` field these
+paths read is now `volatile` (`private volatile State state`), made so by astubbs#342 for its own
+reasons. What is still a plain field is `controlThreadFuture`, which `isClosedOrFailed()` also reads
+from another thread.
+
+<!-- post-merge: checked-begin -->
+That half arrived here from astubbs#116, whose result stream reads `isClosedOrFailed()` from the
+caller's consuming thread and therefore depended on it. That PR is cited as where the debt was
+found, which stays true once it lands.
+<!-- post-merge: checked-end --> Its failure mode is now benign rather than a
+hang: a consumer seeing a stale `Optional.empty()` falls through to the volatile `state` read and gets
+the right answer. So it is one keyword, owned by this class rather than by whoever needed it - which
+is why it is recorded here rather than left on a merged PR's note.
 
 ## 3. `RejectedExecutionException` does not mean "pool shut down"
 
