@@ -89,3 +89,61 @@ stayed invisible for three years. Two audit modes wanted:
 - containment re-check: every `branch_accounting` tip still reachable on origin (branch OR tag - see
   the docs/upstream.md trap above); docs/upstream.md already records this as manual-only, tracked in
   astubbs#300
+
+## Pre-fork branches described nowhere at all, found 2026-09-03
+
+<!-- post-merge: checked-begin -->
+Turned up while archiving `refactor/deprecate-jstream` under astubbs#116. That branch had a
+one-line description in `docs/refactoring.md` but no `branch_accounting` record, which raised the
+obvious question: how many others? The audit is the durable part; the PR that prompted it is cited
+only as where it came from.
+<!-- post-merge: checked-end -->
+
+**Re-derive rather than trusting this list** - it is a snapshot, and the shape is what matters:
+
+```sh
+git ls-remote --heads origin | sed 's|.*refs/heads/||' | sort            # every branch
+grep -oE '\{ref: [^,}]+' src/docs/development/upstream-map.yaml        # every ledger record
+# then: tips dated before the 2026-03-24 fork point, minus the ledger,
+# minus any name that appears anywhere under docs/
+```
+
+Most pre-fork branches ARE accounted for - the majority of those missing from
+`branch_accounting` are still described somewhere under `docs/`, which is the audit working. The
+residue below is the set with **no mention anywhere in the repository**: not the manifest, not a
+ledger, not a note. For these, nobody can say what they were for without reading their commits.
+
+  0.2.0.x
+  bug/back-pressure-fix
+  bugs/block-asserter-subject
+  bugs/disabled-tests
+  bugs/fix-incorrect-assume-test
+  build-repetition
+  ci-tests
+  continuous-encode-backup
+  continuous-encoding-tests
+  docker-fixes
+  editor-config
+  features/health-check
+  improvements/multi-topic-test
+  improvements/privacy-restriction
+  improvements/remove-static-use-pcmodule
+  issues/num395
+  m1-changes
+  parallel-join-technique
+  parallel-tests-ci
+  parallel-webservice
+  refactor/chaos-broker-challage-test
+  refactor/test-consumer-disconnect
+  refactors/mvnw
+  refactors/offsets-class-partition-state
+  v0.5.2.2
+  vertx-web-examples
+
+**Not a task list, and deliberately not triaged here.** Several are obviously spent (`editor-config`,
+`refactors/mvnw`, `m1-changes`, `ci-tests`), and a few read like they could carry real work
+(`features/health-check` against the shipped health-check API, `improvements/remove-static-use-pcmodule`
+against the `PCModule` seam astubbs#322 built, `refactor/chaos-broker-challage-test` against the chaos
+suite). Guessing from names is what this directory's rules warn against; the point of recording them is
+that the next audit starts from a list rather than from scratch.
+
