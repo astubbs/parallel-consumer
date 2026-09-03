@@ -180,6 +180,22 @@ nothing at all on `onPartitionsAssigned`, which reaches the same lock through a 
 walk cannot see. Write-up:
 [`../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md`](../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md).
 
+**Update 2026-09-03, later the same day: the walk that missed it now follows method references.**
+`notReachBlockingCalls()` follows `getMethodReferencesFromSelf()` beside `getMethodCallsFromSelf()`, so the
+shape above is reported rather than skipped - re-measured by restoring `.map(retryQueue::remove)` to the
+production tree, which takes the rule from green to a report naming all three callbacks.
+`RebalanceCallbackRuleControlTest` holds a fixture reaching a deny-listed acquire through a method reference
+and asserts the rule reports it, so the hop cannot be dropped again silently; it fails on the pre-2026-09-03
+walk, which is how it was checked.
+
+**Constructor calls were the obvious next widening and were measured and rejected**, which is worth recording
+because it reads as free. Enqueuing `getConstructorCallsFromSelf()` turns every factory call into a reach into
+whatever the constructed object wires up: `PCModule.workManager()` contains `new WorkManager(..)`, whose
+constructor registers a metrics gauge as a method reference, and that gauge reads the retry queue under its
+read lock - a red rule on a path no callback takes. The general limit under it is that ArchUnit's model has
+the same shape for a reference invoked now (a stream stage) and one invoked later (a gauge, an executor task),
+so a reference-walking rule is conservative by construction.
+
 **The tension is real and is not resolved here.** The argument for the entries: each names a defect
 that exists on master, has a tracking note, and was not introduced by the branch that had to decide
 what to do about it - the alternative was leaving a rule permanently red on inherited work, which
