@@ -36,7 +36,7 @@ opt_in:
   isolated_from_stable_modules: false
 boundaries:
   - Use the builder. The setCommitInterval setter is @Deprecated and marked for deletion in the next major version.
-  - Under PERIODIC_TRANSACTIONAL_PRODUCER, validate() substitutes DEFAULT_COMMIT_INTERVAL_FOR_TRANSACTIONS only when commitInterval was left at its default; an explicitly set value is kept.
+  - Under PERIODIC_TRANSACTIONAL_PRODUCER, validate() substitutes DEFAULT_COMMIT_INTERVAL_FOR_TRANSACTIONS only when commitInterval was never set; an explicitly set value is kept, including one equal to the default.
   - Shortening it trades broker load against replay. The CommitMode Javadoc states the trade, and the README includes it.
 references:
   - label: commitInterval option and transactionsValidation
