@@ -15,14 +15,6 @@ limits.
 
 ## Still open
 
-- **No test drives the self-close-on-error path.** `JStreamParallelEoSStreamProcessor` wires the
-  stream's completion predicate to `this::isClosedOrFailed`, and `Java8StreamUtils`' own comment
-  justifies that choice over a poison pill *because* the control thread can self-close on an
-  unhandled error - nothing enqueues a sentinel on that path. Every test drives the predicate with a
-  plain boolean supplier (`() -> true`, `() -> false`, or an `AtomicBoolean`), and every processor-level
-  test terminates through an explicit close. So the path the design argument rests on is the one path
-  never exercised. What it needs: drive a real processor into a control-thread failure and assert the
-  consumer's stream ends rather than hanging.
 - **`controlThreadFuture` is still a plain field**, read from the consumer thread via
   `isClosedOrFailed()`. Master's astubbs#342 made `state` volatile, which publishes the half that
   decides correctness, so a consumer seeing a stale `Optional.empty()` now falls through to the
@@ -38,6 +30,15 @@ limits.
 
 Kept because the reasoning is worth more than the outcome - two of these were settled by refuting the
 finding rather than by accepting it.
+
+- **The self-close-on-error path is tested**, by
+  `JStreamLiveResultStreamTest.aControlThreadThatFailsOnItsOwnStillEndsTheStream`. A consumer is parked
+  on the result queue, the control loop is then killed from the inside, and the stream has to end with
+  **no caller having called close** - which is the poison-pill argument stated as a test. Worth knowing
+  what it does not pin: the `state == CLOSED` half of `isClosedOrFailed()` carries this path, because
+  the supervisor runs `doClose` from its own catch block before rethrowing, so cutting the predicate
+  down to that half leaves the test green. Removing the signal entirely is what turns it red. The
+  `controlThreadFuture` half remains a backstop nothing reaches.
 
 **Do them in this order.** The first is the only one that can change what the fix has to prove.
 

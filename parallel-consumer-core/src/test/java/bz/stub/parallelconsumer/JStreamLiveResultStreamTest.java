@@ -101,6 +101,50 @@ class JStreamLiveResultStreamTest extends ParallelEoSStreamProcessorTestBase {
     }
 
     /**
+     * The stream ends when the control thread closes <b>itself</b> on an unhandled error, with nobody having
+     * called close.
+     * <p>
+     * This is the case the completion predicate exists for, and until now the one no test reached. A poison
+     * pill enqueued at close is the obvious design and would hang exactly here: only whoever performs a close
+     * can enqueue one, and <b>no caller performs a close on this path</b> - the control thread meets an
+     * unhandled error, runs {@code doClose} from its own catch block, and rethrows.
+     * {@code Java8StreamUtils}' own comment gives that as the reason it asks the source whether it has
+     * finished instead, so this test is what stops that reasoning being an untested assertion.
+     * <p>
+     * <b>What it does not pin.</b> It is the {@code state == CLOSED} half of {@code isClosedOrFailed()} that
+     * carries this path, because that self-close reaches {@code CLOSED} before the throw - reduce the
+     * predicate to only that half and this still passes. The {@code controlThreadFuture} half is a backstop
+     * for a control thread that dies without getting there, and nothing here reaches it. Removing the signal
+     * altogether is what turns this red: the consumer then never leaves the queue and the join times out.
+     * <p>
+     * The consumer is parked before the loop is killed, so the stream is genuinely waiting rather than
+     * finishing off queued work when the failure lands.
+     */
+    @Timeout(30)
+    @Test
+    void aControlThreadThatFailsOnItsOwnStillEndsTheStream() {
+        List<Object> received = new CopyOnWriteArrayList<>();
+
+        var stream = streaming.pollProduceAndStream(record ->
+                Lists.list(mock(org.apache.kafka.clients.producer.ProducerRecord.class)));
+
+        var consumer = new Thread(() -> stream.forEach(received::add), "test-result-consumer");
+        consumer.start();
+        await("the result consumer to park with nothing left to take")
+                .atMost(ofSeconds(10))
+                .until(() -> isParked(consumer));
+
+        // Kill the control loop from the inside. Nothing calls close, so nothing could enqueue a sentinel -
+        // the only thing that can end the consumer's stream is the processor reporting itself finished.
+        streaming.addLoopEndCallBack(() -> {
+            throw new FakeRuntimeException("fake control loop error, so the control thread closes itself");
+        });
+
+        joinConsumer(consumer);
+        assertThat(consumer.isAlive()).isFalse();
+    }
+
+    /**
      * Parked in {@code QueueSpliterator.tryAdvance}'s timed poll. {@code forEach} does nothing else that
      * waits, so this state can only be the poll - and a consumer that ended the stream instead is
      * {@code TERMINATED}, which never satisfies it.
