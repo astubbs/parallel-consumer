@@ -29,6 +29,7 @@ Where their diagnoses generalised, the rule is in [`docs/solutions/`](../solutio
 | `Mutation Tests (PIT, PR-scoped)` lane | 1 seen (2026-09-02, astubbs#207, [run 33610711974](https://github.com/astubbs/parallel-consumer/actions/runs/33610711974)) | Not a test - the LANE hit its `timeout-minutes: 30` cap and was cancelled, on a **markdown-only** delta from a head where it had scored in 19m18s with the same class set. The cap has about a third headroom over a normal run, so it will flap on a slow runner. `continue-on-error: true`, so it never gates a merge - but a cancelled row reads like a failure <!-- post-merge: checked --> |
 | `ManagedPCInstanceLifecycleTest.rapidToggleShouldNotCreateDuplicateInstances` | 1 seen (2026-09-02, astubbs#207, [job 100175277225](https://github.com/astubbs/parallel-consumer/actions/runs/33607572165/job/100175277225)) | Not from the original scan - **arrived on master with astubbs#29 and failed on the first PR to merge it**. `consumeCount` 0, repetition 1 of 5, `forkCount=4`, `probe clean`. Every wait in the test is a fixed sleep, and its assertion names a cause it cannot discriminate - see below <!-- post-merge: checked --> |
 | `RegistrationRaceStaleResidentIT.freshArrivalCollidingWithStaleShardResidentMustStillGetProcessed` | 1 seen (2026-09-01) | Not from the original scan - found while babysitting astubbs#257. Failed its **saturation/pause-point setup guard**, not the confluentinc#909 signature assertion, so it proves nothing about the defect it reproduces - see below <!-- post-merge: checked --> |
+| `AmbientProbeExtensionTest.headroomIsReportedOnAPassingTestToo` and `.headroomOutcomeComesFromTheWatcherPhaseNotTheEndOfTheTestMethod` | 2/2 isolated runs, 1 seen in a full core run (2026-09-02, local, astubbs#116) | **DIAGNOSED, and not a product defect** - two methods of one class each capture the *same process-global* logger with `LogCapture.of(AmbientProbeExtension.class)` while the suite runs them concurrently, so each sees the other's headroom line and the `hasSize(1)` assertion gets 2. Reproduces on demand - see below | <!-- post-merge: checked -->
 | `ParallelEoSStreamProcessorTest.processInKeyOrder` | 8 seen locally (2026-09-01) across three branches, 1 in 3 isolated runs; the input-data failure separately **1 of 8 on unmodified `master`** | **Two DIFFERENT failures under one test name, and the documented fix is already in the tree.** See below - this one is not a fresh flake, it is a solved one still firing. The second failure now has a control arm on master and a source-level lead, so classify from those rather than re-measuring |
 
 **Classify before touching any of them** - the same rule that governs the load-tightness family next
@@ -170,6 +171,48 @@ Whoever merges astubbs#116 owns retiring this entry, per the four outcomes in th
 `AGENTS.md` - the sighting's value is that it corroborates that fix, so it migrates into the fix
 rather than being deleted.
 <!-- post-merge: checked-end -->
+
+### `AmbientProbeExtensionTest` - two tests, one global logger, run concurrently
+
+Found while babysitting astubbs#116, whose merge had touched `AmbientProbeExtension` itself - so the
+first question was whether that merge broke it. It did not, and the control arm is what settles it
+rather than argument.
+
+**Reproduce it, which is the unusual part - this one does not need luck:**
+
+    ./mvnw -o -pl parallel-consumer-core -am test -Dtest=AmbientProbeExtensionTest
+
+Run as a class on its own it failed **2 of 2** attempts, two methods each time. Inside a full
+`parallel-consumer-core` run it is intermittent: one failure in one run, clean in another on the same
+head. That direction is backwards for ordinary contention - a busier suite fails it *less* - and it is
+the tell for the mechanism, because a full suite interleaves other classes between these two methods
+while running the class alone puts them side by side.
+
+**The mechanism is in the test, and it is visible in one line.** Both
+`headroomIsReportedOnAPassingTestToo` and `headroomOutcomeComesFromTheWatcherPhaseNotTheEndOfTheTestMethod`
+open `LogCapture.of(AmbientProbeExtension.class)`. That attaches to the logger for that class, which is
+process-global, not test-scoped - so while both are inside their `try`, each captures BOTH lines:
+
+    value of    : iterable.size()
+    expected    : 1
+    but was     : 2
+    iterable was: [PC-DEADLINE-HEADROOM ... outcome=PASSED,
+                   PC-DEADLINE-HEADROOM ... outcome=FAILED]
+
+The `outcome=FAILED` line belongs to the sibling test. Each method's own assertion is correct; what is
+missing is that only one of them may hold the capture at a time.
+
+**Control arm.** With astubbs#116's own change to `JStreamLiveResultStreamTest` reverted entirely, both
+runs above still failed 2 of 2 - so the flake is inherited, and that PR only perturbed scheduling.
+`AmbientProbeExtension.java` (main) is untouched by it in any way that reaches this.
+
+**Not fixed here, deliberately.** `bin/check-pr-analysis-surfaces.sh` calls this class inherited for
+astubbs#116, and this directory's rule is that inherited findings go to a register rather than being
+bulk-fixed in a PR that happens to meet them. The fix is test-isolation, not a product change - forcing
+these two methods onto one thread, or giving `LogCapture` a per-test scope - and whoever takes it should
+check the other `LogCapture` users for the same shape rather than patching these two.
+
+Unowned.
 
 ### `RegistrationRaceStaleResidentIT` - the setup guard timed out, which is not the 909 assertion
 

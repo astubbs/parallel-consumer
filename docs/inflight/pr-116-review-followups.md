@@ -15,24 +15,33 @@ review) but because two review threads block merge and one of them attacks the r
 
 **Do them in this order.** The first is the only one that can change what the fix has to prove.
 
-1. **The `JStreamLiveResultStreamTest` thread (unresolved, blocks merge).** `consumerReady`
-   counts down *before* `forEach` enters the spliterator, so awaiting it does not establish that
-   the consumer saw an empty queue. Normal interleaving still goes RED against the old bridge, but
-   it is not guaranteed - and the test's own javadoc claims it is
-   (`Against the old bridge this fails with zero results collected`). Deterministic fix is smaller
-   than the thread's suggested instrumented queue: gate the user function on a `CountDownLatch` so
-   nothing can reach the queue until the test releases it, assert the consumer is still alive, then
-   release. Also correct the javadoc. Counter-argument worth making instead: the property *is*
-   proven deterministically one level down by
-   `Java8StreamUtilsTest.anEmptyQueueDoesNotEndTheStreamWhileTheSourceIsRunning`, so this test is
-   wiring, not the guard.
-2. **The `VertxTest` `getResults` thread (unresolved, blocks merge).** Claims `closeDrainFirst()`
-   stalls on the permanently-failing request that `failingHttpCall` and
-   `transportFailureIsDistinctFromANonSuccessStatus` leave queued. It does not - both complete in
-   under a second, because the request already failed fast and DRAIN waits for consumed work to
-   *finish*. But `testVertxFunctionFail` uses `closeDontDrainFirst()` for the same shape, and a
-   reviewer independently proposed matching it. Reply with the timing, mirror the non-draining
-   close in the helper, resolve.
+1. ~~**The `JStreamLiveResultStreamTest` thread.**~~ **DONE, 2026-09-03, thread resolved.** The
+   finding held: `consumerReady` counted down before `forEach` entered the spliterator, so awaiting
+   it proved only that the thread had started. The user function is now held shut until the consumer
+   is parked on an empty queue, so that state is established rather than raced for, and the wait for
+   it is the assertion. Red-proven: restoring the old bridge fails it in 10s naming the alias
+   `the result consumer to park on an empty queue`. The instrumented queue the thread proposed was
+   not needed - `forEach` does nothing else that waits, so thread state is a sufficient signal and
+   costs no production seam. The javadoc's `fails with zero results collected` claim, which the old
+   shape did not have, is corrected and now records what the previous version could not establish.
+   This also answers Antony's 2026-09-01 comment asking whether the test covered the timing.
+2. ~~**The `VertxTest` `getResults` thread.**~~ **DONE, 2026-09-03, replied `not-addressing` and
+   resolved.** The stall the thread describes does not happen, and the measurement is the opposite
+   of its prediction - the two tests it names as stalling are the two FASTEST in the file:
+
+       failingHttpCall                                 0.433s   closeDrainFirst()
+       transportFailureIsDistinctFromANonSuccessStatus 0.439s   closeDrainFirst()
+       testVertxFunctionFail                           2.971s   closeDontDrainFirst()
+
+   **This entry previously said "mirror the non-draining close in the helper, resolve", and that
+   half is now withdrawn** - written before anyone measured. Two reasons not to make the change.
+   `testVertxFunctionFail` does not use `closeDontDrainFirst()` to dodge a stall, which is what the
+   thread assumes; its own comment says it reads `workRemaining()` first because *closing drains the
+   retries away*, a different requirement this helper does not have. And
+   `transportFailureIsDistinctFromANonSuccessStatus` asserts `assertCommits(of())` AFTER
+   `getResults`, so draining is what gives that assertion a quiescent point - going non-draining
+   would let "nothing committed" pass merely because the commit had not happened yet, turning a real
+   assertion into a race.
 3. **`volatile` on the termination signal - HALF-CLOSED by master, 2026-08-31 merge.**
    `AbstractParallelEoSStreamProcessor`'s `state` and `controlThreadFuture` were both non-volatile and
    unsynchronised, and are now read from the consumer thread via `isClosedOrFailed()`. The closing
