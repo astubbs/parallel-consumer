@@ -186,6 +186,26 @@ class PcBuiltProducerTest {
     }
 
     /**
+     * The close is best effort: a producer that fails to close as well must not hide the failure that made PC close
+     * it, which is the one the caller has to act on.
+     */
+    @Test
+    void aBuiltProducerWhoseCloseAlsoFailsStillSurfacesTheConstructionFailure() {
+        var module = moduleBuildingWith(optionsWith(realProducerConfig("pc-test"), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER),
+                config -> new org.apache.kafka.clients.producer.KafkaProducer<String, String>(config) {
+                    @Override
+                    public void close(Duration timeout) {
+                        super.close(timeout);
+                        throw new IllegalStateException("close failed too");
+                    }
+                });
+
+        var thrown = assertThrows(NoSuchFieldException.class, module::producerWrap);
+
+        assertThat(thrown).hasMessageThat().contains("transactionManager");
+    }
+
+    /**
      * The caller's own instance is the caller's to close: they may hold it, and they never handed PC its lifecycle.
      */
     @Test
