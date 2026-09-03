@@ -57,6 +57,20 @@ than by a container, and abandons the shard removal too when refused. Reasoning 
 conditions:
 [`../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md`](../solutions/runtime-errors/retry-queue-write-lock-on-the-rebalance-path.md).
 
+**Update later the same day - the retirement half of that consistency claim is now driven too.**
+Asserting the pair stays whole under a refusal only covers half the contract; the other half is that
+something later takes the whole pair away, and nothing observed that after a refusal. Three cases in
+`RetryQueueRebalancePathTest` now do - refuse, release the read lock, make one controller-thread work
+request, and assert the container has left the retry queue AND the shards - one per refusal site plus
+the ordered-mode shape. Checked by deleting the retry-queue removal from
+`ProcessingShard.getWorkIfAvailable`'s last-resort branch, which turns exactly those three red.
+
+The ordered-mode one recorded a measurement rather than a defect: under KEY or PARTITION ordering the
+shard scan breaks as soon as it takes a container, so a stale entry at a higher offset than a takeable
+one waits for that head to leave the shard rather than being retired on the next tick. The pair stays
+whole throughout, so it is a delay and not an orphan. `ShardManager.removeWorkFromShardFor` owns the
+statement of it, under "what would reopen this"; do not restate it here.
+
 **Still open, and the reason this note stays:**
 
 - **`add` is last-write-wins with a *changed* retry-due time.** Untouched - and it is the normal shape

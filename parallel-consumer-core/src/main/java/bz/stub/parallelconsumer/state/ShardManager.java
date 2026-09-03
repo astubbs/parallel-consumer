@@ -332,13 +332,30 @@ public class ShardManager<K, V> {
      * {@link ProcessingShard#getWorkIfAvailable}'s last-resort stale sweep, which runs on the controller thread
      * where waiting for the queue lock is permitted.
      * <p>
-     * <b>What would reopen this</b> (2026-09-02): a caller that reads the retry queue's size or its
-     * lowest-retry-time WITHOUT an epoch check and acts on it before the controller thread's next work request -
-     * the abandonment is only ever a delay, and only that sweep ends it. If
-     * {@code ProcessingShard.getWorkIfAvailable}'s stale branch ever stops removing from the retry queue, or
-     * stops being reached on every control loop tick, the delay becomes permanent and this becomes the orphan it
-     * was written to avoid. Nothing fails if that happens: {@code ArchitectureTest.rebalanceCallbacksMustNotBlock}
-     * only checks that nothing here WAITS.
+     * <b>HOW LONG the delay is, measured 2026-09-03 rather than assumed.</b> "The next work request" is the
+     * common case, not a bound. That sweep sits in the else-branch of the shard scan, past the break
+     * {@link ProcessingShard#getWorkIfAvailable} takes as soon as it hands out one container under KEY or
+     * PARTITION ordering - so a stale entry at a HIGHER offset than a takeable one is not inspected on that
+     * tick, and the shape is reachable (a record parked for retry at a high offset survives a refused revoke,
+     * the partition comes back, and the re-fetch delivers a lower offset fresh in front of it). What is
+     * bounded is that the pair stays WHOLE for the whole wait - the queue entry and the shard entry are still
+     * each other's - so there is no orphan, only a delay, and the delay ends when the head in front leaves the
+     * shard. Both halves are asserted by
+     * {@code RetryQueueRebalancePathTest.underOrderedProcessingAStaleTailWaitsForTheTakeableHeadInFrontOfItToLeave}.
+     * The same else-branch is not reached at all when the controller asks for no work
+     * ({@code WorkManager.getWorkIfAvailable} returns early below 1), which is the same delay from the other
+     * direction.
+     * <p>
+     * <b>What would reopen this</b> (2026-09-02, re-checked 2026-09-03): a caller that reads the retry queue's
+     * size or its lowest-retry-time WITHOUT an epoch check and acts on it before the controller thread's next
+     * work request - the abandonment is only ever a delay, and only that sweep ends it. If
+     * {@code ProcessingShard.getWorkIfAvailable}'s stale branch ever stops removing from the retry queue, the
+     * delay becomes permanent and this becomes the orphan it was written to avoid. That half now fails
+     * loudly - deleting the {@code retryQueue.remove(removed)} from it turns the three
+     * {@code IsRetiredFromBothStructures} / {@code StaleTailWaitsForTheTakeableHead} cases of
+     * {@code RetryQueueRebalancePathTest} red, which is how they were checked. What still fails silently is
+     * the OTHER half: nothing asserts that the branch is reached often enough for the delay to stay short, and
+     * {@code ArchitectureTest.rebalanceCallbacksMustNotBlock} only checks that nothing here WAITS.
      */
     private void removeWorkFromShardFor(ConsumerRecord<K, V> consumerRecord) {
         ShardKey shardKey = computeShardKey(consumerRecord);
