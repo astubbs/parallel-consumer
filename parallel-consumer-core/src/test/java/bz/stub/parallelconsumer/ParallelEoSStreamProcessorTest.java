@@ -14,6 +14,7 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.*;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.InvalidPidMappingException;
 import org.apache.kafka.common.serialization.Deserializer;
@@ -29,6 +30,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentMatchers;
 import org.mockito.Mockito;
 import org.mockito.MockitoAnnotations;
+import pl.tlinkowski.unij.api.UniLists;
 
 import java.lang.reflect.Field;
 import java.time.Duration;
@@ -218,6 +220,38 @@ public class ParallelEoSStreamProcessorTest extends ParallelEoSStreamProcessorTe
         assertCommits(of(), "the batch whose output was never produced is failed, so nothing is committed");
         assertWithMessage("the primed record is still an incomplete offset - it was never marked succeeded")
                 .that(pcSpy.getWm().getNumberOfIncompleteOffsets()).isEqualTo(1);
+    }
+
+    /**
+     * The producer close is the one shutdown step in {@code innerDoClose} without the try/catch its three
+     * predecessors have. Unguarded, a throwing {@code ProducerManager#close} does not merely skip teardown: the
+     * control task's catch OVERWRITES {@code failureReason} with "Error from poll control thread", re-runs
+     * {@code doClose} on already-closed subsystems, and fails the control future - so the user's {@code close()}
+     * throws and {@code getFailureCause()} no longer names what actually happened.
+     * <p>
+     * The user function returns no records, so the produce path is never entered and the mocked
+     * {@link ProducerManager} only has to answer its close.
+     */
+    @Test
+    @SneakyThrows
+    public void closeCompletesWhenTheProducerCloseThrows() {
+        setupParallelConsumerInstance(getBaseOptions(PERIODIC_CONSUMER_ASYNCHRONOUS));
+        primeFirstRecord(); // setupParallelConsumerInstance built a new client, so prime again
+        var producerManager = mockProducerManagerInto(parallelConsumer);
+        doThrow(new KafkaException("simulated producer close failure")).when(producerManager).close(any());
+
+        parallelConsumer.pollAndProduceMany(record -> UniLists.<ProducerRecord<String, String>>of());
+        awaitForSomeLoopCycles(2);
+
+        parallelConsumer.close(); // must not throw
+
+        verify(producerManager).close(any());
+        Field state = AbstractParallelEoSStreamProcessor.class.getDeclaredField("state");
+        state.setAccessible(true);
+        assertWithMessage("a failing producer close must not stop the instance reaching CLOSED")
+                .that(state.get(parallelConsumer)).isEqualTo(State.CLOSED);
+        assertWithMessage("and it must not invent a failure cause - nothing the user asked for failed")
+                .that(parallelConsumer.getFailureCause()).isNull();
     }
 
 

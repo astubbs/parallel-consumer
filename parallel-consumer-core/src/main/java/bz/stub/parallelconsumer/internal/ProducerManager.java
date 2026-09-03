@@ -382,20 +382,39 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
      */
     public void close(Duration timeout) {
         log.debug("Closing producer, assuming no more in flight...");
-        if (options.isUsingTransactionalProducer() && !producerWrapper.isTransactionReady()) {
-            try {
-                acquireCommitLock();
-            } catch (java.util.concurrent.TimeoutException | InterruptedException e) {
-                log.error("Exception acquiring commit lock, will try to abort anyway", e);
+        // Nothing in the transaction cleanup may prevent the Producer being closed: leaking it (IO thread,
+        // sockets, buffers) outlives every failure that can get us here, and doClose's finally marks the
+        // instance CLOSED either way.
+        try {
+            if (options.isUsingTransactionalProducer() && !producerWrapper.isTransactionReady()) {
+                boolean commitLockHeld = false;
+                try {
+                    acquireCommitLock();
+                    commitLockHeld = true;
+                } catch (java.util.concurrent.TimeoutException | InterruptedException e) {
+                    log.error("Exception acquiring commit lock, will try to abort anyway", e);
+                }
+                try {
+                    // close started after tx began, but before work was done, otherwise a tx wouldn't have been started
+                    abortTransaction();
+                } finally {
+                    // releaseCommitLock throws IllegalStateException when this thread does not hold it,
+                    // which is exactly the state the catch above carries on from - release only what was taken
+                    if (commitLockHeld) {
+                        releaseCommitLock();
+                    }
+                }
             }
-            try {
-                // close started after tx began, but before work was done, otherwise a tx wouldn't have been started
-                abortTransaction();
-            } finally {
-                releaseCommitLock();
-            }
+        } catch (Exception e) {
+            // abortTransaction throws on a fenced (ProducerFencedException / InvalidProducerEpochException) or
+            // poisoned ("we are in an error state") producer - the states a close after a fatal producer error is
+            // most likely in; acquireCommitLock can throw an unchecked ConcurrentModificationException the arm
+            // above does not cover. The broker has already discarded the transaction in every one of those, so
+            // there is nothing the throw protects.
+            log.error("Exception cleaning up the transaction while closing - closing the Producer anyway", e);
+        } finally {
+            closeProducer(timeout);
         }
-        closeProducer(timeout);
     }
 
     private void closeProducer(Duration timeout) {

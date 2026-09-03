@@ -23,6 +23,7 @@ import org.apache.kafka.clients.consumer.ConsumerGroupMetadata;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
+import org.apache.kafka.common.errors.ProducerFencedException;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -51,6 +52,7 @@ import static bz.stub.parallelconsumer.ManagedTruth.assertWithMessage;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.UNORDERED;
 import static bz.stub.parallelconsumer.internal.ProducerWrapper.ProducerState.*;
+import static java.time.Duration.ofMillis;
 import static java.time.Duration.ofSeconds;
 import static java.util.Collections.emptyList;
 import static org.awaitility.Awaitility.await;
@@ -746,6 +748,70 @@ class ProducerManagerTest {
                 .isNull();
         assertThat(producerManager).commitLockNotHeld();
         assertThat(producerManager).isNotTransactionCommittingInProgress();
+    }
+
+    /**
+     * {@code abortTransaction} throws on a fenced or poisoned producer - the very state a close after a fatal
+     * producer error is in. {@code close} must still close the Producer, or it leaks its IO thread, sockets and
+     * buffers while {@code doClose}'s finally marks the instance CLOSED.
+     */
+    @Test
+    void closeStillClosesTheProducerWhenTheAbortThrows() {
+        var producerWrap = module.producerWrap();
+        doReturn(false).when(producerWrap).isTransactionReady(); // a transaction is open, so close takes the abort path
+        doThrow(new ProducerFencedException("fenced")).when(producerWrap).abortTransaction();
+        var closeTimeout = ofSeconds(1);
+
+        producerManager.close(closeTimeout); // must not throw
+
+        verify(producerWrap).abortTransaction();
+        verify(producerWrap, description("the Producer must still be closed when the abort throws"))
+                .close(closeTimeout);
+        assertThat(producerManager).stateIs(CLOSE);
+        assertThat(producerManager).commitLockNotHeld();
+    }
+
+    /**
+     * When close cannot take the commit lock it deliberately aborts anyway - and must not then release a lock it
+     * never took: {@code releaseCommitLock} throws {@code IllegalStateException("Not held be me")}, which escaped
+     * past {@code closeProducer} and leaked the Producer in exactly the same way as the abort above.
+     */
+    @SneakyThrows
+    @Test
+    void closeStillClosesTheProducerWhenTheCommitLockCannotBeAcquired() {
+        setup(ParallelConsumerOptions.<String, String>builder()
+                .commitMode(PERIODIC_TRANSACTIONAL_PRODUCER)
+                .commitLockAcquisitionTimeout(ofMillis(500))); // failure-side wait: a slow CI can only lengthen it
+        var producerWrap = module.producerWrap();
+        doReturn(false).when(producerWrap).isTransactionReady();
+
+        // hold the produce (read) lock on another thread so the commit (write) lock cannot be taken
+        var produceLockHeld = new CountDownLatch(1);
+        var releaseProduceLock = new CountDownLatch(1);
+        var producing = new Thread(() -> {
+            try {
+                var lock = producerManager.beginProducing(mock(PollContextInternal.class));
+                produceLockHeld.countDown();
+                LatchTestUtils.awaitLatch(releaseProduceLock);
+                producerManager.finishProducing(lock);
+            } catch (TimeoutException e) {
+                throw new RuntimeException(e);
+            }
+        }, "produce-lock-holder");
+        producing.start();
+        try {
+            LatchTestUtils.awaitLatch(produceLockHeld);
+            var closeTimeout = ofSeconds(1);
+
+            producerManager.close(closeTimeout); // must not throw
+
+            verify(producerWrap, description("the Producer must still be closed when the commit lock timed out"))
+                    .close(closeTimeout);
+            assertThat(producerManager).stateIs(CLOSE);
+        } finally {
+            releaseProduceLock.countDown();
+            producing.join(ofSeconds(10).toMillis());
+        }
     }
 
     @Test
