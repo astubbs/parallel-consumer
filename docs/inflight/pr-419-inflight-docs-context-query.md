@@ -34,6 +34,9 @@ on the text the agent writes; folding the existing write-time solutions hook ont
   `bin/lib/inflight-tags.mjs` for the index, held equal by a parity self-test. The bash file is the
   source of truth today; the cheaper end state is the Node file as the source with the shell library
   derived from it.
-- Session start is inside its budget but with little headroom, and almost all of it is one
-  `ls-tree` per ref inside `corpusIndex`. The lever - dedupe refs by their `docs/` tree object,
-  since most tips share one - is named in the hook header and not yet pulled.
+- Session start breached its budget once the branch-facts block landed, and the lever named in the
+  hook header was pulled: `corpusIndex` resolves every ref's `docs/` tree in one
+  `cat-file --batch-check` and lists each distinct tree once, since most tips share the baseline's.
+  Its header states the shape; `node bin/inflight.mjs --perf docs` prints the figures. The next
+  lever, if one is ever needed, is parsing the distinct trees themselves through one batched
+  `cat-file` per depth instead of one `ls-tree` per tree - not pulled, no measurement demands it.

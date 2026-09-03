@@ -46,19 +46,26 @@
 #   loaded host   before 7.5 s to  8.0 s      after 8.2 s to  9.1 s   (two self-test suites running)
 #
 # Before, most of the time was one `git grep` across every ref for a count this hook no longer
-# prints. After, almost all of it is the index build - one `git ls-tree` per ref, which
-# bin/lib/notes.mjs owns and `bin/inflight.mjs --perf docs index` itemises (613 calls, six
-# seconds of the seven). Bare `docs` costs the same build. The lever if the budget is breached is
-# a build that deduplicates refs by their `docs/` tree object before listing; the plan's stop
-# condition is half again over budget, which no measurement here approached.
+# prints. After, almost all of it was the index build - at that point one `git ls-tree` per ref,
+# which bin/lib/notes.mjs owns and `bin/inflight.mjs --perf docs index` itemises (the ls-tree
+# line carried most of the wall time). Bare `docs` costs the same build.
 #
 # The branch-facts block (R11) added its own call after the index, MEASURED 2026-09-03 on the same
 # laptop, quiet host, 562 live refs: `docs for-branch` alone costs 1.0 s to 1.3 s cold, whether it
 # finds documents or not - one `git grep` over the live refs plus a drift summary per hit shown -
-# and the whole hook ran 9.2 s to 9.7 s in a window where `docs index` alone ran 6.5 s to 7.9 s.
-# It shares the index's lever and adds none of its own: the grep is fixed-string and single, per
-# bin/lib/terms.mjs. On the baseline the call costs one `git rev-parse` and prints one line.
-# Re-measure with `time CLAUDE_PROJECT_DIR=$PWD .claude/hooks/inject-recorded-knowledge.sh`.
+# and the whole hook ran 9.2 s to 9.7 s in a window where `docs index` alone ran 6.5 s to 7.9 s:
+# over budget, and the plan's stop condition is half again over it, which this did not reach.
+#
+# THE LEVER WAS PULLED the same day: the index now resolves every ref's `docs/` tree in one
+# `cat-file --batch-check` and lists each DISTINCT tree once, because most tips never touch
+# `docs/` and share the baseline's tree object. MEASURED cold, same laptop, quiet host, three runs
+# each side of the change in one window: the hook went from a little over 7 s to under 5 s, and
+# `--perf docs` shows the ls-tree line dropping from one call per ref to one per distinct tree - a
+# small fraction of the refs - while the in-process and `rev-list` lines are unchanged. The exact
+# figures are the command's to print; bin/lib/notes.mjs's `corpusIndex` header states the shape.
+# The grep in the branch-facts block is now the largest single line, and it is fixed-string and
+# single, per bin/lib/terms.mjs; on the baseline the call costs one `git rev-parse` and prints one
+# line. Re-measure with `time CLAUDE_PROJECT_DIR=$PWD .claude/hooks/inject-recorded-knowledge.sh`.
 #
 # Tool-neutral where it can be: the knowledge lives in the documents, and this only enumerates them.
 # Codex and anything else reading AGENTS.md gets the same rule, just without the reminder - and the

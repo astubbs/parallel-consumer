@@ -34,9 +34,11 @@
 // affordable. Asking git the narrow question directly - `cat-file --batch-check` over `<ref>:<path>`
 // - is 60ms cold, which is the cached path's speed with none of its machinery.
 //
-// `corpusIndex` remains for the two questions that genuinely span every note (`find`, `stranded`)
-// and simply pays its 1.3s. The ONE cache left is `prsByBranch`, because that one crosses the
-// network and shares a rate limit with every parallel session here.
+// `corpusIndex` remains for the questions that genuinely span every document (`find`, `stranded`,
+// the docs shape and the session index) and pays its build each call - one object resolution
+// across every ref and one listing per distinct corpus tree, not one per ref; its header owns the
+// measurement. The ONE cache left is `prsByBranch`, because that one crosses the network and
+// shares a rate limit with every parallel session here.
 //
 // THE CORPUS IS THREE AREAS NOW, NOT ONE. `corpusIndex` reads every area in `DOC_AREAS` by default
 // - plans, solutions and notes - because the document context query answers for all three and
@@ -50,10 +52,23 @@ import { cacheRead, cacheWrite } from './cache.mjs'
 import { DOC_AREAS, NOTES_DIR, REPO } from './repo.mjs'
 import {
     baseline, blobContents, blobDiffAddedLines, blobDiffStat, blobsForPath, exec, lines, mergeBaseBlobs, mergeBases,
-    refTips, treeEntries,
+    refTips, treeEntries, treesForPath,
 } from './git.mjs'
 
 export { NOTES_DIR }
+
+/**
+ * The deepest directory every area lives under - `docs` for the three default areas, the area
+ * itself when there is one, `''` (the root tree) when they share nothing. Segment-wise, so
+ * `docs/plans` and `docs/planning` do not share a `docs/plan` that exists nowhere.
+ */
+function commonParentDir(dirs) {
+    const split = dirs.map((d) => d.split('/').filter((s) => s.length > 0))
+    const first = split[0] ?? []
+    let n = 0
+    while (n < first.length && split.every((p) => p[n] === first[n])) n++
+    return first.slice(0, n).join('/')
+}
 
 /**
  * PR state moves without any ref moving, so this one key is time-based - and bounded, not trusted.
@@ -71,8 +86,16 @@ const PR_CACHE_TTL_MS = 24 * 60 * 60 * 1000
  * Every (blob, path) under the corpus areas on every ref, plus the derived indexes.
  *
  * `areas` defaults to all of `DOC_AREAS`; pass the notes area alone for a question that is about
- * in-flight notes only. One `ls-tree` per ref whatever the width, because the areas go in as one
- * pathspec list - three calls per ref would have tripled the pass to answer the same question.
+ * in-flight notes only. Whatever the width, the pass is ONE `cat-file --batch-check` resolving the
+ * areas' common parent tree on every ref, then ONE `ls-tree` per DISTINCT tree object with the areas
+ * as its pathspec list - never one call per ref, and never one call per area.
+ *
+ * MEASURED on this repository, reproduce with `node bin/inflight.mjs --perf docs`: before this
+ * shape the `git ls-tree` line showed one call per ref and carried most of the wall time, which
+ * is what put the session-start hook over its 8 s budget; after it, the ls-tree count is the
+ * number of distinct corpus trees - a small fraction of the ref count, because most tips never
+ * touch `docs/` - and the build is no longer the dominant line. The figures are the command's to
+ * print, not this comment's: they move with every fetch.
  *
  * @param {{areas?: {dir: string, name: string}[]}} [opts]
  * @returns {{
@@ -95,13 +118,45 @@ export function corpusIndex({ areas = DOC_AREAS } = {}) {
     if (!ok) return { ok: false, reason: 'cannot list refs - is this a git repository?' }
     if (refs.length === 0) return { ok: false, reason: 'no branch refs found - nothing to search' }
     if (!base) return { ok: false, reason: 'neither origin/master nor master resolves - no baseline to compare against' }
+    // ONE `cat-file --batch-check` RESOLVES THE CORPUS TREE OF EVERY REF, THEN ONE `ls-tree` PER
+    // DISTINCT TREE OBJECT. This ran `ls-tree -r` once per ref, and on this repository that was
+    // the session-start hook's whole cost: hundreds of forks answering the same question, because
+    // most branch tips never touch `docs/` and so name the very same tree object as the baseline.
+    // A tree SHA is content-addressed, so two refs resolving `<ref>:docs` to one SHA carry byte-
+    // identical corpora and one listing serves both. The rows fan back out per ref below, in ref
+    // order, so nothing downstream (byPath's ref lists, stranded, docs shape) sees a change. The
+    // measurement is in this function's header comment, with the command that reproduces it.
+    //
+    // THE TREE RESOLVED IS THE AREAS' COMMON PARENT, not each area's own tree, so the whole index
+    // stays one batch-check and one ls-tree per distinct tree whatever the width: three areas under
+    // `docs/` resolve `docs` and scope the listing to `plans solutions inflight`; the notes area
+    // alone resolves `docs/inflight` itself, which dedupes even harder because a branch editing
+    // only a plan still shares the baseline's notes tree. Paths come back relative to that tree
+    // and are re-prefixed, which is what keeps the rows identical to a per-ref `ls-tree`.
+    const root = commonParentDir(dirs)
+    const prefix = root === '' ? '' : `${root}/`
+    const relative = dirs.map((d) => d.slice(prefix.length))
+    // An area that IS the root has an empty relative pathspec, which means "everything" - and a
+    // pathspec list containing it must not narrow to the other entries.
+    const pathspec = relative.some((r) => r === '') ? [] : relative
+    const trees = treesForPath(refs.map((r) => r.ref), root)
+    if (!trees.ok) return { ok: false, reason: `cannot resolve ${root || 'the root tree'} on any ref - git cat-file failed` }
+
     // AGGREGATED, not swallowed. A single ref's ls-tree failing used to read as "that branch
     // carries no notes"; if it were the baseline, every landed note would have reported as stranded.
+    // With the listing shared, one failure now marks EVERY ref carrying that tree.
     const unreadable = []
+    const listed = new Map()
     const entries = refs.map(({ ref }) => {
-        const t = treeEntries(ref, dirs)
+        const tree = trees.blobs.get(ref)
+        // NO SUCH DIRECTORY ON THIS REF IS AN EMPTY CORPUS, NOT A FAILURE - the same answer the
+        // per-ref `ls-tree` gave for a pathspec matching nothing. Every ref here came from
+        // `for-each-ref`, so a miss is the directory's absence, never an unresolvable ref.
+        if (!tree) return [ref, []]
+        if (!listed.has(tree)) listed.set(tree, treeEntries(tree, pathspec))
+        const t = listed.get(tree)
         if (!t.ok) unreadable.push(ref)
-        return [ref, t.entries.map((e) => [e.blob, e.path])]
+        return [ref, t.entries.map((e) => [e.blob, prefix + e.path])]
     })
     if (unreadable.includes(base)) {
         return { ok: false, reason: `cannot read ${base}'s notes - every comparison would be against an empty baseline` }

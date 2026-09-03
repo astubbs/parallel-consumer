@@ -441,6 +441,32 @@ function buildDocsIndexFixture() {
 }
 const docsIndexFixture = () => (DOCS_INDEX ??= buildDocsIndexFixture())
 
+/**
+ * The corpus fixture plus the two shapes the shared-tree index build is specified against and the
+ * shared fixture does not hold: refs that SHARE a `docs/` tree object (`src-only-a` and `src-only-b`
+ * edit source only, so both name master's tree - the common case on the real repository, where
+ * most tips never touch `docs/`), and a ref with NO `docs/` directory at all (`no-docs`, an orphan
+ * history), which must index as empty rather than as an error. Its own repository for the reason
+ * bin/lib/fixture-repos.mjs gives: the drift checks assert exact ref counts on the shared one.
+ */
+let SHARED_TREES = null
+function buildSharedTreesFixture() {
+    const { dir, git, commit, write } = buildDocsFixture()
+    for (const name of ['src-only-a', 'src-only-b']) {
+        git('checkout', '-q', '-b', name, 'master')
+        write(`src/${name}.java`, `// ${name}\n`)
+        commit(`${name}: source only, docs untouched`)
+    }
+    git('checkout', '-q', '--orphan', 'no-docs')
+    git('rm', '-rq', '--cached', '.')
+    git('clean', '-fdq')
+    write('src/Orphan.java', '// no docs directory on this history\n')
+    commit('an orphan history with no docs/')
+    git('checkout', '-q', 'master')
+    return dir
+}
+const sharedTreesFixture = () => (SHARED_TREES ??= buildSharedTreesFixture())
+
 /** A corpus whose index is comfortably over a 64 KiB pipe buffer: enough long titles on master. */
 let BIG_INDEX = null
 function buildBigIndexFixture() {
@@ -1025,13 +1051,20 @@ const CHECKS = [
             return commands.every((args) => invoke(binDir, args, { cwd: outside }).code === 2)
         },
         // Targets the GUARD, not refTips: restoring the old `[]`-on-failure alone still tripped the
-        // separate empty-refs guard, so the mutant stayed green while proving nothing.
-        mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
-            "    if (!ok) return { ok: false, reason: 'cannot list refs - is this a git repository?' }\n"
-            + "    if (refs.length === 0) return { ok: false, reason: 'no branch refs found - nothing to search' }\n"
-            + "    if (!base) return { ok: false, reason: 'neither origin/master nor master resolves"
-            + " - no baseline to compare against' }",
-            '    // mutant: every corpus guard removed'),
+        // separate empty-refs guard, so the mutant stayed green while proving nothing. EVERY guard
+        // goes, including the one on the tree-resolving cat-file below them: outside a repository
+        // that batch fails too, so leaving it would catch the case alone and again prove nothing.
+        mutate: (binDir) => {
+            patch(join(binDir, 'lib', 'notes.mjs'),
+                "    if (!ok) return { ok: false, reason: 'cannot list refs - is this a git repository?' }\n"
+                + "    if (refs.length === 0) return { ok: false, reason: 'no branch refs found - nothing to search' }\n"
+                + "    if (!base) return { ok: false, reason: 'neither origin/master nor master resolves"
+                + " - no baseline to compare against' }",
+                '    // mutant: every corpus guard removed')
+            patch(join(binDir, 'lib', 'notes.mjs'),
+                "    if (!trees.ok) return { ok: false, reason: `cannot resolve ${root || 'the root tree'} on any ref - git cat-file failed` }",
+                '    // mutant: the cat-file guard removed with the rest')
+        },
     },
     {
         id: 'every-command-runs-end-to-end',
@@ -1919,6 +1952,80 @@ const CHECKS = [
             'export function blobContents(blobs) {',
             'export function blobContents(blobs) {\n'
             + "    return { ok: true, contents: new Map(blobs.map((b) => [b, exec('git', ['cat-file', '-p', b]).out])) }"),
+    },
+    {
+        id: 'corpus-index-lists-each-distinct-docs-tree-once',
+        why: 'one ls-tree per ref was the session-start budget; most tips share the baseline docs tree and one listing serves them all',
+        run: async (binDir) => {
+            const g = await gitlib(binDir)
+            const n = await notes(binDir)
+            const perf = await perfOf(binDir)
+            return inDir(sharedTreesFixture(), () => {
+                // The truth the batch must match, computed BEFORE the perf window so its own
+                // subprocesses do not count: how many distinct `docs/` tree objects the refs name.
+                const refs = g.refTips().tips.map((r) => r.ref)
+                const distinct = new Set(refs
+                    .map((r) => g.exec('git', ['rev-parse', '-q', '--verify', `${r}:docs`]))
+                    .filter((r) => r.ok).map((r) => r.out.trim()))
+                // The fixture is only a test of sharing if sharing exists: fewer trees than refs.
+                if (refs.length < 6 || distinct.size >= refs.length - 1) return false
+                perf.perfReset()
+                const index = n.corpusIndex()
+                const report = perf.perfReport()
+                if (!index.ok) return false
+                if (callCount(report, 'git cat-file') !== 1) return false
+                return callCount(report, 'git ls-tree') === distinct.size
+            })
+        },
+        // Lists once per ref again: the memo that shares a listing between refs is bypassed.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
+            'if (!listed.has(tree)) listed.set(tree, treeEntries(tree, pathspec))',
+            'listed.set(tree, treeEntries(tree, pathspec))'),
+    },
+    {
+        id: 'corpus-index-rows-equal-a-per-ref-ls-tree',
+        why: 'the shared listing must fan out to exactly the rows each ref would have listed on its own, in order',
+        run: async (binDir) => {
+            const g = await gitlib(binDir)
+            const n = await notes(binDir)
+            const { DOC_AREAS } = await import(pathToFileURL(join(binDir, 'lib', 'repo.mjs')).href)
+            return inDir(sharedTreesFixture(), () => {
+                const dirs = DOC_AREAS.map((a) => a.dir)
+                const index = n.corpusIndex()
+                if (!index.ok || index.refs.length < 6) return false
+                let rows = 0
+                for (const { ref } of index.refs) {
+                    // The pre-batch code path, ref by ref: paths as ls-tree prints them from the
+                    // ref, so a prefix the fan-out dropped or doubled shows here.
+                    const truth = g.treeEntries(ref, dirs).entries
+                    const got = index.byRef.get(ref) ?? []
+                    if (JSON.stringify(got) !== JSON.stringify(truth)) return false
+                    rows += got.length
+                }
+                return rows > 0
+            })
+        },
+        // Hands back the tree-relative path, which is what ls-tree prints for a bare tree SHA.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
+            '[e.blob, prefix + e.path]', '[e.blob, e.path]'),
+    },
+    {
+        id: 'corpus-index-treats-a-ref-without-docs-as-empty',
+        why: 'an orphan history with no docs/ is an empty corpus, and reading it as a failure would poison the aggregate',
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            return inDir(sharedTreesFixture(), () => {
+                const index = n.corpusIndex()
+                if (!index.ok) return false
+                if (!index.refs.some((r) => r.ref === 'no-docs')) return false
+                const rows = index.byRef.get('no-docs')
+                return Array.isArray(rows) && rows.length === 0 && index.unreadableRefs.length === 0
+            })
+        },
+        // A missing tree counts as an unreadable ref.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'notes.mjs'),
+            'if (!tree) return [ref, []]',
+            'if (!tree) { unreadable.push(ref); return [ref, []] }'),
     },
     {
         id: 'source-frame-puts-the-label-first-and-the-command-last',

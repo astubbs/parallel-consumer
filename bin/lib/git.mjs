@@ -188,11 +188,21 @@ export function blobsForPath(refs, path) {
 }
 
 /**
- * Every (blob, path) pair under one pathspec - or several - on one ref.
+ * THE SAME BATCH, NAMED FOR WHAT A DIRECTORY PATH RESOLVES TO. `<ref>:docs` names a TREE object,
+ * and `cat-file --batch-check` answers for it exactly as it does for a blob - one process, one
+ * self-describing line per ref, `missing` for a ref without that directory. `corpusIndex` uses this
+ * to find which refs share a corpus tree before listing any of them; the name exists so that call
+ * site does not read as if it were fetching note contents.
+ */
+export const treesForPath = blobsForPath
+
+/**
+ * Every (blob, path) pair under one pathspec - or several - on one tree-ish: a ref, or a bare tree
+ * SHA, in which case the paths come back relative to that tree.
  *
  * SEVERAL PATHSPECS IN ONE CALL, because the cost of an index is the fork count: the corpus index
- * runs this once per ref, and widening it from one docs area to three as three calls would have
- * tripled a 1.3s pass to answer the same question.
+ * runs this once per DISTINCT corpus tree (`treesForPath` finds them), and widening it from one
+ * docs area to three as three calls would have tripled the pass to answer the same question.
  */
 export function treeEntries(ref, pathspec) {
     // `-z`, because git C-QUOTES a path containing non-ASCII or special characters unless told

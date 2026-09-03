@@ -52,9 +52,11 @@ ref set searched and the archival split. That was the argument here and it held.
 `process.exit()`, which on macOS drops stdout still queued on a pipe, so any page over 64 KiB read
 through `$(...)` arrived cut at exactly 65536 bytes with exit 0 - the hook lost its plans section
 before anything noticed; it sets `process.exitCode` now and a self-test holds the line. And the
-index's cold cost is the `corpusIndex` build, one `git ls-tree` per ref, which on a loaded host sits
-at the 8 s session-start budget; a build that deduplicated refs by their `docs/` tree object would
-cut most of those calls, and is the lever if the budget is breached.
+index's cold cost is the `corpusIndex` build, which as one `git ls-tree` per ref sat at the 8 s
+session-start budget on a loaded host and breached it once the branch-facts block was added; the
+build now resolves every ref's `docs/` tree in one `cat-file --batch-check` and lists each distinct
+tree once, which is the lever the hook header had named. Its shape and reproduce command are in
+`corpusIndex`'s header in `bin/lib/notes.mjs`.
 <!-- post-merge: checked-end -->
 
 
