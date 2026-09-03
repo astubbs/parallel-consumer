@@ -71,9 +71,33 @@ public class PCModule<K, V> {
         if (this.producerWrapper == null) {
             this.producerWrapper = options().isProducerInstanceSupplied()
                     ? new ProducerWrapper<>(options())
-                    : new ProducerWrapper<>(options(), buildProducer(new LinkedHashMap<>(options().getProducerConfig())));
+                    : wrapPcBuilt(buildProducer(new LinkedHashMap<>(options().getProducerConfig())));
         }
         return producerWrapper;
+    }
+
+    /**
+     * Wraps a producer PC just built, closing it if the wrapper cannot be constructed around it: the wrapper's
+     * transactional discovery reads a {@code KafkaProducer} field reflectively, and a subclass of
+     * {@code KafkaProducer} does not declare that field, so the constructor throws - and the producer, already
+     * running its network thread, is referenced by nobody else. Throwable, not RuntimeException: that reflective
+     * failure is a checked exception thrown sneakily, which a narrower catch lets straight through.
+     */
+    private ProducerWrapper<K, V> wrapPcBuilt(Producer<K, V> producer) {
+        try {
+            return new ProducerWrapper<>(options(), producer);
+        } catch (Throwable wrapFailed) {
+            closeQuietly(producer, "the producer built for a wrapper that failed to construct");
+            throw wrapFailed;
+        }
+    }
+
+    private void closeQuietly(Producer<K, V> producer, String what) {
+        try {
+            producer.close(Duration.ZERO);
+        } catch (RuntimeException closeFailed) {
+            log.debug("Closing {} also failed", what, closeFailed);
+        }
     }
 
     /**
@@ -93,17 +117,13 @@ public class PCModule<K, V> {
             ProducerWrapper<K, V> wrapper = producerWrap();
             try {
                 this.producerManager = new ProducerManager<>(wrapper, consumerManager(), workManager(), options());
-            } catch (RuntimeException | Error constructionFailed) {
+            } catch (Throwable constructionFailed) {
                 // The manager's constructor initialises transactions, which can throw (a coordinator that is not
                 // there yet, say). A producer PC built is PC's to close: nobody else holds it, and the processor that
                 // failed to construct is never returned to the caller, so without this every failed start-up leaks
                 // a producer and its network thread. The caller's own instance is the caller's to close.
                 if (!options().isProducerInstanceSupplied()) {
-                    try {
-                        wrapper.close(Duration.ZERO);
-                    } catch (RuntimeException closeFailed) {
-                        log.debug("Closing the producer built for a manager that failed to construct also failed", closeFailed);
-                    }
+                    closeQuietly(wrapper, "the producer built for a manager that failed to construct");
                 }
                 throw constructionFailed;
             }

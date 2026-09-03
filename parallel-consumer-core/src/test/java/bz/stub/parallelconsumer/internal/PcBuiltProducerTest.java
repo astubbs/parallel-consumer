@@ -163,6 +163,29 @@ class PcBuiltProducerTest {
     }
 
     /**
+     * The wrapper's transactional discovery reads a {@code KafkaProducer} field reflectively, and a subclass does not
+     * declare it - so a producer built as a subclass (a user's instrumenting subclass, say) fails at the wrapper, one
+     * frame before the manager guard, with nobody else holding the producer PC just built. Found by the review of
+     * astubbs#426.
+     */
+    @Test
+    void aProducerBuiltForAWrapperThatFailsToConstructIsClosed() {
+        var closed = new java.util.concurrent.atomic.AtomicBoolean();
+        var module = moduleBuildingWith(optionsWith(realProducerConfig("pc-test"), CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER),
+                config -> new org.apache.kafka.clients.producer.KafkaProducer<String, String>(config) {
+                    @Override
+                    public void close(Duration timeout) {
+                        closed.set(true);
+                        super.close(timeout);
+                    }
+                });
+
+        assertThrows(NoSuchFieldException.class, module::producerWrap);
+
+        assertWithMessage("the built producer is PC's alone, so PC closes it").that(closed.get()).isTrue();
+    }
+
+    /**
      * The caller's own instance is the caller's to close: they may hold it, and they never handed PC its lifecycle.
      */
     @Test
