@@ -5,11 +5,13 @@ package bz.stub.parallelconsumer.state;
  */
 
 import bz.stub.parallelconsumer.BrokerlessWorkManagerTestBase;
+import bz.stub.parallelconsumer.internal.utils.ThreadUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.Test;
 import pl.tlinkowski.unij.api.UniLists;
 
+import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -213,13 +215,6 @@ class RetryQueueRebalancePathTest extends BrokerlessWorkManagerTestBase {
      * into the rest of the suite.
      */
     private static void joinQuietly(Thread thread) {
-        if (thread == null) {
-            return;
-        }
-        try {
-            thread.join(TimeUnit.SECONDS.toMillis(CALLBACK_DEADLINE_SECONDS));
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
+        ThreadUtils.joinQuietly(thread, Duration.ofSeconds(CALLBACK_DEADLINE_SECONDS));
     }
 }

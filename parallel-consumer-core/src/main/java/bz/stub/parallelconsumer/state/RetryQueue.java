@@ -183,6 +183,17 @@ public class RetryQueue {
      *         false if the lock was contended, in which case NOTHING was changed
      */
     public boolean tryRemove(final String topic, final int partition, final long offset) {
+        return tryRemove(WorkContainerKey.of(topic, partition, offset));
+    }
+
+    /**
+     * @see #tryRemove(String, int, long)
+     */
+    public boolean tryRemove(final WorkContainer<?, ?> workContainer) {
+        return tryRemove(WorkContainerKey.of(workContainer));
+    }
+
+    private boolean tryRemove(final WorkContainerKey key) {
         if (!lock.writeLock().tryLock()) {
             return false;
         }
@@ -190,20 +201,11 @@ public class RetryQueue {
             // Presence is deliberately not reported. Every caller is deciding whether it may go on to its own
             // paired removal, and for that decision "there was no entry" and "I removed the entry" are the same
             // answer - only "I could not look" differs.
-            boolean ignoredWasPresent = removeWhileWriteLocked(WorkContainerKey.of(topic, partition, offset));
+            boolean ignoredWasPresent = removeWhileWriteLocked(key);
             return true;
         } finally {
             lock.writeLock().unlock();
         }
-    }
-
-    /**
-     * @see #tryRemove(String, int, long)
-     */
-    public boolean tryRemove(final WorkContainer<?, ?> workContainer) {
-        return tryRemove(workContainer.getTopicPartition().topic(),
-                workContainer.getTopicPartition().partition(),
-                workContainer.getCr().offset());
     }
 
     /**
