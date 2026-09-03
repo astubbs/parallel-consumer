@@ -2327,6 +2327,47 @@ measuring on those runners is starvation. What would move it back toward a wedge
 seed replays red on an idle box - and both of today's are now known not to be that seed.
 
 
+## 2026-09-03, `INSTANCE_STALL` fires a third time - on a chaos lane running two forks, with control arms dispatched the same hour
+
+**Same detector, same class, a different lane shape.** `ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger`,
+killed by `INSTANCE_STALL/NO_WORK_COMPLETED`: *instance 14 holds work (queued=0, outForProcessing=62)
+but has returned no work result for 150s (bound 150s) at 26465 results returned*. The 46 autopsy
+observations were all `CLASS2_STALL/LAG_STAGNATION` (23 partitions stagnant ~154s), non-gating, as in
+the two sightings above. The class took 326s against a 137-169s baseline that day.
+
+**What was different: the suite ran under `-DforkCount=2 -DreuseForks=true`** - two JVM forks, each
+with its own broker, on one `ubuntu-latest` VM - the first candidate astubbs#421 measured, on a <!-- post-merge: checked -->
+`maven.yml` dispatched against a throwaway ref rather than on a PR. So this is not
+master-state and it is not a sighting against the gate as it runs today; it is recorded because it
+is the same signature, and because the two firings above already say the detector is load-shaped.
+Tree: origin/master `10ed71c9e` plus the dispatch harness astubbs#421 carried (`dae17bf13`) plus <!-- post-merge: checked -->
+the two-line fork-forwarding change; the snapshot commit itself is unreachable now the ref is gone.
+
+<!-- post-merge: checked-begin - a dated sighting against a run id and a job id, both durable -->
+Seen on [run 33697856947](https://github.com/astubbs/parallel-consumer/actions/runs/33697856947),
+job 100470662249, artifact `chaos-suite-reports-2615` (14-day retention; the failing class's XML is
+also kept beside the optimisation run's experiment log).
+<!-- post-merge: checked-end -->
+
+**Seed `1630088991107806597`**, replay line as the failure printed it:
+
+    ./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true \
+      -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=1630088991107806597
+
+**Control arms, dispatched the same hour on the same runner class, prediction stated first.** Two
+seeded replays of the whole suite: one fork (run 33698964025) and two forks (run 33698941244). If two
+forks manufacture the stall by starving the control thread, the one-fork arm passes and the two-fork
+arm fails again; if both fail, the seed reproduces a real stall independent of the lane shape; if
+both pass, the seed is not a deterministic reproducer on this runner either, which is what the
+2026-09-02 replay on a 32-core box found. The outcome is in astubbs#421's description; this <!-- post-merge: checked -->
+section is the seed's durable home either way.
+
+**Why it matters beyond the tally.** Three firings on one fork in a month is the rate the gate
+already has. An in-job parallel lane adds CPU contention exactly where this detector is
+load-sensitive, so its stability cannot be read off a single green run - and the sharded
+alternative astubbs#421 measured next gives each shard its own VM, which does not move this rate <!-- post-merge: checked -->
+at all.
+
 ## Delete when
 
 The `CLASS2_STALL` entries above are superseded by this section and kept only as the record of how a
