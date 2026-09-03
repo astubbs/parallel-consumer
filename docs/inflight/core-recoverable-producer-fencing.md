@@ -4,6 +4,19 @@
 <!-- inflight-impact: crash -->
 
 
+## In flight as a stack of three PRs (2026-09-03)
+
+<!-- post-merge: checked-begin -->
+- astubbs/parallel-consumer#426 - `producerConfig`: PC builds its producer from configuration with the
+  default constructor, the caller's `transactional.id` included. The only rung recovery needs, because
+  re-initialising a replacement under the same id is what fences the producer it replaces.
+- astubbs/parallel-consumer#410 - recovery: detection, the aborted-transaction ledger and replay, the
+  replacement with backoff, observability, the broker IT. Stacked on astubbs#426.
+- astubbs/parallel-consumer#420 - the rest of producer ownership: a derived prefix-free
+  `transactional.id`, a `ProducerFactory` with an enforced contract, configuration redaction, deprecating
+  the instance option, migrating the examples. Stacked on astubbs#410.
+<!-- post-merge: checked-end -->
+
 <!-- post-merge: checked -->
 The feature was implemented by astubbs/parallel-consumer#410 against the plan
 `docs/plans/2026-09-02-001-feat-recoverable-producer-fencing-plan.md`, which owns the requirements, the

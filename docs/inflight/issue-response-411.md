@@ -49,10 +49,10 @@ Two honest caveats:
 
 - **It will not reach your configuration unchanged.** Recovery requires Parallel Consumer to build the
   producer itself, from configuration, so it can build a replacement. Supplying a `Producer` instance —
-  the only option today, and what you were doing — stays supported and deprecated, but cannot recover,
+  the only option today, and what you were doing — stays supported, but cannot recover,
   because a `KafkaProducer`'s configuration cannot be read back out of it.
 - **The loop itself is a separate defect**, tracked in
-  `docs/inflight/bug-411-wrapped-send-failure-spins-forever.md`. Whether to close it on the deprecated
+  `docs/inflight/bug-411-wrapped-send-failure-spins-forever.md`. Whether to close it on the instance
   path as well — so the condition at least terminates rather than spinning — is an open decision.
 
 Thanks for the original report and for the fix attempt. The diagnosis in it was right; it was the

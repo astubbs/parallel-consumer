@@ -6,7 +6,6 @@ package bz.stub.parallelconsumer.examples.vertx;
  */
 
 import com.github.tomakehurst.wiremock.WireMockServer;
-import bz.stub.parallelconsumer.ProducerFactory;
 import bz.stub.parallelconsumer.internal.utils.KafkaTestUtils;
 import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
 import bz.stub.parallelconsumer.internal.utils.WireMockUtils;
@@ -77,12 +76,6 @@ class VertxAppTest {
         @Override
         Producer<String, String> getKafkaProducer() {
             return new MockProducer<>(true, null, null);
-        }
-
-        @Override
-        ProducerFactory<String, String> getProducerFactory() {
-            // the example hands PC configuration; the test substitutes the producer PC builds from it
-            return config -> getKafkaProducer();
         }
 
         @Override

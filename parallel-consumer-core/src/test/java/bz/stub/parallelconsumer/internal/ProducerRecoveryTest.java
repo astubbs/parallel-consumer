@@ -8,7 +8,6 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.PollContext;
-import bz.stub.parallelconsumer.ProducerFactory;
 import bz.stub.parallelconsumer.internal.utils.LongPollingMockConsumer;
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
@@ -23,6 +22,7 @@ import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.clients.producer.Callback;
 import org.apache.kafka.clients.producer.MockProducer;
+import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
@@ -45,6 +45,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -65,11 +66,11 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 
 /**
- * Recovery end to end, on the PC-built path, against producers a factory hands out: what happens after the broker
- * reports the producer invalid (R10-R15, R18, KTD4-KTD7). Every producer is a spied {@link MockProducer}, so a commit
- * or a send can be made to fail the way kafka-clients fails it, and the replacement is a fresh one the factory
- * returns. In this package so the processor's protected accessors and the manager's package-private pacing hooks are
- * reachable.
+ * Recovery end to end, on the PC-built path, against producers the module's construction seam hands out: what
+ * happens after the broker reports the producer invalid (R10-R15, R18, KTD4-KTD7). Every producer is a spied
+ * {@link MockProducer}, so a commit or a send can be made to fail the way kafka-clients fails it, and the
+ * replacement is a fresh one the seam returns. In this package so the processor's protected accessors, the module's
+ * seam and the manager's package-private pacing hooks are reachable.
  */
 @Slf4j
 @Timeout(90)
@@ -79,17 +80,17 @@ class ProducerRecoveryTest {
     private static final TopicPartition TP = new TopicPartition(TOPIC, 0);
     private static final String GROUP = "recovery-group";
 
-    /** Every producer the factory built, in order; the last is the one PC is using. */
+    /** Every producer built, in order; the last is the one PC is using. */
     private final List<MockProducer<String, String>> producers = new CopyOnWriteArrayList<>();
-    private final List<Instant> factoryCallTimes = new CopyOnWriteArrayList<>();
+    private final List<Instant> buildTimes = new CopyOnWriteArrayList<>();
     /** How many times the user function saw each offset. */
     private final Map<Long, AtomicInteger> seen = new ConcurrentHashMap<>();
     /** The failed-attempt count each delivery of each offset reported through its RecordContext, in order. */
     private final Map<Long, List<Integer>> failedAttemptsSeen = new ConcurrentHashMap<>();
-    /** Applied to each producer as the factory builds it, keyed by build index (0 = the initial producer). */
+    /** Applied to each producer as it is built, keyed by build index (0 = the initial producer). */
     private final Map<Integer, Consumer<MockProducer<String, String>>> onBuild = new ConcurrentHashMap<>();
-    private volatile Optional<CountDownLatch> holdFactoryUntil = Optional.empty();
-    /** Run before the factory builds, keyed by factory call index (0 = the initial producer); throws to fail the build. */
+    private volatile Optional<CountDownLatch> holdBuildUntil = Optional.empty();
+    /** Run before a build, keyed by build index (0 = the initial producer); throws to fail the build. */
     private final Map<Integer, Runnable> beforeBuild = new ConcurrentHashMap<>();
     /** Runs inside the user function before it returns its record - a hook for holding a worker where it stands. */
     private volatile Consumer<PollContext<String, String>> insideUserFunction = ignored -> {
@@ -100,40 +101,47 @@ class ProducerRecoveryTest {
     /** How many times PC's poll thread has read a generation other than the first - its cache refresh. */
     private final AtomicInteger refreshedMetadataReads = new AtomicInteger();
     private ParallelEoSStreamProcessor<String, String> pc;
-    private volatile String derivedTransactionalId;
+    /** Unique per test instance: the suite runs concurrently, and log lines are told apart by the id they name. */
+    private final String transactionalId = "pc-test-" + UUID.randomUUID();
+    /** What the construction seam was handed as transactional.id - the same map's value, on every build. */
+    private volatile String transactionalIdBuiltUnder;
     private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
 
     @AfterEach
     void tearDown() {
-        holdFactoryUntil.ifPresent(CountDownLatch::countDown);
+        holdBuildUntil.ifPresent(CountDownLatch::countDown);
         if (pc != null && !pc.isClosedOrFailed()) {
             pc.closeDontDrainFirst(Duration.ofSeconds(10));
         }
     }
 
-    private ProducerFactory<String, String> factory() {
-        return config -> {
-            factoryCallTimes.add(Instant.now());
-            holdFactoryUntil.ifPresent(latch -> {
-                try {
-                    latch.await();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
+    /** A module whose construction seam hands out spied MockProducers, with the hooks a test registers applied. */
+    private PCModule<String, String> moduleBuildingSpiedMockProducers(ParallelConsumerOptions<String, String> options) {
+        return new PCModule<>(options) {
+            @Override
+            protected Producer<String, String> buildProducer(Map<String, Object> config) {
+                buildTimes.add(Instant.now());
+                holdBuildUntil.ifPresent(latch -> {
+                    try {
+                        latch.await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                });
+                transactionalIdBuiltUnder = (String) config.get(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
+                Runnable before = beforeBuild.get(buildTimes.size() - 1);
+                if (before != null) {
+                    before.run();
                 }
-            });
-            derivedTransactionalId = (String) config.get(ProducerConfig.TRANSACTIONAL_ID_CONFIG);
-            Runnable before = beforeBuild.get(factoryCallTimes.size() - 1);
-            if (before != null) {
-                before.run();
+                MockProducer<String, String> producer = spy(new MockProducer<>(true, new StringSerializer(), new StringSerializer()));
+                int index = producers.size();
+                producers.add(producer);
+                Consumer<MockProducer<String, String>> hook = onBuild.get(index);
+                if (hook != null) {
+                    hook.accept(producer);
+                }
+                return producer;
             }
-            MockProducer<String, String> producer = spy(new MockProducer<>(true, new StringSerializer(), new StringSerializer()));
-            int index = producers.size();
-            producers.add(producer);
-            Consumer<MockProducer<String, String>> hook = onBuild.get(index);
-            if (hook != null) {
-                hook.accept(producer);
-            }
-            return producer;
         };
     }
 
@@ -149,8 +157,8 @@ class ProducerRecoveryTest {
         return ParallelConsumerOptions.<String, String>builder()
                 .consumer(consumer)
                 .meterRegistry(registry)
-                .producerConfig(UniMaps.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "mock:9092"))
-                .producerFactory(factory())
+                .producerConfig(UniMaps.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "mock:9092",
+                        ProducerConfig.TRANSACTIONAL_ID_CONFIG, transactionalId))
                 .commitMode(CommitMode.PERIODIC_TRANSACTIONAL_PRODUCER)
                 .commitInterval(Duration.ofMillis(100))
                 .commitLockAcquisitionTimeout(Duration.ofSeconds(5))
@@ -160,7 +168,7 @@ class ProducerRecoveryTest {
     }
 
     private void start(ParallelConsumerOptions<String, String> options) {
-        pc = new ParallelEoSStreamProcessor<>(options);
+        pc = new ParallelEoSStreamProcessor<>(options, moduleBuildingSpiedMockProducers(options));
         pc.subscribe(UniLists.of(TOPIC));
         consumer.subscribeWithRebalanceAndAssignment(UniLists.of(TOPIC), 1);
         pc.pollAndProduceMany(context -> {
@@ -286,7 +294,7 @@ class ProducerRecoveryTest {
         List<ConsumerGroupMetadata> all = metadataUsed.getAllValues();
         assertWithMessage("the commit made after the refresh carries the live generation")
                 .that(all.get(all.size() - 1).generationId()).isEqualTo(2);
-        assertThat(derivedTransactionalId).startsWith(TransactionalIdDerivation.prefixFor(GROUP));
+        assertWithMessage("every build is handed the caller's id, unchanged").that(transactionalIdBuiltUnder).isEqualTo(transactionalId);
         assertThat(producerManager().isProducerAvailable()).isTrue();
     }
 
@@ -347,7 +355,7 @@ class ProducerRecoveryTest {
         // this instance's recovery lines, told apart from a concurrently running test's by the id they name
         List<ILoggingEvent> recoveries = appender.list.stream()
                 .filter(event -> event.getFormattedMessage().startsWith("Producer recovery replaced"))
-                .filter(event -> event.getFormattedMessage().contains(derivedTransactionalId))
+                .filter(event -> event.getFormattedMessage().contains(transactionalIdBuiltUnder))
                 .collect(java.util.stream.Collectors.toList());
         assertThat(recoveries).hasSize(3);
         assertThat(recoveries.get(0).getLevel()).isEqualTo(Level.WARN);
@@ -381,8 +389,8 @@ class ProducerRecoveryTest {
         awaitCommittedThrough(producers.get(3), 3);
 
         assertThat(pc.isClosedOrFailed()).isFalse();
-        Duration firstRetryAfter = Duration.between(factoryCallTimes.get(1), factoryCallTimes.get(2));
-        Duration secondRetryAfter = Duration.between(factoryCallTimes.get(2), factoryCallTimes.get(3));
+        Duration firstRetryAfter = Duration.between(buildTimes.get(1), buildTimes.get(2));
+        Duration secondRetryAfter = Duration.between(buildTimes.get(2), buildTimes.get(3));
         assertWithMessage("the first retry waits at least one backoff, not inline").that(firstRetryAfter).isAtLeast(Duration.ofMillis(300));
         assertWithMessage("the second retry waits at least the doubled backoff").that(secondRetryAfter).isAtLeast(Duration.ofMillis(600));
         assertWithMessage("the control thread wakes for the attempt rather than sleeping out the 5 s commit interval")
@@ -405,7 +413,7 @@ class ProducerRecoveryTest {
         assertThat(producers).hasSize(2);
         Exception cause = pc.getFailureCause();
         assertThat(cause).isInstanceOf(ProducerInvalidatedException.class);
-        assertThat(cause).hasMessageThat().contains(derivedTransactionalId);
+        assertThat(cause).hasMessageThat().contains(transactionalIdBuiltUnder);
         assertThat(cause).hasMessageThat().contains(TransactionalIdAuthorizationException.class.getName());
         assertWithMessage("the raw cause message may carry configuration values, so it is not carried")
                 .that(cause).hasMessageThat().doesNotContain("hunter2");
@@ -602,12 +610,13 @@ class ProducerRecoveryTest {
     }
 
     /**
-     * A factory is user code. An {@link Error} from it - a serializer whose static initialiser fails, say - is
-     * deterministic, so it is terminal rather than retried: the instance closes naming the type, and a worker parked
-     * on the produce lock is released by the close rather than waiting on a replacement that will never come.
+     * The construction seam runs as user code. An {@link Error} from it - a serializer whose static initialiser
+     * fails inside the producer's constructor, say - is deterministic, so it is terminal rather than retried: the
+     * instance closes naming the type, and a worker parked on the produce lock is released by the close rather than
+     * waiting on a replacement that will never come.
      */
     @Test
-    void anErrorFromTheFactoryIsTerminalAndClosesTheInstanceNamingIt() {
+    void anErrorFromTheBuildIsTerminalAndClosesTheInstanceNamingIt() {
         onBuild.put(0, this::fenceAtFirstCommit);
         beforeBuild.put(1, () -> {
             throw new NoClassDefFoundError("com/example/Serializer");
@@ -617,11 +626,11 @@ class ProducerRecoveryTest {
 
         await().atMost(Duration.ofSeconds(30)).until(() -> pc.isClosedOrFailed());
 
-        assertThat(factoryCallTimes).hasSize(2);
+        assertThat(buildTimes).hasSize(2);
         Exception cause = pc.getFailureCause();
         assertThat(cause).isInstanceOf(ProducerInvalidatedException.class);
         assertThat(cause).hasMessageThat().contains(NoClassDefFoundError.class.getName());
-        assertThat(cause).hasMessageThat().contains(derivedTransactionalId);
+        assertThat(cause).hasMessageThat().contains(transactionalIdBuiltUnder);
         assertWithMessage("closed, not merely failed: the parked workers were released and the shutdown completed")
                 .that(producerManager().isProducerAvailable()).isFalse();
     }
@@ -634,7 +643,8 @@ class ProducerRecoveryTest {
      */
     @Test
     void noReplacementIsAttemptedOnceTheInstanceIsClosing() {
-        pc = new ParallelEoSStreamProcessor<>(optionsBuilder().build());
+        var options = optionsBuilder().build();
+        pc = new ParallelEoSStreamProcessor<>(options, moduleBuildingSpiedMockProducers(options));
         pc.close();
         assertThat(pc.isClosedOrFailed()).isTrue();
         producerManager().recordInvalidation(new ProducerFencedException("fenced during close"));
@@ -645,7 +655,7 @@ class ProducerRecoveryTest {
         AbstractParallelEoSStreamProcessor<String, String> engine = pc;
         engine.maybeRecoverProducer();
 
-        assertWithMessage("no replacement was built").that(factoryCallTimes).hasSize(1);
+        assertWithMessage("no replacement was built").that(buildTimes).hasSize(1);
         assertThat(producers).hasSize(1);
     }
 

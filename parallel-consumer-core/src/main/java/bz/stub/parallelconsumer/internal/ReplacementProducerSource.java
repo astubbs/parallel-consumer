@@ -11,9 +11,8 @@ import java.util.function.Supplier;
 
 /**
  * Where a replacement producer comes from, handed to {@link ProducerManager} only on the path where PC built the
- * producer itself: each {@link #build()} resolves the same configuration - the same derived {@code transactional.id}
- * included - and asks the {@link bz.stub.parallelconsumer.ProducerFactory} for a new producer. The id travels with
- * it so a failure to build can name what was refused.
+ * producer itself: each {@link #build()} builds a new producer from the same configuration, the same
+ * {@code transactional.id} included. The id travels with it so a failure to build can name what was refused.
  */
 @RequiredArgsConstructor
 public class ReplacementProducerSource<K, V> {

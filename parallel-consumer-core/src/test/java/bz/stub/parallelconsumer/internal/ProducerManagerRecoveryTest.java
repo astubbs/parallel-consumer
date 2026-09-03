@@ -392,25 +392,6 @@ class ProducerManagerRecoveryTest {
     }
 
     /**
-     * A factory that breaks its contract does so on every rebuild - a caching factory caches every time - so
-     * deferring is a retry loop for the life of the instance, each attempt logged as if the coordinator were merely
-     * slow. The failure names the violation, not the wrapper it arrived in.
-     */
-    @Test
-    void aFactoryContractViolationIsTerminalRatherThanRetriedForever() throws Exception {
-        sourceFailure = new ProducerFactoryContractException("The ProducerFactory returned the producer it had already returned");
-        recoverPhaseA();
-
-        var outcome = manager.completeReplacement();
-
-        assertThat(outcome.getKind()).isEqualTo(ReplacementOutcome.Kind.TERMINAL);
-        assertThat(outcome.getFailure()).hasMessageThat().contains(ProducerFactoryContractException.class.getName());
-        assertWithMessage("the transactional id is named, for the operator").that(outcome.getFailure()).hasMessageThat().contains("pc-4-test-id");
-        assertThat(manager.isProducerAvailable()).isFalse();
-        assertThat(manager.isReplacing()).isFalse();
-    }
-
-    /**
      * The recovery counter is the user's MeterRegistry. Once the replacement is published it is in use, so a
      * registry that throws must not turn the outcome into a deferral that schedules a second rebuild against it.
      */

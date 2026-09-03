@@ -11,6 +11,8 @@ execution: code
 
 # Recoverable Producer Fencing - Plan
 
+> **Re-cut into a stack, 2026-09-03.** The producer-ownership half of this plan ships in stages rather than in one PR: `producerConfig` with the default constructor is the base rung (astubbs/parallel-consumer#426); recovery (astubbs/parallel-consumer#410) stacks on that rung alone and rebuilds under the `transactional.id` the caller sets; the derived prefix-free id, the `ProducerFactory` and its contract, configuration redaction, and the deprecation of the instance option with the example migration are astubbs/parallel-consumer#420, stacked above recovery. Where the text below says the factory or the derived id is what recovery rebuilds through, read: the same configuration, id included - the mechanisms and decisions are unchanged, only the order they land in.
+
 ## Goal Capsule
 
 **Objective.** Give Parallel Consumer a transactional producer it owns, so that when the broker tells it the producer is no longer usable, PC closes that producer, builds a replacement, and carries on — instead of spinning forever on the produce path or shutting the instance down on the commit path. Tracked as astubbs#225.
@@ -331,6 +333,7 @@ U1 → U2 → U3 → U5 → U6 → U7; U4 has no dependencies and may be built a
 - **Requirements:** R1, R2, R3, R7, R16, R17, R19, R21; KTD1, KTD9.
 - **Dependencies:** none.
 - **Files:** `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java`, new `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ProducerFactory.java`, new `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/ProducerConfigRedaction.java`, `docs/refactoring.md` (the entry exists; only re-check the release it names), tests in new `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/ParallelConsumerOptionsProducerConfigTest.java` and new `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/internal/ProducerConfigRedactionTest.java`.
+  <!-- file-refs: N/A - the factory, derivation and redaction files are astubbs#420's, stacked above this PR; see the re-cut note at the head of this plan -->
 - **Approach:**
   1. Add `producerConfig` (`Map<String, Object>`) and `producerFactory` (`ProducerFactory<K, V>`, `@Builder.Default` to a `KafkaProducer` constructor) fields; `isProducerSupplied()` becomes "instance or configuration present".
   2. `validate()`: both `producer` and `producerConfig` set fails with a message naming `Fields.producer` and `Fields.producerConfig` (R17); transactional mode with neither fails as today; `producer` set alone logs the single R19 WARN naming `producerConfig` plus `producerFactory`, the absence of recovery, and the removal release.
@@ -353,6 +356,7 @@ U1 → U2 → U3 → U5 → U6 → U7; U4 has no dependencies and may be built a
 - **Requirements:** R2, R4, R5, R6; KTD2, KTD8.
 - **Dependencies:** U1.
 - **Files:** `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/PCModule.java`, `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/ProducerWrapper.java`, new `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/TransactionalIdDerivation.java`, `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/internal/PCModuleTestEnv.java` (constructor change follow-through), tests in new `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/internal/TransactionalIdDerivationTest.java` and new `parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/internal/PcBuiltProducerTest.java`.
+  <!-- file-refs: N/A - the factory, derivation and redaction files are astubbs#420's, stacked above this PR; see the re-cut note at the head of this plan -->
 - **Approach:**
   1. `TransactionalIdDerivation`: `prefixFor(groupId)` returns `pc-<L>-<groupId>-`; `derive(groupId, instanceUuid)` appends the UUID; `resolve(producerConfig, commitMode, groupId, uuid)` returns a copy of the config with the id set (transactional mode) or removed (otherwise), emitting the R5 WARN when the caller had set one.
   2. `PCModule`: one `UUID` per module instance; `producerWrap()` builds from the instance when present, otherwise resolves the config and calls the factory; new `replacementProducerWrap()` returns `Optional<Supplier<ProducerWrapper<K, V>>>`, present only on the configuration path, each call resolving the same config and calling the factory again.
