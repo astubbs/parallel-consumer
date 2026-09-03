@@ -868,13 +868,44 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
                     wm.hasIncompleteOffsets(),
                     pc.getPausedPartitionSize(),
                     instance.getConsumedKeys().size(),
-                    pc.describeProgress());
+                    pc.describeProgress())
+                    + describeInstanceThreads(instance.getInstanceId());
         } catch (Exception e) {
             // the type is kept, not just the message: a diagnostic that says only "error dumping
             // state: null" names neither the failure nor the field that produced it
             return msg("Instance {}: error dumping state: {}: {}",
                     instance.getInstanceId(), e.getClass().getSimpleName(), e.getMessage());
         }
+    }
+
+    /**
+     * Top frames of the threads PC runs for one instance - {@code pc-broker-poll-PC-<id>} and
+     * {@code pc-control-PC-<id>}, matched on the {@code -PC-<id>} suffix its
+     * {@code AbstractParallelEoSStreamProcessor#setMyId} gives them.
+     * <p>
+     * <b>Why a stack and not another counter.</b> The fleet line already says an instance is stuck in
+     * {@code CLOSING} with a poll pass tens of seconds old; what it cannot say is which call is
+     * holding it, and the candidates want different repairs -
+     * {@code ConsumerManager#close}'s wait for {@code pendingRequests} to drain, the consumer's own
+     * close, or a commit. Reading it off a stall costs nothing; inferring it from code has already
+     * produced one refuted hypothesis on this bug.
+     * <p>
+     * Deliberately unfiltered by package: the interesting frame is usually Kafka's or the JDK's
+     * (a {@code Thread.sleep} in a wait loop, a socket read), and trimming to PC's own frames would
+     * hide precisely the line that names the blocker.
+     */
+    private String describeInstanceThreads(int instanceId) {
+        String suffix = "-PC-" + instanceId;
+        return Thread.getAllStackTraces().entrySet().stream()
+                .filter(e -> e.getKey().getName().endsWith(suffix))
+                .map(e -> {
+                    String frames = Arrays.stream(e.getValue())
+                            .limit(8)
+                            .map(StackTraceElement::toString)
+                            .collect(Collectors.joining(" <- "));
+                    return e.getKey().getName() + "[" + e.getKey().getState() + "] " + frames;
+                })
+                .collect(Collectors.joining("\n      ", "\n      ", ""));
     }
 
     /**
