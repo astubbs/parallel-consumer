@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.state;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumer;
+import com.facebook.infer.annotation.ThreadConfined;
 import bz.stub.parallelconsumer.internal.BrokerPollSystem;
 import bz.stub.parallelconsumer.internal.EpochAndRecordsMap;
 import bz.stub.parallelconsumer.internal.PCModule;
@@ -45,6 +46,12 @@ import static lombok.AccessLevel.*;
 @ToString
 @Slf4j
 public class PartitionState<K, V> {
+
+    /**
+     * The thread the aborted-transaction replay is confined to, as {@code ThreadConfined} names it: the control
+     * thread, which also stamps the replay generation on every dispatch, so the two are totally ordered.
+     */
+    public static final String CONTROL_THREAD = "pc-control";
 
     /**
      * Symbolic value for a parameter which is initialised as having an offset absent (instead of using Optional or
@@ -329,11 +336,14 @@ public class PartitionState<K, V> {
      * lock, or before the drain - nothing gates that but the one call site in
      * {@code AbstractParallelEoSStreamProcessor}.
      * <p>
-     * Runs on the control thread. The ledger's monitor is not held across the replay itself, which enters the shard
-     * map's per-key lock and must not do so while holding it.
+     * Confined to the control thread - declared for RacerD by the annotation, and asserted at the one entry point,
+     * {@code AbstractParallelEoSStreamProcessor#replayWorkDiscardedByAbortedTransaction}. The ledger's monitor is
+     * not held across the replay itself, which enters the shard map's per-key lock and must not do so while holding
+     * it.
      *
      * @return how many records were put back
      */
+    @ThreadConfined(PartitionState.CONTROL_THREAD)
     public int restoreCompletedButUncommittedWork() {
         Map<Long, ConsumerRecord<K, V>> discarded = uncommittedCompletions.snapshotInOffsetOrder();
         if (discarded.isEmpty()) {

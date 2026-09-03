@@ -8,6 +8,8 @@ import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.internal.utils.ThrowableUtils;
 import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
+import bz.stub.parallelconsumer.state.PartitionState;
+import com.facebook.infer.annotation.ThreadConfined;
 import com.google.errorprone.annotations.concurrent.GuardedBy;
 import io.micrometer.core.instrument.Tag;
 import lombok.extern.slf4j.Slf4j;
@@ -250,6 +252,7 @@ public class ProducerRecovery<K, V> {
      * @param restored how many records the replay put back; a replay that put back none moved no offset below any
      *                 record in flight, so the generation - and with it every parked worker - is left alone
      */
+    @ThreadConfined(PartitionState.CONTROL_THREAD)
     public void replayCompleted(int restored) {
         replayOwed = false;
         if (restored > 0) {
@@ -264,6 +267,7 @@ public class ProducerRecovery<K, V> {
      * paced by the same backoff a failed build gets, so a listener that throws on every drain does not spin the
      * control loop.
      */
+    @ThreadConfined(PartitionState.CONTROL_THREAD)
     public void deferAfterFailedPass(String why) {
         scheduleRetry(why);
     }
@@ -375,6 +379,7 @@ public class ProducerRecovery<K, V> {
      * @return true when the lock was entered and the producer discarded; false when the wait elapsed, in which case
      *         a retry is scheduled and nothing changed
      */
+    @ThreadConfined(PartitionState.CONTROL_THREAD)
     public boolean beginReplacement() throws InterruptedException {
         Throwable condition = pendingInvalidation.get();
         Duration lockTimeout = options.getCommitLockAcquisitionTimeout();
@@ -406,6 +411,7 @@ public class ProducerRecovery<K, V> {
         }
     }
 
+    @ThreadConfined(PartitionState.CONTROL_THREAD)
     public void releaseCommitLockAfterReplacement() {
         manager.releaseCommitLock();
     }
@@ -438,6 +444,7 @@ public class ProducerRecovery<K, V> {
      * {@code transactional.id} only, never the raw cause message - a {@code ConfigException} embeds the offending
      * configuration value (R7).
      */
+    @ThreadConfined(PartitionState.CONTROL_THREAD)
     public ReplacementOutcome completeReplacement() {
         ReplacementProducerSource<K, V> source = replacementProducerSource.orElseThrow(() ->
                 new IllegalStateException("Bug: recovery attempted on the producer-instance path, where canRecover() is false"));

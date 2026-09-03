@@ -12,9 +12,11 @@ import bz.stub.parallelconsumer.*;
 import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import bz.stub.parallelconsumer.state.WorkContainer;
+import bz.stub.parallelconsumer.state.PartitionState;
 import bz.stub.parallelconsumer.state.WorkManager;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.binder.jvm.ExecutorServiceMetrics;
+import com.facebook.infer.annotation.ThreadConfined;
 import lombok.*;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
@@ -2008,7 +2010,9 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      *
      * @return how many records the replay put back
      */
+    @ThreadConfined(PartitionState.CONTROL_THREAD)
     int replayWorkDiscardedByAbortedTransaction() {
+        assertOnControlThread("the replay of work an aborted transaction discarded");
         processWorkCompleteMailBox(Duration.ZERO);
         return wm.restoreWorkDiscardedByAbortedTransaction();
     }
@@ -2063,8 +2067,23 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * producer: {@link ProducerRecoveryPass} owns it. Visible for testing - the state gate is driven directly,
      * because the window between CLOSING and the manager closing is on this thread only.
      */
+    @ThreadConfined(PartitionState.CONTROL_THREAD)
     void maybeRecoverProducer() {
+        assertOnControlThread("the producer recovery pass");
         producerRecoveryPass.ifPresent(ProducerRecoveryPass::run);
+    }
+
+    /**
+     * The confinement the recovery pass and the ledger replay declare with {@code @ThreadConfined}, asserted rather
+     * than trusted: once a control thread exists, only it may run them. Before one exists - an instance never
+     * started - nothing runs concurrently, so there is nothing to confine, and a test may drive them directly.
+     */
+    private void assertOnControlThread(String what) {
+        Thread control = blockableControlThread;
+        if (control != null && Thread.currentThread() != control) {
+            throw new IllegalStateException(msg("{} is confined to the control thread '{}' but was called on '{}'",
+                    what, control.getName(), Thread.currentThread().getName()));
+        }
     }
 
     /**

@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.state;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
+import com.facebook.infer.annotation.ThreadConfined;
 import bz.stub.parallelconsumer.internal.*;
 import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
@@ -256,6 +257,7 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
      *
      * @return how many records were put back
      */
+    @ThreadConfined(PartitionState.CONTROL_THREAD)
     public int restoreWorkDiscardedByAbortedTransaction() {
         int restored = pm.restoreCompletedButUncommittedWork();
         if (restored > 0) {
