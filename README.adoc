@@ -1080,9 +1080,8 @@ Each claim in both lists has a negative control that was observed to fail: the m
 The terminally-failed-send case above used to leave a *partial* result set visible to a `read_committed` consumer, silently, because a producer callback threw and pre-empted the Kafka client's own transition of the transaction into an abortable state.
 It was found by these tests and fixed; the test that found it is now the regression test.
 
-*Known gap, not fixed:* the commit-interval default is applied by comparing your configured value against the default by reference identity, so explicitly setting `commitInterval(Duration.ofSeconds(5))` - the same value as the non-transactional default - is treated as "not set" and silently replaced with 100ms.
-Any other explicit value survives.
-See `docs/inflight/bug-commit-interval-identity-check.md`.
+The commit-interval default used to be applied by comparing your configured value against the default by reference identity, so `commitInterval(ParallelConsumerOptions.DEFAULT_COMMIT_INTERVAL)` in transactional mode was treated as "not set" and silently replaced with 100ms - fifty times the broker load configured, with no log line.
+Found by this register, fixed in astubbs/parallel-consumer#422: unset is now the absence of a value, and any value you set is kept, whatever it equals.
 
 One guarantee is attributed rather than re-proved here, and is marked as such in the register: the commit-lock timeout failing fast.
 It is covered by an existing test, but no negative control was observed for it, so it is not recorded as proved.
@@ -1142,9 +1141,10 @@ For implementations details, see the <<Transactional System Architecture>> secti
          * message replay may cause duplicates in external systems which is unavoidable - external systems must be
          * idempotent).
          * <p>
-         * The default commit interval {@link AbstractParallelEoSStreamProcessor#KAFKA_DEFAULT_AUTO_COMMIT_FREQUENCY}
+         * The default commit interval {@link ParallelConsumerOptions#DEFAULT_COMMIT_INTERVAL}
          * gets automatically reduced from the default of 5 seconds to 100ms (the same as Kafka Streams <a
          * href=https://docs.confluent.io/platform/current/streams/developer-guide/config-streams.html">commit.interval.ms</a>).
+         * The reduction applies only when no interval was set; an interval set explicitly is kept, whatever its value.
          * Reducing this configuration places higher load on the broker, but will reduce (but cannot eliminate) replay
          * upon failure. Note also that when using transactions in Kafka, consumption in {@code READ_COMMITTED} mode is
          * blocked up to the offset of the first STILL open transaction. Using a smaller commit frequency reduces this

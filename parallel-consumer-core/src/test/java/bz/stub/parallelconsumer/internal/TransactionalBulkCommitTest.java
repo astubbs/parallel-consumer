@@ -309,9 +309,18 @@ class TransactionalBulkCommitTest {
      * names the number: comparing the resolved value to the constant would still pass if the constant were
      * changed and the javadoc left behind.
      * <p>
-     * {@link ParallelConsumerOptions#validate()} is the resolution point - it is what
-     * {@link AbstractParallelEoSStreamProcessor}'s constructor calls - so the assertion is on the options object
-     * after validation, not on what the builder was handed.
+     * {@link ParallelConsumerOptions#getCommitInterval()} is the resolution point: the builder leaves the field null
+     * when nothing was set and the getter resolves it from the commit mode, so the reduced value is in effect from
+     * {@code build()} onward. {@link ParallelConsumerOptions#validate()} is still called here - it is what
+     * {@link AbstractParallelEoSStreamProcessor}'s constructor calls - to show that validation does not disturb the
+     * resolution.
+     * <p>
+     * The pre-validate() assertion used to expect Kafka's 5s, on the premise that the builder default was the
+     * pre-resolution value. astubbs#422 removed that {@code @Builder.Default}, precisely because inferring "unset"
+     * from the value made an explicitly passed {@code DEFAULT_COMMIT_INTERVAL} indistinguishable from no value at all,
+     * so the premise is gone. The read is kept and inverted rather than deleted: two reads either side of
+     * {@code validate()} are what make "no call order can expose an unresolved value" an assertion instead of a
+     * javadoc claim.
      */
     @Test
     @ProvesClaim(TransactionalClaim.COMMIT_INTERVAL_AUTO_REDUCED)
@@ -322,14 +331,15 @@ class TransactionalBulkCommitTest {
                 .commitMode(PERIODIC_TRANSACTIONAL_PRODUCER)
                 .build();
 
-        Truth.assertWithMessage("before resolution the builder default is still Kafka's 5s - so the assertion "
-                        + "below is about what validate() changed, not about the builder input")
+        Truth.assertWithMessage("the getter already resolves to 100ms before validate() runs - the resolution is in "
+                        + "getCommitInterval(), so no call order can expose an unresolved value")
                 .that(options.getCommitInterval())
-                .isEqualTo(ofSeconds(5));
+                .isEqualTo(ofMillis(100));
 
         options.validate();
 
-        Truth.assertWithMessage("transactional mode with an unset commit interval must resolve to 100ms")
+        Truth.assertWithMessage("transactional mode with an unset commit interval must resolve to 100ms, and "
+                        + "validate() must not disturb that")
                 .that(options.getCommitInterval())
                 .isEqualTo(ofMillis(100));
     }
