@@ -185,6 +185,14 @@ diagnosing the mirror rather than while reading the file:
 Large, mostly interdependent, several **undecided**. Most trace to confluentinc#200.
 Do not start one casually.
 
+### `corpusIndex` lists each distinct docs tree with one `ls-tree` - the next lever is unpulled
+
+`bin/lib/notes.mjs` resolves every ref's `docs/` tree in one `cat-file --batch-check` and lists each
+distinct tree once, which is what brought the session-start hook back inside its budget. If a
+measurement ever asks for more, the next lever is parsing the distinct trees through one batched
+`cat-file` per depth instead of one `ls-tree` per tree. Not pulled: `node bin/inflight.mjs --perf docs`
+prints the figures, and none demands it.
+
 ### The portable-mtime probe exists three times
 
 `hook_file_mtime` in `.claude/hooks/lib/hook-common.sh`, `_mtime` in

@@ -271,34 +271,20 @@ the disagreement. A tool that reconciles is answering a question nobody asked he
 - **Backlog.md remains worth reading for ideas**, translated rather than adopted. Its board and its
   branch-scan loader solve real presentation problems; only its reconciliation step is wrong here.
 
-## The corpus is not every ref, and the tool says it is
+## The corpus is every ref now - resolved
 
-Measured 2026-09-02 in the development clone. `refTips()` enumerates `refs/heads` and
-`refs/remotes/origin`, which is 436 refs - and the help text calls that "every branch tip", which is
-true and is read as "everything".
+Measured 2026-09-02, `refTips()` enumerated `refs/heads` and `refs/remotes/origin` only, while the
+help text said "every branch tip": 64 tags and 44 `refs/backup` refs were outside the corpus, and 12
+of those tags pointed at commits reachable from nothing else - the `backup/pre-recut-*` and
+`recut-baseline-*` shape, which is where this repository parks work before a re-cut.
 
-| Ref space | Count | In the corpus? |
-|---|---|---|
-| `refs/heads`, `refs/remotes/origin` | 436 | yes |
-| `refs/tags` | 64 | **no** |
-| `refs/backup` | 44 | **no** |
-| `refs/remotes/upstream` and three stray remotes | 3 | no, and correctly so |
-
-**What that costs, measured rather than assumed** - both findings came from checking, and most of
-the excluded refs turned out to be duplicates:
-
-- **41 of 44 `refs/backup` tips are already commits inside the visible history**, so excluding them
-  costs nothing. Of the remaining three, one - `pre-rename-merge/heads/264-rename` - holds a version
-  of `branch-package-rename.md` that exists at no visible ref. One note, but `stranded` exists
-  precisely to find that class, and it cannot see it.
-- **12 of 64 tags point at commits outside the visible set**, named `backup/pre-recut-324`,
-  `recut-baseline-342`, `archive/presentation` and so on. Tags are how this repo preserves work
-  before a re-cut, which makes them a *likely* home for stranded knowledge rather than an unlikely
-  one. Antony named tags explicitly.
-
-The fix is not simply widening the glob: `refs/backup` and `refs/tags` are archival, so a version
-found only there is a different finding from one on a live branch - preserved, not in flight - and
-the output has to say which. Scope first, then widen.
+Resolved: `refTips()` looks everywhere, and `refKind` marks tags and everything outside the branch
+spaces as archival, so the *answer* carries the distinction rather than the enumeration deciding it.
+`stranded` reports an archive-only cluster as preserved, and `note drift` lists a version held only
+by archival refs under a preserved line instead of as a branch to rescue; the document context
+query counts divergent versions over live refs alone and names the preserved ones by ref kind. The
+reasoning, and the measurement that motivated it, is in the `refTips` and `refKind` headers in
+`bin/lib/git.mjs`.
 
 ## Fetch completeness, not just fetch age
 

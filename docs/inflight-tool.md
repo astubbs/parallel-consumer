@@ -48,6 +48,201 @@ else its own name. Sizes are against each branch's merge-base, so the number say
 The filtering is most of the value: for that note, 198 of the 274 carrying refs are merely behind.
 Reporting them would bury the two dozen that actually differ.
 
+## Seeing what the corpus holds, and walking to one document
+
+```
+node bin/inflight.mjs docs
+```
+
+The map. Each of the three areas with how many documents it holds across every ref and how many of
+those exist *only* off the baseline; under each area its groups with the same two counts; then the
+`docs` subcommands with the sentence that says when to reach for each; then a notice for any
+delivery of the context query that has a recorded failure; then the ref set it searched. The groups
+are the ones the session-start index already uses, so nothing here needs learning twice: solutions
+by category directory, in-flight notes by the cost-of-not-knowing order (registers first, then open
+work by impact, then features with no consequence attached, then whatever no group claimed, then
+closed, then deferred last), plans by year-month, newest first.
+
+```
+In-flight state  docs/inflight/  <n> documents, <n> only off the baseline    bin/inflight.mjs docs list inflight
+  registers        <n> (<n> off)    bin/inflight.mjs docs list inflight registers
+  misdirection     <n> (<n> off)    bin/inflight.mjs docs list inflight misdirection
+  ...
+  deferred         <n> (<n> off)    bin/inflight.mjs docs list inflight deferred
+```
+
+**Every level prints the next level's commands, and that is the whole interface.** There is no
+interactive step and nothing to type that was not printed: the area row carries its `docs list
+<area>`, each group row its `docs list <area> <group>`, and each document its `docs show <path>`.
+An agent walks from the bare call to one document by copying three lines. The walk on this
+repository, copied verbatim: `docs`, then `docs list inflight`, then `docs list inflight crash`,
+then the `docs show docs/inflight/...` line beside the note it wanted.
+
+```
+node bin/inflight.mjs docs list inflight crash
+```
+
+The leaf: each document as its title, its path, and - when it exists only off the baseline - the
+live ref it was read from, which is the ref `docs show` will show it from. A closed or deferred note
+carries its state, because a disposition without its reason reads as an abandonment. An unknown
+area or group is not an error: the valid names come back, each as the command that would have
+worked, and the exit is 0.
+
+**The counts are corpus counts, not working-tree counts, which is the point.** This lists what
+exists on any live ref - as does the session index at the top of your context, which is `docs
+index` below - reading on-baseline documents from the baseline's own blob and off-baseline ones
+from the first sorted live ref carrying them, so a shape built on a checkout behind the baseline is not wrong. An
+in-flight note is placed by its markers, read the same way, and the vocabulary that places it is
+held equal to the gate's shell library by a self-test that sources the shell file. The cost is one
+`ls-tree` per ref plus one `cat-file --batch` for every document, several seconds here, paid on
+every call because there is no corpus cache to go stale.
+
+**The failure notice is the only place a fail-open hook's breakage shows.** The read-time and
+prompt-time deliveries never block a read or a prompt, so a hook that has been throwing for a week
+looks exactly like a hook with nothing to say. A delivery that catches an error records its name,
+the reason and the time; bare `docs` prints one line per record while it exists, and a later
+success of the same delivery clears it.
+
+## Reading a document as the corpus holds it, not as your checkout does
+
+```
+node bin/inflight.mjs docs show docs/inflight/bug-857-family.md
+```
+
+The file in your working tree is *one* version of that note. On the fork's most-shared note there
+are two dozen others on live branches, each carrying content the baseline has never held, and
+`cat` shows none of that: it shows the copy your branch happens to hold, and says nothing about
+whether that copy is the baseline's, your branch's own edit, or one of the two dozen. That is the
+incident the divergence header exists for - a session edited a stale copy of a note and every
+working-tree read answered for that copy without saying so.
+
+The read-time hook prints one line about this whenever a file under `docs/inflight/`,
+`docs/solutions/` or `docs/plans/` is read - and on a shallow or never-fetched clone that line
+opens with `UNRELIABLE (<id> - run: <remedy>):`, because the count is computed against a
+truncated history; the prompt hook's count line carries the same prefix, and `docs show` prints
+the same warning in full inside its header. `docs show` is the same query at full size, and the
+page has three parts, in the order an agent needs them:
+
+```
+docs/inflight/bug-857-family.md from origin/master - the baseline
+docs context: divergence header for docs/inflight/bug-857-family.md
+=== divergence: docs/inflight/bug-857-family.md ===
+  25 divergent versions on 131 live refs carry content origin/master has NEVER held; 614 refs searched (561 live, 53 archival)
+  this copy is the baseline's version (origin/master)
+  preserved, not in flight: 1 version held only by tag refs - backup/pr57-pre-split
+  largest 3 versions, by what each added:
+    +600 -9        experiment/857-deadlock-control-arm-do-not-merge, origin/experiment/857-deadlock-control-arm-do-not-merge
+        adds: "## Commit mode decides which defect can explain a sighting", ...
+    ...
+  the rest: bin/inflight.mjs note drift docs/inflight/bug-857-family.md
+more: bin/inflight.mjs docs show docs/inflight/bug-857-family.md --ref experiment/857-deadlock-control-arm-do-not-merge
+
+--- docs/inflight/bug-857-family.md @ origin/master ---
+# Bug 857 family
+...
+```
+
+**The first line names the ref shown, and the choice is a rule, not a guess.** The baseline when it
+carries the path; otherwise the first live ref carrying it, in sorted order, so two agents asking on
+two machines get the same copy. `--ref <ref>` picks any other, and the header then describes *that*
+copy's state - the baseline's version, that branch's own edit, or branch-only.
+
+**Divergence is the only claim the header makes.** It never says a version is newer. It says how many
+distinct versions exist on live refs, which branches and pull requests carry the largest, how much
+each added against its own merge-base, and *what* - the headings it added, or its first added line
+when it added no heading. Evidence, ordered by size, and the command for the rest.
+
+**Archival refs are searched and reported, never shown by default.** A version held only by a tag
+or a `refs/backup` ref is *preserved*: that is where this repository parks work before a re-cut, and
+serving it as the document would present history as the live copy. The header names it by ref kind;
+`--ref` reaches it when that is what you want.
+
+**An empty answer says what it covered.** A path on no ref prints the ref set it searched - size, and
+the live-versus-archival split - because "on none of 614 refs" is a result and a blank line is not. A
+path outside the three corpus areas says so and claims nothing, since the query is not defined there.
+
+```
+node bin/inflight.mjs docs header docs/inflight/bug-857-family.md
+```
+
+The header alone - byte for byte what `docs show --header-only` prints. It is the "more" command the
+read-time hook names under its one-line summary, and the pull form for an agent on a host without
+hooks: run it before acting on a document, and you have seen what the hook would have shown.
+
+## The session-start index, on demand
+
+```
+node bin/inflight.mjs docs index
+```
+
+What `.claude/hooks/inject-recorded-knowledge.sh` puts in front of every Claude Code session for
+`docs/solutions/`, `docs/inflight/` and `docs/plans/` - the whole title list, corpus-scoped. On a
+host without hooks this is the pull form; with hooks it is the refresh. The on-baseline part keeps
+the headings the hook has always printed, so a grep an agent learned still works (`grep '^## crash'`,
+`sed -n '/^# Open work/,/^# /p'`): solutions under `## <category>`, in-flight notes under
+`# Registers`, `# Open work` by impact, `# Not shown above` and `# Deferred`, plans under
+`# Dated plans and investigations` by month. The off-baseline part is new, and it is grouped by
+the **branch set** carrying the documents, as `stranded` clusters them:
+
+```
+# In flight only on branches - grouped by the branch set carrying them, largest first
+
+## only on feats/inflight-docs-context-query - YOUR BRANCH
+- [feature] Inflight docs context query - header at read time, keyword injection, `inflight docs`  _blind-spot_
+
+## only on feats/hasten-micro-mvp, feats/ideate-distributed-throttling
+- [bug] ...
+...
+... <n> more branch sets holding <n> documents, past the 400-line cap (`docs index --max-lines <n>` raises it): bin/inflight.mjs docs list inflight
+```
+
+**A workstream is one heading, not one line per note.** A branch carrying forty notes is one fact
+about the repository, and the heading names the branches so a reader can go there - `docs show
+<path>` prints any one of them from the branch that holds it. The checked-out branch's own group is
+pinned first and marked, whatever its size, because it is what the working-tree scan this replaced
+always listed.
+
+**The cap is on the off-baseline groups only.** The on-baseline listing is never cut - the failure
+the index exists to end is not knowing a document exists, and a cap on the part every session
+already paid for would bring it back. Each area gets an equal share of `--max-lines` (unused share
+rolls to the next area); past it, the rest of an area collapses to a count and the `docs list`
+command that lists it, so the omission is visible and costs one line.
+
+**Titles come from the refs, never the working tree.** An on-baseline document is listed as the
+baseline holds it, so an index built on a checkout behind the baseline is not wrong - and a note
+whose title this branch changed is listed under its baseline title until the change lands. The
+hook's equivalence check names any title that differs for this reason rather than failing on it.
+
+**It states its own scope and its own failures.** The first lines say how many refs were searched,
+the live-versus-archival split, and the one thing the index cannot show (a version preserved only in
+an archival ref); a recorded delivery failure is printed as a notice, the same line bare `docs`
+prints. The hook itself adds one line when the command could not run at all - no `node`, or the
+corpus unreadable - and never falls back to a working-tree scan, because a partial index that reads
+as complete is the thing it replaced.
+
+## What already names the branch you are on
+
+```
+node bin/inflight.mjs docs for-branch            # the checked-out branch
+node bin/inflight.mjs docs for-branch fix/857-commit-lock
+```
+
+The branch-facts block the session hook injects after the index: the documents across every live
+ref that name the branch's slug, its issue number, its PR number or the identifiers in its cached
+PR title. The first body line lists the terms it used, so a block can be judged by what it looked
+for; each document line carries the same marks as the prompt-terms block.
+
+<!-- issue-refs: exempt-begin - the bare form is what the tool searches for; a qualified one would not be found in a document that wrote it bare -->
+`fix/857-commit-lock` with a cached title of `fix(core) astubbs#857: give ProducerManager a lock`
+searches for `#857`, `commit-lock`, `ProducerManager` and the PR's own `#NNN` - every spelling of
+an issue reference collapses to its bare core, because that is the substring all of them contain.
+<!-- issue-refs: exempt-end --> The PR facts come from
+the tool's cache only - a session start never calls `gh` - so on a fresh cache the branch name is
+all it has, and it says so in the terms line. Stdout carries the block or nothing - the hook's
+silence is the answer. On the baseline (`master`, `origin/master`, or a detached head) one line
+saying there is nothing to look up goes to stderr; when the terms match nothing, the coverage (which
+terms, how many refs, that an empty result is not proof) goes to stderr for whoever ran it by hand.
+
 ## Finding work that will be lost if nobody acts
 
 ```
