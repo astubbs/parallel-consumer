@@ -558,6 +558,18 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
      * For the same reason a supplier that throws yields an {@code unreadable} marker rather than an
      * empty string: this is called from inside an awaitility condition, so it must neither abort the
      * wait nor let a failed read look like an empty fleet.
+     * <p>
+     * <b>What it cannot tell you, and it is the same trap one instrument along: a RESTART forges
+     * recovery.</b> {@code res=} is {@code ManagedPCInstance#workResultsReturned}, which deliberately
+     * spans incarnations and is never reset, and {@code out=} reads whatever {@code WorkManager} is
+     * current. So when the conductor stops a wedged member and starts it again - {@code RESTART}
+     * carries weight 3 in the churn storm, so it is a routine draw rather than an edge case - the
+     * following tokens show {@code res=} climbing on from the frozen value and {@code out=} filling
+     * from a brand-new {@code WorkManager}, which is exactly the shape read here as recovery. The
+     * DETECTOR is immune, because {@link #sampleInstanceProgress} re-arms on
+     * {@link InstanceProgressView#incarnationMarker()}; the rendered token carries no incarnation, so
+     * a human reading the line is not. Until it does, pair an apparent recovery with the conductor's
+     * own action log for that instance id before classifying anything from it.
      */
     String instanceProgressSnapshot() {
         var supplier = instanceProgressSupplier;

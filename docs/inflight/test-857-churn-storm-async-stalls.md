@@ -439,6 +439,21 @@ distinction is the whole value of the second counter: a phantom `numberRecordsOu
 because a phantom is not replenished. This one climbs, so the control loop is alive and taking work
 while nothing comes back from the workers.
 
+<!-- post-merge: checked-begin -->
+**The instrument has one blind spot, found by REVIEWING it rather than by running it.** A restart of
+the accused instance forges recovery in these tokens: `res` deliberately spans incarnations and is
+never reset, and `out` is read from whichever `WorkManager` is current, so a member the conductor
+kills and brings back shows `res` climbing on from its frozen value and `out` filling from a fresh
+one - the exact shape read above as recovery, and `RESTART` carries weight 3 in this scenario. It
+does not touch the reading above, which is instance 0 **live throughout** with no restart drawn
+against it, and the detector itself is immune because it re-arms on the incarnation marker. It does
+mean that until the token carries the incarnation, any FUTURE seed classified from these lines must
+have them paired with the conductor's action log for that instance id. Adding the incarnation to the
+token is the fix; astubbs/parallel-consumer#435 recorded the blind spot rather than closing it, and
+`ProgressProbe#instanceProgressSnapshot` states the same limitation from the code's side.
+<!-- post-merge: checked-end -->
+
+
 **Ruled out, each cheaply and each worth not re-deriving:**
 
 - **Phantom in-flight counter** - `out` climbs and oscillates, so it is being both incremented and
