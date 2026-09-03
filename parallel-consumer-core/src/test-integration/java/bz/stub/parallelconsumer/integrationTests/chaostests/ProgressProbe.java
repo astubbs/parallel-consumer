@@ -540,18 +540,6 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
     }
 
     /**
-     * INSTANCE-progress detector - see {@link #INSTANCE_STALL_BOUND} for the property it asserts and
-     * the granularity reasoning. Per live instance: if it holds work (queued in shards, or records out
-     * for processing) and its returned-work-result count has not advanced within the bound, that is a
-     * violation. The clock re-arms on ANY of: a result returned, the instance going idle (nothing
-     * held), a restart (new PC incarnation), or the instance leaving the live set - so only a
-     * continuous hold-work-return-nothing stretch can accumulate.
-     * <p>
-     * Package-private and taking {@code now} explicitly so {@code InstanceStallProbeIT} can drive it
-     * deterministically, broker-free, in both directions - the sampler thread calls it with
-     * {@code Instant.now()}.
-     */
-    /**
      * One compact token per fleet member for a {@code -Dchaos.diagnoseStallRecovery=true} run's log:
      * {@code <id>(live|down q=<queued> out=<outForProcessing> res=<workResultsReturned>)}.
      * <p>
@@ -577,24 +565,29 @@ public class ProgressProbe implements ChaosConductor.ChaosObserver {
             return "";
         }
         try {
-            StringBuilder rendered = new StringBuilder();
-            for (InstanceProgressView view : supplier.get()) {
-                if (rendered.length() > 0) {
-                    rendered.append(' ');
-                }
-                rendered.append(view.instanceId())
-                        .append(view.isLive() ? "(live q=" : "(down q=")
-                        .append(view.queuedInShards())
-                        .append(" out=").append(view.outForProcessing())
-                        .append(" res=").append(view.workResultsReturned())
-                        .append(')');
-            }
-            return rendered.toString();
+            return supplier.get().stream()
+                    .map(view -> view.instanceId()
+                            + (view.isLive() ? "(live q=" : "(down q=") + view.queuedInShards()
+                            + " out=" + view.outForProcessing()
+                            + " res=" + view.workResultsReturned() + ")")
+                    .collect(java.util.stream.Collectors.joining(" "));
         } catch (Exception e) {
             return "unreadable (" + e + ")";
         }
     }
 
+    /**
+     * INSTANCE-progress detector - see {@link #INSTANCE_STALL_BOUND} for the property it asserts and
+     * the granularity reasoning. Per live instance: if it holds work (queued in shards, or records out
+     * for processing) and its returned-work-result count has not advanced within the bound, that is a
+     * violation. The clock re-arms on ANY of: a result returned, the instance going idle (nothing
+     * held), a restart (new PC incarnation), or the instance leaving the live set - so only a
+     * continuous hold-work-return-nothing stretch can accumulate.
+     * <p>
+     * Package-private and taking {@code now} explicitly so {@code InstanceStallProbeIT} can drive it
+     * deterministically, broker-free, in both directions - the sampler thread calls it with
+     * {@code Instant.now()}.
+     */
     void sampleInstanceProgress(Instant now) {
         var supplier = instanceProgressSupplier;
         if (supplier == null) return; // not wired (ambient mode, or a scenario predating the probe)
