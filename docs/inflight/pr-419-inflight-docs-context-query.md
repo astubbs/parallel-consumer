@@ -11,23 +11,27 @@ this note carries what `gh` cannot show about that work as it lands.
 
 **Ships in this order, and the first is the only one that would have caught the incident that
 motivates the work:** the header first and alone; then prompt-keyword injection; then `inflight docs`;
-then the session-start index migrates onto the query. The files-touched trigger waits on lifting the
-citation resolver out of `.github/scripts/file-ref-gate.js`.
+then the session-start index migrates onto the query. The files-touched trigger is deferred, re-keyed
+on the text the agent writes; folding the existing write-time solutions hook onto the query goes with it.
 
 **Related notes this work touches, and how:**
 
 - [`ci-inflight-absorbs-the-query-half.md`](ci-inflight-absorbs-the-query-half.md) - the session
   index row migrates here (its "start with the session index" paragraph). Update that row when it
   lands, do not duplicate it here.
-- [`ci-inflight-next-commands.md`](ci-inflight-next-commands.md) - owns corpus widening to tags and
-  backup refs; the header inherits whatever the corpus covers and does not widen it.
+- [`ci-inflight-next-commands.md`](ci-inflight-next-commands.md) - its corpus-scope section was stale
+  (the enumeration already looks everywhere) and is corrected here; the header reports archival-only
+  versions as preserved.
 - [`ci-node-query-client.md`](ci-node-query-client.md) - the no-daemon, no-dependency constraint
   binds every delivery here.
 
-**Open once the plan has landed:**
+**Open as the units land** (the plan's U-IDs are the order):
 
-- The corpus index rebuilds from git on every run (the `bin/lib/notes.mjs` header says why the disk
-  cache was removed). A per-read hook pays that each time until a cache decision is taken; the plan
-  carries a latency budget rather than assuming reads are free.
-- Which hook moment delivers the header for direct reads is a planning decision: allow-with-context
-  before the read, or context after it.
+- The read-time hook (U2) has to verify, on the installed Claude Code version, that a `PostToolUse`
+  hook on the Read tool delivers `additionalContext`; only the Bash half is verified today. The
+  fallback is `PreToolUse` allow-with-context for Read alone.
+- Every delivery publishes its measured cold cost in its own header before it ships; the budgets
+  are in the plan's cost decision. The full-tier header pays one diff per divergent cluster for the
+  preview, which `note drift` now pays too - flag it if that command's wall-clock matters.
+- The session-index migration (U6) holds the bash tag vocabulary and the Node port together with a
+  parity test until the tag gate itself moves to Node, which is deferred.
