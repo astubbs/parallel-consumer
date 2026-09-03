@@ -105,6 +105,18 @@ race. That note was being dropped with no accounting, which is the failure-rende
 result shape this whole file is organised against. Unreadable paths are now named and the run says
 the answer is incomplete.
 
+## Citing the interface rule is not following it
+
+The command's own help text says every level of this front door prints the next level's commands -
+and its rows did not. `docs list inflight <impact>` prints `docs show <path>` beside each row; `rank`
+printed the path and left the reader to know that command exists. A scoped group with no rows printed
+nothing at all, and the exclusion counts were whole-corpus while sitting among scope-limited lines.
+
+All three were invisible to the suite for the same reason: every check drove the `rank()` data
+function and nothing asserted on rendered text, so the view had no coverage at all. Worth knowing for
+the next command added here - a view that no check renders is a view whose contract is unenforced,
+however carefully the query underneath it is tested.
+
 ## Pull requests come from the bulk snapshot only
 
 `branchView` falls through to `prForBranch` when the bulk map misses, because it answers about one
