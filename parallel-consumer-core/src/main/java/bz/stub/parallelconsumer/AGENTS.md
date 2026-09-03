@@ -36,6 +36,19 @@ If the right fix is `volatile` or removing the sharing outright, there is no loc
 annotation to write. That is fine - the rule is "record the invariant you just established", not
 "add an annotation".
 
+## Declare thread confinement with `@ThreadConfined`, and assert it at the entry point
+
+`@GuardedBy` names a lock, so it cannot say "only the control thread runs this" - and that is the
+invariant most of the recovery path rests on. Say it with Infer's
+`@ThreadConfined(PartitionState.CONTROL_THREAD)` on the method (or field), which RacerD reads: the
+accesses inside are taken as confined to that thread, and an unannotated access to the same state
+elsewhere is still reported. It is a declaration the analyser consumes, not one it checks, so **pair
+it with a runtime assertion at the entry point** - `assertOnControlThread` in
+`AbstractParallelEoSStreamProcessor` is the pattern, and `ThreadConfinedConsumer` the older one for
+the poll thread. An unstarted instance has no control thread and nothing to race, so the assertion
+lets a test drive the gate directly; once the thread exists, any other caller fails loudly. Added
+with astubbs#225's recovery pass, which is where the first annotations are.
+
 ## Record a CLEARED suspicion in the javadoc, not only in the commit
 
 When you investigate a concurrency path and conclude it is safe, **write that conclusion where the

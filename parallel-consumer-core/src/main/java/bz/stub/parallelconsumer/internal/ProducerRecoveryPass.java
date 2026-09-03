@@ -5,6 +5,8 @@ package bz.stub.parallelconsumer.internal;
  */
 
 import bz.stub.parallelconsumer.internal.utils.ThrowableUtils;
+import bz.stub.parallelconsumer.state.PartitionState;
+import com.facebook.infer.annotation.ThreadConfined;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
@@ -53,6 +55,7 @@ class ProducerRecoveryPass<K, V> {
      * Visible for testing - the state gate is driven directly through the processor, because the window between
      * CLOSING and the manager closing is on the control thread only.
      */
+    @ThreadConfined(PartitionState.CONTROL_THREAD)
     void run() {
         State current = state.get();
         if (current == State.CLOSING || current == State.CLOSED) {

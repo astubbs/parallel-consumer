@@ -58,6 +58,7 @@ import java.util.function.Consumer;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 import static org.awaitility.Awaitility.await;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.Mockito.atLeastOnce;
@@ -642,6 +643,26 @@ class ProducerRecoveryTest {
         assertThat(cause).hasMessageThat().contains(transactionalIdBuiltUnder);
         assertWithMessage("closed, not merely failed: the parked workers were released and the shutdown completed")
                 .that(producerManager().isProducerAvailable()).isFalse();
+    }
+
+    /**
+     * The pass declares itself confined to the control thread (RacerD reads the annotation) and asserts it, so a
+     * caller on any other thread fails loudly instead of racing the control loop on the ledger and the locks. An
+     * unstarted instance has no control thread and nothing to race, which is what lets the closing-state test below
+     * drive the gate directly.
+     */
+    @Test
+    void theRecoveryPassRefusesAnyThreadButTheControlThreadOnceOneExists() {
+        start(optionsBuilder().build());
+        addRecords(0, 0);
+        awaitCommittedThrough(producers.get(0), 1);
+
+        AbstractParallelEoSStreamProcessor<String, String> engine = pc;
+
+        var thrown = assertThrows(IllegalStateException.class, engine::maybeRecoverProducer);
+
+        assertThat(thrown).hasMessageThat().contains("confined to the control thread");
+        assertThat(thrown).hasMessageThat().contains(Thread.currentThread().getName());
     }
 
     /**
