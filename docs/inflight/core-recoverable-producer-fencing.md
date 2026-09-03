@@ -5,6 +5,7 @@
 
 ## In flight as a stack of three PRs (2026-09-03)
 
+<!-- post-merge: checked-begin -->
 - astubbs/parallel-consumer#426 - `producerConfig`: PC builds its producer from configuration with the
   default constructor, the caller's `transactional.id` included. The only rung recovery needs, because
   re-initialising a replacement under the same id is what fences the producer it replaces.
@@ -13,6 +14,7 @@
 - astubbs/parallel-consumer#420 - the rest of producer ownership: a derived prefix-free
   `transactional.id`, a `ProducerFactory` with an enforced contract, configuration redaction, deprecating
   the instance option, migrating the examples. Stacked on astubbs#410.
+<!-- post-merge: checked-end -->
 
 The plan the stack implements is `docs/plans/2026-09-02-001-feat-recoverable-producer-fencing-plan.md`,
 which arrives with astubbs#410. What follows is the note as it read before the work started.
