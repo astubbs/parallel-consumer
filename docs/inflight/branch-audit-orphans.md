@@ -63,7 +63,13 @@ Feature drafts with likely manifest homes (attribute, then back-fill the entry):
 - `features/key-partition-combine` - check against `sweep-2023-null-key-ordering` before assuming
 - `features/extend-functional` - likely confluentinc#303 (adoc C6); `sweep-2023-api-shape` is the
   nearest entry but its issues are confluentinc#175/confluentinc#372 - verify before attaching
-- `feats/jstream-bounded-blocking-buffer` - relates to `refactor/deprecate-jstream`?
+<!-- post-merge: checked-begin -->
+- `feats/jstream-bounded-blocking-buffer` - relates to `refactor/deprecate-jstream`, which was archived
+  and deleted 2026-09-03 (`archive/refactor/deprecate-jstream`). Both were reaching for the same thing
+  from opposite ends - bound the buffer, or retire the API whose buffer it is - and astubbs#116 took a
+  third route: it fixed the stream that made the buffer grow, so neither branch's premise survived
+  intact. Worth reading before reviving this one.
+<!-- post-merge: checked-end -->
 
 Newly preserved upstream tips whose CONTENT was never assessed (read before judging):
 
@@ -83,3 +89,33 @@ stayed invisible for three years. Two audit modes wanted:
 - containment re-check: every `branch_accounting` tip still reachable on origin (branch OR tag - see
   the docs/upstream.md trap above); docs/upstream.md already records this as manual-only, tracked in
   astubbs#300
+
+## Pre-fork branches: all read and classified, 2026-09-03
+
+Every pre-fork branch on `origin` now has a `branch_accounting` record in
+`src/docs/development/upstream-map.yaml`, carrying what it does and whether the idea already
+landed. The gap this section previously recorded - branches described nowhere at all - is closed,
+so the list of names it held is gone: the manifest holds the answer now, per branch, and a list
+here would be a second copy that drifts.
+
+**Each branch was judged by reading its COMMITS and diff**, never its name. That is not a
+formality: `improvements/privacy-restriction` is a shared-nothing-architecture spike
+(`ControllerEventBus`, `PartitionEpochTracker`), and any name-based triage would have filed it
+under privacy and lost it again.
+
+**What to grep, rather than a count that goes stale:**
+
+```sh
+grep -c 'class: open-idea' src/docs/development/upstream-map.yaml   # how many are unabsorbed
+grep    'class: open-idea' src/docs/development/upstream-map.yaml   # which ones, with the reasoning
+```
+
+**The finding that mattered.** A large share are `open-idea` - written, never landed, and in several
+cases the direct answer to a defect this repository documents as still live. The sweep was prompted by
+noticing one such case and asking how many others there were; the answer was "most of them". Nothing
+came back `unclear`.
+
+**It is not a worklist.** `open-idea` says the code never landed, not that it should. Several are
+breaking changes belonging in `docs/refactoring.md`'s release-gated queue, several are stacked on an
+unfinished actor base, and some are worth less than reviving them costs. Read the note first.
+

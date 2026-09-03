@@ -55,6 +55,16 @@ input record"*, never populates it, and returns it empty. Per-record result corr
 and abandoned, so **batch atomicity is an unfinished feature, not a design invariant** - which is what
 makes the manifest rung "finish a seam" rather than hot-path surgery.
 
+**The abandoned work has a name, found 2026-09-03**: `origin/features/partial-batch-failure`, with
+`origin/features/retry-exception` as its sibling (same commit as
+`features/retry-exception-w-terminal`). They carry `PCTerminalException`, `PCUserException`,
+`ParallelConsumerOptions.TerminalFailureReaction {SKIP, SHUTDOWN}`, an `Offsets` type and a
+`UserFunctionRunner` - none of which reached master; `git grep TerminalFailureReaction origin/master`
+is empty. So the reaction this note argues PC needs was written in 2022 and never landed, and this
+note was written later, independently, by someone who did not know that. Read the branches before
+designing the seam from scratch; `bin/inflight.mjs branch features/partial-batch-failure` and the
+`branch_accounting` entries in `src/docs/development/upstream-map.yaml` carry the rest.
+
 ## Pending decision, maintainer-only
 
 **Does the default retry delay get jitter?** Small change, and the existing per-record
