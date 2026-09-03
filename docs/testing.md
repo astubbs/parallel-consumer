@@ -172,7 +172,7 @@ Two things that make the result trustworthy:
 A `@RepeatedTest` is the shape to look at hardest: repetition is what you reach for when you cannot
 force a race and hope to draw it, so it is often a hope-based test sitting in a gating lane.
 
-## Chaos Pain Suite (on-demand bug detector - never gates)
+## Chaos Pain Suite (seeded bug detector - gates every PR, hunts on demand)
 
 A seeded, calibrated chaos suite (`integrationTests.chaostests`: `ChaosConductor`, `ProgressProbe`,
 `ChaosScenarioBase`) that hunts the "alive but not progressing" bug class: rebalance-dwell zombies,

@@ -100,8 +100,12 @@ summary() {
         while IFS= read -r -d '' f; do
             local tag n t obs peak_ms peak_line
             tag=$(head -3 "$f" | tr '\n' ' ')
-            n=$(grep -o 'name="[^"]*"' <<< "$tag" | head -1 | cut -d'"' -f2)
-            t=$(grep -o 'time="[^"]*"' <<< "$tag" | head -1 | cut -d'"' -f2)
+            # `|| n=""`: this loop runs under `set -e` and the missing-scenario guard below depends on
+            # it finishing. A report with no name= attribute would otherwise fail the pipeline, abort
+            # summary() here, skip the guard, and let a shard that ran less than it was assigned read
+            # green - the exact silence the guard exists to remove (review on astubbs#421).
+            n=$(grep -o 'name="[^"]*"' <<< "$tag" | head -1 | cut -d'"' -f2) || n=""
+            t=$(grep -o 'time="[^"]*"' <<< "$tag" | head -1 | cut -d'"' -f2) || t=""
             obs=$(grep -c "$OBSERVATION_MARKER" "$f") || obs=0
             # MAX, not first match: a class with several test methods emits one `peaks:` line per
             # method, and reporting the first would understate a later method's peak.
