@@ -172,10 +172,15 @@ entries:
     blocks_1_0: false
     stage: idea
     stage_detail: >-
-      Scoped by the streaming-results deprecation reasoning; no design yet.
+      No design yet. Its original scoping - the streaming-results deprecation - no longer holds:
+      astubbs#116 fixed the defect that deprecation argued from and the removal was withdrawn on
+      2026-09-03, so this entry stands on its own merits rather than riding on that.
     why_now: >-
-      An unbounded buffer is a memory-safety problem rather than a monitoring gap, and the streaming
-      results API is being deprecated for exactly that, so the two are one piece of work.
+      An unbounded buffer is a memory-safety problem rather than a monitoring gap. The JStream result
+      queue is the worked example and is still unbounded after astubbs#116: that PR fixed the consumer
+      that walked away, not a consumer genuinely slower than the producer, and it says so. What is
+      missing is a decision about what should happen when a bound is reached - LinkedBlockingQueue
+      takes one whenever someone makes that call.
     done_when: No internal buffer can grow without limit, and each publishes its depth.
     tracking: astubbs#216
     related: astubbs#116
