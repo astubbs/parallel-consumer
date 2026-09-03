@@ -87,10 +87,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # `scenarios`/`shard` are chaos-only fields, but actionlint statically requires every matrix
+          # entry to define a property that ANY entry references (below, in the env: and artifact-name
+          # expressions) - so every non-chaos entry carries them empty rather than the expression being
+          # rejected outright.
           - suite: unit
             name: "Unit Tests"
             cmd: "bin/ci-unit-test.sh"
             timeout: 15
+            scenarios: ""
+            shard: ""
           - suite: integration
             name: "Integration Tests"
             # Forked (process-parallel) mode: each JVM fork gets its own TestContainers
@@ -99,10 +105,14 @@ jobs:
             # docs/solutions/test-flakiness/. forkCount=4 matches the self-hosted measurement.
             cmd: "bin/ci-integration-test.sh -DforkCount=4 -DreuseForks=true"
             timeout: 60
+            scenarios: ""
+            shard: ""
           - suite: performance
             name: "Performance Tests"
             cmd: "bin/performance-test.sh"
             timeout: 60
+            scenarios: ""
+            shard: ""
           # Lincheck - scheduler-controlled concurrency testing over the state classes. It existed
           # without running ANYWHERE: six test classes, a runner script, and no workflow referencing
           # them, while every CI script passed -Dexcluded.groups=...,lincheck. Built in astubbs#347 and
@@ -144,6 +154,8 @@ jobs:
             name: "Lincheck"
             cmd: "bin/lincheck-test.sh"
             timeout: 20
+            scenarios: ""
+            shard: ""
 
           # Chaos Pain Suite - the per-PR ambient tripwire. It ran on the self-hosted `highcpu` box
           # until 2026-08-26, on the premise that it needed many real cores to provoke anything.
@@ -156,15 +168,52 @@ jobs:
           # never load-bearing: it passes no forkCount and no -Dparallel-tests, so the suite was
           # never configured to exploit those cores.
           #
-          # GATING, like the suite it replaces: a chaos RED is a real finding, so this entry is
-          # deliberately NOT `optional`. bin/chaos-test.sh excludes @Quarantined scenarios (the
-          # Quarantine Lane owns them) and flags a zero-tests-selected window loudly in the job
-          # summary rather than impersonating a green - read that before trusting a pass.
-          # On-demand seeded hunts (specific seed/reps) stay in chaos-pain.yml.
+          # FOUR SHARDS, one VM each, since docs/inflight/ci-shard-the-chaos-suite.md. Eight
+          # @Tag("chaos") scenario classes running serially in one JVM set a 15-20 min floor under
+          # every PR, and two shards only halve that if the work divides evenly - it does not, one
+          # revoke-under-work cell running long puts a floor under any arrangement - so the split is
+          # sized from MEASURED per-scenario durations (longest-first / LPT packing over four bins),
+          # not a guess. Baseline (three dispatched ubuntu-latest runs, serial): median critical path
+          # 1150s. Per-class median seconds: ChaosRevokeUnderWorkDrainIT 180,
+          # ChaosRevokeUnderWorkTransactionalIT 152, ChaosRevokeUnderWorkCooperativeIT 151,
+          # ChaosRevokeUnderWorkIT 145, ChaosChurnStormIT 140, ChaosRevokeUnderWorkCooperativeDrainIT
+          # 105, ChaosRevokeUnderWorkKeyOrderIT 68, ChaosKeyOrderIT 50. A scenario added later goes
+          # wherever keeps the four bins balanced by ITS measured duration, not appended to whichever
+          # shard is listed last.
+          #
+          # bin/chaos-test.sh stays the SINGLE entry point (CHAOS_SCENARIOS below selects the shard's
+          # classes) so this matrix and chaos-pain.yml's on-demand dispatch cannot select tests
+          # differently, and it fails a shard whose requested scenario produced no failsafe report -
+          # the shard-goes-quietly-idle regression the design note names, the same shape the mutation
+          # lane shipped with once already ("nothing to mutate, skipping", green forever).
+          #
+          # GATING, like the suite it replaces: a chaos RED is a real finding, so these entries are
+          # deliberately NOT `optional`. On-demand seeded hunts (specific seed/reps) stay in
+          # chaos-pain.yml.
           - suite: chaos
-            name: "Chaos Pain Suite"
+            name: "Chaos Pain Suite 1/4"
             cmd: "bin/chaos-test.sh"
-            timeout: 60
+            timeout: 30
+            shard: "1"
+            scenarios: "ChaosRevokeUnderWorkDrainIT,ChaosKeyOrderIT"
+          - suite: chaos
+            name: "Chaos Pain Suite 2/4"
+            cmd: "bin/chaos-test.sh"
+            timeout: 30
+            shard: "2"
+            scenarios: "ChaosRevokeUnderWorkTransactionalIT,ChaosRevokeUnderWorkKeyOrderIT"
+          - suite: chaos
+            name: "Chaos Pain Suite 3/4"
+            cmd: "bin/chaos-test.sh"
+            timeout: 30
+            shard: "3"
+            scenarios: "ChaosRevokeUnderWorkCooperativeIT,ChaosRevokeUnderWorkCooperativeDrainIT"
+          - suite: chaos
+            name: "Chaos Pain Suite 4/4"
+            cmd: "bin/chaos-test.sh"
+            timeout: 30
+            shard: "4"
+            scenarios: "ChaosRevokeUnderWorkIT,ChaosChurnStormIT"
     name: "${{ matrix.name }}"
     runs-on: ubuntu-latest
     # NO continue-on-error: every suite in this matrix gates. If you add an advisory trial lane, give
@@ -188,6 +237,12 @@ jobs:
         # ce-optimize harness: a dispatch naming a suite runs only that suite's entries; the other
         # matrix jobs still spin up (a job-level `if` cannot read `matrix`) but do nothing.
         if: github.event_name != 'workflow_dispatch' || inputs.suite == '' || inputs.suite == matrix.suite
+        env:
+          # Data through env, never spliced into a script string - bin/chaos-test.sh's header states
+          # this rule and why. Empty for every non-chaos entry (see the matrix comment above), which
+          # bin/chaos-test.sh already treats as "run every chaos-tagged scenario" when it is chaos's
+          # own entry, and which every other suite's script ignores outright.
+          CHAOS_SCENARIOS: ${{ matrix.scenarios }}
         run: ${{ matrix.cmd }}
 
       # CHAOS ONLY. The self-hosted lane used to upload these as
@@ -197,11 +252,15 @@ jobs:
       # docs/solutions/workflow-issues/gh-run-view-log-truncation.md exists because the job LOG is
       # unreliable for this suite - the artifact survives where the log stream does not. Cited from
       # docs/inflight/bug-857-family.md; keep the name greppable if you rename it.
+      #
+      # `-shard${{ matrix.shard }}` suffix: upload-artifact v4+ rejects duplicate artifact names
+      # within one run, and four chaos shards now upload in the same run where one used to. The
+      # `chaos-suite-reports-` prefix stays intact for anything that greps for it.
       - name: Upload chaos test reports
         if: always() && matrix.suite == 'chaos'
         uses: actions/upload-artifact@v7
         with:
-          name: chaos-suite-reports-${{ github.run_number }}
+          name: chaos-suite-reports-${{ github.run_number }}-shard${{ matrix.shard }}
           path: '**/target/*-reports/*.xml'
           retention-days: 14
 

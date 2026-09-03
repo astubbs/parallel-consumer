@@ -9,10 +9,19 @@
 # Env (data, not code - workflow inputs must pass through env, never ${{ }} into scripts):
 #   CHAOS_SEED - optional seed (replays a schedule); empty = random, logged by the run
 #   CHAOS_REPS - how many times to run the suite (default 1)
+#   CHAOS_SCENARIOS - optional comma-separated list of simple chaos test class names (e.g.
+#     "ChaosKeyOrderIT,ChaosChurnStormIT"); empty = every chaos-tagged scenario, which is what
+#     chaos-pain.yml and local replays keep. When set, this passes -Dit.test=<list> AND
+#     -Dfailsafe.failIfNoSpecifiedTests=false to failsafe - the second flag is required because -am
+#     builds the parent module first and it has no matching tests, so without it the build dies
+#     before the requested scenarios run (docs/inflight/bug-857-family.md). The end-of-run summary
+#     then verifies every requested scenario produced a failsafe report and fails the run if one did
+#     not - a shard that silently ran fewer scenarios than it was assigned must not read as a pass.
 #
 # @Quarantined chaos scenarios are EXCLUDED (the Quarantine Lane owns them): a known-RED detector
 # must not drown the tripwire signal. If that leaves zero tests selected, the summary says so
-# loudly instead of impersonating a real GREEN run (see docs/quarantined-tests.md).
+# loudly instead of impersonating a real GREEN run (see docs/quarantined-tests.md) - and when
+# CHAOS_SCENARIOS is set, zero-selected is a hard failure rather than the advisory wording below.
 
 set -euo pipefail
 
@@ -28,6 +37,21 @@ REPS="${CHAOS_REPS:-1}"
 SEED_ARG=""
 if [ -n "${CHAOS_SEED:-}" ]; then SEED_ARG="-Dchaos.seed=${CHAOS_SEED}"; fi
 
+# Note the `+` expansion: under `set -u`, bash 3.2 (which is what macOS ships) treats "${arr[@]}" on
+# an EMPTY array as an unbound variable and aborts - same trap bin/lincheck-test.sh documents and
+# guards against with the identical pattern.
+TEST_ARG=()
+if [ -n "${CHAOS_SCENARIOS:-}" ]; then
+    TEST_ARG=(-Dit.test="${CHAOS_SCENARIOS}" -Dfailsafe.failIfNoSpecifiedTests=false)
+fi
+
+# Existence, not content, is the signal: summary() (run in the `emit_summaries` EXIT trap's command
+# substitution, i.e. a subshell) writes this file when CHAOS_SCENARIOS requested a scenario that
+# produced no failsafe report. A subshell can still write a real file, so this crosses back out
+# where a plain variable assignment inside `$(summary)` could not. No mktemp: this needs no atomic
+# creation, and mktemp's `-t` flag differs enough between GNU and BSD/macOS to be worth avoiding.
+MISSING_SCENARIOS_MARKER="${TMPDIR:-/tmp}/chaos-missing-scenarios.$$"
+
 start=$(date +%s)
 
 summary() {
@@ -38,12 +62,23 @@ summary() {
     local tests
     # All reports, live and archived - the summary must count every rep, not just the last.
     tests=$(chaos_all_report_paths | tr -cd '\0' | wc -c | tr -d ' ')
+    # Simple (unqualified) class names of every scenario that produced a report, comma-joined - built
+    # in the tests>0 branch below and left empty here. Compared against CHAOS_SCENARIOS after both
+    # branches, so a shard sharded down to zero tests reports it too, not just a partial miss.
+    local found_names=""
     if [ "$tests" -eq 0 ]; then
         echo "### ZERO chaos tests selected - this run measured NOTHING"
         echo ""
-        echo "All chaos-tagged scenarios are currently @Quarantined (excluded here; the"
-        echo "Quarantine Lane runs them - see docs/quarantined-tests.md). Real coverage"
-        echo "returns when the W4 variants or the quarantine owner fix (astubbs#80) land."
+        if [ -n "${CHAOS_SCENARIOS:-}" ]; then
+            echo "CHAOS_SCENARIOS requested (${CHAOS_SCENARIOS}) but no failsafe report was produced"
+            echo "for any of them - a class-name typo, a quarantined scenario assigned to this shard,"
+            echo "or a build failure before the tests ran. See below for which requested scenario(s)"
+            echo "are missing."
+        else
+            echo "All chaos-tagged scenarios are currently @Quarantined (excluded here; the"
+            echo "Quarantine Lane runs them - see docs/quarantined-tests.md). Real coverage"
+            echo "returns when the W4 variants or the quarantine owner fix (astubbs#80) land."
+        fi
     else
         # Class 2 lag stagnation REPORTS rather than gates (see ProgressProbe.getObservations and
         # docs/solutions/best-practices/a-timing-bound-used-as-a-correctness-gate-manufactures-its-own-evidence.md),
@@ -78,7 +113,14 @@ summary() {
             # Counted independently of the table-row guard: a report with no name= attribute still
             # observed whatever it observed.
             if [ "$obs" -gt 0 ]; then any_observations=$((any_observations + 1)); fi
-            if [ -n "$n" ]; then echo "| $n | ${t}s | ${peak_ms:-n/a}${peak_ms:+ms} | ${obs} |"; fi
+            if [ -n "$n" ]; then
+                echo "| $n | ${t}s | ${peak_ms:-n/a}${peak_ms:+ms} | ${obs} |"
+                # `name=` is the FULLY QUALIFIED class name; CHAOS_SCENARIOS is simple names (see the
+                # header), so strip the package here rather than asking every caller to qualify it.
+                # `< <(...)` (not a pipe) keeps this loop in summary()'s own scope, not a subshell -
+                # accumulation across iterations depends on that, same as `any_observations` above.
+                found_names="${found_names},${n##*.}"
+            fi
         done < <(chaos_all_report_paths)
         if [ "$any_observations" -gt 0 ]; then
             echo ""
@@ -96,6 +138,34 @@ summary() {
             echo "docs/inflight/test-per-shard-liveness-has-no-gate.md has the shape to look for."
         fi
     fi
+    # A shard that silently ran fewer scenarios than it was assigned must not read as a pass - this
+    # is the guard `-Dfailsafe.failIfNoSpecifiedTests=false` above makes necessary, and it covers
+    # both branches above: zero-selected (found_names empty) and a partial miss alike.
+    if [ -n "${CHAOS_SCENARIOS:-}" ]; then
+        local requested_name missing=""
+        IFS=',' read -ra requested <<< "$CHAOS_SCENARIOS"
+        for requested_name in "${requested[@]}"; do
+            [ -n "$requested_name" ] || continue
+            case ",${found_names}," in
+                *",${requested_name},"*) : ;; # found - no action
+                *) missing="${missing},${requested_name}" ;;
+            esac
+        done
+        missing="${missing#,}"
+        if [ -n "$missing" ]; then
+            echo ""
+            echo "### MISSING SCENARIO REPORT(S): ${missing}"
+            echo ""
+            echo "CHAOS_SCENARIOS requested \`${CHAOS_SCENARIOS}\` but no failsafe report was found for"
+            echo "the scenario(s) above - a shard doing less than it was assigned must not read as a"
+            echo "pass. This fails the run (see emit_summaries)."
+            # Existence is the signal - see MISSING_SCENARIOS_MARKER's declaration above. This write
+            # happens inside summary()'s own subshell (it runs under \$(summary)), which is fine: a
+            # real file write is real I/O, not process-local state, so it is visible to the caller
+            # once this subshell exits.
+            : > "$MISSING_SCENARIOS_MARKER"
+        fi
+    fi
 }
 
 # Emit the summary on EVERY exit - a RED run's autopsy needs the timing/selection data most.
@@ -111,6 +181,17 @@ emit_summaries() {
     rendered=$(summary) || true
     printf '%s\n' "$rendered"
     if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then printf '%s\n' "$rendered" >> "$GITHUB_STEP_SUMMARY" || true; fi
+    # summary() marks this file (not $ec, which command substitution cannot set - see the marker's
+    # declaration above) when CHAOS_SCENARIOS requested a scenario that produced no report. Turn a
+    # 0 exit into 1 for that; a Maven failure already set $ec non-zero and stays as it is - this
+    # never masks a real red with a "just missing scenarios" one.
+    if [ -f "$MISSING_SCENARIOS_MARKER" ]; then
+        rm -f "$MISSING_SCENARIOS_MARKER"
+        if [ "$ec" -eq 0 ]; then
+            echo "chaos-test.sh: CHAOS_SCENARIOS requested a scenario with no failsafe report - failing a run that would otherwise read GREEN (see the MISSING SCENARIO REPORT(S) section above)." >&2
+            ec=1
+        fi
+    fi
     exit "$ec"
 }
 trap emit_summaries EXIT
@@ -132,5 +213,5 @@ for i in $(seq 1 "$REPS"); do
     time ./mvnw --batch-mode -Pci -pl parallel-consumer-core -am verify \
         -DskipUTs=true \
         -Dincluded.groups=chaos -Dexcluded.groups=quarantined \
-        ${SEED_ARG:+"$SEED_ARG"}
+        ${SEED_ARG:+"$SEED_ARG"} ${TEST_ARG[@]+"${TEST_ARG[@]}"}
 done
