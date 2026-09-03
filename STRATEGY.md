@@ -216,12 +216,28 @@ throws from `onCompletion`, which pre-empted Kafka's own `maybeTransitionToError
 transaction un-abortable. Both affected claims - C7 `PRODUCE_MANY_ALL_OR_NONE` and C2
 `ALL_OR_NONE_PER_SOURCE_OFFSET` - were `REFUTED` and now read `PROVED`.
 
-**So the headline is defensible: exactly-once, massively parallel, optionally key-ordered.** Every
-documented guarantee in the register is proved or attributed, and none is refuted - twelve `PROVED`
-with observed controls, one `KAFKA_GUARANTEE` that is Kafka's to keep, and one `COVERED_NO_CONTROL`
-(the commit-lock timeout failing fast) which is **attributed to an existing test rather than
-re-proved**. That last one is the difference between "defensible" and "unqualified", and it is why
-this section does not say the latter.
+**The headline is defensible, and it now carries one stated exception.** Of the documented
+guarantees in the register, eleven read `PROVED` with observed controls, one is a `KAFKA_GUARANTEE`
+that is Kafka's to keep, one is `COVERED_NO_CONTROL` (the commit-lock timeout failing fast) and is
+**attributed to an existing test rather than re-proved** - and one, C9
+`NO_PRODUCE_WITHOUT_ITS_OFFSET`, reads `REFUTED`. The last two are the difference between
+"defensible" and "unqualified", and they are why this section does not say the latter.
+
+**The refuted one, stated plainly rather than qualified away.** *"The system must prevent records
+from being produced to the brokers whose source consumer record offsets has not been included in this
+transaction"* holds on the control-loop commit path, with the observed control that proved it. It
+does **not** hold on the revoke path: `tryCommitOffsetsOnRevoke` takes the commit lock but never
+drains the work mailbox, and draining is the only thing that marks a partition dirty, so a
+revoke-time commit can publish a transaction containing a record whose source offset it omits - the
+output committed, the input not, and the next owner reprocessing it. Exactly-once degrades to
+at-least-once on that path. It is deterministic (red 5/5, no broker, no load), it predates the work
+that found it, and it is quarantined with a control arm rather than fixed, because the fix is a
+thread-ownership decision at a seam this project has patched four times and never restructured
+(`docs/inflight/core-revoke-commit-skips-the-work-mailbox-drain.md`).
+
+This is what the register is for. It was written to fire against us, it has now done so twice - once
+on claims that were fixed, once on a claim that is open - and the value of that is lost the moment
+the finding is softened instead of published.
 
 **This is the first pass, not the finished job.** The suite covers the guarantees that are
 *documented* today; a chaos scenario for exactly-once under churn is deliberately deferred, and the
