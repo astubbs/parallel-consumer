@@ -114,9 +114,16 @@ jobs:
     # runners are slower. Generous ceiling, not an expected duration.
     timeout-minutes: 20
     steps:
-      # Fixtures are built in temp dirs and the parse sweep reads the working tree, so shallow is
-      # fine - same reasoning as the other jobs here.
+      # Full history, for the same reason as the Linux lane above: bin/test-check-agent-hooks.sh
+      # now exercises the session-start hook against THIS checkout, and that hook's corpus index
+      # needs origin/master as its baseline; its equivalence case also pins a master commit. On the
+      # default shallow checkout the index answered "neither origin/master nor master resolves",
+      # the hook failed open to silence, and seven cases went red on this lane only - reproduced in
+      # a depth-1 clone locally, and cleared by fetching origin/master into it. The fixture-building
+      # suites never needed history; the one that reads the real clone does.
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       # PATH bash decides what is actually under test: 60 of the 62 tracked scripts are
       # `#!/usr/bin/env bash`, and each self-test invokes the gate it protects as a bare `bash`.
