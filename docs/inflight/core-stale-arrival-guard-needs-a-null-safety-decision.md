@@ -96,7 +96,13 @@ removed the resident and the empty shard with it. A sweep that DECLINES leaves t
 so the next add takes the branch.
 
 Fixed as a fixture - the harness now assigns its partition, which is what its own constructor claims
-to model - so this note's policy question is untouched. What it adds is that the unguarded call is
-reachable from a *state the product deliberately creates*, not only from a test shortcut, which is a
-datum for the second bullet under "The decision needed".
+to model - so this note's policy question is untouched.
+
+**It is evidence for "test shortcut", not for "real production shape"** - the second bullet under
+"The decision needed" - and the distinction matters both ways round. What the product now creates is
+the *branch*: a declining sweep leaves a resident behind, so an arrival finds one and asks whether it
+is stale. What the product does not create is the *null* it asked into, because a revoked partition
+keeps an entry (`RemovedPartitionState`) rather than losing one. So this is a fourth fixture of the
+same shape as the three above, reached by a route that is now ordinary - which is an argument for
+fixing fixtures, not for the guard failing open.
 <!-- post-merge: checked-end -->

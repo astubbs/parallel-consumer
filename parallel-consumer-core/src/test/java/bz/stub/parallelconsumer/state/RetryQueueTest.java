@@ -18,8 +18,8 @@ import static com.google.common.truth.Truth.assertWithMessage;
 /**
  * {@link RetryQueue#removeAll} contract tests - the one entry point the shard calls on EVERY work request, and
  * the only one with no coverage at all until now (the three pre-existing {@code RetryQueue} tests live in
- * {@link ShardManagerTest} and assert ordering only; see
- * {@code docs/inflight/test-retry-queue-behaviour-untested.md}).
+ * {@link ShardManagerTest} and assert ordering only). What is still untested is inventoried in
+ * {@code docs/inflight/test-retry-queue-behaviour-untested.md}.
  * <p>
  * <b>What these pin, and what they cannot.</b> {@code removeAll} opens with a fast path that returns
  * {@code false} without taking the write lock. That guard reads the CALLER'S list, never the queue's shared

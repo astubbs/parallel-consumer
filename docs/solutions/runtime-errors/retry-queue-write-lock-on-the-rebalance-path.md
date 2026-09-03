@@ -127,12 +127,19 @@ front leaves. What is bounded is that the pair stays whole for the whole wait.
 
 ### What would reopen it
 
-The abandonment is only ever a delay, and exactly one thing ends it. If
-`ProcessingShard.getWorkIfAvailable`'s stale branch stops removing from the retry queue, or stops
-being reached at all, the delay becomes permanent and the orphan is back.
-**Nothing fails if that happens**: `rebalanceCallbacksMustNotBlock` only checks that nothing on the
-callback path WAITS, and it is green either way. The reasoning is recorded at the site, on
-`ShardManager.removeWorkFromShardFor`.
+The abandonment is only ever a delay, and exactly one thing ends it: `ProcessingShard
+.getWorkIfAvailable`'s stale branch. It has two halves and they are guarded differently.
+
+- **If it stops REMOVING from the retry queue, that now fails loudly.** Deleting
+  `retryQueue.remove(removed)` from it turns three `RetryQueueRebalancePathTest` cases red - the two
+  `IsRetiredFromBothStructures` ones and the ordered-mode `StaleTailWaitsForTheTakeableHead` one -
+  which is how they were checked.
+- **If it stops being REACHED promptly, nothing fails at all.** No test asserts how often the branch
+  is entered, and `rebalanceCallbacksMustNotBlock` only checks that nothing on the callback path
+  WAITS, so it is green either way. That is the half that would silently turn the delay into a
+  permanent orphan.
+
+`ShardManager.removeWorkFromShardFor`'s javadoc owns the split; do not restate it here.
 
 ## Rejected alternatives
 
