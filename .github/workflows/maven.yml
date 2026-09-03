@@ -102,8 +102,10 @@ jobs:
             # Forked (process-parallel) mode: each JVM fork gets its own TestContainers
             # broker, so tests don't contend one shared broker. Reliable AND parallel,
             # without masking anything (each test runs on an uncontended broker). See
-            # docs/solutions/test-flakiness/. forkCount=4 matches the self-hosted measurement.
-            cmd: "bin/ci-integration-test.sh -DforkCount=4 -DreuseForks=true"
+            # docs/solutions/test-flakiness/. EXPERIMENT (ce-optimize integration-gate H3): 6, up
+            # from the 4 that matched the self-hosted measurement. Control arm - measures how much
+            # of the 420s failsafe wall is recovered once the 339s probe tail is ALSO split (H1+H2).
+            cmd: "bin/ci-integration-test.sh -DforkCount=6 -DreuseForks=true"
             timeout: 60
             scenarios: ""
             shard: ""
