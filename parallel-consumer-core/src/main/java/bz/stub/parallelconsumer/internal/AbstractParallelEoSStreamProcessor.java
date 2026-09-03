@@ -2539,6 +2539,16 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * gate protects this - {@code ArchitectureTest.rebalanceCallbacksMustNotBlock} matches method
      * calls, and a {@code synchronized} block is a {@code MONITORENTER} instruction it cannot see, so
      * the rule is green here whether the invariant holds or not.
+     * <p>
+     * <b>Amended 2026-09-03:</b> one tool CAN see it. Infer's {@code @Lockless} on
+     * {@link #onPartitionsRevoked} reports this monitor by name, through this method, and does not
+     * report {@code commitLock.tryLock()} - so it agrees with the decline-rather-than-wait rule while
+     * seeing the {@code MONITORENTER} ArchUnit misses. It is still not the gate, because it forbids
+     * the monitor outright rather than the waiting-while-holding this paragraph is about: annotating
+     * the callback leaves a violation standing whether the invariant holds or not, which is the same
+     * complaint made above. Measured, not assumed - see the annotation inventory in
+     * {@code parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md}. Reach for it
+     * as a query when checking this suspicion again, rather than enumerating the monitors by hand.
      */
     private void clearCommitCommand() {
         synchronized (commitCommand) {

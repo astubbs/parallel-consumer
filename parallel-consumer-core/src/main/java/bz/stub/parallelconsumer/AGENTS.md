@@ -64,6 +64,42 @@ Grep every writer and every reader of the field, not the two the surrounding cod
 it turns out not to be confined, `volatile` is usually the answer, and a modifier tripwire is what
 keeps it - see "Known shared state" below.
 
+## Which of Infer's annotations this repo uses, and which it does not
+
+All of `com.facebook.infer.annotation` is on the compile classpath, so all of it is *writable*.
+Most of it is not *worth* writing here, and this list exists so the next reader does not re-derive
+that. Every verdict below was measured by applying the annotation and re-running
+`bin/infer-test.sh`, not reasoned about.
+
+- **`@ThreadConfined` - in use, and the only one that is.** The section above owns how to write it.
+- **`@ThreadSafe` - would move the lane most, and is blocked.** Over half the findings it raises are
+  `INTERFACE_NOT_THREAD_SAFE` on `org.slf4j.Logger` and micrometer's `Meter` - one per log call site,
+  in interfaces that are thread-safe and not ours to annotate. Open, with the two blockers and the
+  triage of what it did find:
+  `docs/inflight/static-infer-threadsafe-is-blocked-by-third-party-interfaces.md`.
+- **`@Initializer`, `@Functional`, `@SynchronizedCollection` - not yet writable, and the reason is
+  the entry above.** All three exist to *suppress* a report, and RacerD raises none of those reports
+  on an unannotated class. They become worth writing the day `@ThreadSafe` goes on, and not before.
+  The note names the first `@Initializer` site the survey found.
+- **`@Lockless` - fires, and sees what `ArchitectureTest.rebalanceCallbacksMustNotBlock` cannot.**
+  Measured on `onPartitionsRevoked`: it reports the `synchronized (commitCommand)` monitor reached
+  through `clearCommitCommand()`, which the ArchUnit rule misses because a `synchronized` block is a
+  `MONITORENTER` and that rule matches method calls. It does **not** report `commitLock.tryLock()`,
+  so it agrees with this repo about declining rather than waiting. It is still not adopted, because
+  the monitor it reports is one the design deliberately keeps: annotating the callback would leave a
+  violation that stands whether the invariant holds or not, which is the same criticism the cleared
+  suspicion on `clearCommitCommand()` makes of the ArchUnit rule. Reach for it as a *query* - it is
+  the only thing here that can enumerate the monitors a rebalance callback reaches, which is work
+  that has been done by hand twice: `clearCommitCommand()`'s suspicion, and the `PCMetrics.removeMeter`
+  monitor astubbs#431 found on the same path and left alone.
+- **`@NonBlocking` - inert here.** On the same method, over the same `Thread.sleep(100)` in
+  `onPartitionsRevoked`, it reported nothing.
+- **The `Nullsafe` family** is a different checker mode and belongs with the open null-safety
+  decision, not here - `docs/inflight/core-stale-arrival-guard-needs-a-null-safety-decision.md`.
+- **Not for this codebase at all**: `PrivacySource`/`Sink` and `IntegritySource`/`Sink` (taint),
+  `Expensive`, `PerformanceCritical`, `IgnoreAllocations`, `NoAllocation` (Android-oriented cost
+  checkers), `OkToExtend`, `Cleanup`, `ReturnsOwnership`.
+
 ## Record a CLEARED suspicion in the javadoc, not only in the commit
 
 When you investigate a concurrency path and conclude it is safe, **write that conclusion where the
