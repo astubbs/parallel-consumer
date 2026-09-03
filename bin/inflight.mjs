@@ -48,14 +48,16 @@ import { fileURLToPath } from 'node:url'
 import { perfReport, perfStart } from './lib/perf.mjs'
 
 import { baseline, blobContents, blobsForPath, freshnessWarnings, refTips } from './lib/git.mjs'
-import { cacheClear, cacheStatus, knownCaches } from './lib/cache.mjs'
+import { cacheClear, cacheStatus, deliveryFailures, knownCaches } from './lib/cache.mjs'
 import { corpusIndex, drift, findNotes, prsByBranch, stranded } from './lib/notes.mjs'
 import { DOC_AREAS, NOTES_DIR } from './lib/repo.mjs'
+import { docsShape } from './lib/docs-shape.mjs'
 import { branchView, commitGraph, trackingGap } from './lib/branches.mjs'
 import { loadCandidates, refactorWindow } from './lib/refactor-window.mjs'
 import {
-    formatBranch, formatCache, formatCoverage, formatDivergenceHeader, formatDocsShow, formatDrift, formatFind,
-    formatFlakes, formatRefactorWindow, formatSlowest, formatStranded, formatTimeline, formatWarnings,
+    formatBranch, formatCache, formatCoverage, formatDivergenceHeader, formatDocsList, formatDocsShape, formatDocsShow,
+    formatDrift, formatFind, formatFlakes, formatRefactorWindow, formatSlowest, formatStranded, formatTimeline,
+    formatWarnings,
 } from './lib/views.mjs'
 import { coverage, flakeCandidates, slowest, testTimeline } from './lib/codecov.mjs'
 import {
@@ -115,18 +117,45 @@ export const cvOpts = (args) => {
  */
 const NOTES_AREA = DOC_AREAS.filter((a) => a.dir === NOTES_DIR)
 
+/**
+ * The freshness warnings that VOID an answer rather than date it. `no-baseline` is not staleness,
+ * it is a declaration that the run is unreliable; the others say the ref set itself is partial.
+ * The rest - a stale or narrow fetch, a main checkout, HEAD behind - date the answer, and a
+ * command that is one step of a longer walk need not repeat them at every step.
+ */
+const INVALIDATING_WARNINGS = new Set(['no-baseline', 'never-fetched', 'shallow'])
+
 /** Under one of the three corpus areas - the only paths the divergence query is defined for. */
 const inCorpus = (path) => DOC_AREAS.some((a) => path.startsWith(`${a.dir}/`))
 
-/** Once, because the `docs` row and its bare run both print it. */
-const DOCS_USAGE = `Usage: bin/inflight.mjs docs show <path> [--ref <ref>] [--header-only]
+const DOCS_USAGE = `Usage: bin/inflight.mjs docs                                  the corpus shape, and the guide
+       bin/inflight.mjs docs list <area> [<group>]              one level of it, with the next level's commands
+       bin/inflight.mjs docs show <path> [--ref <ref>] [--header-only]
        bin/inflight.mjs docs header <path> [--ref <ref>]
 
 The docs corpus - docs/inflight/, docs/solutions/, docs/plans/ - read across EVERY ref, never the
-working tree. Bare \`docs\` has no answer yet; the subcommands do:
+working tree. Bare \`docs\` prints each area, its groups and their counts, how many documents exist
+only off the baseline, the subcommands with when to use each, and a notice for any delivery of the
+context query that has a recorded failure. Every level prints the commands for the next, so the
+walk from here to one document is copy and paste.
 
+  list    the areas; one area's groups; or one group's documents, each with its \`docs show\`
   show    one document with its divergence header, from the right ref
   header  the header alone - what the read-time hook shows, in full`
+
+/**
+ * The index, its stranded clusters and the shape over both - what bare `docs` and every `docs
+ * list` level share. One build per call and no cache, per the plan's KTD5: the three-area index
+ * measures about five seconds here and the budget is eight, so the cost is stated in the usage
+ * rather than hidden behind a file that would go stale.
+ */
+function corpusShape() {
+    const index = corpusIndex()
+    if (!index.ok) return { ok: false, reason: index.reason }
+    const shape = docsShape({ index, stranded: stranded(index) })
+    if (!shape.ok) return shape
+    return { ok: true, shape, warnings: freshnessWarnings(index.baseline, index.refs.length) }
+}
 
 /**
  * `docs show` - and `docs header`, which is this with `--header-only` appended.
@@ -232,6 +261,79 @@ function showDocument(args, emit) {
  *            run?: (args: string[], emit: (s: string) => void) => {ok: boolean, reason?: string}}} Command
  * @type {Command[]}
  */
+/** The `docs` subcommands, held apart so the bare call can print their `when` lines without restating them. */
+const DOCS_SUB = [
+    {
+        name: 'list',
+        summary: "one level of the corpus shape - the areas, one area's groups, or one group's documents with their docs show commands",
+        when: 'bare docs showed you a group and you want the documents in it, or you know the area and not the group',
+        usage: `Usage: bin/inflight.mjs docs list <area> [<group>]
+
+Areas are the corpus directories by their last segment: inflight, solutions, plans. Groups are what
+the session index groups by - a solution's category directory, an in-flight note's impact (plus
+registers, feature, unmatched, closed and deferred), a plan's year-month - and the area level lists
+them with the command for each. The leaf lists every document as a title, its path, whether it
+exists only off the baseline (and on which ref), and the \`docs show\` command that prints it.
+
+An unknown area or group is not an error: the valid names are printed, each as a command, exit 0.
+
+  bin/inflight.mjs docs list inflight
+  bin/inflight.mjs docs list inflight crash
+  bin/inflight.mjs docs list solutions test-flakiness
+  bin/inflight.mjs docs list plans 2026-09`,
+        run: (args, emit) => {
+            const [area = null, group = null, ...extra] = args
+            if (extra.length > 0) return { ok: false, reason: `docs list: takes an area and at most one group, not '${args.join(' ')}'` }
+            const built = corpusShape()
+            if (!built.ok) return { ok: false, reason: `docs list: ${built.reason}` }
+            // ONLY THE WARNINGS THAT VOID THE ANSWER. A list level is one step of a walk whose entry
+            // point, bare `docs`, printed the full set; re-printing a stale-fetch note at every step
+            // buried the levels under their own preamble. Guarded, because `emit('')` is a newline.
+            const warn = formatWarnings(built.warnings.filter((w) => INVALIDATING_WARNINGS.has(w.id)))
+            if (warn) emit(warn)
+            emit(formatDocsList(built.shape, { area, group }))
+            return { ok: true }
+        },
+    },
+    {
+        name: 'show',
+        summary: 'one document with its full divergence header, from the baseline or the first live ref carrying it',
+        when: 'a read-time header said other branches hold versions of this file, or you want the copy the baseline has rather than the one checked out',
+        usage: `Usage: bin/inflight.mjs docs show <path> [--ref <ref>] [--header-only]
+
+Prints the header, then the document from ONE ref, and the first line names which: the baseline when
+it carries the path, else the first carrying live ref in sorted order. Archival refs - tags,
+refs/backup - are never chosen by default; they are reported as preserved, and --ref reaches them.
+
+The header is the full tier of the query the read-time hook runs at the summary tier: how many
+distinct divergent versions exist on live refs, which branches and PRs carry the largest, what each
+added - headings, else its first added line - and which ref set was searched. Divergence is the only
+claim it makes; nothing here says a version is newer.
+
+--ref <ref>     show that ref's copy (and describe THAT copy's state in the header)
+--header-only   the header alone - the same text as \`docs header\`
+
+  bin/inflight.mjs docs show docs/inflight/bug-857-family.md
+  bin/inflight.mjs docs show docs/inflight/bug-857-family.md --ref origin/feats/hasten-micro-mvp`,
+        run: showDocument,
+    },
+    {
+        name: 'header',
+        summary: 'the full divergence header for one document, without the document',
+        when: 'the read-time hook named this as its "more" command, or you have no hooks and want what they would have shown',
+        usage: `Usage: bin/inflight.mjs docs header <path> [--ref <ref>]
+
+Exactly what \`docs show --header-only\` prints: which ref the header describes, how many distinct
+divergent versions live refs carry and which branches and PRs hold the largest, what each added,
+anything preserved only in archival refs, and the ref set searched. An agent on a host without
+hooks runs this before acting on a document; with hooks, this is the "more" the read-time line
+points at.
+
+  bin/inflight.mjs docs header docs/inflight/bug-857-family.md`,
+        run: (args, emit) => showDocument([...args, '--header-only'], emit),
+    },
+]
+
 const COMMANDS = [
     {
         name: 'prior-art',
@@ -330,50 +432,23 @@ carries that the baseline does not, else the branch name. Nothing is summarised 
     },
     {
         name: 'docs',
-        summary: 'the docs corpus across every ref - a document with its divergence header, or the header alone',
-        when: 'you are about to act on anything under docs/inflight, docs/solutions or docs/plans',
+        summary: 'the docs corpus across every ref - its shape, one level of it, a document with its divergence header, or the header alone',
+        when: 'you are about to act on anything under docs/inflight, docs/solutions or docs/plans, or want to see what the corpus holds',
         usage: DOCS_USAGE,
-        sub: [
-            {
-                name: 'show',
-                summary: 'one document with its full divergence header, from the baseline or the first live ref carrying it',
-                when: 'a read-time header said other branches hold versions of this file, or you want the copy the baseline has rather than the one checked out',
-                usage: `Usage: bin/inflight.mjs docs show <path> [--ref <ref>] [--header-only]
-
-Prints the header, then the document from ONE ref, and the first line names which: the baseline when
-it carries the path, else the first carrying live ref in sorted order. Archival refs - tags,
-refs/backup - are never chosen by default; they are reported as preserved, and --ref reaches them.
-
-The header is the full tier of the query the read-time hook runs at the summary tier: how many
-distinct divergent versions exist on live refs, which branches and PRs carry the largest, what each
-added - headings, else its first added line - and which ref set was searched. Divergence is the only
-claim it makes; nothing here says a version is newer.
-
---ref <ref>     show that ref's copy (and describe THAT copy's state in the header)
---header-only   the header alone - the same text as \`docs header\`
-
-  bin/inflight.mjs docs show docs/inflight/bug-857-family.md
-  bin/inflight.mjs docs show docs/inflight/bug-857-family.md --ref origin/feats/hasten-micro-mvp`,
-                run: showDocument,
-            },
-            {
-                name: 'header',
-                summary: 'the full divergence header for one document, without the document',
-                when: 'the read-time hook named this as its "more" command, or you have no hooks and want what they would have shown',
-                usage: `Usage: bin/inflight.mjs docs header <path> [--ref <ref>]
-
-Exactly what \`docs show --header-only\` prints: which ref the header describes, how many distinct
-divergent versions live refs carry and which branches and PRs hold the largest, what each added,
-anything preserved only in archival refs, and the ref set searched. An agent on a host without
-hooks runs this before acting on a document; with hooks, this is the "more" the read-time line
-points at.
-
-  bin/inflight.mjs docs header docs/inflight/bug-857-family.md`,
-                run: (args, emit) => showDocument([...args, '--header-only'], emit),
-            },
-        ],
-        // A bare call has not answered anything yet, so it is a usage error like every other one.
-        run: () => ({ ok: false, reason: DOCS_USAGE }),
+        sub: DOCS_SUB,
+        // THE BARE CALL IS THE MAP (the plan's R13): the shape, the guide built from the rows above
+        // so it cannot say what help does not, and the failure notice - the one place a fail-open
+        // delivery's breakage is visible. `commands` are taken from the registry, not restated.
+        run: (args, emit) => {
+            const built = corpusShape()
+            if (!built.ok) return { ok: false, reason: `docs: ${built.reason}` }
+            emit(formatDocsShape(built.shape, {
+                warnings: built.warnings,
+                failures: deliveryFailures(),
+                commands: DOCS_SUB.map((c) => ({ path: `docs ${c.name}`, summary: c.summary, when: c.when })),
+            }))
+            return { ok: true }
+        },
     },
     {
         name: 'branch',
@@ -631,12 +706,11 @@ full measurement would be unaffordable. Prints nothing for a file that is not a 
             // being dropped on exactly the path both hooks use. That put the compensating control
             // out of action in the one place the answer could be confidently wrong.
             const warnings = freshnessWarnings(r.baseline, r.liveRefs)
-            const INVALIDATING = new Set(['no-baseline', 'never-fetched', 'shallow'])
             // NEVER EMIT AN EMPTY STRING. `emit` is console.log, so `emit('')` writes a newline -
             // and the documented silent form then produces two bytes rather than none, which is
             // observable to any caller measuring stdout rather than using command substitution
             // (which strips trailing newlines and hid this from the self-test that asserted it).
-            const warnText = formatWarnings(ifOpen ? warnings.filter((w) => INVALIDATING.has(w.id)) : warnings)
+            const warnText = formatWarnings(ifOpen ? warnings.filter((w) => INVALIDATING_WARNINGS.has(w.id)) : warnings)
             if (warnText) emit(warnText)
             const body = formatRefactorWindow(r, { ifOpen })
             if (body) emit(body)

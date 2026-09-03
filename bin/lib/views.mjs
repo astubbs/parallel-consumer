@@ -244,6 +244,103 @@ export function formatDocsShow(d, { ref, warnings = [], archivalCarriers = [], b
     return out.join('\n')
 }
 
+// --- The corpus shape - bare `docs`, and the levels `docs list` walks. ---------------------------
+//
+// EVERY LEVEL PRINTS THE NEXT LEVEL'S COMMANDS (the plan's R14). An agent reaches a document from
+// the bare call by copying what it was shown and nothing else: the area row carries its `docs list
+// <area>`, each group row carries its `docs list <area> <group>`, and each document carries its
+// `docs show <path>`. A count without the command beside it is a fact the reader has to turn into
+// a command by hand, which is the step that gets skipped.
+
+const TOOL = 'bin/inflight.mjs'
+const offText = (n) => (n > 0 ? `, ${n} only off the baseline` : '')
+const scopeLine = (shape) => `searched ${shape.refs.total} refs (${shape.refs.live} live, ${shape.refs.archival} archival); `
+    + `baseline ${shape.baseline}. Read from the refs, never the working tree.`
+
+/** One area's heading and its non-empty groups, each with the command that lists it. */
+const areaBlock = (area, { allGroups = false } = {}) => {
+    const out = [`${area.name}  ${area.dir}/  ${plural(area.documents, 'document')}${offText(area.offBaseline)}`
+        + `    ${TOOL} docs list ${area.key}`]
+    const groups = area.groups.filter((g) => allGroups || g.documents > 0)
+    const width = Math.max(1, ...groups.map((g) => g.key.length))
+    for (const g of groups) {
+        out.push(`  ${g.key.padEnd(width)}  ${String(g.documents).padStart(4)}${g.offBaseline > 0 ? ` (${g.offBaseline} off)` : '        '}`
+            + `    ${TOOL} docs list ${area.key} ${g.key}`)
+    }
+    if (groups.length === 0) out.push('  (no documents)')
+    return out
+}
+
+/**
+ * @param {object} shape from `docsShape()`
+ * @param {{warnings?: object[], failures?: Record<string, {reason: string, time: string}>,
+ *          commands?: {path: string, summary: string, when: string}[]}} opts
+ *   `commands` are the `docs` subcommands as the front door registers them - summary and `when`
+ *   verbatim, so the guide cannot say something help does not.
+ */
+export function formatDocsShape(shape, { warnings = [], failures = {}, commands = [] } = {}) {
+    const out = []
+    const warn = formatWarnings(warnings)
+    if (warn) out.push(warn.trimEnd(), '')
+    out.push(`docs corpus: ${plural(shape.documents, 'document')} across ${shape.areas.length} areas`
+        + `${offText(shape.offBaseline)} - on live branches that have not merged, where no working-tree read reaches them.`, '')
+    for (const area of shape.areas) out.push(...areaBlock(area), '')
+
+    if (commands.length > 0) {
+        const width = Math.max(...commands.map((c) => c.path.length))
+        out.push('Commands:')
+        for (const c of commands) {
+            out.push(`  ${c.path.padEnd(width)}  ${c.summary}`, `  ${' '.repeat(width)}  when: ${c.when}`)
+        }
+        out.push('')
+    }
+    // ONE LINE PER RECORDED FAILURE (R26). A delivery that fails open prints nothing to the agent
+    // it failed, so this notice is the only place the failure exists outside the cache file.
+    for (const [delivery, f] of Object.entries(failures)) {
+        out.push(`DELIVERY FAILED: ${delivery} - ${f.reason} (${f.time}). It fails open, so nothing else showed this; `
+            + 'a later success of the same delivery clears it.')
+    }
+    if (Object.keys(failures).length > 0) out.push('')
+    out.push(scopeLine(shape))
+    return out.join('\n')
+}
+
+/**
+ * One level of the shape: the areas (no area given, or an unknown one), one area's groups, or the
+ * documents of one group - the leaf, where each line carries its `docs show` command.
+ *
+ * An unknown name is a result, not an error: the valid names are the answer, and every one is
+ * printed as the command that would have worked.
+ */
+export function formatDocsList(shape, { area = null, group = null } = {}) {
+    const found = area === null ? null : shape.areas.find((a) => a.key === area)
+    if (!found) {
+        const out = [area === null ? 'give an area to list:' : `no area named '${area}' - the areas are:`]
+        for (const a of shape.areas) {
+            out.push(`  ${a.key.padEnd(10)} ${a.name}, ${plural(a.documents, 'document')}    ${TOOL} docs list ${a.key}`)
+        }
+        return [...out, '', scopeLine(shape)].join('\n')
+    }
+    if (group === null) return [...areaBlock(found), '', scopeLine(shape)].join('\n')
+
+    const g = found.groups.find((x) => x.key === group)
+    if (!g) {
+        const out = [`no group named '${group}' in ${found.key} - the groups are:`, ...areaBlock(found, { allGroups: true }).slice(1)]
+        return [...out, '', scopeLine(shape)].join('\n')
+    }
+    const out = [`${found.name} / ${g.label}  ${plural(g.documents, 'document')}${offText(g.offBaseline)}`]
+    if (g.docs.length === 0) out.push(`  none in ${found.key} ${g.key}`)
+    for (const d of g.docs) {
+        const type = d.note?.type ? `[${d.note.type}] ` : ''
+        // The state is the reason a closed or deferred note sits where it does, and the index
+        // prints it for the same reason: a disposition without its why reads as an abandonment.
+        const state = d.note?.state && !d.note.open ? `  _${d.note.state}_` : ''
+        out.push(`  - ${type}${d.title}  ${d.path}${d.offBaseline ? `  (off baseline - on ${d.ref})` : ''}${state}`)
+        out.push(`        ${TOOL} docs show ${d.path}`)
+    }
+    return [...out, '', scopeLine(shape)].join('\n')
+}
+
 export function formatStranded(clusters, index) {
     if (clusters.length === 0) return `nothing stranded: every note on every ref has reached ${index.baseline}.`
     const paths = clusters.reduce((n, c) => n + c.paths.length, 0)

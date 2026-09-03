@@ -48,6 +48,61 @@ else its own name. Sizes are against each branch's merge-base, so the number say
 The filtering is most of the value: for that note, 198 of the 274 carrying refs are merely behind.
 Reporting them would bury the two dozen that actually differ.
 
+## Seeing what the corpus holds, and walking to one document
+
+```
+node bin/inflight.mjs docs
+```
+
+The map. Each of the three areas with how many documents it holds across every ref and how many of
+those exist *only* off the baseline; under each area its groups with the same two counts; then the
+`docs` subcommands with the sentence that says when to reach for each; then a notice for any
+delivery of the context query that has a recorded failure; then the ref set it searched. The groups
+are the ones the session-start index already uses, so nothing here needs learning twice: solutions
+by category directory, in-flight notes by the cost-of-not-knowing order (registers first, then open
+work by impact, then features with no consequence attached, then whatever no group claimed, then
+closed, then deferred last), plans by year-month, newest first.
+
+```
+In-flight state  docs/inflight/  <n> documents, <n> only off the baseline    bin/inflight.mjs docs list inflight
+  registers        <n> (<n> off)    bin/inflight.mjs docs list inflight registers
+  misdirection     <n> (<n> off)    bin/inflight.mjs docs list inflight misdirection
+  ...
+  deferred         <n> (<n> off)    bin/inflight.mjs docs list inflight deferred
+```
+
+**Every level prints the next level's commands, and that is the whole interface.** There is no
+interactive step and nothing to type that was not printed: the area row carries its `docs list
+<area>`, each group row its `docs list <area> <group>`, and each document its `docs show <path>`.
+An agent walks from the bare call to one document by copying three lines. The walk on this
+repository, copied verbatim: `docs`, then `docs list inflight`, then `docs list inflight crash`,
+then the `docs show docs/inflight/...` line beside the note it wanted.
+
+```
+node bin/inflight.mjs docs list inflight crash
+```
+
+The leaf: each document as its title, its path, and - when it exists only off the baseline - the
+live ref it was read from, which is the ref `docs show` will show it from. A closed or deferred note
+carries its state, because a disposition without its reason reads as an abandonment. An unknown
+area or group is not an error: the valid names come back, each as the command that would have
+worked, and the exit is 0.
+
+**The counts are corpus counts, not working-tree counts, which is the point.** The session index at
+the top of your context lists what the *current branch* carries; this lists what exists on any live
+ref, reading on-baseline documents from the baseline's own blob and off-baseline ones from the first
+sorted live ref carrying them - so a shape built on a checkout behind the baseline is not wrong. An
+in-flight note is placed by its markers, read the same way, and the vocabulary that places it is
+held equal to the gate's shell library by a self-test that sources the shell file. The cost is one
+`ls-tree` per ref plus one `cat-file --batch` for every document, several seconds here, paid on
+every call because there is no corpus cache to go stale.
+
+**The failure notice is the only place a fail-open hook's breakage shows.** The read-time and
+prompt-time deliveries never block a read or a prompt, so a hook that has been throwing for a week
+looks exactly like a hook with nothing to say. A delivery that catches an error records its name,
+the reason and the time; bare `docs` prints one line per record while it exists, and a later
+success of the same delivery clears it.
+
 ## Reading a document as the corpus holds it, not as your checkout does
 
 ```

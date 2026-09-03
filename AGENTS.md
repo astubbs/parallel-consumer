@@ -198,6 +198,7 @@ and the traps that voided earlier experiments.
 | Check | Command |
 |---|---|
 | Plans, solutions and in-flight notes, **on every branch** | `node bin/inflight.mjs prior-art <mechanism> [<mechanism>...]` |
+| **The shape of the docs corpus, and one document's other versions** | `node bin/inflight.mjs docs` - every area, its groups and their counts across every ref, with the commands that drill in; `node bin/inflight.mjs docs header <path>` before acting on a document - the pull form of what the read-time hook shows, for a host without hooks |
 | Open PRs (collision check) | `gh pr list -R astubbs/parallel-consumer`, then `gh pr diff <n> -R astubbs/parallel-consumer --name-only` |
 | **Merged** PRs, by file | `gh pr list -R astubbs/parallel-consumer --state merged --limit 100 --json number,title,files --jq '.[] \| select(.files[]?.path \| test("<ClassName>")) \| "\(.number) \(.title)"'` |
 | Issues, `--state all` | `gh issue list -R astubbs/parallel-consumer --state all --limit 300` - fork issues *and* `upstream-mirror` ones; read the upstream original, not the mirror's summary |

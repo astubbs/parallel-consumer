@@ -189,6 +189,9 @@ const gitlib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'git.mjs')).
 const front = (binDir) => import(pathToFileURL(join(binDir, 'inflight.mjs')).href)
 const branches = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'branches.mjs')).href)
 const termsLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'terms.mjs')).href)
+const tagsLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'inflight-tags.mjs')).href)
+const docsShapeLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'docs-shape.mjs')).href)
+const cacheLib = (binDir) => import(pathToFileURL(join(binDir, 'lib', 'cache.mjs')).href)
 
 /**
  * Source with comments removed, so a check about CODE is not answered by prose. The first cut of
@@ -2037,7 +2040,212 @@ const CHECKS = [
             })
         },
         mutate: (binDir) => patch(join(binDir, 'inflight.mjs'),
-            "                name: 'header',", "                name: 'hdr',"),
+            "        name: 'header',", "        name: 'hdr',"),
+    },
+    // ---------------------------------------------------------------------------------------------
+    // BARE `docs` AND `docs list` - the corpus shape, and the walk from it to one document.
+    // docs/plans/2026-09-03-001-feat-inflight-docs-context-query-plan.md, unit U5.
+    // ---------------------------------------------------------------------------------------------
+    {
+        id: 'tag-vocabulary-matches-the-bash-library',
+        why: 'the gate sources the shell file and the shape imports the Node one; a value or an order the two disagree on is a note the gate accepts and the shape misplaces, and nothing else would report it',
+        run: async (binDir) => {
+            const t = await tagsLib(binDir)
+            const names = Object.keys(t.SHELL_VARIABLES)
+            // SOURCED, NOT PARSED: the feature and register sets are built by shell expansion, so
+            // only bash can say what they hold.
+            const script = `source "$1" || exit 9; for v in ${names.join(' ')}; do eval "printf '%s\\n' \\"\\$\${v}\\""; done`
+            const r = spawnSync('bash', ['-c', script, '_', join(binDir, 'lib', 'inflight-tags.sh')], { encoding: 'utf8' })
+            if (r.status !== 0) return false
+            const got = r.stdout.split('\n').slice(0, names.length).map((l) => l.trim().split(/\s+/).filter(Boolean))
+            if (got.length !== names.length || got.some((v) => v.length === 0)) return false
+            return names.every((n, i) => JSON.stringify(got[i]) === JSON.stringify(t.SHELL_VARIABLES[n]))
+        },
+        // One impact moved one place: the same set, a different order, which is the drift that
+        // would silently re-rank the index.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'inflight-tags.mjs'),
+            "export const INFLIGHT_IMPACT_ORDER = [\n    'misdirection', 'blind-spot', 'crash',",
+            "export const INFLIGHT_IMPACT_ORDER = [\n    'blind-spot', 'misdirection', 'crash',"),
+    },
+    {
+        id: 'bare-docs-prints-the-shape-the-guide-and-any-recorded-delivery-failure',
+        why: 'a hook that fails open prints nothing to the agent it failed; the bare call is the one place that failure is visible, beside the map of what the corpus holds',
+        run: async (binDir) => {
+            const dir = docsFixture()
+            const plain = invoke(binDir, ['docs'], { cwd: dir })
+            if (plain.code !== 0 || !plain.out.trim()) return false
+            // Each area with its count, the off-baseline count, and the guide from the registry.
+            if (!/docs\/inflight\/ {2}2 documents, 1 only off the baseline/.test(plain.out)) return false
+            if (!/docs\/solutions\/ {2}1 document\b/.test(plain.out) || !/docs\/plans\/ {2}1 document\b/.test(plain.out)) return false
+            if ((plain.out.match(/^ +when: /gm) ?? []).length < 3) return false
+            if (!['docs list', 'docs show', 'docs header'].every((c) => plain.out.includes(c))) return false
+            if (plain.out.includes('DELIVERY FAILED')) return false
+            // A failure recorded through the cache library, in a cache directory of this check's own.
+            const cache = await cacheLib(binDir)
+            const cacheDir = mkdtempSync(join(tmpdir(), 'inflight-docs-cache-'))
+            const envBefore = process.env.PC_INFLIGHT_CACHE_DIR
+            process.env.PC_INFLIGHT_CACHE_DIR = cacheDir
+            try { cache.recordDeliveryFailure('header', 'the hook threw on a fixture') } finally {
+                if (envBefore === undefined) delete process.env.PC_INFLIGHT_CACHE_DIR
+                else process.env.PC_INFLIGHT_CACHE_DIR = envBefore
+            }
+            const noticed = invoke(binDir, ['docs'], { cwd: dir, env: { ...process.env, PC_INFLIGHT_CACHE_DIR: cacheDir } })
+            return noticed.code === 0 && /DELIVERY FAILED: header - the hook threw on a fixture/.test(noticed.out)
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'views.mjs'),
+            'for (const [delivery, f] of Object.entries(failures)) {', 'for (const [delivery, f] of []) {'),
+    },
+    {
+        id: 'docs-list-walks-from-the-bare-call-to-a-document-by-copied-commands',
+        why: 'every level must print the next level\'s commands, or the walk needs input the agent has to invent - the plan\'s R14, and its acceptance example AE5',
+        run: async (binDir) => {
+            const dir = docsFixture()
+            const t = await tagsLib(binDir)
+            const cmds = (out) => out.split('\n').map((l) => /bin\/inflight\.mjs (.+)$/.exec(l)).filter(Boolean).map((m) => m[1].trim().split(/\s+/))
+            const first = (out, prefix, length) => cmds(out).find((c) => c.length === length && prefix.every((p, i) => c[i] === p))
+            const bare = invoke(binDir, ['docs'], { cwd: dir })
+            const toArea = first(bare.out, ['docs', 'list', 'inflight'], 3)
+            if (bare.code !== 0 || !toArea) return false
+            const area = invoke(binDir, toArea, { cwd: dir })
+            const toGroup = first(area.out, ['docs', 'list', 'inflight'], 4)
+            if (area.code !== 0 || !toGroup) return false
+            const group = invoke(binDir, toGroup, { cwd: dir })
+            if (group.code !== 0) return false
+            // Titles with paths, and the off-baseline note marked as such with its ref.
+            if (!group.out.includes('The note  docs/inflight/note.md')) return false
+            if (!/Only here {2}docs\/inflight\/branch-only\.md {2}\(off baseline - on only-here\)/.test(group.out)) return false
+            const toDoc = first(group.out, ['docs', 'show'], 3)
+            if (!toDoc) return false
+            const doc = invoke(binDir, toDoc, { cwd: dir })
+            if (doc.code !== 0 || !doc.out.includes(`--- ${toDoc[2]} @ `)) return false
+            // The group commands come out in the index's order: registers, the impact order the
+            // shell library states, then the four trailing groups.
+            const listed = invoke(binDir, ['docs', 'list', 'inflight', 'no-such-group'], { cwd: dir })
+            const order = cmds(listed.out).filter((c) => c.length === 4 && c[2] === 'inflight').map((c) => c[3])
+            const want = ['registers', ...t.INFLIGHT_IMPACT_ORDER, 'feature', 'unmatched', 'closed', 'deferred']
+            return listed.code === 0 && JSON.stringify(order) === JSON.stringify(want)
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'views.mjs'),
+            'out.push(`        ${TOOL} docs show ${d.path}`)', 'out.push(`        ${TOOL} docs show`)'),
+    },
+    {
+        id: 'a-deferred-note-groups-as-deferred-and-a-note-that-mentions-the-marker-stays-open',
+        why: 'the session index once filed `parked - deferred` under nothing and read a note QUOTING the marker as closed; the shape inherits both rules or repeats both incidents',
+        run: async (binDir) => {
+            const t = await tagsLib(binDir)
+            const s = await docsShapeLib(binDir)
+            const g = (text) => s.inflightGroupOf(t.classifyNote(text, 'docs/inflight/x.md'))
+            const tagged = (state) => `# X\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\n${state}\nbody\n`
+            if (g(tagged('<!-- inflight-state: parked - deferred until the next major -->')) !== 'deferred') return false
+            if (g(tagged('<!-- inflight-state: deferred - after v6 -->')) !== 'deferred') return false
+            if (g(tagged('<!-- inflight-state: closed - landed in astubbs#1 -->')) !== 'closed') return false
+            if (g(tagged('the marker is `inflight-state:` and this note quotes it in prose')) !== 'ci') return false
+            if (g(tagged('')) !== 'ci') return false
+            // And through the tool: its own repository, so the shared fixture's exact counts stand.
+            const { dir, commit } = windowRepo()
+            mkdirSync(join(dir, 'docs', 'inflight'), { recursive: true })
+            const note = (name, state) => writeFileSync(join(dir, 'docs', 'inflight', `${name}.md`), `# ${name}\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\n${state}\n`)
+            note('parked-one', '<!-- inflight-state: parked - deferred until v6 -->')
+            note('quotes-the-marker', 'prose that says inflight-state: and moves on')
+            note('open-one', '')
+            commit('three notes')
+            const deferred = invoke(binDir, ['docs', 'list', 'inflight', 'deferred'], { cwd: dir })
+            const ci = invoke(binDir, ['docs', 'list', 'inflight', 'ci'], { cwd: dir })
+            if (deferred.code !== 0 || ci.code !== 0) return false
+            if (!deferred.out.includes('parked-one') || deferred.out.includes('open-one') || deferred.out.includes('quotes-the-marker')) return false
+            return ci.out.includes('quotes-the-marker') && ci.out.includes('open-one') && !ci.out.includes('parked-one')
+        },
+        // Requires the word at the FRONT of the state - the exact rule the index once had, under
+        // which `parked - deferred` fell out of every section.
+        mutate: (binDir) => patch(join(binDir, 'lib', 'inflight-tags.mjs'),
+            'export const DEFERRED_RE = /inflight-state:[^>]*(deferred|parked)[^>]*-->/',
+            'export const DEFERRED_RE = /inflight-state:\\s*deferred[^>]*-->/'),
+    },
+    {
+        id: 'an-empty-area-prints-its-heading-with-a-zero-count-and-the-refs-searched',
+        why: 'an area the shape drops because it is empty reads as an area that does not exist, and zero across N refs is a result where a missing heading is not',
+        run: async (binDir) => {
+            const { dir, commit } = windowRepo()
+            mkdirSync(join(dir, 'docs', 'inflight'), { recursive: true })
+            writeFileSync(join(dir, 'docs', 'inflight', 'only.md'), '# Only\n\n<!-- inflight-type: task -->\n<!-- inflight-impact: ci -->\nbody\n')
+            commit('one note, no plans, no solutions')
+            const bare = invoke(binDir, ['docs'], { cwd: dir })
+            if (bare.code !== 0) return false
+            if (!/docs\/solutions\/ {2}0 documents/.test(bare.out) || !/docs\/plans\/ {2}0 documents/.test(bare.out)) return false
+            if (!/searched \d+ refs? \(\d+ live, \d+ archival\)/.test(bare.out)) return false
+            const area = invoke(binDir, ['docs', 'list', 'plans'], { cwd: dir })
+            return area.code === 0 && /docs\/plans\/ {2}0 documents/.test(area.out) && /searched \d+ ref/.test(area.out)
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-shape.mjs'),
+            'const shaped = areas.map((a) => {', 'const shaped = areas.filter((a) => perArea.get(a.dir).length > 0).map((a) => {'),
+    },
+    {
+        id: 'docs-list-with-an-unknown-name-answers-with-the-valid-names-and-exit-0',
+        why: 'a typo is not a failure to run; the valid names, each as the command that would have worked, are the answer',
+        run: async (binDir) => {
+            const dir = docsFixture()
+            const area = invoke(binDir, ['docs', 'list', 'nowhere'], { cwd: dir })
+            if (area.code !== 0 || !area.out.includes("no area named 'nowhere'")) return false
+            if (!['inflight', 'solutions', 'plans'].every((a) => area.out.includes(`bin/inflight.mjs docs list ${a}`))) return false
+            const group = invoke(binDir, ['docs', 'list', 'inflight', 'nowhere'], { cwd: dir })
+            if (group.code !== 0 || !group.out.includes("no group named 'nowhere' in inflight")) return false
+            if (!group.out.includes('bin/inflight.mjs docs list inflight crash')) return false
+            const none = invoke(binDir, ['docs', 'list'], { cwd: dir })
+            return none.code === 0 && none.out.includes('bin/inflight.mjs docs list inflight')
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'views.mjs'),
+            "const out = [area === null ? 'give an area to list:' : `no area named '${area}' - the areas are:`]",
+            "return area === null ? 'give an area to list' : `no area named '${area}'`\n        const out = []"),
+    },
+    {
+        id: 'docs-shape-reads-every-document-in-one-cat-file-batch',
+        why: 'the three-area index alone is most of the 8 s budget; one fork per document for its title and markers would spend the rest several times over',
+        run: async (binDir) => {
+            const n = await notes(binDir)
+            const s = await docsShapeLib(binDir)
+            const perf = await perfOf(binDir)
+            return inDir(docsFixture(), () => {
+                const index = n.corpusIndex()
+                const clusters = n.stranded(index)
+                perf.perfReset()
+                const shape = s.docsShape({ index, stranded: clusters })
+                if (!shape.ok || callCount(perf.perfReport(), 'git cat-file') !== 1) return false
+                const titles = shape.areas.flatMap((a) => a.groups.flatMap((g) => g.docs.map((d) => d.title)))
+                if (!['The note', 'Only here', 'A solved problem', 'A plan'].every((t) => titles.includes(t))) return false
+                const inflight = shape.areas.find((a) => a.key === 'inflight')
+                return inflight.groups.find((g) => g.key === 'ci').docs.every((d) => d.note.type === 'task')
+            })
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'docs-shape.mjs'),
+            'const batch = blobContents(wanted.map((w) => w.blob))',
+            'const batch = { ok: true, contents: new Map(wanted.map((w) => [w.blob, blobContents([w.blob]).contents.get(w.blob)])) }'),
+    },
+    {
+        id: 'document-titles-follow-the-index-fallback-chain',
+        why: 'a solution\'s title is YAML in its frontmatter and quoted whenever it holds a colon; a shape that lists the heading or the filename instead names the document differently from the index the agent already read',
+        run: async (binDir) => {
+            const t = await tagsLib(binDir)
+            if (t.titleOf('---\ntitle: "Race: the drainer ran twice"\ntags: [x]\n---\n# Some heading\n', 'docs/solutions/ci/a.md') !== 'Race: the drainer ran twice') return false
+            if (t.titleOf("---\ntitle: 'it''s quoted'\n---\n", 'docs/solutions/ci/a.md') !== "it''s quoted") return false
+            if (t.titleOf('intro\n# The heading\n\ntitle: not frontmatter\n', 'docs/plans/2026-01-01-001-p.md') !== 'The heading') return false
+            return t.titleOf('no heading at all\n', 'docs/plans/2026-01-01-001-p.md') === '2026-01-01-001-p'
+        },
+        mutate: (binDir) => patch(join(binDir, 'lib', 'inflight-tags.mjs'),
+            '    const fm = /^---\\r?\\n([\\s\\S]*?)\\r?\\n---/.exec(text)', '    const fm = null'),
+    },
+    {
+        id: 'help-lists-docs-list-with-its-when-line',
+        why: 'the bare call points at docs list; a command help cannot find is one the agent will not trust',
+        run: async (binDir) => {
+            const help = invoke(binDir, ['help'])
+            if (help.code !== 0) return false
+            const lines = help.out.split('\n')
+            const at = lines.findIndex((l) => /^ {2}docs list\b/.test(l))
+            if (at < 0 || !/^\s+when: \S/.test(lines[at + 1] ?? '')) return false
+            const usage = invoke(binDir, ['help', 'docs', 'list'])
+            return usage.code === 0 && usage.out.includes('Usage: bin/inflight.mjs docs list')
+        },
+        mutate: (binDir) => patch(join(binDir, 'inflight.mjs'), "        name: 'list',", "        name: 'ls',"),
     },
     // ---------------------------------------------------------------------------------------------
     // THE PROMPT HALF OF THE QUERY - term extraction in isolation, then one grep over the live refs.
