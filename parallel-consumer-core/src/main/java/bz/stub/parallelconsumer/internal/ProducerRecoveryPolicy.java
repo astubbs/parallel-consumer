@@ -39,13 +39,14 @@ class ProducerRecoveryPolicy {
     }
 
     /**
-     * What retrying a replacement build cannot fix: the broker refusing the id or the feature, and an {@link Error}
-     * from the build (the construction seam runs as user code, so it arrives wrapped as a user-function failure),
-     * which is never a transient broker condition.
+     * What retrying a replacement build cannot fix: the broker refusing the id or the feature, the factory breaking
+     * its contract (deterministic - a caching factory caches on every rebuild), and an {@link Error} from the
+     * factory, which arrives wrapped as user-function failure and is never a transient broker condition.
      */
     static boolean isTerminalBuildFailure(Throwable failure) {
         return ThrowableUtils.anyInCauseChain(failure,
-                f -> f instanceof AuthorizationException || f instanceof UnsupportedVersionException || f instanceof Error);
+                f -> f instanceof AuthorizationException || f instanceof UnsupportedVersionException
+                        || f instanceof ProducerFactoryContractException || f instanceof Error);
     }
 
     /**

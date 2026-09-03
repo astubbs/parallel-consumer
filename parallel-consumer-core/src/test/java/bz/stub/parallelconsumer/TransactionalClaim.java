@@ -300,7 +300,7 @@ public enum TransactionalClaim {
     PRODUCER_INVALIDATION_RECOVERED(Source.README_TEMPLATE,
             "Where PC built the producer, a producer the broker reports invalid is replaced and the work its aborted transaction discarded is processed again, so processing continues instead of the instance stopping.",
             Status.PROVED, "ProducerFencingRecoveryIT#aFencedProducerIsReplacedAndEveryResultIsStillVisibleExactlyOnce: a "
-            + "rogue producer initialised under PC's own transactional.id fences PC's producer three times on a "
+            + "rogue producer initialised under PC's own derived transactional.id fences PC's producer three times on a "
             + "real coordinator; each time the recovery counter moves, every source record's result is visible exactly "
             + "once at read_committed, and the control - the rogue's next transactional call throwing "
             + "ProducerFencedException - shows the replacement re-initialised under the same id. That case fences "

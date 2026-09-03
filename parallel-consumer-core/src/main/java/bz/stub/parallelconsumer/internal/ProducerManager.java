@@ -629,7 +629,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
 
     /**
      * @return true where PC built the producer and so can build another, and the commit mode is the transactional
-     *         one whose control loop performs the recovery; false on the producer-instance path, and in
+     *         one whose control loop performs the recovery; false on the deprecated producer-instance path, and in
      *         the consumer-commit modes, where every condition keeps its pre-recovery behaviour
      */
     public boolean canRecover() {
@@ -890,7 +890,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
                 }
                 var terminal = new ProducerInvalidatedException(msg(
                         "The replacement producer for transactional.id '{}' cannot be built or initialised ({}), and " +
-                                "retrying cannot fix that - check the TransactionalId ACL for this id",
+                                "retrying cannot fix that - check the TransactionalId ACL for the prefix this id carries",
                         source.getTransactionalId(), failureType), ProducerRecoveryPolicy.sanitised(failure));
                 log.error("Producer recovery terminal: condition {}, attempt {}: {}", condition, attempt, terminal.getMessage());
                 return new ReplacementOutcome(ReplacementOutcome.Kind.TERMINAL, terminal);
@@ -914,7 +914,7 @@ public class ProducerManager<K, V> extends AbstractOffsetCommitter<K, V> impleme
     }
 
     /**
-     * The failure's class, and its root cause's where that differs - a build failure arrives wrapped as
+     * The failure's class, and its root cause's where that differs - a factory's failure arrives wrapped as
      * {@link bz.stub.parallelconsumer.ExceptionInUserFunctionException}, which names nothing on its own. Types only,
      * never messages: a {@code ConfigException}'s message carries the offending configuration value (R7).
      */

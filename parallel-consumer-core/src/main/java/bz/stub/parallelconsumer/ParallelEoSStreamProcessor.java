@@ -70,7 +70,7 @@ public class ParallelEoSStreamProcessor<K, V> extends AbstractParallelEoSStreamP
                                    Consumer<ConsumeProduceResult<K, V, K, V>> callback) {
         if (!getOptions().isProducerSupplied()) {
             throw new IllegalArgumentException("To use the produce flows you must supply producerConfig for PC to build " +
-                    "a Producer from (or a Producer instance) in the options");
+                    "a Producer from (or, deprecated, a Producer instance) in the options");
         }
 
         // wrap user func to add produce function
@@ -148,7 +148,7 @@ public class ParallelEoSStreamProcessor<K, V> extends AbstractParallelEoSStreamP
      * anywhere in the failure's cause chain - the send future raises it inside {@code ExecutionException}, which is
      * the shape the field report (astubbs#411, confluentinc#830) actually has - is recorded on the
      * {@link ProducerManager} and this record fails, returning through the mailbox for retry; the control thread
-     * recovers on its next pass. Where PC cannot recover, the producer-instance path, the outcome is what
+     * recovers on its next pass. Where PC cannot recover, the deprecated producer-instance path, the outcome is what
      * confluentinc#839 made it: a synchronous {@link InvalidPidMappingException} closes the instance, and anything
      * else is an ordinary produce failure of this record.
      * <p>
