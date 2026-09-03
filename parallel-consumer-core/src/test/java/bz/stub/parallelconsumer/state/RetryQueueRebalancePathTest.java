@@ -88,27 +88,13 @@ class RetryQueueRebalancePathTest extends BrokerlessWorkManagerTestBase {
     void revokeDeclinesTheRetryQueueWriteLockRatherThanWaitingForIt() throws InterruptedException {
         var ignoredParkedForRetry = aFailedRecordParkedForRetry(); // the fixture is the point; the container is not needed here
 
-        var revokeReturned = new CountDownLatch(1);
-        Thread pollThread = null;
-        // the controller thread's own read-lock hold, through the production iterator
-        try (RetryQueue.RetryQueueIterator heldByTheControllerThread = sm.getRetryQueue().iterator()) {
-            assertWithMessage("FIXTURE: the iterator must actually be holding something, or it is not modelling a scan")
-                    .that(heldByTheControllerThread.hasNext()).isTrue();
-
-            pollThread = new Thread(() -> {
-                wm.onPartitionsRevoked(UniLists.of(tp));
-                revokeReturned.countDown();
-            }, "broker-poll");
-            pollThread.start();
-
-            assertWithMessage("the rebalance callback runs inside poll() with the whole group waiting on it, so "
-                    + "it has to decline the retry queue's write lock rather than wait for the controller "
-                    + "thread's scan to finish")
-                    .that(revokeReturned.await(CALLBACK_DEADLINE_SECONDS, TimeUnit.SECONDS))
-                    .isTrue();
-        } finally {
-            joinQuietly(pollThread);
-        }
+        withTheControllerThreadHoldingTheReadLock(sm.getRetryQueue(),
+                () -> wm.onPartitionsRevoked(UniLists.of(tp)),
+                revokeReturned -> assertWithMessage("the rebalance callback runs inside poll() with the whole "
+                        + "group waiting on it, so it has to decline the retry queue's write lock rather than "
+                        + "wait for the controller thread's scan to finish")
+                        .that(revokeReturned)
+                        .isTrue());
     }
 
     /**
@@ -118,37 +104,26 @@ class RetryQueueRebalancePathTest extends BrokerlessWorkManagerTestBase {
     void aDeclinedRevokeLeavesTheShardAndTheRetryQueueInStep() throws InterruptedException {
         WorkContainer<String, String> parkedForRetry = aFailedRecordParkedForRetry();
 
-        var revokeReturned = new CountDownLatch(1);
-        Thread pollThread = null;
-        try (RetryQueue.RetryQueueIterator heldByTheControllerThread = sm.getRetryQueue().iterator()) {
-            assertThat(heldByTheControllerThread.hasNext()).isTrue();
+        withTheControllerThreadHoldingTheReadLock(sm.getRetryQueue(),
+                () -> wm.onPartitionsRevoked(UniLists.of(tp)),
+                ignoredCompleted -> {
+                    // whether it completed is the OTHER test's assertion; here the deadline is only a way of
+                    // giving the poll thread every chance to reach the split before the state below is read
 
-            pollThread = new Thread(() -> {
-                wm.onPartitionsRevoked(UniLists.of(tp));
-                revokeReturned.countDown();
-            }, "broker-poll");
-            pollThread.start();
+                    // read while the lock is still contended - the split only exists in this window
+                    boolean stillQueued = sm.getRetryQueue().contains(parkedForRetry);
+                    long stillInShards = sm.getNumberOfRecordsInShards();
+                    log.debug("Under contention: retry queue holds it = {}, shards hold {}", stillQueued, stillInShards);
 
-            boolean ignoredCompleted = revokeReturned.await(CALLBACK_DEADLINE_SECONDS, TimeUnit.SECONDS);
-            // whether it completed is the OTHER test's assertion; here the deadline is only a way of giving the
-            // poll thread every chance to reach the split before the state below is read
-
-            // read while the lock is still contended - the split only exists in this window
-            boolean stillQueued = sm.getRetryQueue().contains(parkedForRetry);
-            long stillInShards = sm.getNumberOfRecordsInShards();
-            log.debug("Under contention: retry queue holds it = {}, shards hold {}", stillQueued, stillInShards);
-
-            assertWithMessage("a retry-queue entry whose container is in no shard is removed by nothing, ever - "
-                    + "every removal path reaches the queue through shard contents. So the revoke either does "
-                    + "both removals or neither, and under contention it must be neither")
-                    .that(stillQueued && stillInShards == 0L)
-                    .isFalse();
-            assertWithMessage("and 'neither' is what it must be, rather than the queue emptying first")
-                    .that(stillQueued).isTrue();
-            assertThat(stillInShards).isEqualTo(1L);
-        } finally {
-            joinQuietly(pollThread);
-        }
+                    assertWithMessage("a retry-queue entry whose container is in no shard is removed by nothing, "
+                            + "ever - every removal path reaches the queue through shard contents. So the revoke "
+                            + "either does both removals or neither, and under contention it must be neither")
+                            .that(stillQueued && stillInShards == 0L)
+                            .isFalse();
+                    assertWithMessage("and 'neither' is what it must be, rather than the queue emptying first")
+                            .that(stillQueued).isTrue();
+                    assertThat(stillInShards).isEqualTo(1L);
+                });
     }
 
     /**
@@ -162,60 +137,40 @@ class RetryQueueRebalancePathTest extends BrokerlessWorkManagerTestBase {
      * rule reported six violations and none of them on {@code onPartitionsAssigned}, which reaches the same lock
      * by this route.
      * <p>
-     * Driven against a shard built here rather than through {@code wm}, because the sweep has to find a
-     * container that is ALREADY stale - and every production route that makes one stale runs the sweep on its
-     * way past.
+     * Driven against a hand-built shard rather than through {@code wm} - see
+     * {@link #aStaleContainerParkedForRetry()} for why.
      */
     @Test
     void theStaleSweepDeclinesTheRetryQueueWriteLockRatherThanWaitingForIt() throws InterruptedException {
-        var module = mu.getModule();
-        var record = new ConsumerRecord<>(topic, tp.partition(), 7L, "a-key", "a-value");
-        var retryQueue = new RetryQueue();
-        var shard = new ProcessingShard<>(ShardKey.of(record, module.options().getOrdering()),
-                module.options(), pm, new RecordPopulation());
+        var fixture = aStaleContainerParkedForRetry();
 
-        wm.onPartitionsAssigned(UniLists.of(tp));
-        var container = new WorkContainer<>(pm.getEpochOfPartition(tp), record, module);
-        shard.addWorkContainer(container);
-        boolean ignoredWasAbsent = retryQueue.add(container); // parking it is the fixture; presence is asserted below
-
-        // the partition goes away, so what this shard holds is stale - and this shard is not registered with
-        // the work manager, so nothing has swept it on the way
-        wm.onPartitionsRevoked(UniLists.of(tp));
         // The staleness PREDICATE, not a count. The sweep only reaches tryRemove for an entry it considers
         // stale, and a count of one holds whether or not it does - so a fixture regression that stopped this
         // container being stale would make the sweep skip it, return instantly, and leave every assertion
         // below passing without the write lock ever being asked for.
         assertWithMessage("FIXTURE: the resident must actually be stale now, by the same question the sweep asks")
-                .that(pm.getPartitionState(container).checkIfWorkIsStale(container)).isTrue();
+                .that(pm.getPartitionState(fixture.container).checkIfWorkIsStale(fixture.container)).isTrue();
         assertWithMessage("FIXTURE: and still resident, so there is something for the sweep to remove")
-                .that(shard.getCountOfWorkTracked()).isEqualTo(1L);
-        assertThat(retryQueue.contains(container)).isTrue();
+                .that(fixture.shard.getCountOfWorkTracked()).isEqualTo(1L);
+        assertThat(fixture.retryQueue.contains(fixture.container)).isTrue();
 
-        var sweepReturned = new CountDownLatch(1);
-        Thread pollThread = null;
-        try (RetryQueue.RetryQueueIterator heldByTheControllerThread = retryQueue.iterator()) {
-            assertThat(heldByTheControllerThread.hasNext()).isTrue();
+        withTheControllerThreadHoldingTheReadLock(fixture.retryQueue,
+                () -> {
+                    var ignoredSwept = fixture.shard.removeStaleWorkContainersFromShard(fixture.retryQueue);
+                },
+                sweepReturned -> {
+                    assertWithMessage("the epoch-change stale sweep runs inside the rebalance callback too, so it "
+                            + "declines the write lock on the same terms")
+                            .that(sweepReturned)
+                            .isTrue();
 
-            pollThread = new Thread(() -> {
-                var ignoredSwept = shard.removeStaleWorkContainersFromShard(retryQueue);
-                sweepReturned.countDown();
-            }, "broker-poll");
-            pollThread.start();
-
-            assertWithMessage("the epoch-change stale sweep runs inside the rebalance callback too, so it "
-                    + "declines the write lock on the same terms")
-                    .that(sweepReturned.await(CALLBACK_DEADLINE_SECONDS, TimeUnit.SECONDS))
-                    .isTrue();
-
-            assertWithMessage("and it leaves the pair in step - a stale container is a state the engine "
-                    + "already tolerates, an orphaned queue entry is not")
-                    .that(retryQueue.contains(container) && shard.getCountOfWorkTracked() == 0L)
-                    .isFalse();
-            assertThat(shard.getCountOfWorkTracked()).isEqualTo(1L);
-        } finally {
-            joinQuietly(pollThread);
-        }
+                    assertWithMessage("and it leaves the pair in step - a stale container is a state the engine "
+                            + "already tolerates, an orphaned queue entry is not")
+                            .that(fixture.retryQueue.contains(fixture.container)
+                                    && fixture.shard.getCountOfWorkTracked() == 0L)
+                            .isFalse();
+                    assertThat(fixture.shard.getCountOfWorkTracked()).isEqualTo(1L);
+                });
     }
 
     /**
@@ -240,26 +195,17 @@ class RetryQueueRebalancePathTest extends BrokerlessWorkManagerTestBase {
     void aRefusedRevokeIsRetiredFromBothStructuresByTheNextControllerWorkRequest() throws InterruptedException {
         WorkContainer<String, String> parkedForRetry = aFailedRecordParkedForRetry();
 
-        var revokeReturned = new CountDownLatch(1);
-        Thread pollThread = null;
-        try (RetryQueue.RetryQueueIterator heldByTheControllerThread = sm.getRetryQueue().iterator()) {
-            assertThat(heldByTheControllerThread.hasNext()).isTrue();
+        withTheControllerThreadHoldingTheReadLock(sm.getRetryQueue(),
+                () -> wm.onPartitionsRevoked(UniLists.of(tp)),
+                revokeReturned -> {
+                    assertThat(revokeReturned).isTrue();
 
-            pollThread = new Thread(() -> {
-                wm.onPartitionsRevoked(UniLists.of(tp));
-                revokeReturned.countDown();
-            }, "broker-poll");
-            pollThread.start();
-
-            assertThat(revokeReturned.await(CALLBACK_DEADLINE_SECONDS, TimeUnit.SECONDS)).isTrue();
-
-            assertWithMessage("FIXTURE: the revoke must actually have been REFUSED - if it got the lock, the "
-                    + "rest of this test observes the uncontended path and proves nothing about retirement")
-                    .that(sm.getRetryQueue().contains(parkedForRetry)).isTrue();
-            assertThat(sm.getNumberOfRecordsInShards()).isEqualTo(1L);
-        } finally {
-            joinQuietly(pollThread);
-        }
+                    assertWithMessage("FIXTURE: the revoke must actually have been REFUSED - if it got the lock, "
+                            + "the rest of this test observes the uncontended path and proves nothing about "
+                            + "retirement")
+                            .that(sm.getRetryQueue().contains(parkedForRetry)).isTrue();
+                    assertThat(sm.getNumberOfRecordsInShards()).isEqualTo(1L);
+                });
 
         // the read lock is released, so the controller thread may now WAIT for the write lock - which is the
         // whole reason abandoning on the poll thread is allowed
@@ -286,43 +232,24 @@ class RetryQueueRebalancePathTest extends BrokerlessWorkManagerTestBase {
      */
     @Test
     void aRefusedStaleSweepIsRetiredFromBothStructuresByTheNextControllerWorkRequest() throws InterruptedException {
-        var module = mu.getModule();
-        var record = new ConsumerRecord<>(topic, tp.partition(), 7L, "a-key", "a-value");
-        var retryQueue = new RetryQueue();
-        var shard = new ProcessingShard<>(ShardKey.of(record, module.options().getOrdering()),
-                module.options(), pm, new RecordPopulation());
+        var fixture = aStaleContainerParkedForRetry();
 
-        wm.onPartitionsAssigned(UniLists.of(tp));
-        var container = new WorkContainer<>(pm.getEpochOfPartition(tp), record, module);
-        shard.addWorkContainer(container);
-        boolean ignoredWasAbsent = retryQueue.add(container); // parking it is the fixture; presence is asserted below
+        withTheControllerThreadHoldingTheReadLock(fixture.retryQueue,
+                () -> {
+                    var ignoredSwept = fixture.shard.removeStaleWorkContainersFromShard(fixture.retryQueue);
+                },
+                sweepReturned -> {
+                    assertThat(sweepReturned).isTrue();
+                    assertWithMessage("FIXTURE: the sweep must actually have been REFUSED")
+                            .that(fixture.retryQueue.contains(fixture.container)).isTrue();
+                    assertThat(fixture.shard.getCountOfWorkTracked()).isEqualTo(1L);
+                });
 
-        wm.onPartitionsRevoked(UniLists.of(tp));
-
-        var sweepReturned = new CountDownLatch(1);
-        Thread pollThread = null;
-        try (RetryQueue.RetryQueueIterator heldByTheControllerThread = retryQueue.iterator()) {
-            assertThat(heldByTheControllerThread.hasNext()).isTrue();
-
-            pollThread = new Thread(() -> {
-                var ignoredSwept = shard.removeStaleWorkContainersFromShard(retryQueue);
-                sweepReturned.countDown();
-            }, "broker-poll");
-            pollThread.start();
-
-            assertThat(sweepReturned.await(CALLBACK_DEADLINE_SECONDS, TimeUnit.SECONDS)).isTrue();
-            assertWithMessage("FIXTURE: the sweep must actually have been REFUSED")
-                    .that(retryQueue.contains(container)).isTrue();
-            assertThat(shard.getCountOfWorkTracked()).isEqualTo(1L);
-        } finally {
-            joinQuietly(pollThread);
-        }
-
-        assertThat(shard.getWorkIfAvailable(10, retryQueue)).isEmpty();
+        assertThat(fixture.shard.getWorkIfAvailable(10, fixture.retryQueue)).isEmpty();
 
         assertWithMessage("the controller thread's own scan retires the pair the sweep left alone")
-                .that(retryQueue.contains(container)).isFalse();
-        assertThat(shard.getCountOfWorkTracked()).isEqualTo(0L);
+                .that(fixture.retryQueue.contains(fixture.container)).isFalse();
+        assertThat(fixture.shard.getCountOfWorkTracked()).isEqualTo(0L);
     }
 
     /**
@@ -407,5 +334,95 @@ class RetryQueueRebalancePathTest extends BrokerlessWorkManagerTestBase {
      */
     private static void joinQuietly(Thread thread) {
         ThreadUtils.joinQuietly(thread, Duration.ofSeconds(CALLBACK_DEADLINE_SECONDS));
+    }
+
+    /**
+     * What every test here is actually made of: the controller thread holds {@code queue}'s READ lock through a
+     * live iterator, {@code rebalanceCallback} runs on a thread named {@code broker-poll}, and
+     * {@code whileStillContended} reads the state while that lock is <em>still held</em> - which is the only
+     * window in which a declined removal is observable at all.
+     * <p>
+     * <b>The join placement is load-bearing and is why this takes a callback rather than returning a handle.</b>
+     * The poll thread is joined only after the try-with-resources has released the read lock: on unfixed code it
+     * is parked on the write lock until then, so joining any earlier would block for the whole join timeout and
+     * then leak the thread into the rest of the suite. Four copies of that sequence is four chances to get it
+     * subtly wrong in one of them.
+     *
+     * @param callbackReturned handed to {@code whileStillContended}: whether the callback returned inside
+     *                         {@link #CALLBACK_DEADLINE_SECONDS}. Passed rather than asserted here because
+     *                         whether that is the test's claim or merely its way of giving the poll thread
+     *                         every chance differs between callers.
+     */
+    private void withTheControllerThreadHoldingTheReadLock(RetryQueue queue,
+                                                           Runnable rebalanceCallback,
+                                                           ContendedAssertions whileStillContended)
+            throws InterruptedException {
+        var callbackReturned = new CountDownLatch(1);
+        Thread pollThread = null;
+        try (RetryQueue.RetryQueueIterator heldByTheControllerThread = queue.iterator()) {
+            assertWithMessage("FIXTURE: the iterator must actually be holding something, or it is not modelling a scan")
+                    .that(heldByTheControllerThread.hasNext()).isTrue();
+
+            pollThread = new Thread(() -> {
+                rebalanceCallback.run();
+                callbackReturned.countDown();
+            }, "broker-poll");
+            pollThread.start();
+
+            whileStillContended.run(callbackReturned.await(CALLBACK_DEADLINE_SECONDS, TimeUnit.SECONDS));
+        } finally {
+            joinQuietly(pollThread);
+        }
+    }
+
+    /**
+     * The assertions a test makes while the read lock is still held against the poll thread.
+     */
+    @FunctionalInterface
+    private interface ContendedAssertions {
+        void run(boolean callbackReturned);
+    }
+
+    /**
+     * A shard and a retry queue holding the same container, with the partition revoked underneath them so the
+     * container is stale - the fixture both stale-sweep tests need.
+     * <p>
+     * Built by hand rather than through {@code wm} because the sweep has to find a container that is ALREADY
+     * stale, and every production route that makes one stale runs the sweep on its way past. The shard is
+     * deliberately not registered with the work manager for the same reason: nothing else may sweep it first.
+     */
+    private StaleSweepFixture aStaleContainerParkedForRetry() {
+        var module = mu.getModule();
+        var record = new ConsumerRecord<>(topic, tp.partition(), 7L, "a-key", "a-value");
+        var retryQueue = new RetryQueue();
+        var shard = new ProcessingShard<>(ShardKey.of(record, module.options().getOrdering()),
+                module.options(), pm, new RecordPopulation());
+
+        wm.onPartitionsAssigned(UniLists.of(tp));
+        var container = new WorkContainer<>(pm.getEpochOfPartition(tp), record, module);
+        shard.addWorkContainer(container);
+        boolean ignoredWasAbsent = retryQueue.add(container); // parking it is the fixture; presence is asserted by the callers
+
+        // the partition goes away, so what this shard holds is stale
+        wm.onPartitionsRevoked(UniLists.of(tp));
+
+        return new StaleSweepFixture(retryQueue, shard, container);
+    }
+
+    private static final class StaleSweepFixture {
+
+        private final RetryQueue retryQueue;
+
+        private final ProcessingShard<String, String> shard;
+
+        private final WorkContainer<String, String> container;
+
+        private StaleSweepFixture(RetryQueue retryQueue,
+                                  ProcessingShard<String, String> shard,
+                                  WorkContainer<String, String> container) {
+            this.retryQueue = retryQueue;
+            this.shard = shard;
+            this.container = container;
+        }
     }
 }
