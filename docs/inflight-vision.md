@@ -108,7 +108,22 @@ note named with it.
    [`inflight/ci-inflight-standalone-thesis.md`](inflight/ci-inflight-standalone-thesis.md) ·
    [`inflight-tool.md`](inflight-tool.md)
 
-2. **Never reconcile disagreement unless the domain genuinely has one authoritative state.** Git owns
+2. **A ref is a dimension the graph is observed through, not a node inside it.** The deepest law
+   here and the newest - **corrected into this shape on 2026-09-04**, having first been written as
+   *the version is the native node*. A ref is not a coordinate stamped onto a node beside issues and
+   PRs; it is the axis the whole graph is read along, so the same document, assertion, link or
+   cluster differs by ref position and Git ancestry relates those positions. Two things fall out
+   that otherwise have to be built: **divergence is native to the coordinate system** rather than
+   computed after the fact, and the fork map/reduce is free - shared ancestry is a shared region,
+   divergent commits a differentiated one, identical blob ids exact equality, a fork remote one more
+   namespace of the same axis. It is why Git is not merely an input adapter in this half of the
+   system but supplies one of the coordinate systems, and it is the clause the adjacent systems
+   cannot reach by extension.
+   [`inflight/ci-inflight-standalone-thesis.md`](inflight/ci-inflight-standalone-thesis.md) ·
+   [`inflight-tool.md`](inflight-tool.md) ·
+   [`inflight/ci-inflight-adjacent-systems-register.md`](inflight/ci-inflight-adjacent-systems-register.md)
+
+3. **Never reconcile disagreement unless the domain genuinely has one authoritative state.** Git owns
    ancestry; GitHub owns whether an issue is open; a branch owns what that workstream believes; a
    dated investigation owns what was observed that day. This tool owns none of those facts - it owns
    the edges and indexes that make them jointly legible. **The law that separates this from every
@@ -121,7 +136,7 @@ note named with it.
    [`inflight/ci-issue-index-has-no-edges.md`](inflight/ci-issue-index-has-no-edges.md) ·
    [`inflight/ci-node-query-client.md`](inflight/ci-node-query-client.md)
 
-3. **If another system already owns a fact, index it; never recreate it.** The corollary is the scope
+4. **If another system already owns a fact, index it; never recreate it.** The corollary is the scope
    discipline that keeps the tool from becoming a worse GitHub plus a worse Jira: it creates
    knowledge, not replicas of facts merely for discoverability. The generated issue index is the
    interim form and says so in its own title - a discovery aid, not a source of truth - and its
@@ -130,8 +145,8 @@ note named with it.
    [`inflight/ci-issue-index-has-no-edges.md`](inflight/ci-issue-index-has-no-edges.md) ·
    [`inflight/ci-inflight-adjacent-systems-register.md`](inflight/ci-inflight-adjacent-systems-register.md)
 
-4. **Could-not-ask must never look like asked-and-found-nothing.** The most load-bearing law here,
-   and the one with the most incidents behind it. Every section prints the size of the corpus it
+5. **Could-not-ask must never look like asked-and-found-nothing.** The law with the most incidents
+   behind it - law 2 is the deepest, this one is the most often paid for. Every section prints the size of the corpus it
    searched; a run that could not search returns a distinct code rather than a clean empty. A title
    grep is not a search. A check that reports success without having run is worse than no check. An
    instrument that could not have said yes cannot be quoted as having said no. It generalises past
@@ -146,7 +161,7 @@ note named with it.
    [`solutions/workflow-issues/an-inert-analysis-config-reads-as-a-clean-codebase.md`](solutions/workflow-issues/an-inert-analysis-config-reads-as-a-clean-codebase.md) ·
    [`inflight/ci-quarantine-lane-not-run-cannot-name-a-broken-build.md`](inflight/ci-quarantine-lane-not-run-cannot-name-a-broken-build.md)
 
-5. **Every edge carries its provenance and its epistemic class.** Authoritative, declared, inferred -
+6. **Every edge carries its provenance and its epistemic class.** Authoritative, declared, inferred -
    and never flattened together, so an agent can always ask *why does it think these are connected?*
    Governs the edge graph that does not exist yet, and the register's verified-versus-claimed
    marking, which is the same law applied to the landscape research itself.
@@ -154,7 +169,7 @@ note named with it.
    [`inflight/ci-inflight-adjacent-systems-register.md`](inflight/ci-inflight-adjacent-systems-register.md) ·
    [`inflight/ci-inflight-standalone-thesis.md`](inflight/ci-inflight-standalone-thesis.md)
 
-6. **Deliver at the moment of use; a corpus nobody opens does not exist.** A rule in a document takes
+7. **Deliver at the moment of use; a corpus nobody opens does not exist.** A rule in a document takes
    effect only if somebody opens the document and thinks to apply it, so the query half is worthless
    without the delivery half. This is why the tool's consumers are hooks on session start, prompt
    submission and tool use rather than a command an agent must remember to run.
@@ -166,7 +181,7 @@ note named with it.
    [`solutions/workflow-issues/read-the-commits-you-inherit-2026-08-10.md`](solutions/workflow-issues/read-the-commits-you-inherit-2026-08-10.md) ·
    [`solutions/workflow-issues/duplication-scanners-do-not-look-where-agents-duplicate-2026-08-12.md`](solutions/workflow-issues/duplication-scanners-do-not-look-where-agents-duplicate-2026-08-12.md)
 
-7. **One implementation of intelligence. Many implementations of ergonomics.** Shared verbatim with
+8. **One implementation of intelligence. Many implementations of ergonomics.** Shared verbatim with
    law 4 of [`w2-vision.md`](w2-vision.md), and the point at which the two corpora meet. Here it
    means the kernel speaks in **context events** - a session starts, a term is mentioned, a document
    is read, a branch is inherited, a merge is attempted - and Claude Code hooks, other harnesses, MCP
@@ -176,7 +191,7 @@ note named with it.
    [`agent-harness.md`](agent-harness.md) ·
    [`w2-vision.md`](w2-vision.md)
 
-8. **Do not replace the substrate; index it by the semantics the reader actually needs.** Git is not
+9. **Do not replace the substrate; index it by the semantics the reader actually needs.** Git is not
    replaced any more than Kafka is in the sibling corpus, and the derived index is disposable by
    construction - throw it away and recompute when the derivation improves. The second point at which
    the two corpora agree, and the reason the standalone thesis records the parallel rather than
@@ -184,17 +199,17 @@ note named with it.
    [`inflight/ci-inflight-standalone-thesis.md`](inflight/ci-inflight-standalone-thesis.md) ·
    [`w2-vision.md`](w2-vision.md)
 
-9. **A note is where knowledge is staged, never where it is buried.** When the work a note tracks
+10. **A note is where knowledge is staged, never where it is buried.** When the work a note tracks
    lands, what outlives it migrates to a durable owner first - `docs/solutions/` for a settled
    problem, `CONCEPTS.md` for vocabulary, the topic doc for a rule - and deleting is one of four
    outcomes, not the rule. [`inflight/AGENTS.md`](inflight/AGENTS.md) **owns those four outcomes**;
    what this law adds is that the lifecycle is the thing a reconciling tracker cannot express, which
-   ties it back to law 2.
+   ties it back to law 3.
    [`inflight/AGENTS.md`](inflight/AGENTS.md) ·
    [`compound-engineering.md`](compound-engineering.md) ·
    [`citations.md`](citations.md)
 
-10. **Never write down what a command can answer.** Counts of any kind included. A copied answer is
+11. **Never write down what a command can answer.** Counts of any kind included. A copied answer is
     correct until exactly one copy changes, and nothing goes red at that moment. Governs both the
     corpus (a note that tabulates open PRs is a second tracker that is wrong within a day) and the
     code (a constant written three times is the bug that produced the one file now holding the
@@ -240,14 +255,14 @@ it and the traps it had to avoid are `bin/lib/prior-art.mjs`'s and `bin/lib/note
 
 **3. The answers arrive unasked.** Session index, prompt-term injection, per-read divergence headers,
 branch context at dispatch, push-time drift. Beat 3 is what makes beats 1 and 2 pay, and it is where
-law 6 lives.
+law 7 lives.
 [`agent-harness.md`](agent-harness.md) ·
 [`inflight/ci-inflight-absorbs-the-query-half.md`](inflight/ci-inflight-absorbs-the-query-half.md)
 
 **4. The graph gets edges.** The tracker's nodes exist and its edges do not, so an agent can find an
 issue by keyword and still not learn what it is attached to - and the edges are where the reasoning
-lives. The requirement law 2 imposes: edges hang off document *versions*, never off a node with a
-current state.
+lives. The requirement laws 2 and 3 impose: an edge is read at a ref position like everything else,
+and no node carries a current state.
 [`inflight/ci-issue-index-has-no-edges.md`](inflight/ci-issue-index-has-no-edges.md) ·
 [`inflight/issue-index.md`](inflight/issue-index.md) ·
 [`inflight/ci-node-query-client.md`](inflight/ci-node-query-client.md)
@@ -267,7 +282,7 @@ taken.
 
 The tool is also a subject. These notes are open defects and gaps in the machinery this file
 describes, and a session extending the harness should read the ones it is about to touch - the class
-of bug here is *the instrument lied*, which law 4 ranks above everything else.
+of bug here is *the instrument lied*, which law 5 ranks above everything else.
 
 - **Guards that answer the wrong question**:
   [`inflight/ci-branch-behind-guard-answers-for-the-sessions-branch.md`](inflight/ci-branch-behind-guard-answers-for-the-sessions-branch.md) ·

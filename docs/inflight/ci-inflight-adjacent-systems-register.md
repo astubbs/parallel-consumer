@@ -10,7 +10,7 @@ novel?** A system entering the vicinity is as likely to become an input adapter 
 row ends with what to consume rather than compete with.
 
 [`docs/inflight-vision.md`](../inflight-vision.md) binds this register to the rest of the harness
-corpus, and its law 5 is the one the evidence rule below implements.
+corpus, and its law 6 is the one the evidence rule below implements.
 
 Opened 2026-09-04 from the conversation the thesis note captures. The two dated investigations that
 precede it - [`docs/plans/2026-09-01-001-investigate-beads-comparison.md`](../plans/2026-09-01-001-investigate-beads-comparison.md)
@@ -60,13 +60,22 @@ capabilities this tool depends on were proposed there and closed `NOT_PLANNED` (
 and lifecycle hooks - the 09-02 document's §6 owns the numbers; a third, Beads integration, was
 closed for a different reason and is not a refusal of the same kind).
 
+## Two classes of system, and neither is privileged
+
+A distinction added 2026-09-04, because it decides what a row *means* rather than how it scores. A
+**primary-source** system carries what an authority asserts - Git, GitHub, GitLab, Jira, Linear,
+Slack, Radicle. A **derived-intelligence** system carries what something else inferred - Cortex,
+GitNexus, ckg, Atlassian's Teamwork Graph, Glean. InFlight consumes both and records which is which,
+so a derived system's conclusions enter the graph as *inferred by X* and never as facts. A row's
+class is noted where it is not obvious.
+
 ## The families, and the rows so far
 
 ### Git-native and distributed work trackers
 
 | System | Relation to InFlight | Evidence |
 |---|---|---|
-| **Backlog.md** | Reconciles concurrent task versions to one winner; in-tree and single-truth. Tracks the work; InFlight tracks what the work knows. Input adapter candidate; never a query layer. | **verified** - 09-02 §2, §6, §9 |
+| **Backlog.md** | Reconciles concurrent task versions to one winner; in-tree and single-truth. Tracks the work; InFlight tracks what the work knows. Input adapter candidate; never a query layer. **Also the leading fork candidate for the *shell*** - MIT, mature CLI, Markdown parsing, search, TUI and browser UI, packaging, tests - with its manifesto's one-coherent-model invariant as the crisp thing to fork against. Gated on the winner-selection archaeology the thesis note names. | **verified** for the reconcile finding - 09-02 §2, §6, §9; the fork option is **claimed**, and the archaeology has not been run |
 | **Beads** | Out-of-tree shared store built for a fleet of agents ("50 First Dates"); correctly designed for a problem that is not this one. Its dependency graph and context injection are what `ci-issue-index-has-no-edges.md` once thought might already contain a GitHub link cache; they do not travel with a branch. | **verified** - 09-01 §8, 09-02 |
 | **git-bug** | Issues as Git objects in their own refs with GitHub, GitLab and Jira bridges; the strongest prior art for keeping machine state under refs and letting fetch distribute it, which is the multi-fork mechanism the thesis note records. Imports GitHub into a parallel tracker rather than making GitHub's graph queryable. | **verified** for the bridges and ref storage - 09-01 §8, `ci-node-query-client.md` |
 | **git-issue** (dspinellis) | Same shape as git-bug, own store outside the tree. | **verified** - `ci-node-query-client.md` |
@@ -102,6 +111,22 @@ surveyed is in-tree and multi-truth.** The axis is authority, not location.
 | **karanb192/claude-code-hooks** | Guardrails; ships the config-guard this repo lacks and a dead-rules audit that is this repo's rules-into-mechanisms thesis, shipping. | **verified** - 09-01 §8 |
 | **Superpowers, ECC, wshobson/agents** | Capability bundles; none ships a record of what is true about a repository now. | **verified** - 09-01 §8 |
 
+### Organisational memory and derived-intelligence systems
+
+| System | Relation to InFlight | Evidence |
+|---|---|---|
+| **Cortex** | Apache 2.0, so forkable, and a buffet of things InFlight eventually wants: GitHub/Jira/Linear/Slack connectors, event ingestion, a Neo4j graph, semantic and temporal/episodic stores, contradiction detection, trust scoring, context ranking and injection, MCP, causal chains. **Its epistemic stance is close to opposite**: it says *capture decisions, not documents*, extracting normalised memory objects from source events and treating those as the organisational memory - where InFlight preserves the primary evidence and native structure and records inference as a derived, provenanced edge over it. So forking it means inheriting an architecture centred on the normalised store you then spend effort un-centering. Recommended treatment, 2026-09-04: **integrate rather than fork**, quarry the connectors, contradiction heuristics, ranking and MCP shape, and make every imported part submit to InFlight's epistemic model. It also cannot satisfy the falsifier's first clause - the ref topology as a knowledge dimension is not something a decision-extraction pipeline extends into - which is the evidence that the falsifier tests architecture rather than features. Derived-intelligence class. | **claimed** - the whole row, from the 2026-09-04 conversation; nothing here has been read from its source or run. Its star count was raised and correctly dismissed as evidence about code quality: it says assume nothing about battle-testing, users, API stability or maintenance, and says nothing about whether the code is useful |
+| **Atlassian Teamwork Graph** | Named as a derived-intelligence adapter target in the same class as Cortex. | **claimed** - not surveyed |
+| **Glean** | Enterprise search and knowledge graph over work systems; the closest commercial shape to the engineering-knowledge family below. | **claimed** - not surveyed |
+
+### Memory research, which is prior art rather than product
+
+Reached through Cortex's own references and worth being nodes in this register rather than a
+dead end at the project that cited them: **Graphiti / Zep**, **A-MEM**, **MAGMA**. All **claimed**,
+none surveyed. The question to ask each is the register's usual twelve, but the one that matters is
+whether any of them treats concurrent versions as simultaneously true rather than as a history to
+collapse.
+
 ### Work-state authorities, agent memory, and prior art that is not a product
 
 | System | Relation to InFlight | Evidence |
@@ -116,6 +141,16 @@ surveyed is in-tree and multi-truth.** The axis is authority, not location.
 Dated entries, newest first. An entry names the row that moved and what it does to
 [`ci-inflight-standalone-thesis.md`](ci-inflight-standalone-thesis.md)'s open decision.
 
+- **2026-09-04, continuation** - Cortex added, and it moves the thesis rather than only the table.
+  It is the first surveyed system that plausibly satisfies several falsifier clauses at once - forge
+  and chat ingestion, a graph, contradiction detection, MCP - which makes the clause it *cannot*
+  satisfy the sharp one: the Git ref topology as a simultaneous knowledge dimension. That
+  strengthens the novelty claim by narrowing it, and it is also the first row whose right treatment
+  is *integrate to prove the thesis* rather than *survey and dismiss*. Two adjacent moves recorded
+  with it: the primary-source versus derived-intelligence split above, and Backlog.md becoming a
+  candidate **shell** as well as an adapter, which is a decision the register cannot settle - it
+  needs the winner-selection archaeology, not a comparison. The memory-research leads arrived the
+  same way and are unsurveyed.
 - **2026-09-04** - register opened. The only verified rows are the trackers and harness frameworks
   the two September investigations ran or read; every code-graph, forge and portal row is a lead.
   Standing verdict, unchanged from 09-02: the individual ingredients are not novel; the potentially
@@ -126,7 +161,9 @@ Dated entries, newest first. An entry names the row that moved and what it does 
 ## The first sweep, when someone runs it
 
 Verify every *claimed* row against its primary source with the twelve questions, adding the
-engineering-knowledge and developer-portal family, which was not surveyed at all. Same instrument
+engineering-knowledge and developer-portal family, which was not surveyed at all. **Cortex and the
+Backlog winner-selection archaeology are the two highest-value items** and they are different kinds
+of work: Cortex is a survey row, the archaeology is a source reading that answers a build decision. Same instrument
 standard as the 09-02 re-run: run or read the source, not the marketing page. Record what each row
 changes above, including "nothing" - and if one system constructs the same derived view, that is the
 finding that decides the thesis note's open decision, in either direction.

@@ -76,6 +76,22 @@ The product test the conversation proposed, worth keeping as the acceptance test
 here: **could an agent arrive cold, on the wrong branch, and still discover the important thing
 another workstream already learned?**
 
+A sharper falsifier was stated in the same conversation and is worth keeping in the form it was
+restated on 2026-09-04, because it names the clause the adjacent systems cannot satisfy:
+
+> Given 100 active branches across several trusted forks plus GitHub/Jira/etc., can the system tell
+> an agent that the document it just opened has 17 divergent versions carrying additional relevant
+> conclusions, connect those versions to PRs/issues/code/inferred families, and deliver the
+> disagreement without reconciling it?
+
+The figures are the test's shape, not a measurement of this repository. **Its original statement is
+not captured anywhere** - the continuation says to keep it verbatim, which means a turn between the
+recorded conversations was never written down; this is a restatement, and if the original surfaces it
+supersedes this block. What makes it a good falsifier rather than a feature checklist: a system with
+forge ingestion, a graph, contradiction detection and MCP satisfies most clauses and still fails the
+first, because treating the ref topology itself as a simultaneous knowledge dimension is not
+something a decision-extraction pipeline can be extended into.
+
 The coordination failure this addresses is the one parallel agents create: A discovers assumption X
 is false; B is already building on X; C fixes the cause on a third branch; D rediscovers it. An
 orchestrator stuffing summaries into prompts scales worse than making the discovery an artefact
@@ -87,34 +103,44 @@ A never needs to know B exists.
 Each one is already the tool's practice or the corpus's rule somewhere; the conversation named them
 as the principles a standalone project would state up front.
 
-1. **Integrate knowledge, not state.** *Federate authorities, preserve disagreement, derive
+1. **A ref is a dimension the graph is observed through, not a node inside it.** The same logical
+   document, assertion, link or semantic cluster - potentially the entire reachable graph - can
+   differ by ref perspective, and Git ancestry is what relates those projections to each other. So
+   the model is not *branch A contains document X* but *the graph at ref A* beside *the graph at ref
+   B*. **Divergence is then native to the coordinate system rather than computed after the graph is
+   built**, and the map/reduce over forks falls out for free: shared ancestry is a shared graph
+   region, divergent commits are a differentiated one, identical blob ids are exact equality, and a
+   fork remote is one more namespace of the same dimension. Git is not merely an input adapter in
+   this half of the system - it supplies one of the coordinate systems. **This supersedes the
+   version-as-node framing recorded here on 2026-09-04**; see the corrections section.
+2. **Integrate knowledge, not state.** *Federate authorities, preserve disagreement, derive
    connections.*
-2. **Never reconcile disagreement unless the domain genuinely has one authoritative state.** Git
+3. **Never reconcile disagreement unless the domain genuinely has one authoritative state.** Git
    owns whether commit X is an ancestor of Y. GitHub owns whether an issue is open. A branch owns what
    that workstream currently believes. A dated investigation owns what was observed at that time.
    InFlight owns none of those facts - it owns the edges and indexes that make them jointly legible.
    A node with a "current state" property is `chooseWinners` rebuilt.
-3. **If another system already owns a fact, index it; never recreate it.** Corollary: InFlight
+4. **If another system already owns a fact, index it; never recreate it.** Corollary: InFlight
    creates knowledge; it does not create replicas of facts merely for discoverability. A GitHub issue
    gets an adapter-maintained node, not an in-flight note written to make it greppable; a note exists
    only when the project adds something - an investigation, a hypothesis, a decision - and links to
    the node. The generated [`issue-index.md`](issue-index.md) is the interim form of this, and its
    own header already says its rows go stale silently.
-4. **Could-not-ask must never look like asked-and-found-nothing.** Freshness is metadata: an issue
+5. **Could-not-ask must never look like asked-and-found-nothing.** Freshness is metadata: an issue
    node with GitHub unreachable says *state unavailable, last observed N hours ago*, and does not
    vanish from a traversal. `bin/inflight.mjs`'s header states the exit-code half of this rule.
-5. **Every edge carries its provenance and its epistemic class.** Authoritative (PR heads branch),
+6. **Every edge carries its provenance and its epistemic class.** Authoritative (PR heads branch),
    declared (a note says *depends on astubbs#333*), inferred (an association derived from reachable
    explicit edges, with the path that produced it). A literal `depends on` never has the same
    standing as an embedding's guess, and an agent can always ask *why does InFlight think these are
    connected?*
-6. **One implementation of intelligence, many implementations of ergonomics.** Shared verbatim with
+7. **One implementation of intelligence, many implementations of ergonomics.** Shared verbatim with
    law 4 of [`docs/w2-vision.md`](../w2-vision.md). Here it means: the kernel speaks in context
    events - session starts, a term is mentioned, a document is read, a branch is inherited, a merge
    is attempted - and Claude Code hooks, Codex, MCP and a plain CLI are adapters. Today's
    `.claude/settings.json` wires four event types (SessionStart, UserPromptSubmit, PreToolUse,
    PostToolUse) to the tool; that is the provider-neutral surface, discovered rather than designed.
-7. **Do not replace the substrate; index it by the semantics the user actually needs.** The same
+8. **Do not replace the substrate; index it by the semantics the user actually needs.** The same
    instinct the Hasten corpus reached over Kafka - `docs/w2-vision.md`'s *"an inverted index, not a
    cache"* - reached again over Git. Not shared code; a shared design rule, recorded so the two
    projects can cite one statement of it.
@@ -131,10 +157,13 @@ as the principles a standalone project would state up front.
   Codecov URL baked into `bin/lib/codecov.mjs` and the `origin/master` baseline in
   `bin/lib/git.mjs`. The impact ranking and closed label set in `bin/lib/inflight-tags.mjs` are this
   repo's taxonomy, and become configuration rather than the product.
-- **The multi-version graph.** The native node is the version - blob, path, ref context - and the
-  logical document is an identity grouping versions, so that `bug-857-family.md`'s two dozen
-  divergent copies are two dozen nodes carrying what the baseline never held, not one node with a
-  state. Entities and who owns them: refs, commits and blobs (Git); PRs, issues, reviews (GitHub);
+- **The ref-dimensional graph.** Law 1 restated as a build direction, and **corrected on
+  2026-09-04**: the earlier framing here made the *version* the node - blob, path, ref context - with
+  the logical document an identity grouping them. That is not wrong so much as one dimension short.
+  A ref is not a coordinate stamped onto a node; it is the axis the whole graph is read along, so
+  `bug-857-family.md`'s divergent copies are the same logical document seen from many ref positions,
+  and ancestry relates those positions. The practical consequence is unchanged and now has a reason:
+  no node may carry a current state. Entities and who owns them: refs, commits and blobs (Git); PRs, issues, reviews (GitHub);
   logical documents and workstreams (derived here); optionally the agent session that produced a
   branch (the `Claude-Session:` trailers already in the log). Edges start with what can be proven
   mechanically - Git ancestry and containment, GitHub's closes/references/heads, the corpus's own
@@ -158,6 +187,13 @@ as the principles a standalone project would state up front.
   they are objectively the same; let the model infer meaning from native data. Where normalisation
   earns its place is retrieval, as configurable synonym sets (issue, ticket, task, story), possibly
   suggested from the corpus with project configuration winning.
+- **Two kinds of adapter, and neither is privileged.** A **primary-source** adapter carries what an
+  authority *asserts* - Git, GitHub, GitLab, Jira, Linear, Slack. A **derived-intelligence** adapter
+  carries what another system *inferred* - Cortex, GitNexus, Atlassian's Teamwork Graph, code
+  intelligence generally. InFlight consumes both and records which is which, so an edge reads as
+  *GitHub stated this* or *Cortex inferred this* or *InFlight inferred this*. That is law 6 applied
+  to adapters, and it is what lets a derived system be consumed without its conclusions being
+  promoted to facts.
 - **Adapters in, MCP out.** Inputs: Git, GitHub, GitLab, Jira, Linear, Backlog.md, Radicle, CI
   results, and code graphs such as GitNexus and ckg for symbol-level edges - none of which InFlight
   should reimplement. Output: an MCP surface that exposes InFlight's own objects (workstream,
@@ -171,6 +207,23 @@ as the principles a standalone project would state up front.
   shared files and symbols and citation direction do most of the work without a model; embeddings
   handle the ambiguous tail. Everything inferred is derived and disposable, recomputed when the
   inference improves.
+- **Build on somebody's shell, but never on their epistemics - the 2026-09-04 continuation's
+  recommendation, not a decision.** Three separate questions that must not be conflated: fork
+  Backlog.md, fork Cortex, or consume either as an adapter. Its reading, recorded for the owner:
+  **Backlog.md is the plausible codebase to fork**, because the boring mature surfaces are exactly
+  what a standalone project would otherwise rebuild - CLI, Markdown parsing, task and document
+  primitives, search, TUI and browser UI, packaging, cross-platform binaries, release
+  infrastructure, tests - and because its manifesto states a governing invariant crisp enough to
+  fork *against*: it exists to maintain one coherent model over human-readable Markdown, which is
+  why reconciling is right for it and wrong here. **Cortex is the quarry, not the foundation**, and
+  **Cortex is more valuable unforked**: integrating it demonstrates the federation thesis in a way
+  copying its Slack connector never would. The shape that follows is a Backlog-derived shell, an
+  InFlight kernel, and Cortex, GitNexus and the forges as sensors.
+  **The one archaeology pass that decides the Backlog half**, and it is a question about their
+  source rather than their features: *how deeply is winner-selection baked into loading, indexing
+  and querying?* Localised in branch aggregation - fork it. Pervading every storage and query API -
+  take the ideas instead, because every internal API expecting one task per id is an assumption this
+  project exists to reject.
 - **A strangler extraction, boundary now and mechanics later.** The mechanical split is cheap under
   the agentic cost model; the risk is freezing the wrong model. The conversation's own list of what
   not to pre-decide: what a knowledge item is; which lifecycle states are universal; whether Git
@@ -189,7 +242,7 @@ repository-native development knowledge, versioned and inspectable with `git sho
 Backlog.md (it tracks the work; this tracks what the work knows); a better Linear or Jira (they are
 authorities to index); a code graph (GitNexus and ckg are inputs); a forge (Radicle owns
 collaboration state and replication, and is an input). The rule that keeps the scope from
-metastasising is law 3.
+metastasising is law 4.
 
 ## Positioning lines, none chosen
 
@@ -206,6 +259,9 @@ puts the project in a category with hundreds of entries.
    <!-- post-merge: checked -->
    astubbs/parallel-consumer#367 introduced are.
 3. **The second repository**, and it should look nothing like this one.
+   **Fork Backlog.md as the shell?** - gated on the winner-selection archaeology above, and
+   deliberately separate from the extraction decision: the shell question can be answered while
+   item 1 stays open.
 4. **Whether context injection is opinionated in the kernel or left to adapters.**
 5. **Repository, licence and the relationship to this fork** once, and if, item 1 is taken.
 
@@ -221,6 +277,16 @@ puts the project in a category with hundreds of entries.
 - **The normalisation layer was over-designed** before the owner cut it - see the ruling above.
 - **Every product claim about GitNexus, ckg and Understand-Anything came from a model with web
   access, and none was checked in this repo.** The register's evidence rule exists because of this.
+- **The version-as-node framing was one dimension short, and it was mine, not the conversation's.**
+  The 2026-09-04 capture wrote the version as the graph's native node. The continuation corrected it
+  to the ref as a dimension the graph is observed through - law 1 - which is a stronger claim and
+  changes what gets built, because divergence stops being a computation over nodes and becomes a
+  property of the coordinate system. Recorded here rather than silently rewritten, because the
+  superseded framing is the one a reader would otherwise reconstruct.
+- **The shorthand changed with it.** *Multi-version knowledge graph* became **version-dimensional
+  development knowledge graph** - the point being that refs are not entries in the graph beside
+  issues and PRs. Both remain working phrases, and neither is the user-facing line; law 1 and the
+  positioning section own those halves.
 - **An assumption recorded rather than probed:** the near-term shift most likely to falsify the
   thesis is a first-party harness - Claude Code, Codex, GitHub - shipping repository-scoped or
   cross-branch memory. The 2026-09-01 survey already noted Claude Code Tasks as *watch, do not
