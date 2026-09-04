@@ -4,7 +4,6 @@ package bz.stub.parallelconsumer.state;
  */
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
-import bz.stub.parallelconsumer.internal.DynamicLoadFactor;
 import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.MockConsumer;
@@ -67,35 +66,21 @@ class WorkManagerStaleCheckDoubleLookupTest {
 
     /**
      * A {@link WorkManager} that completes a full rebalance in the gap between checkpoint 3's staleness lookup
-     * and the acting lookups. Firing is tracked in an explicit {@code raceFired} boolean, set at firing time: a
-     * cleared armed-slot cannot tell "armed, then fired" from "never armed", so a guard built on it would pass on
-     * a test that forgot to arm.
+     * and the acting lookups.
+     * <p>
+     * The seam is the override below; the arming and the fired-flag live in {@link RacingSeamWorkManager},
+     * which owns why the flag is separate from the armed slot.
      */
-    static class RacingStaleCheckWorkManager extends WorkManager<String, String> {
-        private transient Runnable interference;
-        private boolean raceFired;
+    static class RacingStaleCheckWorkManager extends RacingSeamWorkManager {
 
         RacingStaleCheckWorkManager(PCModuleTestEnv module) {
-            super(module, new DynamicLoadFactor(2, 4));
-        }
-
-        void arm(Runnable interference) {
-            this.interference = interference;
-        }
-
-        boolean raceHasFired() {
-            return raceFired;
+            super(module);
         }
 
         @Override
         protected boolean checkIfWorkIsStale(PartitionState<String, String> partitionState, WorkContainer<String, String> workContainer) {
             boolean staleAnswerFromFirstLookup = super.checkIfWorkIsStale(partitionState, workContainer);
-            if (interference != null) {
-                Runnable oneShot = interference;
-                interference = null;
-                raceFired = true;
-                oneShot.run();
-            }
+            fireOnceIfArmed();
             return staleAnswerFromFirstLookup;
         }
     }

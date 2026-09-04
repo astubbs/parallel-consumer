@@ -258,16 +258,32 @@ public class WorkManager<K, V> implements ConsumerRebalanceListener {
         wc.endFlight();
         pm.onFailure(wc, partitionState);
         // Re-validate against the LIVE map immediately before the retry re-queue - the staleness checkpoint's
-        // answer cannot carry this decision, because a rebalance can complete between there and here. The
-        // revoke sweep cleans the retry queue only through shard contents, so a stale add landing after the
-        // sweep is permanent: nothing can ever remove the entry, and once its retry delay elapses it reads as
-        // ready-to-retry forever - phantom waiting work that gates the broker poller (a confluentinc#857-family
-        // stall; the count mechanism is that ShardManager#getWorkableRecords subtracts the parked-for-retry
-        // figure from the shard population, so an orphan is subtracted from a total that no longer contains it,
-        // and the gate is told the system holds less than it does. The note that traced it is retired now that
-        // the other door into the same defect is shut - `git show
-        // a80f2bbd1:docs/inflight/bug-retry-queue-orphaned-by-inline-stale-removal.md`).
-        // Skipping the re-queue is the safe direction: the partition's next owner redelivers the record.
+        // answer cannot carry this decision, because a rebalance can complete between there and here.
+        //
+        // THIS CHECK IS NOT THE THING THAT MAKES THE RE-QUEUE SAFE, and must not be relied on as though it
+        // were. It is a check-then-act: a rebalance can equally complete between it and sm.onFailure below,
+        // which is a strictly narrower window that no epoch check placed here can close. What actually closes
+        // it is on the other side - ShardManager#onFailure adds to the retry queue and THEN confirms the
+        // container is still resident in its shard, undoing the add if it is not; its javadoc owns the
+        // argument. This check is kept because skipping the re-queue outright is the cheaper and safer answer
+        // whenever the staleness is already visible: the partition's next owner redelivers the record.
+        //
+        // What an orphaned re-queue costs, measured rather than assumed (RetryQueueRequeueWindowTest):
+        // every route that removes a retry-queue entry reaches it through shard contents, so an entry whose
+        // container is in no shard is there for the life of the instance. Once its retry delay elapses it
+        // reads as ready-to-retry forever, which survives the flooring in
+        // ShardManager#getNumberOfWorkQueuedInShardsAwaitingSelection once the pipeline is drained - so
+        // isRecordsAwaitingProcessing() is permanently true and AbstractParallelEoSStreamProcessor#drain()
+        // never transitions to closing. A DRAINING CLOSE THEN HANGS TO ITS TIMEOUT with no work in the system.
+        // It is NOT the broker-poller load gate: that reads ShardManager#getWorkableRecords(), where the
+        // orphan counts in the queue size and the ready-to-retry count alike and nets to zero once the delay
+        // passes - and while it is non-zero it reads the figure LOW, which fetches sooner rather than stalling.
+        // An earlier version of this comment claimed the load gate was the harm; it was wrong in both the
+        // permanence and the direction, and RetryQueueRequeueWindowTest#aQueueOnlyOrphanCostsTheDrainFigureAndNotTheLoadGate
+        // is what keeps it corrected.
+        //
+        // The other door into the same orphan is shut and its note retired - `git show
+        // a80f2bbd1:docs/inflight/bug-retry-queue-orphaned-by-inline-stale-removal.md`.
         if (checkIfWorkIsStale(wc)) {
             log.debug("Not re-queueing failed work for retry - its partition was revoked mid-flight, so the retry belongs to the partition's next owner. {}", wc);
         } else {
