@@ -59,6 +59,14 @@ import static org.awaitility.Awaitility.await;
  * an unconditional call on the close path ({@code doClose()}), not a branch that a given interleaving
  * may skip. Read {@code BrokerPollSystem#dischargeCoordinatorBeforeClose} before moving it back into
  * {@code handlePoll()} - that move is the regression this paragraph exists to prevent.
+ * <p>
+ * <b>A second thing this test does NOT cover, for the same reason.</b> The discharge poll must leave
+ * the assignment PAUSED - {@code checkStateForPausingSubscriptions}'s {@code CLOSING} arm exists so
+ * back-pressure logic cannot resume it and turn that poll into a live fetch (found in review, not by
+ * a test). An assertion for it was written here and deleted again: against this harness nothing is
+ * ever paused at close time, so it could not be made to fail with the arm removed. A vacuous
+ * assertion that reads as coverage is worse than none, so what stands in its place is this sentence
+ * and the reasoning at the fix site.
  */
 @Timeout(60)
 @Slf4j

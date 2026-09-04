@@ -306,10 +306,13 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      */
     private void dischargeCoordinatorBeforeClose() {
         try {
-            // Subscriptions are already paused by doPause() above, so this is a coordinator round
-            // trip rather than a fetch. Any records it returns anyway are deliberately dropped: this
-            // instance is closing and will never process them, and registering work here would hand
-            // the work manager offsets nothing is going to complete.
+            // A coordinator round trip rather than a fetch: doPause() above pauses the assignment, and
+            // pollBrokerForRecords -> checkStateForPausingSubscriptions KEEPS it paused under CLOSING
+            // rather than re-deciding from back-pressure - see that method, where the CLOSING arm
+            // exists precisely so this sentence is true instead of merely intended. Any records that
+            // arrive anyway (Kafka returns locally buffered ones regardless of the timeout) are
+            // deliberately dropped: this instance is closing and will never process them, and
+            // registering work here would hand the work manager offsets nothing is going to complete.
             var droppedOnClose = pollBrokerForRecords();
             if (droppedOnClose.count() > 0) {
                 log.debug("Dropping {} record(s) polled during close - this instance is shutting down",
@@ -361,7 +364,18 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
     }
 
     private void checkStateForPausingSubscriptions() {
-        if (runState == DRAINING) {
+        // CLOSING pauses for the same reason DRAINING does, and it is NOT symmetry for its own sake.
+        // managePauseOfSubscription() decides pause-vs-resume from wm.shouldThrottle(), a
+        // back-pressure signal that knows nothing about close state - so on an unloaded pipeline,
+        // which is the ordinary case once a DONT_DRAIN close begins, it RESUMES the assignment that
+        // doClose() paused one line earlier and turns the discharge poll into a live fetch. Kafka
+        // returns locally buffered records regardless of a 1ms timeout, so records would be fetched
+        // and then dropped by dischargeCoordinatorBeforeClose() instead of being left for whoever
+        // takes the partition next. Not a delivery-guarantee break - nothing is acknowledged - but
+        // wasted shutdown fetching, and it falsified that method's own javadoc.
+        // Reachable only since the discharge poll was added: before it, pollBrokerForRecords() was
+        // gated by handlePoll() to RUNNING/DRAINING and this branch never saw CLOSING.
+        if (runState == DRAINING || runState == CLOSING) {
             doPause();
         } else {
             managePauseOfSubscription();
