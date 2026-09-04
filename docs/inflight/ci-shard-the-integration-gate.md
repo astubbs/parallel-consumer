@@ -6,17 +6,21 @@
 The `Integration Tests` lane is the PR build's critical path - 620s against ~500s for the next
 slowest. Sharding it across runner jobs is the lever that actually moves it.
 
-**IMPLEMENTED**: two shards in astubbs/parallel-consumer#442 (measured 620s -> 519s), then the 857
-probe split and the heavy set re-derived in the PR stacked on it. ONE named heavy set plus a
-catch-all defined by subtraction - not the Chaos Pain Suite's four balanced bins, and the
-difference is the point (below).
+<!-- post-merge: checked-begin - names astubbs/parallel-consumer#442 explicitly and in the past
+     tense, so it stays true once that PR has merged and its branch is gone. Nothing here says
+     "this branch" or "this PR", and the arrangement it describes is the one that landed: a single
+     PR, not a stack. -->
+**IMPLEMENTED in astubbs/parallel-consumer#442**, which carries the whole split: two shards, the
+857 probe split four ways, and the heavy set re-derived from the measurements that followed. ONE
+named heavy set plus a catch-all defined by subtraction - not the Chaos Pain Suite's four balanced
+bins, and the difference is the point (below).
 
-**FOUR SHARDS WERE BUILT AND MEASURED, AND DELIBERATELY NOT TAKEN.** Green at 355s against two
-shards' ~440s, but 1318s of runner time against ~880s, and ~500s of MANUFACTURED extra test work -
+**FOUR SHARDS WERE BUILT AND MEASURED, AND DELIBERATELY NOT TAKEN.** Green at 355s against the two
+shards' 416s, but 1318s of runner time against 792s, and ~500s of MANUFACTURED extra test work -
 per-shard fixed costs are paid per shard, the same way per-fork costs were when forkCount went 4->6.
-85s of critical path did not justify a 50% machine-time increase and four lists to maintain instead
-of one. Preserved on `ci/shard-integration-four` if that trade ever looks different. This note keeps what is
-still open; the measurements live with those PRs.
+61s of critical path did not justify a 66% machine-time increase and four lists to maintain instead
+of one. Preserved on `ci/shard-integration-four` if that trade ever looks different.
+<!-- post-merge: checked-end -->
 
 ## Why four shards needed the 857 probe split first, and two did not
 
@@ -27,7 +31,8 @@ within 3s (predicted 516s, measured 519s):
 |---|---:|---:|
 | 2 shards, probe intact | 516s modelled, **519s measured** | 870s |
 | **4 shards, probe intact** | **516s modelled** | 1417s |
-| 2 shards, probe split | ~440s modelled | ~880s |
+| 2 shards, probe split | 440s modelled, **450s measured** | 780s |
+| 2 shards + split + rebalance, cumulative (**shipped**) | **416s measured** | 792s |
 | 4 shards, probe split | 337s modelled, **355s measured** | 1318s |
 
 **The pre-split model was wrong about the split itself**, and it matters for anyone re-deriving
@@ -38,8 +43,17 @@ once. So the split buys less than arithmetic suggests, and splitting FURTHER wou
 `Rebalance857CommitSyncDeadlockProbeIT` was `@RepeatedTest(20)` in one ~356s class, and forks
 cannot split a class - so whichever shard held it WAS the critical path, at 516s, for any shard
 count. **Four shards bought nothing while it was intact** and cost 547 extra runner-seconds.
-Splitting it is worth 161s; going from two shards to four is worth 18s. Order matters more than
-count, which is the same lesson as the serial-build work above.
+Order matters more than count, and the MEASURED attribution says so more clearly than the model did:
+splitting the probe bought 69s (519 -> 450), rebalancing the heavy set another 34s (450 -> 416) - and
+those two are CUMULATIVE, not alternatives, nor even independent. The rebalance moves
+`Rebalance857CommitSyncDeadlockProbeIT` into the heavy shard, which is a 134s class only BECAUSE the
+split happened; at its pre-split 356s it would have blown the heavy shard past the catch-all
+immediately. The split created the granularity the rebalance needed.
+
+Going from two shards to four would buy 61s more (416 -> 355) for 526 extra runner-seconds. An
+earlier version of this paragraph said the split was worth 161s and the shard count 18s; both came
+from the pre-split model, which assumed the four probe classes would be 89s each when they measure
+138-166s. Same lesson as the serial-build work above, arrived at with better numbers.
 
 **A BLOCKING PREREQUISITE, and it is not in the diff.** `Integration Tests` is a required status
 check in the `master` ruleset; `Integration Tests (heavy)` is not, and adding a job does not add a
