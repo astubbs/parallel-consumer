@@ -218,6 +218,48 @@ elif [ "${INTEGRATION_SHARD:-}" = "rest" ]; then
     done
 fi
 
+# EVERY INTEGRATION TEST FILE IN THE TREE MUST HAVE PRODUCED A REPORT. This is the completeness
+# half, and it is the only check here that starts from the SOURCE rather than from the run: the
+# others all ask whether what ran was right, and none of them can see a test that ran nowhere.
+#
+# The gap it closes is not sharding-specific and predates it. Failsafe selects by package
+# (`**/integrationTest*/**`), so a class moved to a neighbouring package silently stops being
+# collected - in the single-job arrangement as much as in this one - and every shard passes having
+# never run it. "A test that never runs is not a passing test, and nothing goes red to tell you"
+# is AGENTS.md's phrasing, and this is that rule made mechanical for this lane.
+#
+# Only the catch-all runs it, because only the catch-all is supposed to hold everything not named.
+#
+# WHAT COUNTS AS "SHOULD HAVE RUN" is four subtractions, and getting them wrong makes this a gate
+# that fails every build rather than one that catches anything. The first draft demanded 55 classes
+# against the 38 that run, because an integrationTest package holds helpers and fixtures as well as
+# tests. Dry-run any change to these against a real run before trusting it:
+#   - HEAVY_CLASSES        - ran in the other shard, by design
+#   - abstract bases       - never collected; their subclasses are what run
+#   - chaos / performance  - excluded by GROUP, not by package, so package-walking still finds them
+#   - @Quarantined         - the quarantine lane owns them
+#   - no @Test/@RepeatedTest/@ParameterizedTest - a helper class, not a test
+# Verified against run 33831283169: 37 required, 0 missing.
+if [ "${INTEGRATION_SHARD:-}" = "rest" ]; then
+    unrun=""
+    while IFS= read -r f; do
+        cls=$(basename "$f" .java)
+        case ",${HEAVY_CLASSES}," in *",${cls},"*) continue ;; esac
+        grep -qE '^[[:space:]]*abstract class|^abstract class' "$f" && continue
+        grep -qE '@Tag\("(chaos|performance)"\)|@Quarantined' "$f" && continue
+        grep -qE '^[[:space:]]*@(Test|RepeatedTest|ParameterizedTest)\b' "$f" || continue
+        report_exists "$cls" || unrun="${unrun} ${cls}"
+    done < <(find . -path '*/integrationTest*/*' -name '*.java' -not -path './.git/*' -not -path '*/target/*')
+    if [ -n "$unrun" ]; then
+        echo "ci-integration-test: FAILED - integration test file(s) in the tree that NO shard ran:" >&2
+        printf '    %s\n' $unrun >&2
+        echo "  These exist as source and produced no failsafe report anywhere. Most likely the class" >&2
+        echo "  is not in a package failsafe collects (**/integrationTest*/**), so it silently never" >&2
+        echo "  runs - in this arrangement or the single-job one. Check the package before the shards." >&2
+        exit 1
+    fi
+fi
+
 # EVERY class that ran must live in an integrationTest package, in EVERY shard. This is the guard
 # that caught the -Dit.test bug described above, and none of the checks before it would have: they
 # ask whether the RIGHT tests ran, and that failure was 126 EXTRA ones. A "ran at least N" gate

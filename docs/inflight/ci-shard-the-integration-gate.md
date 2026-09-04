@@ -99,6 +99,42 @@ shards would pass), and every failsafe report in every shard must come from an `
 package. That last one is what caught `-Dit.test=!Class` silently running the entire unit suite
 under failsafe - a failure of 126 EXTRA tests, which no "ran at least N" gate can see.
 
+## DEFERRED: the four-shard arrangement, built and measured, not taken
+
+Kept as future work rather than a rejected idea - it works, it is faster, and the reason it is not
+in use is a cost trade that could reasonably be revisited. The branch is
+`ci/shard-integration-four`; everything below was measured, not modelled.
+
+| arrangement | critical path | runner-minutes | per-shard walls |
+|---|---:|---:|---|
+| single job | **620s** | 620s | - |
+| 2 shards, probe intact | **519s** | 870s | 476 / 519 |
+| 2 shards + probe split | **450s** | 780s | 330 / 450 |
+| 2 shards + split + rebalanced (**in use**) | **416s** | 792s | 416 / 376 |
+| **4 shards + probe split** | **355s** | 1318s | 355 / 311 / 332 / 320 |
+
+**Four shards buys 61s over the arrangement in use, for +526 runner-seconds.** That is a 15%
+critical-path gain for a 66% machine-time increase, plus four lists to maintain instead of one. Not
+worth it today. What would change the answer: runner-minutes becoming free or irrelevant, the suite
+growing enough that the catch-all dominates again, or someone needing the gate under ~6 minutes for
+a specific reason.
+
+**Two things that run measured and are easy to get wrong from arithmetic alone:**
+
+- **Shards MANUFACTURE work.** Total test time was 1545s at two shards and 2074s at four - the same
+  tests. Per-shard fixed costs (JVM start, broker start, fixture setup) are paid per shard, exactly
+  as per-fork costs were when `forkCount` went 4->6 and cost 11% more CPU for the same suite. Any
+  model that treats total work as constant across shard counts will over-promise, and the one used
+  here did.
+- **Four shards is NOT worth having without the probe split.** Modelled at 516s either way with the
+  probe intact, because a single unsplittable 356s class sets the floor for whichever shard holds
+  it. Order matters more than count.
+
+**If it is picked up, re-derive rather than restore.** The four-way lists on that branch were sized
+from `Rebalance857CommitSyncDeadlockProbeIT` as one class and are stale by construction.
+`bin/check-integration-shard-balance.mjs` computes the current optimum; the guide in
+`bin/ci-integration-test.sh` says how to read it.
+
 ## What this will need when it is picked up
 
 - **Size the split from measured per-class durations, longest-first over N bins** - the chaos suite's
