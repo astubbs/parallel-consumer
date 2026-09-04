@@ -39,6 +39,23 @@ from this tool: not where state lives but **authority**, whether a branch is all
 the 08-19 survey never evaluated: the multi-version graph below, which changes what category the tool
 is in.
 
+**Superseding move, 2026-09-05: the question is no longer extract-or-not but JOIN, fork, or build -
+and joining goes first.** A sweep run specifically to falsify the idea found the space converging
+quickly, and the owner's stated preference is explicit: *"I'd rather join someone else's efforts."*
+Three projects are close enough that source archaeology and a maintainer conversation should happen
+**before** any decision to build separately - agent-memory, ctxpipe and Engram - and the register
+owns their rows, the distinction in each case, and the question to put to each maintainer. If one of
+them has the same architectural destination, this note's open decision is settled by becoming
+unnecessary.
+
+**The sharpest statement of the difference, and the reason the boundary might still be real.** Nearly
+every neighbour **creates a curated memory store and then makes it branch-aware**. The inverse move
+is the one that has not turned up: *the development environment already contains the memory - stop
+hiding most of it from the agent.* An investigation on branch X should not have to be promoted into a
+memory store before branch Y can find it, because the branch is already part of the knowledge
+universe. **That is exactly the failure that produced this tool**, and it is now the falsifier's
+decisive clause.
+
 **The owner's ruling, 2026-09-04: the extraction decision is reopened, not taken.** The 08-19 "no"
 stays on the record with this reasoning beside it. What would settle it, in the conversation's own
 terms:
@@ -85,23 +102,26 @@ The product test the conversation proposed, worth keeping as the acceptance test
 here: **could an agent arrive cold, on the wrong branch, and still discover the important thing
 another workstream already learned?**
 
-The sharper falsifier, **recovered in its original form on 2026-09-04** when the prior-art sweep
-that produced it was recorded - an earlier capture here carried a restatement and flagged that the
-original had never been written down:
+The falsifier, **revised 2026-09-05** after a sweep run to falsify the idea rather than support it.
+The added clause is the decisive one, because it is where the memory products differ most:
 
-> Find me a tool that, given 100 active branches across several trusted forks plus GitHub/Jira/etc.,
-> can tell an agent that a document it just opened has 17 divergent versions carrying additional
-> relevant conclusions, relate those versions to PRs/issues/code and inferred conceptual families,
-> and deliver the relevant disagreements without first reconciling them into canonical state.
+> Point the tool at an existing repository with 100 active branches across several trusted forks,
+> **without first curating a separate memory store**. Can an agent opening a document discover that
+> 17 divergent versions contain relevant additional conclusions, connect those versions to live
+> PRs/issues/code/external systems and inferred conceptual families, explain the provenance of those
+> connections, and present the disagreements without reconciling them away?
 
-**The owner endorsed it outright** - *"Your falsifier is excellent"* - so it is the one thing in this
-note that is settled rather than proposed. The figures are the test's shape, not a measurement of
-this repository. It earns its place because
-the sweep found systems that satisfy most of it: an enterprise work graph with typed and inferred
-edges serving coding agents, cross-tool memory with contradiction detection and proactive injection,
-Git-native distributed collaboration objects. **The clause none of them reached is the first one**,
-and [`ci-inflight-adjacent-systems-register.md`](ci-inflight-adjacent-systems-register.md) owns
-which system got closest and why.
+The figures are the test's shape, not a measurement of this repository. **The owner endorsed the
+earlier form outright** - *"Your falsifier is excellent"* - and this revision only sharpens it.
+
+It earns its place by discriminating, clause by clause, against systems that each satisfy most of
+it: agent-memory fails *without first curating a memory store*; Cortex fails the ref-dimensional
+*existing repository* clause; GitLab's knowledge graph fails the development-knowledge and external
+semantic context clause; Backlog.md fails *preserve divergence*; Atomic changes the underlying
+version-control model rather than reading it; Atlassian Teamwork Graph goes furthest on federation
+and, on what has been found, fails *Git perspectives as first-class simultaneous knowledge*.
+[`ci-inflight-adjacent-systems-register.md`](ci-inflight-adjacent-systems-register.md) owns those
+rows. **This is now the instrument for maintainer conversations**, not only for surveys.
 
 ## The scenario that would demonstrate it
 
@@ -342,7 +362,9 @@ puts the project in a category with hundreds of entries.
 
 ## Open decisions, all the owner's
 
-1. **Extract at all** - reopened above, gated on the register and a second repository.
+1. **Join, fork, or build** - restated 2026-09-05, and joining is evaluated first. Gated on the
+   archaeology and maintainer conversations the register lists, then on a second repository. The
+   older form of this decision was *extract at all*, which assumed building was the only path.
 2. **The name.** InFlight is the working name throughout and is uncommitted, the way the codenames
    <!-- post-merge: checked -->
    astubbs/parallel-consumer#367 introduced are.

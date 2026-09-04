@@ -116,6 +116,18 @@ over those objects** - which is the architectural reason not to normalise. Atlas
 item and an Asana work item into one common work-item type; InFlight would keep `native-type =
 JiraIssue` and *derive* the neighbourhood `issue / work-item / ticket` when it is useful.
 
+## The axis that actually classifies this field
+
+Added 2026-09-05 by the second sweep, and it is sharper than the four lineages below. Nearly every
+system here **creates a curated memory store and then makes it branch-aware**. InFlight's move is the
+inverse: **the development environment already contains the memory - stop hiding most of it from the
+agent.** An investigation written on branch X does not have to be promoted into a memory store before
+branch Y can find it, because the branch is already part of the knowledge universe. That is precisely
+the failure that produced this tool.
+
+So the question to ask every row is no longer *is it branch-aware* - many now are - but: **does
+knowledge have to be authored into its store first, or does it discover what the refs already hold?**
+
 ## Four lineages, and the intersection
 
 The defensible claim, replacing the disproved one. InFlight sits where four existing lineages meet,
@@ -177,6 +189,31 @@ surveyed is in-tree and multi-truth.** The axis is authority, not location.
 | **Atlassian Teamwork Graph** | **The closest system found, and the one to watch** - closer than GitNexus, Radicle or any distributed tracker, which is the sweep's most consequential correction. A unified graph over work items, documents, messages, branches, commits and pull requests, including third-party objects; a relationship model that already distinguishes **canonical, activity, logical and inferred** edges; and, from August 2026, multi-repository code understanding pushed into that graph specifically so coding agents can reason about code together with the surrounding work, through its CLI and plugins. Overlaps the federation-plus-graph-plus-agents half almost entirely. **The difference is fundamental rather than cosmetic, and is the first claim to try to falsify**: it appears object-centric and current-state-centric - a branch is an *object* in the graph - where InFlight's move is that a branch or fork is a *perspective from which an entire body of knowledge may differ*. The sweep looked specifically for multi-ref or fork epistemic state and found branches represented and related to repositories and work items, but no retention of simultaneously divergent repository knowledge. Code Context entered open beta recently, so this row goes stale fastest of any here. | **surveyed** 2026-09-04 from Atlassian developer documentation and release notes |
 | **Glean** | Enterprise search and context: connects GitHub/GitLab, Jira/Linear, Slack, Confluence/Notion and Drive, and exposes that to engineering agents over MCP, pitched as starting every task with the full picture. **This is why "connect all the engineering systems and retrieve context for a coding agent" is established commercial territory and not an InFlight claim.** A retrieval and search layer, not a multi-version development-history model. | **surveyed** 2026-09-04 from its own documentation |
 
+### The nearest neighbours - candidates to JOIN, not to survey
+
+Found by the 2026-09-05 sweep, which was run to falsify the idea rather than support it. These are
+the rows that could make building InFlight separately the wrong move, and the owner's stated
+preference is to join an existing effort where the architectural destination matches.
+
+| System | How close | The distinction, and the question to put to its maintainer | Evidence |
+|---|---|---|---|
+| **agent-memory** | **Strongest join candidate.** Local, Git-native project memory for coding agents; its current release is a *federation* release - repositories reference Git-pinned shared "landscape" stores, retrieval blends them while preserving source and commit provenance and trust boundaries, plus branch-scoped working notes and a section-aware Git merge driver for concurrent edits. Philosophically extremely compatible: Git-native, local, reviewable, provenance-preserving, MCP. | It **curates** a memory store and branches it. Ask: *would you treat all active refs as simultaneously queryable project knowledge, including conflicting versions, rather than requiring knowledge to be promoted into the store first?* A yes makes joining the obvious move; a no makes the boundary real. | **surveyed** 2026-09-05 |
+| **Engram** | **Closest on the branch insight itself** - it says outright that Git branches encode work-in-progress boundaries prior memory tools ignore, and supports querying across all branches, with contradiction detection and relationship graphs. | Its memories *have* a branch attribute; the proposal here is that the branch is a **dimension over the development graph**, so everything reachable from a ref contributes - docs, code, commits, cross-links, PR associations. Potentially a very short conceptual distance. | **surveyed** 2026-09-05 |
+| **ctxpipe** | **Closest on the federated engineering-context graph**: repos plus docs plus tools into a self-learning org-scoped knowledge graph behind one MCP, with Git as the source of truth for decisions and instructions. | Unknown and decisive: what does repo ingestion actually mean - HEAD, history, branches, PR heads, forks? Does it preserve divergent knowledge? **Source archaeology, not a README read.** | **surveyed** 2026-09-05 |
+
+### Systems that validate a piece of the design
+
+| System | What it establishes | Evidence |
+|---|---|---|
+| **Atomic** | Replaces Git's change model with a semantic change graph, and its terminology is **"Views, Not Branches"** - each agent gets an isolated view of one underlying graph, with agent-turn provenance and intent. **This is the branch-as-perspective correction, independently reached.** The difference is direction: Atomic says Git's model is insufficient and replaces branches with graph views; the position here is that Git branches already *are* perfectly good graph views, so use them. Not a join candidate - it attacks source control itself, a far larger project - but its design documents on view identity, provenance and agent concurrency are worth reading. | **surveyed** 2026-09-05 |
+| **GitLab Knowledge Graph / Orbit** | **Evidence the all-branches problem is recognised, not imagined.** GitLab's design explicitly discusses indexing active branches, focuses on the default branch first because indexing every active branch at their scale means an enormous number of definitions and relationships, and proposes storing active-branch graph data cold and materialising on demand. **Their framing is N versions of the code graph; the optimisation available here is that Git already says precisely what diverged** - a shared base plus divergent overlays, which the substrate almost forces. Primarily a code graph rather than a development-knowledge graph. | **surveyed** 2026-09-05 |
+| **Mnemograph** | Persistent event-sourced knowledge graph for coding agents where the memory itself can branch, commit, diff and revert - relevant prior art for versioned graph semantics. | **surveyed** 2026-09-05 |
+| **ForgeDock** | Treats GitHub issues, PRs and comments as persistent structured agent knowledge. Essentially one very good InFlight input dimension, already built. | **surveyed** 2026-09-05 |
+| **2context** | Git history into a provenance-bearing knowledge graph, generic adapter architecture, PRs/issues/ADRs planned. Oriented toward extracting a graph *from* history rather than preserving simultaneous ref perspectives. | **surveyed** 2026-09-05 |
+| **memory-mcp** | Branch-scoped recent work, `branch:*` queries, shared across worktrees. Its own memory, not arbitrary branch knowledge. | **surveyed** 2026-09-05 |
+| **Codastre, Symvanta** | Branch-aware code knowledge graphs; primarily code intelligence, so inputs rather than alternatives. | **surveyed** 2026-09-05 |
+| **BranchMind** | Git-style version control for LLM *conversations* - parallel branches with a shared knowledge graph and cross-branch queries. Wrong domain, but branch-dimensions plus shared graph plus cross-branch retrieval already exists as an idea. | **surveyed** 2026-09-05 |
+
 ### Coding-agent memory - a crowded family, and closer than first thought
 
 | System | Relation to InFlight | Evidence |
@@ -219,6 +256,20 @@ collapse.
 Dated entries, newest first. An entry names the row that moved and what it does to
 [`ci-inflight-standalone-thesis.md`](ci-inflight-standalone-thesis.md)'s open decision.
 
+- **2026-09-05, second sweep, run to falsify rather than to support.** The honest answer to *are you
+  sure nobody is attempting this* is now **no**. The space is converging fast, and several people
+  have independently reached pieces of the same realisation - agents need persistent project
+  knowledge, Git gives identity and versioning, branches matter, development systems hold the
+  context, graphs help, MCP is the delivery interface. That much is zeitgeist, not insight. Engram
+  reached the branches-are-knowledge-boundaries point independently; Atomic reached
+  views-not-branches independently; GitLab is designing active-branch indexing and treating scale as
+  the obstacle. **The claim narrows again**, to the curate-versus-discover axis above, and the
+  number of qualifiers now needed to state it is itself the argument against claiming any large
+  fundamental novelty. The likely true situation: many teams walking to the same destination from
+  different directions, and this route starts from Git's existing multi-version topology rather than
+  from a new memory database. **Consequence for the open decision: joining now precedes building.**
+  Three candidates for source archaeology and then a maintainer conversation - agent-memory, ctxpipe,
+  Engram - and the falsifier below is the instrument for those conversations.
 - **2026-09-04, first sweep run.** The sweep the section below asked for was run, and it moves the
   thesis more than any single row. **The novelty claim as it stood is disproved**: a federated
   software-development knowledge graph exists, has adapters, typed and inferred edges, and serves
@@ -253,22 +304,24 @@ Dated entries, newest first. An entry names the row that moved and what it does 
   simultaneous perspectives, external systems stay authoritative, and inferred edges carry
   provenance. That claim is specific enough to be disproved, and the first sweep should try to.
 
-## The next sweep
+## The next sweep, and it is not a sweep
 
-The first sweep ran on 2026-09-04 and its results are the rows above. What it left:
+The 2026-09-05 pass changed the shape of the remaining work. Surveying more products has diminishing
+returns; the open questions now need **source archaeology and conversations**, in this order:
 
-- **Atlassian Teamwork Graph is the watch item**, and the fastest-staling row here - Code Context
-  entered open beta recently. Re-read it on a schedule, and attack one question: does anything in it
-  retain simultaneously divergent repository knowledge, or is a branch only ever an object?
-- **Nothing has been run.** Every row above is `surveyed` or `claimed`; only the Backlog.md
-  reconcile finding is `verified`, because somebody drove the binary. The highest-value runs are
-  Atlassian's agent interface and Cortex.
-- **The Backlog.md winner-selection archaeology** is a source reading, not a survey, and it answers
-  a build decision rather than a ranking one.
-- **The memory-research leads** - Graphiti/Zep, A-MEM, MAGMA - are untouched, and the question to
-  ask each is whether it treats concurrent versions as simultaneously true or as history to
-  collapse.
-- **Radicle's COB internals** want a real reading before any replicated-object design here.
+1. **agent-memory** - read the federation release properly, then ask its maintainer the question in
+   its row. This is the one that could make building separately the wrong move.
+2. **ctxpipe** - source archaeology on what repo ingestion means. HEAD, history, branches, PR heads,
+   forks? Divergence preserved or collapsed? A README cannot answer this.
+3. **Engram** - whether it would move from *memories scoped to branches* to *branches as dimensions*.
+   Possibly a short conceptual distance, and worth asking rather than assuming.
+4. **Backlog.md winner-selection archaeology** - a source reading that answers a build decision.
+5. **Atomic's design documents** and **Radicle's COB internals** - read before inventing view
+   identity, provenance or replicated-object semantics here.
+6. **Atlassian Teamwork Graph** stays the watch item and the fastest-staling row.
 
-Record what each changes above, including "nothing". If one system turns out to construct the same
-derived view, that is the finding that settles the thesis note's open decision, in either direction.
+Untouched leads: Graphiti/Zep, A-MEM, MAGMA. Nothing in this register except the Backlog.md
+reconcile finding has been *run*.
+
+Record what each changes above, including "nothing". If one of the three join candidates has the same
+architectural destination, that settles the thesis note's open decision by making it unnecessary.
