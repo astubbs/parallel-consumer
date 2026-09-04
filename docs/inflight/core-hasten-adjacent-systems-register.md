@@ -35,6 +35,20 @@ The 2026-09-05 sweep additionally used **adversarial 3-vote verification**: each
 to three independent verifiers and needed two refutals to be killed. Ten were killed. Rows below
 carry the vote where one exists, because a 2-1 is not a 3-0.
 
+## The discriminating clause, tested once and answered
+
+**Envoy answers NO, and that is the most useful result the register holds.** Researched 2026-09-05:
+its adaptive concurrency is adaptive but **strictly local**; RLQS is global but its upward signal is
+**demand, never performance**; and **the two subsystems never touch** - the minRTT one discovers is
+published nowhere and the other never reads it. Nothing in Envoy closes the loop from *measured
+service time* to *global allocation*. It defines an interface where one could live and implements
+none of it.
+
+That is the first time the clause has been put to a system properly, and it survived. It does not
+generalise - Arktos, IBM's LLA and Hadar are unexamined and are exactly the rows most likely to
+answer yes - but it means the clause **discriminates** rather than merely sounding good, which is
+what a discriminating clause has to prove before it can carry weight.
+
 ## The falsifier
 
 **This register had no falsifier until 2026-09-05**, which is an odd omission given its InFlight
@@ -175,8 +189,8 @@ repository** - the evidence rule applies to them exactly as to anything else.
 
 | System | Why it matters | Evidence |
 |---|---|---|
-| **Envoy adaptive concurrency filter** | An HTTP filter with a **gradient controller** that periodically measures request latency and minRTT and recalculates a concurrency limit. **The same family of control idea as this engine's adaptive concurrency** - perturb, observe, infer a useful admission level. Note that [`core-auto-scaling.md`](core-auto-scaling.md) already records a Gradient2 port from Netflix's concurrency-limits, so the family was acknowledged; what is new is a **deployed-at-scale instantiation inside a proxy**. Owner's direction: **study it closely rather than reinvent blindly.** | **claimed** |
-| **Envoy RLQS** (rate limit quota service) | The strongest single piece of external validation found so far for the resource plane: **it is independent evidence that a delegated-credit architecture is a sensible design for high-performance distributed quotas**, not an odd invention. Owner's instruction: cite it explicitly in the resource-plane design, which [`core-distributed-throttling.md`](core-distributed-throttling.md) now does. | **claimed** |
+| **Envoy adaptive concurrency filter** | A gradient controller descended from TCP Vegas via Netflix's `concurrency-limits`: probes an ideal round-trip time by deliberately underloading, then scales a concurrency limit by the ratio of that to the current window's sampled latency. **Strictly local** - one controller per process, no cross-instance channel; the fleet-level `jitter` field means *do not all probe at once*, not *share what you learned*. **It implements Netflix's Gradient, the minRTT-probing variant - not Gradient2**, which this engine already ports and which exists precisely because minimum-latency measurement drifts. So the earlier *study rather than reinvent* direction inverts on the algorithm and holds on everything else: the mitigation set and the shipped stability constants are the expensive part to rediscover. [`core-auto-scaling.md`](core-auto-scaling.md) and [`core-envoy-is-the-other-half.md`](core-envoy-is-the-other-half.md) carry the detail. | **surveyed** 2026-09-05 from Envoy docs, protos and source |
+| **Envoy RLQS** (rate limit quota service) | **Fair independent validation of the delegated-credit shape**: advance assignment, local spend, no per-request permit call, periodic usage report, TTL, explicit degraded-mode behaviour - a different team on a different substrate reaching the same conclusion that the per-request permit call is the thing to eliminate. Three differences that matter: it delegates a **rate**, not a stock of credit; its bucket is *requests matching matchers*, not a named external resource with real capacity shared by unrelated participants; and the number vended is **human-configured, never discovered**. Its usage report carries requests allowed, denied and time elapsed - **no performance signal at all**, so a server cannot do performance-driven allocation over it. Partition behaviour is configuration-selected rather than solved, with no lease return, fencing token or spend reconciliation. **Envoy ships no RLQS server**, so its allocation policy is out of tree and unreadable - *"RLQS does global optimisation"* is unproven either way. | **surveyed** 2026-09-05; the server side is **unknowable** from public sources |
 | **Arktos Global Scheduler** | Built around a global view across clusters and data centres, with application-aware scaling and migration from observed input-flow behaviour and multidimensional optimisation. Non-Kafka, cluster-scale, and squarely on the discriminating clause. | **claimed** |
 | **IBM LLA** | Continuously adapts distributed CPU and network allocation to workload and resource variation, maximising **aggregate utility from end-to-end latency**. A stronger objective formulation than anything this corpus has written down. | **claimed** |
 | **Hadar** | Online scheduling of task placement across heterogeneous accelerators from measured or modelled workload performance. Shows how far measured-performance-driven placement has been taken mathematically. | **claimed** |
