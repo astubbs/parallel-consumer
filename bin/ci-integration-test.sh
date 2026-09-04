@@ -245,12 +245,42 @@ fi
 if [ "${INTEGRATION_SHARD:-}" = "rest" ]; then
     unrun=""
     while IFS= read -r f; do
-        cls=$(basename "$f" .java)
-        case ",${HEAVY_CLASSES}," in *",${cls},"*) continue ;; esac
-        grep -qE '^[[:space:]]*abstract class|^abstract class' "$f" && continue
-        grep -qE '@Tag\("(chaos|performance)"\)|@Quarantined' "$f" && continue
-        grep -qE '^[[:space:]]*@(Test|RepeatedTest|ParameterizedTest)\b' "$f" || continue
-        report_exists "$cls" || unrun="${unrun} ${cls}"
+        # CLASS-LEVEL only, anchored at column 0. A file-wide grep exempts the WHOLE class the
+        # moment one method carries @Quarantined beside ordinary @Test methods - which silently
+        # drops those ordinary methods from the "must have run somewhere" requirement, the exact
+        # gap this check exists to close. Class-level annotations are unindented; method-level ones
+        # are inside the class body and therefore indented, so the anchor separates them. Not
+        # hypothetical: the file-wide form exempted LoadTest and MultiInstanceRebalanceTest, both of
+        # which carry a method-level @Tag("performance") beside ordinary tests and both of which run.
+        grep -qE '^@(Quarantined|Tag\("(chaos|performance)"\))' "$f" && continue
+        # A test class need not DECLARE its test methods - it can inherit them, which is how the
+        # four 857 probe subclasses work: the @RepeatedTest lives on their shared abstract base and
+        # each subclass is one line. Checking only for a declared annotation skipped them, and
+        # Probe4IT is in the catch-all rather than HEAVY_CLASSES, so nothing else covered it: it
+        # could have stopped running with nothing going red. So: declared annotation, OR extends a
+        # type in this tree that declares one.
+        if ! grep -qE '^[[:space:]]*@(Test|RepeatedTest|ParameterizedTest)\b' "$f"; then
+            inherits=false
+            while read -r parent; do
+                pf=$(find . -name "${parent}.java" -not -path './.git/*' -not -path '*/target/*' | head -1)
+                [ -n "$pf" ] && grep -qE '^[[:space:]]*@(Test|RepeatedTest|ParameterizedTest)\b' "$pf" && inherits=true && break
+            done < <(grep -oE 'extends[[:space:]]+[A-Za-z0-9_]+' "$f" | awk '{print $2}' | sort -u)
+            [ "$inherits" = true ] || continue
+        fi
+        # CLASS DECLARATIONS, not the filename. Java allows several package-private top-level
+        # classes per file - the four 857 probe subclasses share one - and failsafe collects
+        # compiled CLASSES, so a filename-derived name sees only the first and is blind to the
+        # rest. Probe4IT is in the catch-all rather than HEAVY_CLASSES, so nothing else covered
+        # it: it could have stopped running with nothing going red.
+        while read -r decl; do
+            [ -z "$decl" ] && continue
+            # abstract is judged PER DECLARATION, not per file: a file may hold an abstract base
+            # and a concrete test, and skipping the whole file would drop the concrete one.
+            case "$decl" in *abstract*) continue ;; esac
+            cls=${decl##* }
+            case ",${HEAVY_CLASSES}," in *",${cls},"*) continue ;; esac
+            report_exists "$cls" || unrun="${unrun} ${cls}"
+        done < <(grep -oE '^([a-z]+ )*class [A-Za-z0-9_]+' "$f")
     done < <(find . -path '*/integrationTest*/*' -name '*.java' -not -path './.git/*' -not -path '*/target/*')
     if [ -n "$unrun" ]; then
         echo "ci-integration-test: FAILED - integration test file(s) in the tree that NO shard ran:" >&2
