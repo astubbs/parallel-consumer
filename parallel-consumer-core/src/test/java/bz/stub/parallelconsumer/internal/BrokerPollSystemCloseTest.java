@@ -42,6 +42,23 @@ import static org.awaitility.Awaitility.await;
  * {@code docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md}.
  * <p>
  * <b>Desired behaviour</b> (the fix): an instance that has not yet left the group keeps polling it.
+ * <p>
+ * <b>What this test can and cannot prove locally, stated so nobody reads more into a green run.</b>
+ * {@code transitionToClosing()} runs on the caller's thread and wakes the consumer, so {@code CLOSING}
+ * lands either between control-loop iterations or midway through a long poll. Against a
+ * {@code MockConsumer} whose {@code poll} returns immediately, the local loop spins fast enough that
+ * the transition essentially always lands BETWEEN iterations - so a fix that only polls from
+ * {@code handlePoll()}'s {@code CLOSING} branch passes here and is still broken, because the
+ * mid-poll case skips that branch entirely (the woken poll finishes the {@code RUNNING} iteration and
+ * the switch below it closes at once). That is not hypothetical: it is what the first version of this
+ * fix did, and CI caught it - Unit Tests in run 33838043495, this test, zero closing polls. Attempting
+ * to force the window locally with a sleep was tried and did NOT reproduce it, so no such sleep is
+ * kept here.
+ * <p>
+ * What makes the shipped fix safe is therefore structural rather than observed: the discharge poll is
+ * an unconditional call on the close path ({@code doClose()}), not a branch that a given interleaving
+ * may skip. Read {@code BrokerPollSystem#dischargeCoordinatorBeforeClose} before moving it back into
+ * {@code handlePoll()} - that move is the regression this paragraph exists to prevent.
  */
 @Timeout(60)
 @Slf4j

@@ -258,8 +258,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
      */
     private void handlePoll() {
         log.trace("Loop: Broker poller: ({})", runState);
-        if (runState == RUNNING || runState == DRAINING // if draining - subs will be paused, so use this to just sleep
-                || runState == CLOSING) { // still a group member until doClose() closes the consumer - see javadoc
+        if (runState == RUNNING || runState == DRAINING) { // if draining - subs will be paused, so use this to just sleep
             var polledRecords = pollBrokerForRecords();
             int count = polledRecords.count();
             log.debug("Got {} records in poll result", count);
@@ -274,8 +273,54 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
     private void doClose() {
         log.debug("Doing close...");
         doPause();
+        dischargeCoordinatorBeforeClose();
         maybeCloseConsumerManager();
         runState = CLOSED;
+    }
+
+    /**
+     * One last {@code consumer.poll()} before the consumer is closed, so this member discharges any
+     * rebalance request it still owes the group.
+     * <p>
+     * <b>Why it lives here and not in {@link #handlePoll()}, which is where it was first written.</b>
+     * The control loop is {@code handlePoll(); maybeDoCommit(); switch (runState) { CLOSING ->
+     * doClose(); }}, and {@code transitionToClosing()} sets the state from ANOTHER thread and wakes
+     * the consumer. So when the transition lands mid-poll - the common case, and the only one under
+     * load - the woken poll finishes the {@code RUNNING} iteration, the switch below it sees
+     * {@code CLOSING} and closes immediately, and a {@code CLOSING} branch in {@code handlePoll()}
+     * never executes at all. That version passed locally and failed in CI on timing alone;
+     * {@code BrokerPollSystemCloseTest} is what caught it. Here it is unconditional.
+     * <p>
+     * <b>What it prevents.</b> Rejoin and revoke-ack happen inside {@code consumer.poll()}, so a
+     * member that stops polling while still subscribed cannot answer a rebalance - and
+     * {@code consumer.close()} then waits, in
+     * {@code AbstractCoordinator.close -> ConsumerNetworkClient.awaitPendingRequests}, for the very
+     * JoinGroup it can no longer discharge. The coordinator will not answer that until every member
+     * has joined, including the ones already stuck in the same wait, so each closing member waited on
+     * a coordinator waiting on it for the whole close budget while the group froze. This is
+     * astubbs/parallel-consumer#80's drain-path defect one lifecycle state along.
+     * <p>
+     * Bounded by construction: {@link #pollBrokerForRecords()} gives any state that is not
+     * {@code RUNNING}/{@code DRAINING} a 1ms timeout, and {@code ConsumerManager#poll} allows exactly
+     * one attempt once close is in progress - never a retry loop.
+     */
+    private void dischargeCoordinatorBeforeClose() {
+        try {
+            // Subscriptions are already paused by doPause() above, so this is a coordinator round
+            // trip rather than a fetch. Any records it returns anyway are deliberately dropped: this
+            // instance is closing and will never process them, and registering work here would hand
+            // the work manager offsets nothing is going to complete.
+            var droppedOnClose = pollBrokerForRecords();
+            if (droppedOnClose.count() > 0) {
+                log.debug("Dropping {} record(s) polled during close - this instance is shutting down",
+                        droppedOnClose.count());
+            }
+        } catch (Exception e) {
+            // Never let the courtesy poll break the close it exists to improve. Logged with its type
+            // because a null-message exception here would otherwise say nothing at all.
+            log.debug("Final poll before close failed ({}: {}) - closing anyway",
+                    e.getClass().getSimpleName(), e.getMessage());
+        }
     }
 
     /**
