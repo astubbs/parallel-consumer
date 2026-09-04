@@ -4,8 +4,6 @@ package bz.stub.parallelconsumer.state;
  */
 
 import bz.stub.parallelconsumer.ForeignThread;
-import bz.stub.parallelconsumer.internal.PCModuleTestEnv;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -33,27 +31,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  *
  * @author Antony Stubbs
  */
-class RetryQueueIteratorConfinementTest {
-
-    private static final String TOPIC = "retry-queue-confinement";
-
-    private static final int PARTITION = 0;
-
-    private static final long EPOCH = 0L;
-
-    private final PCModuleTestEnv module = new PCModuleTestEnv();
-
-    private final RetryQueue retryQueue = new RetryQueue();
+class RetryQueueIteratorConfinementTest extends RetryQueueTestBase {
 
     private final ForeignThread foreign = new ForeignThread();
 
     @AfterEach
     void closeForeignThread() {
         foreign.close();
-    }
-
-    private WorkContainer<String, String> workFor(long offset) {
-        return new WorkContainer<>(EPOCH, new ConsumerRecord<>(TOPIC, PARTITION, offset, "key-" + offset, "value"), module);
     }
 
     @Test

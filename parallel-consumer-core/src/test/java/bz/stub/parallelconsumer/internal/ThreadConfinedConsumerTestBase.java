@@ -10,19 +10,13 @@ import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 
-import java.util.concurrent.ExecutionException;
 
 /**
  * The two-threads-one-consumer fixture every ownership test needs: a {@link MockConsumer} behind a
  * {@link ThreadConfinedConsumer}, and one named foreign thread to play the other party.
  * <p>
- * Shared rather than repeated because the guard's whole subject is <em>which thread</em> called, so
- * every test of it needs a second thread it can name - and two independent copies of that fixture had
- * already drifted: only one of them unwrapped {@link ExecutionException}, so an assertion failing on
- * the foreign thread surfaced in the other as a wrapper naming neither the assertion nor the thread.
- * <p>
- * The thread half is now {@link ForeignThread}, because a confinement test in another package needed the
- * same fixture and would otherwise have been the third copy. What stays here is the consumer half.
+ * The thread half is {@link ForeignThread}, which owns the reasoning for why it is shared. What stays
+ * here is the consumer half.
  *
  * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/857">#857</a>
  */
@@ -63,9 +57,8 @@ abstract class ThreadConfinedConsumerTestBase {
     }
 
     /**
-     * Runs {@code action} on the foreign thread and waits for it, rethrowing whatever it threw rather
-     * than the {@link ExecutionException} wrapper - an assertion that fails over there has to fail the
-     * test over here, naming its own cause.
+     * Runs {@code action} on the foreign thread and waits for it; {@link ForeignThread#run} owns what it
+     * does with what the action threw.
      */
     void onOtherThread(Runnable action) throws Exception {
         foreignThread.run(action);
