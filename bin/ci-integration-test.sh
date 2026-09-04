@@ -157,7 +157,12 @@ esac
 # is a false RED, and it failed two shards on the first four-way run.
 all_reports() { find . -path '*/target/failsafe-reports/TEST-*.xml' -not -path './.git/*' 2>/dev/null; }
 report_exists() {  # report_exists <simple class name>
-    all_reports | grep -q "/TEST-.*\.$1\.xml$"
+    # Herestring, NOT `all_reports | grep -q`. Under `set -o pipefail` that pipeline inverts its own
+    # answer: grep -q exits on the first match, find takes EPIPE and dies 141, and pipefail promotes
+    # that - so a MATCH reports failure. bin/check-source-patterns.mjs caught it here, and its rule
+    # exists because check-review-posted.sh shipped the same bug and reported "no review posted" on
+    # four PRs that had one. It would have been the same false RED this commit is fixing.
+    grep -q "/TEST-.*\.$1\.xml$" <<<"$(all_reports)"
 }
 
 if [ -n "${SHARD_EXPECT}" ]; then
