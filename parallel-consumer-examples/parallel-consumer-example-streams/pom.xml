@@ -35,12 +35,17 @@
                  jackson-core and jackson-annotations on the same line - pinning databind alone would
                  leave it running against 2.16.2 core.
 
-                 Retire this when kafka-streams can be bumped to a release that ships Jackson 2.18.9
+                 2.18.10 rather than 2.18.9 because it is the release that carries the fixes for
+                 CVE-2026-68497 and CVE-2026-19032, which this repo had been holding as dated
+                 TEMPORARY exclusions in the root pom precisely until it shipped. Those two entries
+                 are deleted in the same change; do not reintroduce them.
+
+                 Retire this when kafka-streams can be bumped to a release that ships Jackson 2.18.10
                  or newer; 3.9.2 is the last 3.9.x, and 4.x is behind the Java 11 baseline move. -->
             <dependency>
                 <groupId>com.fasterxml.jackson</groupId>
                 <artifactId>jackson-bom</artifactId>
-                <version>2.18.9</version>
+                <version>2.18.10</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>

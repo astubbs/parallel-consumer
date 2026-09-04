@@ -778,9 +778,23 @@
                              scopes it to HTTP *server* instrumentation, and this project uses only
                              Counter/Gauge/Timer/DistributionSummary/KafkaClientMetrics, with
                              example-metrics serving over the JDK's own com.sun.net.httpserver.
+                             CVE-2026-59295 (5.9, CWE-400) is the same component, the same blocker and
+                             the same retire condition, so it shares this comment rather than repeating
+                             it. Unbounded memory growth in MicrometerHttpClientInterceptor when an
+                             instrumented Apache HttpAsyncClient request fails before a response.
+                             Unreachable here for a structural reason rather than a judgement call:
+                             neither MicrometerHttpClientInterceptor nor any Apache HttpAsyncClient
+                             appears anywhere in this repo's sources or poms, and the micrometer
+                             surface actually used is metric primitives plus KafkaClientMetrics,
+                             ExecutorServiceMetrics and CompositeMeterRegistry. Re-check that if this
+                             project ever instruments an HTTP client:
+                             `grep -rn "MicrometerHttpClientInterceptor\|HttpAsyncClient" --include=*.java --include=*.xml`
+
                              RETIRE WHEN: the io.micrometer.prometheus -> prometheusmetrics package
-                             rename is migrated, which is what unblocks 1.15.x. -->
+                             rename is migrated, which is what unblocks 1.15.x - and it retires BOTH
+                             ids below, since 1.15.12 is past each of them. -->
                         <excludeVulnerabilityId>CVE-2026-40984</excludeVulnerabilityId>
+                        <excludeVulnerabilityId>CVE-2026-59295</excludeVulnerabilityId>
 
                         <!-- com.fasterxml.jackson.core:jackson-databind (example-streams only). False
                              positive: GHSA-rcqc-6cw3-h962 gives introduced 2.21.0 / fixed 2.21.4, and
@@ -791,55 +805,6 @@
                              2.21.x that is genuinely in scope (then it needs >= 2.21.5, not an
                              exclusion). -->
                         <excludeVulnerabilityId>CVE-2026-54518</excludeVulnerabilityId>
-
-                        <!-- ==== TEMPORARY-SINCE: 2026-08-11 - delete when Jackson 2.18.10 ships ====
-
-                             The date is machine-read by bin/check-cve-exclusions.sh, which fails the
-                             Repo Hygiene check once this entry is 90 days old. Change it only after
-                             re-checking upstream, never to buy quiet.
-
-                             com.fasterxml.jackson.core:jackson-databind, example-streams only, at
-                             runtime scope via kafka-streams 3.9.2. Unlike everything above, these two
-                             are NOT permanent: both fixes are already merged upstream on the 2.18
-                             branch, milestone 2.18.10, and there is simply no release carrying them
-                             yet.
-
-                               CVE-2026-68497 (8.7, CWE-770) - unbounded allocation deserializing
-                               javax.xml.datatype.Duration / XMLGregorianCalendar. Fix: FasterXML/
-                               jackson-databind#6127, merged 2026-07-29, adds the StreamReadConstraints
-                               number-length limit to CoreXMLDeserializers.
-
-                               CVE-2026-19032 (6.3, CWE-470) - java.nio.file.Path deserialization
-                               accepts arbitrary URI schemes. Fix: FasterXML/jackson-databind#6129,
-                               merged 2026-08-06, restricts the accepted schemes.
-
-                             There is nothing to bump TO. Neither id is in OSV, NVD or GHSA yet, so the
-                             only public record is Sonatype's own; the fixed-version data comes from the
-                             two merged PRs. Every released 2.x artifact predates both merges - the
-                             newest on each line are 2.18.9 (2026-07-08), 2.21.5 (2026-07-07) and
-                             2.22.1 (2026-07-07) - so moving up a line does not help, and moving lines
-                             is separately blocked (2.21.0-2.21.3 would make CVE-2026-54518 above real,
-                             and a global pin breaks VertxTest through wiremock-jre8).
-
-                             Neither is reachable in this example: StreamsApp is String-serde end to
-                             end, constructs no ObjectMapper, and never names Path, Duration or
-                             XMLGregorianCalendar. jackson-databind is present only because
-                             kafka-streams drags it in for its own internal metadata.
-
-                             Being an example is why this is excludable rather than shipped risk: the
-                             examples parent sets maven.deploy.skip / maven.install.skip /
-                             skipPublishing, so no consumer of the library inherits this dependency.
-                             That is a statement about blast radius, not about the vulnerability -
-                             an example is still code people copy, and if either advisory had touched
-                             core, vertx, reactor or mutiny this would have been a bump or a stop, not
-                             an exclusion. It was checked: they resolve no jackson-databind at runtime
-                             at all.
-
-                             RETIRE WHEN: jackson-databind 2.18.10 is on Central. Then bump the
-                             jackson-bom import in parallel-consumer-example-streams/pom.xml and DELETE
-                             these two lines - do not carry them forward. -->
-                        <excludeVulnerabilityId>CVE-2026-68497</excludeVulnerabilityId>
-                        <excludeVulnerabilityId>CVE-2026-19032</excludeVulnerabilityId>
                     </excludeVulnerabilityIds>
                 </configuration>
                 <executions>
