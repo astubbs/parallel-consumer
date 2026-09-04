@@ -11,6 +11,10 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.platform.commons.support.AnnotationSupport;
 
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
 import java.lang.reflect.Method;
 import java.net.URISyntaxException;
 import java.nio.file.Path;
@@ -326,7 +330,17 @@ class TransactionalClaimCoverageTest {
      * the tags a proof inherits from a superclass.
      */
     private static Set<String> effectiveTagsOf(JavaMethod method) {
-        Method reflected = method.reflect();
+        return effectiveTagsOf(method.reflect());
+    }
+
+    /**
+     * The resolution itself, split from the ArchUnit wrapper above so
+     * {@link #tagResolutionSeesMetaAnnotationsAndSuperclassesTheWayTheLauncherDoes()} can drive it from a fixture.
+     * Scanning the compiled tree cannot reach these cases: the only meta-annotated tag carrier here is
+     * {@link Quarantined}, and a claim proof carrying it is forbidden outright by
+     * {@link #claimProofsMustLiveWhereATestRunnerWillFindThem()}, so no real input exercises the path.
+     */
+    private static Set<String> effectiveTagsOf(Method reflected) {
         List<Tag> onTheMethod = AnnotationSupport.findRepeatableAnnotations(reflected, Tag.class);
         List<Tag> onTheClass = AnnotationSupport.findRepeatableAnnotations(reflected.getDeclaringClass(), Tag.class);
 
@@ -338,5 +352,64 @@ class TransactionalClaimCoverageTest {
             tags.add(tag.value().trim());
         }
         return tags;
+    }
+
+    /**
+     * A tag carrier standing in for {@link Quarantined}, whose own meta-annotation is asserted by
+     * {@code QuarantinedAnnotationContractTest#annotationIsMetaTaggedWithTheQuarantinedTag}.
+     * <p>
+     * The real annotation cannot be used here. {@code bin/check-quarantine-registry.sh} scans the tree for classes
+     * carrying {@link Quarantined} and fails any that has no entry in {@code docs/quarantined-tests.md}; a fixture
+     * would read to that gate as an undocumented quarantine and have to be answered with a registry entry for a
+     * test that is not quarantined. A local carrier proves the property that would actually regress - that
+     * resolution follows meta-annotations at all - without lying to a different gate to do it.
+     */
+    @Target(ElementType.METHOD)
+    @Retention(RetentionPolicy.RUNTIME)
+    @Tag("carried-through-a-meta-annotation")
+    private @interface CarriesATagWithoutBeingOne {
+    }
+
+    @Tag("from-the-superclass")
+    private static class TaggedAncestor {
+    }
+
+    private static final class TagFixture extends TaggedAncestor {
+
+        @Tag("from-the-method")
+        @CarriesATagWithoutBeingOne
+        void carriesBothKinds() {
+        }
+
+        void carriesNothingOfItsOwn() {
+        }
+    }
+
+    /**
+     * The tag reading must match what the launcher computes, including the two cases no real input here reaches.
+     * <p>
+     * This closes a gap a review found: {@link #effectiveTagsOf(Method)} is asserted to resolve meta-annotated and
+     * inherited tags "the way the launcher does", and nothing checked it. Every {@code @ProvesClaim} method in the
+     * tree carries plain, directly-declared {@code @Tag}s, so swapping {@link AnnotationSupport} for a hand-rolled
+     * {@code isAnnotatedWith(Tag.class)} would pass the whole suite while silently making
+     * {@link #everyCoveredClaimMustHaveAProofThisRunCanSelect()} blind to a proof deselected through a carrier -
+     * which is this PR's own failure class, one layer down in the gate that fixes it.
+     */
+    @Test
+    void tagResolutionSeesMetaAnnotationsAndSuperclassesTheWayTheLauncherDoes() throws NoSuchMethodException {
+        Set<String> both = effectiveTagsOf(TagFixture.class.getDeclaredMethod("carriesBothKinds"));
+
+        assertWithMessage("a directly declared @Tag on the method")
+                .that(both).contains("from-the-method");
+        assertWithMessage("a tag reached only through a meta-annotation - the shape @Quarantined has, and the one "
+                + "a hand-rolled isAnnotatedWith(Tag.class) would miss")
+                .that(both).contains("carried-through-a-meta-annotation");
+        assertWithMessage("a tag inherited from a superclass, which JUnit applies and a declared-annotations-only "
+                + "read would drop")
+                .that(both).contains("from-the-superclass");
+
+        assertWithMessage("a method with no tags of its own still inherits its class's")
+                .that(effectiveTagsOf(TagFixture.class.getDeclaredMethod("carriesNothingOfItsOwn")))
+                .containsExactly("from-the-superclass");
     }
 }

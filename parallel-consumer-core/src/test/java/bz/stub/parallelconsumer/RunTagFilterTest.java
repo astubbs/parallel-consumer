@@ -136,23 +136,40 @@ class RunTagFilterTest {
      * failsafe gate started reading a filter that was not there. That is the same asymmetry
      * {@code QuarantinedAnnotationContractTest#bothSurefireAndFailsafeBindTheGroupProperties} exists for - a P1
      * where only failsafe was wired and unit-lane tag filtering was a silent no-op - so it gets the same guard.
+     * <p>
+     * Asserted per plugin block rather than by counting occurrences in the whole file. A review pointed out that a
+     * bare count of two is also satisfied by one plugin carrying the block twice, which is the failure this test
+     * names in its own message - a gate that cannot tell the state it forbids from the state it requires is the
+     * defect this whole PR is about.
      */
     @Test
     void bothSurefireAndFailsafeForwardTheFiltersToTheTestJvm() throws IOException {
         String pom = new String(Files.readAllBytes(RepoRoot.find().resolve("pom.xml")), StandardCharsets.UTF_8);
 
-        for (String forwarding : of("<pc.run.includedGroups>${included.groups}</pc.run.includedGroups>",
-                "<pc.run.excludedGroups>${excluded.groups}</pc.run.excludedGroups>")) {
-            int found = 0;
-            for (int idx = pom.indexOf(forwarding); idx != -1; idx = pom.indexOf(forwarding, idx + 1)) {
-                found++;
+        for (String plugin : of("maven-surefire-plugin", "maven-failsafe-plugin")) {
+            String block = configurationBlockOf(pom, plugin);
+            for (String forwarding : of("<pc.run.includedGroups>${included.groups}</pc.run.includedGroups>",
+                    "<pc.run.excludedGroups>${excluded.groups}</pc.run.excludedGroups>")) {
+                assertWithMessage(plugin + " must forward " + forwarding + " - with it on only one plugin, a gate "
+                        + "reading the filters in the other lane would see nothing and could not tell that from an "
+                        + "unfiltered run")
+                        .that(block)
+                        .contains(forwarding);
             }
-            assertWithMessage("surefire AND failsafe must each forward " + forwarding + " - with it on only one, "
-                    + "a gate reading the filters in the other lane would see nothing and could not tell that "
-                    + "from an unfiltered run")
-                    .that(found)
-                    .isAtLeast(2);
         }
+    }
+
+    /**
+     * The text of one plugin declaration, from its {@code artifactId} to the end of that declaration - so a
+     * containment check below cannot be satisfied by something sitting in a different plugin.
+     */
+    private static String configurationBlockOf(String pom, String artifactId) {
+        int start = pom.indexOf("<artifactId>" + artifactId + "</artifactId>");
+        assertWithMessage("the root pom must declare " + artifactId + " for this gate to have anything to check")
+                .that(start).isGreaterThan(-1);
+        int end = pom.indexOf("</plugin>", start);
+        assertWithMessage(artifactId + "'s declaration must be closed").that(end).isGreaterThan(start);
+        return pom.substring(start, end);
     }
 
     /**
