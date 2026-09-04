@@ -74,39 +74,64 @@ set -euo pipefail
 # that compilation is load-bearing. Checked before spending a CI run on it.
 #
 # docs/plans/2026-09-03-001-investigate-integration-gate-wall-time.md holds the measurements.
-# The classes the heavy shard owns. SIMPLE class names, comma-separated, and the single source of
-# truth for both shards - `rest` is built from this by negation, so the two can never disagree
-# about what is where. Keep it a short, deliberate list.
-readonly HEAVY_CLASSES="Rebalance857CommitSyncDeadlockProbeIT"
+# ---------------------------------------------------------------------------------------------
+# SHARD MEMBERSHIP. Three NAMED shards plus a catch-all, derived by longest-processing-time
+# packing over MEASURED per-class wall times (run 33818955853). Simple class names, comma-separated.
+#
+# The catch-all is `rest`, defined by SUBTRACTION of the three lists - so a newly added test runs
+# there by default and can never belong to no shard. That is the property that makes this
+# maintainable: the failure mode of N explicit bins is a new class silently running nowhere, and
+# nothing goes red for it.
+#
+# Balance is not asserted here and must not be: it decays as the suite changes, and a number
+# written into a comment cannot notice. bin/check-integration-shard-balance.mjs recomputes the
+# optimal partition from recorded per-class times and reports how far this one has drifted - so
+# every CI run feeds the signal that says when to re-derive these lists.
+# ---------------------------------------------------------------------------------------------
+readonly SHARD_1_CLASSES="PartitionStateCommittedOffsetIT,Rebalance857CommitSyncDeadlockProbe2IT,RebalanceTest,TransactionalPartialResultSetIT,TransactionTimeoutsTest,CoreAppMetricsIntegrationTest,PartitionOrderProcessingTest,MultiInstanceMetricsTest,DrainingMemberRebalanceIT,KafkaSanityTests"
+readonly SHARD_2_CLASSES="TransactionAndCommitModeTest,Rebalance857CommitSyncDeadlockProbe3IT,DbTest,CustomConsumersTest,CloseAndOpenOffsetTest,VertxConcurrencyIT,TransactionalEagerProcessingIT,BrokerPollerBackpressureTest,ProgressBarTest"
+readonly SHARD_3_CLASSES="MultiInstanceRebalanceTest,Rebalance857CommitSyncDeadlockProbe4IT,TransactionalCrashReplayIT,TransactionMarkersTest,TransactionalVisibilityIT,LatestResetTailNudgeIT,LoadTest,DrainCloseTest,RetriesTest"
+
+# Every named class, for the catch-all's exclusion and for the disjointness check below.
+ALL_NAMED="${SHARD_1_CLASSES},${SHARD_2_CLASSES},${SHARD_3_CLASSES}"
+
+# A class in two lists would run twice and be paid for twice, and nothing downstream would notice -
+# both shards would pass. Cheap to check, so check it on every invocation rather than trusting
+# review to catch a copy-paste.
+dupes=$(echo "$ALL_NAMED" | tr ',' '\n' | sort | uniq -d)
+if [ -n "$dupes" ]; then
+    echo "ci-integration-test: FAILED - class(es) named in more than one shard list:" >&2
+    printf '    %s\n' $dupes >&2
+    exit 2
+fi
+
+shard_include_arg() {  # shard_include_arg <comma-list>
+    echo "-Dit.test=$1"
+}
+shard_exclude_arg() {  # shard_exclude_arg <comma-list> -> failsafe <excludes> patterns
+    echo "-Dit.excluded.classes=$(echo "$1" | sed 's#[^,][^,]*#**/&.java#g')"
+}
 
 SHARD_ARGS=()
+SHARD_EXPECT=""
 case "${INTEGRATION_SHARD:-}" in
-    heavy)
-        # -Dfailsafe.failIfNoSpecifiedTests=false is REQUIRED, not defensive: the reactor builds
-        # ten other modules that contain none of these classes, and without it the first such
-        # module fails the build before the requested tests run. bin/chaos-test.sh's header records
-        # the same trap. The report check below is what stops that flag turning a shard that
-        # selected NOTHING into a silent pass.
-        SHARD_ARGS=(-Dit.test="${HEAVY_CLASSES}" -Dfailsafe.failIfNoSpecifiedTests=false)
-        ;;
+    1) SHARD_EXPECT="$SHARD_1_CLASSES"
+       SHARD_ARGS=("$(shard_include_arg "$SHARD_1_CLASSES")" -Dfailsafe.failIfNoSpecifiedTests=false) ;;
+    2) SHARD_EXPECT="$SHARD_2_CLASSES"
+       SHARD_ARGS=("$(shard_include_arg "$SHARD_2_CLASSES")" -Dfailsafe.failIfNoSpecifiedTests=false) ;;
+    3) SHARD_EXPECT="$SHARD_3_CLASSES"
+       SHARD_ARGS=("$(shard_include_arg "$SHARD_3_CLASSES")" -Dfailsafe.failIfNoSpecifiedTests=false) ;;
     rest)
-        # NOT -Dit.test=!Class. Setting it.test REPLACES failsafe's <includes>, and both test
-        # source roots compile into the same target/test-classes - so the negated form silently
-        # drops the `**/integrationTest*/**` restriction and runs the entire UNIT suite under
-        # failsafe too. Measured before this was understood: 168 classes and 981 tests instead of
-        # 42 and 204, critical path 782s against a 620s baseline, and the shard PASSED, because
-        # running more tests than you meant to fails nothing.
-        #
-        # it.excluded.classes feeds failsafe's <excludes> in the root pom, which leaves <includes>
-        # intact - so the catch-all is the complement of HEAVY_CLASSES *within the integration
-        # packages*, by construction rather than by hoping.
-        SHARD_ARGS=(-Dit.excluded.classes="$(echo "$HEAVY_CLASSES" | sed 's#[^,][^,]*#**/&.java#g')")
-        ;;
+       # NOT a negated -Dit.test. Setting it.test REPLACES failsafe's <includes>, and both test
+       # source roots compile into the same target/test-classes - so the negated form silently
+       # drops the `**/integrationTest*/**` restriction and runs the entire UNIT suite under
+       # failsafe too. Measured before it was understood: 168 classes and 981 tests instead of 42
+       # and 204, and it PASSED, because running more tests than you meant to fails nothing.
+       SHARD_ARGS=("$(shard_exclude_arg "$ALL_NAMED")") ;;
     "") ;;  # whole suite - local runs and any caller that does not opt in
     *)
-        echo "ci-integration-test: INTEGRATION_SHARD must be 'heavy', 'rest' or unset (got '${INTEGRATION_SHARD}')" >&2
-        exit 2
-        ;;
+       echo "ci-integration-test: INTEGRATION_SHARD must be 1, 2, 3, 'rest' or unset (got '${INTEGRATION_SHARD}')" >&2
+       exit 2 ;;
 esac
 
 ./mvnw --batch-mode \
@@ -120,58 +145,59 @@ esac
   ${SHARD_ARGS[@]+"${SHARD_ARGS[@]}"} \
   "$@"
 
-# A SHARD THAT RAN NOTHING MUST NOT READ AS A PASS. With failIfNoSpecifiedTests disabled above,
-# Maven exits 0 whether the selection matched every class or none of them, so the only thing
-# standing between a renamed class and a permanently green job that tests nothing is this check.
-# The mutation lane shipped exactly that bug once ("nothing to mutate, skipping", green forever)
-# and bin/chaos-test.sh guards the same shape for the same reason.
-#
-# The two shards need OPPOSITE assertions, which is what makes the pair airtight: heavy must
-# contain every named class, rest must contain none of them and still not be empty. A rename
-# therefore fails the heavy shard loudly while the catch-all quietly keeps running the test - the
-# safe direction, and the reason this shape was chosen.
+# A SHARD THAT RAN NOTHING MUST NOT READ AS A PASS. failIfNoSpecifiedTests is disabled above -
+# it has to be, because the reactor builds ten modules containing none of these classes and the
+# first would otherwise fail the build - so Maven exits 0 whether the selection matched every class
+# or none of them. These checks are the only thing between a renamed class and a permanently green
+# job that tests nothing. The mutation lane shipped exactly that bug once ("nothing to mutate,
+# skipping", green forever); bin/chaos-test.sh guards the same shape.
 REPORTS_DIR=parallel-consumer-core/target/failsafe-reports
-case "${INTEGRATION_SHARD:-}" in
-    heavy)
-        missing=""
-        for c in ${HEAVY_CLASSES//,/ }; do
-            ls "${REPORTS_DIR}"/TEST-*."${c}".xml >/dev/null 2>&1 || missing="${missing} ${c}"
-        done
-        if [ -n "$missing" ]; then
-            echo "ci-integration-test: FAILED - the 'heavy' shard produced no failsafe report for:${missing}" >&2
-            echo "  The shard ran, exited 0, and tested less than it was assigned. Usually a renamed or" >&2
-            echo "  deleted class still named in HEAVY_CLASSES - the catch-all shard is still running it," >&2
-            echo "  so nothing is untested, but this list is now wrong." >&2
-            exit 1
-        fi
-        ;;
-    rest)
-        found=$(ls "${REPORTS_DIR}"/TEST-*.xml 2>/dev/null | wc -l | tr -d ' ')
-        if [ "$found" -eq 0 ]; then
-            echo "ci-integration-test: FAILED - the 'rest' shard produced no failsafe reports at all." >&2
-            exit 1
-        fi
-        for c in ${HEAVY_CLASSES//,/ }; do
-            if ls "${REPORTS_DIR}"/TEST-*."${c}".xml >/dev/null 2>&1; then
-                echo "ci-integration-test: FAILED - '${c}' is in HEAVY_CLASSES but ran in the 'rest' shard too." >&2
-                echo "  Both shards are paying for it." >&2
-                exit 1
-            fi
-        done
-        ;;
-esac
+report_exists() {  # report_exists <simple class name>
+    ls "${REPORTS_DIR}"/TEST-*."$1".xml >/dev/null 2>&1
+}
 
-# EVERY class that ran must live in an integrationTest package, in BOTH shards. This is the guard
-# that would have caught the it.test bug described above, and neither of the shard-specific checks
-# would have: they ask whether the RIGHT tests ran, and the failure there was 126 EXTRA ones. A
-# "ran at least N" gate cannot see that either - more is not fewer - which is why this asks about
-# provenance rather than count.
+if [ -n "${SHARD_EXPECT}" ]; then
+    # A NAMED shard must contain every class it was assigned. A rename fails HERE, loudly, while
+    # the catch-all quietly keeps running the test - so the suite stays complete and the list is
+    # what gets reported as wrong. That asymmetry is deliberate and is why the catch-all exists.
+    missing=""
+    for c in ${SHARD_EXPECT//,/ }; do
+        report_exists "$c" || missing="${missing} ${c}"
+    done
+    if [ -n "$missing" ]; then
+        echo "ci-integration-test: FAILED - shard ${INTEGRATION_SHARD} produced no failsafe report for:${missing}" >&2
+        echo "  The shard ran, exited 0, and tested less than it was assigned. Usually a renamed or" >&2
+        echo "  deleted class still named in its shard list - the catch-all is still running it, so" >&2
+        echo "  nothing is untested, but the list is now wrong." >&2
+        exit 1
+    fi
+elif [ "${INTEGRATION_SHARD:-}" = "rest" ]; then
+    # The catch-all must contain NONE of the named classes and still not be empty.
+    found=$(ls "${REPORTS_DIR}"/TEST-*.xml 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$found" -eq 0 ]; then
+        echo "ci-integration-test: FAILED - the catch-all shard produced no failsafe reports at all." >&2
+        exit 1
+    fi
+    for c in ${ALL_NAMED//,/ }; do
+        if report_exists "$c"; then
+            echo "ci-integration-test: FAILED - '${c}' is in a named shard but ran in the catch-all too." >&2
+            echo "  Both shards are paying for it, and both will pass." >&2
+            exit 1
+        fi
+    done
+fi
+
+# EVERY class that ran must live in an integrationTest package, in EVERY shard. This is the guard
+# that caught the -Dit.test bug described above, and none of the checks before it would have: they
+# ask whether the RIGHT tests ran, and that failure was 126 EXTRA ones. A "ran at least N" gate
+# cannot see it either - more is not fewer - which is why this asks about PROVENANCE rather than
+# count. It is the only check here that is not about the shard lists at all.
 if [ -n "${INTEGRATION_SHARD:-}" ]; then
     strays=$(ls "${REPORTS_DIR}"/TEST-*.xml 2>/dev/null | grep -v '\.integrationTest' || true)
     if [ -n "$strays" ]; then
-        echo "ci-integration-test: FAILED - the '${INTEGRATION_SHARD}' shard ran classes from outside" >&2
-        echo "  an integrationTest package. Failsafe's <includes> restriction has been lost - check" >&2
-        echo "  whether something set -Dit.test, which REPLACES it. Offenders:" >&2
+        echo "ci-integration-test: FAILED - shard '${INTEGRATION_SHARD}' ran classes from outside an" >&2
+        echo "  integrationTest package. Failsafe's <includes> restriction has been lost - check whether" >&2
+        echo "  something set -Dit.test, which REPLACES it. Offenders:" >&2
         printf '    %s\n' $strays >&2
         exit 1
     fi

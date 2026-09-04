@@ -6,9 +6,28 @@
 The `Integration Tests` lane is the PR build's critical path - 620s against ~500s for the next
 slowest. Sharding it across runner jobs is the lever that actually moves it.
 
-**BEING IMPLEMENTED in astubbs/parallel-consumer#440**, as one named heavy set plus a catch-all
-rather than the Chaos Pain Suite's four balanced bins. This note keeps what is still open; the
-shape and its measurement live with that PR.
+**IMPLEMENTED**: two shards in astubbs/parallel-consumer#442 (measured 620s -> 519s), then four in
+the PR stacked on it. Three NAMED shards plus a catch-all defined by subtraction - not the Chaos
+Pain Suite's four balanced bins, and the difference is the point (below). This note keeps what is
+still open; the measurements live with those PRs.
+
+## Why four shards needed the 857 probe split first, and two did not
+
+Modelled from measured per-class times, and the model reproduced the two-shard measurement to
+within 3s (predicted 516s, measured 519s):
+
+| config | critical path | runner-minutes |
+|---|---:|---:|
+| 2 shards, probe intact | 516s | 870s |
+| **4 shards, probe intact** | **516s** | 1417s |
+| 2 shards, probe split | 355s | 709s |
+| 4 shards, probe split | 337s | 1158s |
+
+`Rebalance857CommitSyncDeadlockProbeIT` was `@RepeatedTest(20)` in one ~356s class, and forks
+cannot split a class - so whichever shard held it WAS the critical path, at 516s, for any shard
+count. **Four shards bought nothing while it was intact** and cost 547 extra runner-seconds.
+Splitting it is worth 161s; going from two shards to four is worth 18s. Order matters more than
+count, which is the same lesson as the serial-build work above.
 
 **A BLOCKING PREREQUISITE, and it is not in the diff.** `Integration Tests` is a required status
 check in the `master` ruleset; `Integration Tests (heavy)` is not, and adding a job does not add a
@@ -41,6 +60,32 @@ costs roughly 400 extra runner-seconds before it saves anything.
 3.6s of test time buys 1s of wall - while removing 1s of *serial build* time buys a full second. The
 build reduction is therefore worth ~3.6x per second AND it is the exact cost sharding multiplies.
 Doing it first is not a detour from sharding; it is the thing that makes sharding pay.
+
+## Keeping it from decaying - the part that is not the split itself
+
+A partition sized from measurements is only right on the day it is measured. The failure is silent:
+nothing goes red as the lists go stale, the lane just gets slower than it needs to be. Three
+properties are what stop that here, and only the third is unusual:
+
+- **The catch-all is defined by SUBTRACTION.** A new test runs there by default and can never
+  belong to no shard. This is the inversion of N explicit bins, whose failure mode is a new class
+  running nowhere with nothing going red.
+- **A rename fails its named shard loudly while the catch-all keeps running the test.** Each named
+  shard asserts a failsafe report for every class it was assigned, so the suite stays complete and
+  the LIST is what gets reported as wrong. Failing in the safe direction is deliberate.
+- **`bin/check-integration-shard-balance.mjs` recomputes the optimal partition from RECORDED
+  per-class times and reports the drift.** So the same runs that make the lists stale also measure
+  how stale they are: drift becomes a visible number instead of quiet decay. It is advisory by
+  default - a shared runner's wall-clock is not stable enough to block a merge on, with 119s of
+  measured noise on this lane - and takes `--fail-over <seconds>` for a caller that wants it
+  blocking. It also names classes that are in a list but have no recorded history at all, which is
+  what a rename or a deletion looks like before the build catches it.
+
+Two guards sit underneath all of that and are about correctness rather than balance: no class may
+appear in two lists (checked on every invocation - it would run and be paid for twice, and both
+shards would pass), and every failsafe report in every shard must come from an `integrationTest`
+package. That last one is what caught `-Dit.test=!Class` silently running the entire unit suite
+under failsafe - a failure of 126 EXTRA tests, which no "ran at least N" gate can see.
 
 ## What this will need when it is picked up
 

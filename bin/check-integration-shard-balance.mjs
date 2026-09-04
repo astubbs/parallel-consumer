@@ -1,0 +1,133 @@
+#!/usr/bin/env node
+//
+// Copyright (C) 2026 Antony Stubbs and contributors
+//
+// Is the integration lane's shard partition still a good one?
+//
+// WHAT THIS IS FOR, and why it is not a balance ASSERTION. bin/ci-integration-test.sh carries three
+// named class lists plus a catch-all, derived once by longest-processing-time packing over measured
+// per-class wall times. Those times drift: a test gets slower, a class is added, a scenario is
+// split. The partition does not drift with them, and nothing goes red when it stops being good -
+// the lane just quietly gets slower than it needs to be, which is the least visible kind of decay
+// there is.
+//
+// So this does not check that the shards ARE balanced. It recomputes what the best partition would
+// be from the times actually recorded by recent runs, and reports how much wall-clock the current
+// one is leaving on the table. Every CI run feeds Codecov; every run therefore improves the signal
+// that says when to re-derive the lists. That is the whole design: the thing that makes a static
+// partition go stale is also the thing that measures its staleness.
+//
+// ADVISORY BY DEFAULT. A number derived from a shared runner's wall-clock is not stable enough to
+// block a merge on - this repo has 119s of measured noise on a 620s lane - so a drifted partition
+// prints and exits 0. `--fail-over <seconds>` makes it blocking for a caller that wants that, and
+// is what a scheduled job would use rather than the PR gate.
+//
+// Exit codes follow the bin/ convention: 0 ran (whatever it found), 2 could not run, 3 nothing in
+// scope. It needs the network (Codecov is public, no token) and is skipped offline rather than
+// guessed at - a partition check that invents its input is worse than none.
+
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
+import { slowest } from './lib/codecov.mjs'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
+const SCRIPT = join(HERE, 'ci-integration-test.sh')
+const BUILD_OVERHEAD_SECONDS = 160 // serial build + job setup, re-paid by every shard
+const FORKS = 4 // forkCount inside each shard; a measured ceiling, see the script's header
+
+const failOverIdx = process.argv.indexOf('--fail-over')
+const failOver = failOverIdx > -1 ? Number(process.argv[failOverIdx + 1]) : null
+
+// --- the partition as it is checked in -------------------------------------------------------
+function shardListsFromScript() {
+    const src = readFileSync(SCRIPT, 'utf8')
+    const lists = []
+    for (const n of [1, 2, 3]) {
+        const m = src.match(new RegExp(`readonly SHARD_${n}_CLASSES="([^"]*)"`))
+        if (!m) return null
+        lists.push(m[1].split(',').filter(Boolean))
+    }
+    return lists
+}
+
+// --- packing ---------------------------------------------------------------------------------
+// Longest-processing-time first. Used twice and for different things: to pack CLASSES into forks
+// inside one shard, and to pack classes into SHARDS. Same algorithm, same reason - the long jobs
+// have to go first or the tail cannot pack tight.
+function lpt(items, bins) {
+    const b = Array.from({ length: bins }, () => [])
+    const sums = new Array(bins).fill(0)
+    for (const it of [...items].sort((x, y) => y.seconds - x.seconds)) {
+        const i = sums.indexOf(Math.min(...sums))
+        b[i].push(it)
+        sums[i] += it.seconds
+    }
+    return { bins: b, sums }
+}
+
+// A shard's wall is its classes packed across FORKS - NOT its total work. A shard holding one
+// 356s class is 356s wide however little else is in it, which is the whole reason the 857 probe
+// dominated this lane before it was split.
+const shardWall = (classes) => Math.max(...lpt(classes, FORKS).sums) + BUILD_OVERHEAD_SECONDS
+const criticalPath = (shards) => Math.max(...shards.map(shardWall))
+
+// --- main ------------------------------------------------------------------------------------
+const lists = shardListsFromScript()
+if (!lists) {
+    console.error('check-integration-shard-balance: could not read SHARD_n_CLASSES from bin/ci-integration-test.sh')
+    process.exit(2)
+}
+
+const res = slowest(4000)
+if (!res.ok) {
+    console.log(`check-integration-shard-balance: could not reach Codecov (${res.error ?? 'unknown'}) - skipped`)
+    process.exit(2)
+}
+
+// Integration classes only, and by CLASS: the shards select classes, so per-test rows have to be
+// summed back up to the unit the partition actually operates on.
+const perClass = new Map()
+for (const r of res.value.rows) {
+    if (!(r.flags ?? []).includes('integration')) continue
+    const cls = r.name.split('::')[0].split('.').pop()
+    perClass.set(cls, (perClass.get(cls) ?? 0) + r.seconds)
+}
+if (perClass.size === 0) {
+    console.log('check-integration-shard-balance: no integration timings recorded yet - nothing in scope')
+    process.exit(3)
+}
+
+const all = [...perClass].map(([name, seconds]) => ({ name, seconds }))
+const named = new Set(lists.flat())
+const current = [...lists.map((l) => all.filter((c) => l.includes(c.name))), all.filter((c) => !named.has(c.name))]
+const optimal = lpt(all, 4).bins
+
+const now = criticalPath(current)
+const best = criticalPath(optimal)
+const drift = now - best
+
+console.log(`check-integration-shard-balance: ${perClass.size} integration classes with recorded times`)
+current.forEach((s, i) => {
+    const label = i < 3 ? `shard ${i + 1}` : 'catch-all'
+    console.log(`  ${label.padEnd(10)} ${String(Math.round(shardWall(s))).padStart(4)}s  ${s.length} classes`)
+})
+console.log(`  current critical path ${Math.round(now)}s | best achievable ${Math.round(best)}s | drift ${Math.round(drift)}s`)
+
+// Classes with recorded times that no shard claims are fine - the catch-all has them by
+// construction. Classes NAMED but never recorded are not: that is a rename or a deletion, and the
+// shard's own report check will fail on it at run time. Saying so here is cheaper than a red build.
+const stale = [...named].filter((n) => !perClass.has(n))
+if (stale.length) {
+    console.log(`  NAMED BUT NEVER RECORDED (renamed or deleted?): ${stale.join(', ')}`)
+}
+if (res.value.truncated) {
+    console.log('  NOTE: hit the Codecov page bound, so this is not the whole history - drift may be understated.')
+}
+
+if (failOver !== null && drift > failOver) {
+    console.error(`check-integration-shard-balance: drift ${Math.round(drift)}s exceeds --fail-over ${failOver}s`)
+    console.error('  Re-derive the SHARD_n_CLASSES lists in bin/ci-integration-test.sh from current timings.')
+    process.exit(1)
+}
+process.exit(0)
