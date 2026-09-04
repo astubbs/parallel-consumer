@@ -71,6 +71,14 @@ contract-violating *optimistic* mode beside it, while DRL's shipped designs bias
 over-admission under partition. The strict corner is unoccupied, and both papers explicitly defer the
 adversarial analysis where it would matter.
 
+**Envoy RLQS is the citation this design should carry**, per the owner, 2026-09-05. Envoy's rate
+limit quota service is independent evidence that a **delegated-credit resource plane is a sensible
+architecture for high-performance distributed quotas** rather than an odd invention - which is a
+different and more useful kind of prior-art finding than "somebody got here first". It says the shape
+is validated. Unverified in this repository; recorded as `claimed` in
+[`core-hasten-adjacent-systems-register.md`](core-hasten-adjacent-systems-register.md) until someone
+reads the primary source.
+
 **What is unanswered is the substrate** - carrying divisible leases on a durable log, which Doorman
 (server tree plus etcd), SIGCOMM 2007 Distributed Rate Limiting (UDP gossip), Kueue (API server) and
 DBOS (Postgres) each miss on a different axis. And what none of them offers is any of it to a team

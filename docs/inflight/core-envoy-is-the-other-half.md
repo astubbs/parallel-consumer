@@ -88,6 +88,28 @@ teams who already run Kafka and did not set out to adopt a scheduler, and many o
 mesh. **"Add this beside what you have" is a far cheaper ask than "replace your mesh"**, and it is
 consistent with the rule that pulling people off an existing system is explicitly not the strategy.
 
+## What Envoy already has that bears directly on this design
+
+Named by the owner 2026-09-05, `claimed` and unverified here, and both are more useful as
+**validation and as reading** than as competition:
+
+- **The adaptive concurrency filter's gradient controller** - periodically measures request latency
+  and minRTT and recalculates a concurrency limit. That is the same perturb-observe-infer loop as
+  this engine's adaptive concurrency, which already ports Gradient2 from Netflix's
+  concurrency-limits ([`core-auto-scaling.md`](core-auto-scaling.md)). **Study it closely rather than
+  reinvent blindly** - it is a second independent production instantiation at a different operating
+  point.
+- **RLQS, the rate limit quota service** - independent evidence that a **delegated-credit resource
+  plane is a sensible architecture for high-performance distributed quotas**. That is a more useful
+  kind of prior art than a priority claim: it says the shape is validated rather than that somebody
+  got there first. [`core-distributed-throttling.md`](core-distributed-throttling.md) now cites it in
+  the resource-plane design, as instructed.
+
+**Both strengthen the run-both reading rather than weakening it.** A design whose two hardest
+mechanisms have each been independently arrived at by a widely deployed proxy is a design whose
+mechanisms work; what remains distinctive is the dimension it operates on and the position it
+occupies, which is exactly what the register says survives.
+
 ## Why deferred
 
 The interesting half needs the Envoy research that has not happened, and asserting a synergy before

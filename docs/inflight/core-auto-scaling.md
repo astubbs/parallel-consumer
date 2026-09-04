@@ -112,6 +112,17 @@ multiply. This whole feature is candidate STRATEGY.md material ("the engine
 every language re-implements badly" positioning) - fold in via ce-strategy when direction is
 confirmed.
 
+**Envoy's adaptive concurrency filter is live prior art in this exact family, and the owner's
+direction (2026-09-05) is to study it closely rather than reinvent blindly.** It carries a gradient
+controller that periodically measures request latency and minRTT and recalculates a concurrency
+limit - the same perturb-observe-infer loop this note designs, deployed at scale inside a proxy. The
+Gradient2 lineage below already acknowledges Netflix's concurrency-limits as the source of the
+algorithm; what Envoy adds is a second independent production instantiation, and a different
+operating point to compare against. Unverified here - recorded as `claimed` in
+[`core-hasten-adjacent-systems-register.md`](core-hasten-adjacent-systems-register.md), which also
+carries why the network and work dimensions do not substitute for each other
+([`core-envoy-is-the-other-half.md`](core-envoy-is-the-other-half.md)).
+
 Prior art (design references, bitrotted - catalogued in `docs/refactoring.md` idea bank):
 `features/dynamic-concurrency-control` @6f85eac41 (Netflix concurrency-limits Gradient2Limit as
 the worker pool, auto-scale module extraction started, README section written) and

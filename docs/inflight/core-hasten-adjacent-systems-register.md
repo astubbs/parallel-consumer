@@ -93,6 +93,35 @@ no, and each one requires the user to adopt a whole new system to get the capabi
 | **5. The composite** | **No answer found**, medium confidence | Pieces occupied at different layers with incompatible topologies; synthesized rather than directly verified |
 | **No rewrite, nothing in the per-call hot path** | **Confirmed as a real difference** (3-0 x3) | Restate and DBOS both fail it - Restate pushes rules cluster-side, DBOS hits Postgres per dequeue |
 
+## Substrate neutrality
+
+**The unit of comparison is the execution architecture, not the transport.** A system that places
+admission or scheduling beneath an existing API belongs in this register whether it runs over Kafka,
+RPC, actors, work queues, a database or generic async work. The 2026-09-05 sweep's angles were
+implicitly Kafka-shaped, which narrowed it; from 2026-09-05 the briefs are substrate-neutral and
+[`process-prior-art-research-targets.md`](process-prior-art-research-targets.md) states the rule in
+full. The discriminating clause, stated without a substrate: **does it drive that decision from
+adaptive global optimisation over measured performance?** Many systems have a limiter, a quota or a
+scheduler; far fewer close the loop from observed behaviour back into a global allocation.
+
+## Rows added 2026-09-05, all `claimed` and none checked here
+
+Named by the owner from reading, recorded so they are not lost, and **not verified in this
+repository** - the evidence rule applies to them exactly as to anything else.
+
+| System | Why it matters | Evidence |
+|---|---|---|
+| **Envoy adaptive concurrency filter** | An HTTP filter with a **gradient controller** that periodically measures request latency and minRTT and recalculates a concurrency limit. **The same family of control idea as this engine's adaptive concurrency** - perturb, observe, infer a useful admission level. Note that [`core-auto-scaling.md`](core-auto-scaling.md) already records a Gradient2 port from Netflix's concurrency-limits, so the family was acknowledged; what is new is a **deployed-at-scale instantiation inside a proxy**. Owner's direction: **study it closely rather than reinvent blindly.** | **claimed** |
+| **Envoy RLQS** (rate limit quota service) | The strongest single piece of external validation found so far for the resource plane: **it is independent evidence that a delegated-credit architecture is a sensible design for high-performance distributed quotas**, not an odd invention. Owner's instruction: cite it explicitly in the resource-plane design, which [`core-distributed-throttling.md`](core-distributed-throttling.md) now does. | **claimed** |
+| **Arktos Global Scheduler** | Built around a global view across clusters and data centres, with application-aware scaling and migration from observed input-flow behaviour and multidimensional optimisation. Non-Kafka, cluster-scale, and squarely on the discriminating clause. | **claimed** |
+| **IBM LLA** | Continuously adapts distributed CPU and network allocation to workload and resource variation, maximising **aggregate utility from end-to-end latency**. A stronger objective formulation than anything this corpus has written down. | **claimed** |
+| **Hadar** | Online scheduling of task placement across heterogeneous accelerators from measured or modelled workload performance. Shows how far measured-performance-driven placement has been taken mathematically. | **claimed** |
+
+**The academic rows are the uncomfortable ones**, and that is why they are here: they go further
+mathematically than the design does, on the exact clause claimed as discriminating. Reading them is
+more likely to improve the design than to threaten it, but neither outcome should be assumed before
+somebody looks.
+
 ## Where the answers already exist - say so first, always
 
 Not a prohibition, a courtesy and a credibility move: on each of these, somebody has a shipped

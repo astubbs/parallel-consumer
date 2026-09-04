@@ -53,6 +53,17 @@ completed. New questions arrive faster than old ones close.
 - **Log-transported quota.** Kafka's own quota and throttling internals, service-mesh rate-limit
   services with log-backed state, Raft-backed token brokers. *Settles:* whether the substrate
   residual of the capacity-lease question is real; only four alternatives have been checked.
+- **Arktos Global Scheduler** - reported to be built around a global view across clusters and data
+  centres, with application-aware scaling and migration driven by observed input-flow behaviour and
+  multidimensional optimisation. *Settles:* whether the global-view-plus-measured-behaviour
+  combination is already occupied at cluster scale, on a non-Kafka substrate.
+- **IBM's LLA work** - reported to continuously adapt distributed CPU and network allocation to
+  workload and resource variation, maximising aggregate utility from end-to-end latency. *Settles:*
+  whether the adaptive-global-optimisation clause has a mature academic answer, and what objective
+  function it optimises - utility-from-latency is a stronger formulation than anything recorded here.
+- **Hadar and the online-scheduling literature** - task placement across heterogeneous accelerators
+  from measured or modelled workload performance. *Settles:* how far the measured-performance-driven
+  placement idea has already been taken mathematically.
 - **Scheduling-theory literature** on backlog-aware and requirement-aware lookahead admission.
   Never searched. *Settles:* whether Prescience has an academic precedent that a product search
   cannot see.
@@ -84,6 +95,19 @@ completed. New questions arrive faster than old ones close.
   re-deriving solved machinery.
 - **Graphiti/Zep, A-MEM, MAGMA** - untouched memory-research leads. *Settles:* whether any treats
   concurrent versions as simultaneously true rather than as history to collapse.
+
+## Substrate neutrality - a standing rule for every brief from 2026-09-05
+
+**The unit of comparison is the execution architecture, never the transport.** If somebody built
+this shape under RPC, actors, work queues, a database, generic async work, or across clusters and
+data centres, that is **exactly as relevant** as a Kafka project - and the first sweep's angles were
+implicitly Kafka-shaped, which is one reason it missed things.
+
+The searchable form of the question, stated without naming a substrate: *does anything place an
+admission or scheduling decision beneath an existing API or programming model, and drive it from
+adaptive global optimisation over measured performance?* The final clause is the discriminating one.
+Most systems have some of it - a limiter, a quota, a scheduler - and far fewer close the loop from
+observed behaviour back into a global allocation.
 
 ## The rule these all run under
 
