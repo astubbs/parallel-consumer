@@ -2,65 +2,43 @@
 #
 # Copyright (C) 2026 Antony Stubbs and contributors
 #
-# THE single home of the machine-readable inflight tag sets - the same move as
-# bin/lib/quarantine-common.sh: source this, do not copy from it. docs/inflight/AGENTS.md owns what
-# each value MEANS; this file owns which values exist, for both consumers:
+# The inflight tag vocabulary FOR BASH - sourced by bin/check-inflight-tags.sh, the gate. It defines
+# nothing itself: bin/lib/inflight-tags.mjs owns the sets, the impact order and every comment that
+# explains them, and this file evals what `node bin/lib/inflight-tags.mjs --shell` prints, which is
+# one `NAME="value value ..."` line per variable in SHELL_VARIABLES there.
 #
-#   - bin/check-inflight-tags.sh          - the gate: rejects a tag outside these sets
-#   - .claude/hooks/inject-recorded-knowledge.sh - the session index: groups open notes by them
+# WHY THE NODE FILE OWNS IT. The vocabulary used to live here and be ported to Node for the session
+# index, held equal by a parity self-test - two copies of a closed set, which is the drift this
+# repository treats as a defect everywhere else. The index is the consumer that ORDERS by these
+# values, so the file it imports is the natural owner; the gate only tests membership, and reads the
+# same values through this wrapper. One source, no parity to keep.
 #
-# The two used to carry private copies, each annotated "these WILL drift" - and the failure mode of
-# drift is the worst one this system has: a value the gate accepts but the index cannot place files
-# a note into "unmatched", or loses it entirely. One source makes that class impossible.
+# FAILS LOUDLY, NEVER EMPTY. A sourced library that cannot produce its variables must not return
+# quietly: the gate would then compare every tag against empty sets and report every note invalid,
+# or - with `set -u` off - nothing at all. Both a missing `node` and a failed render return non-zero
+# with a message on stderr, so `. inflight-tags.sh || exit 1` in the gate stops there.
 #
-# ORDER IS LOAD-BEARING for the index, not the gate: within each partition the values are listed by
-# cost of not knowing, signal-integrity classes first (you cannot judge the code through instruments
-# that lie, so `misdirection` outranks `blind-spot` and both outrank any product defect), and the
-# index emits its groups in exactly this order.
-#
-# THE PARTITION IS THE POINT - bug impacts and task impacts are separate sets, not one flat list,
-# because the index groups them separately: a `bug` carrying `release-gate` once passed a flat-set
-# gate and then appeared under "unmatched" in the index.
-#
-# Adding a value: add it here AND describe it in docs/inflight/AGENTS.md in the same commit, and say
-# why the existing values do not fit - do not invent one in a note and hope.
+# shell-justified: the gate that sources this is bash, and a sourced file has to be the language of
+# its sourcer; the whole point of this file is to be the smallest such bridge.
 
-# A REGISTER is consulted, never completed - a ranked backlog, a collision list. It has no done
-# state, so filing it as a `task` implied a discrete action someone could finish and sorted it among
-# things waiting to be done, when it is the thing you READ to decide what to do next. Surfaced in its
-# own section at the top of the session index rather than among open work.
-INFLIGHT_TYPES="bug feature task register"
-INFLIGHT_BUG_IMPACTS="misdirection blind-spot crash data-loss stall security config-lie reliability throughput"
-INFLIGHT_TASK_IMPACTS="release-gate coordination stranded-work ci test-debt refactor process deps-debt security reliability"
+_inflight_tags_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# A FEATURE MAY CARRY AN IMPACT, and should whenever it addresses one. The point of the tag is that
-# work falls out in priority order, not that it is filed under the correct part of speech: a
-# commit-failure seam whose motivation is PC shutting down is `feature` + `crash`, and tagging it
-# impact-less buries it among cosmetic features. Optional, because a genuinely new capability with no
-# problem behind it has an opportunity rather than a consequence.
-INFLIGHT_FEATURE_IMPACTS="$INFLIGHT_BUG_IMPACTS $INFLIGHT_TASK_IMPACTS"
-# A register may carry one too - a collision list whose cost of being unread is a collision.
-INFLIGHT_REGISTER_IMPACTS="$INFLIGHT_BUG_IMPACTS $INFLIGHT_TASK_IMPACTS"
+if ! command -v node >/dev/null 2>&1; then
+    printf 'inflight-tags.sh: node is not on PATH - bin/lib/inflight-tags.mjs owns the tag vocabulary and renders it for bash\n' >&2
+    unset _inflight_tags_dir
+    return 1 2>/dev/null || exit 1
+fi
 
-# THE ORDER THE SESSION INDEX PRESENTS THEM IN, across every type - because a feature that prevents a
-# crash must appear beside the crashes, not after them. Signal integrity first (you cannot judge the
-# code through instruments that lie), then what kills, then what corrupts, then what stops, then what
-# is merely owed.
-# LABELS ARE THE THIRD AXIS, AND IT IS A MECHANISM - deliberately neither of the other two. The
-# filename prefix says the AREA a note is about; the impact says the CONSEQUENCE of not knowing it.
-# Neither can say what a note is about MECHANICALLY, and that is what you search by when you sit down
-# to do a piece of work: "show me the concurrency ones" spans bug-, core-, static-, deps- and
-# release-, and its consequences are already spread across stall, data-loss, crash and reliability.
-#
-# WHY A CLOSED SET. An open free-text field becomes tag soup within a month and then partitions
-# nothing, which is the failure this whole scheme exists to avoid. Add a value the way impacts were
-# added - by reading the corpus and finding a group the existing values cannot express - and describe
-# it in docs/inflight/AGENTS.md in the same commit.
-#
-# WHY IT STARTS AT ONE VALUE. Because one is what the corpus currently justifies: a small minority of
-# notes are concurrency-shaped, which is the band where a label partitions usefully rather than
-# matching nearly everything. A speculative second value would be inventing a group and hoping, which
-# the header above forbids.
-INFLIGHT_LABELS="concurrency"
+# Captured first, then evaled, so a render that fails part-way defines nothing rather than half.
+if ! _inflight_tags_vars="$(node "$_inflight_tags_dir/inflight-tags.mjs" --shell)"; then
+    printf 'inflight-tags.sh: `node %s/inflight-tags.mjs --shell` failed - no tag vocabulary defined\n' "$_inflight_tags_dir" >&2
+    unset _inflight_tags_dir _inflight_tags_vars
+    return 1 2>/dev/null || exit 1
+fi
 
-INFLIGHT_IMPACT_ORDER="misdirection blind-spot crash data-loss stall security config-lie reliability throughput release-gate coordination stranded-work ci test-debt refactor process deps-debt"
+if ! eval "$_inflight_tags_vars"; then
+    printf 'inflight-tags.sh: the rendered vocabulary did not eval as bash - no tag vocabulary defined\n' >&2
+    unset _inflight_tags_dir _inflight_tags_vars
+    return 1 2>/dev/null || exit 1
+fi
+unset _inflight_tags_dir _inflight_tags_vars

@@ -104,7 +104,7 @@ Ranked by how close each sits to a failure this repo has actually paid for.
 | 1 | `SC2155` | 3 | **Declare-and-assign masks the return value** - `local x=$(cmd)` swallows `cmd`'s exit status. That is the exit-code-swallowing mechanism behind several of this month's silent false greens, in a repo whose gates are shell scripts. | Mechanical, split each line |
 | 2 | `SC2164` | 4 | `cd` without `\|\|` - the run continues in the wrong directory. Same failure shape as the BSD class: accepted, and means something else. | Mechanical |
 | 3 | `SC2010` | 1 | `ls \| grep` instead of a glob. One site, and it breaks on filenames this repo will eventually have. | Mechanical |
-| 4 | `SC2034` (shared-lib exports) | 4 | `INFLIGHT_*` in `bin/lib/inflight-tags.sh`. **Not a defect** - the linter cannot see them used across a `source` boundary. Needs a directive at the definitions, which is legitimate use of a suppression rather than silencing a finding. | One directive |
+| 4 | `SC2034` (shared-lib exports) | 4 | `INFLIGHT_*` in `bin/lib/inflight-tags.sh`. **Not a defect** - the linter cannot see them used across a `source` boundary. Gone since the file became a wrapper that evals `bin/lib/inflight-tags.mjs --shell`: there are no assignments left for it to flag, and the consumer's reads are `SC2154`, a warning tier this lane does not gate. | None left |
 | 5 | `SC2034` (`rc`, `out`) | 2 | The remaining two are genuinely unused locals, so unlike the four above these are real. | Read 2 sites |
 
 Clearing all five raises the floor from `error` to `warning`, which is the single biggest coverage

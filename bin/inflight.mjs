@@ -30,11 +30,19 @@
 // deploys, the check-* gates - stay shell, and bin/AGENTS.md owns those. docs/inflight-tool.md, "If
 // it does not answer your question, change it", carries the full guidance and the three invariants.
 //
-// THIS IS THE ONLY FILE HERE THAT MAY CALL process.exit, and it does so once, at the bottom. The
+// THIS IS THE ONLY FILE HERE THAT MAY SET THE EXIT CODE, and it does so once, at the bottom. The
 // libraries return findings; the views render them; the exit code is a fact about a process and
 // belongs at the process boundary. A library that exits has decided something that is not its to
 // decide - and cannot then be called by a self-test, which is how the first cut of this split was
 // caught.
+//
+// IT SETS process.exitCode AND NEVER CALLS process.exit(). Node writes to a PIPED stdout
+// asynchronously, and process.exit() drops whatever is still queued - so a page over 64 KiB read
+// through `$(...)` or a pipe arrived cut off at exactly 65536 bytes, mid-line, with exit 0. The
+// session-start hook captures `docs index` that way and lost its plans section to this before
+// anything noticed; `the-front-door-drains-a-large-page-before-exiting` in bin/test-inflight.mjs
+// holds the line. Setting exitCode lets the event loop drain and exit on its own, which is the
+// same exit code by a route that cannot truncate.
 //
 // NOT A GATE, and deliberately not named `check-*`: bin/AGENTS.md grants that prefix to the review
 // agent by pattern, and this reaches the network through `gh`.
@@ -47,15 +55,20 @@ import { fileURLToPath } from 'node:url'
 
 import { perfReport, perfStart } from './lib/perf.mjs'
 
-import { baseline, freshnessWarnings, refTips } from './lib/git.mjs'
+import { INVALIDATING_WARNINGS, baseline, freshnessWarnings, refTips } from './lib/git.mjs'
 import { cacheClear, cacheStatus, knownCaches } from './lib/cache.mjs'
 import { corpusIndex, drift, findNotes, prsByBranch, stranded } from './lib/notes.mjs'
+import { DOC_AREAS, NOTES_DIR } from './lib/repo.mjs'
 import { branchView, commitGraph, trackingGap } from './lib/branches.mjs'
 import { loadCandidates, refactorWindow } from './lib/refactor-window.mjs'
 import {
-    formatBranch, formatCache, formatCoverage, formatDrift, formatFind, formatFlakes,
-    formatRefactorWindow, formatSlowest, formatStranded, formatTimeline, formatWarnings,
+    formatBranch, formatCache, formatCoverage, formatDrift, formatFind, formatFlakes, formatRefactorWindow, formatSlowest,
+    formatStranded, formatTimeline, formatWarnings,
 } from './lib/views.mjs'
+import {
+    docsForBranch, docsSummary, docsUsage, forBranchSummary, forBranchUsage, headerSummary, headerUsage, indexDocs,
+    indexSummary, indexUsage, listDocs, listSummary, listUsage, showCorpus, showDocument, showHeader, showSummary, showUsage,
+} from './lib/docs-commands.mjs'
 import { coverage, flakeCandidates, slowest, testTimeline } from './lib/codecov.mjs'
 import {
     format, formatHeader, formatSection, formatTail,
@@ -108,14 +121,67 @@ export const cvOpts = (args) => {
 
 
 /**
+ * The notes area alone, for the two commands whose question is about in-flight NOTES. `corpusIndex`
+ * now spans every docs area by default - the context query needs all three - and passing this keeps
+ * `note find` and `stranded` answering exactly what they answered before the default widened.
+ */
+const NOTES_AREA = DOC_AREAS.filter((a) => a.dir === NOTES_DIR)
+
+/**
+ * The `docs` subcommands, held apart so the bare call can print their `when` lines without
+ * restating them. Bodies and text in bin/lib/docs-commands.mjs; only the placement is here.
+ * @type {Command[]}
+ */
+const DOCS_SUB = [
+    {
+        name: 'list',
+        summary: listSummary,
+        when: 'bare docs showed you a group and you want the documents in it, or you know the area and not the group',
+        usage: listUsage,
+        run: listDocs,
+    },
+    {
+        name: 'show',
+        summary: showSummary,
+        when: 'a read-time header said other branches hold versions of this file, or you want the copy the baseline has rather than the one checked out',
+        usage: showUsage,
+        run: showDocument,
+    },
+    {
+        name: 'header',
+        summary: headerSummary,
+        when: 'the read-time hook named this as its "more" command, or you have no hooks and want what they would have shown',
+        usage: headerUsage,
+        run: showHeader,
+    },
+    {
+        name: 'index',
+        summary: indexSummary,
+        when: 'you want the whole list the session hook injects, refreshed, or are on a host without hooks and never saw it',
+        usage: indexUsage,
+        run: indexDocs,
+    },
+    {
+        name: 'for-branch',
+        summary: forBranchSummary,
+        when: 'you start on a branch you did not cut, or want the notes and plans that already talk about the one you are on',
+        usage: forBranchUsage,
+        run: docsForBranch,
+    },
+]
+
+/**
  * The registry.
  *
  * `when` is the sentence an agent needs to decide whether this is the tool - it answers "should I
  * reach for this now", which a name alone cannot.
  *
- * `run` takes the remaining argv and an `emit` for streaming, and returns `{ok, reason?}`. It never
- * exits and never decides a code: a search that ran and found nothing is `ok: true`, because "no
- * hits" and "could not look" are different answers and this repo has been bitten by conflating them.
+ * `run` takes the remaining argv and an `emit` for streaming, and returns `{ok, reason?, note?}`.
+ * It never exits and never decides a code: a search that ran and found nothing is `ok: true`,
+ * because "no hits" and "could not look" are different answers and this repo has been bitten by
+ * conflating them. `note` is a sentence for whoever ran the command by hand - "nothing to look up",
+ * the coverage of an empty result - that the front door prints to STDERR, so a hook capturing
+ * stdout for injection gets the block or nothing; `reason` is what ok:false could not do.
  *
  * A command may instead carry `sub`, a nested registry. That is deliberately how the word "in-flight"
  * is disambiguated rather than by renaming the tool: `inflight note drift` is unmistakably about ONE
@@ -125,7 +191,7 @@ export const cvOpts = (args) => {
  *
  * @typedef {{name: string, summary: string, when: string, usage: string,
  *            sub?: Command[],
- *            run?: (args: string[], emit: (s: string) => void) => {ok: boolean, reason?: string}}} Command
+ *            run?: (args: string[], emit: (s: string) => void) => {ok: boolean, reason?: string, note?: string}}} Command
  * @type {Command[]}
  */
 const COMMANDS = [
@@ -178,7 +244,7 @@ working tree can show you under a third of them.
                 run: (args, emit) => {
                     const query = args[0]
                     if (!query) return { ok: false, reason: 'note find: give a fuzzy name to match' }
-                    const index = corpusIndex()
+                    const index = corpusIndex({ areas: NOTES_AREA })
                     if (!index.ok) return { ok: false, reason: `note find: ${index.reason}` }
                     emit(formatWarnings(freshnessWarnings(index.baseline, index.refs.length)))
                     emit(formatFind(findNotes(index, query), query, index))
@@ -209,20 +275,33 @@ carries that the baseline does not, else the branch name. Nothing is summarised 
                     if (!path) return { ok: false, reason: 'note drift: give a note path (see: note find)' }
                     // No corpus index: this is a question about one path, so it asks git that.
                     const tips = refTips()
-                    emit(formatWarnings(freshnessWarnings(baseline(), tips.tips.length)))
+                    const base = baseline()
+                    emit(formatWarnings(freshnessWarnings(base, tips.tips.length)))
                     const prs = prsByBranch()
                     if (!prs.ok) {
                         // gh being unavailable is not "these branches have no PR", and the drift
                         // output cannot say which it meant unless this line says it first.
                         emit(`  WARNING: ${prs.reason} - PR titles below are UNKNOWN, not absent.\n`)
                     }
-                    const d = drift(path, { prs: prs.map, all })
+                    // The refs and the baseline just resolved for the warning go in, so drift does
+                    // not list them again; a failed listing goes in as absent, so drift reports it.
+                    const d = drift(path, { prs: prs.map, all, tips: tips.ok ? tips.tips : null, base })
                     if (d.ok === false) return { ok: false, reason: `note drift: ${d.reason}` }
                     emit(formatDrift(d))
                     return { ok: true }
                 },
             },
         ],
+    },
+    {
+        name: 'docs',
+        summary: docsSummary,
+        when: 'you are about to act on anything under docs/inflight, docs/solutions or docs/plans, or want to see what the corpus holds',
+        usage: docsUsage,
+        sub: DOCS_SUB,
+        // THE BARE CALL IS THE MAP (the plan's R13): the guide is built from the rows above so it
+        // cannot say what help does not. `commands` are taken from the registry, not restated.
+        run: (args, emit) => showCorpus(emit, DOCS_SUB.map((c) => ({ path: `docs ${c.name}`, summary: c.summary, when: c.when }))),
     },
     {
         name: 'branch',
@@ -405,9 +484,13 @@ more than the right conclusion:
   master's HISTORY once had this path            it landed and was git rm'd - removed 40 more
 
 What survives is clustered by ref-set, because one workstream's notes share their refs and listing
-them separately buries the finding under its own volume.`,
+them separately buries the finding under its own volume.
+
+SCOPE: docs/inflight/ only. The corpus index can read plans and solutions too; this command reports
+the notes area alone, because the stranded-work impact is a contract docs/inflight/AGENTS.md makes
+about notes. For the whole corpus - plans and solutions too - prior-art searches every area.`,
         run: (args, emit) => {
-            const index = corpusIndex()
+            const index = corpusIndex({ areas: NOTES_AREA })
             if (!index.ok) return { ok: false, reason: `stranded: ${index.reason}` }
             emit(formatWarnings(freshnessWarnings(index.baseline, index.refs.length)))
             emit(formatStranded(stranded(index), index))
@@ -476,12 +559,11 @@ full measurement would be unaffordable. Prints nothing for a file that is not a 
             // being dropped on exactly the path both hooks use. That put the compensating control
             // out of action in the one place the answer could be confidently wrong.
             const warnings = freshnessWarnings(r.baseline, r.liveRefs)
-            const INVALIDATING = new Set(['no-baseline', 'never-fetched', 'shallow'])
             // NEVER EMIT AN EMPTY STRING. `emit` is console.log, so `emit('')` writes a newline -
             // and the documented silent form then produces two bytes rather than none, which is
             // observable to any caller measuring stdout rather than using command substitution
             // (which strips trailing newlines and hid this from the self-test that asserted it).
-            const warnText = formatWarnings(ifOpen ? warnings.filter((w) => INVALIDATING.has(w.id)) : warnings)
+            const warnText = formatWarnings(ifOpen ? warnings.filter((w) => INVALIDATING_WARNINGS.has(w.id)) : warnings)
             if (warnText) emit(warnText)
             const body = formatRefactorWindow(r, { ifOpen })
             if (body) emit(body)
@@ -600,9 +682,13 @@ if (invokedDirectly()) {
     const perf = argv.includes('--perf')
     if (perf) perfStart()
 
-    const { ok, reason } = dispatch(argv.filter((a) => a !== '--perf'), (s) => console.log(s))
+    const { ok, reason, note } = dispatch(argv.filter((a) => a !== '--perf'), (s) => console.log(s))
     if (reason) (ok ? console.log : console.error)(reason)
+    // A note is for the person at the terminal, never for the hook capturing stdout: the
+    // session-start hook injected "master is on the baseline - nothing to look up" into every
+    // session while `docs for-branch` said it on stdout.
+    if (note) console.error(note)
     // stderr, so a caller piping stdout gets exactly what it would without the flag.
     if (perf) console.error(perfReport())
-    process.exit(ok ? 0 : 2)
+    process.exitCode = ok ? 0 : 2
 }
