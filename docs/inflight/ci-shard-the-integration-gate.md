@@ -2,6 +2,10 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: ci -->
+<!-- inflight-state: deferred - the two-shard split LANDED in astubbs/parallel-consumer#442; what
+     remains open here is only the four-shard follow-up, which was built, measured and deliberately
+     not taken. Without this the note reads as wholly open in the session index, because it leads
+     with IMPLEMENTED and absent means open. -->
 
 The `Integration Tests` lane is the PR build's critical path - 620s against ~500s for the next
 slowest. Sharding it across runner jobs is the lever that actually moves it.
@@ -146,8 +150,14 @@ a specific reason.
 
 **If it is picked up, re-derive rather than restore.** The four-way lists on that branch were sized
 from `Rebalance857CommitSyncDeadlockProbeIT` as one class and are stale by construction.
-`bin/check-integration-shard-balance.mjs` computes the current optimum; the guide in
-`bin/ci-integration-test.sh` says how to read it.
+
+**And it needs a four-way calculator, which does not exist yet.**
+`bin/check-integration-shard-balance.mjs` deliberately models only the shipped shape - one named
+heavy set plus a catch-all - and searches only two-way "largest N classes" splits, because that is
+the choice the guide in `bin/ci-integration-test.sh` actually offers a maintainer. Its LPT packer
+already takes a bin count (`lpt(classes, n)`), so extending it means parameterising the shard count
+and the reporting, not writing a new packer. Do that first; reading its current two-way number as a
+four-way optimum would give the wrong partition shape.
 
 ## What this will need when it is picked up
 

@@ -26,12 +26,16 @@
 # Sizing, measured (docs/plans/2026-09-03-001-investigate-integration-gate-wall-time.md): core's
 # failsafe is ~1450-1530s of test time over 42 classes, and each JOB re-pays ~136s of serial build
 # plus ~20s of job overhead - so a split only pays while the largest remaining class is smaller
-# than the work it takes off the critical path. THE 857 PROBE IS THE BINDING CONSTRAINT: at ~342s
-# in a single unsplittable class it sets the floor for whichever shard holds it, which is why the
-# heavy set is that class alone and why the projected saving is ~20%. Splitting that class four
-# ways (measured green, not yet adopted) would move the floor to PartitionStateCommittedOffsetIT's
-# ~160s and roughly double the benefit - at which point the right heavy set is larger than one
-# class and this list should be re-derived, not extended by guess.
+# than the work it takes off the critical path.
+#
+# HOW THIS SHAPE WAS ARRIVED AT, in order, because the order is the finding. The 857 probe was the
+# binding constraint: at ~342s in ONE unsplittable class it set the floor for whichever shard held
+# it, which capped a two-way split at ~20%. Splitting that class four ways moved the floor to
+# PartitionStateCommittedOffsetIT's ~160s, and only THEN was a larger heavy set worth deriving.
+# So the probe split came first and the seven-class HEAVY_CLASSES below was re-derived after it,
+# not extended by guess - which is also why the maintenance guide further down says to re-derive
+# rather than append. Measured end to end: 620s -> 519s (two shards) -> 450s (+ probe split) ->
+# 416s (+ the re-derived heavy set).
 #
 # Extra args are forwarded to Maven. Forked per-broker mode - each JVM fork gets its
 # own broker, reliable AND parallel - is requested with -DforkCount=N -DreuseForks=true,

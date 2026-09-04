@@ -4,9 +4,9 @@
 //
 // Is the integration lane's shard partition still a good one?
 //
-// WHAT THIS IS FOR, and why it is not a balance ASSERTION. bin/ci-integration-test.sh carries three
-// named class lists plus a catch-all, derived once by longest-processing-time packing over measured
-// per-class wall times. Those times drift: a test gets slower, a class is added, a scenario is
+// WHAT THIS IS FOR, and why it is not a balance ASSERTION. bin/ci-integration-test.sh carries ONE
+// named class list plus a catch-all defined by subtraction, derived by longest-processing-time
+// packing over measured per-class wall times. Those times drift: a test gets slower, a class is added, a scenario is
 // split. The partition does not drift with them, and nothing goes red when it stops being good -
 // the lane just quietly gets slower than it needs to be, which is the least visible kind of decay
 // there is.
@@ -26,6 +26,7 @@
 // scope. It needs the network (Codecov is public, no token) and is skipped offline rather than
 // guessed at - a partition check that invents its input is worse than none.
 
+import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -36,8 +37,23 @@ const SCRIPT = join(HERE, 'ci-integration-test.sh')
 const BUILD_OVERHEAD_SECONDS = 160 // serial build + job setup, re-paid by every shard
 const FORKS = 4 // forkCount inside each shard; a measured ceiling, see the script's header
 
+// A malformed --fail-over must not degrade to advisory. `Number(undefined)` is NaN, and every
+// `drift > NaN` is false - so a scheduled job that asked to BLOCK would have exited 0 having
+// gated on nothing, which is the silent-pass shape this directory's exit codes exist to prevent.
 const failOverIdx = process.argv.indexOf('--fail-over')
-const failOver = failOverIdx > -1 ? Number(process.argv[failOverIdx + 1]) : null
+let failOver = null
+if (failOverIdx > -1) {
+    if (process.argv.lastIndexOf('--fail-over') !== failOverIdx) {
+        console.error('check-integration-shard-balance: --fail-over given more than once')
+        process.exit(2)
+    }
+    const raw = process.argv[failOverIdx + 1]
+    failOver = Number(raw)
+    if (raw === undefined || raw.startsWith('--') || !Number.isFinite(failOver) || failOver < 0) {
+        console.error(`check-integration-shard-balance: --fail-over needs one finite, non-negative threshold in seconds (got ${raw ?? 'nothing'})`)
+        process.exit(2)
+    }
+}
 
 // --- the partition as it is checked in -------------------------------------------------------
 function heavyFromScript() {
@@ -73,18 +89,53 @@ if (!heavy) {
     process.exit(2)
 }
 
+// The integration classes THIS TREE actually has, by declaration rather than by filename - the
+// same reason ci-integration-test.sh enumerates declarations: several package-private top-level
+// classes may share one file, and the partition operates on compiled classes.
+function classesInTree() {
+    // Scoped by PACKAGE, mirroring ci-integration-test.sh's `-path '*/integrationTest*/*'` and the
+    // pom's collection pattern - NOT by `src/test-integration/`, which is one module's layout. The
+    // examples modules keep their integration tests in `src/test/java/.../integrationTests/`, so a
+    // directory-based scope silently dropped CoreAppMetricsIntegrationTest and StreamsAppTest and
+    // understated catch-all work - the same one-module blind spot the shard report check had.
+    const files = execFileSync('git', ['ls-files'], { encoding: 'utf8' })
+        .split('\n')
+        .filter((f) => f.endsWith('.java') && /\/integrationTest[^/]*\//.test(f))
+    const found = new Set()
+    for (const f of files) {
+        for (const m of readFileSync(f, 'utf8').matchAll(/^([a-z]+ )*class (\w+)/gm)) {
+            if (!m[0].includes('abstract')) found.add(m[2])
+        }
+    }
+    return found
+}
+
+// NOT branch-scoped, and that is measured rather than assumed. Scoping to the default branch is the
+// obvious fix for "the newest observation for a class can come from any branch", but there is no
+// default-branch corpus to scope TO: api.codecov.io reports count=0 for branch=master AND for
+// branch=main, and 0 of 12000 sampled rows across 5 branches are on master. Test analytics here is
+// uploaded by PR builds under their own head branch. `slowest(4000, { branch: 'master' })` therefore
+// returns nothing and this checker exits 3 forever - it stops measuring, which is worse than the
+// drift. The harm that scoping was meant to prevent is handled below instead, by intersecting
+// against the classes this tree actually has: a class that is branch-only, renamed or deleted
+// cannot then be modelled as catch-all work, whichever branch observed it.
 const res = slowest(4000)
 if (!res.ok) {
-    console.log(`check-integration-shard-balance: could not reach Codecov (${res.error ?? 'unknown'}) - skipped`)
+    // `reason`, not `error` - every failure path in lib/codecov.mjs sets that field, so reading
+    // `error` printed "(unknown)" every time and hid HTTP and empty-corpus failures, which need
+    // different remedies from being offline.
+    console.log(`check-integration-shard-balance: could not reach Codecov (${res.reason ?? 'unknown'}) - skipped`)
     process.exit(2)
 }
 
 // Integration classes only, and by CLASS: the shards select classes, so per-test rows have to be
 // summed back up to the unit the partition actually operates on.
+const inTree = classesInTree()
 const perClass = new Map()
 for (const r of res.value.rows) {
     if (!(r.flags ?? []).includes('integration')) continue
     const cls = r.name.split('::')[0].split('.').pop()
+    if (!inTree.has(cls)) continue
     perClass.set(cls, (perClass.get(cls) ?? 0) + r.seconds)
 }
 if (perClass.size === 0) {
@@ -135,7 +186,7 @@ if (res.value.truncated) {
 
 if (failOver !== null && drift > failOver) {
     console.error(`check-integration-shard-balance: drift ${Math.round(drift)}s exceeds --fail-over ${failOver}s`)
-    console.error('  Re-derive the SHARD_n_CLASSES lists in bin/ci-integration-test.sh from current timings.')
+    console.error('  Re-derive HEAVY_CLASSES in bin/ci-integration-test.sh from current timings.')
     process.exit(1)
 }
 process.exit(0)

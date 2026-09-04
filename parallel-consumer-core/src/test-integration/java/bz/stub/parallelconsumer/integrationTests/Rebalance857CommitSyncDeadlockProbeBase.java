@@ -38,8 +38,22 @@ import static org.hamcrest.number.OrderingComparison.greaterThan;
  * MEASUREMENT PROBE for the confluentinc#857 AB-BA deadlock, in the only commit mode where the
  * cycle can close: {@link ParallelConsumerOptions.CommitMode#PERIODIC_CONSUMER_SYNC}.
  * <p>
- * NOT a candidate for merging as-is - this is the instrument for an A/B soak experiment comparing
- * origin/master (defect) against the astubbs#29 fix branch. It must be byte-identical on both arms.
+ * <b>Current role: this GATES.</b> The probe runs in the gating integration suite, split across four
+ * one-line subclasses of this base ({@code Rebalance857CommitSyncDeadlockProbeIT} and {@code ..2IT},
+ * {@code ..3IT}, {@code ..4IT}) so that failsafe can pack it across forks - as one class it was a
+ * ~342s unsplittable floor that set the wall for whichever CI shard held it. The first three are
+ * named in {@code HEAVY_CLASSES} in {@code bin/ci-integration-test.sh}; the fourth rides the
+ * catch-all. Do not collapse them back into one class without reading that script's sizing preamble,
+ * and do not remove one thinking it is redundant - the repetition count is the detection power.
+ * <p>
+ * HISTORY, and it is dated: until astubbs/parallel-consumer#442 (2026-09) this was NOT a merge
+ * candidate. It was the instrument for an A/B soak experiment comparing origin/master (defect)
+ * against the astubbs#29 fix branch, and had to stay byte-identical on both arms - which is why it
+ * carried {@code @RepeatedTest(20)}. That constraint ended with the experiment. It is recorded here
+ * because a maintainer finding this class in the gating suite would otherwise read the old rule as
+ * live and either remove a deliberate gate or refuse a legitimate edit; historical byte-identity is
+ * no longer required of it. Reps are now {@code 5} per subclass, chosen for gate cost rather than
+ * for soak depth.
  * <p>
  * <b>Mechanism being probed.</b> In PERIODIC_CONSUMER_SYNC:
  * <ul>
