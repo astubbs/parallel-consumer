@@ -799,7 +799,12 @@
 
                         <!-- com.fasterxml.jackson.core:jackson-databind (example-streams only). False
                              positive: GHSA-rcqc-6cw3-h962 gives introduced 2.21.0 / fixed 2.21.4, and
-                             the module resolves 2.18.9. The vulnerable code is in unwrapped-creator
+                             the module resolves a 2.18.x - see jackson.examples.version in the
+                             examples parent for which one. Stated as the line rather than the exact
+                             version deliberately: what makes this a false positive is being below
+                             2.21.0, so a patch bump must not be able to make this comment wrong. It
+                             already did once, when 2.18.9 here went stale the moment the bom moved to
+                             2.18.10. The vulnerable code is in unwrapped-creator
                              handling that the 2.18 line does not have. OSS Index's version range is
                              over-broad; Dependabot does not report it.
                              RETIRE WHEN: OSS Index corrects the range, or the module moves onto a
