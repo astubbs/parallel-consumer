@@ -146,13 +146,13 @@ class RunTagFilterTest {
     void bothSurefireAndFailsafeForwardTheFiltersToTheTestJvm() throws IOException {
         String pom = new String(Files.readAllBytes(RepoRoot.find().resolve("pom.xml")), StandardCharsets.UTF_8);
 
-        for (String plugin : of("maven-surefire-plugin", "maven-failsafe-plugin")) {
-            String block = configurationBlockOf(pom, plugin);
+        for (String pluginDeclaration : of(SUREFIRE_DECLARATION, FAILSAFE_DECLARATION)) {
+            String block = declarationBodyOf(pom, pluginDeclaration);
             for (String forwarding : of("<pc.run.includedGroups>${included.groups}</pc.run.includedGroups>",
                     "<pc.run.excludedGroups>${excluded.groups}</pc.run.excludedGroups>")) {
-                assertWithMessage(plugin + " must forward " + forwarding + " - with it on only one plugin, a gate "
-                        + "reading the filters in the other lane would see nothing and could not tell that from an "
-                        + "unfiltered run")
+                assertWithMessage(pluginDeclaration + " must forward " + forwarding + " - with it on only one "
+                        + "plugin, a gate reading the filters in the other lane would see nothing and could not "
+                        + "tell that from an unfiltered run")
                         .that(block)
                         .contains(forwarding);
             }
@@ -160,15 +160,28 @@ class RunTagFilterTest {
     }
 
     /**
-     * The text of one plugin declaration, from its {@code artifactId} to the end of that declaration - so a
-     * containment check below cannot be satisfied by something sitting in a different plugin.
+     * The two plugin declarations, written out whole rather than assembled from an artifact id.
+     * <p>
+     * Assembling them put a variable inside markup, which SpotBugs reads as building XML from untrusted input. The
+     * input is a literal from the line above, so the finding is not a real injection - but a suppression would be
+     * a claim a reader has to take on trust, and there is nothing to gain from the concatenation. Written out, the
+     * match is also exact rather than merely likely.
      */
-    private static String configurationBlockOf(String pom, String artifactId) {
-        int start = pom.indexOf("<artifactId>" + artifactId + "</artifactId>");
-        assertWithMessage("the root pom must declare " + artifactId + " for this gate to have anything to check")
+    private static final String SUREFIRE_DECLARATION = "<artifactId>maven-surefire-plugin</artifactId>";
+
+    private static final String FAILSAFE_DECLARATION = "<artifactId>maven-failsafe-plugin</artifactId>";
+
+    /**
+     * The text of one plugin declaration, from its {@code artifactId} to the end of that declaration - so a
+     * containment check above cannot be satisfied by something sitting in a different plugin.
+     */
+    private static String declarationBodyOf(String pom, String pluginDeclaration) {
+        int start = pom.indexOf(pluginDeclaration);
+        assertWithMessage("the root pom must contain " + pluginDeclaration + " for this gate to have anything to "
+                + "check")
                 .that(start).isGreaterThan(-1);
         int end = pom.indexOf("</plugin>", start);
-        assertWithMessage(artifactId + "'s declaration must be closed").that(end).isGreaterThan(start);
+        assertWithMessage(pluginDeclaration + " must be closed").that(end).isGreaterThan(start);
         return pom.substring(start, end);
     }
 
