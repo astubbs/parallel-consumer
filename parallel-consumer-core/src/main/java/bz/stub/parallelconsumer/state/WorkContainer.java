@@ -333,6 +333,31 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
     private final AtomicBoolean selectionClaimed = new AtomicBoolean(false);
 
     /**
+     * Set when this delivery is handed back to scheduling without any verdict at all - the record was neither
+     * processed successfully nor seen to fail. An external engine whose worker disconnects mid-record has no
+     * verdict to report, but the record must not be treated as a failure either: a dropped connection is not a
+     * processing attempt and must not consume a retry.
+     * <p>
+     * <b>Why this is not an {@link ExecutionState}</b>, given that {@link #state} exists precisely so that two
+     * fields cannot contradict each other. The hazard that collapsing fixed was a claim decision <em>reading</em>
+     * one field and being contradicted by the other; nothing reads this one to decide a claim. It is not a
+     * lifecycle position but a note left by the returner for {@link WorkManager#handleFutureResult} - "there is
+     * no verdict coming, and that is expected" - which is the same reason {@link #selectionClaimed} is its own
+     * field: the state at an instant records what the container is, never who acted on it. An abandoned record
+     * that has left flight is {@link ExecutionState#AVAILABLE}, which is exactly what it is, and is claimable on
+     * that basis alone.
+     * <p>
+     * Atomic rather than a plain field because the marker is written by whichever thread noticed the worker was
+     * gone and read by the controller, with no lock between them.
+     * <p>
+     * Deliberately distinct from the verdict: an empty verdict with this marker unset is still the bug
+     * {@link WorkManager#handleFutureResult} throws on.
+     *
+     * @see #markAbandoned()
+     */
+    private final AtomicBoolean abandoned = new AtomicBoolean(false);
+
+    /**
      * How many times this record has been handed to a worker. Incremented only by a WON claim, so a refused
      * claim leaves it untouched - which is one of the properties {@code WorkClaimStateMachineTest} pins.
      * <p>
@@ -548,6 +573,26 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
         return !isInFlight();
     }
 
+    /**
+     * Marks this delivery as returned without a verdict, so {@link WorkManager#handleFutureResult} returns it to
+     * scheduling rather than throwing. Does not touch the failure count or the retry delay - the record is
+     * redelivered as the same attempt it already was.
+     *
+     * @see #abandoned
+     */
+    public void markAbandoned() {
+        log.trace("Abandoning without verdict {}", this);
+        abandoned.set(true);
+    }
+
+    /**
+     * @return true if this delivery was handed back with no verdict, and has not since been claimed again
+     * @see #abandoned
+     */
+    public boolean isAbandoned() {
+        return abandoned.get();
+    }
+
     public boolean isInFlight() {
         return state.get().state().isInFlight();
     }
@@ -661,6 +706,12 @@ public class WorkContainer<K, V> implements Comparable<WorkContainer<K, V>> {
             return false;
         }
         log.trace("Queueing for execution: {}", this);
+        // A redelivery is a fresh attempt and carries no note from the last one. The verdict clears itself - the
+        // transition above lands on IN_FLIGHT, which has none - but this marker is not part of that state, so it
+        // is cleared here, by the claim WINNER and only after the compare-and-set has been won. A record that
+        // failed, was redelivered and was then abandoned would otherwise still be carrying the previous
+        // delivery's marker.
+        abandoned.set(false);
         deliveryCount.incrementAndGet();
         timeTakenAsWorkMs = of(System.currentTimeMillis());
         return true;
