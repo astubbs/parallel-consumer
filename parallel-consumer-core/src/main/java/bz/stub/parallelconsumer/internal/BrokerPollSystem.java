@@ -226,9 +226,40 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
         }
     }
 
+    /**
+     * <b>CLOSING polls too, and that is not a tidy-up - it is the fix for a group-wide stall.</b>
+     * <p>
+     * A member that has stopped polling but has NOT yet left the group cannot answer a rebalance,
+     * because rejoin and revoke-ack happen inside {@code consumer.poll()}. That is the defect
+     * astubbs/parallel-consumer#80 fixed for {@link State#DRAINING} - and {@link State#CLOSING} never
+     * got it, while {@code closeDontDrainFirst()} reaches {@code CLOSING} without passing through
+     * {@code DRAINING} at all, so the commonest close took the unprotected path.
+     * <p>
+     * <b>What it cost, measured.</b> With a JoinGroup already in flight, the un-polled member went
+     * straight into {@code consumer.close()}, whose
+     * {@code AbstractCoordinator.close -> ConsumerNetworkClient.awaitPendingRequests} waits for that
+     * very request - and the coordinator will not answer it until every member has joined, including
+     * the ones now stuck in the same wait. Each closing member waits for a coordinator waiting for
+     * it, so the close burns its whole {@code DEFAULT_TIMEOUT} budget with the consumer still a
+     * silent group member, and the whole fleet freezes. Observed in
+     * {@code MultiInstanceRebalanceTest.largeNumberOfInstances} as the ambient probe's
+     * {@code ZOMBIE_MEMBER/REBALANCE_BLOCKED}, at 2 failures in 30, with ten of twelve instances
+     * parked in that stack. Evidence and the stack:
+     * {@code docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md}.
+     * <p>
+     * One poll before the close is enough to discharge the in-flight request, and it cannot hang:
+     * {@link #pollBrokerForRecords()} gives any state that is not {@code RUNNING}/{@code DRAINING} a
+     * 1ms timeout, and {@code CLOSING} is reached once per control-loop pass immediately before
+     * {@link #doClose()}. Records polled here are still registered rather than dropped - the state
+     * that decides what to do with them is the work manager's, not this method's.
+     * <p>
+     * The invariant, stated so a future edit cannot narrow this guard back without meeting it:
+     * <b>an instance that has not yet left the group must keep polling it.</b>
+     */
     private void handlePoll() {
         log.trace("Loop: Broker poller: ({})", runState);
-        if (runState == RUNNING || runState == DRAINING) { // if draining - subs will be paused, so use this to just sleep
+        if (runState == RUNNING || runState == DRAINING // if draining - subs will be paused, so use this to just sleep
+                || runState == CLOSING) { // still a group member until doClose() closes the consumer - see javadoc
             var polledRecords = pollBrokerForRecords();
             int count = polledRecords.count();
             log.debug("Got {} records in poll result", count);
