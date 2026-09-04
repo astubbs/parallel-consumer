@@ -2,6 +2,7 @@
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: ci -->
+<!-- post-merge: checked - the state below names the PR in the past tense; see its own wording. -->
 <!-- inflight-state: deferred - the two-shard split LANDED in astubbs/parallel-consumer#442; what
      remains open here is only the four-shard follow-up, which was built, measured and deliberately
      not taken. Without this the note reads as wholly open in the session index, because it leads
