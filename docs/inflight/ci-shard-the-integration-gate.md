@@ -6,9 +6,16 @@
 The `Integration Tests` lane is the PR build's critical path - 620s against ~500s for the next
 slowest. Sharding it across runner jobs is the lever that actually moves it.
 
-**IMPLEMENTED**: two shards in astubbs/parallel-consumer#442 (measured 620s -> 519s), then four in
-the PR stacked on it. Three NAMED shards plus a catch-all defined by subtraction - not the Chaos
-Pain Suite's four balanced bins, and the difference is the point (below). This note keeps what is
+**IMPLEMENTED**: two shards in astubbs/parallel-consumer#442 (measured 620s -> 519s), then the 857
+probe split and the heavy set re-derived in the PR stacked on it. ONE named heavy set plus a
+catch-all defined by subtraction - not the Chaos Pain Suite's four balanced bins, and the
+difference is the point (below).
+
+**FOUR SHARDS WERE BUILT AND MEASURED, AND DELIBERATELY NOT TAKEN.** Green at 355s against two
+shards' ~440s, but 1318s of runner time against ~880s, and ~500s of MANUFACTURED extra test work -
+per-shard fixed costs are paid per shard, the same way per-fork costs were when forkCount went 4->6.
+85s of critical path did not justify a 50% machine-time increase and four lists to maintain instead
+of one. Preserved on `ci/shard-integration-four` if that trade ever looks different. This note keeps what is
 still open; the measurements live with those PRs.
 
 ## Why four shards needed the 857 probe split first, and two did not
@@ -18,10 +25,15 @@ within 3s (predicted 516s, measured 519s):
 
 | config | critical path | runner-minutes |
 |---|---:|---:|
-| 2 shards, probe intact | 516s | 870s |
-| **4 shards, probe intact** | **516s** | 1417s |
-| 2 shards, probe split | 355s | 709s |
-| 4 shards, probe split | 337s | 1158s |
+| 2 shards, probe intact | 516s modelled, **519s measured** | 870s |
+| **4 shards, probe intact** | **516s modelled** | 1417s |
+| 2 shards, probe split | ~440s modelled | ~880s |
+| 4 shards, probe split | 337s modelled, **355s measured** | 1318s |
+
+**The pre-split model was wrong about the split itself**, and it matters for anyone re-deriving
+this: it assumed splitting a ~356s `@RepeatedTest(20)` class four ways gives four 89s classes. The
+measured classes are **138-166s** - the repetitions carry per-class fixed cost that used to be paid
+once. So the split buys less than arithmetic suggests, and splitting FURTHER would pay less again.
 
 `Rebalance857CommitSyncDeadlockProbeIT` was `@RepeatedTest(20)` in one ~356s class, and forks
 cannot split a class - so whichever shard held it WAS the critical path, at 516s, for any shard

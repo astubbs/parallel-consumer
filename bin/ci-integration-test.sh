@@ -75,63 +75,77 @@ set -euo pipefail
 #
 # docs/plans/2026-09-03-001-investigate-integration-gate-wall-time.md holds the measurements.
 # ---------------------------------------------------------------------------------------------
-# SHARD MEMBERSHIP. Three NAMED shards plus a catch-all, derived by longest-processing-time
-# packing over MEASURED per-class wall times (run 33818955853). Simple class names, comma-separated.
+# SHARD MEMBERSHIP: one NAMED heavy set, and a catch-all defined by SUBTRACTION.
 #
-# The catch-all is `rest`, defined by SUBTRACTION of the three lists - so a newly added test runs
-# there by default and can never belong to no shard. That is the property that makes this
-# maintainable: the failure mode of N explicit bins is a new class silently running nowhere, and
-# nothing goes red for it.
+# WHEN TO ADD A CLASS TO HEAVY_CLASSES - the whole guide, because a list nobody knows how to
+# maintain rots:
 #
-# Balance is not asserted here and must not be: it decays as the suite changes, and a number
-# written into a comment cannot notice. bin/check-integration-shard-balance.mjs recomputes the
-# optimal partition from recorded per-class times and reports how far this one has drifted - so
-# every CI run feeds the signal that says when to re-derive these lists.
+#   1. ONLY when it is the thing bounding the catch-all. A shard's wall is
+#      max(its slowest class, its total work / forkCount), so a class is worth moving only when
+#      its OWN wall exceeds the catch-all's work/4. Absolute slowness is not the test: a 90s class
+#      is irrelevant while the catch-all is work-bound at 275s, and a 300s class is the whole
+#      problem. `bin/check-integration-shard-balance.mjs` prints both numbers.
+#   2. Keep the two shards' WALLS close, not their class counts or their totals. The heavy set is
+#      five classes against the catch-all's twenty-three, and that is correct - the point is
+#      balance of wall-clock, and a shard of few big classes packs differently from many small ones.
+#   3. Prefer a heavy set that is a MULTIPLE OF forkCount (4) or comfortably more than it. Five
+#      classes over four forks means one fork runs two - which is exactly why the heavy set is
+#      sized at five and not four: the sixth-largest class would have made a fork run two BIG ones.
+#   4. REMOVING is as much a part of this as adding. A class that got faster, or a suite that grew
+#      around it, leaves the list over-weighted; the balance checker reports drift in both
+#      directions and does not care which way you fix it.
+#   5. Re-derive from MEASURED times, never from reading the code. Every sizing guess in this
+#      lane's history has been wrong, including the one that said splitting the 857 probe would
+#      give four 89s classes - they measured 138-166s, because the repetitions carry per-class
+#      fixed cost that used to be paid once.
+#
+# Sized from the measured per-class times of run 33829154038. The catch-all is the complement, so
+# a NEW test runs there by default and can never belong to no shard - the inversion of N explicit
+# bins, whose failure mode is a class running nowhere with nothing going red.
+#
+# WHY TWO SHARDS AND NOT FOUR, measured rather than assumed: four shards with this same probe
+# split measured 355s against two shards' ~440s, but cost 1318s of runner time against ~880s AND
+# manufactured 500s of extra test work - per-shard fixed costs are paid per shard. 85s of critical
+# path is not worth a 50% machine-time increase and four lists to keep straight instead of one.
+# The four-way arrangement is preserved on branch ci/shard-integration-four if that trade ever
+# looks different.
 # ---------------------------------------------------------------------------------------------
-readonly SHARD_1_CLASSES="PartitionStateCommittedOffsetIT,Rebalance857CommitSyncDeadlockProbe2IT,RebalanceTest,TransactionalPartialResultSetIT,TransactionTimeoutsTest,CoreAppMetricsIntegrationTest,PartitionOrderProcessingTest,MultiInstanceMetricsTest,DrainingMemberRebalanceIT,KafkaSanityTests"
-readonly SHARD_2_CLASSES="TransactionAndCommitModeTest,Rebalance857CommitSyncDeadlockProbe3IT,DbTest,CustomConsumersTest,CloseAndOpenOffsetTest,VertxConcurrencyIT,TransactionalEagerProcessingIT,BrokerPollerBackpressureTest,ProgressBarTest"
-readonly SHARD_3_CLASSES="MultiInstanceRebalanceTest,Rebalance857CommitSyncDeadlockProbe4IT,TransactionalCrashReplayIT,TransactionMarkersTest,TransactionalVisibilityIT,LatestResetTailNudgeIT,LoadTest,DrainCloseTest,RetriesTest"
+readonly HEAVY_CLASSES="PartitionStateCommittedOffsetIT,Rebalance857CommitSyncDeadlockProbe3IT,Rebalance857CommitSyncDeadlockProbe2IT,TransactionAndCommitModeTest,MultiInstanceRebalanceTest"
 
-# Every named class, for the catch-all's exclusion and for the disjointness check below.
-ALL_NAMED="${SHARD_1_CLASSES},${SHARD_2_CLASSES},${SHARD_3_CLASSES}"
-
-# A class in two lists would run twice and be paid for twice, and nothing downstream would notice -
-# both shards would pass. Cheap to check, so check it on every invocation rather than trusting
-# review to catch a copy-paste.
-dupes=$(echo "$ALL_NAMED" | tr ',' '\n' | sort | uniq -d)
+# A class in two lists would run twice and be paid for twice, and both shards would pass. With one
+# list this cannot happen, but the check costs nothing and survives the list being split again.
+dupes=$(echo "$HEAVY_CLASSES" | tr ',' '\n' | sort | uniq -d)
 if [ -n "$dupes" ]; then
-    echo "ci-integration-test: FAILED - class(es) named in more than one shard list:" >&2
+    echo "ci-integration-test: FAILED - class(es) named more than once in HEAVY_CLASSES:" >&2
     printf '    %s\n' $dupes >&2
     exit 2
 fi
 
-shard_include_arg() {  # shard_include_arg <comma-list>
-    echo "-Dit.test=$1"
-}
-shard_exclude_arg() {  # shard_exclude_arg <comma-list> -> failsafe <excludes> patterns
-    echo "-Dit.excluded.classes=$(echo "$1" | sed 's#[^,][^,]*#**/&.java#g')"
-}
-
 SHARD_ARGS=()
 SHARD_EXPECT=""
 case "${INTEGRATION_SHARD:-}" in
-    1) SHARD_EXPECT="$SHARD_1_CLASSES"
-       SHARD_ARGS=("$(shard_include_arg "$SHARD_1_CLASSES")" -Dfailsafe.failIfNoSpecifiedTests=false) ;;
-    2) SHARD_EXPECT="$SHARD_2_CLASSES"
-       SHARD_ARGS=("$(shard_include_arg "$SHARD_2_CLASSES")" -Dfailsafe.failIfNoSpecifiedTests=false) ;;
-    3) SHARD_EXPECT="$SHARD_3_CLASSES"
-       SHARD_ARGS=("$(shard_include_arg "$SHARD_3_CLASSES")" -Dfailsafe.failIfNoSpecifiedTests=false) ;;
+    heavy)
+        # -Dfailsafe.failIfNoSpecifiedTests=false is REQUIRED: the reactor builds ten modules
+        # containing none of these classes and the first would otherwise fail the build before the
+        # requested tests run. bin/chaos-test.sh's header records the same trap. The report checks
+        # below are what stop that flag turning a shard that selected NOTHING into a silent pass.
+        SHARD_EXPECT="$HEAVY_CLASSES"
+        SHARD_ARGS=(-Dit.test="${HEAVY_CLASSES}" -Dfailsafe.failIfNoSpecifiedTests=false)
+        ;;
     rest)
-       # NOT a negated -Dit.test. Setting it.test REPLACES failsafe's <includes>, and both test
-       # source roots compile into the same target/test-classes - so the negated form silently
-       # drops the `**/integrationTest*/**` restriction and runs the entire UNIT suite under
-       # failsafe too. Measured before it was understood: 168 classes and 981 tests instead of 42
-       # and 204, and it PASSED, because running more tests than you meant to fails nothing.
-       SHARD_ARGS=("$(shard_exclude_arg "$ALL_NAMED")") ;;
+        # NOT -Dit.test=!Class. Setting it.test REPLACES failsafe's <includes>, and both test source
+        # roots compile into the same target/test-classes - so the negated form silently drops the
+        # `**/integrationTest*/**` restriction and runs the entire UNIT suite under failsafe too.
+        # Measured before it was understood: 168 classes and 981 tests instead of 42 and 204, and it
+        # PASSED, because running more tests than you meant to fails nothing. it.excluded.classes
+        # feeds failsafe's <excludes>, which leaves <includes> intact.
+        SHARD_ARGS=(-Dit.excluded.classes="$(echo "$HEAVY_CLASSES" | sed 's#[^,][^,]*#**/&.java#g')")
+        ;;
     "") ;;  # whole suite - local runs and any caller that does not opt in
     *)
-       echo "ci-integration-test: INTEGRATION_SHARD must be 1, 2, 3, 'rest' or unset (got '${INTEGRATION_SHARD}')" >&2
-       exit 2 ;;
+        echo "ci-integration-test: INTEGRATION_SHARD must be 'heavy', 'rest' or unset (got '${INTEGRATION_SHARD}')" >&2
+        exit 2
+        ;;
 esac
 
 ./mvnw --batch-mode \
@@ -174,7 +188,7 @@ if [ -n "${SHARD_EXPECT}" ]; then
         report_exists "$c" || missing="${missing} ${c}"
     done
     if [ -n "$missing" ]; then
-        echo "ci-integration-test: FAILED - shard ${INTEGRATION_SHARD} produced no failsafe report for:${missing}" >&2
+        echo "ci-integration-test: FAILED - the heavy shard produced no failsafe report for:${missing}" >&2
         echo "  The shard ran, exited 0, and tested less than it was assigned. Usually a renamed or" >&2
         echo "  deleted class still named in its shard list - the catch-all is still running it, so" >&2
         echo "  nothing is untested, but the list is now wrong." >&2
@@ -187,7 +201,7 @@ elif [ "${INTEGRATION_SHARD:-}" = "rest" ]; then
         echo "ci-integration-test: FAILED - the catch-all shard produced no failsafe reports at all." >&2
         exit 1
     fi
-    for c in ${ALL_NAMED//,/ }; do
+    for c in ${HEAVY_CLASSES//,/ }; do
         if report_exists "$c"; then
             echo "ci-integration-test: FAILED - '${c}' is in a named shard but ran in the catch-all too." >&2
             echo "  Both shards are paying for it, and both will pass." >&2

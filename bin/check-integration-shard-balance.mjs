@@ -40,15 +40,9 @@ const failOverIdx = process.argv.indexOf('--fail-over')
 const failOver = failOverIdx > -1 ? Number(process.argv[failOverIdx + 1]) : null
 
 // --- the partition as it is checked in -------------------------------------------------------
-function shardListsFromScript() {
-    const src = readFileSync(SCRIPT, 'utf8')
-    const lists = []
-    for (const n of [1, 2, 3]) {
-        const m = src.match(new RegExp(`readonly SHARD_${n}_CLASSES="([^"]*)"`))
-        if (!m) return null
-        lists.push(m[1].split(',').filter(Boolean))
-    }
-    return lists
+function heavyFromScript() {
+    const m = readFileSync(SCRIPT, 'utf8').match(/readonly HEAVY_CLASSES="([^"]*)"/)
+    return m ? m[1].split(',').filter(Boolean) : null
 }
 
 // --- packing ---------------------------------------------------------------------------------
@@ -73,9 +67,9 @@ const shardWall = (classes) => Math.max(...lpt(classes, FORKS).sums) + BUILD_OVE
 const criticalPath = (shards) => Math.max(...shards.map(shardWall))
 
 // --- main ------------------------------------------------------------------------------------
-const lists = shardListsFromScript()
-if (!lists) {
-    console.error('check-integration-shard-balance: could not read SHARD_n_CLASSES from bin/ci-integration-test.sh')
+const heavy = heavyFromScript()
+if (!heavy) {
+    console.error('check-integration-shard-balance: could not read HEAVY_CLASSES from bin/ci-integration-test.sh')
     process.exit(2)
 }
 
@@ -99,9 +93,20 @@ if (perClass.size === 0) {
 }
 
 const all = [...perClass].map(([name, seconds]) => ({ name, seconds }))
-const named = new Set(lists.flat())
-const current = [...lists.map((l) => all.filter((c) => l.includes(c.name))), all.filter((c) => !named.has(c.name))]
-const optimal = lpt(all, 4).bins
+const named = new Set(heavy)
+const current = [all.filter((c) => named.has(c.name)), all.filter((c) => !named.has(c.name))]
+// The best achievable TWO-way split, found by trying every "largest N classes" heavy set. That is
+// the shape the guide in ci-integration-test.sh tells a maintainer to pick, so the comparison is
+// against a partition they could actually choose - not against an unconstrained optimum.
+let optimal = current
+let bestCp = Infinity
+const bySize = [...all].sort((a, b) => b.seconds - a.seconds)
+for (let k = 1; k < Math.min(bySize.length, 20); k++) {
+    const hn = new Set(bySize.slice(0, k).map((c) => c.name))
+    const cand = [all.filter((c) => hn.has(c.name)), all.filter((c) => !hn.has(c.name))]
+    const cp = criticalPath(cand)
+    if (cp < bestCp) { bestCp = cp; optimal = cand }
+}
 
 const now = criticalPath(current)
 const best = criticalPath(optimal)
@@ -109,10 +114,13 @@ const drift = now - best
 
 console.log(`check-integration-shard-balance: ${perClass.size} integration classes with recorded times`)
 current.forEach((s, i) => {
-    const label = i < 3 ? `shard ${i + 1}` : 'catch-all'
-    console.log(`  ${label.padEnd(10)} ${String(Math.round(shardWall(s))).padStart(4)}s  ${s.length} classes`)
+    const label = i === 0 ? 'heavy' : 'catch-all'
+    console.log(`  ${label.padEnd(10)} ${String(Math.round(shardWall(s))).padStart(4)}s wall  ${s.length} classes  ${Math.round(s.reduce((t, c) => t + c.seconds, 0))}s work`)
 })
-console.log(`  current critical path ${Math.round(now)}s | best achievable ${Math.round(best)}s | drift ${Math.round(drift)}s`)
+// The number the guide tells a maintainer to compare a candidate class against.
+const catchAllBound = current[1].reduce((t, c) => t + c.seconds, 0) / FORKS
+console.log(`  a class is worth moving to HEAVY_CLASSES only if its own wall exceeds ${Math.round(catchAllBound)}s`)
+console.log(`  current critical path ${Math.round(now)}s | best two-way split ${Math.round(best)}s | drift ${Math.round(drift)}s`)
 
 // Classes with recorded times that no shard claims are fine - the catch-all has them by
 // construction. Classes NAMED but never recorded are not: that is a rename or a deletion, and the

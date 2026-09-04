@@ -97,49 +97,28 @@ jobs:
             timeout: 15
             scenarios: ""
             shard: ""
-          # INTEGRATION RUNS AS FOUR JOBS: three NAMED shards and one catch-all.
-          # bin/ci-integration-test.sh owns the class lists (SHARD_n_CLASSES) and all four entries
-          # go through it, so no two shards can select differently - the single-entry-point rule the
-          # chaos matrix follows below.
+          # INTEGRATION RUNS AS TWO JOBS: one named heavy set, one catch-all defined by
+          # SUBTRACTION. bin/ci-integration-test.sh owns HEAVY_CLASSES and the guide for when to
+          # add to it, and both entries go through that one script - so the shards cannot select
+          # differently. A new test lands in the catch-all by default and can never belong to no
+          # shard, which is the inversion of N explicit bins.
           #
-          # The catch-all is defined by SUBTRACTION of the three lists, which is the property that
-          # makes this survivable: a newly added test runs there by default and can never belong to
-          # no shard. N explicit bins fail the other way - a new class runs nowhere and nothing goes
-          # red. A rename fails its named shard loudly while the catch-all keeps running the test.
-          #
-          # SIZED FROM MEASURED per-class times by longest-processing-time packing, not guessed, and
-          # NOT asserted here: a number in a comment cannot notice the suite changing under it.
-          # bin/check-integration-shard-balance.mjs recomputes the optimal partition from recorded
-          # times and reports the drift, so every run feeds the signal that says when to re-derive.
-          #
-          # FOUR SHARDS ONLY PAY BECAUSE THE 857 PROBE IS SPLIT. That class was @RepeatedTest(20) in
-          # one ~356s class, and forks cannot split a class, so whichever shard held it set the floor:
-          # modelled at 516s for two shards AND for four, i.e. four shards bought nothing while it was
-          # intact. Split four ways it drops to ~89s each and PartitionStateCommittedOffsetIT (~177s)
-          # becomes the floor. Modelled critical path ~337s against 620s for the single job.
+          # TWO AND NOT FOUR, measured rather than assumed: four shards with the same probe split
+          # measured 355s against two shards' ~440s, but cost 1318s of runner time against ~880s
+          # and manufactured ~500s of extra test work, because per-shard fixed costs are paid per
+          # shard. 85s of critical path is not worth a 50% machine-time increase and four lists to
+          # keep straight. The four-way arrangement is preserved on ci/shard-integration-four.
           #
           # forkCount=4 inside each shard is a measured CEILING - 6 was slower and destabilising
           # (docs/plans/2026-09-03-001-investigate-integration-gate-wall-time.md).
           - suite: integration
-            name: "Integration Tests 1/4"
-            cmd: "INTEGRATION_SHARD=1 bin/ci-integration-test.sh -DforkCount=4 -DreuseForks=true"
+            name: "Integration Tests (heavy)"
+            cmd: "INTEGRATION_SHARD=heavy bin/ci-integration-test.sh -DforkCount=4 -DreuseForks=true"
             timeout: 60
             scenarios: ""
             shard: ""
-          - suite: integration
-            name: "Integration Tests 2/4"
-            cmd: "INTEGRATION_SHARD=2 bin/ci-integration-test.sh -DforkCount=4 -DreuseForks=true"
-            timeout: 60
-            scenarios: ""
-            shard: ""
-          - suite: integration
-            name: "Integration Tests 3/4"
-            cmd: "INTEGRATION_SHARD=3 bin/ci-integration-test.sh -DforkCount=4 -DreuseForks=true"
-            timeout: 60
-            scenarios: ""
-            shard: ""
-          # Keeps the name "Integration Tests" because that is the context required by the master
-          # ruleset. The other three are NOT required until the ruleset is updated - see the PR.
+          # Keeps the name "Integration Tests" because that is the context the master ruleset
+          # requires. "(heavy)" is NOT required until the ruleset is updated - see the PR.
           - suite: integration
             name: "Integration Tests"
             cmd: "INTEGRATION_SHARD=rest bin/ci-integration-test.sh -DforkCount=4 -DreuseForks=true"
