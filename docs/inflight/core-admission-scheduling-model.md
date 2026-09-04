@@ -81,6 +81,18 @@ should absorb this framing).
   [`web-control-plane.md`](web-control-plane.md) Explain layer *correctness*, not polish - and
   enables the next questions: what would make this PROCEED, and what would that cost.
 
+## Why blocking in user code is information destruction, stated sharply
+
+The version of this argument worth using, from an external assessment 2026-09-05. If a worker starts
+and *then* blocks on a semaphore or a limiter, the engine sees exactly one fact: **worker busy.** It
+has lost the fact it actually needed - *this record cannot proceed because a named resource is
+exhausted, while thirty thousand other records could run right now.*
+
+So admission is **not a performance optimisation**. It is what preserves the scheduler's information
+advantage, and the loss is irreversible at the moment of blocking. The compact operational form, and
+a better statement than the buffet metaphor: **first determine what is admissible, then select among
+the admissible.** Two steps, in that order, and the first one is where all the knowledge lives.
+
 ## Prior art, stated before anyone over-claims
 
 **ANSWERED 2026-09-05 by a real sweep, and the paragraph below understated how well-trodden this

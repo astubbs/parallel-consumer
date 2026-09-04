@@ -1,5 +1,15 @@
 # Identity, position, incarnation: the three things a piece of work is, kept separate
 
+**A correction from an external repo-level assessment, 2026-09-05, and it is worth taking:** the
+emerging centre is probably **not a rich mutable Execution object**. Read against what
+astubbs/parallel-consumer#333 and astubbs/parallel-consumer#392 actually built, the deeper primitive
+looks like **a work candidate plus an admission/eligibility decision state** - identity, position and
+incarnation hang off it, but the operation the engine actually performs is *evaluate the predicates,
+then atomically claim an eligible candidate*. That is a smaller and more faithful primitive than an
+object graph with behaviour, and it matches the direction the implementation took without anybody
+designing it that way. Recorded as an assessment rather than a ruling; the model below is unchanged
+until somebody decides.
+
 <!-- inflight-type: task -->
 <!-- inflight-impact: process -->
 <!-- inflight-state: deferred - a foundational model to establish early, like the admission model it accompanies -->

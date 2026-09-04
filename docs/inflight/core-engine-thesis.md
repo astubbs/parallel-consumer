@@ -172,6 +172,45 @@ do not apply there yet because the section they are about has not landed.
    architectural possibility.* Otherwise the doc contradicts itself the moment the thesis section
    exists.
 
+## The tension is now sharper than when this note was written - and a concrete proposal
+
+An external repo-level assessment, 2026-09-05, makes the argument this note has been implying, and
+adds the thing it was missing: **what to actually write.**
+
+Its diagnosis: the gap between root strategy and live corpus is no longer breadth, it is **level of
+abstraction**. `STRATEGY.md` says *a smarter Kafka consumer plus self-tuning*; the corpus says
+*ownership and execution are independent, and once separated, execution becomes programmable* - with
+shared capacity, Prescience, decision lineage, work identity, alternate programming models and fleet
+control as consequences rather than features.
+
+**What changed the urgency is astubbs/parallel-consumer#392.** Deferring was reasonable while this
+was a captured conversation. It is less reasonable now that one of the laws is running machinery, and
+the root document tells a contributor something different from what the branches are doing.
+
+**The proposal, and it is deliberately smaller than merging the vision doc in.**
+<!-- post-merge: checked-begin -->
+Keep the separation astubbs/parallel-consumer#367 created between the root strategy and the vision
+doc - it is good, and the vision doc should stay linked rather than absorbed.
+<!-- post-merge: checked-end --> Change
+`STRATEGY.md` only enough to carry the engine thesis, the suggested wording being:
+
+> Parallel Consumer proved that ownership and execution need not be the same thing. The project is
+> following that separation into a programmable execution runtime.
+
+then the four decisions, the programming/execution/control separation, and *embedded rather than
+execution cluster* - with everything more speculative staying linked out. Enough for the root
+document to point the same direction as the work, without pretending any Hasten hypothesis has been
+validated.
+
+**Still the owner's call, and unchanged by this note being written.** `STRATEGY.md` is a claims
+document nothing tests; adopting a candidate strategy is a decision, not a documentation task. What
+the assessment adds is that the cost of waiting is now paid by contributors reading the wrong answer
+to *what are we building*.
+
+The structural observation underneath it is worth keeping on its own: the corpus has settled into
+**laws -> claims and notes -> implementations and experiments**, which works better than one large
+strategy document, and is why absorbing the vision doc into `STRATEGY.md` would be the wrong move.
+
 ## What the review got wrong, so nobody inherits it
 
 - It believed no inflight note existed for the `features/consumer-interface` branch. One does:

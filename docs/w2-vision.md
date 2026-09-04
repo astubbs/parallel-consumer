@@ -308,6 +308,15 @@ Three things it settles that are otherwise argued from scratch each time:
 
 ## Sequencing, in one line each
 
+**Updated 2026-09-05 by an external assessment, and it describes what is happening rather than what
+was planned.** The earlier expectation was a hollow lighthouse vertical slice first, then a rename
+threshold. What has actually happened is an engine-first progression - concurrency and performance
+substrate, then adaptive admission, then named shared resources, with distributed coordination,
+Prescience and broader composition still ahead - and that may be *better* than a facade-heavy hollow
+application, because the first vertical slice proves the hard engine composition instead of
+assembling shallow endpoints. Hasten Logistics still matters enormously as the integration and
+lighthouse constraint; it is no longer the next threshold. The composition test above is.
+
 v6 and the open PR stack are untouched by all of the above. The build order is the
 **falsification staircase** the cross-model review substituted for navigator-then-lighthouse
 (finding 4): (1) a local admission A/B against a conventional limiter, (2) the
@@ -318,6 +327,27 @@ rule; the twelve-dimension lighthouse only if all three survive. The navigator m
 [`core-distributed-throttling.md`](inflight/core-distributed-throttling.md) says gate any
 build (the review caught this file stating it as settled while the owning note says unchosen).
 STRATEGY.md adoption waits for the owner's triage and the ce-strategy run.
+
+## The composition test - the threshold that actually decides this
+
+Proposed by an external repo-level assessment, 2026-09-05, and it is a better decisive threshold than
+the one the sequencing above implies. Not *are all the lighthouse boxes connected*, but:
+
+> **Do adaptive admission, semantic eligibility, shared-resource authority and deep work knowledge
+> actually compose into one scheduler - without bespoke paths for each?**
+
+It is better because it is falsifiable early and cheaply, it fails loudly (the tell is a special case
+added for one of the four), and it tests the laws rather than the feature list. **Two of the four are
+already in flight**, which is what makes it live rather than hypothetical:
+astubbs/parallel-consumer#333 discovers the **admission target** - its own title says so, and the
+significant part is that it controls admission rather than a worker-pool size - and
+astubbs/parallel-consumer#392, the navigator micro-MVP, adds the second axis: even where local
+concurrency says another record could run, can *this* record acquire the named resources its
+execution requires? Local capacity admission and semantic resource admission, both before selection.
+
+The build rule the same assessment extracts, which this file should have stated and did not:
+**build the smallest mechanism that proves a law, and preserve the future seam.** That is what law 9
+is for, and astubbs/parallel-consumer#392 is its first real outing.
 
 ## Risks register
 
