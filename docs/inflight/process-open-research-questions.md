@@ -89,13 +89,22 @@ Each is load-bearing, and each currently reads as a measured design value:
 
 ## Kafka, JVM and library behaviour assumed rather than verified
 
-- **That the fencing vocabulary comes from machinery Kafka already has.** Kafka does not fence an
-  arbitrary produce by consumer generation - a revoked owner can still write. The bounded-overshoot
-  correction concedes this for external calls, but the claim for the **control topic** survives
-  untouched, and the whole coordination plane rests on it. **Check:** the smallest possible test - two
-  consumers, forced rebalance, old owner produces to the control topic after revocation, record
-  whether anything rejects it. Then establish whether transactional producer fencing is usable at
-  per-resource-shard cardinality.
+- **That the fencing vocabulary comes from machinery Kafka already has.** **NARROWED 2026-09-05 from
+  evidence already in this repository, and the claim is half right in a way that matters.**
+  `ProducerFencedException` appears in `ProducerWrapper` on **transactional paths only** -
+  `beginTransaction`, `commitTransaction`, `abortTransaction`, `sendOffsetsToTransaction`. So Kafka's
+  fencing machinery is real but it is **transactional-producer fencing keyed on `transactional.id`
+  plus epoch**, not consumer-generation fencing of an arbitrary produce. A revoked owner holding a
+  plain producer can still write to the control topic and nothing rejects it.
+  **What that leaves:** the mechanism exists and can be used, but only by giving each fenced writer
+  its own `transactional.id` - so the real question is no longer *does Kafka fence this* (it does
+  not, for plain produces) but **is per-resource-shard `transactional.id` cardinality affordable**,
+  which is a cost question about transaction coordinator state and initialisation latency.
+  **Check, now sharper:** measure `initTransactions` cost and coordinator state at the shard
+  cardinality the design implies, and confirm the small negative case - two consumers, forced
+  rebalance, old owner produces non-transactionally to the control topic after revocation, nothing
+  rejects it. The second is cheap and closes the claim; the first decides whether the fix is
+  affordable.
 - **That two consumer groups will agree on the partition assignment**
   ([`core-frontier-handover.md`](core-frontier-handover.md)). Two coordinators with different member
   sets generally do not produce the same mapping, so an ownership claim can land on a member that
@@ -135,7 +144,13 @@ None of these are in the prior-art register, which is why they are here rather t
 
 ## Contradictions to resolve
 
-- **"No cluster" has three readings and no authoritative one** - [`../w2-vision.md`](../w2-vision.md)'s
+- **RESOLVED 2026-09-05 in law 3: "no cluster" means no cluster YOU OPERATE.** The strong form is an
+  open question this corpus carries, never a property to advertise. **And the sweep it called for was then run, and came back clean** -
+  every live use is already the honest form (*no cluster to operate*), the two remaining hits are a
+  frozen record quoting the claim as it was put to a research sweep and a register row using it as a
+  claim label, and `SOUND_BITES.md`, the README and the docs sources contain no form of it at all. So
+  the contradiction was in the *laws*, not in the copy. Original finding:
+  **"No cluster" had three readings and no authoritative one** - [`../w2-vision.md`](../w2-vision.md)'s
   law 3 read to its limit, the preserved handoff's *globally coordinated runtime with no runtime
   cluster*, and [`core-standalone-deployment.md`](core-standalone-deployment.md)'s third topology
   which the note itself calls an inversion of the record. **Check:** write the reconciling sentence

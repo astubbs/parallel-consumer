@@ -31,6 +31,8 @@ allocator inside the process, fed by the regimes the controller already classifi
 External scaling becomes last-resort and evidence-based: **scale-out is the consequence of failing
 to satisfy profitable internal demand**, and scale-in of every function's marginal return
 collapsing. That is not a new signal - it is the strongest form of the existing +1 delta vote,
+whose predicate [`core-auto-scaling.md`](core-auto-scaling.md) owns; what this note contributes is
+one precondition on it, not a second definition of it -
 reached through one more layer of "tried everything cheaper first". The endpoint claim, candidate
 thesis material: a Kafka application stops having a meaningful configured size, and "Kafka
 application" stops being a scheduling concept at all - the scheduling entities are functions and

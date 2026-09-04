@@ -109,6 +109,14 @@ named with it.
    stalls - for participants that have a local controller to fall back to. Read to its limit the
    law allows *no cluster at all* - the broker inside the application - which is the open question
    the standalone note's third topology carries.
+   **The phrase has three readings and needed one, so the reconciliation is stated here (2026-09-05).
+   The law means NO CLUSTER YOU OPERATE, not no cluster at all** - that is the claim the positioning
+   can carry, and the only one the corpus can currently defend. A standalone component is *plainly a
+   process to operate*, as [`core-standalone-deployment.md`](inflight/core-standalone-deployment.md)
+   says outright; bundling a broker *hides Kafka's name, not Kafka's operations*, as the same note
+   says of the third topology. The strong form - no cluster whatsoever - is an **open question that
+   note carries**, not a property to advertise. **Anywhere the strong form appears in positioning
+   copy, it is wrong**, and that is a sweep somebody owes the corpus.
    [`core-fleet-capacity-coordination.md`](inflight/core-fleet-capacity-coordination.md) ·
    [`core-shared-execution-resources.md`](inflight/core-shared-execution-resources.md) ·
    [`core-auto-scaling.md`](inflight/core-auto-scaling.md) ·

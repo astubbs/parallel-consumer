@@ -82,6 +82,17 @@ including the caveat about what resource is actually arbitrable; what binds here
 composition: the +1 vote gains a precondition - internal reallocation exhausted first - which
 makes the recommendation stronger, not different.
 
+**THIS FILE OWNS THE +1 VOTE PREDICATE** - the full set of conditions under which an instance votes
+for another one - and the ownership is stated because three notes each add a precondition and none
+of them claimed it, which the risks register predicts as note-corpus drift. The predicate as it
+stands: local capacity exhausted **and** independent keys still unexploited **and** internal
+reallocation across co-hosted functions already exhausted
+([`core-per-function-capacity-arbitration.md`](core-per-function-capacity-arbitration.md)) **and**
+the residence time is service-time-dominated rather than queue-dominated
+([`core-slo-objective-api.md`](core-slo-objective-api.md), which is what stops a catch-up backlog
+voting scale-out forever). Those two notes own their *reasons*; they do not own the predicate, and a
+new precondition is added **here** with a link back, never restated there.
+
 Lifecycle rules:
 
 - **Post-rebalance cooldown, per instance.** Any membership or assignment change invalidates

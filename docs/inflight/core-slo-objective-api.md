@@ -56,7 +56,9 @@ SLO instead of drawing a red line on a chart after the violation.
 **Residence time under backlog measures the backlog, not the engine**
 ([`perf-benchmark-cost-to-slo.md`](perf-benchmark-cost-to-slo.md) names this gap already; it is
 Little's law). A consumer recovering from lag has a p99 no concurrency can satisfy, and a naive
-SLO controller would thrash or permanently vote scale-out during every catch-up. The controller
+SLO controller would thrash or permanently vote scale-out during every catch-up. That makes
+service-time-dominated residence a **precondition on the +1 vote**, whose predicate
+[`core-auto-scaling.md`](core-auto-scaling.md) owns - recorded there, reasoned here. The controller
 must separate service-time-dominated residence (concurrency can help) from queue-dominated
 residence (only capacity or time helps) - which is the attribution taxonomy again, applied to the
 SLO term. Ship the objective API without that distinction and the first Monday-morning backlog

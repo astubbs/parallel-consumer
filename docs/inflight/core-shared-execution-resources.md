@@ -81,6 +81,7 @@ spend capacity locally.**
   property") applied positively: hash resource names onto partitions of an internal control topic;
   the partition's owner is the authority for those resources; sharding, failure detection,
   authority movement and the fencing vocabulary (generations, epochs) all come from machinery
+  <!-- CORRECTION 2026-09-05: this sentence is half right and the half it gets wrong is load-bearing. -->
   Kafka already has. No Redis, no etcd, no server.
 - **Report USEFUL demand, not queue size.** PC knows that payments "wants 5,000 Stripe permits"
   but only 800 are executable because Postgres binds them - so Stripe capacity flows to refunds
@@ -92,6 +93,20 @@ spend capacity locally.**
   `postgres-orders` runs when the *local* slices of all three have a permit - deterministic
   acquisition order, release on partial failure, all local synchronisation. Fits PC exactly
   because the engine already lives with "semantically executable but not selected right now".
+
+**CORRECTION, 2026-09-05.** *"Generations, epochs ... machinery Kafka already has"* is true of the
+vocabulary and false of the enforcement, and the coordination plane rests on the difference.
+`ProducerWrapper` in this repository throws `ProducerFencedException` on **transactional paths only**
+- begin, commit, abort, and sending offsets. Kafka fences a **transactional producer** keyed on
+`transactional.id` plus epoch; it does **not** fence an arbitrary produce by consumer generation, so
+**a revoked owner holding a plain producer can still write to the control topic and nothing rejects
+it.** The bounded-overshoot correction already conceded this for external calls; the control-topic
+claim had survived untouched and should not have.
+
+The mechanism is still available - give each fenced writer its own `transactional.id` - which turns
+the open question from *does Kafka fence this* into **is per-resource-shard `transactional.id`
+cardinality affordable**, a cost question about coordinator state and `initTransactions` latency.
+[`process-open-research-questions.md`](process-open-research-questions.md) carries both checks.
 
 ## The micro-MVP before even that (owner's checklist, 2026-08-31)
 
