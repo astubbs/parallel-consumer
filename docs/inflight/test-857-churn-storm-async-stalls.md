@@ -528,3 +528,25 @@ Two things about how it was retrieved are worth more than the sighting itself:
 This is the rule about recording a sighting before the PR that saw it merges, missed: astubbs#426 had
 already merged by the time anyone looked. The seed survived only because the archive outlives the
 run listing.
+
+## Sighting, 2026-09-04 - on a pom-only PR, and the second signature in one CI run
+
+`ChaosChurnStormIT.churnStormMeetsSlosAndBalancesLedger` errored after 331s on the `Chaos Pain
+Suite 4/4` shard of astubbs/parallel-consumer#445, a dependency change touching nothing but pom files
+and one shell self-test - so that branch cannot be the cause, which is the same control this file's
+earlier entries rely on.
+
+**Replay seed `5650361238717170909`** (`CHAOS W1 churn storm: seed=5650361238717170909`).
+
+Recorded rather than diagnosed. What makes it worth keeping is that it is a fresh reproducer for the
+line this file classifies above as a real non-recovering wedge, and it arrived on an unrelated branch
+within hours of that classification. Replaying it with `-Dchaos.diagnoseStallRecovery=true` and the
+per-instance telemetry `ProgressProbe#instanceProgressSnapshot` emits is the cheap next step: if its
+stalled instance also holds work while its completion count stays frozen, that is a second seed for
+the wedge rather than a second timing proxy.
+
+**The same run also failed `RegistrationRaceStaleResidentIT`**, which is already carried in
+`test-untracked-ci-flakes.md`. `bin/inflight.mjs codecov test` places that failure alongside one on
+an unrelated branch nine minutes later and passes on three other branches in the same window, so it
+is master-state rather than either branch's doing. Noted here only because the two arriving together
+is what a reader of this run's checks will see.
