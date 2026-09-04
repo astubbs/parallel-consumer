@@ -569,3 +569,31 @@ the protected state entirely.
 Any application closing a PC instance while its group is rebalancing holds up every peer for up to
 the close timeout. A rolling restart of a PC fleet is the ordinary case; this profile just does it
 often enough to catch.
+
+
+## A verification that measured the wrong tree, 2026-09-05 - recorded so its number is never quoted
+
+Run 33836808270 was dispatched to verify the fix and returned **4 failures in 60**. That number says
+nothing about the fix, and it is written down here so nobody later finds it and reads it as
+"the fix did not work".
+
+It was dispatched at head `576b4f04` - the **first** version of the fix, which polled from
+`BrokerPollSystem.handlePoll()`'s `CLOSING` branch. That version is now known not to fire for the
+interleaving that matters: `transitionToClosing()` runs on the caller's thread and can land mid-poll,
+after which the woken poll completes the `RUNNING` iteration and `doClose()` runs immediately, so the
+branch is skipped. CI caught it as a unit failure the same hour. The experiment was already queued
+behind other batches by then, so it measured a tree whose fix largely does not engage - and duly
+reported the unfixed rate.
+
+Its 4/60 sits with every other pre-fix measurement rather than against them: 2/30 control, 1/30 with
+astubbs/parallel-consumer#431, 3/60 and 3/60 on the two diagnostics-only trees. Six trees, one rate,
+about 5%.
+
+**The lesson is the one this corpus already carries three times, and it caught a fourth here: a run is
+evidence only about the thing that actually ran.** The instrument that saved it was the `ref=` column
+in the tally, added to `bin/exp-measure-large-instances-failure-rate.sh` for a different reason
+entirely - separating two concurrent arms on a shared `/tmp`. Without it the artifact would have been
+read as "the verification run", because that is what it was dispatched as.
+
+Re-dispatched at `eace35700`, the first tree carrying the discharge poll in `doClose()` plus the
+review fix that keeps it paused. That result is the one this note is waiting on.
