@@ -39,12 +39,17 @@ It is the sharpest challenge available and it will be asked in public, so the an
 measured rather than asserted. Same for the sibling forms: *is it just an embedded Netflix
 concurrency-limiter?*, and *does Ray already do this?*
 
-What can be said without research: the two sit at **different boundaries**. A service mesh governs
-**calls leaving a process** - it sees a request that has already been created and decides whether to
-let it out. This design governs **work before it becomes execution** - a record that exists durably
-in a log, which nobody has spent a thread on yet, and which can be left un-dispatched at zero cost
-because ownership is already decoupled from execution. Not admitting a record does not stall its
-partition. Not admitting a request means somebody is already blocked holding it.
+**Envoy is the network layer. Hasten is the work layer.** The owner's formulation, and it is the
+whole answer in one line - the two are not the same system at different sizes, they govern different
+things.
+
+Unpacked: a mesh sees a **call that already exists** and decides whether to let it leave. By then the
+work has been created, a thread is committed to it, and the only levers left are shed, delay or fail.
+The work layer sits earlier - a record durably in a log that nobody has spent anything on yet, which
+can be left un-dispatched at **zero cost**, because ownership and execution were decoupled upstream.
+Not admitting a record does not stall its partition; not admitting a request means somebody is
+already blocked holding it. That asymmetry is why the layers cannot substitute for each other in
+either direction.
 
 **What must NOT be asserted until measured**, and each is queued as a research target:
 
@@ -61,9 +66,10 @@ partition. Not admitting a request means somebody is already blocked holding it.
 
 **Run both. Hasten is the missing half of Envoy, and the outputs feed each other.**
 
-A mesh knows what is happening to calls in flight - latency, saturation, error rates at the callee -
-and can shed or limit at the egress. It does not know what work *exists but has not started*, which
-is precisely what a runtime sitting on a log can see. The composition is therefore not competitive:
+The network layer knows what is happening to calls in flight - latency, saturation, error rates at
+the callee - and can shed or limit at the egress. It cannot know what work *exists but has not
+started*, because at that point the work is not on the network yet. The work layer sees exactly that
+and nothing about the wire. The composition is therefore not competitive:
 the mesh's measured downstream pressure is an input to admission decisions about undispatched work,
 and the runtime's knowledge of pending demand is an input the mesh has no way to obtain. Each one's
 scheduling and analysis output improves the other's.
