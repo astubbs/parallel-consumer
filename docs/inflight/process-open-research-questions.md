@@ -23,19 +23,26 @@ read the whole `core-*` engine spine and about half the corpus
 handoffs under `docs/ideation/` and a dozen smaller notes were not read, so **absence from this list
 is not evidence of soundness.**
 
-## The one to settle first
+## The one that looked most urgent, and was already handled by the dependency gate
 
-**A build is running ahead of the decisions that gate it.**
-[`core-distributed-throttling.md`](core-distributed-throttling.md) lists *"Decisions that gate any
-build"* and says they *"stay open until the owner adopts them"*;
-[`../w2-vision.md`](../w2-vision.md) agrees the micro-MVP *"remains gated on the two decisions"* -
-and its own composition-test section says astubbs/parallel-consumer#392, the navigator micro-MVP, is
-in flight. Either the code has implicitly taken the enforcement-fork and standalone-versus-controller
-decisions, or it is about to.
+**RESOLVED 2026-09-05.** The finding was that a build is running ahead of the decisions that gate it:
+[`core-distributed-throttling.md`](core-distributed-throttling.md) says its gating decisions *"stay
+open until the owner adopts them"*, [`../w2-vision.md`](../w2-vision.md) agrees the micro-MVP is
+gated on them, and astubbs/parallel-consumer#392 - the navigator micro-MVP - is in flight.
 
-**Check:** ask the owner directly, then record them as taken. Otherwise the vision doc goes on
-describing as open what the implementation has already decided - which is the corpus lying about
-itself, in the direction that is hardest to notice.
+<!-- post-merge: checked-begin -->
+**The resolution is that "in flight" and "ahead of" are not the same thing.** The description of
+astubbs/parallel-consumer#392 already carries `depends on astubbs/parallel-consumer#367` (and on
+astubbs/parallel-consumer#333), so the PR-dependency gate refuses to merge it until
+astubbs/parallel-consumer#367 - which carries those decisions - has landed. The build proceeds on a
+branch; the *merge* waits on the decisions. That is the sequencing working as designed, not violated.
+
+**What it does not resolve, and the owner should still say:** whether the code in
+astubbs/parallel-consumer#392 has *taken* the enforcement-fork and standalone-versus-controller
+decisions implicitly. If it has, the notes should record them as taken before
+astubbs/parallel-consumer#367 merges rather than after, so the corpus and the code agree on the day
+they land together.
+<!-- post-merge: checked-end -->
 
 ## Claims with no evidence and no falsifier
 

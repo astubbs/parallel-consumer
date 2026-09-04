@@ -349,7 +349,8 @@ added for one of the four), and it tests the laws rather than the feature list. 
 already in flight**, which is what makes it live rather than hypothetical:
 astubbs/parallel-consumer#333 discovers the **admission target** - its own title says so, and the
 significant part is that it controls admission rather than a worker-pool size - and
-astubbs/parallel-consumer#392, the navigator micro-MVP, adds the second axis: even where local
+astubbs/parallel-consumer#392, the navigator micro-MVP - **which declares this document's PR as a
+dependency, so its merge waits on the decisions recorded here** - adds the second axis: even where local
 concurrency says another record could run, can *this* record acquire the named resources its
 execution requires? Local capacity admission and semantic resource admission, both before selection.
 
