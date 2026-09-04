@@ -35,6 +35,40 @@ The 2026-09-05 sweep additionally used **adversarial 3-vote verification**: each
 to three independent verifiers and needed two refutals to be killed. Ten were killed. Rows below
 carry the vote where one exists, because a 2-1 is not a 3-0.
 
+## The falsifier
+
+**This register had no falsifier until 2026-09-05**, which is an odd omission given its InFlight
+sibling has carried one throughout, and it meant the question set below had nothing to serve. From a
+handoff document dated 2026-09-04:
+
+> **Find a system that can sit transparently under an existing Kafka application, separate partition
+> ownership from semantic ordering and execution, schedule record/key/order-domain work locally,
+> adapt concurrency, coordinate named shared resources through delegated authority, retain unresolved
+> work in causal position while unrelated work proceeds, look ahead across the committed backlog
+> using semantic execution knowledge, explain every wait, and fail scheduler authority over with work
+> ownership - without requiring a separate execution cluster or a new application programming model.**
+
+**If such a system exists and is mature, study or join it before rebuilding it** - the same posture
+the InFlight register takes, and for the same reason. Refine the falsifier as the claims sharpen; it
+is a live instrument, not a slogan.
+
+## Five standing falsifiers for the architecture itself
+
+Distinct from the prior-art falsifier above: these are the ways the design could be *wrong* rather
+than *already built*. Recorded together because a register that only asks "does this exist" misses
+the other half of the risk.
+
+1. Shared scheduler primitives do not actually simplify the derived features - each needs its own
+   parallel subsystem after all. **This is the one the composition test in
+   [`../w2-vision.md`](../w2-vision.md) is designed to detect early.**
+2. Deep Prescience provides little value over a modest lookahead buffer.
+3. Transparency collapses, and users end up redesigning around a framework after all - which would
+   break *keep your code, replace the runtime underneath it*.
+4. Kafka's physical abstractions leak so badly that virtualisation becomes Kafka-squared.
+5. An existing system already solves the same architectural problem well enough that the right move
+   is to join or build on it. **That is what this register exists to detect**, and the first sweep
+   made it less hypothetical rather than more.
+
 ## The question set - ask every system the same eight
 
 1. **What does it schedule** - requests, queries, jobs, records, packets, invocations?
@@ -81,6 +115,24 @@ So the useful question a row answers is not *is the idea new* but **is anyone de
 somebody who already has Kafka and did not ask for a scheduler.** Every occupied row so far answers
 no, and each one requires the user to adopt a whole new system to get the capability.
 
+## The search families - eighteen, replacing the first sweep's five angles
+
+The first sweep's angles were mechanism-shaped and Kafka-blind, which is how uForwarder was missed.
+From the same 2026-09-04 handoff, and to be used as the family list for the next sweep:
+
+Kafka consumer proxies and decoupled-consumption systems · Kafka queue and work-distribution systems
+· record- and key-level schedulers · adaptive concurrency and admission-control systems · distributed
+shared rate and resource controllers · embedded workflow, actor and RPC runtimes · Kafka-backed
+workflow systems · Kafka Streams alternative runtimes · dataflow schedulers · durable execution
+systems · Orleans/Akka/Temporal-style actor and workflow runtimes · distributed admission control and
+lease systems · work-conserving schedulers · look-ahead schedulers · semantic indexes over queues and
+logs · virtual partition and hot-key extraction systems · transparent Kafka client replacements and
+proxies · systems deriving coordination primitives from Kafka ownership or log state.
+
+**For every candidate, classify rather than score**: competitor, substrate, integration, historical
+prior art, or something to join and build upon. A row that only carries a verdict has thrown away the
+useful half.
+
 ## The state per question, after one sweep
 
 | Question explored | Already answered? | By whom, and what it costs their user |
@@ -103,6 +155,18 @@ implicitly Kafka-shaped, which narrowed it; from 2026-09-05 the briefs are subst
 full. The discriminating clause, stated without a substrate: **does it drive that decision from
 adaptive global optimisation over measured performance?** Many systems have a limiter, a quota or a
 scheduler; far fewer close the loop from observed behaviour back into a global allocation.
+
+## The nearest Kafka-native neighbour, and the sweep never found it
+
+| System | Why it is the most serious adjacent evidence yet | Evidence |
+|---|---|---|
+| **Uber uForwarder / Consumer Proxy** | **Decouples Kafka consumption from application workers, adaptively sizes workloads, and continuously re-places workloads across worker capacity** - which lands directly on the complaint this whole design is built around: *do not use your data architecture as your thread pool.* It is not obviously the same thing: it appears to **centralise or proxy consumption** and to reason in **coarser workload-placement units**, rather than embedding a key- and ordering-domain scheduler into each execution path - so it likely fails the falsifier's *transparently under an existing application* and *schedule locally* clauses. **But it must be treated as serious adjacent evidence and not dismissed**, and it is the natural starting point for the next sweep: trace its citations and its adjacent systems outward. | **claimed** - named in a 2026-09-04 handoff, unverified here |
+
+**That this row is new is itself a finding about the 2026-09-05 sweep.** The sweep ran five angles and
+none of them surfaced the closest Kafka-native comparator - because the angles were organised by
+*mechanism* (admission, rate limiting, durable execution, stream elasticity, capacity governance) and
+uForwarder is none of those; it is a **consumption proxy**. The corrected family list below exists
+because of that miss.
 
 ## Rows added 2026-09-05, all `claimed` and none checked here
 

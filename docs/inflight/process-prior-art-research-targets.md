@@ -16,6 +16,15 @@ completed. New questions arrive faster than old ones close.
 
 ## Hasten - highest value first
 
+- **Uber uForwarder / Consumer Proxy - start here.** The nearest Kafka-native neighbour found so far
+  and absent from the corpus until 2026-09-05: it decouples Kafka consumption from application
+  workers, adaptively sizes workloads and continuously re-places them across worker capacity.
+  *Settles:* the falsifier's hardest clauses at once, and it is the right root for the next sweep -
+  trace its citations and adjacent systems outward rather than starting from mechanisms again.
+  **The reason it was missed is the lesson:** the first sweep's angles were organised by mechanism,
+  and a consumption proxy is not a mechanism - the register now carries an eighteen-family list
+  instead.
+
 - **ENVOY, and it is top of the list because the sweep claimed this angle and did not run it.** The
   2026-09-05 brief named Envoy's global rate limiting twice and the sweep returned zero findings and
   zero sources on it, while covering Doorman, DRL and Gubernator in the same angle.
@@ -108,6 +117,14 @@ admission or scheduling decision beneath an existing API or programming model, a
 adaptive global optimisation over measured performance?* The final clause is the discriminating one.
 Most systems have some of it - a limiter, a quota, a scheduler - and far fewer close the loop from
 observed behaviour back into a global allocation.
+
+## Classify, do not score
+
+For every candidate in either project, the output is a **classification** and not a verdict:
+**competitor · substrate · integration · historical prior art · something to join or build upon.**
+A row carrying only "occupied" or "not occupied" has thrown away the half that decides what to do
+next - which is the whole reason the InFlight register's join candidates are useful and its
+occupied rows are merely interesting.
 
 ## The rule these all run under
 
