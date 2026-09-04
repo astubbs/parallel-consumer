@@ -509,3 +509,63 @@ recorded here because it **changes what this profile measures**, and this note o
 rate. Fixed in astubbs/parallel-consumer#441, which deliberately does not re-measure - so **the
 2/30 baseline above was taken with the old selection**, and a rate compared across that merge is not
 comparing like with like.
+
+
+## THE BLOCKING CALL IS NAMED, 2026-09-04 - and it is the astubbs/parallel-consumer#80 defect one state along
+
+Run 33824474506, 3 failures in 60 (5%). Every stuck instance's `pc-broker-poll` thread:
+
+    RUNNABLE parked-at=sun.nio.ch.EPoll.wait
+      via NetworkClient.poll <- ConsumerNetworkClient.poll
+          <- ConsumerNetworkClient.awaitPendingRequests(ConsumerNetworkClient.java:355)
+          <- AbstractCoordinator.close(AbstractCoordinator.java:1140)
+          <- ConsumerCoordinator.close(ConsumerCoordinator.java:987)
+          <- ClassicKafkaConsumer.close(ClassicKafkaConsumer.java:1140)
+
+**The poll thread is inside `consumer.close()`, waiting on the group coordinator.** Not a PC lock,
+not a sleep, not a commit retry - all three of those were candidates and all three are refuted by
+this frame.
+
+### The complete chain
+
+1. A stop calls `pc.close()` -> `closeDontDrainFirst()` -> `transitionToClosing()`.
+2. `BrokerPollSystem.handlePoll()` is guarded on `runState == RUNNING || DRAINING`, so the instance
+   **stops calling `consumer.poll()`** while its consumer is still an open group member.
+3. `doClose()` -> `consumerManager.close(DEFAULT_TIMEOUT)` -> `consumer.close(30s)` ->
+   `AbstractCoordinator.close()` -> `awaitPendingRequests()`, which waits on the coordinator.
+4. The coordinator cannot answer: the group is in `PreparingRebalance` waiting for JoinGroup from
+   its members - **including the ones now sitting in this wait**. Each closing member is waiting for
+   a coordinator that is waiting for it.
+5. So the close burns its full 30s budget. Throughout it the consumer is a group member that does
+   not poll and does not answer: `ZOMBIE_MEMBER/REBALANCE_BLOCKED`. The observed 23-25s poll-pass
+   age is that budget, and `waitForClose` (a shorter budget) gives up first, which is why ten
+   instances logged a `TimeoutException` while still `CLOSING`.
+6. The aggressive profile has up to 6 of 11 instances closing at once, so the group freezes
+   wholesale and the fleet stops: detector `FLAT`, whole assignment stagnant at comparable lag.
+
+### This is a known defect class, fixed once already, and CLOSING did not get the fix
+
+astubbs/parallel-consumer#80 fixed exactly this for `DRAINING` - "draining PC stops polling - 10kHz
+busy-spin + zombie partition hold". Its guard,
+`BrokerPollSystemDrainTest.drainKeepsPollingConsumer_staysRebalanceResponsiveWithoutSpinning`, states
+the reason in its own javadoc: *"rebalance participation (rejoin / revoke-ack) happens inside
+`consumer.poll()`; a draining consumer that never polls cannot respond to rebalances while its
+background heartbeat keeps it a live member"*. Owning write-up:
+`docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md`.
+
+`CLOSING` never received that fix, and **`close()` reaches it without passing through `DRAINING` at
+all** - `closeDontDrainFirst()` transitions straight to `CLOSING`, so the most common close bypasses
+the protected state entirely.
+
+### The invariant to restore
+
+> **A PC instance that has not yet left the group must keep polling it.**
+
+`DRAINING` honours it since astubbs/parallel-consumer#80. `CLOSING` does not, and hands Kafka's
+`consumer.close()` a 30-second budget to discover that.
+
+### Not a test-only defect
+
+Any application closing a PC instance while its group is rebalancing holds up every peer for up to
+the close timeout. A rolling restart of a PC fleet is the ordinary case; this profile just does it
+often enough to catch.
