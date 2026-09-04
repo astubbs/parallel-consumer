@@ -99,9 +99,17 @@ set -euo pipefail
 #      give four 89s classes - they measured 138-166s, because the repetitions carry per-class
 #      fixed cost that used to be paid once.
 #
-# Sized from the measured per-class times of run 33829154038. The catch-all is the complement, so
-# a NEW test runs there by default and can never belong to no shard - the inversion of N explicit
-# bins, whose failure mode is a class running nowhere with nothing going red.
+# Sized from the measured per-class times of run 33829977814, which is where rule 1 above came from
+# rather than being an example of it. That run measured heavy 330s against the catch-all's 450s, and
+# the heavy shard was TAIL-BOUND: its slowest class (PartitionStateCommittedOffsetIT, 208s) exceeded
+# its own work/4 of 178s, so three of its four forks were partly idle. Work added to a tail-bound
+# shard is FREE until its total reaches forkCount x its slowest class - 834s here, against the 710s
+# it held. Two classes moved across from the catch-all, which is work-bound and hands back every
+# second removed.
+#
+# The catch-all is the complement, so a NEW test runs there by default and can never belong to no
+# shard - the inversion of N explicit bins, whose failure mode is a class running nowhere with
+# nothing going red.
 #
 # WHY TWO SHARDS AND NOT FOUR, measured rather than assumed: four shards with this same probe
 # split measured 355s against two shards' ~440s, but cost 1318s of runner time against ~880s AND
@@ -110,7 +118,7 @@ set -euo pipefail
 # The four-way arrangement is preserved on branch ci/shard-integration-four if that trade ever
 # looks different.
 # ---------------------------------------------------------------------------------------------
-readonly HEAVY_CLASSES="PartitionStateCommittedOffsetIT,Rebalance857CommitSyncDeadlockProbe3IT,Rebalance857CommitSyncDeadlockProbe2IT,TransactionAndCommitModeTest,MultiInstanceRebalanceTest"
+readonly HEAVY_CLASSES="PartitionStateCommittedOffsetIT,Rebalance857CommitSyncDeadlockProbe3IT,Rebalance857CommitSyncDeadlockProbe2IT,TransactionAndCommitModeTest,MultiInstanceRebalanceTest,RebalanceEoSDeadlockTest,Rebalance857CommitSyncDeadlockProbeIT"
 
 # A class in two lists would run twice and be paid for twice, and both shards would pass. With one
 # list this cannot happen, but the check costs nothing and survives the list being split again.
