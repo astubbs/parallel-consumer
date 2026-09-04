@@ -16,6 +16,9 @@ Antony's steer. It is a vision guide for where the seams go rather than a rule t
 it already argues for one concrete thing: repository-specific facts belong in one place. `REPO` and
 `NOTES_DIR` are single constants today; the `docs/plans|solutions|inflight` section list is
 hard-coded inside `bin/lib/prior-art.mjs`, and that is the one to lift before it spreads.
+The direction now has an owner: [`ci-inflight-standalone-thesis.md`](ci-inflight-standalone-thesis.md)
+carries the thesis, the seams a kernel-and-configuration split would run along, and the extraction
+decision itself, which is reopened and not taken. This paragraph keeps only the concrete lift.
 
 ## `inflight branch` - the per-branch view
 
