@@ -112,7 +112,17 @@ multiply. This whole feature is candidate STRATEGY.md material ("the engine
 every language re-implements badly" positioning) - fold in via ce-strategy when direction is
 confirmed.
 
-**Envoy's adaptive concurrency filter is live prior art in this exact family, and the owner's
+**Two live prior arts in this exact family, both confirmed from source on 2026-09-05 - so the
+earlier line in this note claiming no known competitor does runtime-discovered per-instance adaptive
+concurrency is WRONG and must be corrected before any public claim.** Uber's uForwarder ships
+`VegasAdaptiveInflightLimiter` wrapping Netflix `concurrency-limits` - TCP Vegas inferring the limit
+from latency drift, which is precisely *discovered from measured service time* - and it even runs a
+static and a shadow adaptive limiter side by side, switching between them.
+[`core-hasten-adjacent-systems-register.md`](core-hasten-adjacent-systems-register.md) owns that row.
+**What differentiates this engine is not that it adapts, but WHAT it adapts**: per-key shard
+admission rather than per-destination inflight count.
+
+**Envoy's adaptive concurrency filter is the second, and the owner's
 direction (2026-09-05) is to study it closely rather than reinvent blindly.** It carries a gradient
 controller that periodically measures request latency and minRTT and recalculates a concurrency
 limit - the same perturb-observe-infer loop this note designs, deployed at scale inside a proxy. The

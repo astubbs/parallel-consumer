@@ -66,6 +66,16 @@ handoff document dated 2026-09-04:
 the InFlight register takes, and for the same reason. Refine the falsifier as the claims sharpen; it
 is a live instrument, not a slogan.
 
+**Run against uForwarder, 2026-09-05 - it passes more clauses than anything else found.** It
+separates ownership from execution, schedules record work with adaptive concurrency, coordinates
+divided capacity spent locally, and explains every wait. **It fails three clauses, and they are the
+ones to lead with:** it does not sit transparently under an existing Kafka application (the app is
+rewritten into a gRPC server), it requires a separate execution cluster (controller plus workers plus
+ZooKeeper), and it has **no semantic ordering at all** - the falsifier's *separate partition ownership
+from semantic ordering* clause cannot be satisfied by a system that surrendered ordering to get
+concurrency. That is the falsifier working: it discriminated on a real system rather than a
+hypothetical one.
+
 ## Five standing falsifiers for the architecture itself
 
 Distinct from the prior-art falsifier above: these are the ways the design could be *wrong* rather
@@ -170,19 +180,72 @@ full. The discriminating clause, stated without a substrate: **does it drive tha
 adaptive global optimisation over measured performance?** Many systems have a limiter, a quota or a
 scheduler; far fewer close the loop from observed behaviour back into a global allocation.
 
-## The nearest Kafka-native neighbour, and the sweep never found it
+## uForwarder - the closest comparator found, and it disproves four claims
 
-| System | Why it is the most serious adjacent evidence yet | Evidence |
-|---|---|---|
-| **Uber uForwarder / Consumer Proxy** | **Decouples Kafka consumption from application workers, adaptively sizes workloads, and continuously re-places workloads across worker capacity** - which lands directly on the complaint this whole design is built around: *do not use your data architecture as your thread pool.* **Start from what is shared, not from what differs: this design is a consumer proxy too** - so is Parallel Consumer - and saying otherwise would be the kind of distinction nobody outside the project would accept. The difference is *position*, and it is concrete rather than architectural taste: **uForwarder requires you to operate another, properly sized cluster. Here the cluster IS your application nodes - all of them.** So the deployment is typically far more horizontally scaled, there is no second fleet to capacity-plan, and scheduling authority is already co-located with the work rather than proxied to somewhere that must itself be sized. It also reasons in **coarser workload-placement units** rather than embedding a key- and ordering-domain scheduler into each execution path. **Serious adjacent evidence, not to be dismissed**, and the natural root for the next sweep - trace its citations and adjacent systems outward. | **claimed** - named in a 2026-09-04 handoff, unverified here |
+**Searched 2026-09-05 against its source, its IDL, its issues and Uber's two blog posts.** It is a
+citation, not a threat - but the "nobody has done adaptive concurrency, sparse frontiers or admission
+control for Kafka" framing does not survive it, and that framing appears in this corpus.
 
-**That this row is new is itself a finding about the 2026-09-05 sweep.** The sweep ran five angles and
-none of them surfaced the closest Kafka-native comparator - because the angles were organised by
-*mechanism* (admission, rate limiting, durable execution, stream elasticity, capacity governance) and
-uForwarder is none of those; it is a **consumption proxy**. The corrected family list below exists
+**Four properties are no longer distinctive, each disproved from source:**
+
+| Property | What uForwarder has |
+|---|---|
+| Adaptive concurrency discovered from measured service time | `VegasAdaptiveInflightLimiter` wrapping Netflix `concurrency-limits` - TCP Vegas, inferring the limit from latency drift. It even runs a static and a shadow adaptive limiter side by side and switches between them |
+| A sparse completion frontier | `AckTrackingQueue` - per-offset `UNSET -> NACKED/CANCELED/ACKED`, committing only the contiguous prefix |
+| Admission as a state before execution | Three stacked gates before dispatch |
+| Every wait attributable to a binding constraint | `KafkaPipelineIssue` is a literal enum of *which* limiter is binding - message rate, inflight count, and so on |
+
+It also delegates capacity and spends it locally: the controller divides a job group's rate and
+inflight quota by partition count and each worker enforces its slice. **So delegation is prior art
+too** - what is missing is the *named shared resource*: the unit is always
+`(cluster, topic, consumer_group)`, there is no way to say three workloads share one database's
+capacity, and there is no renegotiation, only a re-divide when partition count changes.
+
+**Two things survive cleanly, and they are the ones to lead with.**
+
+- **Ordering, and it is the largest single gap.** uForwarder advertises *"Out of order Message
+  delivery"* as a **property, not a limitation**, and there is no key ordering anywhere in its source
+  - the record key is used only for tracing and DLQ metadata. **It buys concurrency by surrendering
+  ordering entirely; Parallel Consumer buys it while keeping key order.** That is structural, not a
+  gap they might close.
+- **Position, and the axis was confirmed rather than assumed.** A separate operated controller and
+  worker cluster, with **ZooKeeper mandatory** - the maintainer states it is required for leader
+  election and job metadata and is unrelated to Kafka dropping ZK. Exactly two Spring profiles,
+  **no embedded or library mode anywhere**, and its own capacity-planning problem solved by an
+  operator-run control loop with a configured per-worker capacity. Workers do not even join a Kafka
+  consumer group - they `assign()` from an assignment the controller holds in ZooKeeper, replacing
+  the rebalance protocol wholesale. Uber runs it at a scale that is itself a fleet to size.
+
+**And the application is rewritten.** It stops being a Kafka consumer and becomes a gRPC server; the
+routing target is a URI the control plane holds, not app config. Migration is a rewrite of the
+consumption path plus an operator ticket - the opposite of *keep your code, replace the runtime
+underneath it*.
+
+**One difference of kind worth keeping precise.** The completion frontier is novel here **in
+durability, not in kind**: Parallel Consumer encodes it into commit metadata so it survives restart
+and rebalance, while uForwarder's lives in worker memory and, when it fills, the escape hatch is not
+a wider frontier but eviction to a dead-letter queue on head-of-line-blocking detection.
+
+**Health, which matters if anyone proposes depending on it rather than citing it:** the README claims
+Apache 2.0 but the repository has **no LICENSE file** and the PR adding one is still open; there is
+no SASL/PLAIN in the OSS build; internals are documented only on an external wiki; and activity is
+largely *merge changes from internal repo* - a monorepo mirror rather than a community project.
+
+**Honest positioning, and it replaces a sentence this corpus currently uses:** *uForwarder is the
+proxy-cluster answer to this problem; this is the embedded answer, and it keeps key ordering.* Never
+*nobody has done this.*
+
+**Seeds for the next sweep, from its own citations:** Confluent's Kafka REST Proxy and Kafka Connect
+- both explicitly considered and rejected in Uber's 2021 write-up, Connect over rebalance latency
+against a hard end-to-end latency requirement - and Netflix `concurrency-limits` as the direct
+algorithmic ancestor. Notably it never mentions SQS, RabbitMQ, Pulsar shared subscriptions, or
+Parallel Consumer.
+
+**Why the earlier sweep missed it** is the durable lesson: its five angles were organised by
+*mechanism*, and a consumption proxy is not a mechanism. The eighteen-family list below exists
 because of that miss.
 
-## Rows added 2026-09-05, all `claimed` and none checked here
+## Rows added 2026-09-05, all `claimed` and none checked here## Rows added 2026-09-05, all `claimed` and none checked here
 
 Named by the owner from reading, recorded so they are not lost, and **not verified in this
 repository** - the evidence rule applies to them exactly as to anything else.
@@ -211,6 +274,15 @@ locally decided dispatch. Graceful degradation when the coordinator is unreachab
 capacity leases delegated to an embedded client library. Divisible or borrowable quota across named
 pools. Predeclared resource requirements. Embedded-library-not-cluster packaging.*
 
+**Added 2026-09-05 by the uForwarder pass, and these are the ones that hurt**, because they were the
+Kafka-specific claims: *adaptive concurrency discovered from measured service time · a sparse
+completion frontier over unresolved work · admission as a state before execution, for Kafka records ·
+every wait attributable to a named binding constraint · dividing a quota and letting each participant
+spend its slice locally.* All five are in uForwarder's source today. The surviving forms are narrower
+and stated in the row above: **key-ordered** concurrent execution, a frontier that is **durable
+because it is encoded into the commit**, and capacity attached to a **named resource shared across
+unrelated workloads** rather than to one topic-and-group.
+
 The register's real use is the opposite of a warning list: each of these is a **design already
 reviewed by somebody else**, free to read. Doorman's design document settles lease expiry semantics,
 refresh intervals and unreachable-vendor fallbacks; Impala settles what decentralised admission with
@@ -227,7 +299,16 @@ shared counters actually costs; DRL quantifies the degrade-versus-over-admit tra
    mechanism - every mechanism examined turned out to be occupied.
 4. **Under the existing dispatch boundary, no application rewrite, nothing in the hot path** - the
    only difference the sweep positively confirmed rather than merely failed to find a counterexample
-   to. Given the primary audience above, this is also the most commercially load-bearing of the four.
+   to. Given the primary audience above, this is also the most commercially load-bearing of the four,
+   and the uForwarder pass confirmed the axis independently: that project is a separate operated
+   ZooKeeper-backed cluster with no library mode, and adopting it rewrites the application's
+   consumption path.
+5. **Key-ordered concurrency, promoted 2026-09-05 to the front of this list.** The closest comparator
+   in the field advertises out-of-order delivery as a *property* and has no key-level scheduling
+   primitive at all. Concurrency beyond partition count *while keeping key order* is the one place
+   the comparison is not close, and it is structural rather than a gap somebody might close. It had
+   been treated as background because it is Parallel Consumer's existing behaviour rather than a new
+   claim - which is exactly how a real differentiator goes unmentioned.
 
 **And the honest form of the conclusion is not "nobody does this".** It is: *nobody does it from this
 position, and the position is what makes the rest cheap.* Sitting between a log somebody already runs

@@ -22,22 +22,23 @@ completed. New questions arrive faster than old ones close.
 
 ## Hasten - highest value first
 
-- **Uber uForwarder / Consumer Proxy - start here.** The nearest Kafka-native neighbour found so far
-  and absent from the corpus until 2026-09-05: it decouples Kafka consumption from application
-  workers, adaptively sizes workloads and continuously re-places them across worker capacity.
-  *Settles:* the falsifier's hardest clauses at once, and it is the right root for the next sweep -
-  trace its citations and adjacent systems outward rather than starting from mechanisms again.
-  **The reason it was missed is the lesson:** the first sweep's angles were organised by mechanism,
-  and a consumption proxy is not a mechanism - the register now carries an eighteen-family list
-  instead.
-
-- **ENVOY, and it is top of the list because the sweep claimed this angle and did not run it.** The
-  2026-09-05 brief named Envoy's global rate limiting twice and the sweep returned zero findings and
-  zero sources on it, while covering Doorman, DRL and Gubernator in the same angle.
-  [`core-envoy-is-the-other-half.md`](core-envoy-is-the-other-half.md) owns why that is worse than an
-  ordinary miss - three of our own notes already describe the design as "the Envoy shape". *Settles:*
-  the closest live comparator for the capacity-lease question, the honest answer to *is this just an
-  embedded Envoy*, and whether the run-both synergy reading survives contact with their model.
+- **DONE 2026-09-05: Uber uForwarder.** Searched against source, IDL, issues and blog posts;
+  [`core-hasten-adjacent-systems-register.md`](core-hasten-adjacent-systems-register.md) owns the
+  result. It disproved four claims and confirmed the position axis. **Its own citations are the next
+  targets:** Confluent's Kafka REST Proxy and Kafka Connect, both explicitly considered and rejected
+  in Uber's 2021 write-up - Connect over rebalance latency against a hard end-to-end latency
+  requirement, which is a measured argument somebody else already made about a system we also compare
+  against.
+- **The systems uForwarder never mentions**, which is its own signal: SQS, RabbitMQ, Pulsar shared
+  subscriptions, and Parallel Consumer itself. *Settles:* whether the queue-semantics-over-a-log
+  family has an answer nobody in this space cites - Pulsar shared subscriptions especially, since
+  that is a broker offering the thing Kafka lacks.
+- **DONE 2026-09-05: Envoy**, both mechanisms, against its documentation, protos and source.
+  [`core-envoy-is-the-other-half.md`](core-envoy-is-the-other-half.md) owns the result: the
+  discriminating clause answers **no**, we are ahead on the controller variant, RLQS validates the
+  delegated shape, and a co-deployment interference risk surfaced that neither project's docs
+  address. **Left open there:** what the RLQS server's allocation policy actually does, which is
+  unknowable from public sources since no open-source server exists.
 - **The performance-ceiling comparison against a mesh's model.** A benchmark, not an argument -
   nobody here has measured either side. *Settles:* whether the placement advantage is also a
   throughput advantage, or only an adoption-cost one. Do not assert either way before it runs.
