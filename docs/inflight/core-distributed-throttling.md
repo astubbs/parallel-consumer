@@ -55,18 +55,28 @@ function") belongs to [`web-control-plane.md`](web-control-plane.md).
 tokens a second, spread as one every 250ms instead of four at the top of the second; each shard
 assigned its own slot; random jitter *within* the slot so shards sharing one do not align.
 
-**CORRECTED 2026-09-05: the mechanism this note designs is Google Doorman, and has been for years.**
-Renewable time-bounded capacity leases, vended to an *embedded client library* that then decides
-in-process with no per-call permit server, with a configured or server-computed safe capacity to fall
-back on when the vendor is unreachable - verified in Doorman's source, not merely its prose. The
-conservation-law safety bias is a stricter position *within* that explored space rather than a new
-one: Doorman makes the same choice a per-client configuration option and ships an explicitly
-contract-violating *optimistic* mode beside it. **What survives is the substrate alone** - carrying
-divisible leases on a durable log, which Doorman (server tree plus etcd), SIGCOMM 2007 Distributed
-Rate Limiting (UDP gossip), Kueue (API server) and DBOS (Postgres) each miss on a different axis.
-Treat Doorman's design document as a free design review of this note rather than as a competitor.
+**ANSWERED 2026-09-05: Google Doorman has shipped this mechanism for years, and its design document
+is the most useful thing this note could read.** Renewable time-bounded capacity leases, vended to an
+*embedded client library* that then decides in-process with no per-call permit server, with a
+configured or server-computed safe capacity to fall back on when the vendor is unreachable - verified
+in Doorman's source, not merely its prose. It is archived read-only since 2024-11-29 and was
+self-described alpha, so it is an answered question rather than a live competitor; prior art does not
+expire. **Treat it as a free design review**: it already settled lease expiry semantics, refresh
+intervals, and what a client does when the vendor is gone, and it states plainly that a cooperative
+system offers no protection against misbehaving clients.
+
+The conservation-law safety bias sits inside that same explored space rather than outside it -
+Doorman makes the equivalent choice a per-client configuration option and ships an explicitly
+contract-violating *optimistic* mode beside it, while DRL's shipped designs bias toward
+over-admission under partition. The strict corner is unoccupied, and both papers explicitly defer the
+adversarial analysis where it would matter.
+
+**What is unanswered is the substrate** - carrying divisible leases on a durable log, which Doorman
+(server tree plus etcd), SIGCOMM 2007 Distributed Rate Limiting (UDP gossip), Kueue (API server) and
+DBOS (Postgres) each miss on a different axis. And what none of them offers is any of it to a team
+that already runs Kafka and did not set out to adopt a rate limiter.
 [`core-hasten-adjacent-systems-register.md`](core-hasten-adjacent-systems-register.md) owns the
-verdicts; the dated sweep owns the evidence.
+per-question state; the dated sweep owns the evidence.
 
 Prior art, stated so no novelty claim escapes: **spreading one process's permits evenly is the
 leaky bucket as a meter**, and Guava's `RateLimiter`, GCRA (redis-cell in the ideation's table) and

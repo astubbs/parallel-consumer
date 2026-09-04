@@ -83,20 +83,21 @@ should absorb this framing).
 
 ## Prior art, stated before anyone over-claims
 
-**CORRECTED 2026-09-05 by a real sweep, and the correction goes the wrong way for this note.** The
-paragraph below was written from reasoning rather than from a survey, and it under-stated how
-occupied this ground is. Pre-execution admission - *waiting is a scheduling state, not an execution
-state* - is **fully occupied prior art**, verified unanimously against four independent production
-systems: Kueue (a suspended Job's Pods are never created at all, so a queued Workload is not even a
-Pending pod), CockroachDB, Impala, and Restate 1.7's virtual queues. **The distinction may not be
-claimed as this project's.** What survives is only the scoping clause - none of them admit records
-already durably resident in an external log that somebody else owns.
+**ANSWERED 2026-09-05 by a real sweep, and the paragraph below understated how well-trodden this
+ground is.** Pre-execution admission - *waiting is a scheduling state, not an execution state* - is
+implemented and shipped in at least four independent production systems, verified unanimously:
+Kueue (a suspended Job's Pods are never created at all, so a queued Workload is not even a Pending
+pod), CockroachDB, Impala, and Restate 1.7's virtual queues. **Name theirs before describing ours** -
+not because we ever claimed the distinction, but because someone who knows the field will supply the
+comparison anyway, and it is stronger coming from us. What none of them does is admit records already
+durably resident in an external log that somebody else owns, without asking their user to adopt a new
+system to get it.
 [`core-hasten-adjacent-systems-register.md`](core-hasten-adjacent-systems-register.md) owns the
-verdicts and
+per-question state and
 [`docs/plans/2026-09-05-001-investigate-hasten-prior-art-sweep.md`](../plans/2026-09-05-001-investigate-hasten-prior-art-sweep.md)
-owns the evidence. One precision the sweep insists on: Impala collapses ADMITTED and RUNNING into a
-single transition, so it occupies **the pre-execution admission distinction**, not the four-state
-framing this note names.
+owns the evidence. One precision worth carrying: Impala collapses ADMITTED and RUNNING into a single
+transition, so it occupies **the pre-execution admission distinction**, not the four-state framing
+this note names.
 
 
 Pre-execution admission control is not novel: CockroachDB explicitly moves queuing out of the Go

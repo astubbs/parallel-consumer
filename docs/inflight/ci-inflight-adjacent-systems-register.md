@@ -306,6 +306,9 @@ Dated entries, newest first. An entry names the row that moved and what it does 
 
 ## The next sweep, and it is not a sweep
 
+**The queue lives in [`process-prior-art-research-targets.md`](process-prior-art-research-targets.md)**, which owns every outstanding target across both projects and what each would settle. Repeated in outline here only:
+
+
 The 2026-09-05 pass changed the shape of the remaining work. Surveying more products has diminishing
 returns; the open questions now need **source archaeology and conversations**, in this order:
 

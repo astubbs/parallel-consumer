@@ -50,30 +50,66 @@ carry the vote where one exists, because a 2-1 is not a 3-0.
 Question 5 is the one that has so far separated this design from every durable-execution runtime;
 question 8 is the one nothing found answers the way this design proposes to.
 
-## The verdict per claim, after one sweep
+## Read this before the table below
 
-| Claim | Status | Occupied by |
+**Nothing here was ever a claim.** This corpus explores product space: *X would be good - does anyone
+do it, how, and if not why not?* The sweep was run in adversarial mode because that is what makes a
+language model search hard rather than agreeably; **"refuted" and "disproved" are instructions to the
+instrument, not conclusions about what we believed.** A row reading REFUTED means *this question is
+already answered, and here is who answered it* - not *we thought we invented this and were wrong*.
+That distinction is the difference between a useful register and a false history, and the dated
+sweep's own verdict language is preserved in
+[`docs/plans/2026-09-05-001-investigate-hasten-prior-art-sweep.md`](../plans/2026-09-05-001-investigate-hasten-prior-art-sweep.md)
+as the instrument's output rather than as ours.
+
+## Why idea-novelty is close to irrelevant here
+
+The thing that matters is **whether the implementation is novel and useful in its placement**, and
+placement is the whole argument. Two audiences, and they are not equally important:
+
+- **Primary: teams already running Kafka**, who are not shopping for a scheduler at all. For them
+  this arrives as capabilities they get *for free* - no new cluster, no second system to operate, no
+  application rewrite - because the runtime is already sitting where their work is dispatched.
+  Doorman having invented lease-vending in no way helps that team: they were never going to adopt
+  Doorman, deploy its server tree and rewrite their call sites.
+- **Byproduct: teams already on a scheduler or orchestrator.** Becoming attractive to them is a
+  consequence of being good, not the goal. **Pulling people off an existing scheduler is explicitly
+  not the strategy**, which is why "someone else already implements this mechanism" costs far less
+  than it appears to.
+
+So the useful question a row answers is not *is the idea new* but **is anyone delivering this to
+somebody who already has Kafka and did not ask for a scheduler.** Every occupied row so far answers
+no, and each one requires the user to adopt a whole new system to get the capability.
+
+## The state per question, after one sweep
+
+| Question explored | Already answered? | By whom, and what it costs their user |
 |---|---|---|
-| **1. Admission is a scheduling state, not an execution state** | **REFUTED as novel** (3-0 x4) | Kueue, CockroachDB, Impala, Restate. Only the scoping clause survives: none admit records already durable in an external log somebody else owns |
-| **2. Delegated capacity leases, no cluster, no per-call permit server** | **PARTIALLY REFUTED** | Doorman occupies the mechanism outright - renewable time-bounded leases to an embedded client that decides in-process. Residual: **the durable log as coordination substrate**, which Doorman (server tree + etcd), DRL (UDP gossip), Kueue (API server) and DBOS (Postgres) each miss on a different axis |
-| **3. Global intelligence, local execution** | **REFUTED as novel**, most thoroughly of the set | Impala, Doorman, and SIGCOMM 2007 Distributed Rate Limiting - three decades, three layers |
-| **Conservation-law safety bias** | **WEAKENED, not refuted** | Doorman makes it a per-client configuration option and ships an explicitly contract-violating *optimistic* mode; DRL's shipped designs bias the other way |
-| **4. Prescience - backlog indexed by declared requirements** | **NO DIRECT HIT** | Nothing found. But requirement *declaration* is heavily occupied (Slurm GRES, AWS Batch consumable resources, Kueue requests, US 7,813,276) - the unoccupied part is only the **index over the committed backlog** plus horizon and feasibility reasoning |
-| **5. The composite** | **NO DIRECT HIT**, medium confidence | Pieces occupied at different layers with incompatible topologies; synthesized rather than directly verified |
-| **No rewrite, nothing in the per-call hot path** | **DIFFERENTIATOR CONFIRMED** (3-0 x3) | Restate and DBOS both fail it - Restate pushes rules cluster-side, DBOS hits Postgres per dequeue |
+| **1. Admission is a scheduling state, not an execution state** | **Answered** (3-0 x4) | Kueue, CockroachDB, Impala, Restate. Only the scoping clause survives: none admit records already durable in an external log somebody else owns |
+| **2. Delegated capacity leases, no cluster, no per-call permit server** | **Answered in part** | Doorman occupies the mechanism outright - renewable time-bounded leases to an embedded client that decides in-process. Residual: **the durable log as coordination substrate**, which Doorman (server tree + etcd), DRL (UDP gossip), Kueue (API server) and DBOS (Postgres) each miss on a different axis |
+| **3. Global intelligence, local execution** | **Answered, most emphatically of the set** | Impala, Doorman, and SIGCOMM 2007 Distributed Rate Limiting - three decades, three layers |
+| **Conservation-law safety bias** | **Explored space, stricter corner unoccupied** | Doorman makes it a per-client configuration option and ships an explicitly contract-violating *optimistic* mode; DRL's shipped designs bias the other way |
+| **4. Prescience - backlog indexed by declared requirements** | **No answer found** | Nothing found. But requirement *declaration* is heavily occupied (Slurm GRES, AWS Batch consumable resources, Kueue requests, US 7,813,276) - the unoccupied part is only the **index over the committed backlog** plus horizon and feasibility reasoning |
+| **5. The composite** | **No answer found**, medium confidence | Pieces occupied at different layers with incompatible topologies; synthesized rather than directly verified |
+| **No rewrite, nothing in the per-call hot path** | **Confirmed as a real difference** (3-0 x3) | Restate and DBOS both fail it - Restate pushes rules cluster-side, DBOS hits Postgres per dequeue |
 
-## What may never be claimed as novel
+## Where the answers already exist - say so first, always
 
-The register's most-used section, by the same logic as its InFlight sibling. Each is disprovable on
-sight by anyone who knows the field, and the credibility cost of being corrected on your own novelty
-claim exceeds anything the claim buys:
+Not a prohibition, a courtesy and a credibility move: on each of these, somebody has a shipped
+answer, so name theirs before describing ours. Being told "that's Doorman" by someone who knows the
+field costs more than the sentence ever bought.
 
 *Pre-execution admission control. Queueing work before it starts. Globally coordinated capacity with
 locally decided dispatch. Graceful degradation when the coordinator is unreachable. Renewable
 capacity leases delegated to an embedded client library. Divisible or borrowable quota across named
 pools. Predeclared resource requirements. Embedded-library-not-cluster packaging.*
 
-## What survives, stated narrowly enough to be attacked
+The register's real use is the opposite of a warning list: each of these is a **design already
+reviewed by somebody else**, free to read. Doorman's design document settles lease expiry semantics,
+refresh intervals and unreachable-vendor fallbacks; Impala settles what decentralised admission with
+shared counters actually costs; DRL quantifies the degrade-versus-over-admit tradeoff.
+
+## What is unanswered, and what the arrangement buys - stated narrowly enough to be attacked
 
 1. **The substrate combination** - divisible capacity leases carried on a *durable log* to embedded
    instances, with no coordination cluster and nothing per-call in the hot path. A combination
@@ -83,7 +119,15 @@ pools. Predeclared resource requirements. Embedded-library-not-cluster packaging
 3. **The composite**, resting on integration and on the two residuals above, never on any individual
    mechanism - every mechanism examined turned out to be occupied.
 4. **Under the existing dispatch boundary, no application rewrite, nothing in the hot path** - the
-   only differentiator the sweep positively confirmed rather than failed to refute.
+   only difference the sweep positively confirmed rather than merely failed to find a counterexample
+   to. Given the primary audience above, this is also the most commercially load-bearing of the four.
+
+**And the honest form of the conclusion is not "nobody does this".** It is: *nobody does it from this
+position, and the position is what makes the rest cheap.* Sitting between a log somebody already runs
+and execution they already own is what turns admission, capacity governance, attribution and scaling
+advice from four products into feature arms of one architecture - each arriving without a cluster,
+a rewrite, or a second thing to operate. That is a claim about **arrangement and placement**, which
+is testable, rather than about **invention**, which the table above shows is mostly not the point.
 
 ## The caveat that governs how much of this to believe
 
@@ -102,6 +146,9 @@ the same one
 owns, and it applies to this register's own output.
 
 ## The next sweep
+
+**The queue lives in [`process-prior-art-research-targets.md`](process-prior-art-research-targets.md)**, which owns every outstanding target across both projects and what each would settle. Repeated in outline here only:
+
 
 In priority order, and the first is not optional before any public claim:
 

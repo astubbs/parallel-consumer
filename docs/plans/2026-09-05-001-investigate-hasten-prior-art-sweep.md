@@ -17,19 +17,44 @@ survey; do the prior-art sweep before any public 'first' claim"* - and nobody ha
 owner asked for it directly after the equivalent InFlight sweep, saying he would hate to discover an
 existing project like Hasten later.
 
+## Framing, corrected the same day by the owner - read before the findings
+
+**This corpus was never claiming novelty; it was exploring product space.** The sweep was run in
+adversarial mode - *try to disprove this* - because that is what makes a language model search hard
+instead of agreeably. **"Refuted" and "disproved" throughout the findings below are the instrument's
+verdict language, not a record of anything we believed and lost.** The right reading of a REFUTED row
+is *this question already has a shipped answer, and here is whose* - never *we thought we invented
+this*. The first version of this section was written the other way round and imputed claims that were
+never made; it is corrected here rather than reworded silently, because a dated record that
+misdescribes its own history is worse than one that shows the correction.
+
+**And idea-novelty is close to irrelevant to the actual question**, which is whether the
+*implementation* is novel and useful **in its placement**. The primary audience is teams already
+running Kafka who never set out to adopt a scheduler; for them the value is capabilities arriving
+without a new cluster, a second system to operate, or an application rewrite. Doorman having invented
+lease-vending does not help that team, because they were never going to deploy Doorman's server tree.
+Attracting teams already on a scheduler is a byproduct, not the strategy.
+
 ## The one-paragraph answer
 
-Most of the design's individually-stated distinctives already exist, and two are thoroughly
-occupied. **Claims 1 and 3 should be dropped as novelty arguments entirely**, and **claim 2 should
-be narrowed to its coordination substrate**, because the lease-delegation mechanism itself is
-nineteen-year-old prior art. What survives the searched corpus is the substrate combination
-(divisible capacity leases carried on a durable log to embedded instances, with no coordination
-cluster and no per-call permit server), claim 4 (the inverted index over a committed backlog keyed
-by producer-declared requirements), and the composite of claim 5 - **and the surviving gaps are
-unproven rather than disproven, in precisely the region closest to this system's own substrate.**
+Most of the design's individually-explored ideas already have shipped answers elsewhere, and two are
+answered emphatically: pre-execution admission as a scheduling state, and the
+globally-coordinated/locally-decided split. The lease-delegation mechanism of claim 2 is Doorman's
+and is nineteen-year-old territory; what is unanswered there is the **substrate** - divisible leases
+carried on a durable log to embedded instances with no coordination cluster and nothing per-call in
+the hot path, which Doorman (server tree plus etcd), DRL (UDP gossip), Kueue (API server) and DBOS
+(Postgres) each miss on a different axis. Also unanswered: claim 4's index over a committed backlog
+keyed by producer-declared requirements, and the composite of claim 5.
 
-**This does not say the design is wrong.** Four independent teams converging on the same shape is
-evidence the shape is right. What the sweep kills is the pitch, not the engineering.
+**Convergence is a good sign, not a bad one.** Four independent teams reaching the same shapes is
+evidence the shapes are right. What it changes is how the work should be *described* - name theirs
+first - and where effort is best spent: not on re-deriving admission control, but on the substrate,
+on Prescience, and on the one difference the sweep positively confirmed rather than merely failed to
+find a counterexample to: **no application rewrite and nothing in the per-call hot path.**
+
+**The conclusion is not "nobody does this".** It is *nobody does it from this position*, and the
+position is what makes the rest cheap - which is a testable claim about arrangement, not about
+invention.
 
 ## The findings
 

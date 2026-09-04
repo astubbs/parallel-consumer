@@ -94,12 +94,12 @@ named with it.
 
 3. **Global intelligence, local execution.** Coordinate constraints and capacity globally; dispatch
    on the hot path locally, from delegated state. **The most load-bearing law here, and the one that
-   had no live owner at all before this file took it.** It is also, as of a 2026-09-05 prior-art
-   sweep, **the most thoroughly disproven of this corpus's novelty claims** - occupied three times
-   over by Impala, Google Doorman and SIGCOMM 2007 Distributed Rate Limiting, across three decades
-   and three layers. That does not weaken it as a *law*: it is still the rule the rest is generated
-   from, and independent convergence is evidence it is the right rule. It weakens it only as a
-   *claim*, and it may not be presented as this project's idea.
+   had no live owner at all before this file took it.** A 2026-09-05 prior-art sweep found it
+   **independently arrived at three times over** - Impala, Google Doorman and SIGCOMM 2007
+   Distributed Rate Limiting, across three decades and three layers. That is a good result for a law:
+   three unrelated systems reaching the same split is evidence it is the right one. It means only
+   that the split is not ours to introduce, so name theirs first; what none of them delivers is any
+   of it to a team that already runs Kafka and did not set out to adopt a scheduler.
    [`inflight/core-hasten-adjacent-systems-register.md`](inflight/core-hasten-adjacent-systems-register.md)
    owns which system occupies what. Fleet coordination's *"every runtime decides
    locally, collectively one scheduler"* is this law at the fleet; delegated credits are it at a
