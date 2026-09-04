@@ -94,7 +94,14 @@ named with it.
 
 3. **Global intelligence, local execution.** Coordinate constraints and capacity globally; dispatch
    on the hot path locally, from delegated state. **The most load-bearing law here, and the one that
-   had no live owner at all before this file took it.** Fleet coordination's *"every runtime decides
+   had no live owner at all before this file took it.** It is also, as of a 2026-09-05 prior-art
+   sweep, **the most thoroughly disproven of this corpus's novelty claims** - occupied three times
+   over by Impala, Google Doorman and SIGCOMM 2007 Distributed Rate Limiting, across three decades
+   and three layers. That does not weaken it as a *law*: it is still the rule the rest is generated
+   from, and independent convergence is evidence it is the right rule. It weakens it only as a
+   *claim*, and it may not be presented as this project's idea.
+   [`inflight/core-hasten-adjacent-systems-register.md`](inflight/core-hasten-adjacent-systems-register.md)
+   owns which system occupies what. Fleet coordination's *"every runtime decides
    locally, collectively one scheduler"* is this law at the fleet; delegated credits are it at a
    resource; the line between forcing and offering a per-call decision is it at the deployment. Its
    failure mode is the law with the global half removed: the local controller keeps discovering

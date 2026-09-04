@@ -83,6 +83,22 @@ should absorb this framing).
 
 ## Prior art, stated before anyone over-claims
 
+**CORRECTED 2026-09-05 by a real sweep, and the correction goes the wrong way for this note.** The
+paragraph below was written from reasoning rather than from a survey, and it under-stated how
+occupied this ground is. Pre-execution admission - *waiting is a scheduling state, not an execution
+state* - is **fully occupied prior art**, verified unanimously against four independent production
+systems: Kueue (a suspended Job's Pods are never created at all, so a queued Workload is not even a
+Pending pod), CockroachDB, Impala, and Restate 1.7's virtual queues. **The distinction may not be
+claimed as this project's.** What survives is only the scoping clause - none of them admit records
+already durably resident in an external log that somebody else owns.
+[`core-hasten-adjacent-systems-register.md`](core-hasten-adjacent-systems-register.md) owns the
+verdicts and
+[`docs/plans/2026-09-05-001-investigate-hasten-prior-art-sweep.md`](../plans/2026-09-05-001-investigate-hasten-prior-art-sweep.md)
+owns the evidence. One precision the sweep insists on: Impala collapses ADMITTED and RUNNING into a
+single transition, so it occupies **the pre-execution admission distinction**, not the four-state
+framing this note names.
+
+
 Pre-execution admission control is not novel: CockroachDB explicitly moves queuing out of the Go
 scheduler into admission queues; Impala queues queries against cluster limits; Kubernetes will not
 start an unschedulable pod. What they own is the request/query/workload. What this engine owns is

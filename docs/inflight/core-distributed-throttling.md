@@ -55,6 +55,19 @@ function") belongs to [`web-control-plane.md`](web-control-plane.md).
 tokens a second, spread as one every 250ms instead of four at the top of the second; each shard
 assigned its own slot; random jitter *within* the slot so shards sharing one do not align.
 
+**CORRECTED 2026-09-05: the mechanism this note designs is Google Doorman, and has been for years.**
+Renewable time-bounded capacity leases, vended to an *embedded client library* that then decides
+in-process with no per-call permit server, with a configured or server-computed safe capacity to fall
+back on when the vendor is unreachable - verified in Doorman's source, not merely its prose. The
+conservation-law safety bias is a stricter position *within* that explored space rather than a new
+one: Doorman makes the same choice a per-client configuration option and ships an explicitly
+contract-violating *optimistic* mode beside it. **What survives is the substrate alone** - carrying
+divisible leases on a durable log, which Doorman (server tree plus etcd), SIGCOMM 2007 Distributed
+Rate Limiting (UDP gossip), Kueue (API server) and DBOS (Postgres) each miss on a different axis.
+Treat Doorman's design document as a free design review of this note rather than as a competitor.
+[`core-hasten-adjacent-systems-register.md`](core-hasten-adjacent-systems-register.md) owns the
+verdicts; the dated sweep owns the evidence.
+
 Prior art, stated so no novelty claim escapes: **spreading one process's permits evenly is the
 leaky bucket as a meter**, and Guava's `RateLimiter`, GCRA (redis-cell in the ideation's table) and
 nginx's `limit_req` without `nodelay` all do it - it is thirty years old from ATM traffic shaping.
