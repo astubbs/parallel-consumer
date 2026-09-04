@@ -204,13 +204,34 @@ public enum TransactionalClaim {
     NO_PRODUCE_WITHOUT_ITS_OFFSET(Source.OPTIONS_JAVADOC,
             "The system must prevent records from being produced to the brokers whose source consumer record "
                     + "offsets has not been included in this transaction.",
-            Status.PROVED, "ProducerManagerTest#commitLockIsGrantedOnlyAfterTheProducedWorkReachesTheMailbox, with "
-            + "ProducerManagerTest#producedRecordsCantBeInTransactionWithoutItsOffsetDirect covering the outcome and "
-            + "the docs/plans/2026-08-03-001 §11 guard. Negative control observed (U3): releasing the produce lock "
+            Status.REFUTED, "PROVED on the control-loop commit path; REFUTED on the revoke path, which is why the "
+            + "status is REFUTED - the claim is written as a property of the system, and one reachable commit path "
+            + "breaks it. "
+            + "The control-loop half: ProducerManagerTest#commitLockIsGrantedOnlyAfterTheProducedWorkReachesTheMailbox, "
+            + "with ProducerManagerTest#producedRecordsCantBeInTransactionWithoutItsOffsetDirect covering the outcome "
+            + "and the docs/plans/2026-08-03-001 §11 guard. Negative control observed (U3): releasing the produce lock "
             + "before the mailbox handoff, with the 400ms window §11's experiment used, failed 3/3 with 'the work "
             + "reaches the controller's mailbox only after its record was sent' - the commit had completed while the "
             + "work was still not in the mailbox. Position control: the same 400ms spent inside the lock, before the "
-            + "handoff, passed 2/2, so it is the ordering and not the added latency"),
+            + "handoff, passed 2/2, so it is the ordering and not the added latency. "
+            + "The revoke half, 2026-09-03: ProducerManagerTest#aRevokeTimeCommitIncludesTheOffsetOfEveryRecordItAlreadyProduced "
+            + "is RED 5/5, deterministically, and is quarantined rather than deleted. Holding the commit lock is only "
+            + "half the contract; the other half is DRAINING the mailbox before collecting offsets, because "
+            + "PartitionState#onSuccess - the only thing that marks a partition dirty on a success - is reachable from "
+            + "AbstractParallelEoSStreamProcessor#processWorkCompleteMailBox and nowhere else in main. The control loop "
+            + "does both, in that order. tryCommitOffsetsOnRevoke does the first and not the second, so it commits a "
+            + "transaction containing a record whose source offset it omits: output committed, input not, and the next "
+            + "owner reprocesses it. Control arm observed: "
+            + "#aRevokeTimeCommitIncludesThatOffsetWhenTheMailboxIsDrainedFirst is identical but for a "
+            + "processWorkCompleteMailBox call inserted before the revoke, and it passes - so the drain is the term, "
+            + "not added latency or anything else the revoke does. "
+            + "The lock discipline makes this MORE reachable, not less: cleanUpContext is the single release point and "
+            + "runs strictly after the batch is mailboxed, so a returned produce lock GUARANTEES the work is already "
+            + "queued, and a commit granted the write lock always has undrained work in front of it. "
+            + "Not fixed here deliberately - the revoke callback runs on the broker-poll thread and the drain mutates "
+            + "control-thread-confined WorkManager state, so the one-line fix is the cross-thread mutation that "
+            + "corrupted the out-for-processing counter in astubbs#29. "
+            + "docs/inflight/core-revoke-commit-skips-the-work-mailbox-drain.md"),
 
     /**
      * C10 - holding the commit lock stops processing for the duration of the commit.

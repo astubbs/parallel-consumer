@@ -82,10 +82,14 @@ Rules (full discipline in [`docs/testing.md`](testing.md), AGENTS.md, and the `@
 
 ## Currently quarantined
 
-The one entry below is an unreliable failure rather than a deterministic one, so it carries
-`flapping = true`: a pass proves nothing and the lane reports it without demanding action. It was never
-hidden by the surefire retry astubbs#224 removed, because the test did not run in a gating lane until
-the PR that quarantines it.
+Two entries, and they are opposite kinds. `MultiInstanceRebalanceTest.largeNumberOfInstances` is an
+unreliable failure, so it carries `flapping = true`: a pass proves nothing and the lane reports it
+without demanding action. It was never hidden by the surefire retry astubbs#224 removed, because the
+test did not run in a gating lane until the PR that quarantines it.
+`ProducerManagerTest.aRevokeTimeCommitIncludesTheOffsetOfEveryRecordItAlreadyProduced` is the other
+kind - **deterministic**, so it is left at the annotation's default `flapping = false` and a PASS is
+strict-xfail: the lane will open a merge-blocking thread demanding the annotation and this entry be
+deleted, which is correct, because the only way it passes is the defect being fixed.
 
 **The other entry that stood here has gone, and not by a lapse.**
 `ProducerManagerTest.producedRecordsCantBeInTransactionWithoutItsOffsetDirect` is astubbs#262's rule-3
@@ -114,3 +118,27 @@ earlier, diagnosed and fixed on master by astubbs#351 - it asserted an offset it
   check that fails about one run in ten. The quarantine lands in the same change as the enablement,
   so the test never spends a day blocking merges on an unexplained stall. If the enablement were
   ever reverted, this entry should go with it.
+
+- [ ] `ProducerManagerTest.aRevokeTimeCommitIncludesTheOffsetOfEveryRecordItAlreadyProduced` - a
+  **diagnosed, deterministic** exactly-once defect on the revoke path, red 5/5 with no broker, no
+  load and no timing involved. The revoke-time commit
+  (`AbstractParallelEoSStreamProcessor#tryCommitOffsetsOnRevoke`) collects offsets without first
+  draining the controller's work mailbox, and `PartitionState#onSuccess` - the only thing that marks
+  a partition dirty on a success - is reachable from `processWorkCompleteMailBox` and nowhere else in
+  main. So the commit publishes a transaction containing a record whose source offset it omits:
+  output committed, input not, and the next owner reprocesses it. Observed: it sends offset 1 where 2
+  is required. Its sibling `#aRevokeTimeCommitIncludesThatOffsetWhenTheMailboxIsDrainedFirst` is the
+  control arm - identical but for a `processWorkCompleteMailBox` call inserted before the revoke -
+  and passes, so the drain is the responsible term. Master-state and older than the branch that found
+  it: `onPartitionsRevoked` has never drained. Diagnosis, the disproved unreachability argument, and
+  the candidate fixes:
+  [`docs/inflight/core-revoke-commit-skips-the-work-mailbox-drain.md`](inflight/core-revoke-commit-skips-the-work-mailbox-drain.md).
+  Unowned - no fix PR exists, deliberately.
+
+  **Why this is quarantined rather than fixed, which is unusual for a defect this well understood.**
+  The obvious one-line fix - drain from `onPartitionsRevoked` - runs on the broker-poll thread and
+  mutates control-thread-confined `WorkManager` state. That is the same shape of change that
+  corrupted `numberRecordsOutForProcessing` in astubbs#29, measured at `-8, -16, -20, -20, -20`
+  against a truth of 0. The fix is a thread-ownership decision at the commit seam, wanting its own
+  change and its own reviewer; the note lists the candidates and what each one costs. Quarantine
+  keeps the proof executing in the meantime, which `@Disabled` would not.
