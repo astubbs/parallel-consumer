@@ -94,12 +94,33 @@ original had never been written down:
 > relevant conclusions, relate those versions to PRs/issues/code and inferred conceptual families,
 > and deliver the relevant disagreements without first reconciling them into canonical state.
 
-The figures are the test's shape, not a measurement of this repository. It earns its place because
+**The owner endorsed it outright** - *"Your falsifier is excellent"* - so it is the one thing in this
+note that is settled rather than proposed. The figures are the test's shape, not a measurement of
+this repository. It earns its place because
 the sweep found systems that satisfy most of it: an enterprise work graph with typed and inferred
 edges serving coding agents, cross-tool memory with contradiction detection and proactive injection,
 Git-native distributed collaboration objects. **The clause none of them reached is the first one**,
 and [`ci-inflight-adjacent-systems-register.md`](ci-inflight-adjacent-systems-register.md) owns
 which system got closest and why.
+
+## The scenario that would demonstrate it
+
+The concrete form of the falsifier, and the thing to build a demo around rather than a feature list.
+An agent is working on `fix/producer-race`, and InFlight surfaces, as one subgraph with every
+assertion's origin attached:
+
+- a divergent investigation on another local branch;
+- an upstream fork's branch carrying a *different* fix;
+- the GitHub PR, and a Jira incident;
+- a decision Cortex extracted six months ago from a Slack thread;
+- GitNexus saying the affected method sits on a particular runtime path;
+- Backlog.md saying a task is complete, while another branch holds a finding that contradicts it.
+
+**That last pair is the whole thesis in one line** - two authorities disagree, and the answer is to
+show both with their provenance rather than to decide. The scenario is also the argument against
+absorbing the neighbours: presenting it demonstrates that InFlight is a layer *above* heterogeneous
+intelligence systems, which is a far stronger validation than having copied somebody's Slack
+connector.
 
 The coordination failure this addresses is the one parallel agents create: A discovers assumption X
 is false; B is already building on X; C fixes the cause on a third branch; D rediscovers it. An
@@ -153,7 +174,10 @@ as the principles a standalone project would state up front.
    vanish from a traversal. `bin/inflight.mjs`'s header states the exit-code half of this rule.
 6. **Every edge carries its provenance and its epistemic class.** Authoritative (PR heads branch),
    declared (a note says *depends on astubbs#333*), inferred (an association derived from reachable
-   explicit edges, with the path that produced it). A literal `depends on` never has the same
+   explicit edges, with the path that produced it). Stated as the graph should read it: *this edge
+   was **stated** by GitHub · **inferred** by Cortex · **structurally extracted** by GitNexus ·
+   **inferred** by InFlight* - four origins, and structural extraction is worth keeping distinct
+   from inference because a parser's answer and a model's guess are not the same kind of claim. A literal `depends on` never has the same
    standing as an embedding's guess, and an agent can always ask *why does InFlight think these are
    connected?*
 7. **One implementation of intelligence, many implementations of ergonomics.** Shared verbatim with
@@ -253,6 +277,26 @@ as the principles a standalone project would state up front.
   and querying?* Localised in branch aggregation - fork it. Pervading every storage and query API -
   take the ideas instead, because every internal API expecting one task per id is an assumption this
   project exists to reject.
+  **Why a fork rather than a plugin, stated precisely:** its manifesto treats its own CLI and product
+  model as canonical and MCP as an optional or legacy adapter, so the semantics InFlight needs to
+  mutate sit deeper than any extension point can comfortably reach - and the directions it needs were
+  among the ones already declined. That combination is exactly when a friendly OSS fork is the right
+  move rather than a rude one.
+  **The two pipelines, side by side**, which is the real reason Cortex is a sensor and Backlog a
+  shell:
+
+  ```
+  Cortex     raw event -> extraction -> canonical-ish memory object -> graph
+  InFlight   native evidence -> objective normalisation -> graph layer per ref/perspective
+             -> derived assertions and inferences, each with provenance -> context projection
+  ```
+
+  **The layer breakdown that follows**, recorded so a later session does not re-derive it: a
+  **Backlog-derived shell** (CLI, native docs, task and work UX, Markdown lifecycle, packaging,
+  browsing UI); an **InFlight kernel** (the ref-dimensional graph, multi-fork perspectives,
+  divergence, provenance, semantic inference, traversal, lifecycle context delivery); and **sensors**
+  - Cortex for cross-tool organisational memory, GitNexus for the structural code graph, and
+  GitHub/Jira/Linear as primary authorities.
 - **A strangler extraction, boundary now and mechanics later.** The mechanical split is cheap under
   the agentic cost model; the risk is freezing the wrong model. The conversation's own list of what
   not to pre-decide: what a knowledge item is; which lifecycle states are universal; whether Git
