@@ -16,24 +16,21 @@ the ranking and says what each one needs - this file does not repeat it, because
 here is how the two drift.
 
 Not yet released: the pom is `0.6.0.0-SNAPSHOT`, there is no `v0.6.0.0` tag, and the changelog section
-is written. Release = strip `-SNAPSHOT` and merge to `master`; `publish.yml` runs after CI succeeds,
-deploys via the `maven-central` profile, tags `v<version>` and cuts a GitHub release
-([`docs/releasing.md`](../releasing.md)).
+is written. Cutting it = dispatch the **Release** workflow with `releaseVersion=0.6.0.0` and the next
+dev version; `release:prepare` rewrites the poms, tags `v0.6.0.0` and pushes to `master`, then that tag
+is deployed to Maven Central and a GitHub release is cut
+([`docs/releasing.md`](../releasing.md)). `publish.yml` publishes snapshots only - it does not tag or
+release.
 
 **No longer blocked by the quarantine guard** - astubbs#80 emptied the registry when it merged, so
 `release.yml`'s "no release while tests are quarantined" gate now passes.
 
-## Bugs found while triaging the upstream mirrors (2026-08-05)
-
-<!-- post-merge: checked-begin -->
-They were found by reading code to diagnose something else. The load-factor one has since become
-astubbs#201 and is no longer tracked here; what is left has no issue of its own.
-<!-- post-merge: checked-end -->
-
-1. **MDC context is not propagated into the worker pool.** PC sets its own `pcId` and `offset` keys
-   but never captures the caller's context map at submit time (no `copyOfContextMap` anywhere), so a
-   caller's `trace_id` is lost crossing into the worker threads and the vert.x event loop. Raised by
-   a user in the `confluentinc#907` thread (astubbs#195).
+**Before dispatching, drop the `(unreleased)` suffix from the `== 0.6.0.0 (unreleased)` changelog
+heading.** A non-dry-run dispatch will refuse to release until you do
+([`docs/releasing.md`](../releasing.md) owns the rule and why a rehearsal is exempt) - this line is
+only the reminder that 0.6.0.0 has not had it done yet. Rehearse with `bin/release-notes.py 0.6.0.0`:
+that prints the exact body the release page will show, and a **Dry run** of the workflow puts it in
+the job summary.
 
 ## Marked for 0.6.0.0
 

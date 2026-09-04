@@ -37,11 +37,14 @@ Release mechanics live in [`release-0.6.0.0.md`](release-0.6.0.0.md); the tracki
   - Re-read the maturity wording itself. `stable` was withdrawn because it was untrue; the
     replacement, `production-use`, is only as good as the critical-defect gate holding.
 <!-- post-merge: checked-begin -->
-- **The rest of astubbs#197's triage list**, minus the ones that have since been picked up (an
-  `OffsetEncoding` magic-byte hazard in astubbs#217, the "Max loading factor steps reached" WARN in
-  astubbs#201). Still open: MDC context is not captured at submit time, so a caller's `trace_id` is
-  lost into the worker pool and the vert.x event loop; and `release.yml` publishes an empty GitHub
-  Release body, so the curated changelog never reaches the release page.
+- **The rest of astubbs#197's triage list has landed, and owes the release nothing:** the "Max loading
+  factor steps reached" WARN on every control-loop pass, which `PCModule` earned for anyone following
+  the README's own tuning advice by building `DynamicLoadFactor(static, static)` when
+  `messageBufferSize` was set (astubbs#155, fixed in astubbs#201); the `OffsetEncoding` magic-byte
+  hazard (astubbs#217); MDC capture at submit time (astubbs#205); and `release.yml` publishing an
+  empty GitHub Release body, so the curated changelog never reached the release page (astubbs#199,
+  which replaced the inline `awk`/`sed` converter with `bin/release-notes.py` and made a missing or
+  unrenderable section fail the release).
 <!-- post-merge: checked-end -->
 - **After it ships:** ~11 mirrored issues describe 0.6.0.0 in the future tense and need the real
   coordinate; astubbs#186, astubbs#188 and astubbs#195 close with a pointer to the release.

@@ -26,6 +26,29 @@ while the quarantine lane is non-empty (`release.yml` guard; snapshots still pub
 
 Workflows: `release.yml` (release), `publish.yml` (snapshot-only).
 
+**The release body is the version's `CHANGELOG.adoc` section**, converted to Markdown by
+`bin/release-notes.py` (`bin/release-notes.py 0.6.0.0` prints exactly what will be published).
+`release.yml` renders it **before** it commits, tags, deploys or publishes anything, and **fails the
+release** if the section is missing, renders to nothing, or is written in AsciiDoc the renderer will
+not convert - it never substitutes `--generate-notes`, because an auto-generated commit list is
+indistinguishable from the curated notes having silently vanished, which is how a release ended up
+with no readable body (astubbs#197). "Renders to nothing" is judged on the *converted* output, not on
+the raw lines: a section holding only `//` comments is not empty and still produces a blank release
+page. A dry run rehearses the render and prints the result to the job summary. The AsciiDoc subset a
+section may use is under *At release time* below.
+
+**A real release also requires a frozen heading** - `== 0.6.0.0`, not `== 0.6.0.0 (unreleased)`.
+`release.yml` passes `--strict` whenever `dryRun` is false, so the release stops at the render step
+rather than tagging a changelog that still calls the version unreleased. A dry run deliberately
+tolerates the suffix and only warns, which is what makes rehearsing before the freeze possible.
+
+**Dispatch inputs are env-bound, never interpolated into a `run:` block.** `release.yml` binds
+`releaseVersion`/`developmentVersion`/`dryRun` to `RELEASE_VERSION`/`DEVELOPMENT_VERSION`/`DRY_RUN`
+once at job level, and every shell step reads `"$RELEASE_VERSION"`. `${{ }}` is substituted textually
+into the script *before* bash parses it, so an input containing shell metacharacters would be injected
+as code; env binding passes it as data. Keep new steps to this pattern - `if:`/`with:` expressions are
+evaluated by Actions rather than a shell, so those correctly keep using `${{ }}`.
+
 **Required GitHub repo secrets:**
 
 - `RELEASE_PAT` - fine-grained PAT (repo **Contents: write**) owned by a repo admin, so
@@ -142,6 +165,15 @@ it - and a human should re-apply it before freezing:
   is confluentinc; make issue links explicit (`.../issues/NN[#NN]`), since GitHub numbers issues and
   PRs from one sequence. The file is in the issue-reference gate's `EXEMPT_PATHS` for this reason -
   everywhere else, [`docs/issue-references.md`](issue-references.md) applies.
+- **The section IS the GitHub Release body** (see *Cutting a release* above), so write it in the
+  AsciiDoc `bin/release-notes.py` converts: headings, `*`/`**` bullets, `. ` ordered lists,
+  `link:`/URL macros, `*bold*`, `` `mono` ``, `NOTE::`, `+` continuations, `//` comments. Everything
+  else it recognises as markup is **rejected** - the renderer fails rather than ship mangled markup,
+  and names the construct and the line when it does, which is why the rejection list is **not
+  copied here**: `bin/release-notes.py`'s own `UNSUPPORTED` table owns it, and a second copy would
+  go stale the first time the table grows. `bin/test-release-notes.sh` runs the renderer over every
+  section of `CHANGELOG.adoc` on each PR, via `bin/check-all.sh --with-tests` in `repo-hygiene.yml`,
+  so a section reaching for something unsupported fails in CI rather than on the release page.
 
 ## The `PR Checklist` changelog gate is a different, narrower check
 

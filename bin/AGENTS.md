@@ -155,6 +155,13 @@ Two structural guards exist and are worth copying into any new checker's self-te
 
 ## Workflows
 
+**A dispatch input reaches a `run:` block as an environment variable, never as `${{ }}`.**
+`${{ }}` is substituted textually before bash parses the script, so an input carrying shell
+metacharacters is injected as code however it is quoted; binding it at job or step level passes it
+as data. [`docs/releasing.md`](../docs/releasing.md) **owns this convention** - the reasoning, and
+which expressions correctly keep `${{ }}` - and `release.yml` is the worked example. Nothing
+enforces it, so it is on the author of each new step.
+
 **One version per action.** `bin/check-action-versions.sh` fails if any action appears at two
 versions across `.github/workflows/`, and runs in the Repo Hygiene workflow.
 
