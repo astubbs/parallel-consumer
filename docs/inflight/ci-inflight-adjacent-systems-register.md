@@ -20,13 +20,19 @@ two could not be: a dated plan may not be rewritten, and this register must accr
 
 ## The evidence rule
 
-Every row carries one of two marks, and the distinction is the whole point:
+Every row carries one of three marks, and the distinction is the whole point. The third was added
+2026-09-04 when the first sweep ran, because collapsing it into either neighbour would have been a
+lie in one direction or the other:
 
 - **verified** - run, or read from the primary source, by someone in this repository, with the
   document that did it cited. The 09-02 re-run is the model: it ran the binary.
-- **claimed** - asserted in the 2026-09-04 conversation by an external model with web access, and
-  not checked here. A claimed row is a lead, not a finding. Verifying it is the first sweep's job,
-  and until then it must not be quoted as established -
+- **surveyed** - read from the system's own published sources - its docs, README, release notes,
+  source - by the 2026-09-04 sweep, but **not run**. Stronger than a lead, weaker than a finding,
+  and it must say so: the 09-01 survey was documentation-derived, concluded something about a market
+  from evidence about a literature, and had to retract. A surveyed row is good enough to rank
+  against and not good enough to settle a build decision on.
+- **claimed** - asserted in conversation and not checked anywhere. A lead. Until verified or
+  surveyed it must not be quoted as established -
   [`docs/solutions/workflow-issues/negative-results-need-an-instrument-that-could-have-said-yes.md`](../solutions/workflow-issues/negative-results-need-an-instrument-that-could-have-said-yes.md)
   owns why a literature reading and a market reading are different claims.
 
@@ -69,6 +75,57 @@ GitNexus, ckg, Atlassian's Teamwork Graph, Glean. InFlight consumes both and rec
 so a derived system's conclusions enter the graph as *inferred by X* and never as facts. A row's
 class is noted where it is not obvious.
 
+## What may never be claimed as novel
+
+The sweep's most useful output, and the reason to keep it at the top: every one of these has
+abundant prior art, and any pitch containing one is disprovable on sight.
+
+*A software-development knowledge graph. Federated developer data. GitHub plus Jira plus Slack plus
+docs in one graph. MCP context for coding agents. Semantic relationships between engineering
+artifacts. Multi-repo context. Git-native distributed metadata. Branch-aware agent memory.
+Contradiction detection. Provenance-aware knowledge graphs. A software-evolution graph.*
+
+**"Nobody has built a federated software knowledge graph" is false**, and was the shape of the claim
+before the sweep. What survives is narrower and stated below.
+
+## What still looks unusual, after trying to find it
+
+Eight properties. None is individually novel; the perspective-preserving *combination* is what has
+not turned up:
+
+1. **Every relevant Git ref is live knowledge** - not only checked-out HEAD, not only the baseline.
+2. **Forks are admitted as additional perspective namespaces**, in one searchable object universe.
+3. **Divergence is retained rather than reconciled** - two conflicting versions are two facts about
+   perspectives, not candidates for a winner.
+4. **Source authorities stay authoritative** - indexed, never replaced.
+5. **Explicit links bootstrap semantic inference**, seeded from the corpus's own registers.
+6. **Inferred relationships retain provenance**, so the model can say why.
+7. **Context is delivered by what the agent is doing now** - not primarily a dashboard or a search
+   product.
+8. **The fused graph is itself a service to other tools** over MCP.
+
+**Better framing than "knowledge graph"**, which is implementation language and lands in a category
+with hundreds of entries: *a live index of the knowledge distributed across software-development
+workstreams*. And the unit each neighbour names differently is worth owning - Atlassian has
+*teamwork graph*, Glean *enterprise context*, Cortex *organizational memory*, SEON *software
+evolution knowledge*; InFlight's is **workstream knowledge**, which is the one that has a location
+and a provenance, and which can hold contradictory beliefs.
+
+That suggests the core model is not an object graph but **objects plus assertions and perspectives
+over those objects** - which is the architectural reason not to normalise. Atlassian folds a Jira
+item and an Asana work item into one common work-item type; InFlight would keep `native-type =
+JiraIssue` and *derive* the neighbourhood `issue / work-item / ticket` when it is useful.
+
+## Four lineages, and the intersection
+
+The defensible claim, replacing the disproved one. InFlight sits where four existing lineages meet,
+and each already owns its half far better than a new project would:
+
+- **Atlassian Teamwork Graph** - federation, graph and agents.
+- **Radicle** - distributed histories and perspectives.
+- **Cortex** - cross-tool memory, contradiction detection, proactive injection.
+- **Backlog.md** - Git-native work knowledge in the tree.
+
 ## The families, and the rows so far
 
 ### Git-native and distributed work trackers
@@ -81,7 +138,8 @@ class is noted where it is not obvious.
 | **git-issue** (dspinellis) | Same shape as git-bug, own store outside the tree. | **verified** - `ci-node-query-client.md` |
 | **Claude Code Tasks** | First-party, per-user, outside the repo, invisible to other harnesses and humans. *Watch, do not adopt.* This is the row the durability assumption in the thesis note points at. | **verified** - 09-01 §8 |
 | **OpenClaw** | Agent-side chronological memory injected at session start; the closest to the *idea*, on the wrong axis - it follows the agent, not the branch. | **verified** - 09-01 §8 |
-| **git-appraise, Bugs Everywhere, Fossil tickets** | Older distributed-metadata designs; the conversation named them as lessons in what happens when Git-as-metadata-store is pushed hard, and for the dead-project lessons current AI products lack. | **claimed** - not surveyed |
+| **git-appraise** | **Direct prior art for the machine-ref decision.** Stores review requests, comments, CI information and analysis in machine-oriented refs under `refs/notes/devtools/...`, explicitly because humans are not meant to interact with those refs - which is the owner's *refs are for machines now* ruling, already shipped by somebody else. It validates bringing trusted fork remotes into an InFlight-controlled namespace rather than cloning into subdirectories, and letting Git do dedup, ancestry and transport. Owns review state narrowly; not an alternative. | **surveyed** 2026-09-04 |
+| **Bugs Everywhere, Fossil tickets** | Older distributed-metadata designs; named as lessons in what happens when Git-as-metadata-store is pushed hard, and for the dead-project lessons current AI products lack. | **claimed** - not surveyed |
 
 The finding these rows share, stated once in 09-02 §7 and load-bearing for the thesis: **nothing
 surveyed is in-tree and multi-truth.** The axis is authority, not location.
@@ -90,7 +148,7 @@ surveyed is in-tree and multi-truth.** The axis is authority, not location.
 
 | System | Relation to InFlight | Evidence |
 |---|---|---|
-| **Radicle** | Peer-to-peer Git collaboration: replicated repositories, collaborative objects for issues, patches and discussions, identities. Solves a larger and lower-level problem; the owner resized it from alternative to **input** after the conversation oversized it. Its causal-history and replicated-object machinery is worth reading for the multi-fork design. | **claimed** |
+| **Radicle** | Peer-to-peer Git collaboration: replicated repositories, collaborative objects for issues, patches and discussions, identities. Solves a larger and lower-level problem; the owner resized it from alternative to **input**. Its collaborative-object histories are unioned **non-destructively** across peers, and Radicle itself compares the model to CRDT behaviour - so it is the closest existing thing to the distributed-histories-and-perspectives half. **Study the COB internals before inventing any InFlight-native replicated object**: causal histories, non-destructive union, signed provenance, per-peer namespaces, concurrent updates. | **surveyed** 2026-09-04 from radicle.dev |
 | **ForgeFed / ActivityPub, Gitea and Forgejo federation** | Cross-forge identity and federation prior art; relevant to what a fork boundary means. | **claimed** - not surveyed |
 | **GitHub, GitLab** | Authorities. Own PR, issue, review and comment state; never re-homed. The tunnel that reads them is `ci-node-query-client.md`'s. | **verified** as the existing surface |
 
@@ -115,9 +173,29 @@ surveyed is in-tree and multi-truth.** The axis is authority, not location.
 
 | System | Relation to InFlight | Evidence |
 |---|---|---|
-| **Cortex** | Apache 2.0, so forkable, and a buffet of things InFlight eventually wants: GitHub/Jira/Linear/Slack connectors, event ingestion, a Neo4j graph, semantic and temporal/episodic stores, contradiction detection, trust scoring, context ranking and injection, MCP, causal chains. **Its epistemic stance is close to opposite**: it says *capture decisions, not documents*, extracting normalised memory objects from source events and treating those as the organisational memory - where InFlight preserves the primary evidence and native structure and records inference as a derived, provenanced edge over it. So forking it means inheriting an architecture centred on the normalised store you then spend effort un-centering. Recommended treatment, 2026-09-04: **integrate rather than fork**, quarry the connectors, contradiction heuristics, ranking and MCP shape, and make every imported part submit to InFlight's epistemic model. It also cannot satisfy the falsifier's first clause - the ref topology as a knowledge dimension is not something a decision-extraction pipeline extends into - which is the evidence that the falsifier tests architecture rather than features. Derived-intelligence class. | **claimed** - the whole row, from the 2026-09-04 conversation; nothing here has been read from its source or run. Its star count was raised and correctly dismissed as evidence about code quality: it says assume nothing about battle-testing, users, API stability or maintenance, and says nothing about whether the code is useful |
-| **Atlassian Teamwork Graph** | Named as a derived-intelligence adapter target in the same class as Cortex. | **claimed** - not surveyed |
-| **Glean** | Enterprise search and knowledge graph over work systems; the closest commercial shape to the engineering-knowledge family below. | **claimed** - not surveyed |
+| **Cortex** | Apache 2.0, so forkable, and a buffet of things InFlight eventually wants: GitHub/Jira/Linear/Slack connectors, event ingestion, a Neo4j graph, semantic and temporal/episodic stores, contradiction detection, trust scoring, context ranking and injection, MCP, causal chains. **Its epistemic stance is close to opposite**: it says *capture decisions, not documents*, extracting normalised memory objects from source events and treating those as the organisational memory - where InFlight preserves the primary evidence and native structure and records inference as a derived, provenanced edge over it. So forking it means inheriting an architecture centred on the normalised store you then spend effort un-centering. Recommended treatment, 2026-09-04: **integrate rather than fork**, quarry the connectors, contradiction heuristics, ranking and MCP shape, and make every imported part submit to InFlight's epistemic model. It also cannot satisfy the falsifier's first clause - the ref topology as a knowledge dimension is not something a decision-extraction pipeline extends into - which is the evidence that the falsifier tests architecture rather than features. Derived-intelligence class. | **surveyed** 2026-09-04 - read from its own README and repository, not run. The sweep confirms the extraction model (decisions with status, rationale, people, affected systems and causal triggers, into Neo4j) and confirms it is extremely young at one star, so its README is not market validation. The risk it names is the one that matters: **the extraction layer becomes an arbiter of what the source meant** - excellent prior art for contradiction detection, temporal memory and active injection, and the wrong truth model to copy |
+| **Atlassian Teamwork Graph** | **The closest system found, and the one to watch** - closer than GitNexus, Radicle or any distributed tracker, which is the sweep's most consequential correction. A unified graph over work items, documents, messages, branches, commits and pull requests, including third-party objects; a relationship model that already distinguishes **canonical, activity, logical and inferred** edges; and, from August 2026, multi-repository code understanding pushed into that graph specifically so coding agents can reason about code together with the surrounding work, through its CLI and plugins. Overlaps the federation-plus-graph-plus-agents half almost entirely. **The difference is fundamental rather than cosmetic, and is the first claim to try to falsify**: it appears object-centric and current-state-centric - a branch is an *object* in the graph - where InFlight's move is that a branch or fork is a *perspective from which an entire body of knowledge may differ*. The sweep looked specifically for multi-ref or fork epistemic state and found branches represented and related to repositories and work items, but no retention of simultaneously divergent repository knowledge. Code Context entered open beta recently, so this row goes stale fastest of any here. | **surveyed** 2026-09-04 from Atlassian developer documentation and release notes |
+| **Glean** | Enterprise search and context: connects GitHub/GitLab, Jira/Linear, Slack, Confluence/Notion and Drive, and exposes that to engineering agents over MCP, pitched as starting every task with the full picture. **This is why "connect all the engineering systems and retrieve context for a coding agent" is established commercial territory and not an InFlight claim.** A retrieval and search layer, not a multi-version development-history model. | **surveyed** 2026-09-04 from its own documentation |
+
+### Coding-agent memory - a crowded family, and closer than first thought
+
+| System | Relation to InFlight | Evidence |
+|---|---|---|
+| **agent-memory** | Local, Git-native project memory for coding agents: plain Markdown as source of truth, branch-aware, MCP-served, structured updates. | **surveyed** 2026-09-04 |
+| **agentmemory** | One shared memory server across many coding agents, with knowledge graphs, confidence, lifecycle and hooks. | **surveyed** 2026-09-04 |
+| **repo-agent-context** | **The closest of this family.** Snapshots GitHub/GitLab issues, PRs, CI, comments, diffs and branches-ahead into local Markdown/JSON, and detects issue-to-PR textual relationships for agents. A snapshot and export model rather than a live multi-version graph. | **surveyed** 2026-09-04 |
+
+The family's collective lesson: persistent agent memory, branch-aware context, local Git-backed
+memory, MCP exposure, proactive hooks and forge-data snapshots are **all** established. What none of
+them appeared to do is treat the complete set of active refs and forks as a distributed knowledge
+corpus in itself.
+
+### Software-evolution research and data platforms
+
+| System | Relation to InFlight | Evidence |
+|---|---|---|
+| **SEON** (2012) | An ontology of software evolution: source code, version control, issue trackers, developers and changes, with cross-domain relations so *which release fixed this bug and which source changes implemented it* traverses sources. **Shows the problem is at least fourteen years old**, and it already diagnosed the trap InFlight is avoiding - a central repository database imposing one rigid universal schema, which is why it built layered extensible ontologies instead. The 2026 improvement on it is precisely not to formally ontology-model what can now be handed to a model: normalise what is objectively true, preserve native data, give inference provenance. The LLM is what makes the last semantic mile affordable without the enormous ontology. | **surveyed** 2026-09-04 |
+| **GrimoireLab** | Years of ingesting Git, GitHub, Jira, Bugzilla, GitLab, Slack, mailing lists, Jenkins and more, enriched and queryable. **Proves "build adapters for all the developer systems" is not novel either**, and that an adapter ecosystem is a project in its own right - do not underestimate source heterogeneity. Its purpose is metrics and analytics, so it is an adapter-experience teacher rather than a rival. | **surveyed** 2026-09-04 |
 
 ### Memory research, which is prior art rather than product
 
@@ -141,6 +219,23 @@ collapse.
 Dated entries, newest first. An entry names the row that moved and what it does to
 [`ci-inflight-standalone-thesis.md`](ci-inflight-standalone-thesis.md)'s open decision.
 
+- **2026-09-04, first sweep run.** The sweep the section below asked for was run, and it moves the
+  thesis more than any single row. **The novelty claim as it stood is disproved**: a federated
+  software-development knowledge graph exists, has adapters, typed and inferred edges, and serves
+  coding agents - see the not-may-be-claimed list above, which is now the register's most-used
+  section. **Atlassian Teamwork Graph replaces Backlog.md as the closest system**, which nothing
+  before this had suggested; the falsifier's first clause is the only place it visibly does not
+  reach, and that is now the single claim to attack. What survives is the eight-property
+  combination and the four-lineage intersection, both above - a much more defensible claim than the
+  one it replaces, because it names who owns each half. Two implementation decisions gained external
+  validation rather than argument: git-appraise already ships machine-only refs for exactly the
+  owner's stated reason, and Radicle already solved non-destructive union of concurrent
+  collaborative-object histories, so neither should be invented here. SEON says the problem is
+  fourteen years old and names the schema trap; GrimoireLab says the adapter universe is real work.
+  **The verdict is still yes, worth taking seriously - but for a different reason than novelty of
+  the graph**: the underserved thing is the multi-agent coordination failure, where knowledge
+  becomes distributed across concurrent histories faster than it can be merged, which agents made
+  cheap and which this repository hit in practice before anyone designed for it.
 - **2026-09-04, continuation** - Cortex added, and it moves the thesis rather than only the table.
   It is the first surveyed system that plausibly satisfies several falsifier clauses at once - forge
   and chat ingestion, a graph, contradiction detection, MCP - which makes the clause it *cannot*
@@ -158,12 +253,22 @@ Dated entries, newest first. An entry names the row that moved and what it does 
   simultaneous perspectives, external systems stay authoritative, and inferred edges carry
   provenance. That claim is specific enough to be disproved, and the first sweep should try to.
 
-## The first sweep, when someone runs it
+## The next sweep
 
-Verify every *claimed* row against its primary source with the twelve questions, adding the
-engineering-knowledge and developer-portal family, which was not surveyed at all. **Cortex and the
-Backlog winner-selection archaeology are the two highest-value items** and they are different kinds
-of work: Cortex is a survey row, the archaeology is a source reading that answers a build decision. Same instrument
-standard as the 09-02 re-run: run or read the source, not the marketing page. Record what each row
-changes above, including "nothing" - and if one system constructs the same derived view, that is the
-finding that decides the thesis note's open decision, in either direction.
+The first sweep ran on 2026-09-04 and its results are the rows above. What it left:
+
+- **Atlassian Teamwork Graph is the watch item**, and the fastest-staling row here - Code Context
+  entered open beta recently. Re-read it on a schedule, and attack one question: does anything in it
+  retain simultaneously divergent repository knowledge, or is a branch only ever an object?
+- **Nothing has been run.** Every row above is `surveyed` or `claimed`; only the Backlog.md
+  reconcile finding is `verified`, because somebody drove the binary. The highest-value runs are
+  Atlassian's agent interface and Cortex.
+- **The Backlog.md winner-selection archaeology** is a source reading, not a survey, and it answers
+  a build decision rather than a ranking one.
+- **The memory-research leads** - Graphiti/Zep, A-MEM, MAGMA - are untouched, and the question to
+  ask each is whether it treats concurrent versions as simultaneously true or as history to
+  collapse.
+- **Radicle's COB internals** want a real reading before any replicated-object design here.
+
+Record what each changes above, including "nothing". If one system turns out to construct the same
+derived view, that is the finding that settles the thesis note's open decision, in either direction.

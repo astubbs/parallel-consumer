@@ -51,6 +51,15 @@ terms:
 5. **a second real repository uses it, chosen for a shape as unlike this one as possible** - because
    the second repo exposes every accidental PC assumption faster than speculative abstraction does.
 
+**The 2026-09-04 prior-art sweep changed the reason, not the answer.** It disproved the claim the
+case had been resting on - a federated software-development knowledge graph with adapters, typed and
+inferred edges and an agent interface already exists, and the register now carries a list of eleven
+things that may never be claimed as novel here. What the sweep left standing is narrower and better:
+the underserved problem is not graph-building but **knowledge becoming distributed across concurrent
+histories faster than it can be merged**, which agents made cheap and which this repository hit in
+practice before anyone designed for it. So the case for extraction rests on a coordination failure
+with a worked instance, not on a category nobody has entered.
+
 Items 1-4 are buildable inside this repo today and are not scheduled by this note. Item 5 is the gate,
 and **the evidence today is single-repository**: asked directly, the owner named nothing outside
 parallel-consumer that this tool would have caught. `STRATEGY.md` already says so in its own words -
@@ -76,21 +85,21 @@ The product test the conversation proposed, worth keeping as the acceptance test
 here: **could an agent arrive cold, on the wrong branch, and still discover the important thing
 another workstream already learned?**
 
-A sharper falsifier was stated in the same conversation and is worth keeping in the form it was
-restated on 2026-09-04, because it names the clause the adjacent systems cannot satisfy:
+The sharper falsifier, **recovered in its original form on 2026-09-04** when the prior-art sweep
+that produced it was recorded - an earlier capture here carried a restatement and flagged that the
+original had never been written down:
 
-> Given 100 active branches across several trusted forks plus GitHub/Jira/etc., can the system tell
-> an agent that the document it just opened has 17 divergent versions carrying additional relevant
-> conclusions, connect those versions to PRs/issues/code/inferred families, and deliver the
-> disagreement without reconciling it?
+> Find me a tool that, given 100 active branches across several trusted forks plus GitHub/Jira/etc.,
+> can tell an agent that a document it just opened has 17 divergent versions carrying additional
+> relevant conclusions, relate those versions to PRs/issues/code and inferred conceptual families,
+> and deliver the relevant disagreements without first reconciling them into canonical state.
 
-The figures are the test's shape, not a measurement of this repository. **Its original statement is
-not captured anywhere** - the continuation says to keep it verbatim, which means a turn between the
-recorded conversations was never written down; this is a restatement, and if the original surfaces it
-supersedes this block. What makes it a good falsifier rather than a feature checklist: a system with
-forge ingestion, a graph, contradiction detection and MCP satisfies most clauses and still fails the
-first, because treating the ref topology itself as a simultaneous knowledge dimension is not
-something a decision-extraction pipeline can be extended into.
+The figures are the test's shape, not a measurement of this repository. It earns its place because
+the sweep found systems that satisfy most of it: an enterprise work graph with typed and inferred
+edges serving coding agents, cross-tool memory with contradiction detection and proactive injection,
+Git-native distributed collaboration objects. **The clause none of them reached is the first one**,
+and [`ci-inflight-adjacent-systems-register.md`](ci-inflight-adjacent-systems-register.md) owns
+which system got closest and why.
 
 The coordination failure this addresses is the one parallel agents create: A discovers assumption X
 is false; B is already building on X; C fixes the cause on a third branch; D rediscovers it. An
@@ -263,6 +272,21 @@ Backlog.md (it tracks the work; this tracks what the work knows); a better Linea
 authorities to index); a code graph (GitNexus and ckg are inputs); a forge (Radicle owns
 collaboration state and replication, and is an input). The rule that keeps the scope from
 metastasising is law 4.
+
+## The unit, and why it is not an object graph
+
+Each neighbour names its unit differently - Atlassian *teamwork graph*, Glean *enterprise context*,
+Cortex *organizational memory*, SEON *software evolution knowledge*. InFlight's is **workstream
+knowledge**, and it is the one with a location and a provenance - a named branch, a named fork, one
+PR, one investigation, one review, one CI result. Critically, workstreams can know contradictory
+things.
+
+That is why the model is better described as **objects plus assertions and perspectives over those
+objects** than as an object graph, and it is the architectural reason behind the no-normalisation
+ruling rather than a taste for it. Atlassian folds a Jira item and an Asana work item into one common
+work-item type; the alternative here is to keep `native-type = JiraIssue` and *derive* the
+neighbourhood `issue / work-item / ticket` when a query needs it. Cheaper, and it preserves the
+information the fold discards.
 
 ## Positioning lines, none chosen
 
