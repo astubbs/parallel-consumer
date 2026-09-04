@@ -151,9 +151,13 @@ esac
 # or none of them. These checks are the only thing between a renamed class and a permanently green
 # job that tests nothing. The mutation lane shipped exactly that bug once ("nothing to mutate,
 # skipping", green forever); bin/chaos-test.sh guards the same shape.
-REPORTS_DIR=parallel-consumer-core/target/failsafe-reports
+# EVERY module's reports, not core's. Integration tests live in parallel-consumer-vertx and the
+# example modules too - VertxConcurrencyIT and CoreAppMetricsIntegrationTest among them - and a
+# core-only glob reports those as MISSING while they ran and passed elsewhere in the reactor. That
+# is a false RED, and it failed two shards on the first four-way run.
+all_reports() { find . -path '*/target/failsafe-reports/TEST-*.xml' -not -path './.git/*' 2>/dev/null; }
 report_exists() {  # report_exists <simple class name>
-    ls "${REPORTS_DIR}"/TEST-*."$1".xml >/dev/null 2>&1
+    all_reports | grep -q "/TEST-.*\.$1\.xml$"
 }
 
 if [ -n "${SHARD_EXPECT}" ]; then
@@ -173,7 +177,7 @@ if [ -n "${SHARD_EXPECT}" ]; then
     fi
 elif [ "${INTEGRATION_SHARD:-}" = "rest" ]; then
     # The catch-all must contain NONE of the named classes and still not be empty.
-    found=$(ls "${REPORTS_DIR}"/TEST-*.xml 2>/dev/null | wc -l | tr -d ' ')
+    found=$(all_reports | wc -l | tr -d ' ')
     if [ "$found" -eq 0 ]; then
         echo "ci-integration-test: FAILED - the catch-all shard produced no failsafe reports at all." >&2
         exit 1
@@ -193,7 +197,7 @@ fi
 # cannot see it either - more is not fewer - which is why this asks about PROVENANCE rather than
 # count. It is the only check here that is not about the shard lists at all.
 if [ -n "${INTEGRATION_SHARD:-}" ]; then
-    strays=$(ls "${REPORTS_DIR}"/TEST-*.xml 2>/dev/null | grep -v '\.integrationTest' || true)
+    strays=$(all_reports | grep -v '\.integrationTest' || true)
     if [ -n "$strays" ]; then
         echo "ci-integration-test: FAILED - shard '${INTEGRATION_SHARD}' ran classes from outside an" >&2
         echo "  integrationTest package. Failsafe's <includes> restriction has been lost - check whether" >&2
