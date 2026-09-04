@@ -81,3 +81,28 @@ NullAway lane.
 Until both are answered, this stays parked. The mechanism it guards is documented in
 `PartitionState#epochIsStale`'s three-checkpoint javadoc, which also records why re-checking per
 record or consulting the live epoch closes nothing.
+
+## 2026-09-03: a fourth fixture, found by a harness rather than by the prototype
+
+Added beside the text above rather than over it - the decision is unchanged, its evidence is not.
+
+<!-- post-merge: checked-begin -->
+`ShardManagerLincheckTest` reached `ProcessingShard.isWorkContainerStale`'s unguarded deref of
+`PartitionStateManager.getPartitionState` and reported `NullPointerException` in CI. It is the same
+shape as the three fixtures named above - a harness driving a `PCModuleTestEnv` whose partition was
+never assigned - and it had simply never taken the branch before: the branch needs an arrival to find
+a RESIDENT at its offset, and until the declining revoke sweep landed (astubbs#431) a sweep always
+removed the resident and the empty shard with it. A sweep that DECLINES leaves the resident in place,
+so the next add takes the branch.
+
+Fixed as a fixture - the harness now assigns its partition, which is what its own constructor claims
+to model - so this note's policy question is untouched.
+
+**It is evidence for "test shortcut", not for "real production shape"** - the second bullet under
+"The decision needed" - and the distinction matters both ways round. What the product now creates is
+the *branch*: a declining sweep leaves a resident behind, so an arrival finds one and asks whether it
+is stale. What the product does not create is the *null* it asked into, because a revoked partition
+keeps an entry (`RemovedPartitionState`) rather than losing one. So this is a fourth fixture of the
+same shape as the three above, reached by a route that is now ordinary - which is an argument for
+fixing fixtures, not for the guard failing open.
+<!-- post-merge: checked-end -->

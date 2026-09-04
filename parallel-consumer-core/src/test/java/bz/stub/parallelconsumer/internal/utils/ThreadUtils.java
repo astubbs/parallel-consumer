@@ -66,4 +66,20 @@ public class ThreadUtils {
     public static void sleepSecondsLog(int seconds) {
         sleepLog(seconds * 1000);
     }
+
+    /**
+     * Joins {@code thread} for at most {@code timeout}, restoring the interrupt flag if interrupted. A {@code null}
+     * thread is a no-op, so a {@code finally} block can call this before it knows whether the thread was ever
+     * started. Two tests in {@code state} had each hand-rolled this; this is the one copy.
+     */
+    public static void joinQuietly(Thread thread, Duration timeout) {
+        if (thread == null) {
+            return;
+        }
+        try {
+            thread.join(timeout.toMillis());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
 }
