@@ -254,3 +254,46 @@ product being built to sell, and it should be recognised as one rather than arri
   back into the same system (a Prometheus that scrapes us as well) or somewhere else.
 - Whether this is a deployment mode of one artefact or a second artefact. Recording it as a mode is
   the cheaper assumption and nothing yet argues against it.
+
+
+## The embedded precedent, researched 2026-09-05 - and the pattern is not what this note assumed
+
+The claim here was that Hazelcast's embedded mode is the precedent, with client/server mode added
+**because of rolling deploys**. **Half confirmed, and the causation refuted.**
+
+Embedded genuinely was the original shape - the earliest releases are in-process collections only,
+and remote clients appear later. But **no primary source attributes client/server mode to rolling
+deploys**: the stated reasons at the time are remote reach across LAN and WAN, polyglot access, and
+client-count scalability. Rolling deploys are real and they are why people *migrate* today - version
+coupling, whole-cluster shutdown, mixed-version rejoin failing on classloading, and partition loss
+and split-brain with *externalise it* as the permanent fix - but that is roughly a decade after the
+fact. **The consequence was right and the history was wrong**, which is worth knowing because the
+history was doing the persuading.
+
+**The siblings agree, and more strongly than expected.** Ignite deprecated true embedded servers in
+as many words - *can cause unexpected rebalancing or even data loss ... deprecated and will be
+eventually discontinued* - and its normal shape is already client-embedded with servers separate.
+Red Hat's Data Grid dropped its Library Mode distribution and *highly discourages* embedding. Akka
+stayed embedded, and its rolling-updates documentation is a catalogue of the same costs.
+
+**The sharpest correction, and it reframes the whole question:**
+
+> The pattern is not *embedded migrates to client/server*. It is **the control plane migrates
+> outward; the data plane migrates only if it holds authoritative state.**
+
+**Kafka Streams is only a partial counterexample, and the part where it differs is the part that
+matters here.** It survives embedded because it **holds no authoritative state** - the broker is the
+system of record and local state is a rebuildable changelog cache - and because it **borrows an
+existing external cluster** for coordination rather than forming its own. But its control plane is
+migrating outward too: KIP-1071 moves assignment, internal-topic creation and topology metadata into
+the broker, citing production incidents caused by rebalancing-logic bugs and tuning that requires
+redeployment.
+
+**So the decisive question for anything betting on embedded is not "will we be forced to add a
+server", it is: does an embedded node hold anything unrebuildable?** This design's answer is
+currently no - Kafka is the system of record, credits and fingerprints are derived - and *keeping*
+that answer true is the thing to defend. The moment a node holds state that cannot be rebuilt from
+the log, the pattern above says the data plane moves out, and the embedded bet is lost.
+
+The corollary is cheerful: **borrowing Kafka as the coordination cluster is exactly what Kafka
+Streams does**, and it is the reason Streams never needed a cluster of its own.

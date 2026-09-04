@@ -13,6 +13,7 @@ to physical Kafka/execution placement.
 
 **The clean boundary: Nile owns data placement; this project owns work placement** - and the
 compact operational form, *Nile controls supply; Hasten controls demand*. The deep-integration
+<!-- REFUTED 2026-09-05: the asserted capability does not exist - see the correction below. -->
 hypothesis is a joint loop: Nile exposes tenant/database capacity and placement as resource
 signals ([`core-shared-execution-resources.md`](core-shared-execution-resources.md)); admission
 and placement respect them before overload manifests as latency; and Prescience exposes committed
@@ -30,3 +31,20 @@ sophisticated specialist can keep its differentiated core and delete meaningful 
 orchestration in favour of this substrate, that is unusually strong evidence for the thesis -
 the same test [`process-csid-repo-archaeology.md`](process-csid-repo-archaeology.md) applies to a
 future JMS layer, aimed at a live counterparty instead of an old repo.
+
+
+## Correction, 2026-09-05: the asserted capability is not present
+
+Checked against Nile's own documentation. **Per-tenant resource quota does not exist**, in their
+words: *"A future plan is to also allow users to specify the resource quota for each tenant which
+Nile can enforce."* Placement is a column on the tenants table, and its own documentation says the
+feature is *"in progress"* and *"still very early in development"*, with moving an existing tenant
+not yet supported. The telemetry that does exist is **consumption, not capacity** - vCPU hours,
+query performance, errors, uptime, at workspace and database level rather than per tenant - with no
+limits, headroom or saturation anywhere.
+
+**So the joint loop is a feature request to a seed-stage third party, and this note now says so.**
+That does not make the *idea* wrong - a multi-tenant database that exposed real per-tenant capacity
+would be an excellent participant in a resource graph, and the reasoning about what the joint loop
+would do survives intact. What is gone is the premise that it could be built against anything
+today. Re-check before any work is scheduled; the surface may arrive.

@@ -47,11 +47,14 @@ itself, in the direction that is hardest to notice.
   two, four and eight instances against a single shared bounded downstream and record whether
   discovered targets oscillate or diverge. Existing machinery, cheaper than the twenty-node test it
   currently sits behind, and it gates more.
-- **That a 429 seen by one participant is evidence about the resource** - true only if the limit is
-  resource-scoped, where per-API-key, per-tenant and per-IP are the common cases and no note records
-  that a 429 carries a scope. **Check:** enumerate limit scoping for three named downstreams from
-  their published docs, then add a scope field to the resource contract. If scope is not declarable,
-  the feature is wrong more often than right.
+- **DONE 2026-09-05: the 429 claim asked the wrong question.** Every downstream checked limits by
+  **client identity**, never by shared backend resource - so the test is *do the participants present
+  the same identity*, and a second test survives even then, because the bucket is usually **narrower
+  than the account** (per-endpoint, per-object, per-partition tiers stacked on an account global).
+  Propagation therefore needs two predicates, not one. **And scope need not be a declared field** -
+  the majors return it at runtime in response headers, which is more accurate than a contract entry
+  and one less thing to misconfigure. [`core-shared-execution-resources.md`](core-shared-execution-resources.md)
+  carries it.
 - **That a blocked external caller is the strongest demand signal anything can supply**
   ([`core-non-kafka-participants.md`](core-non-kafka-participants.md)) - a caller can equally be
   blocked by its own retry loop, a speculative prefetch, or a bug, and the allocator cannot tell.
@@ -116,31 +119,59 @@ Each is load-bearing, and each currently reads as a measured design value:
   cost. **Check:** prototype the read path and establish whether an allocator can subscribe without
   co-partitioning.
 
+## The defect class these share - name it before adding more rows
+
+**Dapr and Nile failed the same way, and it is worth stating as a class rather than two
+corrections:** each note named a **surface that exists** - Dapr's component model, Nile's tenant
+model - and assumed the **capability behind it**. In both cases the capability was either held by the
+other party (Dapr owns dispatch) or simply unbuilt (Nile's quota). The embedded-precedent item failed
+a sibling way: the *consequence* was right and the *attributed cause* was invented.
+
+**The tell is a sentence naming a product and a capability in one breath, with no version, no link
+and no date.** When writing one, either cite the page that says it or mark it as an assumption -
+because a surface is easy to confirm from a landing page and a capability is not, which is exactly
+why the two get conflated.
+
+Worth a sweep of the corpus for the same shape; the three found here were found by looking at only
+part of it.
+
 ## Systems asserted about but never studied
 
 None of these are in the prior-art register, which is why they are here rather than there:
 
-- **Hazelcast embedded mode**, cited in [`core-standalone-deployment.md`](core-standalone-deployment.md)
-  as a precedent *with an attributed historical cause* for why client/server mode was added. **Check:**
-  verify against its own docs and release history, and add Ignite and Infinispan - same shape, same
-  lifecycle collision.
-- **A universal negative about limiter products** in
-  [`core-distributed-throttling.md`](core-distributed-throttling.md) - that phase coordination across
-  shards is something *no limiter product offers*. Never searched for. **Check:** search specifically
-  for slot or phase assignment in distributed limiters, including published designs from the large
-  API providers. **Until then the honest form is "not found"** - the same distinction the prior-art
-  register insists on for its own weakest angle.
-- **Dapr**, named as an adoption surface in two notes and never examined. **Check:** run the
-  ecosystem-adapter seam classification against its pub/sub component API - does it hand over
-  execution, or only consumption?
+- **DONE 2026-09-05: the embedded precedent.** Half confirmed, **causation refuted** - client/server
+  came for remote reach, polyglot and client-count scalability, not rolling deploys, which are why
+  people migrate today, a decade later. Ignite deprecated true embedded servers outright and Data
+  Grid dropped its library distribution. **The reframing is the finding**: the pattern is not
+  *embedded migrates to client/server* but **the control plane migrates outward; the data plane
+  migrates only if it holds authoritative state** - so the decisive question for this design is
+  whether an embedded node holds anything unrebuildable.
+  [`core-standalone-deployment.md`](core-standalone-deployment.md) owns it.
+- **DONE 2026-09-05: the phase-coordination negative holds, and its stated reason is refuted.** The
+  claim was that no limiter offers it *because none owns the shards*. Ownership exists in the wild -
+  Envoy's RLQS and Doorman both hold authoritative state and hand out allocations - and **neither
+  assigns a phase**: they divide quantity, never time, with no offset or slot field anywhere.
+  Doorman's own client library concedes the top-of-the-second burst this idea targets. So the negative
+  is **stronger** than the original phrasing, because it survives someone pointing at RLQS. Two
+  near-misses now cited so nobody claims the idea is unprecedented: Jenkins' hashed cron slot, and
+  bucket4j's settable refill phase. **The novel part is coordinating the phase across instances, not
+  the phase itself.** [`core-distributed-throttling.md`](core-distributed-throttling.md) carries it.
+- **DONE 2026-09-05: Dapr owns dispatch.** The sidecar is the Kafka consumer and pushes into an app
+  endpoint; the app never sees partition, offset or key, and a pluggable component supplies *broker
+  semantics* while Dapr still performs the fan-out. Ordering guarantees are undocumented, the only
+  app-owned flow control is an Alpha streaming API that sits *above* Dapr rather than beneath it, and
+  Dapr already ships retries, circuit breakers, timeouts and rate-limit middleware that an adapter
+  would have to disable rather than duplicate. [`core-dapr-adapter.md`](core-dapr-adapter.md) - which
+  had already named this as its one live unknown, and was right to - now records which way it leans.
 - **The ecosystem-adapter targets**, where [`core-ecosystem-adapters.md`](core-ecosystem-adapters.md)
   is called the strategic main line in the risks register **with no seam actually classified**.
   **Check:** classify exactly one, against the question *who owns dispatch?* One classification
   validates the campaign premise or kills it.
-- **Nile**, where [`core-nile-boundary.md`](core-nile-boundary.md) builds a joint-loop hypothesis on
-  an asserted present capability. **Check:** verify from its docs or a trial whether that telemetry
-  exists today. If not, the joint loop is a feature request to a third party and the note should say
-  so.
+- **DONE 2026-09-05: Nile's capability is absent**, in its own words - per-tenant resource quota is
+  *"a future plan"*, placement is *"still very early in development"* with tenant moves unsupported,
+  and the telemetry that exists is consumption rather than capacity and not per tenant. The joint
+  loop is a feature request to a seed-stage third party and
+  [`core-nile-boundary.md`](core-nile-boundary.md) now says so.
 
 ## Contradictions to resolve
 

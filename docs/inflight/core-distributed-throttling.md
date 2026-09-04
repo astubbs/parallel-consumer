@@ -131,3 +131,29 @@ phase offset coming from the shard owner.
 Idea 7 (decorrelated retry jitter) is independently shippable and needs none of these.
 Next step when picked up: ce-brainstorm idea 8's scope boundary (what ships in the controller
 vs the standalone strategies) into requirements.
+
+
+## Correction, 2026-09-05: the phase-coordination negative, and why its reason was wrong
+
+The claim was *"no limiter product offers phase or slot coordination across shards, because none of
+them owns the shards."* Searched properly. **The negative holds; the reason is refuted, and that
+makes the claim stronger rather than weaker.**
+
+**Ownership exists in the wild and is not being used for phase.** Envoy's RLQS and Google Doorman
+both own the shards - a central authority holds state and hands each instance its allocation - and
+**neither assigns a phase**. They divide **quantity**, never **time**: RLQS's assignment carries a
+strategy and a time-to-live with no offset, slot or start-time field anywhere, and Doorman hands out
+a lease plus a refresh interval with no jitter and no timing guidance. Doorman's own client library
+concedes the failure outright - queries are not evenly spaced within the second, and once the
+second's budget is spent the caller blocks until the next one starts, **which is precisely the
+top-of-the-second burst this idea targets.**
+
+So the honest form is: *ownership is not the missing ingredient; phase assignment simply has not been
+built.* That survives someone pointing at RLQS, which the original phrasing would not have.
+
+**Two near-misses to cite before anyone claims the idea is unprecedented.** Jenkins' cron `H`
+assigns a deterministic hashed slot within the period expressly so jobs do not all fire at minute
+zero - phase assignment by a coordinator, in scheduling rather than limiting, and the closest
+existing artefact to the idea. And bucket4j already exposes a settable refill phase per bucket -
+uncoordinated, but the knob exists in a mainstream limiter. **The novel part is coordinating the
+phase across instances, not the phase itself.**

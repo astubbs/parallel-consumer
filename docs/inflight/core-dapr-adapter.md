@@ -34,6 +34,32 @@ What the ideation settled that the seed docs left open:
   on `feats/ks-on-pc-spike`.
 <!-- file-refs: N/A - names artefacts a future Dapr/streams probe would create; neither exists yet, which is what the entry records -->
 
+## Researched 2026-09-05 - the live unknown is the crux, and it leans the wrong way
+
+Checked against Dapr's own documentation and API reference. **This note's framing holds up well** -
+it named the right unknown while looser mentions elsewhere in the corpus assumed it away - but the
+evidence leans toward the unfavourable answer:
+
+- **The sidecar is the Kafka consumer and it pushes into an app endpoint.** The application never
+  sees partition, offset or key. A pluggable component implements *broker semantics*; **Dapr still
+  performs the fan-out to the app**, so plugging an execution engine in beneath the pub/sub component
+  does not hand it the dispatch decision. That is the note's *one live unknown* answered in the
+  direction that makes the probe's verdict *build + patch* or *no-go* rather than *build as-is*.
+- **Ordering guarantees are not documented at all**, which weakens *"ordering and the in-flight
+  ceiling are admission-side and never need wire expression"* - not because the reasoning is wrong,
+  but because there is no documented contract to be admission-side *of*.
+- **The only app-owned flow control is the streaming-subscription API** (`max_in_flight_messages`,
+  app-set, app acks by event id). Genuinely pull-shaped - but it is **Alpha**, and it sits *above*
+  Dapr rather than beneath it, so it is a different integration entirely from the pluggable
+  component. `app-max-concurrency` is not a substitute: it is a per-sidecar, operator-set cap over
+  *all* inbound traffic, defaulting to unlimited, with no per-topic or per-key notion.
+- **Dapr already ships overlapping machinery** the ideation did not account for: retries and
+  back-off, circuit breakers, timeouts, rate-limit middleware, and that global concurrency cap. Any
+  adapter has to decide what it disables rather than duplicates.
+
+**The probe is still the right first move and is now cheaper to interpret**, because the three-way
+triage has a favoured branch to disconfirm rather than an open field.
+
 Decision pending: none blocking — the probe is unblocked, cheap, and gates everything else.
 Per the expansion rule (demand decides), the full component build waits on a named ask; the probe
 and the STRATEGY.md ordered-concurrency framing are the bank-now parts.

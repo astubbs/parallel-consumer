@@ -256,3 +256,28 @@ should start from rather than invent
   dynamic adjustment, priorities, multitenancy) than the earlier characterisation acknowledged.
   Anything not proved under leases, failures, dynamic declarations and indivisible work is
   original research, and should be written as such.
+
+
+## Correction, 2026-09-05: what a 429 is evidence about
+
+The claim was *"a Python workload's 429 is evidence about the resource, so Java and Go back off
+before ever receiving one."* Checked against the published documentation of a spread of real
+downstreams, and **the claim asks the wrong question.**
+
+Every downstream checked limits by **client identity** - account, project, org, API key, app
+installation, IP - and never by shared backend resource. So the test is not *resource or key* but
+**do the participants present the SAME identity?** One shared account means one shared bucket and the
+429 *is* direct evidence about shared headroom; per-tenant credentials mean it is evidence about
+nothing but that tenant.
+
+**And a second test survives even a shared identity: the bucket is usually narrower than the
+account.** Real limiters stack tiers - per-endpoint and per-object limits on top of an account
+global, per-partition throttling inside a table that is nowhere near its own limit, several tiers at
+a gateway. A 429 earned on one endpoint, or one hot key, says nothing about a sibling on another. So
+propagation needs **two** predicates: **same identity, and same bucket.**
+
+**The good news is that scope need not be a static field.** The majors return it at runtime - a
+reason header naming which bucket class was hit, a resource header naming what the request counted
+against, a live concurrency header. **Read the scope from the response rather than declaring it in
+the contract**, which is both more accurate and one less thing for an operator to get wrong. Where no
+such header exists, the honest default is to treat the 429 as evidence about that participant only.
