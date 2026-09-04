@@ -15,6 +15,7 @@ import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.BeforeEach;
 import pl.tlinkowski.unij.api.UniLists;
 import pl.tlinkowski.unij.api.UniSets;
@@ -219,12 +220,16 @@ abstract class Rebalance857CommitSyncDeadlockProbeBase extends BrokerIntegration
     }
 
     /**
-     * One repetition of the probe. The concrete subclasses each declare their own
-     * {@code @RepeatedTest(5)} calling this, so the twenty repetitions are spread over four classes
-     * that failsafe's forks can schedule independently.
+     * Five repetitions of the probe, INHERITED by each concrete subclass - four of them, so twenty
+     * repetitions in total, spread over four classes that failsafe's forks schedule independently.
+     * <p>
+     * The annotation lives here rather than being redeclared in each subclass so the body exists
+     * once. JUnit collects inherited non-private test methods, so every subclass runs it; this
+     * class is abstract, so it never runs on its own.
      */
+    @RepeatedTest(5)
     @SneakyThrows
-    protected void runOneProbeIteration() {
+    void revokeWhileControlThreadMidCommitMustNotDeadlockOrKillTheConsumer() {
         var count = new AtomicLong();
 
         getKcu().produceMessages(topic, FIRST_BATCH);
