@@ -148,68 +148,28 @@ orchestrator stuffing summaries into prompts scales worse than making the discov
 attached to the workstream and querying the whole active graph - asynchronous by construction, since
 A never needs to know B exists.
 
-## Candidate laws - recorded, not adopted
+## The laws - stated once, in the vision doc
 
-Each one is already the tool's practice or the corpus's rule somewhere; the conversation named them
-as the principles a standalone project would state up front.
+**[`docs/inflight-vision.md`](../inflight-vision.md) owns the laws and the connections between
+notes**, which is the whole reason it exists; this note used to restate them and that was a
+duplicate, caught 2026-09-05 by the owner asking what the difference between the two documents was.
+The vision doc's tripwire names exactly this failure - *a claim restated rather than linked; cut it
+to the link* - so it is cut.
 
-1. **A ref is a dimension the graph is observed through, not a node inside it.** The same logical
-   document, assertion, link or semantic cluster - potentially the entire reachable graph - can
-   differ by ref perspective, and Git ancestry is what relates those projections to each other. So
-   the model is not *branch A contains document X* but *the graph at ref A* beside *the graph at ref
-   B*. **Divergence is then native to the coordinate system rather than computed after the graph is
-   built**, and the map/reduce over forks falls out for free: shared ancestry is a shared graph
-   region, divergent commits are a differentiated one, identical blob ids are exact equality, and a
-   fork remote is one more namespace of the same dimension. Git is not merely an input adapter in
-   this half of the system - it supplies one of the coordinate systems. **This supersedes the
-   version-as-node framing recorded here on 2026-09-04**; see the corrections section.
+What that file states, and this note runs on: a ref is a dimension the graph is observed through
+rather than a node inside it (its law 2, and the labelled-axis half); never reconcile disagreement
+unless the domain genuinely has one authoritative state (3); index what another system owns rather
+than recreating it (4); could-not-ask must never look like asked-and-found-nothing (5); every edge
+carries its provenance and epistemic class (6); one implementation of intelligence, many
+implementations of ergonomics (8); and do not replace the substrate, index it (9).
 
-   **The axis is labelled, and that is the second half of the law.** A ref is not an anonymous
-   coordinate: it carries identity and intent, so a divergence observed along it arrives already
-   classified by what that workstream set out to do. A divergence at `bugs/857-big-bad-lock` is not
-   merely *this document differs here*, it is *this document differs on the big-bad-lock concern*.
-   **The branch name is the weakest form of that signal and the commits are the strongest** - a name
-   is a slug, chosen before the work was understood and never updated, whereas the commits since the
-   merge-base state what the branch is *for*, and the earliest ones state it best, before the
-   workstream drifted or absorbed adjacent work. In this repository that is unusually rich, because
-   commit bodies are load-bearing by policy - release notes are generated from the log, so the most
-   consequential sentence in a commit is often nowhere near its subject. A PR title, a linked issue
-   and a `docs/inflight/` note for the branch label the same axis again. The consequence for the
-   layer below: **theme is available at declared strength, before any inference runs.**
-2. **Integrate knowledge, not state.** *Federate authorities, preserve disagreement, derive
-   connections.*
-3. **Never reconcile disagreement unless the domain genuinely has one authoritative state.** Git
-   owns whether commit X is an ancestor of Y. GitHub owns whether an issue is open. A branch owns what
-   that workstream currently believes. A dated investigation owns what was observed at that time.
-   InFlight owns none of those facts - it owns the edges and indexes that make them jointly legible.
-   A node with a "current state" property is `chooseWinners` rebuilt.
-4. **If another system already owns a fact, index it; never recreate it.** Corollary: InFlight
-   creates knowledge; it does not create replicas of facts merely for discoverability. A GitHub issue
-   gets an adapter-maintained node, not an in-flight note written to make it greppable; a note exists
-   only when the project adds something - an investigation, a hypothesis, a decision - and links to
-   the node. The generated [`issue-index.md`](issue-index.md) is the interim form of this, and its
-   own header already says its rows go stale silently.
-5. **Could-not-ask must never look like asked-and-found-nothing.** Freshness is metadata: an issue
-   node with GitHub unreachable says *state unavailable, last observed N hours ago*, and does not
-   vanish from a traversal. `bin/inflight.mjs`'s header states the exit-code half of this rule.
-6. **Every edge carries its provenance and its epistemic class.** Authoritative (PR heads branch),
-   declared (a note says *depends on astubbs#333*), inferred (an association derived from reachable
-   explicit edges, with the path that produced it). Stated as the graph should read it: *this edge
-   was **stated** by GitHub · **inferred** by Cortex · **structurally extracted** by GitNexus ·
-   **inferred** by InFlight* - four origins, and structural extraction is worth keeping distinct
-   from inference because a parser's answer and a model's guess are not the same kind of claim. A literal `depends on` never has the same
-   standing as an embedding's guess, and an agent can always ask *why does InFlight think these are
-   connected?*
-7. **One implementation of intelligence, many implementations of ergonomics.** Shared verbatim with
-   law 4 of [`docs/w2-vision.md`](../w2-vision.md). Here it means: the kernel speaks in context
-   events - session starts, a term is mentioned, a document is read, a branch is inherited, a merge
-   is attempted - and Claude Code hooks, Codex, MCP and a plain CLI are adapters. Today's
-   `.claude/settings.json` wires four event types (SessionStart, UserPromptSubmit, PreToolUse,
-   PostToolUse) to the tool; that is the provider-neutral surface, discovered rather than designed.
-8. **Do not replace the substrate; index it by the semantics the user actually needs.** The same
-   instinct the Hasten corpus reached over Kafka - `docs/w2-vision.md`'s *"an inverted index, not a
-   cache"* - reached again over Git. Not shared code; a shared design rule, recorded so the two
-   projects can cite one statement of it.
+The one line that is this note's own, because it is a compression rather than a law:
+**integrate knowledge, not state** - *federate authorities, preserve disagreement, derive
+connections.*
+
+**What this note owns, and the vision doc must never state:** whether InFlight becomes its own
+thing, what would settle that, what the conversations concluded and got wrong, and the decisions
+still open. The vision doc binds a corpus; this is one item in it.
 
 ## Directions the owner settled in conversation - none scheduled
 
@@ -257,7 +217,7 @@ as the principles a standalone project would state up front.
   authority *asserts* - Git, GitHub, GitLab, Jira, Linear, Slack. A **derived-intelligence** adapter
   carries what another system *inferred* - Cortex, GitNexus, Atlassian's Teamwork Graph, code
   intelligence generally. InFlight consumes both and records which is which, so an edge reads as
-  *GitHub stated this* or *Cortex inferred this* or *InFlight inferred this*. That is law 6 applied
+  *GitHub stated this* or *Cortex inferred this* or *InFlight inferred this*. That is the vision doc's law 6 applied
   to adapters, and it is what lets a derived system be consumed without its conclusions being
   promoted to facts.
 - **Adapters in, MCP out.** Inputs: Git, GitHub, GitLab, Jira, Linear, Backlog.md, Radicle, CI
@@ -269,7 +229,7 @@ as the principles a standalone project would state up front.
   state of an issue, knowledge since a commit, unresolved disagreements.
 - **Semantic inference by propagation over explicit links - and ref identity comes first.** The
   cheapest and strongest theme signal is not inferred at all: it is the workstream's own declaration
-  of what it is doing, read off the ref per law 1 - the commits since the merge-base, earliest
+  of what it is doing, read off the ref per the vision doc's law 2 - the commits since the merge-base, earliest
   first, then the PR title, the linked issue and any branch note, with the branch name last because
   it is a slug fixed before the work was understood. That answers *what is this divergence about* at
   **declared** strength, so a question like "what else knows about the lock problem" resolves from
@@ -279,7 +239,7 @@ as the principles a standalone project would state up front.
   carries the path that justified it. Graph proximity, co-reference, shared files and symbols and
   citation direction do most of the remaining work without a model; embeddings handle the ambiguous
   tail. Everything inferred is derived and disposable, recomputed when the inference improves - and
-  it never overwrites a declared theme, per law 6.
+  it never overwrites a declared theme, per the vision doc's law 6.
 - **Build on somebody's shell, but never on their epistemics - the 2026-09-04 continuation's
   recommendation, not a decision.** Three separate questions that must not be conflated: fork
   Backlog.md, fork Cortex, or consume either as an adapter. Its reading, recorded for the owner:
@@ -335,7 +295,7 @@ repository-native development knowledge, versioned and inspectable with `git sho
 Backlog.md (it tracks the work; this tracks what the work knows); a better Linear or Jira (they are
 authorities to index); a code graph (GitNexus and ckg are inputs); a forge (Radicle owns
 collaboration state and replication, and is an input). The rule that keeps the scope from
-metastasising is law 4.
+metastasising is the vision doc's law 4.
 
 ## The unit, and why it is not an object graph
 
@@ -389,13 +349,13 @@ puts the project in a category with hundreds of entries.
   access, and none was checked in this repo.** The register's evidence rule exists because of this.
 - **The version-as-node framing was one dimension short, and it was mine, not the conversation's.**
   The 2026-09-04 capture wrote the version as the graph's native node. The continuation corrected it
-  to the ref as a dimension the graph is observed through - law 1 - which is a stronger claim and
+  to the ref as a dimension the graph is observed through - the vision doc's law 2 - a stronger claim, and
   changes what gets built, because divergence stops being a computation over nodes and becomes a
   property of the coordinate system. Recorded here rather than silently rewritten, because the
   superseded framing is the one a reader would otherwise reconstruct.
 - **The shorthand changed with it.** *Multi-version knowledge graph* became **version-dimensional
   development knowledge graph** - the point being that refs are not entries in the graph beside
-  issues and PRs. Both remain working phrases, and neither is the user-facing line; law 1 and the
+  issues and PRs. Both remain working phrases, and neither is the user-facing line; that law and the
   positioning section own those halves.
 - **An assumption recorded rather than probed:** the near-term shift most likely to falsify the
   thesis is a first-party harness - Claude Code, Codex, GitHub - shipping repository-scoped or

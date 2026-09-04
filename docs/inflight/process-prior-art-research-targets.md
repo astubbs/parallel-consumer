@@ -16,6 +16,30 @@ completed. New questions arrive faster than old ones close.
 
 ## Hasten - highest value first
 
+- **ENVOY, and it is top of the list because the sweep claimed this angle and did not run it.** The
+  2026-09-05 brief named Envoy's global rate limiting twice and the sweep returned zero findings and
+  zero sources on it, while covering Doorman, DRL and Gubernator in the same angle.
+  [`core-envoy-is-the-other-half.md`](core-envoy-is-the-other-half.md) owns why that is worse than an
+  ordinary miss - three of our own notes already describe the design as "the Envoy shape". *Settles:*
+  the closest live comparator for the capacity-lease question, the honest answer to *is this just an
+  embedded Envoy*, and whether the run-both synergy reading survives contact with their model.
+- **The performance-ceiling comparison against a mesh's model.** A benchmark, not an argument -
+  nobody here has measured either side. *Settles:* whether the placement advantage is also a
+  throughput advantage, or only an adoption-cost one. Do not assert either way before it runs.
+- **Ray** - does it do global rate limiting in this sense, and what happens to its coordination model
+  at very large adaptive worker counts? The sweep returned effectively nothing. *Settles:* a
+  frequently-asked comparison that currently has no evidenced answer.
+- **Netflix concurrency-limits** as a characterisation of the local half. *Settles:* the sibling
+  challenge - *is this just an embedded adaptive limiter* - by making explicit what the global half
+  adds, which is the same question Doorman answers for its own shape.
+- **"Systems that embed scheduling or admission beneath an existing API"** - the claimed family
+  includes workflow runtimes, actor systems, mesh-style control planes, database and language
+  runtimes and proxies. **One name in the source of that claim, "ARCORIS", could not be identified
+  here at all and may not exist** - treat the whole list as unverified until each is checked
+  individually. *Settles:* whether the placement argument is as distinctive as it currently reads,
+  and specifically whether any of them do **adaptive global optimisation from measured performance**,
+  which is the discriminating clause.
+
 - **Stream-processing elasticity, the whole angle.** Flink's reactive and adaptive schedulers and its
   autoscaler, Kafka Streams, Beam/Dataflow autoscaling, Pulsar Functions, KEDA, Kafka Share Groups
   (KIP-932). **The 2026-09-05 sweep returned nothing at all here**, and it is the nearest neighbour

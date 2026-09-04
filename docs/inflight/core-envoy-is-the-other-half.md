@@ -1,0 +1,80 @@
+# Envoy: the sweep missed it, and the answer is probably "run both"
+
+<!-- inflight-type: feature -->
+<!-- inflight-impact: blind-spot -->
+<!-- inflight-state: deferred - needs the Envoy-shaped research the sweep failed to do; nothing is scheduled by recording it -->
+
+Two things, and the first one is an admission.
+
+## The 2026-09-05 sweep did not cover Envoy at all
+
+The brief named Envoy's global rate limiting **twice**, in the claim text and again in search angle
+(b). The sweep returned **zero findings and zero sources mentioning it**, while covering Doorman, the
+2007 Distributed Rate Limiting paper and Gubernator in that same angle. Nobody noticed until the
+owner asked why Envoy appeared nowhere.
+
+**That is this repository's own named failure mode**, verbatim: *a check that reports success without
+having run*, and *silence from an instrument that could not have spoken is not evidence* - see
+[`../solutions/workflow-issues/a-check-that-reports-success-without-having-run.md`](../solutions/workflow-issues/a-check-that-reports-success-without-having-run.md)
+and
+[`../solutions/best-practices/silence-from-an-instrument-that-could-not-have-spoken-is-not-evidence.md`](../solutions/best-practices/silence-from-an-instrument-that-could-not-have-spoken-is-not-evidence.md).
+A sweep that names a system in its brief and returns nothing about it has not surveyed that system;
+it has produced a gap shaped exactly like a clean result. **The register's Envoy position is
+therefore "not searched", not "not found"**, and it is the highest-value item in
+[`process-prior-art-research-targets.md`](process-prior-art-research-targets.md) because the corpus
+already treats Envoy as the reference shape.
+
+It matters more than an ordinary miss because **three existing notes already describe the design in
+Envoy's terms** - [`core-non-kafka-participants.md`](core-non-kafka-participants.md) says delegated
+credits *are* "the Envoy shape (local bucket, slow-cadence global sync)",
+[`core-standalone-deployment.md`](core-standalone-deployment.md) says the caller spends credit
+locally "the way the Envoy shape requires", and
+[`core-runtime-services-and-compat.md`](core-runtime-services-and-compat.md) proposes Envoy/xDS
+projections outright. So the nearest comparator for the capacity-lease question was named inside our
+own corpus and still went unexamined.
+
+## "So is Hasten just an embedded Envoy?" - the question to answer, not dodge
+
+It is the sharpest challenge available and it will be asked in public, so the answer must be
+measured rather than asserted. Same for the sibling forms: *is it just an embedded Netflix
+concurrency-limiter?*, and *does Ray already do this?*
+
+What can be said without research: the two sit at **different boundaries**. A service mesh governs
+**calls leaving a process** - it sees a request that has already been created and decides whether to
+let it out. This design governs **work before it becomes execution** - a record that exists durably
+in a log, which nobody has spent a thread on yet, and which can be left un-dispatched at zero cost
+because ownership is already decoupled from execution. Not admitting a record does not stall its
+partition. Not admitting a request means somebody is already blocked holding it.
+
+**What must NOT be asserted until measured**, and each is queued as a research target:
+
+- **The performance ceiling comparison.** Nobody here has measured either side. A claim about a
+  ceiling relative to a proxy's model is a benchmark result, not an argument, and this repository's
+  own rules on measurement discipline apply.
+- **Whether Ray does global rate limiting in this sense**, and what happens to its coordination model
+  at very large adaptive worker counts. Unknown here; the sweep returned effectively nothing on Ray.
+- **Whether Netflix's concurrency-limits is a fair characterisation of the local half.** It is an
+  adaptive limiter, so the honest form of the question is what the *global* half adds over it, which
+  is the same question Doorman already answers for its own shape.
+
+## The synergy thesis - the owner's reading, recorded as a direction
+
+**Run both. Hasten is the missing half of Envoy, and the outputs feed each other.**
+
+A mesh knows what is happening to calls in flight - latency, saturation, error rates at the callee -
+and can shed or limit at the egress. It does not know what work *exists but has not started*, which
+is precisely what a runtime sitting on a log can see. The composition is therefore not competitive:
+the mesh's measured downstream pressure is an input to admission decisions about undispatched work,
+and the runtime's knowledge of pending demand is an input the mesh has no way to obtain. Each one's
+scheduling and analysis output improves the other's.
+
+That framing also matches the market position the corpus already takes: the primary audience is
+teams who already run Kafka and did not set out to adopt a scheduler, and many of them already run a
+mesh. **"Add this beside what you have" is a far cheaper ask than "replace your mesh"**, and it is
+consistent with the rule that pulling people off an existing system is explicitly not the strategy.
+
+## Why deferred
+
+The interesting half needs the Envoy research that has not happened, and asserting a synergy before
+understanding the other side's model is how a plausible-sounding wrong claim enters the corpus.
+Nothing is scheduled by recording this.
