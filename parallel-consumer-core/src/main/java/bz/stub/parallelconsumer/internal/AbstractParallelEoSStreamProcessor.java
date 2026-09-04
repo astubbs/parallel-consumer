@@ -241,9 +241,21 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private volatile Exception failureReason;
 
     /**
-     * Time of last successful commit
+     * Time of last successful commit.
+     * <p>
+     * <b>volatile, and NOT {@code @ThreadConfined} to the control thread, which is what it looks like.</b> The
+     * obvious reading is that only {@link #commitOffsetsThatAreReady()} writes it and only
+     * {@link #isTimeToCommitNow()} reads it, both on the control thread - and every record of this field
+     * stated exactly that until somebody grepped for it. {@link #tryCommitOffsetsOnRevoke()} writes it too, from
+     * inside {@link #onPartitionsRevoked}, which the broker POLL thread runs. Both writes are under
+     * {@code commitLock}; the read is not, so without this keyword the control thread has no happens-before
+     * edge to the poll thread's write and can miss a commit that did happen, then commit again immediately.
+     * Benign in effect - a redundant commit - but it is a cross-thread field either way, and declaring it
+     * confined would have been a false declaration that RacerD would then have believed.
+     * <p>
+     * Same shape and same fix as {@code lastWorkRequestWasFulfilled} (astubbs#201) and {@link #failureReason}.
      */
-    private Instant lastCommitTime;
+    private volatile Instant lastCommitTime;
 
     @Override
     public boolean isClosedOrFailed() {
@@ -2527,6 +2539,16 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
      * gate protects this - {@code ArchitectureTest.rebalanceCallbacksMustNotBlock} matches method
      * calls, and a {@code synchronized} block is a {@code MONITORENTER} instruction it cannot see, so
      * the rule is green here whether the invariant holds or not.
+     * <p>
+     * <b>Amended 2026-09-03:</b> one tool CAN see it. Infer's {@code @Lockless} on
+     * {@link #onPartitionsRevoked} reports this monitor by name, through this method, and does not
+     * report {@code commitLock.tryLock()} - so it agrees with the decline-rather-than-wait rule while
+     * seeing the {@code MONITORENTER} ArchUnit misses. It is still not the gate, because it forbids
+     * the monitor outright rather than the waiting-while-holding this paragraph is about: annotating
+     * the callback leaves a violation standing whether the invariant holds or not, which is the same
+     * complaint made above. Measured, not assumed - see the annotation inventory in
+     * {@code parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md}. Reach for it
+     * as a query when checking this suspicion again, rather than enumerating the monitors by hand.
      */
     private void clearCommitCommand() {
         synchronized (commitCommand) {

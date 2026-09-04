@@ -259,12 +259,21 @@ them, do not copy them back.
   codebase contains no annotation. Every detector here is discovery and none prevents regression, so
   the annotation is what makes a fix permanent - write it with the fix.
 
-### `AbstractParallelEoSStreamProcessor.lastCommitTime` is read unsynchronised
+### `ProducerManager.ProducingLock` is the retry-queue iterator's shape, undeclared (SMALL, but establish the premise first)
 
-- Plain `Instant`, written in the commit path and read by `isTimeToCommitNow()` with no
-  happens-before edge. Found by RacerD 2026-08-25; **not previously in any ledger**. The poll thread
-  can read a stale value and mis-time a commit, on a codebase that already tracks commit-timeout
-  flakes. Not diagnosed further. Fix it with `@GuardedBy` per the policy above.
+- Found by the defect-class sweep at astubbs#433's merge prep, which declared and asserted the same
+  shape on `RetryQueue.RetryQueueIterator`. `ProducingLock` wraps a `ReentrantReadWriteLock.ReadLock`
+  taken in `acquireProduceLock` and released by whoever calls its `unlock()`, so the same constraint
+  applies: a read lock may only be released by its holder, and an escaped one cannot be released at
+  all - which its own javadoc already describes the cost of, "the same permanent block on the next
+  commit's write-lock acquisition".
+- The recipe is `@ThreadConfined(ThreadConfined.ANY)` plus an owning-thread assertion, per
+  `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md`. **Do not apply it
+  blind**: the premise is that the acquirer is always the releaser, and that is exactly what was
+  wrong about `lastCommitTime`. The lock is taken on a worker thread in
+  `ParallelEoSStreamProcessor`, stored on the `PollContextInternal`, and released through that
+  context - so establish which thread performs the release before declaring anything. If it can
+  differ, that is a defect and not a tidy-up, and it becomes a note rather than this line.
 
 ### Make the commit/close ownership polymorphism official - an interface, not a rename (SMALL, do any time)
 *Independent of the thread-model work below/above. No behaviour change, but do not file this as
@@ -382,6 +391,12 @@ cosmetic - see the last bullet.*
     be visible to another: `ConsumerManager.commitRequested`, `RetryQueue.closed`.
     Was 3: `AbstractParallelEoSStreamProcessor.lastWorkRequestWasFulfilled` is now
     `volatile` (astubbs#201), and SpotBugs no longer reports it.
+    **`RetryQueue.closed` is now a FALSE POSITIVE and stays listed for that reason.** The
+    iterator that owns it is `@ThreadConfined(ANY)` with a runtime guard
+    (`assertOnOwningThread`), so there is no second thread to be stale for - it never
+    could be, because the iterator holds a read lock only its opener can release.
+    SpotBugs reads no confinement annotation and will keep reporting it; do not "fix" it
+    with `volatile`, which would assert a sharing that does not exist.
   - **`AT_STALE_THREAD_WRITE` on an OBJECT reference, which no detector fired on - FIXED 2026-08-18
     on the astubbs#119 branch:**
     `ConsumerManager.metaCache` (`private ConsumerGroupMetadata metaCache;`) is written by the poll

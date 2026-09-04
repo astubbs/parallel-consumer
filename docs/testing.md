@@ -439,3 +439,10 @@ extend them. Duplicating an existing helper is how bugs get reintroduced - a cop
 logic once drifted to a 1-second timeout and became a flaky-CI source (see
 [`docs/solutions/test-issues/`](solutions/test-issues/)). When you must add a helper, put it in the
 shared util, not the test.
+
+The unit-test side has fewer of these, and the one worth knowing is `ForeignThread` - one named,
+daemon, single-threaded executor with `run` (rethrows) and `catching` (returns what was thrown). Every
+thread-confinement guard can only be exercised by a second party, so every test of one needs it, and
+two hand-rolled copies had already drifted apart before it was extracted: only one unwrapped the
+`ExecutionException`, so an assertion failing over there surfaced here as a wrapper naming neither the
+assertion nor the thread.

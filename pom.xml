@@ -377,6 +377,21 @@
             <version>${error-prone.version}</version>
             <scope>provided</scope>
         </dependency>
+        <!-- Supplies @ThreadConfined, which RacerD (the infer lane, bin/infer-test.sh) reads: a type, method
+             or field so marked is taken to run on one thread, so its accesses are not reported as racing
+             with each other, and an unmarked access to the same state elsewhere still is. It is a
+             declaration the analyser consumes, not one it verifies - the runtime assertion beside each use
+             is what verifies it. @GuardedBy cannot say this: it names a lock, and confined state holds
+             none. `provided` for the same reason as the entry above: the annotation is CLASS-retention, so
+             javac needs it, nothing reads it at runtime, and consumers of this library must not inherit it
+             on their classpath. The rule, and which of this jar's other annotations are worth writing here:
+             parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md -->
+        <dependency>
+            <groupId>com.facebook.infer.annotation</groupId>
+            <artifactId>infer-annotation</artifactId>
+            <version>0.18.0</version>
+            <scope>provided</scope>
+        </dependency>
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
