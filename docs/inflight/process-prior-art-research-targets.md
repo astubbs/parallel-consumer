@@ -11,6 +11,12 @@ row says what the answer would change - a target that settles nothing does not b
 - [`core-hasten-adjacent-systems-register.md`](core-hasten-adjacent-systems-register.md) - the engine.
 - [`ci-inflight-adjacent-systems-register.md`](ci-inflight-adjacent-systems-register.md) - the harness tooling.
 
+**The sibling that asks the other question:**
+[`process-open-research-questions.md`](process-open-research-questions.md) holds what *we* believe and
+have not checked - unfalsified claims, constants that were reasoned rather than measured, and
+decisions nothing is scheduled to resolve. This file is answered by reading other people's work; that
+one by running something here.
+
 **Why this is a register and not a task:** it is consulted before starting an investigation, never
 completed. New questions arrive faster than old ones close.
 
