@@ -40,6 +40,12 @@ check can make:
 What *is* enforced: the file-refs gate breaks when a linked note is moved or renamed, which is the
 drift that would otherwise go silent.
 
+**A sibling runs the same contract over the other corpus.**
+[`inflight-vision.md`](inflight-vision.md) binds the agent-harness notes - the query tool, the
+`docs/inflight/` corpus and the hooks that deliver it - and states two of the laws below in its own
+terms, law 4 here and the index-the-substrate instinct that beat 3 applies to Kafka. Neither file
+owns the other's facts; where they state the same law, they say so rather than diverging.
+
 ## Sources
 
 The preserved primary sources are the handoff documents

@@ -15,6 +15,10 @@ It asked for one instrument, and that has its own note -
 the landscape and the novelty question. This note owns the thesis, the candidate laws, the directions
 the owner settled in conversation, and the list of what is still open.
 
+The laws below are stated here and bound to the rest of the harness corpus by
+[`docs/inflight-vision.md`](../inflight-vision.md), which owns the connections between these notes
+and no fact any of them owns.
+
 What it does not own, because a note already does: the tool's queued commands
 ([`ci-inflight-next-commands.md`](ci-inflight-next-commands.md)), the GitHub tunnel
 ([`ci-node-query-client.md`](ci-node-query-client.md)), the missing edges

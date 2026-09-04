@@ -9,6 +9,9 @@ better*: **where does InFlight fit beside it, and is the thing InFlight would be
 novel?** A system entering the vicinity is as likely to become an input adapter as a rival, so every
 row ends with what to consume rather than compete with.
 
+[`docs/inflight-vision.md`](../inflight-vision.md) binds this register to the rest of the harness
+corpus, and its law 5 is the one the evidence rule below implements.
+
 Opened 2026-09-04 from the conversation the thesis note captures. The two dated investigations that
 precede it - [`docs/plans/2026-09-01-001-investigate-beads-comparison.md`](../plans/2026-09-01-001-investigate-beads-comparison.md)
 and [`docs/plans/2026-09-02-001-investigate-adopt-or-build-re-run.md`](../plans/2026-09-02-001-investigate-adopt-or-build-re-run.md) -
