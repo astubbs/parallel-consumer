@@ -50,8 +50,13 @@ writes it, each already paid for once:
    branch's own PR - or fetches them.
 3. **Gated on [`process-adopt-external-harness.md`](process-adopt-external-harness.md).** Beads
    advertises dependency graphs and context injection; if a GitHub link cache is already in it, this
-   is an adoption decision and not a build. **That survey has not been run**, and running it is the
-   first task here, not the last.
+   is an adoption decision and not a build. **Run on 2026-09-02** -
+   [`docs/plans/2026-09-02-001-investigate-adopt-or-build-re-run.md`](../plans/2026-09-02-001-investigate-adopt-or-build-re-run.md)
+   owns the verdict: build, do not adopt, for the query layer; and Beads keeps its store outside the
+   tree, so nothing in it is a branch-travelling link cache. This item is a build. One requirement
+   arrived with [`ci-inflight-standalone-thesis.md`](ci-inflight-standalone-thesis.md): the edges
+   are carried per document *version*, never on a node with a current state - a reconciled node is
+   the thing the 09-02 re-run rejected.
 
 ## Delete when
 

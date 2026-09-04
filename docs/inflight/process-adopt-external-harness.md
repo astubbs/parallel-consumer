@@ -9,6 +9,15 @@ extract ours as a FOSS project", which prior-art research answered *no* - and in
 the better question obvious. If the space is occupied by products with real distribution, the
 interesting move is adopting one, not competing with it.
 
+**The extraction half of that question was reopened on 2026-09-04, and reopened is not taken.** The
+08-19 *no* was answered against hooks projects and trackers; the 2026-09-02 re-run below then found
+the nearest tracker takes the opposite position on whether a branch may disagree, and a later
+conversation added a direction the survey never evaluated. Both are recorded in
+[`ci-inflight-standalone-thesis.md`](ci-inflight-standalone-thesis.md), which owns the reopened
+decision and what would settle it; the landscape that has to answer first is
+[`ci-inflight-adjacent-systems-register.md`](ci-inflight-adjacent-systems-register.md). The hooks
+half of this note is untouched by either.
+
 ## What we have, and what it cost
 
 Hooks in `.claude/hooks/` covering session start, pre-tool-use and prompt submission; a family of
