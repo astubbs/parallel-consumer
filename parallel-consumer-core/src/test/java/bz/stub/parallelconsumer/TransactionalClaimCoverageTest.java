@@ -298,11 +298,14 @@ class TransactionalClaimCoverageTest {
 
         List<String> unexercised = new ArrayList<>();
         for (TransactionalClaim claim : TransactionalClaim.values()) {
+            List<String> proofsThisRunDropped = deselected.get(claim);
+            // a claim with no proof AT ALL is everyClaimWeSayIsCoveredHasATestReferencingIt's finding, not this
+            // one's - null here means exactly that, so it is passed over rather than reported twice
             if (claim.getStatus().isCoverageEnforced()
                     && !selectable.contains(claim)
-                    && deselected.containsKey(claim)) {
+                    && proofsThisRunDropped != null) {
                 unexercised.add(claim.name() + " - every proof deselected: "
-                        + String.join(", ", deselected.get(claim)));
+                        + String.join(", ", proofsThisRunDropped));
             }
         }
 
@@ -324,11 +327,14 @@ class TransactionalClaimCoverageTest {
      */
     private static Set<String> effectiveTagsOf(JavaMethod method) {
         Method reflected = method.reflect();
-        Set<String> tags = new LinkedHashSet<>();
-        for (Tag tag : AnnotationSupport.findRepeatableAnnotations(reflected, Tag.class)) {
+        List<Tag> onTheMethod = AnnotationSupport.findRepeatableAnnotations(reflected, Tag.class);
+        List<Tag> onTheClass = AnnotationSupport.findRepeatableAnnotations(reflected.getDeclaringClass(), Tag.class);
+
+        Set<String> tags = new LinkedHashSet<>(onTheMethod.size() + onTheClass.size());
+        for (Tag tag : onTheMethod) {
             tags.add(tag.value().trim());
         }
-        for (Tag tag : AnnotationSupport.findRepeatableAnnotations(reflected.getDeclaringClass(), Tag.class)) {
+        for (Tag tag : onTheClass) {
             tags.add(tag.value().trim());
         }
         return tags;
