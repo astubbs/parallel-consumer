@@ -118,7 +118,12 @@ note named with it.
    divergent commits a differentiated one, identical blob ids exact equality, a fork remote one more
    namespace of the same axis. It is why Git is not merely an input adapter in this half of the
    system but supplies one of the coordinate systems, and it is the clause the adjacent systems
-   cannot reach by extension.
+   cannot reach by extension. **The axis is also labelled**: a ref carries identity and intent, so a
+   divergence along it arrives classified by what that workstream set out to do - and the branch
+   name is the weakest form of that (a slug fixed before the work was understood) while the commits
+   since the merge-base are the strongest, earliest first. Theme is therefore available at declared
+   strength before any inference runs, which is why law 6's classes matter here and not only at the
+   edges.
    [`inflight/ci-inflight-standalone-thesis.md`](inflight/ci-inflight-standalone-thesis.md) ·
    [`inflight-tool.md`](inflight-tool.md) ·
    [`inflight/ci-inflight-adjacent-systems-register.md`](inflight/ci-inflight-adjacent-systems-register.md)

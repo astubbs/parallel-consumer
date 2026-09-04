@@ -113,6 +113,19 @@ as the principles a standalone project would state up front.
    fork remote is one more namespace of the same dimension. Git is not merely an input adapter in
    this half of the system - it supplies one of the coordinate systems. **This supersedes the
    version-as-node framing recorded here on 2026-09-04**; see the corrections section.
+
+   **The axis is labelled, and that is the second half of the law.** A ref is not an anonymous
+   coordinate: it carries identity and intent, so a divergence observed along it arrives already
+   classified by what that workstream set out to do. A divergence at `bugs/857-big-bad-lock` is not
+   merely *this document differs here*, it is *this document differs on the big-bad-lock concern*.
+   **The branch name is the weakest form of that signal and the commits are the strongest** - a name
+   is a slug, chosen before the work was understood and never updated, whereas the commits since the
+   merge-base state what the branch is *for*, and the earliest ones state it best, before the
+   workstream drifted or absorbed adjacent work. In this repository that is unusually rich, because
+   commit bodies are load-bearing by policy - release notes are generated from the log, so the most
+   consequential sentence in a commit is often nowhere near its subject. A PR title, a linked issue
+   and a `docs/inflight/` note for the branch label the same axis again. The consequence for the
+   layer below: **theme is available at declared strength, before any inference runs.**
 2. **Integrate knowledge, not state.** *Federate authorities, preserve disagreement, derive
    connections.*
 3. **Never reconcile disagreement unless the domain genuinely has one authoritative state.** Git
@@ -201,12 +214,19 @@ as the principles a standalone project would state up front.
   view. Candidate queries the conversation listed: context for a symbol, related work for an issue,
   explain a relationship, divergent knowledge on a topic, workstreams touching files, authoritative
   state of an issue, knowledge since a commit, unresolved disagreements.
-- **Semantic inference by propagation over explicit links.** A register that links issues,
-  documents and PRs seeds a concept; the neighbourhood reachable through those explicit edges is
-  labelled with it, each label carrying the path that justified it. Graph proximity, co-reference,
-  shared files and symbols and citation direction do most of the work without a model; embeddings
-  handle the ambiguous tail. Everything inferred is derived and disposable, recomputed when the
-  inference improves.
+- **Semantic inference by propagation over explicit links - and ref identity comes first.** The
+  cheapest and strongest theme signal is not inferred at all: it is the workstream's own declaration
+  of what it is doing, read off the ref per law 1 - the commits since the merge-base, earliest
+  first, then the PR title, the linked issue and any branch note, with the branch name last because
+  it is a slug fixed before the work was understood. That answers *what is this divergence about* at
+  **declared** strength, so a question like "what else knows about the lock problem" resolves from
+  ref identity before a model is loaded, and across fork namespaces without reading content.
+  Inference proper then extends it: a register linking issues, documents and PRs seeds a concept,
+  the neighbourhood reachable through those explicit edges is labelled with it, and each label
+  carries the path that justified it. Graph proximity, co-reference, shared files and symbols and
+  citation direction do most of the remaining work without a model; embeddings handle the ambiguous
+  tail. Everything inferred is derived and disposable, recomputed when the inference improves - and
+  it never overwrites a declared theme, per law 6.
 - **Build on somebody's shell, but never on their epistemics - the 2026-09-04 continuation's
   recommendation, not a decision.** Three separate questions that must not be conflated: fork
   Backlog.md, fork Cortex, or consume either as an adapter. Its reading, recorded for the owner:
