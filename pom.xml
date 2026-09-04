@@ -787,8 +787,9 @@
                              appears anywhere in this repo's sources or poms, and the micrometer
                              surface actually used is metric primitives plus KafkaClientMetrics,
                              ExecutorServiceMetrics and CompositeMeterRegistry. Re-check that if this
-                             project ever instruments an HTTP client:
-                             `grep -rn "MicrometerHttpClientInterceptor\|HttpAsyncClient" --include=*.java --include=*.xml`
+                             project ever instruments an HTTP client: grep the sources and poms for
+                             MicrometerHttpClientInterceptor and for HttpAsyncClient, and re-argue
+                             this entry if either appears.
 
                              RETIRE WHEN: the io.micrometer.prometheus -> prometheusmetrics package
                              rename is migrated, which is what unblocks 1.15.x - and it retires BOTH
