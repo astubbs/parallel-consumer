@@ -157,3 +157,7 @@ zero - phase assignment by a coordinator, in scheduling rather than limiting, an
 existing artefact to the idea. And bucket4j already exposes a settable refill phase per bucket -
 uncoordinated, but the knob exists in a mainstream limiter. **The novel part is coordinating the
 phase across instances, not the phase itself.**
+
+**Where the search stopped, so the negative is honest about its own reach:** the budget ran out
+before the published limiter designs of the large API providers, which is the likeliest remaining
+home for a real refutation. Anyone strengthening this should start there.

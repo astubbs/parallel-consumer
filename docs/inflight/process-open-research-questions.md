@@ -53,8 +53,11 @@ itself, in the direction that is hardest to notice.
   than the account** (per-endpoint, per-object, per-partition tiers stacked on an account global).
   Propagation therefore needs two predicates, not one. **And scope need not be a declared field** -
   the majors return it at runtime in response headers, which is more accurate than a contract entry
-  and one less thing to misconfigure. [`core-shared-execution-resources.md`](core-shared-execution-resources.md)
-  carries it.
+  and one less thing to misconfigure. A declared field would have been wrong regardless, because
+  **scope varies per endpoint rather than per vendor**. The IETF rate-limit header draft carries an
+  explicit partition-key parameter and its FAQ states the problem precisely, but adoption is poor
+  enough that it is a thing to watch rather than depend on.
+  [`core-shared-execution-resources.md`](core-shared-execution-resources.md) carries it.
 - **That a blocked external caller is the strongest demand signal anything can supply**
   ([`core-non-kafka-participants.md`](core-non-kafka-participants.md)) - a caller can equally be
   blocked by its own retry loop, a speculative prefetch, or a bug, and the allocator cannot tell.
@@ -156,6 +159,9 @@ None of these are in the prior-art register, which is why they are here rather t
   near-misses now cited so nobody claims the idea is unprecedented: Jenkins' hashed cron slot, and
   bucket4j's settable refill phase. **The novel part is coordinating the phase across instances, not
   the phase itself.** [`core-distributed-throttling.md`](core-distributed-throttling.md) carries it.
+  **The search stopped short of the large API providers' published limiter designs**, which is the
+  likeliest remaining home for a refutation - so the negative is *not found within a named corpus*,
+  not *does not exist*.
 - **DONE 2026-09-05: Dapr owns dispatch.** The sidecar is the Kafka consumer and pushes into an app
   endpoint; the app never sees partition, offset or key, and a pluggable component supplies *broker
   semantics* while Dapr still performs the fan-out. Ordering guarantees are undocumented, the only
@@ -227,6 +233,18 @@ like product sense:
 - **That the cost framing is understood instantly** where a speed framing is not. **Check:** put both
   in front of a handful of users and record which they repeat back correctly, or publish both and
   compare.
+
+## A note on the briefs this register commissions
+
+**The 2026-09-05 limiter brief cited RFC 9239 as the rate-limit header standard. It is not** - that
+number belongs to an unrelated media-types RFC, and the actual work is
+`draft-ietf-httpapi-ratelimit-headers`, still a draft. The researcher caught it and searched for the
+right document anyway.
+
+Recorded because it is the same defect class this register just named, committed while naming it: a
+citation asserted from memory with no link and no check, in a brief whose whole purpose was to
+verify assertions. **When a brief names a standard, a version or an identifier, look it up before
+sending it** - a wrong one either wastes the search or, worse, gets repeated back as confirmed.
 
 ## The rule this register runs under
 

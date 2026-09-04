@@ -281,3 +281,15 @@ reason header naming which bucket class was hit, a resource header naming what t
 against, a live concurrency header. **Read the scope from the response rather than declaring it in
 the contract**, which is both more accurate and one less thing for an operator to get wrong. Where no
 such header exists, the honest default is to treat the 429 as evidence about that participant only.
+
+**And a declared field would have been wrong anyway: scope varies per ENDPOINT, not per vendor**, so
+a single value per downstream would be incorrect for most of them. That is the strongest argument
+against putting scope in the contract at all.
+
+**There is a standard trying to solve exactly this, and it is worth tracking.** The IETF's rate-limit
+header work - `draft-ietf-httpapi-ratelimit-headers`, **a draft and not an RFC** - carries an explicit
+**partition key** parameter, and its own FAQ states the problem this correction is about better than
+we did: *without a partition key, a server can effectively only have one scope, or it must
+communicate the scopes out of band.* **Adoption is poor** - the draft's header names appear in
+roughly one of the services checked and the partition key in none - so it is a design input and a
+thing to watch, not something to depend on.
