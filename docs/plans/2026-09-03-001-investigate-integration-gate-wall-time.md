@@ -10,8 +10,10 @@ hosted runner, and the `unit-gate` run's 2-CPU Docker replica does not extend to
 > **Read the postscript at the end before acting on anything here.** Two later batches overturned
 > parts of this document: the baseline's "16s spread" understated the noise by nearly an order of
 > magnitude, the 4% comparison threshold derived from it was never justified, and the compaction
-> poll listed below as open work was tried and is a proven no-op. The measurements and the
-> reasoning above are left as they were taken; the postscript says which conclusions survived.
+> poll listed below as open work was tried and is a proven no-op, and `compiler:testCompile` -
+> listed below as the third-largest open lever - was investigated and closed as unskippable. The
+> measurements and the reasoning above are left as they were taken; the postscript says which
+> conclusions survived.
 
 ## Headline
 
@@ -204,10 +206,20 @@ and log lines** instead:
 
 - **Skipping javadoc, sources and delombok WORKS**: a run with the flags builds **0 javadoc jars
   against 9** without, and delombok reports skipping **11 times against 2**. It provably does less
-  work and therefore cannot be slower, which is the whole basis on which it was taken. The first cut
-  of it also carried a real bug - `-Dsource.skip=true` is not a property maven-source-plugin reads
+  work and therefore cannot be slower, which is the whole basis on which it was taken. **Its size is
+  an estimate, not a measurement**: the per-goal table above attributes `javadoc:jar` 14s and
+  `lombok:delombok` 8s, so roughly 22s plus a little for `source:jar` - and no measurement here ever
+  confirmed it, because 22s is a fifth of this lane's noise floor. An earlier draft of this PR said
+  "~10s", taken from a `prebuild_seconds` difference that the retraction above shows was drift. The
+  goal attribution is the better estimate; neither number is evidence. The first cut of the change
+  also carried a real bug - `-Dsource.skip=true` is not a property maven-source-plugin reads
   (it wants `maven.source.skip`), so sources jars were still built in both arms and nothing in the
   timings could have revealed it.
+- **`compiler:testCompile` is CLOSED, not open.** Item 3 of "Still open" above ranks it as the
+  third-largest lever at 60s. It cannot be skipped: the integration sources import 19 classes out
+  of `src/test/java`, including `ParallelEoSStreamProcessorTestBase` and its transitive tail, so
+  that compilation is load-bearing. Established by inspection before it cost a CI run, and the
+  reason now lives in `bin/ci-integration-test.sh` where someone would go to attempt it.
 - **The compaction poll is a NO-OP**: it logged "Compaction did NOT advance" four times out of four,
   so it never fired and paid the full 20s deadline every call. Dropped rather than merged. The
   detector was wrong - log compaction need not advance the log start offset - and the open question

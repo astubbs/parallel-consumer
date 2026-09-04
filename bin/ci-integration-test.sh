@@ -57,11 +57,13 @@ set -euo pipefail
 # every run. Nothing here consumes either.
 #
 # TAKEN ON FIRST PRINCIPLES, NOT ON A MEASUREMENT, and the distinction is the point. The skips
-# provably do less work - a run with them builds 0 javadoc jars against 9 without, and delombok
-# reports skipping 11 times against 2 - so this cannot be slower. But the saving is around 10s of
-# a ~600s job, and this lane's wall time cannot resolve it: three CONCURRENT samples of IDENTICAL
-# code spread 119 seconds, roughly 11x the effect. Do not go looking for this in a before/after
-# timing; it is not visible there and never will be.
+# provably do less work - a run with them builds 0 javadoc jars against 9 without (two of the
+# eleven reactor poms are aggregators and produce none either way), and delombok reports skipping
+# 11 times against 2 - so this cannot be slower. The SIZE is an estimate and not a measurement:
+# per-goal attribution puts javadoc:jar at 14s and delombok at 8s, so roughly 22s. Nothing measured
+# it, because this lane's wall time cannot resolve 22s - three CONCURRENT samples of IDENTICAL code
+# spread 119 seconds. Do not go looking for this in a before/after timing; it is not visible there
+# and never will be.
 #
 # Property names matter, and two of the three are non-obvious: maven-source-plugin reads
 # maven.source.skip (NOT source.skip, which silently does nothing and shipped in the first cut of
