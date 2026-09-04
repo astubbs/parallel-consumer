@@ -31,15 +31,19 @@ import { NOTES_DIR } from './repo.mjs'
 import { INFLIGHT_IMPACT_ORDER, classifyNote, titleOf } from './inflight-tags.mjs'
 
 /** A directory's own rules file is not one of the documents an area holds - the index's guard, ported. */
-const DIRECTORY_DOCS_RE = /\/(AGENTS|CLAUDE|README)\./
+export const DIRECTORY_DOCS_RE = /\/(AGENTS|CLAUDE|README)\./
 /** Both extensions, because the plan contract allows an artifact to be `.html`. */
-const DOCUMENT_RE = /\.(md|html)$/
+export const DOCUMENT_RE = /\.(md|html)$/
 
 /** The word an agent types for an area: the directory's last segment - `inflight`, `solutions`, `plans`. */
 const areaKey = (dir) => dir.split('/').pop()
 
 /** The in-flight groups that are not impacts, in the index's order around the impact list. */
-const INFLIGHT_GROUPS = {
+/**
+ * The label for each non-impact group. EXPORTED because `rank` renders the same groups: a second
+ * copy of this taxonomy had already drifted in four of its five entries before it was noticed.
+ */
+export const INFLIGHT_GROUPS = {
     registers: 'registers - standing documents, consult before choosing work',
     feature: 'feature - proposed, no consequence attached',
     unmatched: 'unmatched - no group claimed them: inflight-type or inflight-impact missing or misspelt',
@@ -48,7 +52,7 @@ const INFLIGHT_GROUPS = {
 }
 
 /** Every in-flight group key in presentation order. */
-const INFLIGHT_GROUP_ORDER = ['registers', ...INFLIGHT_IMPACT_ORDER, 'feature', 'unmatched', 'closed', 'deferred']
+export const INFLIGHT_GROUP_ORDER = ['registers', ...INFLIGHT_IMPACT_ORDER, 'feature', 'unmatched', 'closed', 'deferred']
 
 const impactRank = (impact) => {
     const i = INFLIGHT_IMPACT_ORDER.indexOf(impact)

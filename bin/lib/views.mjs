@@ -15,6 +15,18 @@
 
 export const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`
 
+/**
+ * WHAT WAS SEARCHED, in one sentence, for every command that answers across the refs.
+ *
+ * It lives here rather than beside either caller because it is the tool's core disclaimer - a
+ * complete search of a stale corpus reads exactly like a complete search of a current one - and a
+ * second copy of it would drift. `bin/lib/docs-views.mjs` owned it and `formatRank` restated it;
+ * both now read the same sentence. Takes anything carrying `refs: {total, live, archival}` and
+ * `baseline`, which is the shape `docsShape` and `rank` both return.
+ */
+export const refsText = (shape) => `${shape.refs.total} refs (${shape.refs.live} live, ${shape.refs.archival} archival); baseline ${shape.baseline}.`
+export const scopeLine = (shape) => `searched ${refsText(shape)} Read from the refs, never the working tree.`
+
 export function formatWarnings(warnings) {
     if (!warnings.length) return ''
     return `${warnings.map((w) => `  ${w.id === 'head-behind' ? 'NOTE' : 'WARNING'}: ${w.lines.join('\n           ')}`).join('\n')}\n`
@@ -449,4 +461,158 @@ export function formatSlowest(v) {
     out.push('\nWall-clock on a shared runner, NOT a benchmark - see bin/lib/codecov.mjs. Never feed')
     out.push('this to a throughput comparison; that is what bin/check-throughput-regression.mjs is for.')
     return out.join('\n') + truncNote(v)
+}
+
+/**
+ * The backlog view: groups of open notes, and the register delta.
+ *
+ * THE DELTA IS FIRST because it is the deliverable - the ranking pass wants the disagreements, not
+ * the corpus. The groups follow as a map with the command that scopes to each, which is the
+ * interface every level of this front door already uses.
+ *
+ * ASYMMETRIC ON PURPOSE. What the register ranks is a handful of entries, so each is listed with the
+ * reason it needs attention. What it does not name is nearly every open note in the repository, so
+ * that half is a count per group until a group scopes the call - listing it unscoped would be the
+ * whole-corpus dump this command exists to avoid, arriving under the name "delta".
+ */
+export function formatRank(r) {
+    const out = []
+    const cmd = (g) => `bin/inflight.mjs rank --impact ${g}`
+
+    if (r.unreadableRefs.length > 0) {
+        out.push(`  COULD NOT LIST the notes on ${plural(r.unreadableRefs.length, 'ref')}, so this answer does not cover them:`)
+        out.push(`      ${r.unreadableRefs.slice(0, 5).join(', ')}${r.unreadableRefs.length > 5 ? ', ...' : ''}`)
+        out.push('')
+    }
+    if (r.unreadable.length > 0) {
+        out.push(`  COULD NOT READ ${plural(r.unreadable.length, 'note')} that the ref listing named - this answer is INCOMPLETE:`)
+        for (const p of r.unreadable) out.push(`      ${p}`)
+        out.push('')
+    }
+    if (!r.prsOk) {
+        out.push(`  WARNING: ${r.prsReason} - pull-request state below is UNKNOWN, not absent.\n`)
+    }
+
+    const d = r.delta
+    if (!d.ok) {
+        out.push(`  THE DELTA DID NOT RUN: ${d.reason}`)
+        out.push('  Everything below is the grouping alone - not a statement that the register agrees with it.\n')
+    } else {
+        out.push(`the register (${'docs/inflight/process-candidate-ranking.md'}) against the corpus:\n`)
+        if (d.recognised === 0) {
+            // ZERO RECOGNISED ENTRIES IS NOT AGREEMENT. The parse reads list items citing a note
+            // filename or an `astubbs#<n>`; a register saying neither is out of its reach, and
+            // saying nothing here would render that as a register everything agrees with.
+            out.push('  the register was READ but the parse recognised no entry in it - so the delta below')
+            out.push('  is not a finding about the register, it is the parse not reaching it.')
+        } else if (d.stale.length === 0) {
+            out.push(`  ${coverage(d)}; nothing it recognises has stopped being open work.`)
+        } else {
+            out.push(`  ${coverage(d)}. Ranked, but no longer open work in an impact bucket:`)
+            for (const e of d.stale) out.push(`      ${e.cites.join(' / ').padEnd(52)}${e.reason}`)
+        }
+        if (d.unrankedCounts.length > 0) {
+            out.push('', '  open and NOT named by the register:')
+            for (const u of d.unrankedCounts) {
+                out.push(r.scoped === null
+                    ? `      ${u.key.padEnd(18)}${String(u.count).padStart(4)}    ${cmd(u.key)}`
+                    : `      ${plural(u.count, 'note')} in ${u.key}`)
+            }
+        }
+        out.push('')
+    }
+
+    for (const g of r.groups) {
+        out.push(`  ${g.label}`)
+        // Rows only when a group scopes the call - the bare call is the map, never the dump.
+        if (r.scoped === null) { out.push(`      ${plural(g.rows.length, 'open note')}    ${cmd(g.key)}`); continue }
+        for (const row of g.rows) {
+            out.push(`      ${row.name}`)
+            if (row.title) out.push(`          "${row.title}"`)
+            out.push(`          ${carriage(row, r)}`)
+            // Which side of the delta this row is on, on the row - not only as a count above.
+            if (row.ranked) out.push('          the register already names this one')
+            if (row.number) {
+                const which = { fork: 'this fork', upstream: 'confluentinc', unknown: 'NOT attributable from the filename - try both' }
+                out.push(`          number in the filename: ${row.number.value} (${which[row.number.attribution]})`)
+                for (const c of row.number.commands) out.push(`              ${c}`)
+            }
+            // NOT `d` - that is the delta, thirty lines up in this same function.
+            for (const dis of row.disagreement) {
+                // NAMING AN ARCHIVE AS IF IT WERE A BRANCH sends a reader to check out a tag. The
+                // rule is three lines up in this file's own carriage sentence; the line printing it
+                // did not follow it.
+                const where = dis.archival ? `${dis.ref} (an ARCHIVE)` : dis.ref
+                out.push(`          DISAGREEMENT: on ${where} this note reads as ${dis.group}, not ${row.group}`)
+            }
+            // EVERY LEVEL PRINTS THE NEXT LEVEL'S COMMAND - the front door's whole interface, and
+            // what `docs list inflight <impact>` already does for the same rows. Without it a reader
+            // who wants the note has to know `docs show` exists and retype the path.
+            out.push(`          bin/inflight.mjs docs show ${row.path}`)
+        }
+        out.push('')
+    }
+
+    if (r.groups.length === 0) {
+        // AN EMPTY RESULT IS AN ANSWER AND HAS TO LOOK LIKE ONE. Saying nothing here is
+        // indistinguishable from a section that was dropped, which is the silence this whole
+        // command is organised against.
+        out.push(r.scoped === null
+            ? '  no open note is in any impact bucket.'
+            : `  no open note is in ${r.scoped}. That is a result: nothing on any ref carries one.`)
+    }
+
+    if (r.excluded.length > 0) {
+        // ACROSS THE WHOLE CORPUS, and it says so - these counts are identical scoped or not, so
+        // sitting them unqualified among scope-limited lines read as if they described the group.
+        out.push(`  not work waiting to be ranked, across the whole corpus: `
+            + `${r.excluded.map((e) => `${e.count} ${e.key}`).join(', ')}`)
+    }
+    out.push(`\n  ${scopeLine(r)}`)
+    out.push('  An empty group means nothing on any ref carries one, not that your checkout has none.')
+    return out.join('\n')
+}
+
+/**
+ * How much of the register the parse actually reached, never a bare numerator.
+ *
+ * "11 entries recognised" reads as a complete reading of the register and is not: the ready-picks
+ * half cites bare `#40` and `confluentinc#...` numbers this parse does not reach. Saying the
+ * denominator, and what the unreached items look like, is the difference between a coverage
+ * statement and a claim. (It also stops `plural` making "entrys", which it did.)
+ */
+function coverage(d) {
+    const entries = d.recognised === 1 ? '1 entry' : `${d.recognised} entries`
+    const outside = d.items - d.recognised
+    return `${entries} of ${d.items} list items recognised`
+        + (outside > 0
+            ? ` - the other ${outside} cite something this parse does not read (a bare number, or an upstream one), so they are outside the delta entirely`
+            : '')
+}
+
+/**
+ * The one sentence that must never read as ownership.
+ *
+ * On the baseline, carriage is evidence of nothing - every branch cut from it carries the note. Off
+ * it, the carrying branch is the most useful thing in the row, and its pull request is named as a
+ * fact about the BRANCH rather than about the note's subject.
+ */
+function carriage(row, r) {
+    // THE REF ACTUALLY READ, not the path's on-baseline fact. A note deferred on the baseline and
+    // open on a branch is read from that branch, and the every-branch-carries-it sentence would be a
+    // lie about the row whose whole point is that branch.
+    if (row.readFromBaseline) return `on ${r.baseline} - every branch cut from it carries this, so carriage names no owner`
+    if (row.onBaseline) {
+        return `read from ${row.readRef}, NOT ${r.baseline} - the baseline's copy is not open work, this ref's is`
+            + ` - CARRIES the note, which is not the same as fixing what it describes`
+    }
+    const pr = row.pr ? `  [astubbs/parallel-consumer#${row.pr.number} ${row.pr.state}]` : (row.prKnown ? '' : '  [PR state UNKNOWN]')
+    const where = row.preserved
+        ? `preserved only on ${row.readRef} - an archive, so nothing here will land it`
+        // READ FROM AN ARCHIVE WHILE SOMETHING LIVE CARRIES IT: every live copy is closed and the
+        // open one survives on a tag. Naming the tag without saying it is one reads as a branch
+        // somebody could go and work on.
+        : `carried by ${plural(row.carryingRefs.length, 'ref')}, read from ${row.readRef}`
+            + `${row.readRefArchival ? ' (an ARCHIVE - the live copies are closed)' : ''}${pr}`
+    return `${where} - CARRIES the note, which is not the same as fixing what it describes`
 }
