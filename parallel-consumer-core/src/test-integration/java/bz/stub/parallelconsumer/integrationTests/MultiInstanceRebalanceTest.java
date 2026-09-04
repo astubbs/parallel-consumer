@@ -899,11 +899,30 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
         return Thread.getAllStackTraces().entrySet().stream()
                 .filter(e -> e.getKey().getName().endsWith(suffix))
                 .map(e -> {
-                    String frames = Arrays.stream(e.getValue())
-                            .limit(8)
+                    StackTraceElement[] all = e.getValue();
+                    // The top frame says WHERE it is parked; the Kafka/PC frames say WHICH CALL put
+                    // it there, and only the second answers the question. A flat "first N frames"
+                    // does not work here and this is the fix for having tried it: a thread parked in
+                    // a socket select spends four frames on sun.nio internals and another four on
+                    // Kafka's network plumbing, so the first EIGHT frames stopped at
+                    // ConsumerNetworkClient.poll - one frame short of whether the caller was
+                    // KafkaConsumer.poll, commitSync or close, which is the whole question.
+                    String top = all.length == 0 ? "<no frames>" : all[0].toString();
+                    String meaningful = Arrays.stream(all)
                             .map(StackTraceElement::toString)
+                            .filter(f -> f.contains("org.apache.kafka.clients")
+                                    || f.contains("bz.stub.parallelconsumer"))
+                            .limit(10)
                             .collect(Collectors.joining(" <- "));
-                    return e.getKey().getName() + "[" + e.getKey().getState() + "] " + frames;
+                    if (meaningful.isEmpty()) {
+                        // never report nothing: an unrecognised stack is still evidence, and a
+                        // filter that silently empties is the failure mode this comment exists for
+                        meaningful = Arrays.stream(all).limit(15)
+                                .map(StackTraceElement::toString)
+                                .collect(Collectors.joining(" <- "));
+                    }
+                    return e.getKey().getName() + "[" + e.getKey().getState() + "] parked-at=" + top
+                            + " via " + meaningful;
                 })
                 .collect(Collectors.joining("\n      ", "\n      ", ""));
     }
