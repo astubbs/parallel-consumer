@@ -110,6 +110,20 @@ function classesInTree() {
     return found
 }
 
+// THE NETWORK READ IS OPT-IN, and the variable is deliberately NOT `CI`. Every `check-*` script is
+// blanket-granted to the PR reviewer (`Bash(node bin/check-*.mjs:*)` in claude.yml and
+// claude-code-review-dispatch.yml) and auto-run by check-all.sh's glob, which is why bin/AGENTS.md
+// says not to give that prefix to anything reaching the network beyond `gh` reads. That reviewer
+// runs INSIDE GitHub Actions, so gating on `CI` would disable this on a laptop - where it is
+// harmless - and leave it enabled exactly where the auto-executing agent lives. An explicit
+// variable that only the workflow sets inverts that correctly: nothing the reviewer or check-all.sh
+// does can reach Codecov, and the sweep still lists this gate rather than losing sight of it.
+if (process.env.SHARD_BALANCE_NETWORK !== '1') {
+    console.log('check-integration-shard-balance: reads Codecov over the network, which is opt-in - nothing in scope')
+    console.log('  Run it deliberately with SHARD_BALANCE_NETWORK=1, or read the Repo Hygiene job that does.')
+    process.exit(3)
+}
+
 // NOT branch-scoped, and that is measured rather than assumed. Scoping to the default branch is the
 // obvious fix for "the newest observation for a class can come from any branch", but there is no
 // default-branch corpus to scope TO: api.codecov.io reports count=0 for branch=master AND for

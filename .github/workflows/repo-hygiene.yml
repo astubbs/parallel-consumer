@@ -94,6 +94,16 @@ jobs:
       - name: Every gate and every self-test, discovered rather than listed
         run: bash bin/check-all.sh --with-tests
 
+      # The sweep above deliberately does NOT reach Codecov: check-integration-shard-balance.mjs
+      # exits 3 unless SHARD_BALANCE_NETWORK is set, because `check-*` is blanket-granted to the PR
+      # reviewer and auto-run by check-all.sh's glob, and bin/AGENTS.md forbids that prefix a
+      # network read beyond `gh`. This job is the one place that opts in - so the gate still runs,
+      # and the grant still cannot reach the network. Advisory: it reports drift and exits 0.
+      - name: Integration shard drift, the one place the Codecov read is opted into
+        env:
+          SHARD_BALANCE_NETWORK: '1'
+        run: node bin/check-integration-shard-balance.mjs
+
   # WHY THIS LANE EXISTS. Every other job in this file is ubuntu, so the shell harness was only ever
   # exercised against GNU coreutils and bash 5, while contributors run it on macOS with BSD userland
   # and bash 3.2. Four live defects survived a deliberate portability sweep, two automated reviews
