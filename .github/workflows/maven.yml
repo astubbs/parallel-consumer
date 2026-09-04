@@ -689,7 +689,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      # v1.1.0. The bump is not routine: at c828d78 this action installed jscpd with `npx jscpd@4`
+      # v1.1.1. The bump is not routine: at c828d78 this action installed jscpd with `npx jscpd@4`
       # INSIDE the step it measures, so the base-branch engine step paid a cold install the PR-branch
       # step did not - measured at 288s against 15s on the same tree - and npm's default 300s
       # fetch-timeout meant one stalled registry request consumed this job's whole 5-minute budget.
@@ -698,7 +698,7 @@ jobs:
       # It also stopped unzipping its own PMD distribution into the tree it scans. That had inflated
       # the duplication DENOMINATOR ~4x, so every percentage this check reported was about a quarter
       # of the truth - see cpd-max-duplication below.
-      - uses: astubbs/duplicate-code-cross-check@e5c9f6fbd020be8bc7c95568c1926eda57afb45f # v1.1.0 + astubbs/duplicate-code-cross-check#11
+      - uses: astubbs/duplicate-code-cross-check@b462149cbfcdc7585c851e3109763c72787699a7 # v1.1.1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           # SCAN EVERYTHING. There is nothing here to exclude, and three earlier attempts at a
