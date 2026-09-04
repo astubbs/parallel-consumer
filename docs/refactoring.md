@@ -259,6 +259,22 @@ them, do not copy them back.
   codebase contains no annotation. Every detector here is discovery and none prevents regression, so
   the annotation is what makes a fix permanent - write it with the fix.
 
+### `ProducerManager.ProducingLock` is the retry-queue iterator's shape, undeclared (SMALL, but establish the premise first)
+
+- Found by the defect-class sweep at astubbs#433's merge prep, which declared and asserted the same
+  shape on `RetryQueue.RetryQueueIterator`. `ProducingLock` wraps a `ReentrantReadWriteLock.ReadLock`
+  taken in `acquireProduceLock` and released by whoever calls its `unlock()`, so the same constraint
+  applies: a read lock may only be released by its holder, and an escaped one cannot be released at
+  all - which its own javadoc already describes the cost of, "the same permanent block on the next
+  commit's write-lock acquisition".
+- The recipe is `@ThreadConfined(ThreadConfined.ANY)` plus an owning-thread assertion, per
+  `parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/AGENTS.md`. **Do not apply it
+  blind**: the premise is that the acquirer is always the releaser, and that is exactly what was
+  wrong about `lastCommitTime`. The lock is taken on a worker thread in
+  `ParallelEoSStreamProcessor`, stored on the `PollContextInternal`, and released through that
+  context - so establish which thread performs the release before declaring anything. If it can
+  differ, that is a defect and not a tidy-up, and it becomes a note rather than this line.
+
 ### Make the commit/close ownership polymorphism official - an interface, not a rename (SMALL, do any time)
 *Independent of the thread-model work below/above. No behaviour change, but do not file this as
 cosmetic - see the last bullet.*
