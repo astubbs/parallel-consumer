@@ -157,6 +157,22 @@ class ProducerManagerDetectionTest {
      * shutdown. Abort is swallowed and the close happens regardless.
      */
     /**
+     * A PC-built producer under a consumer-commit mode: rebuildable, so the replacement source is present, but
+     * never recovered, because recovery runs from the transactional commit loop only. The test env's wrapper is
+     * always transactional, which this mode rejects; a consumer-commit-mode PC-built producer carries no
+     * transactional id, so neither does its replacement source.
+     */
+    private ProducerManager<String, String> pcBuiltManagerInAConsumerCommitMode() {
+        module = new PCModuleTestEnv(ParallelConsumerOptions.<String, String>builder()
+                .commitMode(PERIODIC_CONSUMER_SYNC)
+                .commitLockAcquisitionTimeout(Duration.ofSeconds(5))
+                .build());
+        var nonTransactional = new ProducerWrapper<>(module.options(), false, module.producer());
+        var replacement = new ReplacementProducerSource<String, String>(() -> nonTransactional, null);
+        return new ProducerManager<>(nonTransactional, module.consumerManager(), module.workManager(), module.options(), Optional.of(replacement));
+    }
+
+    /**
      * A PC-built producer in a consumer-commit mode is rebuildable but never recovered: recovery runs from the
      * transactional commit loop only. If detection recorded the condition anyway, the manager sat in REPLACING with
      * nothing to replace it and every worker parked on the produce lock for the life of the instance. So on that path
@@ -164,15 +180,7 @@ class ProducerManagerDetectionTest {
      */
     @Test
     void inAConsumerCommitModeAPcBuiltProducerIsNotRecoveredSoNothingIsRecorded() {
-        module = new PCModuleTestEnv(ParallelConsumerOptions.<String, String>builder()
-                .commitMode(PERIODIC_CONSUMER_SYNC)
-                .commitLockAcquisitionTimeout(Duration.ofSeconds(5))
-                .build());
-        // the test env's wrapper is always transactional, which this mode rejects; a consumer-commit-mode PC-built
-        // producer carries no transactional id, so neither does its replacement source
-        var nonTransactional = new ProducerWrapper<>(module.options(), false, module.producer());
-        var replacement = new ReplacementProducerSource<String, String>(() -> nonTransactional, null);
-        var manager = new ProducerManager<>(nonTransactional, module.consumerManager(), module.workManager(), module.options(), Optional.of(replacement));
+        var manager = pcBuiltManagerInAConsumerCommitMode();
 
         assertThat(manager.canRecover()).isFalse();
         assertThat(manager.recordIfRecoverable(new ProducerFencedException("fenced"))).isEmpty();
@@ -246,13 +254,7 @@ class ProducerManagerDetectionTest {
      */
     @Test
     void inAConsumerCommitModeATerminallyFailedSendRecordsNothing() {
-        module = new PCModuleTestEnv(ParallelConsumerOptions.<String, String>builder()
-                .commitMode(PERIODIC_CONSUMER_SYNC)
-                .commitLockAcquisitionTimeout(Duration.ofSeconds(5))
-                .build());
-        var nonTransactional = new ProducerWrapper<>(module.options(), false, module.producer());
-        var replacement = new ReplacementProducerSource<String, String>(() -> nonTransactional, null);
-        var manager = new ProducerManager<>(nonTransactional, module.consumerManager(), module.workManager(), module.options(), Optional.of(replacement));
+        var manager = pcBuiltManagerInAConsumerCommitMode();
 
         manager.recovery().recordIfPoisonsTransaction(new RecordTooLargeException("too large"));
 
