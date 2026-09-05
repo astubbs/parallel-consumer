@@ -26,6 +26,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static bz.stub.parallelconsumer.internal.utils.LatchTestUtils.awaitLatch;
 import static bz.stub.parallelconsumer.offsets.OffsetMapCodecManager.HighestOffsetAndIncompletes;
 import static com.google.common.truth.Truth.assertThat;
 
@@ -87,7 +88,12 @@ class EncodingCounterRegistrationIsAtomicTest {
      */
     private static final long WINDOW_HOLD_SECONDS = 5;
 
-    private static final long THREAD_JOIN_SECONDS = 60;
+    /**
+     * Ceiling on every wait the test body makes: the rendezvous that confirms the first encoder reached the
+     * window, and each {@link Thread#join(long)}. An {@code int} because that is what
+     * {@code LatchTestUtils.awaitLatch} takes; it widens for the join.
+     */
+    private static final int THREAD_JOIN_SECONDS = 60;
 
     @Test
     @Timeout(value = 120, unit = TimeUnit.SECONDS)
@@ -110,7 +116,7 @@ class EncodingCounterRegistrationIsAtomicTest {
         var firstEncoder = encoderThread("first-encoder", codecManager, state, firstFailure, encodesCompleted);
         firstEncoder.start();
 
-        assertThat(metrics.firstEncoderInsideWindow.await(THREAD_JOIN_SECONDS, TimeUnit.SECONDS)).isTrue();
+        awaitLatch(metrics.firstEncoderInsideWindow, THREAD_JOIN_SECONDS);
 
         var secondEncoder = encoderThread("second-encoder", codecManager, state, firstFailure, encodesCompleted);
         secondEncoder.start();
