@@ -105,6 +105,18 @@ document. This section is the detail behind it.
   astubbs/parallel-consumer#N` lines from the PR body and blocks the child until every parent has
   merged. Produces the **required** check `Check PR Dependencies`, so a stacked PR cannot merge out
   of order.
+- **`clients.yml`** - "Clients". One row per **foreign-toolchain** proxy-client module
+  (astubbs#242): install that language's toolchain, then build and run its hello fixture through
+  `./mvnw ... -Dpc.foreignClients`. `fail-fast: false`, so one language's breakage cannot hide
+  another's. Three things about it are easy to get wrong:
+  - **Every row sets `PC_FOREIGN_CLIENTS_STRICT`**, which turns "toolchain not on PATH" from the
+    skip a developer's machine wants into the failure a provisioned runner needs.
+    `bin/foreign-client-step.sh` owns that contract; a row that stops setting it goes green having
+    built nothing.
+  - **The Java, Kotlin and Scala client modules have no row here.** They are ordinary Maven modules
+    in the default reactor, so `maven.yml` already builds them and runs their fixture tests.
+  - **The Swift row runs on `macos-latest`** - the ubuntu images ship no Swift toolchain, and the
+    macOS image's bundled one avoids both a third-party setup action and a container.
 - **`repo-hygiene.yml`** - cheap repo-wide static checks needing no broker, no Docker and no build.
   **ONE job, `repo: hygiene`, which DISCOVERS rather than enumerates**: it runs
   `bin/check-all.sh --with-tests`, globbing `bin/check-*.sh` and `bin/test-*.sh`. It was one job per

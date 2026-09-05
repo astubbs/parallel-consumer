@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>parallel-consumer-proxy-clients</artifactId>
+        <groupId>bz.stub.parallelconsumer</groupId>
+        <version>0.6.0.0-SNAPSHOT</version>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+
+    <name>Parallel Consumer - Proxy Client Kotlin</name>
+    <artifactId>parallel-consumer-proxy-client-kotlin</artifactId>
+
+    <!--
+        The Kotlin end of the polyglot build scaffolding (astubbs#242), and one of the three
+        modules with NO foreign-toolchain wrapper: Kotlin is a JVM language, kotlin-maven-plugin
+        comes from Central like any other plugin, and it needs nothing installed that the reactor
+        does not already have. That is why it sits in the clients aggregator's default <modules>
+        while go, rust and the rest sit in the opt-in profile.
+
+        THE REAL COST OF THAT IS A DOWNLOAD, NOT A TOOLCHAIN, and it is worth naming: an ordinary
+        `bin/build.sh` now resolves the Kotlin compiler and stdlib. That is the price of the
+        Kotlin row being exercised on every build rather than only when somebody remembers a flag.
+    -->
+
+    <properties>
+        <!--
+            The Kotlin compiler emits class file 52 (Java 8) for jvmTarget 1.8, which is what the
+            rest of this build targets through Jabel - so the two agree without the module having
+            to override release.target.
+        -->
+        <kotlin.version>2.1.21</kotlin.version>
+        <kotlin.jvm.target>1.8</kotlin.jvm.target>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-stdlib</artifactId>
+            <version>${kotlin.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-test-junit5</artifactId>
+            <version>${kotlin.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-maven-plugin</artifactId>
+                <version>${kotlin.version}</version>
+                <configuration>
+                    <jvmTarget>${kotlin.jvm.target}</jvmTarget>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>compile</id>
+                        <goals>
+                            <goal>compile</goal>
+                        </goals>
+                        <configuration>
+                            <sourceDirs>
+                                <sourceDir>${project.basedir}/src/main/kotlin</sourceDir>
+                            </sourceDirs>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>test-compile</id>
+                        <goals>
+                            <goal>test-compile</goal>
+                        </goals>
+                        <configuration>
+                            <sourceDirs>
+                                <sourceDir>${project.basedir}/src/test/kotlin</sourceDir>
+                            </sourceDirs>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

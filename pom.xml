@@ -38,6 +38,7 @@
         <module>parallel-consumer-vertx</module>
         <module>parallel-consumer-reactor</module>
         <module>parallel-consumer-mutiny</module>
+        <module>parallel-consumer-proxy-clients</module>
         <module>parallel-consumer-examples</module>
     </modules>
 
@@ -61,6 +62,9 @@
     </scm>
 
     <properties>
+        <!-- Set true by the foreign-clients profile below; the notice only fires when the foreign
+             client modules are ABSENT from the build (astubbs#242). -->
+        <pc.foreign.notice.skip>false</pc.foreign.notice.skip>
         <source.version>17</source.version>
         <release.target>8</release.target>
 
@@ -185,6 +189,43 @@
     </properties>
 
     <profiles>
+
+        <!--
+            SAY WHAT IS MISSING, AND ONLY WHEN SOMETHING IS. There is one notice, not a pair: a build
+            that includes the foreign clients needs no announcement that it did, so this profile
+            fires only when they are absent and is silent otherwise.
+
+            parallel-consumer-proxy-clients/pom.xml OWNS the exclusion - which modules leave the
+            reactor and why; this only decides what the root module says about it. Adding a language
+            means editing the notice text below as well as that pom.
+
+            ONE PROFILE ID, ONE SWITCH. `foreign-clients` exists in this pom and in the clients
+            aggregator, so every way of turning it on turns all of it on:
+
+                ./mvnw -Dpc.foreignClients ...      the switch
+                ~/.m2/settings.xml, a profile that SETS that property, for a machine that always
+                wants them
+
+            NOT -P foreign-clients: it activates both profiles by id, but anything downstream that
+            activates on the PROPERTY (a per-module profile, and the CI rows' own flags) never sees
+            it. The notice is correspondingly NOT gated on a negated `!pc.foreignClients` property -
+            a negated-property profile cannot be switched off by activating something by id, so
+            `-P foreign-clients` would have built the clients while the notice still said they were
+            absent. It is always declared, and this profile silences it, which every activation
+            route reaches.
+        -->
+        <profile>
+            <id>foreign-clients</id>
+            <activation>
+                <property>
+                    <name>pc.foreignClients</name>
+                </property>
+            </activation>
+            <properties>
+                <pc.foreign.notice.skip>true</pc.foreign.notice.skip>
+            </properties>
+        </profile>
+
         <profile>
             <!-- override source and target when working from IDE -->
             <id>intellij-idea-only</id>
@@ -907,6 +948,41 @@
                             <arguments>
                                 <argument>${project.basedir}/bin/check-copyright-headers.sh</argument>
                             </arguments>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- THE ABSENT-TOOLCHAIN NOTICE, once at the root (inherited=false).
+
+                 An ordinary build does not contain the eight foreign-language proxy clients - the
+                 clients aggregator keeps them out of its default <modules> - and a reactor that
+                 silently omits eight modules is indistinguishable from one that never had them.
+                 So the root module says so, at `validate`, in four lines: what is missing, the flag
+                 that adds it, and what that flag needs installed.
+
+                 Silent when they ARE in the build: the foreign-clients profile above sets
+                 ${pc.foreign.notice.skip}, so nothing is printed on the run that needs no telling.
+                 (astubbs#242) -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+                <inherited>false</inherited>
+                <executions>
+                    <execution>
+                        <id>foreign-clients-notice</id>
+                        <phase>validate</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <skip>${pc.foreign.notice.skip}</skip>
+                            <target>
+                                <echo level="info">Parallel Consumer - JVM modules only.</echo>
+                                <echo level="info">- NOT in this build: the 8 foreign-language proxy clients (go, python, typescript, rust, dotnet, ruby, cpp, swift).</echo>
+                                <echo level="info">- Add -Dpc.foreignClients to build and run their hello fixtures.</echo>
+                                <echo level="info">- A language whose toolchain is absent is reported and skipped; add -Dpc.foreign.strict=1 to make that red instead.</echo>
+                            </target>
                         </configuration>
                     </execution>
                 </executions>
