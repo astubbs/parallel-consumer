@@ -1,4 +1,5 @@
-# Branch: perf/242-crossing-cost-ladder - the crossing-cost ladder spike
+# The FFI fast-path spike: the crossing-cost ladder, and the feature-crossover ladder
+<!-- post-merge: checked -->
 
 <!-- inflight-type: task -->
 <!-- inflight-impact: coordination -->
@@ -35,14 +36,15 @@ passes the demo, one traced capture was the whole wall, and libjvm demotes to fa
 [`perf-streams-under-native-image.md`](perf-streams-under-native-image.md) owns the result and its
 durability boundary.
 
-**A second workstream now lives on this branch: the feature-crossover ladder.** The transport
-ladder above asks how cheaply a call can cross the boundary. That question is answered, and the
-answer did not settle the strategy - so the branch also carries a ladder in the other dimension,
-adding the features a user actually came for back to the *reimplementation* one at a time to find
-where hand-rolling becomes the worse choice. Durability is the first rung, measured; exactly-once
-is the candidate for the second. [`perf-streams-engine-floor.md`](perf-streams-engine-floor.md)
-**owns both sets of numbers** - what is here is only that the branch has two purposes, so a reader
-arriving at the transport ladder does not take it for the whole.
+**The spike carries a second ladder, in the other dimension: the feature-crossover ladder.** The
+transport ladder above asks how cheaply a call can cross the boundary. That question is answered,
+and the answer did not settle the strategy - so the spike also adds the features a user actually
+came for back to the *reimplementation*, one at a time, to find where hand-rolling becomes the
+worse choice. Durability is the first rung, measured; exactly-once is the candidate for the
+second. [`perf-streams-engine-floor.md`](perf-streams-engine-floor.md) **owns both sets of
+numbers** - what is here is only that the spike has two purposes, so a reader arriving at the
+transport ladder does not take it for the whole.
+<!-- post-merge: checked -->
 
 Delete this note when the branch lands or is superseded; the spike's results note (created on this
 branch) will carry the numbers.
