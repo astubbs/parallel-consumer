@@ -162,6 +162,7 @@ introduced by `ef8b5515c`; there is no results file, no sweep command and no pai
 anywhere in the tree or in git history. The nearest committed data - the version bisect in
 `bench/results/core-curve.csv` and `curve.csv` - already put LOCAL against **0.5.3.2** at
 **1.00-1.02x**, which is parity, on the same axis, and had been sitting there the whole time.
+<!-- file-refs: N/A - branch-only document, carried by feats/hasten-micro-mvp (astubbs#392) among other unmerged branches; node bin/inflight.mjs docs show reads it from there -->
 
 **It has now been measured against 0.5.3.3**, which is genuinely on Maven Central (see
 [`release-0.6.0.0.md`](release-0.6.0.0.md), where this file's neighbour asserted the opposite until
@@ -178,6 +179,7 @@ today). `core` against `core`, alternating within one sweep, two repeats each:
 **Ten cells, all parity.** Full data:
 [`bench/results/realistic-ordering-matrix.csv`](../../bench/results/realistic-ordering-matrix.csv)
 and `realistic-throughput-matrix.csv`.
+<!-- file-refs: N/A - branch-only document, carried by feats/hasten-micro-mvp (astubbs#392) among other unmerged branches; node bin/inflight.mjs docs show reads it from there -->
 
 **What CAN be said, and it needs three qualifiers rather than none.** The gain is not in the engine a
 user gets by upgrading; it is in the opt-in engines this release adds, and only where a
@@ -332,6 +334,7 @@ configured concurrency (thousands in flight) with short handlers; at partition-c
 is neutral or slightly slower."* Both halves are measured
 ([`realistic-throughput-matrix.csv`](../../bench/results/realistic-throughput-matrix.csv)). The
 second half ships with the first or the first does not ship.
+<!-- file-refs: N/A - branch-only document, carried by feats/hasten-micro-mvp (astubbs#392) among other unmerged branches; node bin/inflight.mjs docs show reads it from there -->
 
 **3. P2's "the engine reaches the concurrency you configure" is true only as a conditional.** It
 holds under `UNORDERED`, and under `KEY` when keys are well distributed. On a Zipf distribution the
@@ -418,3 +421,4 @@ and K4's head-of-line number is measured (see the Known gaps entry above). Still
 rows for the async engines and `proxy` - their arm classes never bump the arrival barrier's
 completion counter, so every controlled-arrival run they attempt times out at the warmup barrier;
 harness work, tracked in `perf-async-arms-cannot-run-controlled-arrival.md`.
+<!-- file-refs: N/A - branch-only document, carried by feats/hasten-micro-mvp (astubbs#392) among other unmerged branches; node bin/inflight.mjs docs show reads it from there -->
