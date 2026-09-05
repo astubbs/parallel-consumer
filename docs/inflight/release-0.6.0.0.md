@@ -155,22 +155,28 @@ will ask about the others:
 
 ## Release gate: no disabled tests
 
-**0.6.0.0 does not ship while any test is disabled.** Tests currently carrying `@Disabled`:
-`VertxTest`, `ParallelEoSStreamProcessorTest` (two), and `MultiInstanceRebalanceTest`. All four
-predate the fork - they were added in 2021 and 2022, before this repo had a rule against muting or the
-`@Quarantined` mechanism that replaced it - so this is inherited debt rather than a rule being broken.
-One is not a muted test at all: `VertxTest.handleHttpResponseCodes`'s entire body is
-`assertThat(true).isFalse()`, a stub that was never written.
+**0.6.0.0 does not ship while any test is disabled. This gate is now met** - the four names this
+section used to list are stale; each has already been resolved by other work, and checking each with
+`grep` rather than trusting the list is what found that. `VertxTest.handleHttpResponseCodes` (a stub
+whose entire body was `assertThat(true).isFalse()`) was deleted outright. The two
+`ParallelEoSStreamProcessorTest` methods (`offsetsAreNeverCommittedForMessagesStillInFlightLong`,
+`processInKeyOrder`) run unconditionally now, with no `@Disabled` on either. And
+`MultiInstanceRebalanceTest.largeNumberOfInstances` carries `@Quarantined`, not `@Disabled` - a
+different gate covers it (release is separately blocked while the quarantine registry is non-empty),
+but it is no longer disabled.
 
-Each needs the same decision: fix it, delete it, or quarantine it with a diagnosis under
-`@Quarantined`. Quarantining does not satisfy this gate on its own, because a release is separately
-blocked while the quarantine registry is non-empty - so it defers the same gate by another route.
-AGENTS.md already gives the reasoning for why muting is the wrong answer: it "loses the signal - a
-'known flake' can be a real product bug".
+The one name this section never carried was the actual last `@Disabled` on master:
+`ProgressBarTest.width`, a manual/visual check with no assertions
+(`docs/test-hardening/inactive-tests-audit-2026-08-08.md` §1.5 has the full diagnosis). It carried no
+product behaviour to preserve, so it is deleted rather than fixed or quarantined; the deletion and its
+evidence are recorded in a new dated entry under `docs/test-hardening/`.
+`grep -rn @Disabled --include=*.java .` now returns nothing but comments and javadoc mentioning the
+annotation historically, none of them a live annotation.
 
-This matters to the release rather than only to the codebase, because `docs/data/testing-evidence.yaml`
-asserts flake discipline as evidence, and a reader who greps for `@Disabled` a minute later is exactly
-the reader that data is written for.
+AGENTS.md already gives the reasoning for why muting is the wrong answer generally: it "loses the
+signal - a 'known flake' can be a real product bug". This mattered to the release rather than only to
+the codebase, because `docs/data/testing-evidence.yaml` asserts flake discipline as evidence, and a
+reader who greps for `@Disabled` a minute later is exactly the reader that data is written for.
 
 ## This release is a stability release, and that is the point
 
@@ -306,7 +312,7 @@ Lincheck / jcstress evaluation resolved to adopt both arms:
 the Lincheck lane (astubbs#347) and the jcstress probe module (astubbs#348) both merged 2026-08-25,
 the calibration having held - Lincheck refound four real races unaided. That gives the fork
 scheduler-controlled concurrency testing as a standing lane, something upstream never had, and it is
-shipped rather than roadmap material. **Owed before the release: an entry in
+shipped rather than roadmap material. **Paid before the release: an entry in
 `docs/data/testing-evidence.yaml`** alongside the suite-as-evidence material, which is where this
 paragraph always said landed PoCs belong.
 
