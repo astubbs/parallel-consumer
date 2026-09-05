@@ -103,3 +103,30 @@ same `transactional.id`, and replays the work the abort discarded. That plan's "
 astubbs#262" section records what it took from this note. A transaction poisoned by a cause outside
 that set (the `RecordTooLargeException` case above) is not covered by it and stays as described here;
 the recovery machinery it builds is where that follow-up belongs.
+
+## Fixed, 2026-09-03: the poisoned transaction is now aborted while the instance runs
+
+<!-- post-merge: checked-begin - a dated account of how the wedge was closed, in the past tense -->
+The design decision left open above is taken, and it is the first of the two shapes
+`bug-poisoned-transaction-not-aborted-while-running.md` listed: **record the terminal send failure and let the
+controller abort**. The producer callback in `ProducerManager` - the same branch astubbs#261 carved out when it stopped
+the callback throwing under transactions - now calls `recordIfPoisonsTransaction`, and the control thread's recovery
+pass aborts on its next turn.
+
+**The second shape is obsolete rather than rejected.** "Bypass the `isDirty` gate so the failing commit surfaces" only
+ever existed because nothing ran on the control thread when nothing was dirty. astubbs#225's recovery pass runs at the
+top of *every* pass, independent of that gate, so the abort now happens whether or not other traffic is flowing - and
+the dirty gate is untouched. This is the whole reason the fix is small: it is a detection site on machinery that
+already existed.
+
+The behaviour this note describes - all 10 follow-on records failing with `Cannot execute transactional method because
+we are in an error state` while the instance stays up - is what the fix removes. A new transaction is begun after the
+poisoned one, which is exactly the observable the "How to settle it" section above named.
+<!-- post-merge: checked-end -->
+
+**What is deliberately NOT fixed.** The record that poisoned the transaction is still undeliverable, and PC still has
+no terminal-failure concept, so it returns on its retry delay and poisons the replacement. The instance is now *live
+and progressing* rather than wedged - healthy work commits, and the poison costs an abort per retry cycle instead of
+stopping the partition for good - but the poison record itself loops until a human intervenes. That remainder is the
+DLQ and max-attempts work, and it stays with
+`bug-poisoned-transaction-not-aborted-while-running.md`, which owns it.
