@@ -771,3 +771,60 @@ loggers on and the same analyser: if a failing iteration shows LeaveGroups or Jo
 for ~25s, the members and the instant are named and the fleet dump says what each was doing; if every
 latency there is also ~3s and the fleet still froze, the wait is not in the coordinator protocol and
 the search has been one layer too low.
+
+
+## EXPLAINED - 2026-09-05. The residual is the group protocol under this churn rate, and it is now measured, not asserted
+
+Linux batch at `3fcecf6e` (run 33939841725), coordinator loggers on: **4 failures in 60**, and in every
+one of them **every LeaveGroup was answered within 2.8s and every JoinGroup within 3.0s** - identical to
+the passing Linux runs (2.87-2.98s) and to the Mac baseline. No coordinator request was ever slow.
+The 25-second waits were never a slow request; they were a slow *join phase*.
+
+### The chain, every link observed in run 31
+
+1. **The chaos monkey restarts instances faster than a join phase completes.** PC-1 in the 23s before
+   the stall: 8 LeaveGroups, 16 JoinGroups sent, 2 successful joins. Toggled off ~0.8s after joining,
+   every time - with its JoinGroup still pending.
+2. **A LeaveGroup sent while the member's own JoinGroup is pending is not answered until the join phase
+   completes** (measured deterministically at 2.7s in a healthy group; here the responses land at
+   exactly two instants, 25:21.48 and 25:38.81, the two phase completions).
+3. **Under continuous arrivals and mid-join departures the join phase stayed open for 17 seconds**
+   (25:21.5 -> 25:38.8): generations 18-21 each completed within a heartbeat, the one opened at 21.5
+   did not. Why the coordinator held that phase open is a broker-side question this client-side
+   evidence cannot answer; that it did is not in doubt.
+4. **While the phase is open, `consumer.poll()` returns no records to ANY member** - the two
+   never-toggled survivors rejoined at 21.481 and fetched nothing until 38.8; their thread capture
+   shows an ordinary `pollForFetches`. That is the FLAT count, and the 11-round detector fires at 12s.
+5. **Every closer waits inside `consumer.close()` for that phase** - `awaitPendingRequests`, after
+   LeaveGroup was sent. PC's control thread gives up at 20s with a `TimeoutException`; the fleet dump
+   reads `CLOSING`. The ambient probe reads `ZOMBIE_MEMBER/REBALANCE_BLOCKED`. Both are true and
+   neither is the cause.
+
+### What PC contributes to this: nothing on the critical path
+
+Checked, not assumed: `ConsumerManager.commitAsync` does not touch `pendingRequests`, so there is no
+PC-side wait before LeaveGroup; the closers' frames are all inside Kafka's own close, after LeaveGroup;
+the survivors' frames are an ordinary poll. Every PC-side candidate this note has carried - the retry
+queue lock, the `CLOSING` poll guard, the discharge poll, the pause arm - was either refuted by
+measurement or shown to be off the path. `BrokerPollSystem.dischargeCoordinatorBeforeClose()` and the
+`ConsumerManager` one-attempt allowance should be **reverted**: they fix nothing that is broken.
+
+### What this means for the test
+
+The class javadoc's original claim - "the residual is the Kafka consumer group protocol under extreme
+membership churn, not a PC bug" - was written as an assertion and this note was opened because it had
+never been measured. **It is measured now, and it was right.** The profile's pass rate is a property of
+how often its churn opens a join phase that outlasts the detector, on the hardware it runs on: never on
+an M2 desktop, about one run in fifteen on the Linux runner. That is a measurement of the protocol,
+which is what the profile's javadoc says it is for, and the `@Quarantined` annotation's reason -
+"mechanism unexplained" - is no longer true and should be rewritten to say what the mechanism is.
+Whether a test whose failures are the protocol's belongs in a gating lane at all is the question the
+handoff raised on 2026-09-01, and it is now answerable rather than open.
+
+### Instruments this took, for the next person
+
+`ClosingMemberRebalanceIT` (7 cases, guarded backlog, on-thread close timing); the two coordinator
+loggers on `kafka.coordinator.log.level`; `bin/exp-measure-large-instances-failure-rate.sh` raising
+them; the `ref=` tally column; the fleet diagnostic with thread capture. And an analyser that measured
+LeaveGroup/JoinGroup latency and, by measuring only those, nearly missed that neither was the problem -
+the phase duration is what to read, from the clustering of LeaveGroup responses.
