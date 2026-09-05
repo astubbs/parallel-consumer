@@ -663,10 +663,10 @@ variables the profile has and the green twin lacks, moved one at a time:
 | cooperative | 3 | 0.1s, 0.0s, 0.0s | kept consuming |
 
 Commit mode `PERIODIC_CONSUMER_ASYNCHRONOUS` throughout, as in the profile. **Every close was
-instant and no survivor stalled.** (The full detached run reported all four cases as errors - each
-one in the at-least-once ledger await, 150s draining 150k records at measured throughput, after every
-liveness and close-duration assertion had already passed. That is a harness sizing miss, now widened,
-not a property failing.) Run against BOTH master's product code and the tree carrying the `doClose()`
+instant and no survivor stalled.** (Two sizing misses on the way, both with every property already passed
+before a drain timed out: 150s draining 150k records locally, then 363s per case on a two-core hosted
+runner - 1,469s for the class in the gating lane. The backlog now only has to outlast a 15s liveness
+window: 30,000 records at 10ms, two matrix cells and three join cells, the class in ~52s locally.) Run against BOTH master's product code and the tree carrying the `doClose()`
 discharge poll: identical.
 
 ### Three things this settles, one it does not
