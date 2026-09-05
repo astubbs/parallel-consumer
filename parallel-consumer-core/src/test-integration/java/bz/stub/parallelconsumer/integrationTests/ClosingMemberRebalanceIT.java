@@ -56,7 +56,7 @@ import static pl.tlinkowski.unij.api.UniLists.of;
  * merely waiting on a group that froze for another reason.
  * See {@code docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md}.
  */
-@Timeout(300)
+@Timeout(600)
 @Testcontainers
 @Slf4j
 class ClosingMemberRebalanceIT extends BrokerIntegrationTest<String, String> {
@@ -190,12 +190,127 @@ class ClosingMemberRebalanceIT extends BrokerIntegrationTest<String, String> {
         }
 
         // 3) LEDGER: at-least-once across the group
+        // 150s was not enough: every matrix case passed its liveness and close assertions and then timed
+        // out HERE, draining 150k records at measured (not computed) throughput. The drain is the ledger,
+        // not the property under test, so it gets the time it needs rather than a smaller backlog that
+        // would weaken the liveness guard above.
         await().alias("every record consumed by some member")
-                .atMost(150, SECONDS)
+                .atMost(360, SECONDS)
                 .untilAsserted(() -> assertWithMessage("at-least-once")
                         .that(processed).containsAtLeastElementsIn(producedKeys));
 
         survivors.forEach(ManagedPCInstance::close);
+        pcExecutor.shutdownNow();
+    }
+
+    /**
+     * The arm the settled-member matrix cannot reach: <b>a member closed while its OWN JoinGroup is
+     * still unanswered.</b> Under the capacity profile's churn that is a just-restarted instance toggled
+     * off again before the join phase completes - and it is the one state in which the coordinator is
+     * waiting on a member that has already decided to leave.
+     * <p>
+     * The newcomer IS that member. The settled members learn of its join only on their next heartbeat
+     * (3s), so its JoinGroup stays pending for roughly that long, and the admin-state trigger fires
+     * within tens of milliseconds of {@code PREPARING_REBALANCE} - well inside the window.
+     * <p>
+     * If LeaveGroup releases the pending JoinGroup on the coordinator side, this passes like the
+     * settled-member cases. If it does not, the newcomer's close waits on that JoinGroup until the
+     * client's own {@code request.timeout.ms} fails it (~30s) - which is the duration the capacity
+     * profile's stuck instances show - and the group waits with it.
+     */
+    @ParameterizedTest(name = "cooperative={0} joiners={1}")
+    @CsvSource({"false,1", "true,1", "true,3"})
+    void closingAMemberWhoseOwnJoinIsUnansweredMustNotHoldTheGroup(boolean cooperative, int joiners) throws Exception {
+        List<String> producedKeys = produceMessages(TO_PRODUCE);
+        Set<String> processed = ConcurrentHashMap.newKeySet();
+
+        ManagedPCInstance.Config config = ManagedPCInstance.Config.builder()
+                .commitMode(PERIODIC_CONSUMER_ASYNCHRONOUS)
+                .order(UNORDERED)
+                .inputTopic(getTopic())
+                .pollDelayMs(PER_RECORD_MS)
+                .useCooperativeAssignor(cooperative)
+                .build();
+
+        List<ManagedPCInstance> settled = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            ManagedPCInstance instance = new ManagedPCInstance(config, getKcu(), processed::add);
+            instance.start(pcExecutor);
+            settled.add(instance);
+        }
+        await().alias("every settled member is consuming")
+                .atMost(90, SECONDS)
+                .untilAsserted(() -> settled.forEach(pc ->
+                        assertWithMessage("instance %s consuming", pc.getInstanceId())
+                                .that(pc.getConsumedKeys().size()).isAtLeast(20)));
+
+        // ---- the joiners: started together, then closed the instant the coordinator opens the rebalance,
+        // i.e. while their JoinGroups are pending. They never consume; that is the point.
+        List<ManagedPCInstance> joiningMembers = new ArrayList<>();
+        for (int i = 0; i < joiners; i++) {
+            ManagedPCInstance joiner = new ManagedPCInstance(config, getKcu(), processed::add);
+            joiner.start(pcExecutor);
+            joiningMembers.add(joiner);
+        }
+        String groupId = getKcu().getGroupId();
+        await().alias("coordinator reports the group is rebalancing after the joiners arrived")
+                .atMost(30, SECONDS)
+                .pollInterval(Duration.ofMillis(25))
+                .untilAsserted(() -> assertWithMessage("group state")
+                        .that(groupState(groupId))
+                        .isAnyOf(ConsumerGroupState.PREPARING_REBALANCE, ConsumerGroupState.COMPLETING_REBALANCE));
+
+        assertWithMessage("NON-DISCRIMINATING RUN: too little backlog left at the close")
+                .that(producedKeys.size() - processed.size()).isAtLeast(REMAINING_FLOOR);
+
+        int survivorsBefore = settled.stream().mapToInt(pc -> pc.getConsumedKeys().size()).sum();
+        long closeStartedNanos = System.nanoTime();
+        List<AtomicLong> closeFinishedNanos = new ArrayList<>();
+        List<Thread> closerThreads = new ArrayList<>();
+        for (ManagedPCInstance joiner : joiningMembers) {
+            AtomicLong finished = new AtomicLong();
+            closeFinishedNanos.add(finished);
+            Thread t = new Thread(() -> {
+                try {
+                    joiner.stop();
+                } finally {
+                    finished.set(System.nanoTime());
+                }
+            }, "test-closer-joiner-" + joiner.getInstanceId());
+            closerThreads.add(t);
+        }
+        closerThreads.forEach(Thread::start);
+
+        try {
+            await().alias("settled members make progress while " + joiners + " joining member(s) close mid-join")
+                    .atMost(20, SECONDS)
+                    .pollInterval(Duration.ofMillis(200))
+                    .untilAsserted(() -> assertWithMessage("survivors' consumption since the closes began")
+                            .that(settled.stream().mapToInt(pc -> pc.getConsumedKeys().size()).sum())
+                            .isAtLeast(survivorsBefore + 100));
+        } finally {
+            for (Thread t : closerThreads) {
+                t.join(Duration.ofSeconds(90).toMillis());
+            }
+            for (int i = 0; i < joiningMembers.size(); i++) {
+                long fin = closeFinishedNanos.get(i).get();
+                log.warn("joiner {} close took {}s", joiningMembers.get(i).getInstanceId(),
+                        fin == 0 ? "NOT FINISHED" : String.format("%.1f", (fin - closeStartedNanos) / 1e9));
+            }
+        }
+
+        assertWithMessage("NON-DISCRIMINATING RUN: the backlog ran out during the liveness window")
+                .that(producedKeys.size() - processed.size()).isAtLeast(1_000);
+
+        for (int i = 0; i < joiningMembers.size(); i++) {
+            long fin = closeFinishedNanos.get(i).get();
+            assertWithMessage("joiner %s close should have completed", joiningMembers.get(i).getInstanceId())
+                    .that(fin).isNotEqualTo(0L);
+            assertWithMessage("joiner %s close duration while its own JoinGroup was pending (seconds)", joiningMembers.get(i).getInstanceId())
+                    .that((fin - closeStartedNanos) / 1e9).isLessThan(10.0);
+        }
+
+        settled.forEach(ManagedPCInstance::close);
         pcExecutor.shutdownNow();
     }
 
