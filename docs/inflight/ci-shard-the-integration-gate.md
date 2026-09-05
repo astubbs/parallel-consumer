@@ -62,6 +62,7 @@ from the pre-split model, which assumed the four probe classes would be 89s each
 
 **The second required check.** `Integration Tests (heavy)` produces its own status context, and adding
 a job does not add a requirement, so the heavy shard's classes would have been non-gating. It was added to
+<!-- post-merge: checked - names the PR in the past tense; the ruleset change it records is done. -->
 the `master` ruleset's required checks alongside `Integration Tests` while astubbs/parallel-consumer#442 was
 open; both shards gate. <!-- post-merge: checked -->
 
