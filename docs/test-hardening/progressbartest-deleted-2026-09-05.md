@@ -14,6 +14,7 @@ rendered a progress bar with `Thread.sleep(100)` per step for a human to look at
 nothing. The 2026-08-08 audit confirmed on three axes - the explicit message, zero assertions, and
 placement in the `...integrationTests.sanity` package - that it was a deliberate manual/visual check
 with no product behaviour behind it, and recommended leaving it alone.
+<!-- file-refs: N/A - this commit deletes the path named above; naming it is the point of the paragraph -->
 
 That recommendation stood until `docs/inflight/release-0.6.0.0.md`'s release gate ("0.6.0.0 does not
 ship while any test is disabled") made it the deciding factor: every other test that section named as
