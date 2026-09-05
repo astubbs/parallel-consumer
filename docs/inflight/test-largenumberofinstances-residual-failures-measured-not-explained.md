@@ -597,3 +597,51 @@ read as "the verification run", because that is what it was dispatched as.
 
 Re-dispatched at `eace35700`, the first tree carrying the discharge poll in `doClose()` plus the
 review fix that keeps it paused. That result is the one this note is waiting on.
+
+
+## THE FIX DOES NOT FIX IT - measured 2026-09-05, and the rate did not move
+
+Run 33913401545, head `eace3570`: the first tree carrying the discharge poll in `doClose()` plus the
+review fix that keeps the assignment paused. **2 failures in 60.**
+
+That is not a result. Against 3/60 and 3/60 on the two diagnostics-only trees and 2/30 on the
+control, 2/60 is the same rate. Six trees before it, one rate, about 5%; this is the seventh.
+
+**And the signature is unchanged**, which is the part that matters more than the number. The failing
+run's fleet dump still reads `Instance 1..6: closePending=true state=CLOSING`, with the ambient probe
+still reporting `ZOMBIE_MEMBER`/`REBALANCE_BLOCKED`. Whatever the discharge poll achieved, instances
+still sit in `CLOSING` as silent group members and the fleet still freezes behind them.
+
+### What this does and does not overturn
+
+**Still established**, and not weakened by this: the mechanism. Ten of twelve instances parked in
+`ClassicKafkaConsumer.close -> ConsumerCoordinator.close -> AbstractCoordinator.close ->
+awaitPendingRequests` is an observation, not an inference, and a closing member that has not left the
+group cannot answer a rebalance. The diagnosis stands.
+
+**Overturned**: that ONE poll before `consumer.close()` is enough to discharge what the coordinator is
+waiting for. It is not. A rebalance is not one round trip - JoinGroup and SyncGroup are separate
+exchanges, and a single 1ms poll can complete neither reliably, let alone both, while eleven other
+members are churning.
+
+**The two review-found corrections keep their value regardless** - the `CLOSING` pause arm stops the
+discharge poll being a live fetch, and the `ConsumerManager` one-attempt allowance is what lets any
+poll happen during close at all. They are prerequisites for any version of this fix, not consolation.
+
+### What the next attempt has to do differently
+
+Poll *until the member has actually left or the rebalance has settled*, bounded - not once. The
+candidates, in the order they should be tried:
+
+- **Keep polling in `CLOSING` until the assignment is empty or a short deadline passes**, then close.
+  That is the DRAINING shape - a loop, not a single call - and it is what astubbs/parallel-consumer#80
+  actually did for its state.
+- **Leave the group explicitly before closing** (`unsubscribe()`), so the member stops being a member
+  at the same moment it stops answering, instead of afterwards. Cheaper to reason about, but it runs
+  the revoke callback on this thread and that path has its own history.
+- **Bound the close budget** so a member that cannot leave holds the group for 2s rather than 30s.
+  Mitigation, not a cure, and it should not be reached for first.
+
+**Do not read the third as the easy one.** Backing the timeout off is what makes the rate look better
+without the mechanism changing, and this note exists because that move has already cost this project
+four months once.
