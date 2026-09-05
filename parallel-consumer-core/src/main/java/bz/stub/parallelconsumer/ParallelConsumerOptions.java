@@ -7,8 +7,11 @@ package bz.stub.parallelconsumer;
 
 import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.internal.DynamicLoadFactor;
+import bz.stub.parallelconsumer.navigator.ContractRegistry;
+import bz.stub.parallelconsumer.navigator.PartitionShareResourceAllocator;
 import bz.stub.parallelconsumer.navigator.ResourceAllocator;
 import bz.stub.parallelconsumer.navigator.ResourceContract;
+import bz.stub.parallelconsumer.navigator.StubResourceAllocator;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tag;
@@ -30,6 +33,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
@@ -553,16 +557,20 @@ public class ParallelConsumerOptions<K, V> {
      * the function body; the requirement rides the instance's construction-time registration alongside today's
      * one-function-per-instance API (KD11).
      * <p>
-     * <b>What it does not do.</b> Tagging a name here does not register it - {@link #resourceAllocator}'s
-     * {@link ResourceAllocator#register} does that, as a separate act, before any instance tagging the name is
-     * built (KD5). A function that tags no resources is untouched by the navigator: admission behaves exactly as
-     * it does today (R3) - the empty default below is that untouched path.
+     * <b>What it does not do.</b> Tagging a name here does not register it - a {@link ResourceContract} does
+     * that (KD5): declared in {@link #resourceContracts}, or registered directly on the
+     * {@link #resourceAllocator} you supply under the {@link AllocationStrategy#IN_PROCESS in-process} or
+     * {@link AllocationStrategy#CUSTOM custom} strategy, before any instance tagging the name is built. A
+     * function that tags no resources is untouched by the navigator: admission behaves exactly as it does
+     * today (R3) - the empty default below is that untouched path.
      * <p>
-     * Every tagged name must already be registered with the supplied {@link #resourceAllocator}, and
-     * {@link #resourceAllocator} itself must be supplied whenever this is non-empty - both checked at
-     * {@link #validate()}, failing fast and naming the problem rather than failing silently or deep in the
-     * engine (R4, R19).
+     * Every tagged name must resolve to a registered contract - in {@link #resourceContracts} under
+     * {@link AllocationStrategy#PARTITION_SHARE partition-share}, on the supplied {@link #resourceAllocator}
+     * otherwise - checked at {@link #validate()}, failing fast and naming the tag rather than failing silently
+     * or deep in the engine (R4, R19).
      *
+     * @see #allocationStrategy
+     * @see #resourceContracts
      * @see #resourceAllocator
      * @see #validate()
      */
@@ -572,22 +580,121 @@ public class ParallelConsumerOptions<K, V> {
     /**
      * <b>EXPERIMENTAL</b> - see {@link #resourceTags}.
      * <p>
-     * <b>What it is for.</b> The shared allocator that grants credit against every resource named in
-     * {@link #resourceTags} (R5). Application-supplied, following the {@link #meterRegistry} precedent: the
-     * application constructs ONE allocator and passes the SAME instance into every PC instance's builder, so
-     * capacity is actually shared rather than each instance getting its own unconstrained copy (KTD3).
+     * <b>What it is for.</b> The allocator that grants credit against every resource named in
+     * {@link #resourceTags} (R5) when {@link #allocationStrategy} is {@link AllocationStrategy#IN_PROCESS} or
+     * {@link AllocationStrategy#CUSTOM} - the strategies where the application constructs the allocator itself.
+     * Under {@link AllocationStrategy#IN_PROCESS} it follows the {@link #meterRegistry} precedent: the
+     * application constructs ONE {@link StubResourceAllocator} and passes the SAME instance into every PC
+     * instance's builder, so capacity is actually shared rather than each instance getting its own
+     * unconstrained copy (KTD3).
      * <p>
-     * Resources are registered against this allocator (via {@link ResourceAllocator#register}) separately from,
-     * and before, any instance's construction (KD5) - this field only supplies the already-populated registry an
-     * instance's tags are validated against.
+     * Resources may be registered against this allocator (via {@link ResourceAllocator#register}) separately
+     * from, and before, any instance's construction (KD5), or declared in {@link #resourceContracts} and
+     * reconciled against it at {@link #validate()} - that field's javadoc states the reconciliation rule.
      * <p>
-     * Left unset (the default), no navigator behaviour is possible: {@link #resourceTags} must then be empty, or
-     * {@link #validate()} fails naming the missing allocator (R19).
+     * <b>Supplying it without selecting a strategy that uses it FAILS validation, naming both fields
+     * (KD10).</b> The default strategy, {@link AllocationStrategy#PARTITION_SHARE}, builds its own allocator
+     * from the consumer group's assignment, so an instance passed here would be silently unused - and a
+     * silently unused allocator is exactly the misconfiguration that looks like a broken rate limit. Selecting
+     * the in-process or custom strategy is the deliberate one-line migration from the rung where this field
+     * was the only way to get navigator behaviour; conversely, selecting either without an instance fails
+     * naming the omission (R6).
      *
+     * @see #allocationStrategy
      * @see #resourceTags
      * @see #validate()
      */
     private final ResourceAllocator resourceAllocator;
+
+    /**
+     * Where a tagged resource's credit is divided among the instances that share it - the menu behind
+     * {@link #allocationStrategy} (KD6).
+     *
+     * @see #getAllocationStrategy()
+     */
+    public enum AllocationStrategy {
+
+        /**
+         * The engine builds a {@link PartitionShareResourceAllocator} per instance, after the consumer exists,
+         * and registers {@link #resourceContracts} against it: an instance's share of each resource is the
+         * fraction of the subscription's partitions it holds, re-divided by the consumer group's own rebalance
+         * when instances come and go - across process boundaries, with nothing new to run and nothing new to
+         * configure (astubbs#228). The default: tags plus contracts work out of the box. No
+         * {@link #resourceAllocator} may be supplied alongside it (KD10). The fleet-wide guarantee - rate,
+         * burst, and the bounded overshoot - is scoped to a uniform partition-share configuration across the
+         * group (R6).
+         */
+        PARTITION_SHARE,
+
+        /**
+         * The in-process rung's allocator: the application constructs ONE {@link StubResourceAllocator} and
+         * passes the SAME instance as {@link #resourceAllocator} to every PC instance in this JVM, which
+         * divide each resource equally by membership. Local to one process by construction - two JVMs each
+         * running this strategy do not share anything. Selecting it without an instance fails validation
+         * naming the omission (R6).
+         */
+        IN_PROCESS,
+
+        /**
+         * Any {@link ResourceAllocator} implementation of the application's own, supplied as
+         * {@link #resourceAllocator}; it provides only what it implements. Kept distinct from
+         * {@link #IN_PROCESS} so the configuration says which the user chose. Selecting it without an instance
+         * fails validation naming the omission (R6).
+         */
+        CUSTOM
+    }
+
+    /**
+     * <b>EXPERIMENTAL</b> - see {@link #resourceTags}.
+     * <p>
+     * <b>What it is for.</b> Chooses how each resource in {@link #resourceTags} is divided among the instances
+     * that share it - see {@link AllocationStrategy}. Left unset, {@link AllocationStrategy#PARTITION_SHARE}:
+     * the most capable strategy available is the default, so tags and contracts alone work out of the box
+     * while choosing the in-process stub or a custom allocator is a deliberate act - nothing is chosen
+     * silently, and nothing has to be configured by default (KD6).
+     * <p>
+     * <b>What it changes.</b> Which allocator the engine uses, and therefore what {@link #resourceAllocator}
+     * and {@link #resourceContracts} mean: under partition-share the engine builds the allocator and registers
+     * the contracts on it, and an allocator supplied here fails validation naming both fields; under the other
+     * two the supplied instance is used, and it must be supplied (R6, KD10). Every cell of that matrix is
+     * checked at {@link #validate()}.
+     *
+     * @see #resourceContracts
+     * @see #resourceAllocator
+     * @see #validate()
+     */
+    @Builder.Default
+    private final AllocationStrategy allocationStrategy = AllocationStrategy.PARTITION_SHARE;
+
+    /**
+     * <b>EXPERIMENTAL</b> - see {@link #resourceTags}.
+     * <p>
+     * <b>What it is for.</b> The {@link ResourceContract policies} (name, rate, quantum, burst) of the
+     * resources this instance shares - the registration step (KD5) carried on the options themselves, so the
+     * partition-share strategy needs nothing constructed by the application (R6).
+     * <p>
+     * <b>What it does per strategy.</b> Under {@link AllocationStrategy#PARTITION_SHARE} the engine registers
+     * these on the allocator it builds; R7's fail-fast rules - an unusable policy (non-positive quantum,
+     * negative rate or burst, a rate that mints no whole credit per quantum), one name declared twice with
+     * different policies - are applied at {@link #validate()} through a fresh {@link ContractRegistry}, so a
+     * bad policy fails at construction rather than on the engine's first quantum read. Under
+     * {@link AllocationStrategy#IN_PROCESS} and {@link AllocationStrategy#CUSTOM} each entry is reconciled
+     * against the supplied {@link #resourceAllocator} at {@link #validate()}: a contract the allocator already
+     * has under the same name must be {@link ResourceContract#equals identical}, or validation fails naming
+     * the collision; a contract it does not know at all is registered on it - which is what lets the
+     * in-process migration stay a one-line change. Two JVMs registering different policies under one name is
+     * not detected on this rung (R7).
+     * <p>
+     * Every entry in {@link #resourceTags} must be declared here under partition-share, or registered on the
+     * allocator otherwise; a contract declared here need not be tagged - an instance may register what its
+     * siblings use.
+     *
+     * @see #allocationStrategy
+     * @see #resourceTags
+     * @see #validate()
+     */
+    @Builder.Default
+    private final List<ResourceContract> resourceContracts = Collections.emptyList();
 
     public static final Duration DEFAULT_STATIC_RETRY_DELAY = Duration.ofSeconds(1);
 
@@ -741,6 +848,7 @@ public class ParallelConsumerOptions<K, V> {
         virtualThreadsValidation();
         adaptiveConcurrencyValidation();
         navigatorValidation();
+        allocationStrategyValidation();
     }
 
     /**
@@ -814,41 +922,30 @@ public class ParallelConsumerOptions<K, V> {
 
     /**
      * R3's untouched path falls straight out of the guard below: an instance with no {@link #resourceTags} never
-     * reaches the allocator at all, so admission behaves exactly as it does today. Otherwise enforces R4 and
-     * R19's remaining fail-fast checks (a policy collision on re-registration lives on
-     * {@link ResourceAllocator#register}, not here, since it fires at registration time rather than at an
-     * instance's {@code validate()}), plus two hardening checks against a malformed tag list itself:
+     * reaches an allocator at all, so admission behaves exactly as it does today. Otherwise the two hardening
+     * checks against a malformed tag list itself:
      * <ol>
-     *     <li>{@link #resourceTags} non-empty but {@link #resourceAllocator} unset - a tag with nowhere to
-     *     resolve credit from is a configuration error, not a silent no-op.</li>
      *     <li>a null or blank entry in {@link #resourceTags} - it cannot be looked up, so it must fail here
-     *     with a named error rather than bare inside the allocator's map.</li>
+     *     with a named error rather than bare inside a registry's map.</li>
      *     <li>a duplicate entry in {@link #resourceTags} - each entry spends a credit independently, so a
      *     repeated tag would silently halve this instance's effective rate against that resource.</li>
-     *     <li>a tag naming a resource the supplied {@link #resourceAllocator} has no {@link ResourceContract}
-     *     registered for - a typo must not silently mint an unconstrained resource (KD5), so it fails here,
-     *     naming the unknown resource, rather than deep in the engine on first dispatch.</li>
      * </ol>
+     * WHERE a tag resolves - {@link #resourceContracts} or the supplied {@link #resourceAllocator} - depends on
+     * {@link #allocationStrategy}, so the unknown-tag check (R4, KD5) lives in
+     * {@link #allocationStrategyValidation()}, which runs next and owns the strategy's whole matrix.
      */
     private void navigatorValidation() {
-        List<String> tags = resourceTags == null ? Collections.emptyList() : resourceTags;
+        List<String> tags = resourceTagsOrEmpty();
         if (tags.isEmpty()) {
             return;
-        }
-        if (resourceAllocator == null) {
-            throw new IllegalArgumentException(msg(
-                    "{} names {} resource(s) ({}) but no {} was supplied - tag a resource only when you also " +
-                            "supply the shared allocator that grants its credits (the {} precedent: construct " +
-                            "one and pass the same instance to every instance's builder).",
-                    Fields.resourceTags, tags.size(), tags, Fields.resourceAllocator, Fields.meterRegistry));
         }
         for (String resourceName : tags) {
             if (isBlank(resourceName)) {
                 throw new IllegalArgumentException(msg(
                         "{} contains a null/blank tag ({}) - every entry must name a real resource, since a " +
-                                "missing name cannot be looked up in the supplied {} and would fail unhelpfully " +
-                                "deep in the allocator instead of here.",
-                        Fields.resourceTags, tags, Fields.resourceAllocator));
+                                "missing name cannot be looked up and would fail unhelpfully deep in the " +
+                                "allocator instead of here.",
+                        Fields.resourceTags, tags));
             }
         }
         Set<String> distinctTags = new HashSet<>(tags);
@@ -859,14 +956,133 @@ public class ParallelConsumerOptions<K, V> {
                             "resource once.",
                     Fields.resourceTags, tags));
         }
-        for (String resourceName : tags) {
-            if (!resourceAllocator.lookup(resourceName).isPresent()) {
+    }
+
+    /**
+     * The strategy matrix (R6, KD6, KD10): strategy x allocator-present x contracts-present x tags-present,
+     * every cell decided here, at construction, naming the field or fields that disagree.
+     * <ul>
+     *     <li>{@link AllocationStrategy#PARTITION_SHARE} (explicit or defaulted) with a {@link #resourceAllocator}
+     *     supplied fails naming BOTH fields - the instance would otherwise be silently unused (KD10). Without
+     *     one, {@link #resourceContracts} are registered into a fresh {@link ContractRegistry} so R7's
+     *     unusable-policy and collision rules (R19) fire now rather than on the engine's first quantum read; no
+     *     allocator exists at this point under this strategy - the engine builds it later (KTD4).</li>
+     *     <li>{@link AllocationStrategy#IN_PROCESS} or {@link AllocationStrategy#CUSTOM} without a
+     *     {@link #resourceAllocator} fails naming the omission. With one, each options-supplied contract is
+     *     reconciled through the seam alone - {@link ResourceAllocator#lookup} and
+     *     {@link ResourceContract#equals}, never the instance's type: an identical contract is left as it is, a
+     *     differing one fails naming the collision, an unknown one is registered on the instance.</li>
+     *     <li>Then every tag must resolve to a contract in whichever registry the strategy chose, or it fails
+     *     naming the tag - a typo must not silently mint an unconstrained resource (KD5), and the message
+     *     names the field that should have declared it.</li>
+     * </ul>
+     * A null strategy is refused rather than read as the default: the builder default is how "absent" is
+     * spelled, and an explicit null is a different, unanswerable choice.
+     */
+    private void allocationStrategyValidation() {
+        if (allocationStrategy == null) {
+            throw new IllegalArgumentException(msg(
+                    "{} must not be null - leave it unset to select {}, or choose one of {}.",
+                    Fields.allocationStrategy, AllocationStrategy.PARTITION_SHARE,
+                    Arrays.toString(AllocationStrategy.values())));
+        }
+        List<ResourceContract> contracts = resourceContractsOrEmpty();
+        resourceContractListValidation(contracts);
+
+        final Function<String, Optional<ResourceContract>> contractLookup;
+        final String unknownTagRemedy;
+        if (allocationStrategy == AllocationStrategy.PARTITION_SHARE) {
+            if (resourceAllocator != null) {
                 throw new IllegalArgumentException(msg(
-                        "{} tags resource '{}', but no resource of that name is registered with the supplied " +
-                                "{} - register it (with its policy) before building an instance that tags it.",
-                        Fields.resourceTags, resourceName, Fields.resourceAllocator));
+                        "{} is {} but a {} was supplied ({}) - under partition-share the engine builds its own " +
+                                "allocator from the consumer group's assignment, so the instance you passed " +
+                                "would be silently unused. Either remove the {} and declare the resources in " +
+                                "{}, or select {} {} (a {} shared by every instance in this JVM) or {} (your " +
+                                "own implementation) so the instance you passed is the one that runs (KD10).",
+                        Fields.allocationStrategy, allocationStrategy, Fields.resourceAllocator,
+                        resourceAllocator.getClass().getName(), Fields.resourceAllocator,
+                        Fields.resourceContracts, Fields.allocationStrategy, AllocationStrategy.IN_PROCESS,
+                        StubResourceAllocator.class.getSimpleName(), AllocationStrategy.CUSTOM));
+            }
+            // The engine's allocator does not exist yet (KTD4); a throwaway registry applies R19 to the
+            // declared policies now, with the registry's own messages, and is what the tags resolve against.
+            ContractRegistry declared = new ContractRegistry();
+            for (ResourceContract contract : contracts) {
+                declared.register(contract);
+            }
+            contractLookup = declared::lookup;
+            unknownTagRemedy = msg("no entry in {} declares it - under {} {} the engine builds the allocator, " +
+                            "so every tagged resource must be declared there (name, rate, quantum, burst); to " +
+                            "grant through an allocator you construct yourself, select {} or {} and supply a {} " +
+                            "that has it registered",
+                    Fields.resourceContracts, Fields.allocationStrategy, allocationStrategy,
+                    AllocationStrategy.IN_PROCESS, AllocationStrategy.CUSTOM, Fields.resourceAllocator);
+        } else {
+            if (resourceAllocator == null) {
+                throw new IllegalArgumentException(msg(
+                        "{} is {} but no {} was supplied - that strategy grants credit through the instance " +
+                                "you pass (construct one and pass the SAME instance to every instance's " +
+                                "builder), so it cannot run without one. Supply the allocator, or leave {} " +
+                                "unset to let the engine build a {} allocator from {}.",
+                        Fields.allocationStrategy, allocationStrategy, Fields.resourceAllocator,
+                        Fields.allocationStrategy, AllocationStrategy.PARTITION_SHARE, Fields.resourceContracts));
+            }
+            for (ResourceContract contract : contracts) {
+                Optional<ResourceContract> registered = resourceAllocator.lookup(contract.getName());
+                if (!registered.isPresent()) {
+                    // the one-line migration path's convenience: declared here, registered on the instance
+                    resourceAllocator.register(contract);
+                } else if (!registered.get().equals(contract)) {
+                    throw new IllegalArgumentException(msg(
+                            "{} declares resource '{}' with policy {} but the supplied {} already has it " +
+                                    "registered with a DIFFERENT policy {} - a resource's policy is fixed at " +
+                                    "first registration (R19). Make the two identical, or drop the entry here: " +
+                                    "a contract the allocator already knows need not be repeated.",
+                            Fields.resourceContracts, contract.getName(), contract, Fields.resourceAllocator,
+                            registered.get()));
+                }
+            }
+            contractLookup = resourceAllocator::lookup;
+            unknownTagRemedy = msg("no resource of that name is registered with the supplied {} - register it " +
+                            "(with its policy) before building an instance that tags it, or declare it in {} " +
+                            "to have it registered at validation",
+                    Fields.resourceAllocator, Fields.resourceContracts);
+        }
+        for (String resourceName : resourceTagsOrEmpty()) {
+            if (!contractLookup.apply(resourceName).isPresent()) {
+                throw new IllegalArgumentException(msg("{} tags resource '{}', but {}.",
+                        Fields.resourceTags, resourceName, unknownTagRemedy));
             }
         }
+    }
+
+    /**
+     * The list-shape checks on {@link #resourceContracts} - a null entry, or a contract whose name is null or
+     * blank - which a registry would otherwise turn into a bare {@link NullPointerException} from its map.
+     * Policy checks (R19) are the registry's, applied by the caller.
+     */
+    private void resourceContractListValidation(List<ResourceContract> contracts) {
+        for (ResourceContract contract : contracts) {
+            if (contract == null) {
+                throw new IllegalArgumentException(msg(
+                        "{} contains a null entry ({}) - every entry must be a contract naming a real resource.",
+                        Fields.resourceContracts, contracts));
+            }
+            if (isBlank(contract.getName())) {
+                throw new IllegalArgumentException(msg(
+                        "{} contains a contract with a null/blank name ({}) - a resource nothing can tag " +
+                                "cannot be registered.",
+                        Fields.resourceContracts, contract));
+            }
+        }
+    }
+
+    private List<String> resourceTagsOrEmpty() {
+        return resourceTags == null ? Collections.emptyList() : resourceTags;
+    }
+
+    private List<ResourceContract> resourceContractsOrEmpty() {
+        return resourceContracts == null ? Collections.emptyList() : resourceContracts;
     }
 
     private void transactionsValidation() {

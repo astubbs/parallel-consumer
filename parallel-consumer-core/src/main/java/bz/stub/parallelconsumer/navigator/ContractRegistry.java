@@ -18,13 +18,22 @@ import static bz.stub.parallelconsumer.navigator.QuantumArithmetic.grantPerQuant
  * set of messages. Concurrent because several PC instances' builders may register overlapping resources at
  * construction time (KD11); the map's own thread safety is the whole concurrency control here, which is why
  * an allocator may hold this outside its state monitor.
+ * <p>
+ * Public for two callers outside this package, both of which need the rules without an allocator:
+ * {@code ParallelConsumerOptions#validate()} under the partition-share strategy, where no allocator exists yet
+ * (the engine builds it after the consumer does, KTD4) and the options-supplied contracts are registered into a
+ * fresh registry purely to apply R19 at validation (R6, R7); and a {@code CUSTOM} {@link ResourceAllocator}
+ * implementation, which may hold one rather than re-deriving the same checks and messages.
  */
-final class ContractRegistry {
+public final class ContractRegistry {
 
     private final Map<String, ResourceContract> contracts = new ConcurrentHashMap<>();
 
+    public ContractRegistry() {
+    }
+
     /** {@link ResourceAllocator#register}'s contract, verbatim: validate, then accept identical or reject differing. */
-    void register(ResourceContract contract) {
+    public void register(ResourceContract contract) {
         if (contract.getQuantum() == null || contract.getQuantum().isZero() || contract.getQuantum().isNegative()) {
             throw new IllegalArgumentException(msg(
                     "Resource '{}' declares a non-positive quantum {} - the minting cadence must be a positive "
@@ -60,7 +69,8 @@ final class ContractRegistry {
         }
     }
 
-    Optional<ResourceContract> lookup(String resourceName) {
+    /** {@link ResourceAllocator#lookup}'s contract, verbatim. */
+    public Optional<ResourceContract> lookup(String resourceName) {
         return Optional.ofNullable(contracts.get(resourceName));
     }
 

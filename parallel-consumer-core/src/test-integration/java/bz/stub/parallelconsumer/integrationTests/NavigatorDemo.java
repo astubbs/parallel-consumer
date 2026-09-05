@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.AllocationStrategy.IN_PROCESS;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.PARTITION;
 import static java.time.Duration.ofSeconds;
@@ -283,6 +284,7 @@ public class NavigatorDemo extends BrokerIntegrationTest<String, String> {
                         .ordering(PARTITION);
         if (sharedAllocatorOrNull != null) {
             builder.resourceTags(Collections.singletonList(RESOURCE))
+                    .allocationStrategy(IN_PROCESS)
                     .resourceAllocator(sharedAllocatorOrNull);
         }
         ParallelConsumerOptions<String, String> options = builder.build();

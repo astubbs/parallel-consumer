@@ -37,6 +37,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.AllocationStrategy.IN_PROCESS;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.AllocationStrategy.CUSTOM;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 
@@ -82,6 +84,7 @@ class NavigatorViewTest {
                 .ordering(ParallelConsumerOptions.ProcessingOrder.UNORDERED)
                 .pcInstanceTag(MEMBER)
                 .resourceTags(UniLists.of(API_A))
+                .allocationStrategy(IN_PROCESS)
                 .resourceAllocator(allocator)
                 .build();
         module = new PCModuleTestEnv(options, clock);
@@ -121,6 +124,7 @@ class NavigatorViewTest {
         var options = ParallelConsumerOptions.<String, String>builder()
                 .ordering(ParallelConsumerOptions.ProcessingOrder.UNORDERED)
                 .pcInstanceTag(MEMBER)
+                .allocationStrategy(CUSTOM)
                 .resourceAllocator(untouchedAllocator)
                 .build();
         module = new PCModuleTestEnv(options, clock);
@@ -331,6 +335,7 @@ class NavigatorViewTest {
                 .ordering(ParallelConsumerOptions.ProcessingOrder.UNORDERED)
                 .pcInstanceTag(MEMBER)
                 .resourceTags(UniLists.of(API_A))
+                .allocationStrategy(IN_PROCESS)
                 .resourceAllocator(allocator)
                 .build();
         module = new PCModuleTestEnv(options, clock);

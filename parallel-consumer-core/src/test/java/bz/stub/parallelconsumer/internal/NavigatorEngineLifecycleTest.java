@@ -24,6 +24,7 @@ import java.time.Instant;
 import java.util.Collections;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.AllocationStrategy.IN_PROCESS;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 
@@ -82,6 +83,7 @@ class NavigatorEngineLifecycleTest {
                 .ordering(ParallelConsumerOptions.ProcessingOrder.UNORDERED)
                 .pcInstanceTag(MEMBER)
                 .resourceTags(UniLists.of(API_X))
+                .allocationStrategy(IN_PROCESS)
                 .resourceAllocator(allocator)
                 .build();
         var module = new PCModuleTestEnv(options, clock);
@@ -166,6 +168,7 @@ class NavigatorEngineLifecycleTest {
                 .ordering(ParallelConsumerOptions.ProcessingOrder.UNORDERED)
                 .pcInstanceTag(MEMBER)
                 .resourceTags(UniLists.of(API_X))
+                .allocationStrategy(IN_PROCESS)
                 .resourceAllocator(countingAllocator)
                 .drainTimeout(Duration.ofSeconds(20))
                 .build();
@@ -243,6 +246,7 @@ class NavigatorEngineLifecycleTest {
                 .ordering(ParallelConsumerOptions.ProcessingOrder.UNORDERED)
                 .pcInstanceTag(MEMBER)
                 .resourceTags(UniLists.of(API_X))
+                .allocationStrategy(IN_PROCESS)
                 .resourceAllocator(countingAllocator)
                 .drainTimeout(Duration.ofSeconds(2))
                 .build();
