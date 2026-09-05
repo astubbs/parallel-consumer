@@ -378,9 +378,25 @@ public class PartitionState<K, V> {
      * ({@code PartitionStateLincheckTest}, {@code WorkManagerLincheckTest}) deliberately drive
      * {@link #onSuccess(long)} and {@code handleFutureResult} from several threads to measure exactly the
      * interleavings a guard would refuse, and the direct-pull engine will select from worker threads. The
-     * register-then-publish order is the invariant that survives all of those; the plain {@code long}s this
-     * method writes ({@code offsetHighestSeen}) are the residue that still assumes one writer, and the
-     * {@code jcstress-poc} module's {@code SeenSucceededOrderingProbes} owns that question.
+     * register-then-publish order is the invariant that survives all of those; the plain {@code long}s
+     * are the residue that still assumes one writer. There are two, and the second is the one with teeth:
+     * {@code offsetHighestSeen}, written here through {@link #addNewIncompleteRecord}, and
+     * {@code offsetHighestSucceeded}, which {@link #onSuccess(long)} read-modify-writes and which
+     * {@link #getOffsetHighestSequentialSucceeded()} returns <em>directly</em> whenever
+     * {@code incompleteOffsets} is empty - so a stale read of it is an offset committed to the broker, not
+     * only bookkeeping. The {@code dirty} field's own javadoc records jcstress measuring that exact
+     * staleness (the reader seeing {@code dirty} set while {@code offsetHighestSucceeded} was still stale),
+     * and what closes it is the release/acquire pair that field's {@code volatile} provides - nothing on
+     * this method.
+     * <p>
+     * <b>What would reopen this, and what would catch it (2026-09-05).</b> A second writer of either
+     * {@code long} - the direct-pull engine selecting from worker threads, or a completion path moved off
+     * the control thread - reopens it, and the {@code volatile} on {@code dirty} does not cover a
+     * write/write pair. <b>Nothing in this repository would catch that today.</b> The
+     * {@code jcstress-poc} module's {@code SeenSucceededOrderingProbes} owns the question, and that module
+     * is absent from the root {@code pom.xml}'s {@code <modules>} list, so no reactor build reaches it; no
+     * workflow and no script in {@code bin/} names it either - {@code grep -rn jcstress .github/ bin/}
+     * returns nothing. It is run by hand or not at all.
      */
     public void maybeRegisterNewPollBatchAsWork(@NonNull EpochAndRecordsMap<K, V>.RecordsAndEpoch recordsAndEpoch) {
         if (epochIsStale(recordsAndEpoch)) {

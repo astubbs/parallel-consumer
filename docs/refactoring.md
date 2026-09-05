@@ -502,6 +502,13 @@ cosmetic - see the last bullet.*
   control/poller threads share state - removed under shared-nothing (confluentinc#200).
   `todo refactor use of null shouldn't be needed`: `null` passed to the codec manager
   (confluentinc#233). `visible for legacy testing`: visibility widened for legacy tests.
+- **Draft astubbs#410 reintroduces the publish-then-register order astubbs#370 removed.** Its
+  `restoreCompletedButUncommittedWork` replay loop calls `getShardManager().addWorkContainer(...)`
+  before `addNewIncompleteRecord(record)`, the same order the register-then-publish swap in
+  `maybeRegisterNewPollBatchAsWork` took out - latent for the same reason (control thread, under the
+  producer write lock), and the same defect the moment there is a second selector. Swap the two lines
+  when that PR lands over astubbs#370; the invariant and why it holds are on
+  `maybeRegisterNewPollBatchAsWork`.
 
 ### state/PartitionStateManager.java
 - There was a throwaway `OffsetMapCodecManager` per assignment
@@ -658,6 +665,15 @@ but not this.*
   are not deletions: `ShardAvailableCountOwnershipTest` names its topic constant `TOPIC`, and
   `ShardManagerTest` also builds a `PartitionState` and declares no `sm`/`pm`, so each needs its own small
   reconciliation (noticed on astubbs#373).
+
+- **The `ConsumerRecords` / `EpochAndRecordsMap` / `registerWork` idiom is hand-rolled per test** -
+  `git grep -l "new EpochAndRecordsMap" parallel-consumer-core/src/test` lists the state and internal
+  package classes doing it. `ModelUtils#registerOneRecordAndTakeIt` is not a drop-in: it builds its own
+  record and takes the work after `registerWork` returns, which a test whose subject is the ordering
+  *inside* registration cannot use. What is wanted is a `registerOneRecord`-shaped sibling that takes a
+  supplied record and stops at registration, with the take left to the caller. Pre-existing clone class,
+  not one any single branch introduced, which is why the astubbs#370 simplify pass left it here rather
+  than folding it into that PR.
 
 ### Test infrastructure - timing-based waits
 

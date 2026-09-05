@@ -78,8 +78,13 @@ adding a class with a narrow guess in it.
    `PartitionState#maybeRegisterNewPollBatchAsWork` making a record selectable before its offset was
    registered, latent for the same single-selector reason - is no longer a harness target: astubbs#370
    swapped the order so the offset is registered before the container is published, and
-   `PartitionStateRegistrationOrder370Test` plays the losing interleaving by hand. No schedule can
-   reach a container whose offset is absent, so there is nothing left for a model checker to explore.
+   `PartitionStateRegistrationOrder370Test` plays the losing interleaving by hand. **On the
+   registration path** no schedule can now reach a container whose offset is absent, so there is
+   nothing left for a model checker to explore there. The claim is deliberately scoped to that path:
+   an absent offset under a live container is still reachable *after* completion, because
+   `WorkManager#onSuccessResult` removes the offset before the container leaves its shard, so a
+   scanner in that window sees exactly that pair. What refuses it there is the container's own
+   `SUCCEEDED` claim state (astubbs#335), not the offset - which is candidate 1 above, not this one.
 
    <!-- post-merge: checked-begin -->
    **`ProcessingShard.workAwaitingSelectionCount` (once `availableWorkContainerCnt`) is NOT a Lincheck
