@@ -72,6 +72,15 @@
 
     <!-- Suppress noisy external loggers -->
     <logger name="org.apache.kafka" level="warn"/>
+    <!-- The two coordinator classes are raised SEPARATELY, on their own property, because they are the
+         only Kafka loggers that say whether a closing member sent LeaveGroup and what generation it
+         held at close - the discriminator for the CLOSING-state zombie-member stall
+         (docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md).
+         Raising all of org.apache.kafka to see two lines floods the run; a committed debug default is
+         what bin/check-test-log-config.sh exists to refuse. Default stays warn.
+             -Dkafka.coordinator.log.level=debug -Dit.test=ClosingMemberRebalanceIT -->
+    <logger name="org.apache.kafka.clients.consumer.internals.AbstractCoordinator" level="${kafka.coordinator.log.level:-warn}"/>
+    <logger name="org.apache.kafka.clients.consumer.internals.ConsumerCoordinator" level="${kafka.coordinator.log.level:-warn}"/>
     <logger name="org.apache.kafka.common.config.AbstractConfig" level="error"/>
     <logger name="bz.stub.parallelconsumer.integrationTests.BrokerIntegrationTest" level="warn"/>
     <logger name="org.postgresql" level="info"/>

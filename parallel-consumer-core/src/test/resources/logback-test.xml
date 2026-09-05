@@ -89,6 +89,12 @@
     <logger name="bz.stub.parallelconsumer.integrationTests" level="${pc.log.level:-info}"/>
 
     <logger name="org.apache.kafka" level="warn"/>
+    <!-- Same two coordinator loggers as logback-integration-test.xml, on the same property, for the lanes that
+         load THIS file (the performance lane does). They are the only Kafka loggers that say whether a member
+         sent LeaveGroup and how long the coordinator took to answer it, which is the CLOSING-state stall's
+         discriminator. Default warn; raise with -Dkafka.coordinator.log.level=debug. -->
+    <logger name="org.apache.kafka.clients.consumer.internals.AbstractCoordinator" level="${kafka.coordinator.log.level:-warn}"/>
+    <logger name="org.apache.kafka.clients.consumer.internals.ConsumerCoordinator" level="${kafka.coordinator.log.level:-warn}"/>
 
     <!-- ALWAYS ON despite the blanket warn above: offset-reset decisions are rare (one line each) and
          contain the exact start position - the single number that solved the committedOffsetRemoved[latest]

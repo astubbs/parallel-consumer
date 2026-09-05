@@ -393,17 +393,15 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
      * under extreme churn, not a PC bug — all PC-internal issues have been fixed.
      * If the pass rate drops materially, reassess: a new PC bug may have been introduced.
      * <p>
-     * <b>Corollary, and read it before backing the parameters off: the paragraph above is asserted,
-     * never measured.</b> No experiment separates "the group coordinator cannot converge at this
-     * churn rate" from "PC has a defect that only appears at this churn rate" — both look identical
-     * from outside, as instances alive with an empty assignment and no progress. That matters
-     * because the obvious response to a flaky stress test is to reduce the churn until it passes,
-     * and if any part of the residual is PC's, that <em>hides</em> a defect rather than removing a
-     * confound. It is the same shape that let the confluentinc#857 deadlock survive four months:
-     * astubbs#68 gave every test an uncontended broker, the suite went green, and the defect was
-     * untouched. What would settle it is a control arm — the same churn against a plain
-     * KafkaConsumer group with no PC in the path. Until then, do NOT reduce this profile's churn:
-     * its residual failure rate is the baseline that investigation measures against.
+     * <b>Measured, 2026-09-05 - and the paragraph above was right.</b> For years it was an assertion;
+     * the tracking note below was opened because nobody had measured it. The Linux runner with the
+     * coordinator loggers raised showed, in every failing run, every LeaveGroup answered within 2.8s
+     * and every JoinGroup within 3.0s - no slow request anywhere - and a single JOIN PHASE held open
+     * for 17s while the monkey kept restarting members into it faster than a phase can complete. While
+     * a phase is open {@code consumer.poll()} returns nothing to any member, which is the FLAT count.
+     * Every PC-side candidate (retry-queue lock, CLOSING poll guard, a discharge poll before close) was
+     * refuted by measurement. Do NOT reduce this profile's churn to make it pass: its rate IS the
+     * measurement, and on an M2 desktop it is zero because the timing never lines up.
      * TODO(refactor): settle the residual-failure attribution — see
      * docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md
      * <p>
@@ -425,18 +423,16 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
     @Tag("performance")
     @Test
     @Quarantined(
-            reason = "Rebalance stall, mechanism unexplained. The detector returns FLAT - the record count "
-                    + "stops rather than slows - and the ambient probe autopsy reports "
-                    + "ZOMBIE_MEMBER/REBALANCE_BLOCKED with the group dwelling in PreparingRebalance because a "
-                    + "member stopped answering, the whole assignment frozen at comparable lag. Measured at one "
-                    + "failure in ten consecutive runs on an idle Linux box, plus repeated CI failures, always "
-                    + "that same signature. It reproduces on the tree carrying this branch's log-argument fix, so "
-                    + "it is neither the confluentinc#857 revoke deadlock nor the SLF4J argument-evaluation "
-                    + "defect - it is a third thing. QUARANTINED PRE-EMPTIVELY, and the evidence tension is "
-                    + "deliberate rather than overlooked: the ledger was measured while this test was PR-state, "
-                    + "because on master the test is @Disabled and cannot fail there. This PR enables it into a "
-                    + "required lane, so on merge master inherits a gating check that fails about one run in ten. "
-                    + "The quarantine is applied at exactly the moment the failure becomes master-state.",
+            reason = "Rebalance stall, mechanism MEASURED (2026-09-05): the Kafka consumer group protocol under this "
+                    + "profile's churn rate, not a PC defect. The chaos monkey restarts instances faster than a join "
+                    + "phase completes, a LeaveGroup sent while the member's own JoinGroup is pending is answered only "
+                    + "when the phase completes, and under continuous mid-join departures one phase was observed open for "
+                    + "17s - during which consumer.poll() returns nothing to ANY member, which is the FLAT count the "
+                    + "detector fires on at 12s. In every failing run no coordinator request was slow (LeaveGroup <=2.8s, "
+                    + "JoinGroup <=3.0s, same as passing runs). Every PC-side candidate was refuted by measurement or shown "
+                    + "off the path. Rate: 4 in 60 on the Linux runner, 0 in 22 on an M2 desktop - a property of the "
+                    + "hardware's churn timing, which is what this profile measures. Quarantined because a test whose "
+                    + "failures are the protocol's cannot gate merges; where it should live is an open decision.",
             tracking = "docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md",
             flapping = true)
     void largeNumberOfInstances() {
@@ -631,7 +627,12 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
         // capacity profiles keep the legacy detector (11 consecutive progress-free 1s checks) so
         // their measured pass-rate baseline is undisturbed; correctness profiles use the sliding
         // NO_PROGRESS watermark (see Scenario#noProgressWindow)
-        ProgressTracker progressTracker = new ProgressTracker(count);
+        // withDiagnostic is what puts the fleet's own state next to the external count: without it
+        // every stall this test has ever produced ended "no consumer diagnostic supplied", which is
+        // the cheapest of the three instrumentation gaps standing between the recorded
+        // ZOMBIE_MEMBER/REBALANCE_BLOCKED signature and a diagnosis.
+        ProgressTracker progressTracker = new ProgressTracker(count)
+                .withDiagnostic(() -> describeFleet(allPCRunners));
         ProgressWatermark watermark = new ProgressWatermark(scenario.noProgressWindow, count.get());
         try {
             waitAtMost(scenario.completionCeiling)
@@ -650,8 +651,8 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
                             expectedKeys.removeAll(getAllConsumedKeys(allPCRunners));
                             throw scenario.noProgressWindow == null
                                     ? progressTracker.constructError(msg("No progress, missing keys: {}.", expectedKeys))
-                                    : new RuntimeException(msg("NO_PROGRESS: consumed count stuck at {} beyond the {} watermark window, missing keys: {}.",
-                                    count.get(), scenario.noProgressWindow, expectedKeys));
+                                    : new RuntimeException(msg("NO_PROGRESS: consumed count stuck at {} beyond the {} watermark window, missing keys: {}. {}",
+                                    count.get(), scenario.noProgressWindow, expectedKeys, describeFleet(allPCRunners)));
                         }
                         SoftAssertions all = new SoftAssertions();
                         all.assertThat(overallConsumedKeys.containsAll(expectedKeys)).as("contains all: all expected are consumed at least once").isTrue();
@@ -820,6 +821,124 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
     }
 
     /**
+     * One line of per-instance state, shared by the stall log dump and by the failure message's
+     * consumer diagnostic so the two can never drift apart.
+     * <p>
+     * <b>{@code started} and {@code closePending} are the load-bearing pair, and they are why this
+     * exists.</b> Every recorded {@code largeNumberOfInstances} stall carries the ambient probe's
+     * {@code ZOMBIE_MEMBER/REBALANCE_BLOCKED} verdict - the group dwelling in
+     * {@code PreparingRebalance} because a member stopped answering - and the question no sighting
+     * has been able to answer is whether that silent member is one the chaos monkey stopped (in
+     * which case it is the harness, and expected) or one still running (in which case it is PC, and
+     * a defect). {@code started=false, closePending=true} is the first; {@code started=true} with a
+     * live PC is the second. See
+     * {@code docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md}.
+     */
+    private String describeInstance(ManagedPCInstance instance) {
+        var pc = instance.getParallelConsumer();
+        if (pc == null) {
+            return msg("Instance {}: PC is null (never started?), started={}, closePending={}",
+                    instance.getInstanceId(), instance.isStarted(), instance.isClosePending());
+        }
+        try {
+            var wm = pc.getWm();
+            var sm = wm.getSm();
+            // assignedPartitions is deliberately absent: the accessor behind it mirrored state
+            // Kafka already owns, and astubbs/parallel-consumer#393 deleted the mirror rather
+            // than keep the poll path asking Kafka a third time per pass. This dump is a
+            // failure-path diagnostic, so it is not worth reintroducing a cached field for -
+            // and reading the live assignment here would need a consumer handle the dump does
+            // not have.
+            return msg("Instance {}: closed/failed={}, failureCause={}, started={}, closePending={}, " +
+                            "queuedInShards={}, outForProcessing={}, " +
+                            "incompleteOffsets={}, hasIncompletes={}, " +
+                            "pausedPartitions={}, consumedKeys={}, pc[{}]",
+                    instance.getInstanceId(),
+                    pc.isClosedOrFailed(),
+                    pc.getFailureCause() != null ? pc.getFailureCause().getMessage() : "none",
+                    instance.isStarted(),
+                    instance.isClosePending(),
+                    sm.getNumberOfWorkQueuedInShardsAwaitingSelection(),
+                    wm.getNumberRecordsOutForProcessing(),
+                    wm.getNumberOfIncompleteOffsets(),
+                    wm.hasIncompleteOffsets(),
+                    pc.getPausedPartitionSize(),
+                    instance.getConsumedKeys().size(),
+                    pc.describeProgress())
+                    + describeInstanceThreads(instance.getInstanceId());
+        } catch (Exception e) {
+            // the type is kept, not just the message: a diagnostic that says only "error dumping
+            // state: null" names neither the failure nor the field that produced it
+            return msg("Instance {}: error dumping state: {}: {}",
+                    instance.getInstanceId(), e.getClass().getSimpleName(), e.getMessage());
+        }
+    }
+
+    /**
+     * Top frames of the threads PC runs for one instance - {@code pc-broker-poll-PC-<id>} and
+     * {@code pc-control-PC-<id>}, matched on the {@code -PC-<id>} suffix its
+     * {@code AbstractParallelEoSStreamProcessor#setMyId} gives them.
+     * <p>
+     * <b>Why a stack and not another counter.</b> The fleet line already says an instance is stuck in
+     * {@code CLOSING} with a poll pass tens of seconds old; what it cannot say is which call is
+     * holding it, and the candidates want different repairs -
+     * {@code ConsumerManager#close}'s wait for {@code pendingRequests} to drain, the consumer's own
+     * close, or a commit. Reading it off a stall costs nothing; inferring it from code has already
+     * produced one refuted hypothesis on this bug.
+     * <p>
+     * Deliberately unfiltered by package: the interesting frame is usually Kafka's or the JDK's
+     * (a {@code Thread.sleep} in a wait loop, a socket read), and trimming to PC's own frames would
+     * hide precisely the line that names the blocker.
+     */
+    private String describeInstanceThreads(int instanceId) {
+        String suffix = "-PC-" + instanceId;
+        return Thread.getAllStackTraces().entrySet().stream()
+                .filter(e -> e.getKey().getName().endsWith(suffix))
+                .map(e -> {
+                    StackTraceElement[] all = e.getValue();
+                    // The top frame says WHERE it is parked; the Kafka/PC frames say WHICH CALL put
+                    // it there, and only the second answers the question. A flat "first N frames"
+                    // does not work here and this is the fix for having tried it: a thread parked in
+                    // a socket select spends four frames on sun.nio internals and another four on
+                    // Kafka's network plumbing, so the first EIGHT frames stopped at
+                    // ConsumerNetworkClient.poll - one frame short of whether the caller was
+                    // KafkaConsumer.poll, commitSync or close, which is the whole question.
+                    String top = all.length == 0 ? "<no frames>" : all[0].toString();
+                    String meaningful = Arrays.stream(all)
+                            .map(StackTraceElement::toString)
+                            .filter(f -> f.contains("org.apache.kafka.clients")
+                                    || f.contains("bz.stub.parallelconsumer"))
+                            .limit(10)
+                            .collect(Collectors.joining(" <- "));
+                    if (meaningful.isEmpty()) {
+                        // never report nothing: an unrecognised stack is still evidence, and a
+                        // filter that silently empties is the failure mode this comment exists for
+                        meaningful = Arrays.stream(all).limit(15)
+                                .map(StackTraceElement::toString)
+                                .collect(Collectors.joining(" <- "));
+                    }
+                    return e.getKey().getName() + "[" + e.getKey().getState() + "] parked-at=" + top
+                            + " via " + meaningful;
+                })
+                .collect(Collectors.joining("\n      ", "\n      ", ""));
+    }
+
+    /**
+     * The whole fleet's state as one string, for {@code ProgressTracker.withDiagnostic}.
+     * <p>
+     * This goes in the thrown assertion MESSAGE rather than only in the log, deliberately: a CI log
+     * is truncated (GitHub cut a 9,968-line job to 7,138 during this very investigation, and the
+     * autopsy had to be recovered from the uploaded report artifact), whereas the failure message
+     * survives into the failsafe XML and the job summary. A diagnostic that is only in the log is
+     * one that is missing exactly when it is needed.
+     */
+    private String describeFleet(List<ManagedPCInstance> instances) {
+        return instances.stream()
+                .map(this::describeInstance)
+                .collect(Collectors.joining("\n    ", "fleet:\n    ", ""));
+    }
+
+    /**
      * Dump the internal state of every PC instance when a stall is detected.
      * This tells us exactly what each component thinks is happening:
      * - Is the PC alive or dead?
@@ -831,42 +950,7 @@ public class MultiInstanceRebalanceTest extends BrokerIntegrationTest<String, St
     private void dumpInstanceState(List<ManagedPCInstance> instances) {
         log.error("=== STALL DETECTED — dumping all instance state ===");
         for (var instance : instances) {
-            var pc = instance.getParallelConsumer();
-            if (pc == null) {
-                log.error("  Instance {}: PC is null (never started?), started={}", instance.getInstanceId(), instance.isStarted());
-                continue;
-            }
-            try {
-                var wm = pc.getWm();
-                // Check if the shard manager has any processing shards at all
-                var sm = wm.getSm();
-                long totalWorkTracked = sm.getNumberOfWorkQueuedInShardsAwaitingSelection();
-                boolean hasIncompletes = wm.hasIncompleteOffsets();
-
-                // assignedPartitions is deliberately absent: the accessor behind it mirrored state
-                // Kafka already owns, and astubbs/parallel-consumer#393 deleted the mirror rather
-                // than keep the poll path asking Kafka a third time per pass. This dump is a
-                // failure-path diagnostic, so it is not worth reintroducing a cached field for -
-                // and reading the live assignment here would need a consumer handle the dump does
-                // not have.
-                log.error("  Instance {}: closed/failed={}, failureCause={}, started={}, " +
-                                "queuedInShards={}, outForProcessing={}, " +
-                                "incompleteOffsets={}, hasIncompletes={}, " +
-                                "pausedPartitions={}, consumedKeys={}",
-                        instance.getInstanceId(),
-                        pc.isClosedOrFailed(),
-                        pc.getFailureCause() != null ? pc.getFailureCause().getMessage() : "none",
-                        instance.isStarted(),
-                        totalWorkTracked,
-                        wm.getNumberRecordsOutForProcessing(),
-                        wm.getNumberOfIncompleteOffsets(),
-                        hasIncompletes,
-                        pc.getPausedPartitionSize(),
-                        instance.getConsumedKeys().size()
-                );
-            } catch (Exception e) {
-                log.error("  Instance {}: error dumping state: {}", instance.getInstanceId(), e.getMessage(), e);
-            }
+            log.error("  {}", describeInstance(instance));
         }
         log.error("=== END STATE DUMP ===");
     }

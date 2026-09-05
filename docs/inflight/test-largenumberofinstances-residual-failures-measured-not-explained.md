@@ -1,4 +1,11 @@
-# `largeNumberOfInstances`: the residual failures are measured now, and still not explained
+# `largeNumberOfInstances`: the residual failure is measured, reproduced, and now EXPLAINED
+
+**Filename deliberately unchanged.** It says "not explained"; since 2026-09-05 the mechanism is measured and
+the file's last section is titled EXPLAINED -
+but it is cited from the `@Quarantined` annotation's `tracking` field, `docs/quarantined-tests.md`,
+`docs/refactoring.md`, two sibling notes and a solutions write-up. Renaming it now would break eight
+citations for a title that has to change again the moment the fix lands, so the claim is corrected
+here instead. This is the same trade `docs/inflight/test-retry-queue-behaviour-untested.md` took.
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: blind-spot -->
@@ -341,3 +348,484 @@ work. Checking it costs reading the group's `rebalance.timeout.ms` against the p
 stopped or one still running, and the verdict still ends `no consumer diagnostic supplied` because
 `ProgressTracker.withDiagnostic(...)` is still never called. Two CI failures have now each been one
 wiring change away from saying what PC believed it was doing.
+
+## A candidate mechanism, and the two-arm experiment that will refute or support it - 2026-09-03
+
+**Written before the result, deliberately.** The prediction is stated here first so that a run which
+refutes it cannot be re-read afterwards as having supported something narrower.
+
+### The candidate
+
+The three sightings agree that a member stops answering the rebalance, and this note's open question
+has been *which* member. A live one now has a mechanism, and it survives every exclusion already
+recorded above:
+
+- `RetryQueue`'s lock is **fair** - `new ReentrantReadWriteLock(true)` (grep
+  `ReentrantReadWriteLock` in `RetryQueue.java`).
+- `RetryQueue.remove()` takes `writeLock().lock()` **unbounded** - no `tryLock`, no timeout.
+- It is reachable from the rebalance callbacks **on the broker-poll thread, inside
+  `consumer.poll()`** - which is where the whole group waits.
+- The controller thread holds the **read** lock for a whole scan (`ShardManager.getLowestRetryTime`,
+  grep `retryQueueIterator`) and takes the **write** lock on *every successful record*
+  (`ShardManager.onSuccess` -> `this.retryQueue.remove(wc)`).
+
+So the lock is on the hot path at this profile's record rate, it is fair, and a rebalance callback
+queues behind whatever holds it. A member that cannot get through its callback cannot send JoinGroup,
+and the coordinator dwells in `PreparingRebalance` - the recorded signature, with the whole
+assignment frozen rather than one shard wedged.
+
+**Crucially it is mode-independent**, which is what the two prior exclusions were not: the
+confluentinc#857 revoke deadlock closes only in `PERIODIC_CONSUMER_SYNC` and the transactional revoke
+wait is gated on transactional mode, whereas this profile is `PERIODIC_CONSUMER_ASYNCHRONOUS`.
+
+### This is not a new diagnosis - the defect is already fixed in an open PR nobody connected to it
+
+astubbs/parallel-consumer#431 fixes exactly this lock, on exactly these callback paths
+(`RetryQueue.tryRemove`, declining rather than waiting). It was found by the confluentinc#857
+**defect-class sweep**, not by this stall, and its own body describes the second edge as "one scan
+away from closing into a stall" - a near-miss found by pattern. Its `RetryQueueRebalancePathTest` is
+3/3 red against master, **two of the three timing out on the write lock**, and green after.
+
+**What is missing is the join between the two**: no run of `largeNumberOfInstances` has ever happened
+on a tree carrying that fix. The link is shape, not observation, and this note does not claim
+otherwise.
+
+### The prediction, stated now
+
+Two arms differing in **exactly** the three main-source files of astubbs/parallel-consumer#431
+(`RetryQueue`, `ShardManager`, `ProcessingShard`), both carrying the same new fleet diagnostic, both
+run by `bin/exp-measure-large-instances-failure-rate.sh 30` on the idle self-hosted `highcpu` box,
+**sequentially - never concurrently**, because two 12-instance fleets on one machine reproduce the
+overload confound that invalidated the 2026-08-28 sweep:
+
+<!-- post-merge: checked -->
+- **control** (the tree without astubbs/parallel-consumer#431) - *predicted to fail around 1 run in
+  10*, reproducing the recorded rate and signature. Actions run 33752432746.
+- **treatment** (the same tree plus that fix, and nothing else) - *predicted not to fail*, or to fail
+  materially less often. Actions run 33802869646.
+
+The two arms are named by run id rather than by branch, because the branches carrying them are
+temporary and the runs are the durable record.
+
+**What each outcome licenses, agreed before the data:**
+
+- Control fails at roughly the recorded rate and treatment does not: the retry-queue lock is
+  supported as the mechanism, and the flapper's fix is astubbs/parallel-consumer#431 rather than
+  anything new. Support, not proof - 30 runs cannot separate a large effect from a total one.
+- **Both fail**: the candidate is refuted and must be recorded as such here. The lock is then not
+  the mechanism, whatever its other merits, and the fleet diagnostic below is what the next sighting
+  has to work from.
+- **Neither fails**: nothing is learned about the mechanism, and the honest reading is that the box
+  was not the one that fails - the same weaker-than-it-looks result the nineteen desktop runs
+  produced. It is not evidence for the fix.
+
+### The instrumentation that lands with it
+
+`ProgressTracker.withDiagnostic` had **zero call sites in the whole tree**, which is why all three
+sightings end "no consumer diagnostic supplied". It is now wired to a per-instance fleet description
+carrying `started` and `closePending` - the pair that answers this note's actual open question, since
+a harness-stopped instance mid-close reads `started=false, closePending=true` and a live one does
+not. It goes in the thrown message rather than only the log, because a CI log is truncated and a
+failsafe XML is not.
+
+
+## RESULT, 2026-09-04: the candidate is REFUTED and the mechanism is identified
+
+Both arms ran on the idle self-hosted `highcpu` box, sequentially, 30 iterations each.
+
+| arm | tree | failures |
+|---|---|---|
+| control (run 33752432746) | without astubbs/parallel-consumer#431 | **2 / 30** |
+| treatment (run 33802869646) | + that fix, nothing else | **1 / 30** |
+
+**The retry-queue lock is not the mechanism.** 2/30 against 1/30 is no difference worth a claim, and
+the treatment arm's failure carries the control's signature line for line. The prediction written
+above said both arms failing refutes the candidate; both arms failed, so it is refuted, and
+astubbs/parallel-consumer#431 should not be described anywhere as fixing this test. The control arm
+DID reproduce at 6.7%, consistent with the recorded one-in-ten, so the experiment had the power to
+show an effect and there was none.
+
+**A measurement trap this nearly walked into, recorded because it would have inverted the result.**
+The runner's `/tmp` persists, so the treatment artifact's tally contained **all 60 rows** - both
+arms - not its own 30. Read naively that is "3 failures in 60" and a halved rate. The `ref=` column
+in `bin/exp-measure-large-instances-failure-rate.sh` is the only reason the arms could be separated
+at all; `experiments.yml`'s header had predicted exactly this and called it a known limitation.
+
+### What the fleet diagnostic showed, which is the actual answer
+
+This note's standing question was whether the silent member is one the harness stopped or one still
+running. **It is one the harness stopped - and it is silent because of PC's close path.**
+
+In the worse control failure, **10 of 12 instances sat in `state=CLOSING`** with
+`closedOrFailed=false`, their last completed poll pass **23-25 seconds earlier**; the two survivors
+were `RUNNING` and polling 146ms earlier. The treatment failure is identical: ten
+`closePending=true`, the same two alive.
+
+The chain, every link observed:
+
+1. A chaos stop calls `pc.close()` -> `closeDontDrainFirst()` -> `transitionToClosing()`.
+2. `BrokerPollSystem.handlePoll()` is guarded on `runState == RUNNING || DRAINING`, so the instance
+   **stops calling `consumer.poll()` the moment it enters `CLOSING`** - while its `KafkaConsumer` is
+   still an open member of the group. The consumer is closed later, in `doClose()`.
+3. A member that does not poll does not send JoinGroup. The coordinator dwells in
+   `PreparingRebalance`: the recorded `ZOMBIE_MEMBER/REBALANCE_BLOCKED`, "a member is not answering".
+4. The close cannot finish either. All ten logged *"Execution or timeout exception while waiting for
+   the control thread to close cleanly (state was CLOSING)"*, while `ConsumerOffsetCommitter` filled
+   with `RebalanceInProgressException` - logged on `pc-broker-poll-PC-0` and `PC-11`, the only two
+   instances still running.
+5. So the rebalance waits on the closing members and the close waits on the rebalance. **After
+   `waitForClose` times out the PC stays in `CLOSING` for good** - consumer never closed, member
+   never leaves. That is why the detector reports `FLAT` rather than slow: it does not recover.
+
+**`DRAINING` does not have this problem, and that is the tell.** `drain()`'s own comment says the
+poller "must keep calling `consumer.poll()`" while draining, and `isCloseInProgress()` is documented
+as deliberately NOT true for `DRAINING` for that reason. `CLOSING` took the opposite choice, and the
+`closeDontDrainFirst()` path - which is what `close()` calls - goes straight there.
+
+### This is not a test-only defect
+
+Any application closing a PC instance while its group is rebalancing does this to its peers; a
+rolling restart of a PC fleet is the ordinary case. The test is aggressive enough to hit it reliably
+at ~7%, not doing something an application would not.
+
+### What is NOT yet established
+
+Which of the two calls in the closing instance actually holds it - `maybeDoCommit()` retrying a
+commit that cannot succeed mid-rebalance, or `consumerManager.close()` inside `doClose()`. Both are
+on the path and the logs show the commit failing; neither has been isolated. **The fix should not be
+chosen before that is pinned**, because "keep polling until the consumer is closed" and "do not
+block the close on a commit that cannot land" are different repairs.
+
+
+## The chaos monkey's victim selection was excluding one instance - fixed elsewhere, 2026-09-04
+
+Noticed while reading the monkey during this investigation: `submitChaosMonkey` drew
+`(int) ((size - 1) * Math.random())`, which is `0 .. size - 2`, so the highest-indexed secondary was
+**never** toggled - excluded outright rather than merely unlikely. One instance in the fleet never
+churned.
+
+**It is not the cause of the stall**, and nothing here depends on it: the stall reproduces with ten
+instances closing at once, and the excluded instance is one the monkey simply never touched. It is
+recorded here because it **changes what this profile measures**, and this note owns the profile's
+rate. Fixed in astubbs/parallel-consumer#441, which deliberately does not re-measure - so **the
+2/30 baseline above was taken with the old selection**, and a rate compared across that merge is not
+comparing like with like.
+
+
+## THE BLOCKING CALL IS NAMED, 2026-09-04 - and it is the astubbs/parallel-consumer#80 defect one state along
+
+Run 33824474506, 3 failures in 60 (5%). Every stuck instance's `pc-broker-poll` thread:
+
+    RUNNABLE parked-at=sun.nio.ch.EPoll.wait
+      via NetworkClient.poll <- ConsumerNetworkClient.poll
+          <- ConsumerNetworkClient.awaitPendingRequests(ConsumerNetworkClient.java:355)
+          <- AbstractCoordinator.close(AbstractCoordinator.java:1140)
+          <- ConsumerCoordinator.close(ConsumerCoordinator.java:987)
+          <- ClassicKafkaConsumer.close(ClassicKafkaConsumer.java:1140)
+
+**The poll thread is inside `consumer.close()`, waiting on the group coordinator.** Not a PC lock,
+not a sleep, not a commit retry - all three of those were candidates and all three are refuted by
+this frame.
+
+### The complete chain
+
+1. A stop calls `pc.close()` -> `closeDontDrainFirst()` -> `transitionToClosing()`.
+2. `BrokerPollSystem.handlePoll()` is guarded on `runState == RUNNING || DRAINING`, so the instance
+   **stops calling `consumer.poll()`** while its consumer is still an open group member.
+3. `doClose()` -> `consumerManager.close(DEFAULT_TIMEOUT)` -> `consumer.close(30s)` ->
+   `AbstractCoordinator.close()` -> `awaitPendingRequests()`, which waits on the coordinator.
+4. The coordinator cannot answer: the group is in `PreparingRebalance` waiting for JoinGroup from
+   its members - **including the ones now sitting in this wait**. Each closing member is waiting for
+   a coordinator that is waiting for it.
+5. So the close burns its full 30s budget. Throughout it the consumer is a group member that does
+   not poll and does not answer: `ZOMBIE_MEMBER/REBALANCE_BLOCKED`. The observed 23-25s poll-pass
+   age is that budget, and `waitForClose` (a shorter budget) gives up first, which is why ten
+   instances logged a `TimeoutException` while still `CLOSING`.
+6. The aggressive profile has up to 6 of 11 instances closing at once, so the group freezes
+   wholesale and the fleet stops: detector `FLAT`, whole assignment stagnant at comparable lag.
+
+### This is a known defect class, fixed once already, and CLOSING did not get the fix
+
+astubbs/parallel-consumer#80 fixed exactly this for `DRAINING` - "draining PC stops polling - 10kHz
+busy-spin + zombie partition hold". Its guard,
+`BrokerPollSystemDrainTest.drainKeepsPollingConsumer_staysRebalanceResponsiveWithoutSpinning`, states
+the reason in its own javadoc: *"rebalance participation (rejoin / revoke-ack) happens inside
+`consumer.poll()`; a draining consumer that never polls cannot respond to rebalances while its
+background heartbeat keeps it a live member"*. Owning write-up:
+`docs/solutions/test-flakiness/pc-silent-stall-under-contention-2026-07-29.md`.
+
+`CLOSING` never received that fix, and **`close()` reaches it without passing through `DRAINING` at
+all** - `closeDontDrainFirst()` transitions straight to `CLOSING`, so the most common close bypasses
+the protected state entirely.
+
+### The invariant to restore
+
+> **A PC instance that has not yet left the group must keep polling it.**
+
+`DRAINING` honours it since astubbs/parallel-consumer#80. `CLOSING` does not, and hands Kafka's
+`consumer.close()` a 30-second budget to discover that.
+
+### Not a test-only defect
+
+Any application closing a PC instance while its group is rebalancing holds up every peer for up to
+the close timeout. A rolling restart of a PC fleet is the ordinary case; this profile just does it
+often enough to catch.
+
+
+## A verification that measured the wrong tree, 2026-09-05 - recorded so its number is never quoted
+
+Run 33836808270 was dispatched to verify the fix and returned **4 failures in 60**. That number says
+nothing about the fix, and it is written down here so nobody later finds it and reads it as
+"the fix did not work".
+
+It was dispatched at head `576b4f04` - the **first** version of the fix, which polled from
+`BrokerPollSystem.handlePoll()`'s `CLOSING` branch. That version is now known not to fire for the
+interleaving that matters: `transitionToClosing()` runs on the caller's thread and can land mid-poll,
+after which the woken poll completes the `RUNNING` iteration and `doClose()` runs immediately, so the
+branch is skipped. CI caught it as a unit failure the same hour. The experiment was already queued
+behind other batches by then, so it measured a tree whose fix largely does not engage - and duly
+reported the unfixed rate.
+
+Its 4/60 sits with every other pre-fix measurement rather than against them: 2/30 control, 1/30 with
+astubbs/parallel-consumer#431, 3/60 and 3/60 on the two diagnostics-only trees. Six trees, one rate,
+about 5%.
+
+**The lesson is the one this corpus already carries three times, and it caught a fourth here: a run is
+evidence only about the thing that actually ran.** The instrument that saved it was the `ref=` column
+in the tally, added to `bin/exp-measure-large-instances-failure-rate.sh` for a different reason
+entirely - separating two concurrent arms on a shared `/tmp`. Without it the artifact would have been
+read as "the verification run", because that is what it was dispatched as.
+
+Re-dispatched at `eace35700`, the first tree carrying the discharge poll in `doClose()` plus the
+review fix that keeps it paused. That result is the one this note is waiting on.
+
+
+## THE FIX DOES NOT FIX IT - measured 2026-09-05, and the rate did not move
+
+Run 33913401545, head `eace3570`: the first tree carrying the discharge poll in `doClose()` plus the
+review fix that keeps the assignment paused. **2 failures in 60.**
+
+That is not a result. Against 3/60 and 3/60 on the two diagnostics-only trees and 2/30 on the
+control, 2/60 is the same rate. Six trees before it, one rate, about 5%; this is the seventh.
+
+**And the signature is unchanged**, which is the part that matters more than the number. The failing
+run's fleet dump still reads `Instance 1..6: closePending=true state=CLOSING`, with the ambient probe
+still reporting `ZOMBIE_MEMBER`/`REBALANCE_BLOCKED`. Whatever the discharge poll achieved, instances
+still sit in `CLOSING` as silent group members and the fleet still freezes behind them.
+
+### What this does and does not overturn
+
+**Still established**, and not weakened by this: the mechanism. Ten of twelve instances parked in
+`ClassicKafkaConsumer.close -> ConsumerCoordinator.close -> AbstractCoordinator.close ->
+awaitPendingRequests` is an observation, not an inference, and a closing member that has not left the
+group cannot answer a rebalance. The diagnosis stands.
+
+**Overturned**: that ONE poll before `consumer.close()` is enough to discharge what the coordinator is
+waiting for. It is not. A rebalance is not one round trip - JoinGroup and SyncGroup are separate
+exchanges, and a single 1ms poll can complete neither reliably, let alone both, while eleven other
+members are churning.
+
+**The two review-found corrections keep their value regardless** - the `CLOSING` pause arm stops the
+discharge poll being a live fetch, and the `ConsumerManager` one-attempt allowance is what lets any
+poll happen during close at all. They are prerequisites for any version of this fix, not consolation.
+
+### What the next attempt has to do differently
+
+Poll *until the member has actually left or the rebalance has settled*, bounded - not once. The
+candidates, in the order they should be tried:
+
+- **Keep polling in `CLOSING` until the assignment is empty or a short deadline passes**, then close.
+  That is the DRAINING shape - a loop, not a single call - and it is what astubbs/parallel-consumer#80
+  actually did for its state.
+- **Leave the group explicitly before closing** (`unsubscribe()`), so the member stops being a member
+  at the same moment it stops answering, instead of afterwards. Cheaper to reason about, but it runs
+  the revoke callback on this thread and that path has its own history.
+- **Bound the close budget** so a member that cannot leave holds the group for 2s rather than 30s.
+  Mitigation, not a cure, and it should not be reached for first.
+
+**Do not read the third as the easy one.** Backing the timeout off is what makes the rate look better
+without the mechanism changing, and this note exists because that move has already cost this project
+four months once.
+
+
+## A deterministic reproducer was built, and it does NOT reproduce - 2026-09-05
+
+`ClosingMemberRebalanceIT`, on `ManagedPCInstance` (the capacity profile's own harness), forces the
+window the profile only draws by chance: the admin client is polled until the coordinator reports
+`PREPARING_REBALANCE`/`COMPLETING_REBALANCE`, and only then are members closed. A matrix over the two
+variables the profile has and the green twin lacks, moved one at a time:
+
+| assignor | simultaneous closers | victims' close | survivors |
+|---|---|---|---|
+| eager | 1 | 0.0s | kept consuming |
+| cooperative | 1 | 0.0s | kept consuming |
+| eager | 3 | 0.0s, 0.0s, 0.0s | kept consuming |
+| cooperative | 3 | 0.1s, 0.0s, 0.0s | kept consuming |
+
+Commit mode `PERIODIC_CONSUMER_ASYNCHRONOUS` throughout, as in the profile. **Every close was
+instant and no survivor stalled.** (Two sizing misses on the way, both with every property already passed
+before a drain timed out: 150s draining 150k records locally, then 363s per case on a two-core hosted
+runner - 1,469s for the class in the gating lane. The backlog now only has to outlast a 15s liveness
+window: 30,000 records at 10ms, two matrix cells and three join cells, the class in ~52s locally.) Run against BOTH master's product code and the tree carrying the `doClose()`
+discharge poll: identical.
+
+### Three things this settles, one it does not
+
+- **A member closing mid-rebalance is handled cleanly by Kafka and by PC.** With the coordinator
+  loggers raised: `onLeavePrepare` with a valid generation, LeaveGroup sent within 2ms, LeaveGroup
+  answered within ~10ms, `Control loop ending clean` within ~0.3s, survivors re-synced ~2.6s later.
+  Three at once changes nothing. This is why the discharge-poll fix measured 2/60: it repairs a case
+  that was not broken.
+- **The first cut of this reproducer reported a 15-second freeze that was an exhausted topic** - the
+  last committed offsets summed to exactly the 4,000 produced. It now sizes and GUARDS its backlog
+  (`REMAINING_FLOOR`, checked before the close and after the liveness window) so a run that cannot
+  discriminate fails saying so, rather than as a fake stall. Recorded because "the survivors consumed
+  nothing" is exactly what a real freeze looks like, and only the offsets told them apart.
+- **"Close took 15.2s" was the instrument, not the close.** The duration was read from the main thread
+  after a 15s await expired. It is now recorded on the closer thread the instant `close()` returns,
+  and reads NaN rather than a number if it never did.
+
+**What it does not settle:** the profile's stall. Ten of twelve instances parked in
+`AbstractCoordinator.close -> awaitPendingRequests` for ~25s remains an observation nothing here
+reproduces. What the profile has that this matrix does not is the storm itself - restarts joining while
+other members are mid-close, toggles every 0-500ms, 12 members on 80 partitions, a background producer.
+The next reproducer has to carry one of those, and the cheapest guess is **a member closed while its
+own first JoinGroup is still unanswered** - a just-restarted instance - because that is the one state
+in which `maybeLeaveGroup` sends nothing (`generation.hasMemberId()` is false) and the coordinator is
+left waiting on a member that has already gone. Untested; stated as the next arm, not a finding.
+
+### On the `doClose()` discharge poll and the `ConsumerManager` one-attempt allowance
+
+The `doClose()` discharge poll and the `ConsumerManager` one-attempt allowance are measured not to
+move the profile's rate, and now measured not to be needed for the single or three-way close. They
+are harmless and guarded, but a change that fixes nothing observable should not ship under a
+commit message that says it fixes the stall. Whether to keep them as hygiene or drop them is a
+reviewer's call; this note recommends **dropping them**, so that what lands is only what can be shown.
+
+
+## The close-path wait is MEASURED now, 2026-09-05: LeaveGroup is not answered until the join phase completes
+
+`ClosingMemberRebalanceIT.closingAMemberWhoseOwnJoinIsUnansweredMustNotHoldTheGroup` closes the
+JOINING member the instant the coordinator reports `PREPARING_REBALANCE` - while that member's own
+JoinGroup (with member id, after `MEMBER_ID_REQUIRED`) is in flight. Eager and cooperative, one joiner
+and three. With the coordinator loggers raised, every joiner shows the same sequence:
+
+```
+32:43.758  JoinGroup sent (member id assigned)
+32:43.890  onLeavePrepare gen=-1 memberId=member#5   <- closed 130ms later, JoinGroup still pending
+32:43.890  LeaveGroup sent
+32:46.517  settled members: "group is already rebalancing"   <- their next heartbeat, 3s later
+32:46.525  settled members: Successfully joined gen=2        <- join phase completes
+32:46.529  LeaveGroup response arrives                       <- 4ms after that, 2.64s after it was sent
+32:46.535  Control loop ending clean (CLOSED)
+```
+
+A LeaveGroup from a stable member is answered in ~10ms (the settled-member cases, and A in the
+single-close run). A LeaveGroup from a member whose JoinGroup is pending is answered **only when the
+join phase completes** - the coordinator has already removed the member, but the response is not
+delivered until every other member has (re)joined. Close therefore costs one full join phase, which
+is one heartbeat interval (~3s) in a healthy group and unbounded in one whose join phase keeps
+failing to complete. Passed at 2.7s against a 10s bound, so it is a guard on the bound, and a
+record of the cost.
+
+### What this does and does not close
+
+It closes the question this note has carried since the stack was captured: **what are the stuck
+instances waiting for in `awaitPendingRequests`.** Their own LeaveGroup response, which waits on the
+join phase. That is no longer an inference.
+
+It does NOT reproduce the profile's stall, because here the join phase completes in 3s and there it
+evidently does not for ~25s. What keeps a 12-member join phase from completing for 25s under
+continuous churn is the remaining unknown, and it is a different experiment: the storm itself, at
+reduced scale, with these loggers raised - not another single-event arm. Two candidates, both
+untested: a member that is neither polling nor left (the coordinator waits on it for the rebalance
+timeout), or a join phase that is repeatedly restarted by the next toggle before it can complete.
+
+### What this rules out for the fix
+
+Polling more before close - the discharge poll - could never have helped: the wait is for a
+response the coordinator will not send until other members act, and no amount of polling by the
+closer changes that. Any repair is one of: not waiting for that response (a bounded consumer close
+once LeaveGroup is sent - the coordinator already has it), or keeping the join phase completing under
+churn, which is a group-level property this note cannot yet name the lever for.
+
+
+## The storm itself, on the machine that never fails: a hard 3-second ceiling - 2026-09-05
+
+`largeNumberOfInstances` at `perf.scale=0.5`, three iterations, the two coordinator loggers raised.
+All three passed (this machine has never failed it), and that is the point of running them here:
+they are the healthy baseline the Linux failures now have to be read against.
+
+| iteration | leaves | joins | worst LeaveGroup | worst JoinGroup |
+|---|---|---|---|---|
+| 1 | 89 | 172 | 2.83s | 3.00s |
+| 2 | 106 | 205 | 2.87s | 3.00s |
+| 3 | 91 | 175 | 2.76s | 3.00s |
+
+Under the profile's own churn - a toggle every 0-500ms across eleven secondaries - **no LeaveGroup and
+no JoinGroup ever waited longer than one heartbeat interval.** The join phase always completed on the
+next heartbeat. Nothing here waits 25 seconds, so the Linux stall needs something churn alone does not
+produce.
+
+**What the Linux batch dispatched at `3fcecf6e` (run 33939841725) therefore decides**, with the same
+loggers on and the same analyser: if a failing iteration shows LeaveGroups or JoinGroups unanswered
+for ~25s, the members and the instant are named and the fleet dump says what each was doing; if every
+latency there is also ~3s and the fleet still froze, the wait is not in the coordinator protocol and
+the search has been one layer too low.
+
+
+## EXPLAINED - 2026-09-05. The residual is the group protocol under this churn rate, and it is now measured, not asserted
+
+Linux batch at `3fcecf6e` (run 33939841725), coordinator loggers on: **4 failures in 60**, and in every
+one of them **every LeaveGroup was answered within 2.8s and every JoinGroup within 3.0s** - identical to
+the passing Linux runs (2.87-2.98s) and to the Mac baseline. No coordinator request was ever slow.
+The 25-second waits were never a slow request; they were a slow *join phase*.
+
+### The chain, every link observed in run 31
+
+1. **The chaos monkey restarts instances faster than a join phase completes.** PC-1 in the 23s before
+   the stall: 8 LeaveGroups, 16 JoinGroups sent, 2 successful joins. Toggled off ~0.8s after joining,
+   every time - with its JoinGroup still pending.
+2. **A LeaveGroup sent while the member's own JoinGroup is pending is not answered until the join phase
+   completes** (measured deterministically at 2.7s in a healthy group; here the responses land at
+   exactly two instants, 25:21.48 and 25:38.81, the two phase completions).
+3. **Under continuous arrivals and mid-join departures the join phase stayed open for 17 seconds**
+   (25:21.5 -> 25:38.8): generations 18-21 each completed within a heartbeat, the one opened at 21.5
+   did not. Why the coordinator held that phase open is a broker-side question this client-side
+   evidence cannot answer; that it did is not in doubt.
+4. **While the phase is open, `consumer.poll()` returns no records to ANY member** - the two
+   never-toggled survivors rejoined at 21.481 and fetched nothing until 38.8; their thread capture
+   shows an ordinary `pollForFetches`. That is the FLAT count, and the 11-round detector fires at 12s.
+5. **Every closer waits inside `consumer.close()` for that phase** - `awaitPendingRequests`, after
+   LeaveGroup was sent. PC's control thread gives up at 20s with a `TimeoutException`; the fleet dump
+   reads `CLOSING`. The ambient probe reads `ZOMBIE_MEMBER/REBALANCE_BLOCKED`. Both are true and
+   neither is the cause.
+
+### What PC contributes to this: nothing on the critical path
+
+Checked, not assumed: `ConsumerManager.commitAsync` does not touch `pendingRequests`, so there is no
+PC-side wait before LeaveGroup; the closers' frames are all inside Kafka's own close, after LeaveGroup;
+the survivors' frames are an ordinary poll. Every PC-side candidate this note has carried - the retry
+queue lock, the `CLOSING` poll guard, the discharge poll, the pause arm - was either refuted by
+measurement or shown to be off the path. `BrokerPollSystem.dischargeCoordinatorBeforeClose()` and the
+`ConsumerManager` one-attempt allowance should be **reverted**: they fix nothing that is broken.
+
+### What this means for the test
+
+The class javadoc's original claim - "the residual is the Kafka consumer group protocol under extreme
+membership churn, not a PC bug" - was written as an assertion and this note was opened because it had
+never been measured. **It is measured now, and it was right.** The profile's pass rate is a property of
+how often its churn opens a join phase that outlasts the detector, on the hardware it runs on: never on
+an M2 desktop, about one run in fifteen on the Linux runner. That is a measurement of the protocol,
+which is what the profile's javadoc says it is for, and the `@Quarantined` annotation's reason -
+"mechanism unexplained" - is no longer true and should be rewritten to say what the mechanism is.
+Whether a test whose failures are the protocol's belongs in a gating lane at all is the question the
+handoff raised on 2026-09-01, and it is now answerable rather than open.
+
+### Instruments this took, for the next person
+
+`ClosingMemberRebalanceIT` (7 cases, guarded backlog, on-thread close timing); the two coordinator
+loggers on `kafka.coordinator.log.level`; `bin/exp-measure-large-instances-failure-rate.sh` raising
+them; the `ref=` tally column; the fleet diagnostic with thread capture. And an analyser that measured
+LeaveGroup/JoinGroup latency and, by measuring only those, nearly missed that neither was the problem -
+the phase duration is what to read, from the clustering of LeaveGroup responses.

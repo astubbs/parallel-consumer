@@ -94,17 +94,16 @@ deletes the annotation and its entry together.
 (`OffsetEncodingBackPressureTest.backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing` went
 earlier, diagnosed and fixed on master by astubbs#351 - it asserted an offset it had itself frozen.)
 
-- [ ] `MultiInstanceRebalanceTest.largeNumberOfInstances` - a rebalance stall whose mechanism is
-  measured but not explained. The progress detector returns `FLAT` - the record count *stops* rather
-  than slowing, which is the discriminator it exists to report - and the `AMBIENT PROBE AUTOPSY`
-  block names `ZOMBIE_MEMBER/REBALANCE_BLOCKED`: the group dwells in `PreparingRebalance` because a
-  member stopped answering, with the whole assignment frozen at comparable lag rather than one shard
-  wedged. Measured at one failure in ten consecutive runs on an idle Linux box, plus repeated CI
-  failures, always that signature. It reproduces on the tree carrying this branch's log-argument
-  fix, so it is neither the confluentinc#857 revoke deadlock nor the SLF4J argument-evaluation
-  defect but a third, open mechanism. Sighting ledger, including what would settle the attribution:
+- [ ] `MultiInstanceRebalanceTest.largeNumberOfInstances` - a rebalance stall whose mechanism is now
+  **measured**: the Kafka consumer group protocol under this profile's churn rate, not a PC defect. The
+  chaos monkey restarts members faster than a join phase completes, a LeaveGroup sent mid-join is
+  answered only when the phase completes, and one phase was observed open for 17s during which
+  `consumer.poll()` returns nothing to any member - the `FLAT` count. In every failing run no
+  coordinator request was slow. Every PC-side candidate was refuted by measurement. 4 in 60 on the Linux
+  runner, 0 in 22 on an M2 desktop. Full chain, instruments and the refuted hypotheses:
   [`docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md`](inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md).
-  Unowned - no fix PR exists, because no diagnosis does.
+  Stays quarantined because a test whose failures are the protocol's cannot gate merges; where it
+  should live instead is `docs/inflight/test-largenumberofinstances-cannot-gate-a-merge.md`.
 
   **Rule 2 is satisfied prospectively rather than retrospectively, and that is worth stating plainly
   rather than letting a later reader find it.** The ledger was measured while this test was
