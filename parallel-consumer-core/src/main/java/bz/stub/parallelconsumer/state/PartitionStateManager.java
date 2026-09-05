@@ -274,20 +274,47 @@ public class PartitionStateManager<K, V> implements ConsumerRebalanceListener {
      *
      * <li>{@link ProcessingOrder#UNORDERED} ordering, {@link WorkContainer}s go into shards keyed by partition, so
      * falls back to the {@link ProcessingOrder#PARTITION} case
+     *
+     * <p>
+     * <b>A revoked partition may have no state, and that is survivable.</b> {@link #onPartitionsAssigned} records
+     * the epoch before it loads the state, so anything thrown by the load - {@code consumer.committed()} failing, or
+     * {@code invalidOffsetMetadataPolicy(FAIL)} rejecting metadata - leaves the partition with an epoch and no
+     * entry here. Kafka keeps it assigned regardless and revokes it on the next rebalance or on close, and this
+     * sweep runs on the broker-poll thread inside {@code consumer.poll}, so a throw here is the poller-death shape
+     * on top of an assignment failure already logged. There is nothing to sweep for a state that was never
+     * installed - no work was registered against it, no shard references it - and
+     * {@link #incrementPartitionAssignmentEpoch} has already fenced anything that somehow carried the old epoch.
+     * So the partition is marked removed, the gap is logged, and the sweep moves on.
+     * {@code PartitionStateManagerRevokeAfterFailedAssignmentTest} drives both routes.
      */
     private void resetOffsetMapAndRemoveWork(Collection<TopicPartition> allRemovedPartitions) {
         for (TopicPartition removedPartition : allRemovedPartitions) {
             // by replacing with a no op implementation, we protect for stale messages still in queues which reference it
             // however it means the map will only grow, but only it's key set
-            var partition = this.partitionStates.get(removedPartition);
-            partitionStates.put(removedPartition, RemovedPartitionState.getSingleton());
+            var partition = this.partitionStates.put(removedPartition, RemovedPartitionState.getSingleton());
 
-            //
+            if (partition == null) {
+                log.warn("Partition {} revoked with no tracked state: its assignment must have failed after the epoch "
+                        + "was recorded and before its state was installed (see the earlier onPartitionsAssigned error). "
+                        + "Nothing to remove; the epoch has been advanced so no work referencing it can be taken.",
+                        removedPartition);
+                continue;
+            }
+
             partition.onPartitionsRemoved(sm);
         }
     }
 
     /**
+     * The current assignment epoch of the partition, or null if it has never been assigned.
+     * <p>
+     * Null only ever means "never assigned": epochs are written by {@link #incrementPartitionAssignmentEpoch} on
+     * every assignment and every revocation, and nothing removes one. One reader consumes the null on purpose -
+     * {@link bz.stub.parallelconsumer.internal.EpochAndRecordsMap} skips a poll's records for a partition whose
+     * assignment callback has not fired yet - which is why the return type is not narrowed to {@code long}. The
+     * assignment path, which must never see the null, narrows it at its one consumer instead:
+     * {@code OffsetMapCodecManager.epochOfPartitionBeingAssigned}, whose javadoc carries the trace.
+     *
      * @return the current epoch of the partition, or null if not yet assigned
      */
     public Long getEpochOfPartition(TopicPartition partition) {
