@@ -50,7 +50,8 @@ import static com.google.common.truth.Truth.assertThat;
  * stable: an {@code ArrayIndexOutOfBoundsException} out of {@code ArrayList.add} (the plain-{@code ArrayList}
  * defect astubbs#57 fixes, which this lane found unprompted - its reproduction is now the class
  * javadoc of {@code PCMetrics859Test}, stated as why {@code metersLock} exists, and the half
- * astubbs#57 does not fix is {@code docs/inflight/bug-metrics-counter-maps-are-plain-hashmaps.md}), or
+ * astubbs#57 does not fix is written up in
+ * {@code docs/solutions/logic-errors/the-metrics-counter-maps-were-plain-hashmaps-2026-09-05.md}), or
  * {@code PartitionState.onSuccess}'s {@code assert} from two {@link #succeed} operations in parallel, which
  * production cannot reach because only the control thread completes work.
  * <p>

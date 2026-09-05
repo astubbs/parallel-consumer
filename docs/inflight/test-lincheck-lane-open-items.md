@@ -107,8 +107,10 @@ adding a class with a narrow guess in it.
    a `metersLock` monitor - so a harness here is a regression detector against that fix rather than
    a hunt for an open defect. The reproduction it produced is carried in `PCMetrics859Test`'s class
    javadoc; the sibling defect the same harness found, the plain `HashMap` counter maps in
-   `WorkManager` and `PartitionStateManager`, is still open in
-   [`bug-metrics-counter-maps-are-plain-hashmaps.md`](bug-metrics-counter-maps-are-plain-hashmaps.md).
+   `WorkManager` and `PartitionStateManager`, is closed too - astubbs#267 made those three
+   concurrent and the fourth, `OffsetMapCodecManager.encodingCounters`, followed. The evidence and
+   what the sighting did and did not establish are in
+   [`../solutions/logic-errors/the-metrics-counter-maps-were-plain-hashmaps-2026-09-05.md`](../solutions/logic-errors/the-metrics-counter-maps-were-plain-hashmaps-2026-09-05.md).
    <!-- post-merge: checked-end -->
 3. **`ProducerManager`'s produce/commit lock pair - a known defect in a *named* protocol.** The pair
    is project vocabulary (`CONCEPTS.md`), which means the invariant is already written down in
