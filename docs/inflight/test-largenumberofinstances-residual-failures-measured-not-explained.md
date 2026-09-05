@@ -1,6 +1,7 @@
 # `largeNumberOfInstances`: the residual failure is measured, reproduced, and now EXPLAINED
 
-**Filename deliberately unchanged, 2026-09-04.** It says "not explained" and that is no longer true -
+**Filename deliberately unchanged.** It says "not explained"; since 2026-09-05 the mechanism is measured and
+the file's last section is titled EXPLAINED -
 but it is cited from the `@Quarantined` annotation's `tracking` field, `docs/quarantined-tests.md`,
 `docs/refactoring.md`, two sibling notes and a solutions write-up. Renaming it now would break eight
 citations for a title that has to change again the moment the fix lands, so the claim is corrected

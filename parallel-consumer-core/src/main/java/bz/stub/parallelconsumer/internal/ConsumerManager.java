@@ -145,18 +145,7 @@ public class ConsumerManager<K, V> {
             boolean polledSuccessfully = false;
             try {
                 pendingRequests.addAndGet(1L);
-                // ALLOW ONE POLL DURING CLOSE, exactly as #commitSync allows one commit, and for a
-                // stronger reason. Rejoin and revoke-ack happen inside consumer.poll(), so a member
-                // that stops polling while still subscribed cannot answer a rebalance - and
-                // doClose() then hands its in-flight JoinGroup to consumer.close(), whose
-                // AbstractCoordinator.close -> awaitPendingRequests waits for exactly that request.
-                // The coordinator will not answer it until every member has joined, including the
-                // ones already stuck in that wait, so each closing member waited on a coordinator
-                // waiting on it for the whole close budget. `tryCount == 0` is what bounds this: one
-                // attempt, never a retry loop during shutdown, which is the signal's actual job.
-                // This is the astubbs/parallel-consumer#80 drain-path defect one lifecycle state
-                // along - see BrokerPollSystemCloseTest, and BrokerPollSystem#handlePoll's javadoc.
-                while (tryCount == 0 || !closeInProgressSignal.getAsBoolean()) {
+                while (!closeInProgressSignal.getAsBoolean()) {
                     tryCount++;
                     try {
                         records = consumer.poll(timeoutToUse);

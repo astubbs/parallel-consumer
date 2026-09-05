@@ -226,36 +226,6 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
         }
     }
 
-    /**
-     * <b>CLOSING polls too, and that is not a tidy-up - it is the fix for a group-wide stall.</b>
-     * <p>
-     * A member that has stopped polling but has NOT yet left the group cannot answer a rebalance,
-     * because rejoin and revoke-ack happen inside {@code consumer.poll()}. That is the defect
-     * astubbs/parallel-consumer#80 fixed for {@link State#DRAINING} - and {@link State#CLOSING} never
-     * got it, while {@code closeDontDrainFirst()} reaches {@code CLOSING} without passing through
-     * {@code DRAINING} at all, so the commonest close took the unprotected path.
-     * <p>
-     * <b>What it cost, measured.</b> With a JoinGroup already in flight, the un-polled member went
-     * straight into {@code consumer.close()}, whose
-     * {@code AbstractCoordinator.close -> ConsumerNetworkClient.awaitPendingRequests} waits for that
-     * very request - and the coordinator will not answer it until every member has joined, including
-     * the ones now stuck in the same wait. Each closing member waits for a coordinator waiting for
-     * it, so the close burns its whole {@code DEFAULT_TIMEOUT} budget with the consumer still a
-     * silent group member, and the whole fleet freezes. Observed in
-     * {@code MultiInstanceRebalanceTest.largeNumberOfInstances} as the ambient probe's
-     * {@code ZOMBIE_MEMBER/REBALANCE_BLOCKED}, at 2 failures in 30, with ten of twelve instances
-     * parked in that stack. Evidence and the stack:
-     * {@code docs/inflight/test-largenumberofinstances-residual-failures-measured-not-explained.md}.
-     * <p>
-     * One poll before the close is enough to discharge the in-flight request, and it cannot hang:
-     * {@link #pollBrokerForRecords()} gives any state that is not {@code RUNNING}/{@code DRAINING} a
-     * 1ms timeout, and {@code CLOSING} is reached once per control-loop pass immediately before
-     * {@link #doClose()}. Records polled here are still registered rather than dropped - the state
-     * that decides what to do with them is the work manager's, not this method's.
-     * <p>
-     * The invariant, stated so a future edit cannot narrow this guard back without meeting it:
-     * <b>an instance that has not yet left the group must keep polling it.</b>
-     */
     private void handlePoll() {
         log.trace("Loop: Broker poller: ({})", runState);
         if (runState == RUNNING || runState == DRAINING) { // if draining - subs will be paused, so use this to just sleep
@@ -273,57 +243,8 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
     private void doClose() {
         log.debug("Doing close...");
         doPause();
-        dischargeCoordinatorBeforeClose();
         maybeCloseConsumerManager();
         runState = CLOSED;
-    }
-
-    /**
-     * One last {@code consumer.poll()} before the consumer is closed, so this member discharges any
-     * rebalance request it still owes the group.
-     * <p>
-     * <b>Why it lives here and not in {@link #handlePoll()}, which is where it was first written.</b>
-     * The control loop is {@code handlePoll(); maybeDoCommit(); switch (runState) { CLOSING ->
-     * doClose(); }}, and {@code transitionToClosing()} sets the state from ANOTHER thread and wakes
-     * the consumer. So when the transition lands mid-poll - the common case, and the only one under
-     * load - the woken poll finishes the {@code RUNNING} iteration, the switch below it sees
-     * {@code CLOSING} and closes immediately, and a {@code CLOSING} branch in {@code handlePoll()}
-     * never executes at all. That version passed locally and failed in CI on timing alone;
-     * {@code BrokerPollSystemCloseTest} is what caught it. Here it is unconditional.
-     * <p>
-     * <b>What it prevents.</b> Rejoin and revoke-ack happen inside {@code consumer.poll()}, so a
-     * member that stops polling while still subscribed cannot answer a rebalance - and
-     * {@code consumer.close()} then waits, in
-     * {@code AbstractCoordinator.close -> ConsumerNetworkClient.awaitPendingRequests}, for the very
-     * JoinGroup it can no longer discharge. The coordinator will not answer that until every member
-     * has joined, including the ones already stuck in the same wait, so each closing member waited on
-     * a coordinator waiting on it for the whole close budget while the group froze. This is
-     * astubbs/parallel-consumer#80's drain-path defect one lifecycle state along.
-     * <p>
-     * Bounded by construction: {@link #pollBrokerForRecords()} gives any state that is not
-     * {@code RUNNING}/{@code DRAINING} a 1ms timeout, and {@code ConsumerManager#poll} allows exactly
-     * one attempt once close is in progress - never a retry loop.
-     */
-    private void dischargeCoordinatorBeforeClose() {
-        try {
-            // A coordinator round trip rather than a fetch: doPause() above pauses the assignment, and
-            // pollBrokerForRecords -> checkStateForPausingSubscriptions KEEPS it paused under CLOSING
-            // rather than re-deciding from back-pressure - see that method, where the CLOSING arm
-            // exists precisely so this sentence is true instead of merely intended. Any records that
-            // arrive anyway (Kafka returns locally buffered ones regardless of the timeout) are
-            // deliberately dropped: this instance is closing and will never process them, and
-            // registering work here would hand the work manager offsets nothing is going to complete.
-            var droppedOnClose = pollBrokerForRecords();
-            if (droppedOnClose.count() > 0) {
-                log.debug("Dropping {} record(s) polled during close - this instance is shutting down",
-                        droppedOnClose.count());
-            }
-        } catch (Exception e) {
-            // Never let the courtesy poll break the close it exists to improve. Logged with its type
-            // because a null-message exception here would otherwise say nothing at all.
-            log.debug("Final poll before close failed ({}: {}) - closing anyway",
-                    e.getClass().getSimpleName(), e.getMessage());
-        }
     }
 
     /**
@@ -364,18 +285,7 @@ public class BrokerPollSystem<K, V> implements OffsetCommitter {
     }
 
     private void checkStateForPausingSubscriptions() {
-        // CLOSING pauses for the same reason DRAINING does, and it is NOT symmetry for its own sake.
-        // managePauseOfSubscription() decides pause-vs-resume from wm.shouldThrottle(), a
-        // back-pressure signal that knows nothing about close state - so on an unloaded pipeline,
-        // which is the ordinary case once a DONT_DRAIN close begins, it RESUMES the assignment that
-        // doClose() paused one line earlier and turns the discharge poll into a live fetch. Kafka
-        // returns locally buffered records regardless of a 1ms timeout, so records would be fetched
-        // and then dropped by dischargeCoordinatorBeforeClose() instead of being left for whoever
-        // takes the partition next. Not a delivery-guarantee break - nothing is acknowledged - but
-        // wasted shutdown fetching, and it falsified that method's own javadoc.
-        // Reachable only since the discharge poll was added: before it, pollBrokerForRecords() was
-        // gated by handlePoll() to RUNNING/DRAINING and this branch never saw CLOSING.
-        if (runState == DRAINING || runState == CLOSING) {
+        if (runState == DRAINING) {
             doPause();
         } else {
             managePauseOfSubscription();
