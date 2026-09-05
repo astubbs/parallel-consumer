@@ -259,6 +259,37 @@ single-session transport, bounded by the untested premise that windowing is not 
 practice. What would reopen it is a transport that cuts the per-crossing cost by roughly two orders
 of magnitude - the embedded/FFI direction - not any windowing or placement design.
 
+**Updated 2026-08-25 (second), and the reopening condition above has been met - but what it
+reopened is the floor, not the verdict.** (The crossings:
+`docs/inflight/perf-crossing-cost-ladder.md`; the native engine:
+`docs/inflight/perf-streams-under-native-image.md`; the floor decomposition and the in-session
+retake: `docs/inflight/perf-streams-engine-floor.md`.) The paragraph above named its own condition
+for reopening - a transport cutting the per-crossing cost by roughly two orders of magnitude - and
+that condition is now met: GraalWasm crosses in **747ns** and a Numba `@cfunc` in **19.9ns**
+against the **135us** fitted here, and the Streams engine has been proven to run as a native-image
+binary. Two results followed, pointing opposite ways. **For the wrapper:** most of the measured
+engine floor turned out to be an instrument choice rather than Kafka Streams - the state-store
+cache was set to zero - and with the cache on and nothing crossing, the wrapper reaches **69,265
+rec/s** at hopping-12 and **169,748 rec/s** at tumbling. **Against it:** retaken with the
+reimplementation arm interleaved in the *same* session, the dictionary still wins **4.70x** at
+tumbling and **6.64x** at hopping-12. So removing the crossing does not by itself close the gap,
+and the 69x/122x above should be read as the crossing's price rather than the residual. (Both
+retaken figures are firm: the reimplementation arm's apparent instability was traced to a stalled
+consumer fetch path, not to the arm, and the retake ran below the record count where that stall
+occurs. The **122x** above is itself an artefact of that stall and understates the gap.)
+
+**The substantive change is neither number: it is that the floor was mis-specified.** The
+reimplementation arm is a stateless, non-durable dictionary - no store, no changelog, no restore,
+no rebalance recovery, no exactly-once - which makes it the floor for a product Kafka Streams is
+not in the business of being. Measuring against it answers *"can a toy beat an engine at toy
+work"*, and it can, at any transport speed; sharpening that number further decides nothing. **The
+question that decides this strategy is the crossover: how many of the features a user actually came
+for can be added back to that dictionary before hand-rolling becomes the worse choice.** That is
+the measurement now under way, one feature at a time, starting with durability. Until it returns,
+the not-offered verdict above stands on its own evidence - but the *reason* recorded for it, that a
+reimplementation is simply faster, is too strong. It is faster only at the feature level where
+nobody needed Kafka Streams in the first place.
+
 So the hard part of Streams-in-another-language is not the streaming; it is that a topology has no
 portable description. ~~That is an IDL to design~~ - **and the proof of concept showed it is not.**
 See below.

@@ -10,6 +10,13 @@ rather than copying them - sibling scripts drift (the plan's KTD14).
 
 Experiments are named and selected, so later units add a function here instead of a sibling file.
 
+Experiment ``f2-rerun``: the F2 comparison (wrapper against the reimplementation floor) retaken
+in ONE session with arm H interleaved against the cache-on crossing-free arms, because the
+engine-floor spike's F2 reading paired arms measured in two different sessions - which KTD18
+forbids. It reuses ``engine-floor``'s ``FloorArm`` definitions and ``measure_placement`` rather
+than restating the toggles, and drives arm H from ``--floor-records`` so both sides run at one
+load. See ``run_f2_rerun``.
+
 Experiment ``hot-key`` (U2): whether an aggregation over ONE hot key can be rescued by anything the
 parked bundling work offers. An aggregation is a serial dependency per key - accumulator n+1 needs
 accumulator n - so it cannot be batched across a hot key. It uses the EXISTING ``reduce`` operator,
@@ -96,12 +103,15 @@ before any zero is believed.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
+import gc
 import logging
 import os
 import pathlib
 import re
 import statistics
+import subprocess
 import sys
 import tempfile
 import threading
@@ -114,6 +124,8 @@ from confluent_kafka import (
     OFFSET_BEGINNING,
     TIMESTAMP_LOG_APPEND_TIME,
     Consumer,
+    KafkaError,
+    KafkaException,
     Producer,
     TopicPartition,
 )
@@ -194,6 +206,70 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                              "point; B's per-record cost does not depend on records-per-key, and "
                              "an uncapped B at twelve crossings per record dominates the wall "
                              "time (default 24000)")
+    # --- engine-floor ---
+    parser.add_argument("--floor-records", type=int, default=32_000,
+                        help="engine-floor/f2-rerun: records per run, every arm the same - and "
+                             "in f2-rerun arm H too, so the two sides of the comparison are at "
+                             "one load (default 32000). "
+                             "Not a crossings sweep - the arms are crossing-free, so there is no "
+                             "invocation count to normalise on and the term under test is the "
+                             "record")
+    parser.add_argument("--floor-jfr", action="store_true",
+                        help="engine-floor: attach a JFR profile recording to every engine in "
+                             "this invocation; intended for a SEPARATE single-arm run, because a "
+                             "profiler on every arm taxes the comparison it exists to explain")
+    parser.add_argument("--floor-arms", default="",
+                        help="engine-floor: comma-separated arm labels to run instead of all "
+                             "(e.g. D0), for the profiled capture and for re-running one arm")
+    parser.add_argument("--f2-host-control-keys", type=int, default=8_000,
+                        help="f2-rerun: ALSO run arm H at this second key count in each rep, as "
+                             "the control that attributes any disagreement with U6's arm-H "
+                             "figures to the key count rather than to the session (default 8000, "
+                             "U6's; 0 skips it)")
+    parser.add_argument("--host-fetch-queue-backoff-ms", type=int, default=None,
+                        help="arm H: librdkafka fetch.queue.backoff.ms for the reimplementation "
+                             "consumer. Left unset it is librdkafka's 1,000 ms, which at a "
+                             "record count above the local queue's capacity puts a ~0.65 s "
+                             "fetch stall inside arm H's timed window and reads as a 4.7x "
+                             "slower reimplementation (measured; see the engine-floor note). "
+                             "The stall now fails the run rather than being averaged over")
+    # --- crossing-ladder ---
+    parser.add_argument("--ladder-restore-backoff-ms", type=int, default=10,
+                        help="crossing-ladder: every changelog is restored TWICE, once on "
+                             "librdkafka's defaults and once with fetch.queue.backoff.ms set to "
+                             "this. A restore reads more bytes than the arm that wrote them, so "
+                             "the stall that turned arm H's own rate into a 4.7x artefact can "
+                             "land on the restore figure; two configurations price it rather "
+                             "than argue about it (default 10)")
+    parser.add_argument("--ladder-kill-after-ms", type=int, default=600,
+                        help="ladder-kill: how long the durable writer runs before it is "
+                             "SIGKILLed (default 600). It must be shorter than the run, and a "
+                             "writer that finishes first fails the check rather than passing it")
+    parser.add_argument("--ladder-child-arm", default="H-dur-per",
+                        help="ladder-kill: which durable arm the killed writer runs")
+    parser.add_argument("--ladder-child-spec", default="hopping-12",
+                        choices=("tumbling", "hopping-12"),
+                        help="ladder-kill: which window specification the killed writer runs")
+    parser.add_argument("--ladder-child-source", default="",
+                        help="ladder-kill-child only: the seeded source topic to read")
+    parser.add_argument("--ladder-child-changelog", default="",
+                        help="ladder-kill-child only: the changelog topic to write")
+    # --- host-bimodal ---
+    parser.add_argument("--bimodal-phases", default="observe,toggle,positive",
+                        help="host-bimodal: which phases to run, in order - observe (the "
+                             "untouched loop, many reps, nothing toggled), toggle (paired "
+                             "single-term arms), positive (arms that force each candidate "
+                             "mechanism so it is priced). Default all three")
+    parser.add_argument("--bimodal-control-reps", type=int, default=12,
+                        help="host-bimodal: reps for the toggle and positive phases; the "
+                             "observational phase uses --reps, which needs to be much larger "
+                             "because the slow mode has appeared about once in twelve "
+                             "(default 12)")
+    parser.add_argument("--floor-instrument", action="store_true",
+                        help="engine-floor: also run the I0/I100 instrument-check pair, which "
+                             "costs two host-function arms (slow) and proves the figure can "
+                             "move. f2-rerun runs I0/I1000 instead - 0.1 ms was refuted as too "
+                             "small for the client's thread pool to expose")
     return parser.parse_args(argv)
 
 
@@ -561,6 +637,11 @@ class ArmSpec:
 
 _ARMS: dict[str, ArmSpec] = {
     "A": ArmSpec(_TUMBLE, "host", 1),
+    # The engine-floor experiment's multiplier-1 control: arm A's window with arm D's
+    # crossing-free combine, so the pair A/A-free isolates the crossing and the pair D0/T0
+    # isolates the window multiplier. Added rather than folded into A, whose row U6's results
+    # are reported against.
+    "A-free": ArmSpec(_TUMBLE, "last", 1),
     "B": ArmSpec(_HOP5, "host", 12),
     "C": ArmSpec(_HOP30, "host", 2),
     "D": ArmSpec(_HOP5, "last", 12),
@@ -587,6 +668,23 @@ class PlacementRun:
     group_state: str
     log_append: bool
     emit_band: tuple[int, int]
+    # The engine-floor experiment's toggles, one per arm; the defaults are U6's conditions, so a
+    # placement run records them unchanged and a floor run records exactly what it moved.
+    threads: int = 8
+    sink_on: bool = True
+    changelog_on: bool = True
+    delay_ms: float = 0.0
+    committed_window_s: float = 0.0   # the second clock: committed source offsets, first to last
+
+    @property
+    def committed_rate(self) -> float:
+        """Rate on the committed-source-offset clock - the only clock a no-sink arm has.
+
+        Reported beside ``rate`` on every sink-bearing arm precisely so the no-sink comparison is
+        never the first time this clock is used: two clocks that agree where both exist are what
+        make the one that stands alone believable.
+        """
+        return self.records / self.committed_window_s if self.committed_window_s > 0 else 0.0
 
     @property
     def rate(self) -> float:
@@ -706,6 +804,64 @@ def _committed_source_records(bootstrap: str, group: str, topic: str, partitions
         probe.close()
 
 
+class CommittedClock(threading.Thread):
+    """The second clock: the engine group's committed source offsets, sampled to completion.
+
+    The sink's log-append clock is the lab's authority and stays so - but the engine-floor
+    experiment has an arm with NO SINK, and a rate read off a clock that arm cannot have would be
+    a cross-clock comparison wearing one number. So this clock is sampled on EVERY floor arm: the
+    two agree wherever both exist, which is what licenses the one that stands alone.
+
+    The window is first observed progress (committed > 0) to the sample that reaches the whole
+    seeded backlog, so engine startup and the seed are outside it - the same exclusion the sink
+    clock gets for free by starting at the first append. Its resolution is the commit interval,
+    so an arm that lengthens the commit interval is read on the sink clock instead.
+    """
+
+    def __init__(self, bootstrap: str, group: str, topic: str, partitions: int, records: int,
+                 period_s: float = 0.05) -> None:
+        super().__init__(daemon=True)
+        self._probe = Consumer({"bootstrap.servers": bootstrap, "group.id": group,
+                                "enable.auto.commit": False})
+        self._partitions = [TopicPartition(topic, p) for p in range(partitions)]
+        self._records = records
+        self._period_s = period_s
+        self._stop = threading.Event()
+        self.first_progress_s: float | None = None
+        self.complete_s: float | None = None
+        self.last_committed = 0
+
+    def run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                committed = sum(tp.offset for tp
+                                in self._probe.committed(self._partitions, timeout=30)
+                                if tp.offset >= 0)
+            except Exception as error:  # a clock must never fail the run it is only witnessing
+                log.warning("committed-offset clock sample failed: %s", error)
+                committed = self.last_committed
+            now = time.monotonic()
+            if committed > 0 and self.first_progress_s is None:
+                self.first_progress_s = now
+            if committed >= self._records and self.complete_s is None:
+                self.complete_s = now
+                self.last_committed = committed
+                return
+            self.last_committed = committed
+            self._stop.wait(self._period_s)
+
+    @property
+    def window_s(self) -> float:
+        if self.first_progress_s is None or self.complete_s is None:
+            return 0.0
+        return self.complete_s - self.first_progress_s
+
+    def close(self) -> None:
+        self._stop.set()
+        self.join(timeout=60)
+        self._probe.close()
+
+
 def _slf4j_simple_jar() -> str:
     """The slf4j binding the eviction instrument rides on - the engine classpath has none."""
     root = pathlib.Path.home() / ".m2" / "repository" / "org" / "slf4j" / "slf4j-simple"
@@ -748,9 +904,22 @@ def _count_evictions(engine_log: pathlib.Path) -> int:
 def measure_placement(args: argparse.Namespace, arm: str, records: int, keys: int,
                       cache_bytes: int, *, trace_cache: bool = False,
                       tolerate_evictions: bool = False,
-                      show_topology: bool = False) -> PlacementRun:
-    """One measured placement run: fresh topics, fresh engine, one arm."""
+                      show_topology: bool = False,
+                      commit_ms: int | None = None, threads: int | None = None,
+                      sink_on: bool = True, changelog_on: bool = True,
+                      delay_ms: float = 0.0) -> PlacementRun:
+    """One measured placement run: fresh topics, fresh engine, one arm.
+
+    The keyword toggles are the engine-floor experiment's, one term each, and every default is
+    U6's condition - so a placement run is unaffected and a floor run's row records exactly what
+    it moved. ``delay_ms`` is the instrument check only: it sleeps inside the HOST function, so it
+    is meaningless (and refused) on an arm that registers no function.
+    """
     spec = _ARMS[arm]
+    commit_ms = args.commit_interval_ms if commit_ms is None else commit_ms
+    threads = args.stream_threads if threads is None else threads
+    if delay_ms and spec.placement != "host":
+        raise SystemExit(f"delay_ms is a host-function toggle; arm {arm} registers no function")
     load1 = wait_for_quiet(args.load_limit)
 
     run_id = time.time_ns()
@@ -792,6 +961,8 @@ def measure_placement(args: argparse.Namespace, arm: str, records: int, keys: in
         nonlocal crossings
         with accounting:
             crossings += 1
+        if delay_ms:
+            time.sleep(delay_ms / 1000.0)
         return value
 
     def emit_fold(_key: bytes, value: bytes) -> bytes:
@@ -803,6 +974,21 @@ def measure_placement(args: argparse.Namespace, arm: str, records: int, keys: in
             crossings += 1
         return len(value).to_bytes(8, "big")
 
+    # The changelog toggle is a system property on the engine JVM, gated in TopologyAssembler
+    # (`pcStreams.measure.disableChangelog`) because the protocol has no logging-disabled field and
+    # this spike is not the place to add one; see docs/inflight/perf-streams-engine-floor.md. Off by
+    # default, so every other experiment is untouched by its existence.
+    if not changelog_on:
+        jvm_args = ("-DpcStreams.measure.disableChangelog=true", *jvm_args)
+    jfr_file: pathlib.Path | None = None
+    if getattr(args, "floor_jfr", False):
+        # ONE profiled capture, of the baseline arm only: a profiler on every arm would tax the
+        # comparison it is supposed to explain. async-profiler is not on this box; JFR ships with
+        # the JDK, so the capture is JFR's execution samples.
+        jfr_file = pathlib.Path(tempfile.gettempdir()) / f"pc-wlab-floor-{run_id}.jfr"
+        jvm_args = ("-XX:StartFlightRecording=settings=profile,"
+                    f"filename={jfr_file},dumponexit=true", *jvm_args)
+        print(f"    JFR capture -> {jfr_file}")
     sidecar = Sidecar(SidecarCommand(java, jvm_args))
     port = sidecar.start(timeout=90)
     session = StreamsSession(GrpcStreamsTransport(port))
@@ -811,9 +997,9 @@ def measure_placement(args: argparse.Namespace, arm: str, records: int, keys: in
         session.open(application_id, {
             "bootstrap.servers": args.bootstrap,
             "auto.offset.reset": "earliest",
-            "num.stream.threads": str(args.stream_threads),
+            "num.stream.threads": str(threads),
             "statestore.cache.max.bytes": str(cache_bytes),
-            "commit.interval.ms": str(args.commit_interval_ms),
+            "commit.interval.ms": str(commit_ms),
         })
         builder = session.builder()
         windowed = builder.windowed_by(builder.group_by_key(builder.source(source)),
@@ -829,7 +1015,8 @@ def measure_placement(args: argparse.Namespace, arm: str, records: int, keys: in
             table = builder.aggregate(windowed, store_name=_STORE,
                                       combine=CombineKind.APPEND_BYTES)
             streamed = builder.map_values(builder.to_stream(table), emit_fold)
-        builder.sink(streamed, sink)
+        if sink_on:
+            builder.sink(streamed, sink)
         if show_topology:
             print()
             print(f"Topology, arm {arm} (window {spec.window.size_ms / 60000:.0f}m advance "
@@ -838,14 +1025,27 @@ def measure_placement(args: argparse.Namespace, arm: str, records: int, keys: in
                 print(f"    {line}")
         session.start()
 
-        quiet_s = args.quiescence_intervals * args.commit_interval_ms / 1000.0
+        quiet_s = args.quiescence_intervals * commit_ms / 1000.0
         # A cap, never the predicate: quiescence ends every healthy run long before this.
         timeout = 180 + 2 * (spec.multiplier * records * 400e-6 + records * 2e-3)
         deadline = time.monotonic() + timeout
-        with GroupWatch(admin, application_id, args.stream_threads) as watch:
-            emits, window, log_append, premature = read_emits_quiescent(
-                args.bootstrap, sink, quiet_s, deadline)
+        clock = CommittedClock(args.bootstrap, application_id, source, args.partitions, records)
+        clock.start()
+        with GroupWatch(admin, application_id, threads) as watch:
+            if sink_on:
+                emits, window, log_append, premature = read_emits_quiescent(
+                    args.bootstrap, sink, quiet_s, deadline)
+            else:
+                # No sink, so no log-append clock and no quiescence to read: the committed-offset
+                # clock IS the measurement, and its completion is the completion predicate. The
+                # settle wait afterwards is the same 2x-quiet confirmation the sink arms get.
+                while time.monotonic() < deadline and clock.complete_s is None:
+                    time.sleep(0.05)
+                emits, window, log_append, premature = 0, 0.0, True, clock.complete_s is None
+                time.sleep(2 * quiet_s)
         group_ok, group_state = watch.verdict()
+        clock.close()
+        committed_window = clock.window_s
         # Read BEFORE the topics are deleted below - deleting a topic purges its group offsets.
         # By here the engine has been idle for 3x quiet_s (45 commit intervals at the defaults),
         # so a shortfall is a truncated run, never a commit still in flight.
@@ -864,7 +1064,11 @@ def measure_placement(args: argparse.Namespace, arm: str, records: int, keys: in
 
     # Post-hoc emit band (KTD11: on a broker, caching makes the emit count nondeterministic).
     # With the cache OFF every put forwards, so the band collapses to an exact count.
-    if cache_bytes == 0:
+    if not sink_on:
+        # Nothing is produced out, so there is no emit count to band. The record basis is proven
+        # by the committed-offset check below exactly as it is on every other arm.
+        emit_band = (0, 0)
+    elif cache_bytes == 0:
         emit_band = (spec.multiplier * records, spec.multiplier * records)
     else:
         # Every touched (key, window) entry emits at least once and at most once per put.
@@ -876,7 +1080,11 @@ def measure_placement(args: argparse.Namespace, arm: str, records: int, keys: in
         "append": emits,                     # once per emit, at the emit placement
     }[spec.placement]
     problems: list[str] = []
-    if premature:
+    if not sink_on and premature:
+        problems.append("the committed-offset clock never reached the seeded backlog before the "
+                        "deadline - a no-sink arm has no other completion predicate, so the run "
+                        "is unmeasured rather than slow")
+    elif premature:
         problems.append("premature quiescence break: sink end offsets advanced during the "
                         "2x-quiet confirmation wait - the engine was stalled, not finished, so "
                         "the window is truncated and the rate would read inflated")
@@ -889,7 +1097,10 @@ def measure_placement(args: argparse.Namespace, arm: str, records: int, keys: in
         problems.append(f"emits={emits:,} outside band {emit_band[0]:,}..{emit_band[1]:,}")
     if not group_ok:
         problems.append(f"group={group_state}")
-    if not log_append:
+    if committed_window <= 0:
+        problems.append("the committed-offset clock produced no window - it is reported on every "
+                        "arm precisely so the no-sink arm's sole clock is corroborated elsewhere")
+    if sink_on and not log_append:
         problems.append("sink not on the log-append clock")
     if evictions and not tolerate_evictions:
         problems.append(f"cache evictions={evictions:,} (the zero-evictions assertion failed: "
@@ -898,12 +1109,18 @@ def measure_placement(args: argparse.Namespace, arm: str, records: int, keys: in
 
     result = PlacementRun(arm=arm, records=records, keys=keys, multiplier=spec.multiplier,
                           crossings=crossings, emits=emits, window_s=window,
-                          cache_bytes=cache_bytes, commit_ms=args.commit_interval_ms,
+                          cache_bytes=cache_bytes, commit_ms=commit_ms,
                           evictions=evictions, load1=load1, group_ok=group_ok,
-                          group_state=group_state, log_append=log_append, emit_band=emit_band)
+                          group_state=group_state, log_append=log_append, emit_band=emit_band,
+                          threads=threads, sink_on=sink_on, changelog_on=changelog_on,
+                          delay_ms=delay_ms, committed_window_s=committed_window)
     verdict = "ok" if not problems else "INVALID (" + "; ".join(problems) + ")"
     print(f"  arm={arm} records={records:>7,} keys={keys:>5,} cache={cache_bytes:>11,} "
+          f"commit={commit_ms}ms threads={threads} sink={'on' if sink_on else 'OFF'} "
+          f"changelog={'on' if changelog_on else 'OFF'} delay={delay_ms:g}ms "
           f"window={window:7.2f}s rec/s={result.rate:8,.0f} "
+          f"committed_window={committed_window:6.2f}s "
+          f"committed_rec/s={result.committed_rate:8,.0f} "
           f"crossings/rec={result.crossings_per_record:6.2f} emits={emits:>9,} "
           f"evict={'-' if evictions is None else format(evictions, ',')} "
           f"load1={load1:.2f} {verdict}")
@@ -914,17 +1131,161 @@ def measure_placement(args: argparse.Namespace, arm: str, records: int, keys: in
 
 @dataclasses.dataclass(frozen=True)
 class HostRun:
-    """One arm-H run: the single-threaded reimplementation whose rate defines F2."""
+    """One arm-H run: the single-threaded reimplementation whose rate defines F2.
+
+    The fields below ``load1`` were added to settle arm H's BIMODAL hopping-12 rate (the
+    ``host-bimodal`` experiment). They are recorded on every arm-H run, not only that
+    experiment's, because a rate with no account of where its window went is exactly what left
+    the bimodality unattributable: twelve samples and nothing beside them to separate a run that
+    WAITED from a run that WORKED SLOWLY.
+    """
 
     spec: str                 # "tumbling" or "hopping-12"
     records: int
     keys: int
     updates: int              # dict updates; must equal multiplier x records
     window_s: float           # wall clock, first message to last - H produces nothing to stamp
+    load1: float = 0.0        # 1-minute load read immediately before the run
+    arm: str = "H"            # which arm-H variant; "H" is the untouched loop
+    rep: int = 0              # 1-based repetition index - the cold-first-read hypothesis needs it
+    cpu_s: float = 0.0        # process CPU time across the SAME window; wall >> cpu means waiting
+    fold_s: float = 0.0       # time inside the aggregation loop only
+    consume_s: float = 0.0    # time inside ``Consumer.consume`` only; the two ~= window_s
+    empty_polls: int = 0      # consume() calls returning nothing AFTER the window opened
+    empty_s: float = 0.0      # and the wall time they burned - each one can cost the 1.0s timeout
+    max_gap_s: float = 0.0    # longest single consume() call after the window opened
+    max_gap_at: int = 0       # records already folded when that gap happened - WHERE it stalls
+    long_polls: int = 0       # consume() calls over 100ms: one big stall or a persistent trickle
+    stalls: tuple[tuple[int, float], ...] = ()  # (records folded, seconds) for each of those
+    batches: int = 0
+    gc_gen0: int = 0          # cyclic-collector passes INSIDE the window, by generation
+    gc_gen1: int = 0
+    gc_gen2: int = 0
+    gc_pause_s: float = 0.0   # measured collector pause time inside the window
+    gc_max_pause_s: float = 0.0
+    calib_s: float = 0.0      # a fixed pure-CPU loop timed just before the window - box speed
+    # --- durability (the crossing-ladder's first rung; zero on every non-durable arm) ---
+    changelog_topic: str = ""     # where this run's state was written, "" when it was not
+    changelog_records: int = 0    # records PRODUCED to it, counted client-side
+    changelog_end: int = 0        # end offsets summed off the BROKER after the run - the check
+    boundaries: int = 0           # commit boundaries reached inside the window
+    delivery_failures: int = 0    # changelog delivery reports that carried an error
+    produce_s: float = 0.0        # time inside ``produce()`` at the boundaries (coalesced only)
+    flush_s: float = 0.0          # time inside ``flush()`` - the AWAITED half of durability
+    commit_s: float = 0.0         # time inside the synchronous source-offset commit
+
+    @property
+    def durable_s(self) -> float:
+        """The window time this run spent making its aggregate survive process death."""
+        return self.produce_s + self.flush_s + self.commit_s
 
     @property
     def rate(self) -> float:
         return self.records / self.window_s if self.window_s > 0 else 0.0
+
+    @property
+    def fold_rate(self) -> float:
+        """The rate charging ONLY the aggregation loop - no consume wait, no poll timeout.
+
+        If the wall-clock rate is bimodal and this one is not, the bimodality is wait rather
+        than work, and the wait is a property of the harness's polling rather than of the
+        reimplementation being measured.
+        """
+        return self.records / self.fold_s if self.fold_s > 0 else 0.0
+
+
+@dataclasses.dataclass(frozen=True)
+class HostArm:
+    """One arm-H variant with exactly ONE term moved against the untouched loop.
+
+    Added for the bimodality follow-up. Every field defaults to what plain arm H does, so an arm
+    is defined by the single line that differs - the same discipline ``FloorArm`` uses for the
+    engine arms, and for the same reason: an arm that moves two terms answers neither.
+    """
+
+    label: str
+    spec: str                                          # "tumbling" or "hopping-12"
+    gc_disabled: bool = False                          # H1's paired toggle
+    force_gen2: bool = False                           # H1's positive control, mid-window
+    consumer_extra: tuple[tuple[str, object], ...] = ()  # H3's fetch-sizing toggles
+    fresh_topic: bool = False                          # H2: a topic this rep seeded and nobody read
+    expect_stall: bool = False                         # this arm EXHIBITS the stall on purpose,
+    #                                                    so the validity guard below stands down
+    # --- durability, the crossing-ladder's first rung (astubbs#242) ---
+    # ONE feature added back to the reimplementation, and nothing else: the aggregate survives
+    # process death. Two halves, and an arm needs both to claim it - a changelog write per state
+    # update, and a restore that rebuilds the dict from it (``restore_host``). No exactly-once,
+    # no rebalance handling, no late-record logic; those are later rungs.
+    changelog_mode: str = "none"       # "none" | "per-update" | "coalesced"
+    changelog_acks: str = "all"        # the delivery guarantee; "0" is the not-really-durable arm
+    changelog_await: bool = True       # await the flush AT EVERY BOUNDARY, inside the window.
+    #                                    False writes the same records and waits for none of them,
+    #                                    which is what an accidentally-non-durable arm looks like
+    why: str = ""
+
+    @property
+    def window(self) -> TimeWindow:
+        return _TUMBLE if self.spec == "tumbling" else _HOP5
+
+
+class _GcWatch:
+    """Measures CPython cyclic-collector pauses that land INSIDE a timed window.
+
+    ``gc.get_stats()`` deltas count collections but not their cost, and the bimodality question is
+    a question about a second of wall clock: a hundred cheap gen-0 passes and one expensive gen-2
+    pass are indistinguishable in a count and completely different in a window. ``gc.callbacks``
+    brackets each pass, so the pause time is measured rather than inferred - and the arm can then
+    be refuted on MAGNITUDE without any toggle at all.
+    """
+
+    def __init__(self) -> None:
+        self.pause_s = 0.0
+        self.max_pause_s = 0.0
+        self.counts = [0, 0, 0]
+        self._started: float | None = None
+        self._armed = False
+
+    def _callback(self, phase: str, info: dict) -> None:
+        if not self._armed:
+            return
+        if phase == "start":
+            self._started = time.monotonic()
+        elif self._started is not None:
+            elapsed = time.monotonic() - self._started
+            self.pause_s += elapsed
+            self.max_pause_s = max(self.max_pause_s, elapsed)
+            self.counts[min(int(info.get("generation", 0)), 2)] += 1
+            self._started = None
+
+    def install(self) -> None:
+        gc.callbacks.append(self._callback)
+
+    def arm(self) -> None:
+        """Called when the timed window opens - collections before it are not this run's."""
+        self._armed = True
+
+    def remove(self) -> None:
+        self._armed = False
+        with contextlib.suppress(ValueError):  # cleanup must never fail a valid run
+            gc.callbacks.remove(self._callback)
+
+
+def _cpu_calibration_s(iterations: int = 400_000) -> float:
+    """A fixed pure-CPU loop, timed immediately before a measured window.
+
+    The control that separates 'the harness waited' from 'this core was slow'. It allocates
+    nothing that survives, so it is not itself a cyclic-collector source; it is deliberately the
+    same shape of integer arithmetic the window-start arithmetic does.
+    """
+    started = time.monotonic()
+    total = 0
+    for i in range(iterations):
+        total += i * i
+    # Named rather than discarded: the sum exists only so a future interpreter cannot fold the
+    # loop away, which would turn the calibration into a constant zero without saying so.
+    ignored_calibration_sum = total
+    del ignored_calibration_sum
+    return time.monotonic() - started
 
 
 def _window_starts(timestamp_ms: int, size_ms: int, advance_ms: int) -> list[int]:
@@ -940,8 +1301,138 @@ def _window_starts(timestamp_ms: int, size_ms: int, advance_ms: int) -> list[int
     return starts
 
 
+def _new_changelog_topic(args: argparse.Namespace, label: str) -> str:
+    """A compacted topic for one durable arm-H run, created fresh so its end offsets are that
+    run's alone - which is what makes the end-offset check below a check rather than a total.
+
+    ``cleanup.policy=compact`` is what a changelog IS; Kafka Streams creates its own the same
+    way. Compaction is asynchronous and will not have run inside a session this short, so a
+    restore here reads the UNCOMPACTED log - an upper bound on restore time, named as such.
+    """
+    topic = f"pc-wlab-cl-{label}-{time.time_ns()}"
+    ensure_topic(args.bootstrap, topic, args.partitions,
+                 config={"cleanup.policy": "compact", "min.cleanable.dirty.ratio": "0.1"})
+    return topic
+
+
+def _await_changelog_end(args: argparse.Namespace, topic: str, expected: int,
+                         timeout_s: float = 30.0, strict: bool = True) -> int:
+    """THE INSTRUMENT CHECK for durability, read off the BROKER rather than the client.
+
+    A durable arm that is accidentally not durable would look wonderfully fast, so the claim
+    "these records are on the broker" is never taken from the producer's own count: the end
+    offsets are summed from the cluster and must equal what the arm says it produced. Bounded
+    retry, because with ``acks=0`` the delivery report races the append.
+
+    ``strict=False`` is for the arm whose whole definition is that it does NOT wait: a shortfall
+    there is the result rather than a fault, so it is returned and reported instead of raising.
+    """
+    probe = Consumer({"bootstrap.servers": args.bootstrap,
+                      "group.id": f"pc-wlab-clprobe-{time.time_ns()}",
+                      "enable.auto.commit": False})
+    deadline = time.monotonic() + timeout_s
+    total = 0
+    try:
+        while time.monotonic() < deadline:
+            total = sum(_end_offsets(probe, topic).values())
+            if total >= expected:
+                break
+            time.sleep(0.5)
+    finally:
+        probe.close()
+    if total != expected and not strict:
+        log.warning("changelog %s holds %d of the %d records the arm produced - a %.1f%% "
+                    "shortfall, which for a not-awaited arm is the finding rather than a fault",
+                    topic, total, expected, 100.0 * (expected - total) / expected)
+        return total
+    if total != expected:
+        raise RuntimeError(
+            f"changelog end offsets on {topic} sum to {total:,} against {expected:,} records "
+            "produced - the arm claims a durability cost it did not pay, which is exactly the "
+            "failure this check exists to catch")
+    return total
+
+
+@dataclasses.dataclass(frozen=True)
+class RestoreRun:
+    """One restore: rebuild the reimplementation's dict from its changelog, timed.
+
+    Restore time and steady-state throughput are different quantities and both matter, so this
+    is reported as its own figure and never folded into a rate.
+    """
+
+    arm: str
+    spec: str
+    backoff_ms: int | None      # the ONE term moved between the two restore configurations
+    seconds: float
+    records: int                # changelog records read - the UNCOMPACTED log
+    entries: int                # distinct (key, window) entries rebuilt
+    long_polls: int             # consume() calls over 100ms - the fetch stall, if it is here
+    load1: float
+
+
+def restore_host(args: argparse.Namespace, topic: str, expected_entries: int | None, *,
+                 arm: str, spec: str, backoff_ms: int | None = None) -> RestoreRun:
+    """The other half of durability: rebuild the dict from the changelog before processing.
+
+    Timed from the moment the restoring process asks the broker where the log ends to the moment
+    the dict is complete - which is the wait a user actually experiences on restart.
+
+    ``backoff_ms`` moves librdkafka's ``fetch.queue.backoff.ms``, the one term that turned arm H's
+    own rate into a 4.7x artefact (see the engine-floor note, "Why arm H's hopping-12 rate is
+    bimodal"). A restore reads far more bytes than the arm that wrote them, so the same stall can
+    land here; measuring both configurations prices it instead of arguing about it.
+    """
+    load1 = wait_for_quiet(args.load_limit)
+    config: dict[str, object] = {
+        "bootstrap.servers": args.bootstrap,
+        "group.id": f"pc-wlab-restore-{time.time_ns()}",
+        "enable.auto.commit": False,
+    }
+    if backoff_ms is not None:
+        config["fetch.queue.backoff.ms"] = backoff_ms
+    consumer = Consumer(config)
+    state: dict[bytes, bytes] = {}
+    read = 0
+    long_polls = 0
+    started = time.monotonic()
+    try:
+        ends = _end_offsets(consumer, topic)
+        total = sum(ends.values())
+        consumer.assign([TopicPartition(topic, p, OFFSET_BEGINNING) for p in sorted(ends)])
+        deadline = started + 600
+        while read < total and time.monotonic() < deadline:
+            poll_started = time.monotonic()
+            batch = consumer.consume(num_messages=1000, timeout=5.0)
+            if time.monotonic() - poll_started > 0.1:
+                long_polls += 1
+            if not batch:
+                break
+            for message in batch:
+                if message.error():
+                    continue
+                state[message.key()] = message.value()
+                read += 1
+    finally:
+        elapsed = time.monotonic() - started
+        consumer.close()
+    if read != total or (expected_entries is not None and len(state) != expected_entries):
+        raise RuntimeError(
+            f"restore invalid: read {read:,}/{total:,} changelog records and rebuilt "
+            f"{len(state):,} entries against {expected_entries} expected - a restore that "
+            "does not reproduce the dict is not a restore")
+    print(f"    restore  arm={arm:<13s} {spec:<10s} backoff="
+          f"{'default' if backoff_ms is None else f'{backoff_ms}ms':>7s} "
+          f"{elapsed:7.3f}s for {read:>9,} changelog records -> {len(state):>7,} entries "
+          f"({read / elapsed:9,.0f} rec/s, {long_polls} polls over 100ms) load1={load1:.2f}")
+    return RestoreRun(arm=arm, spec=spec, backoff_ms=backoff_ms, seconds=elapsed,
+                      records=read, entries=len(state), long_polls=long_polls, load1=load1)
+
+
 def measure_host(args: argparse.Namespace, topic: str, records: int, keys: int,
-                 window: TimeWindow, spec_label: str) -> HostRun:
+                 window: TimeWindow, spec_label: str, *, arm: HostArm | None = None,
+                 rep: int = 0, verbose: bool = False,
+                 changelog_topic: str | None = None) -> HostRun:
     """Arm H: consume the same input single-threaded and aggregate into a dict.
 
     Deliberately stateless and non-durable - no store, no changelog, no rebalance recovery, no
@@ -952,29 +1443,176 @@ def measure_host(args: argparse.Namespace, topic: str, records: int, keys: int,
     Runs while the engine is idle (the lab tears each sidecar down before any H run starts).
     Timed on this process's wall clock from first message to last - H produces nothing, so there
     is no log-append record of its progress; the consume loop IS the reimplementation.
+
+    ``arm.changelog_mode`` is the ONE exception to "non-durable", and it is the crossing-ladder's
+    first rung (astubbs#242): the reimplementer's aggregate is made to survive process death by
+    writing every state update to a compacted Kafka topic and awaiting it at a commit boundary.
+    ``restore_host`` is its other half. Nothing else about the arm changes, so a durable arm
+    differs from ``H-base`` by exactly one feature - the discipline this whole program runs on.
+
+    ``arm`` moves exactly one term (see ``HostArm``); omitted, the loop is the untouched one every
+    prior session measured. THE UNTOUCHED PATH MUST STAY UNTOUCHED: the instrumentation added for
+    the bimodality follow-up is two ``time.monotonic()`` calls per BATCH (about 130 of them on a
+    128,000-record run) plus a ``gc.callbacks`` entry that runs only when the collector runs, so
+    it cannot itself account for the second of wall clock under investigation - and the
+    ``H-base`` arm reproduces the earlier sessions' rate, which is the check that says so.
     """
+    arm = arm or HostArm(label="H", spec=spec_label)
     load1 = wait_for_quiet(args.load_limit)
+    calib_s = _cpu_calibration_s()
     multiplier = -(-window.size_ms // window.advance_ms)
-    consumer = Consumer({
+    config: dict[str, object] = {
         "bootstrap.servers": args.bootstrap,
         "group.id": f"pc-wlab-h-{time.time_ns()}",
         "enable.auto.commit": False,
-    })
+    }
+    if getattr(args, "host_fetch_queue_backoff_ms", None) is not None:
+        config["fetch.queue.backoff.ms"] = args.host_fetch_queue_backoff_ms
+    config.update(dict(arm.consumer_extra))
+    consumer = Consumer(config)
     state: dict[tuple[bytes, int], bytes] = {}
+    dirty: set[tuple[bytes, int]] = set()
     updates = 0
     seen = 0
     started: float | None = None
     ended = 0.0
+    cpu_started = 0.0
+    cpu_s = 0.0
+    fold_s = 0.0
+    consume_s = 0.0
+    empty_polls = 0
+    empty_s = 0.0
+    max_gap_s = 0.0
+    max_gap_at = 0
+    long_polls = 0
+    stalls: list[tuple[int, float]] = []
+    batches = 0
+    forced = False
+    changelog_records = 0
+    boundaries = 0
+    produce_s = 0.0
+    flush_s = 0.0
+    commit_s = 0.0
+    delivery_failures: list[object] = []
+
+    def _delivered(error: object, _message: object) -> None:
+        if error is not None:
+            delivery_failures.append(error)
+
+    producer: Producer | None = None
+    if arm.changelog_mode != "none":
+        if not changelog_topic:
+            raise SystemExit(f"arm {arm.label} writes a changelog but no topic was given")
+        # STATED EXPLICITLY, because an unstated producer config is an unreproducible run - the
+        # same rule this lab already applies to commit.interval.ms. acks is the arm's term.
+        # enable.idempotence stays OFF: exactly-once is a LATER rung of the ladder and turning it
+        # on here would move two features at once. The two buffering ceilings are raised past the
+        # whole backlog so that a BufferError-driven wait can never be mistaken for produce cost;
+        # seed_keyed already raises the first for the same reason.
+        producer = Producer({
+            "bootstrap.servers": args.bootstrap,
+            "acks": arm.changelog_acks,
+            "enable.idempotence": False,
+            "queue.buffering.max.messages": 2_000_000,
+            "queue.buffering.max.kbytes": 2_097_152,
+        })
+
+    def _produce_entry(entry: tuple[bytes, int], value: bytes) -> None:
+        """One changelog record for one (key, window) state entry.
+
+        The key is the STATE key, so the topic's compaction can collapse the history to the
+        current value - which is the whole reason a changelog is a compacted topic rather than
+        a log of deltas.
+        """
+        nonlocal changelog_records
+        entry_key, entry_start = entry
+        while True:
+            try:
+                producer.produce(changelog_topic,
+                                 key=entry_key + b"|" + str(entry_start).encode(),
+                                 value=value, on_delivery=_delivered)
+                break
+            except BufferError:  # ceilings are raised past the backlog, so this is a backstop
+                producer.poll(0.5)
+        changelog_records += 1
+
+    def _boundary() -> None:
+        """The reimplementer's commit point: get the state durable, THEN move the resume point.
+
+        Flush before commit is the ordering that makes the pair meaningful - committing first
+        would advance past records whose state had not reached the broker. A restored dict with
+        no resume point is not durability either, which is why the source-offset commit is part
+        of this rung rather than a separate one; it is ~10 synchronous calls per run, and
+        ``commit_s`` is reported separately so it can be seen not to dominate.
+        """
+        nonlocal boundaries, produce_s, flush_s, commit_s
+        opened = time.monotonic()
+        if arm.changelog_mode == "coalesced":
+            # KAFKA STREAMS' STATE-STORE CACHE, hand-rolled: one write per (key, window) touched
+            # since the last boundary, not one per update. The engine-floor decomposition priced
+            # exactly this coalescing at 4.05x (D-cache), so it is a rung of the same ladder.
+            for entry in dirty:
+                _produce_entry(entry, state[entry])
+            dirty.clear()
+        produced = time.monotonic()
+        produce_s += produced - opened
+        if not arm.changelog_await:
+            # The arm that writes a changelog and waits for none of it. It is here as the
+            # instrument's other half: a durable arm that is accidentally not durable looks
+            # wonderfully fast, and this prices exactly how fast.
+            boundaries += 1
+            return
+        producer.flush()
+        flushed = time.monotonic()
+        flush_s += flushed - produced
+        try:
+            consumer.commit(asynchronous=False)
+        except KafkaException as failure:
+            # _NO_OFFSET means the previous boundary already committed everything consumed so
+            # far - which the FINAL boundary hits whenever the last batch happened to trigger
+            # one. It is "nothing new to commit", not a failed commit, and treating it as an
+            # error aborted a five-rep pass mid-run.
+            if failure.args[0].code() != KafkaError._NO_OFFSET:
+                raise
+        commit_s += time.monotonic() - flushed
+        boundaries += 1
+
+    boundary_s = args.commit_interval_ms / 1000.0
+    last_boundary = 0.0
+    watch = _GcWatch()
+    watch.install()
+    gc_was_enabled = gc.isenabled()
+    if arm.gc_disabled:
+        gc.disable()
     try:
         consumer.assign([TopicPartition(topic, p, OFFSET_BEGINNING)
                          for p in range(args.partitions)])
         deadline = time.monotonic() + 120 + records * 1e-3
         while seen < records and time.monotonic() < deadline:
+            poll_started = time.monotonic()
             batch = consumer.consume(num_messages=1000, timeout=1.0)
+            poll_ended = time.monotonic()
+            if started is not None:
+                # Charged to the window whether or not the poll returned anything - which is
+                # precisely the accounting the bimodality question turns on.
+                gap = poll_ended - poll_started
+                consume_s += gap
+                if gap > max_gap_s:
+                    max_gap_s, max_gap_at = gap, seen
+                if gap > 0.1:
+                    long_polls += 1
+                    stalls.append((seen, gap))
             if not batch:
+                if started is not None:
+                    empty_polls += 1
+                    empty_s += poll_ended - poll_started
                 continue
             if started is None:
-                started = time.monotonic()
+                started = poll_ended
+                cpu_started = time.process_time()
+                last_boundary = poll_ended
+                watch.arm()
+            batches += 1
             for message in batch:
                 if message.error():
                     continue
@@ -987,19 +1625,112 @@ def measure_host(args: argparse.Namespace, topic: str, records: int, keys: int,
                 for start in _window_starts(timestamp_ms, window.size_ms, window.advance_ms):
                     state[(key, start)] = value
                     updates += 1
+                    if producer is not None:
+                        if arm.changelog_mode == "per-update":
+                            # The naive reimplementer: every state update is a changelog write.
+                            _produce_entry((key, start), value)
+                        else:
+                            dirty.add((key, start))
+            if producer is not None and time.monotonic() - last_boundary >= boundary_s:
+                _boundary()
+                last_boundary = time.monotonic()
             ended = time.monotonic()
+            fold_s += ended - poll_ended
+            if arm.force_gen2 and not forced and seen >= records // 2:
+                # H1's POSITIVE control: put a full generation-2 collection inside the window on
+                # purpose and let the same instrument price it. A mechanism that cannot produce
+                # the observed excess when forced cannot have produced it by accident.
+                forced = True
+                gc.collect(2)
+                ended = time.monotonic()
+        if producer is not None and started is not None:
+            # THE FINAL BOUNDARY IS INSIDE THE TIMED WINDOW, and it has to be: an arm whose last
+            # 200 ms of state reached the broker only after the clock stopped was not durable at
+            # the moment it claimed a rate.
+            final_opened = time.monotonic()
+            _boundary()
+            ended = time.monotonic()
+            fold_s += ended - final_opened
     finally:
+        if arm.gc_disabled and gc_was_enabled:
+            gc.enable()
+        if started is not None:
+            cpu_s = time.process_time() - cpu_started
+        watch.remove()
         consumer.close()
+        if producer is not None and not arm.changelog_await:
+            # OUTSIDE the window on purpose: this arm's whole definition is that it does not pay
+            # for the wait. The records still have to arrive for the end-offset check below to
+            # mean anything, so the wait happens - it is just not charged to the rate, which is
+            # precisely the accounting error the arm exists to price.
+            producer.flush()
     window_s = (ended - started) if started is not None else 0.0
+    changelog_end = 0
+    if producer is not None:
+        if delivery_failures and arm.changelog_await:
+            raise RuntimeError(f"arm {arm.label} invalid: the changelog producer reported "
+                               f"{len(delivery_failures)} delivery failure(s), first "
+                               f"{delivery_failures[0]} - a changelog that did not arrive is "
+                               "not durability")
+        changelog_end = _await_changelog_end(args, changelog_topic, changelog_records,
+                                             strict=arm.changelog_await)
     result = HostRun(spec=spec_label, records=seen, keys=keys, updates=updates,
-                     window_s=window_s)
+                     window_s=window_s, load1=load1, arm=arm.label, rep=rep, cpu_s=cpu_s,
+                     fold_s=fold_s, consume_s=consume_s, empty_polls=empty_polls,
+                     empty_s=empty_s, max_gap_s=max_gap_s, max_gap_at=max_gap_at,
+                     long_polls=long_polls, stalls=tuple(stalls), batches=batches,
+                     gc_gen0=watch.counts[0], gc_gen1=watch.counts[1], gc_gen2=watch.counts[2],
+                     gc_pause_s=watch.pause_s, gc_max_pause_s=watch.max_pause_s,
+                     calib_s=calib_s, changelog_topic=changelog_topic or "",
+                     changelog_records=changelog_records, changelog_end=changelog_end,
+                     boundaries=boundaries, produce_s=produce_s, flush_s=flush_s,
+                     commit_s=commit_s, delivery_failures=len(delivery_failures))
+    stalled = (long_polls or empty_polls) and not arm.expect_stall
     ok = seen == records and updates == multiplier * records
-    print(f"  arm=H {spec_label:<10s} records={seen:>7,} keys={keys:>5,} "
-          f"window={window_s:7.2f}s rec/s={result.rate:8,.0f} dict-updates={updates:>9,} "
-          f"load1={load1:.2f} {'ok' if ok else 'INVALID'}")
+    print(f"  arm={arm.label:<9s} {spec_label:<10s} records={seen:>7,} keys={keys:>5,} "
+          f"window={window_s:7.3f}s rec/s={result.rate:8,.0f} dict-updates={updates:>9,} "
+          f"load1={load1:.2f} "
+          f"{'ok' if ok and not stalled else ('STALLED' if ok else 'INVALID')}")
+    if verbose:
+        print(f"      where the window went: fold={fold_s:6.3f}s consume={consume_s:6.3f}s "
+              f"(empty={empty_polls} for {empty_s:.3f}s, {long_polls} over 100ms, max gap "
+              f"{max_gap_s:.3f}s after {max_gap_at:,} records, {batches} batches)  "
+              f"cpu={cpu_s:6.3f}s cpu/wall={cpu_s / window_s:5.2f} "
+              f"fold-only rec/s={result.fold_rate:8,.0f}")
+        if stalls:
+            # Capped: H-starve produces 154 of these by construction and the point is their
+            # LENGTH, which is identical, not the list.
+            shown = ", ".join(f"{gap:.3f}s after {at:,} records" for at, gap in stalls[:6])
+            more = f" ... and {len(stalls) - 6} more" if len(stalls) > 6 else ""
+            print(f"      polls over 100ms ({len(stalls)}): {shown}{more}")
+        print(f"      collector inside the window: gen0={watch.counts[0]} gen1={watch.counts[1]} "
+              f"gen2={watch.counts[2]} pause={watch.pause_s:.3f}s "
+              f"(max {watch.max_pause_s:.3f}s)  cpu-calibration={calib_s * 1e3:.1f}ms")
+    if producer is not None:
+        print(f"      durability: changelog {changelog_records:,} records produced, "
+              f"{changelog_end:,} on the broker (end offsets, "
+              f"{changelog_records - changelog_end:,} MISSING, "
+              f"{len(delivery_failures)} failed reports), {boundaries} boundaries, "
+              f"acks={arm.changelog_acks} await={arm.changelog_await}  "
+              f"produce={produce_s:.3f}s flush={flush_s:.3f}s commit={commit_s:.3f}s "
+              f"= {result.durable_s:.3f}s of a {window_s:.3f}s window "
+              f"({result.durable_s / window_s:.0%})")
     if not ok:
         raise RuntimeError(f"arm H invalid: saw {seen:,}/{records:,} records, "
                            f"{updates:,} updates against {multiplier * records:,} expected")
+    if stalled:
+        raise RuntimeError(
+            f"arm H invalid: {long_polls} consume() call(s) over 100ms inside the timed window "
+            f"({empty_polls} of them empty), the longest {max_gap_s:.3f}s after "
+            f"{max_gap_at:,} records - {consume_s / window_s:.0%} of this window was fetch "
+            "wait, not aggregation, so the rate is a property of the fetch path rather than of "
+            "the reimplementation. This is what made arm H's hopping-12 rate read 89,821 rec/s "
+            "at 128,000 records in U6 and ~460,000 at 64,000: librdkafka stops fetching when "
+            "the local queue passes queued.max.messages.kbytes and then postpones the next "
+            "fetch by fetch.queue.backoff.ms (1,000ms by default). Raise the queue or lower "
+            "the backoff (--host-fetch-queue-backoff-ms) rather than averaging over it; see "
+            "docs/inflight/perf-streams-engine-floor.md, 'Why arm H's hopping-12 rate is "
+            "bimodal'.")
     return result
 
 
@@ -1071,6 +1802,183 @@ def run_host_reimpl(args: argparse.Namespace) -> int:
     finally:
         if not args.keep_topics:
             delete_run_topics(AdminClient({"bootstrap.servers": args.bootstrap}), [topic])
+    return 0
+
+
+"""Arm-H variants for ``host-bimodal``. Each moves ONE term against ``H-base``.
+
+``H-base`` and ``T-base`` are the untouched loop at the two specifications - hopping-12 is the
+bimodal one, tumbling the arm that has been stable in every session and therefore the in-session
+stability control. The rest are named by the hypothesis they can refute.
+"""
+_H_BASE = HostArm(label="H-base", spec="hopping-12",
+                  expect_stall=True,
+            why="the untouched loop - the arm every prior session measured")
+_H_ARMS: tuple[HostArm, ...] = (
+    _H_BASE,
+    HostArm(label="T-base", spec="tumbling",
+            why="the untouched loop at the specification that has never been bimodal"),
+    HostArm(label="H-gcoff", spec="hopping-12", gc_disabled=True,
+            expect_stall=True,
+            why="H1's paired toggle: the cyclic collector cannot run inside the window"),
+    HostArm(label="H-queue", spec="hopping-12",
+            consumer_extra=(("queued.max.messages.kbytes", 2_097_151),
+                            ("queued.min.messages", 2_000_000)),
+            why="H3's paired toggle: the whole backlog fits in the local fetch queue, so the "
+                "loop can never outrun the fetcher"),
+    HostArm(label="H-fresh", spec="hopping-12", fresh_topic=True,
+            expect_stall=True,
+            why="H2's toggle: a topic seeded for this rep and never read, against the shared "
+                "topic every other rep has already read"),
+    HostArm(label="H-gcforce", spec="hopping-12", force_gen2=True,
+            expect_stall=True,
+            why="H1's POSITIVE control: one full generation-2 collection forced inside the "
+                "window, so the mechanism is PRICED rather than argued about"),
+    HostArm(label="H-first", spec="hopping-12",
+            expect_stall=True,
+            why="the untouched loop in the FIRST slot of the rep - added after a smoke pass "
+                "showed the slot, not the arm, tracking the slow mode"),
+    HostArm(label="H-second", spec="hopping-12",
+            expect_stall=True,
+            why="the same untouched loop in a LATER slot, after another arm has already read "
+                "the same topic in this rep - one term moved: read position, nothing else"),
+    HostArm(label="H-backoff100", spec="hopping-12",
+            consumer_extra=(("fetch.queue.backoff.ms", 100),),
+            why="the mechanism's dose-response middle rung: if the stall IS librdkafka's "
+                "fetch-queue backoff timer, its length tracks this setting"),
+    HostArm(label="H-backoff10", spec="hopping-12",
+            consumer_extra=(("fetch.queue.backoff.ms", 10),),
+            why="the bottom rung of the same ladder - predicted stall ~10ms, and the arm's rate "
+                "predicted to land on the fold-only rate"),
+    HostArm(label="H-starve", spec="hopping-12",
+            consumer_extra=(("queued.max.messages.kbytes", 1_024),
+                            ("queued.min.messages", 100)),
+            expect_stall=True,
+            why="H3's POSITIVE control: a local queue too small to stay ahead of the loop, so "
+                "the fetch-stall signature is produced on demand and can be compared"),
+)
+_H_PHASES: dict[str, tuple[str, ...]] = {
+    # Observational first, and nothing is toggled in it: the correlations have to be visible in
+    # the untouched arm before any toggle is worth running (docs/investigating.md).
+    "observe": ("H-base", "T-base"),
+    "toggle": ("H-base", "H-gcoff", "H-queue", "H-fresh"),
+    "positive": ("H-base", "H-gcforce", "H-starve"),
+    # Added after the smoke pass, not planned: H-base ran first in every rep and was slow in
+    # both, where f2-rerun ran tumbling first and found hopping mostly fast. Read position is a
+    # term the pre-registration did not name, so it gets an arm of its own before anything else
+    # is toggled - the same move the key-count control made in the section above.
+    "order": ("H-first", "T-base", "H-second"),
+    # A ladder rather than a toggle: the observational pass localised the stall to one poll of
+    # 0.57-0.66s at a fixed point in the stream, which is what a partially-elapsed 1,000 ms
+    # librdkafka fetch-queue backoff looks like. Moving the timer and predicting the stall's
+    # LENGTH is a stronger claim than removing it.
+    "backoff": ("H-base", "H-backoff100", "H-backoff10"),
+}
+
+
+def _print_host_runs(title: str, runs: list[HostRun]) -> None:
+    """Per-arm distribution AND the per-run correlation table, because a bimodal quantity has no
+    median worth printing on its own - the finding is which runs are slow and what else was true
+    of them."""
+    print(f"\n  {title}")
+    by_arm: dict[str, list[HostRun]] = {}
+    for run in runs:
+        by_arm.setdefault(f"{run.arm} {run.spec}", []).append(run)
+    for label, arm_runs in by_arm.items():
+        rates = sorted(run.rate for run in arm_runs)
+        folds = sorted(run.fold_rate for run in arm_runs)
+        print(f"    {label:<22s} n={len(rates):<3d} median {statistics.median(rates):9,.0f} "
+              f"rec/s  min-max {min(rates):,.0f}-{max(rates):,.0f}  "
+              f"spread {max(rates) / min(rates):.2f}x")
+        print("        wall-clock samples: "
+              + " / ".join(f"{rate:,.0f}" for rate in rates))
+        print(f"        fold-only rate:     median {statistics.median(folds):9,.0f} "
+              f"min-max {min(folds):,.0f}-{max(folds):,.0f}  "
+              f"spread {max(folds) / min(folds):.2f}x")
+        stalled = [run for run in arm_runs if run.empty_polls]
+        print(f"        empty polls: {sum(run.empty_polls for run in arm_runs)} across "
+              f"{len(stalled)}/{len(arm_runs)} runs; gen2 collections "
+              f"{sum(run.gc_gen2 for run in arm_runs)}; collector pause total "
+              f"{sum(run.gc_pause_s for run in arm_runs):.3f}s")
+    print("\n    every run, sorted by rate - the correlation table:")
+    print(f"      {'arm':<10s} {'spec':<11s} {'rep':>3s} {'rec/s':>9s} {'window':>8s} "
+          f"{'fold':>7s} {'consume':>8s} {'empty':>6s} {'>100ms':>7s} {'maxgap':>7s} "
+          f"{'gap@rec':>9s} {'cpu/wall':>8s} {'gen2':>5s} {'gcpause':>8s} {'calib':>7s} "
+          f"{'load1':>6s}")
+    for run in sorted(runs, key=lambda r: r.rate):
+        print(f"      {run.arm:<10s} {run.spec:<11s} {run.rep:>3d} {run.rate:>9,.0f} "
+              f"{run.window_s:>8.3f} {run.fold_s:>7.3f} {run.consume_s:>8.3f} "
+              f"{run.empty_polls:>6d} {run.long_polls:>7d} {run.max_gap_s:>7.3f} "
+              f"{run.max_gap_at:>9,d} "
+              f"{(run.cpu_s / run.window_s if run.window_s else 0):>8.2f} {run.gc_gen2:>5d} "
+              f"{run.gc_pause_s:>8.3f} {run.calib_s * 1e3:>6.1f}m {run.load1:>6.2f}")
+
+
+def run_host_bimodal(args: argparse.Namespace) -> int:
+    """Settle WHY arm H's hopping-12 rate is bimodal, with control arms rather than argument.
+
+    The F2 retake (``f2-rerun``) found arm H's hopping-12 rate bimodal across twelve samples -
+    one at 92,254 rec/s, ten between 372,571 and 487,071 - while its tumbling rate reproduced
+    across sessions. Until that is settled F2 at hopping-12 has no median worth quoting, so this
+    experiment exists to attribute it.
+
+    THREE PHASES, IN THIS ORDER, AND THE ORDER IS THE METHOD:
+
+    1. ``observe`` - the untouched loop at both specifications, many reps, nothing toggled, with
+       every run's window decomposed (fold vs consume vs empty-poll wait), its CPU time, its
+       collector passes and pauses, and a pure-CPU calibration beside it. A hypothesis that
+       cannot show its signature HERE does not deserve a toggle.
+    2. ``toggle`` - paired single-term arms, interleaved within each rep, for the hypotheses the
+       observational pass leaves live.
+    3. ``positive`` - arms that force each candidate mechanism to happen, so it is priced. This
+       is the phase the previous round said the follow-up needed: the slow mode appeared once in
+       twelve, so a toggle arm showing 'no slow runs' proves almost nothing at any affordable n,
+       whereas an arm that makes the mode appear ON DEMAND settles the mechanism in three reps.
+
+    Record count and key count come from ``--floor-records`` and ``--keys`` so this can be run at
+    U6's exact arm-H conditions (128,000 records, 8,000 keys) - the condition under which every
+    slow sample so far was taken.
+    """
+    records = args.floor_records
+    keys = args.keys
+    phases = [p.strip() for p in args.bimodal_phases.split(",") if p.strip()]
+    by_label = {arm.label: arm for arm in _H_ARMS}
+    print("host-bimodal - why arm H's hopping-12 rate is bimodal, with control arms")
+    print(f"  records per run         {records:,}")
+    print(f"  keys                    {keys:,}")
+    print(f"  partitions              {args.partitions}, {args.payload_bytes} B payloads")
+    print(f"  reps                    observe {args.reps}, toggle/positive "
+          f"{args.bimodal_control_reps} (arms interleaved within each rep)")
+    print(f"  phases                  {', '.join(phases)}")
+    print(f"  load limit              {args.load_limit:g} (1-minute load read and recorded "
+          "beside every run)")
+    print("  engine                  none - arm H needs no engine, no sidecar and no classpath")
+
+    admin = AdminClient({"bootstrap.servers": args.bootstrap})
+    shared = _seed_host_topic(args, records, keys, "bimodal")
+    fresh_topics: list[str] = []
+    try:
+        for phase in phases:
+            labels = _H_PHASES[phase]
+            reps = args.reps if phase == "observe" else args.bimodal_control_reps
+            print(f"\n=== phase {phase}: {', '.join(labels)}, {reps} reps ===")
+            for label in labels:
+                print(f"  {label:<10s} {by_label[label].why}")
+            runs: list[HostRun] = []
+            for rep in range(1, reps + 1):
+                print(f"\n  rep {rep}/{reps}")
+                for label in labels:
+                    arm = by_label[label]
+                    topic = shared
+                    if arm.fresh_topic:
+                        topic = _seed_host_topic(args, records, keys, f"fresh-{rep}")
+                        fresh_topics.append(topic)
+                    runs.append(measure_host(args, topic, records, keys, arm.window, arm.spec,
+                                             arm=arm, rep=rep, verbose=True))
+            _print_host_runs(f"phase {phase}", runs)
+    finally:
+        if not args.keep_topics:
+            delete_run_topics(admin, [shared, *fresh_topics])
     return 0
 
 
@@ -1343,10 +2251,585 @@ def run_placement(args: argparse.Namespace) -> int:
     return 0
 
 
+@dataclasses.dataclass(frozen=True)
+class FloorArm:
+    """One engine-floor arm: a label, the placement arm it borrows its topology from, and the
+    ONE term it moves against the baseline. Everything unstated is U6's condition."""
+
+    label: str
+    arm: str                  # "D" (hop 1h/5m, crossing-free) or "A" (tumbling, host function)
+    toggle: str               # what this arm moves; "-" for the baseline
+    cache_bytes: int = 0
+    commit_ms: int | None = None
+    threads: int | None = None
+    sink_on: bool = True
+    changelog_on: bool = True
+    delay_ms: float = 0.0
+
+
+_FLOOR_ARMS: tuple[FloorArm, ...] = (
+    FloorArm("D0", "D", "-"),
+    FloorArm("D-cache", "D", "statestore.cache.max.bytes 0 -> 64 MB", cache_bytes=64 * 1024 * 1024),
+    FloorArm("D-nolog", "D", "changelog on -> off", changelog_on=False),
+    FloorArm("D-commit", "D", "commit.interval.ms 200 -> 5000", commit_ms=5000),
+    FloorArm("D-nosink", "D", "sink on -> off", sink_on=False),
+    FloorArm("D-t1", "D", "num.stream.threads 8 -> 1", threads=1),
+    FloorArm("T0", "A-free", "hopping 1h/5m -> tumbling 1h (multiplier 12 -> 1)"),
+    # The two toggles that turned out to matter, applied together: the best case a crossing-free
+    # wrapper can reach at all, which is the number the F2 comparison actually wants.
+    FloorArm("T0-cache", "A-free", "tumbling AND cache 64 MB (both winning toggles)",
+             cache_bytes=64 * 1024 * 1024),
+)
+
+_INSTRUMENT_ARMS: tuple[FloorArm, ...] = (
+    FloorArm("I0", "A", "instrument check control: host fn, no delay"),
+    FloorArm("I100", "A", "instrument check: +0.1 ms per record in the host fn", delay_ms=0.1),
+    # 0.1 ms did not move the figure, and the reason is structural rather than instrumental: the
+    # client dispatches invocations to a thread pool, so a delay smaller than the crossing it rides
+    # on is absorbed by concurrency rather than added to the critical path. 1 ms exceeds what the
+    # pool can hide, which is what makes it a check the instrument can actually fail.
+    FloorArm("I1000", "A", "instrument check: +1 ms per record in the host fn", delay_ms=1.0),
+)
+
+
+def _run_floor_arm(args: argparse.Namespace, arm: FloorArm, records: int,
+                   show_topology: bool = False) -> PlacementRun:
+    """One engine-floor arm, run through the shared ``measure_placement`` machinery.
+
+    Extracted from ``run_engine_floor`` when the in-session F2 re-run needed the SAME arm
+    definitions in a different order beside arm H. A second copy of the toggle plumbing would
+    have drifted from this one the first time an arm learned a new term - the lab's KTD14, the
+    reason every experiment here is a function rather than a sibling file.
+
+    ``arm.arm`` names a row of ``_ARMS``: "D" is the hopping-12 crossing-free topology and
+    "A-free" the tumbling one, both with NO host function registered, so their zero crossings are
+    measured (an engine-side invocation would name an unregistered token and fail the run).
+    """
+    return measure_placement(
+        args, arm.arm, records, args.keys, arm.cache_bytes,
+        show_topology=show_topology, commit_ms=arm.commit_ms, threads=arm.threads,
+        sink_on=arm.sink_on, changelog_on=arm.changelog_on, delay_ms=arm.delay_ms)
+
+
+def _print_floor_table(arms: tuple[FloorArm, ...], runs: dict[str, list[PlacementRun]],
+                       baseline_label: str = "D0") -> None:
+    """The per-arm table: median over reps, min-max beside, ratio against the baseline arm."""
+    print("\n  results - rec/s on the sink's log-append clock (committed-offset clock beside it)")
+    print(f"  {'arm':10s} {'toggle':46s} {'rec/s (min-max)':>26s} {'us/rec':>9s} "
+          f"{'us/rec/window':>14s} {'emits':>10s}")
+    baseline = statistics.median(r.rate or r.committed_rate
+                                 for r in runs.get(baseline_label, next(iter(runs.values()))))
+    for arm in arms:
+        got = runs.get(arm.label)
+        if not got:
+            continue
+        rates = [r.rate or r.committed_rate for r in got]
+        median = statistics.median(rates)
+        multiplier = got[0].multiplier
+        print(f"  {arm.label:10s} {arm.toggle:46s} "
+              f"{median:9,.0f} ({min(rates):,.0f}-{max(rates):,.0f}) "
+              f"{1e6 / median:9.1f} {1e6 / median / multiplier:14.1f} "
+              f"{statistics.median(r.emits for r in got):10,.0f}"
+              f"   x{median / baseline:.2f} vs {baseline_label}")
+
+
+def run_engine_floor(args: argparse.Namespace) -> int:
+    """The engine-floor decomposition: U6 arm D's crossing-free run, one term moved per arm.
+
+    Registered in docs/inflight/perf-streams-engine-floor.md before any arm ran. Arms are
+    INTERLEAVED within each repetition rather than blocked, so machine drift lands on all of them
+    - the same rule every prior crossing measurement here was re-learned by.
+    """
+    records = args.floor_records
+    print("engine-floor experiment - where the microseconds go with NOTHING crossing")
+    print(f"  records per run         {records:,}")
+    print(f"  keys                    {args.keys:,}")
+    print(f"  reps                    {args.reps} (arms interleaved within each rep)")
+    print(f"  baseline conditions     cache 0 B, commit {args.commit_interval_ms} ms, "
+          f"{args.stream_threads} threads, sink on, changelog on")
+    runs: dict[str, list[PlacementRun]] = {}
+    arms = _FLOOR_ARMS + (_INSTRUMENT_ARMS if args.floor_instrument else ())
+    if args.floor_arms:
+        wanted = {label.strip() for label in args.floor_arms.split(",")}
+        arms = tuple(a for a in _FLOOR_ARMS + _INSTRUMENT_ARMS if a.label in wanted)
+        if not arms:
+            raise SystemExit(f"no engine-floor arm matches {sorted(wanted)}")
+    for rep in range(args.reps):
+        print(f"\n  rep {rep + 1}/{args.reps}")
+        for arm in arms:
+            runs.setdefault(arm.label, []).append(
+                _run_floor_arm(args, arm, records, show_topology=(rep == 0)))
+    _print_floor_table(arms, runs)
+    if args.floor_instrument:
+        control = statistics.median(r.rate for r in runs["I0"])
+        slowed = statistics.median(r.rate for r in runs["I100"])
+        moved = 1e6 / slowed - 1e6 / control
+        print(f"\n  INSTRUMENT CHECK: +100us/record injected moved the per-record figure by "
+              f"{moved:,.0f}us ({1e6 / control:,.0f} -> {1e6 / slowed:,.0f} us/rec). "
+              f"A figure that cannot move is not measuring the engine.")
+    return 0
+
+
+_F2_ANCHOR_RATES: dict[str, float] = {"D0": 16_758.0, "T0": 81_946.0}
+"""The 2026-08-25 medians of the two CACHE-OFF arms, at exactly these conditions (1,000 keys,
+64,000 records, 8 partitions, 8 stream threads, commit 200 ms, 1 KB payloads).
+
+They are re-run here as ANCHORS, not as filler. Nothing else ties this session's box to that one:
+the cache-on arms and arm H are being compared for the first time in a single session, and their
+ratio is only readable against a decomposition taken on a different day if the two arms both days
+share land in the same place. A disagreeing anchor is a finding about the box - it is reported,
+never tuned away. Source: docs/inflight/perf-streams-engine-floor.md, section
+"The decomposition, measured 2026-08-25"."""
+
+_F2_HOST_CONTROL_LABEL = "H@{keys}k"
+"""How the arm-H key-count control is labelled in the summary - it is arm H with exactly one term
+moved (the key count), so it reads as an arm rather than as a footnote."""
+
+_F2_ENGINE_ORDER: tuple[str, ...] = ("T0-cache", "D-cache", "D0", "T0")
+"""The engine arms of the F2 re-run, in the order they run WITHIN each repetition - after arm H,
+which goes first while no sidecar is up (``_shared_phase``'s rule, inherited: the engine is idle
+there, and a broken H arm surfaces before the rep's engine runs rather than after them). The two
+cache-on arms lead because they carry the verdict; the two cache-off anchors follow."""
+
+
+def run_f2_rerun(args: argparse.Namespace) -> int:
+    """F2 retaken IN ONE SESSION: arm H interleaved with the cache-on crossing-free arms.
+
+    The engine-floor decomposition established that ~75 percent of the measured floor was an
+    instrument choice (``statestore.cache.max.bytes=0``) and reported the consequence for F2 -
+    the reimplementation floor - by reading this note's cache-on arms against arm H figures
+    measured in U6's session. That is a cross-session comparison, which the project's
+    pre-registered discipline (U6's KTD18, in-session control arms) forbids: two sessions differ
+    by ambient load, page cache and broker state, and a ratio taken across them attributes drift
+    to the term under test.
+
+    So every arm here runs in one session, interleaved within each repetition, at ONE record
+    count and ONE key count:
+
+    - arm H at both specifications first, on this process's wall clock (H produces nothing, so it
+      has no log-append record of its own progress) while no engine is up;
+    - ``T0-cache`` and ``D-cache``, the wrapper's best case at each specification;
+    - ``D0`` and ``T0``, the cache-off anchors that tie this box to 2026-08-25's;
+    - arm H again at ``--f2-host-control-keys``, the key-count control. The engine arms run at
+      1,000 keys rather than U6's 8,000 because a 64 MB cache over an 8,000-key hopping working
+      set would measure eviction thrash - but that deviation lands on arm H too, and U6's arm-H
+      figures were taken at 8,000. Moving only the key count, in this session, says whether a
+      disagreement with U6's arm H is the key count or the box.
+
+    THE RECORD COUNT IS RECONCILED DELIBERATELY. ``run_engine_floor`` reads ``--floor-records``
+    and ``run_host_reimpl`` reads ``max(--crossings-sweep)``; a comparison whose two sides ran at
+    different loads is void, so this experiment drives BOTH sides from ``--floor-records`` and
+    arm H's own record count follows the engine's.
+    """
+    records = args.floor_records
+    by_label = {arm.label: arm for arm in _FLOOR_ARMS + _INSTRUMENT_ARMS}
+    engine_arms = tuple(by_label[label] for label in _F2_ENGINE_ORDER)
+    # I100 is deliberately NOT run: 0.1 ms was refuted as too small in the 2026-08-25 session -
+    # the client dispatches invocations onto a thread pool, which absorbs a delay smaller than
+    # the crossing it rides on. I0 is the crossing control against T0 (same topology, one
+    # registered host function between them); I1000 is the injected-cost check at a magnitude
+    # the pool cannot hide.
+    instrument_arms = (tuple(by_label[label] for label in ("I0", "I1000"))
+                       if args.floor_instrument else ())
+
+    print("f2-rerun - the F2 comparison retaken IN-SESSION, arm H interleaved with the "
+          "cache-on arms")
+    print(f"  records per run         {records:,} (engine arms AND arm H - one count, "
+          "reconciled)")
+    print(f"  keys                    {args.keys:,}")
+    print(f"  reps                    {args.reps} (arms interleaved within each rep, H first)")
+    print(f"  partitions              {args.partitions}, {args.stream_threads} stream threads, "
+          f"{args.payload_bytes} B payloads")
+    print(f"  commit.interval.ms      {args.commit_interval_ms} (set explicitly)")
+    print(f"  quiescence              {args.quiescence_intervals} commit intervals, each break "
+          "confirmed against sink end offsets after a further 2x, and the engine group must "
+          "have committed the whole seeded backlog")
+    print(f"  event time              constant {_EVENT_TIME_MS} ms for every record")
+    print(f"  load limit              {args.load_limit:g} (1-minute load read and recorded "
+          "beside every run)")
+    print("  crossings               every engine arm registers NO host function, so its zero "
+          "crossings are measured client-side rather than assumed")
+    print(f"  order within a rep      H tumbling, H hopping-12, "
+          f"{', '.join(_F2_ENGINE_ORDER)}"
+          + (f", {', '.join(a.label for a in instrument_arms)}" if instrument_arms else ""))
+    print(f"  JAVA_TOOL_OPTIONS       {os.environ.get('JAVA_TOOL_OPTIONS', '(unset)')}")
+
+    control_keys = args.f2_host_control_keys
+    if control_keys:
+        print(f"  arm-H key control       {control_keys:,} keys beside the {args.keys:,} the "
+              "engine arms run at - the ONE term that differs from U6's arm H, moved in-session "
+              "so a disagreement with U6's figures is attributed rather than explained")
+
+    h_topic = _seed_host_topic(args, records, args.keys, "f2")
+    control_topic = (_seed_host_topic(args, records, control_keys, "f2-control")
+                     if control_keys else None)
+    runs: dict[str, list[PlacementRun]] = {}
+    h_runs: list[HostRun] = []
+    control_runs: list[HostRun] = []
+    try:
+        for rep in range(args.reps):
+            print(f"\n  rep {rep + 1}/{args.reps}")
+            h_runs.append(measure_host(args, h_topic, records, args.keys, _TUMBLE, "tumbling"))
+            h_runs.append(measure_host(args, h_topic, records, args.keys, _HOP5, "hopping-12"))
+            if control_topic is not None:
+                # Arm H again with exactly ONE term moved - the key count. Nothing else differs:
+                # same session, same records, same payload, same partitions, same consume loop.
+                control_runs.append(measure_host(args, control_topic, records, control_keys,
+                                                 _TUMBLE, "tumbling"))
+                control_runs.append(measure_host(args, control_topic, records, control_keys,
+                                                 _HOP5, "hopping-12"))
+            for arm in engine_arms + instrument_arms:
+                runs.setdefault(arm.label, []).append(
+                    _run_floor_arm(args, arm, records, show_topology=(rep == 0)))
+    finally:
+        if not args.keep_topics:
+            topics = [h_topic] + ([control_topic] if control_topic is not None else [])
+            delete_run_topics(AdminClient({"bootstrap.servers": args.bootstrap}), topics)
+
+    _print_floor_table(engine_arms + instrument_arms, runs)
+
+    print("\n  arm H, this session - single-threaded, NON-DURABLE (no store, no changelog, no "
+          "rebalance recovery,")
+    print("  no late-record handling), so F2 is an UPPER bound on a real reimplementation:")
+    h_median: dict[str, float] = {}
+    for spec_label in ("tumbling", "hopping-12"):
+        rates = [h.rate for h in h_runs if h.spec == spec_label]
+        h_median[spec_label] = statistics.median(rates)
+        print(f"  arm H {spec_label:<12s} {h_median[spec_label]:9,.0f} "
+              f"({min(rates):,.0f}-{max(rates):,.0f}) rec/s, {1e6 / h_median[spec_label]:.1f} "
+              f"us/rec, n={len(rates)}")
+
+    print("\n  THE F2 VERDICT, RETAKEN IN-SESSION (wrapper best case vs arm H at the SAME "
+          "specification, same session, interleaved):")
+    for spec_label, wrapper in (("tumbling", "T0-cache"), ("hopping-12", "D-cache")):
+        wrapper_rate = statistics.median(r.rate for r in runs[wrapper])
+        host_rate = h_median[spec_label]
+        print(f"    {spec_label:<11s} {wrapper:9s} {wrapper_rate:9,.0f} rec/s   arm H "
+              f"{host_rate:9,.0f} rec/s   -> H is {host_rate / wrapper_rate:.2f}x the wrapper")
+
+    if control_runs:
+        print(f"\n  ARM-H KEY-COUNT CONTROL - the same consume loop at {control_keys:,} keys "
+              f"(U6's) instead of {args.keys:,}, one term moved, same session:")
+        for spec_label in ("tumbling", "hopping-12"):
+            rates = [h.rate for h in control_runs if h.spec == spec_label]
+            control_median = statistics.median(rates)
+            print(f"    H {spec_label:<11s} {args.keys:>6,} keys {h_median[spec_label]:9,.0f} "
+                  f"rec/s   {control_keys:>6,} keys {control_median:9,.0f} "
+                  f"({min(rates):,.0f}-{max(rates):,.0f}) rec/s   -> the key count is worth "
+                  f"{h_median[spec_label] / control_median:.2f}x on arm H alone")
+
+    print("\n  ANCHORS - the two cache-off arms against their 2026-08-25 medians at the same "
+          "conditions:")
+    for label, then in _F2_ANCHOR_RATES.items():
+        now = statistics.median(r.rate for r in runs[label])
+        print(f"    {label:9s} this session {now:9,.0f} rec/s   2026-08-25 {then:9,.0f} rec/s   "
+              f"-> {now / then:.2f}x")
+
+    if instrument_arms:
+        t0_us = 1e6 / statistics.median(r.rate for r in runs["T0"])
+        i0_us = 1e6 / statistics.median(r.rate for r in runs["I0"])
+        i1000_us = 1e6 / statistics.median(r.rate for r in runs["I1000"])
+        print("\n  INSTRUMENT CHECK, both halves - a figure that cannot move is not measuring "
+              "the engine:")
+        print(f"    crossing:  T0 -> I0 adds exactly one registered host function to the same "
+              f"tumbling topology, {t0_us:,.1f} -> {i0_us:,.1f} us/rec, delta "
+              f"{i0_us - t0_us:,.0f}us against U6's independently fitted 135us per crossing")
+        print(f"    injected:  I0 -> I1000 adds +1,000us/record host-side, {i0_us:,.1f} -> "
+              f"{i1000_us:,.1f} us/rec, delta {i1000_us - i0_us:,.0f}us - the client's thread "
+              "pool absorbs the rest, a known property of this harness rather than a new result")
+
+    loads = ([r.load1 for arm_runs in runs.values() for r in arm_runs]
+             + [h.load1 for h in h_runs + control_runs])
+    print(f"\n  1-minute load beside the {len(loads)} runs: {min(loads):.2f}-{max(loads):.2f} "
+          f"(median {statistics.median(loads):.2f}, limit {args.load_limit:g})")
+    return 0
+
+
+_LADDER_ARMS: tuple[HostArm, ...] = (
+    HostArm(label="H-base", spec="hopping-12",
+            why="the control: plain arm H, stateless and non-durable, unchanged"),
+    HostArm(label="H-dur-per", spec="hopping-12", changelog_mode="per-update",
+            why="durability, written the naive way - one awaited changelog record per state "
+                "update, which is what a reimplementer writes first"),
+    HostArm(label="H-dur-coal", spec="hopping-12", changelog_mode="coalesced",
+            why="durability, written the careful way - the dirty (key, window) set flushed once "
+                "per commit interval, which is what the engine's state-store cache does"),
+    HostArm(label="H-dur-nowait", spec="hopping-12", changelog_mode="per-update",
+            changelog_acks="0", changelog_await=False,
+            why="the same changelog volume with the wait removed - not durable, and here to "
+                "price how fast an accidentally-non-durable arm would have looked"),
+)
+"""The first rung of the crossover ladder (astubbs#242), each arm ONE feature from ``H-base``.
+
+Spec-agnostic: the experiment replaces ``spec`` per specification, so an arm is defined by its
+durability term alone and the two window specifications cannot drift apart."""
+
+_LADDER_ENGINE_ORDER: tuple[str, ...] = ("T0-cache", "D-cache", "D0", "T0")
+"""The engine arms, in the order they run within a repetition - after the host arms, which go
+first while no sidecar is up (``_shared_phase``'s inherited rule). The two cache-on arms carry
+the comparison; ``D0`` and ``T0`` are the cache-off anchors that tie this box to the two prior
+sessions through ``_F2_ANCHOR_RATES``."""
+
+
+def run_crossing_ladder(args: argparse.Namespace) -> int:
+    """The crossover ladder, rung 1: what does DURABILITY cost the reimplementation?
+
+    Every F2 verdict in this program compares the wrapper against arm H - a bare dict, stateless
+    and non-durable. The owner's judgement, recorded in ``STRATEGY.md`` and in
+    ``docs/solutions/architecture-patterns/``
+    ``a-per-record-crossing-loses-to-reimplementation-before-features-enter.md``, is that this
+    comparison decides nothing: a toy beats an engine at toy work at any transport speed. The
+    question that decides it is the CROSSOVER - how many of the features a user actually came for
+    can be added back to that dictionary before hand-rolling becomes the worse choice.
+
+    This experiment takes the first step. It adds ONE feature - durability, meaning a changelog
+    per state update plus a restore that rebuilds the dict from it - and measures what it costs,
+    at two write granularities, against ``H-base`` and against the wrapper's cache-on
+    crossing-free arms IN THE SAME SESSION (KTD18). It reports restore time as its own figure,
+    because steady-state throughput and restart latency are different quantities.
+    """
+    records = args.floor_records
+    by_label = {arm.label: arm for arm in _FLOOR_ARMS + _INSTRUMENT_ARMS}
+    engine_arms = tuple(by_label[label] for label in _LADDER_ENGINE_ORDER)
+
+    print("crossing-ladder rung 1 - what DURABILITY costs the reimplementation")
+    print(f"  records per run         {records:,} (host arms AND engine arms - one count)")
+    print(f"  keys                    {args.keys:,}")
+    print(f"  reps                    {args.reps} (arms interleaved within each rep, host first)")
+    print(f"  partitions              {args.partitions}, {args.stream_threads} stream threads, "
+          f"{args.payload_bytes} B payloads")
+    print(f"  commit.interval.ms      {args.commit_interval_ms} - the engine's commit cadence AND "
+          "the durable arms' boundary interval, so both sides flush at the same rate")
+    print(f"  quiescence              {args.quiescence_intervals} commit intervals (engine arms)")
+    print(f"  event time              constant {_EVENT_TIME_MS} ms for every record")
+    print(f"  load limit              {args.load_limit:g} (1-minute load beside every run)")
+    backoff = args.host_fetch_queue_backoff_ms
+    print("  fetch.queue.backoff.ms  " + (f"{backoff} (set explicitly)" if backoff is not None
+                                          else "librdkafka's default 1,000 - the record count "
+                                               "sits below the 80,000-96,000 stall threshold "
+                                               "measured in the bimodality section"))
+    print(f"  restore control         a second read of every changelog with "
+          f"fetch.queue.backoff.ms={args.ladder_restore_backoff_ms}")
+    print(f"  JAVA_TOOL_OPTIONS       {os.environ.get('JAVA_TOOL_OPTIONS', '(unset)')}")
+    print("  arms                    " + ", ".join(f"{a.label} ({a.why})" for a in _LADDER_ARMS))
+
+    h_topic = _seed_host_topic(args, records, args.keys, "ladder")
+    admin = AdminClient({"bootstrap.servers": args.bootstrap})
+    host_runs: list[HostRun] = []
+    restores: list[RestoreRun] = []
+    runs: dict[str, list[PlacementRun]] = {}
+    try:
+        for rep in range(args.reps):
+            print(f"\n  rep {rep + 1}/{args.reps}")
+            for spec_label, window in (("tumbling", _TUMBLE), ("hopping-12", _HOP5)):
+                multiplier = -(-window.size_ms // window.advance_ms)
+                for base_arm in _LADDER_ARMS:
+                    arm = dataclasses.replace(base_arm, spec=spec_label)
+                    changelog = (_new_changelog_topic(args, f"{arm.label}-{spec_label}")
+                                 if arm.changelog_mode != "none" else None)
+                    try:
+                        run = measure_host(args, h_topic, records, args.keys, window, spec_label,
+                                           arm=arm, rep=rep + 1, verbose=True,
+                                           changelog_topic=changelog)
+                        host_runs.append(run)
+                        if changelog is not None and arm.changelog_await:
+                            # The nowait arm's changelog is byte-for-byte the same shape as
+                            # H-dur-per's, so restoring it would re-measure the same quantity.
+                            for backoff in (None, args.ladder_restore_backoff_ms):
+                                restores.append(restore_host(
+                                    args, changelog, args.keys * multiplier,
+                                    arm=arm.label, spec=spec_label, backoff_ms=backoff))
+                    finally:
+                        if changelog is not None and not args.keep_topics:
+                            delete_run_topics(admin, [changelog])
+            for arm in engine_arms:
+                runs.setdefault(arm.label, []).append(
+                    _run_floor_arm(args, arm, records, show_topology=(rep == 0)))
+    finally:
+        if not args.keep_topics:
+            delete_run_topics(admin, [h_topic])
+
+    _print_floor_table(engine_arms, runs)
+
+    print("\n  THE LADDER - arm H with one feature added back, per specification")
+    print(f"  {'arm':14s} {'spec':11s} {'rec/s (min-max)':>28s} {'us/rec':>9s} "
+          f"{'changelog recs':>15s} {'durable share':>14s}")
+    ladder: dict[tuple[str, str], float] = {}
+    for spec_label in ("tumbling", "hopping-12"):
+        for base_arm in _LADDER_ARMS:
+            got = [h for h in host_runs if h.arm == base_arm.label and h.spec == spec_label]
+            if not got:
+                continue
+            rates = [h.rate for h in got]
+            median = statistics.median(rates)
+            ladder[(base_arm.label, spec_label)] = median
+            share = statistics.median(
+                (h.durable_s / h.window_s if h.window_s else 0.0) for h in got)
+            print(f"  {base_arm.label:14s} {spec_label:11s} "
+                  f"{median:11,.0f} ({min(rates):,.0f}-{max(rates):,.0f}) "
+                  f"{1e6 / median:9.1f} "
+                  f"{statistics.median(h.changelog_records for h in got):15,.0f} "
+                  f"{share:13.0%}")
+
+    print("\n  WHERE DURABILITY PUTS THE CROSSOVER - wrapper best case against each rung, same "
+          "session, interleaved:")
+    for spec_label, wrapper in (("tumbling", "T0-cache"), ("hopping-12", "D-cache")):
+        wrapper_rate = statistics.median(r.rate for r in runs[wrapper])
+        print(f"    {spec_label}: wrapper {wrapper} {wrapper_rate:,.0f} rec/s "
+              "(cache on, changelog ON, so it is durable too)")
+        for base_arm in _LADDER_ARMS:
+            rate = ladder.get((base_arm.label, spec_label))
+            if rate is None:
+                continue
+            ratio = rate / wrapper_rate
+            side = "reimplementation ahead" if ratio >= 1 else "WRAPPER AHEAD"
+            print(f"      {base_arm.label:14s} {rate:11,.0f} rec/s   "
+                  f"H/wrapper = {ratio:6.2f}x   {side}")
+
+    if restores:
+        print("\n  RESTORE - rebuilding the dict from the changelog, its own figure:")
+        print(f"  {'arm':14s} {'spec':11s} {'backoff':>9s} {'seconds (min-max)':>26s} "
+              f"{'changelog recs':>15s} {'entries':>9s} {'>100ms polls':>13s}")
+        seen_keys = []
+        for restore in restores:
+            probe_key = (restore.arm, restore.spec, restore.backoff_ms)
+            if probe_key in seen_keys:
+                continue
+            seen_keys.append(probe_key)
+            matching = [r for r in restores
+                        if (r.arm, r.spec, r.backoff_ms) == probe_key]
+            seconds = [r.seconds for r in matching]
+            print(f"  {restore.arm:14s} {restore.spec:11s} "
+                  f"{'default' if restore.backoff_ms is None else f'{restore.backoff_ms}ms':>9s} "
+                  f"{statistics.median(seconds):9.3f} ({min(seconds):.3f}-{max(seconds):.3f}) "
+                  f"{restore.records:15,} {restore.entries:9,} "
+                  f"{max(r.long_polls for r in matching):13d}")
+
+    print("\n  INSTRUMENT CHECK - the durability term must be visible on the broker, not just "
+          "claimed by the producer:")
+    for spec_label in ("tumbling", "hopping-12"):
+        for base_arm in _LADDER_ARMS:
+            got = [h for h in host_runs if h.arm == base_arm.label and h.spec == spec_label
+                   and h.changelog_records]
+            if not got:
+                continue
+            produced = [h.changelog_records for h in got]
+            landed = [h.changelog_end for h in got]
+            lost = [h.changelog_records - h.changelog_end for h in got]
+            print(f"    {base_arm.label:14s} {spec_label:11s} n={len(got)}  produced "
+                  f"{min(produced):,}-{max(produced):,} changelog records/run; broker end "
+                  f"offsets {min(landed):,}-{max(landed):,}; MISSING {min(lost):,}-"
+                  f"{max(lost):,} -> "
+                  f"{'MATCH' if max(lost) == 0 else 'SHORTFALL - this arm is NOT durable'}")
+
+    print("\n  ANCHORS - the two cache-off arms against their 2026-08-25 medians:")
+    for label, then in _F2_ANCHOR_RATES.items():
+        if label not in runs:
+            continue
+        now = statistics.median(r.rate for r in runs[label])
+        print(f"    {label:9s} this session {now:9,.0f} rec/s   2026-08-25 {then:9,.0f} rec/s   "
+              f"-> {now / then:.2f}x")
+
+    loads = ([r.load1 for arm_runs in runs.values() for r in arm_runs]
+             + [h.load1 for h in host_runs] + [r.load1 for r in restores])
+    print(f"\n  1-minute load beside the {len(loads)} runs: {min(loads):.2f}-{max(loads):.2f} "
+          f"(median {statistics.median(loads):.2f}, limit {args.load_limit:g})")
+    return 0
+
+
+def run_ladder_kill_child(args: argparse.Namespace) -> int:
+    """One durable arm-H run, as a CHILD process the parent is about to SIGKILL.
+
+    A separate entry point rather than a fork, because forking a process that already holds
+    librdkafka handles is not safe; the child builds its own clients from the flags it was
+    given. It runs until it is killed - which is the point - so a clean exit means the parent
+    was too slow and the parent says so.
+    """
+    arm = dataclasses.replace(
+        next(a for a in _LADDER_ARMS if a.label == args.ladder_child_arm),
+        spec=args.ladder_child_spec)
+    window = _TUMBLE if args.ladder_child_spec == "tumbling" else _HOP5
+    measure_host(args, args.ladder_child_source, args.floor_records, args.keys, window,
+                 args.ladder_child_spec, arm=arm, verbose=True,
+                 changelog_topic=args.ladder_child_changelog)
+    return 0
+
+
+def run_ladder_kill(args: argparse.Namespace) -> int:
+    """KILL AND REBUILD, literally: SIGKILL a durable arm mid-run, restore from its changelog.
+
+    ``restore_host`` on a complete changelog already measures the rebuild, but it never proves
+    the thing durability is FOR - that state written before an uncontrolled death is still there
+    afterwards. Here the writer is a separate process, killed with SIGKILL so nothing flushes,
+    nothing closes and no ``finally`` runs; the parent then rebuilds from whatever reached the
+    broker and reports how much state survived and how long it took to get back.
+    """
+    print("ladder-kill - SIGKILL a durable arm-H writer mid-run, then rebuild from its changelog")
+    print(f"  arm {args.ladder_child_arm} {args.ladder_child_spec}, {args.floor_records:,} "
+          f"records, {args.keys:,} keys, kill after {args.ladder_kill_after_ms} ms")
+    source = _seed_host_topic(args, args.floor_records, args.keys, "kill")
+    admin = AdminClient({"bootstrap.servers": args.bootstrap})
+    multiplier = 1 if args.ladder_child_spec == "tumbling" else 12
+    try:
+        for rep in range(args.reps):
+            changelog = _new_changelog_topic(args, f"kill-{rep}")
+            try:
+                command = [sys.executable, str(pathlib.Path(__file__).resolve()),
+                           "ladder-kill-child",
+                           "--bootstrap", args.bootstrap,
+                           "--keys", str(args.keys),
+                           "--partitions", str(args.partitions),
+                           "--payload-bytes", str(args.payload_bytes),
+                           "--commit-interval-ms", str(args.commit_interval_ms),
+                           "--floor-records", str(args.floor_records),
+                           "--load-limit", str(args.load_limit),
+                           "--ladder-child-arm", args.ladder_child_arm,
+                           "--ladder-child-spec", args.ladder_child_spec,
+                           "--ladder-child-source", source,
+                           "--ladder-child-changelog", changelog]
+                child = subprocess.Popen(command, stdout=subprocess.DEVNULL,
+                                         stderr=subprocess.DEVNULL)
+                time.sleep(args.ladder_kill_after_ms / 1000.0)
+                if child.poll() is not None:
+                    raise RuntimeError(
+                        f"the writer finished before it could be killed (exit {child.returncode})"
+                        " - lower --ladder-kill-after-ms; a clean exit proves nothing about "
+                        "surviving a kill")
+                child.kill()
+                # SIGKILL, so nothing flushed, nothing closed and no finally ran. Everything on
+                # the broker got there through a boundary the writer had already awaited.
+                child.wait(timeout=30)
+                restored = restore_host(args, changelog, None, arm="kill-rebuild",
+                                        spec=args.ladder_child_spec)
+                full = args.keys * multiplier
+                print(f"    rep {rep + 1}: writer SIGKILLed after "
+                      f"{args.ladder_kill_after_ms} ms; {restored.records:,} changelog records "
+                      f"survived and rebuilt {restored.entries:,} of the {full:,} entries a "
+                      f"complete run holds ({restored.entries / full:.0%}) in "
+                      f"{restored.seconds:.3f}s")
+                if restored.entries == 0:
+                    raise RuntimeError(
+                        "nothing survived the kill - the arm was not durable at any point, "
+                        "which makes every steady-state figure it produced meaningless")
+            finally:
+                if not args.keep_topics:
+                    delete_run_topics(admin, [changelog])
+    finally:
+        if not args.keep_topics:
+            delete_run_topics(admin, [source])
+    return 0
+
+
 EXPERIMENTS = {
     "hot-key": run_hot_key,
     "placement": run_placement,
     "host-reimpl": run_host_reimpl,
+    "engine-floor": run_engine_floor,
+    "f2-rerun": run_f2_rerun,
+    "host-bimodal": run_host_bimodal,
+    "crossing-ladder": run_crossing_ladder,
+    "ladder-kill": run_ladder_kill,
+    "ladder-kill-child": run_ladder_kill_child,
 }
 
 

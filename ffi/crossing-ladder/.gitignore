@@ -1,0 +1,5 @@
+# build outputs - each source file's header carries its build command
+libfold.so
+fold.wasm
+*.class
+graal/target/

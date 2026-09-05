@@ -69,3 +69,34 @@ than an entire native hopping topology.
 - **`TopologyTestDriver` over-counts cached emissions** (commits - and so flushes - per record);
   broker-vs-TTD emit counts only agree under close-driven emit rules (suppression,
   `EmitStrategy.onWindowClose()`).
+
+## Correction, 2026-08-25 (second): the 122x was a stalled consumer, and the floor itself was mis-specified
+
+Two later rounds changed what the numbers above are worth. Neither overturns the pattern; both
+sharpen what it may be cited for. Full workings in
+`docs/inflight/perf-streams-engine-floor.md` and the second dated correction in
+`docs/inflight/perf-streams-windowing-multiplier.md`.
+
+**The hopping figure was an instrument artefact.** `122x` divided by an arm-H hopping rate of
+89,821 rec/s that was not measuring the reimplementation at all: at 128,000 records the consumer's
+local queue passes `queued.max.messages.kbytes`, librdkafka stops fetching and postpones the next
+fetch by `fetch.queue.backoff.ms` (1,000 ms), and 78-81 percent of the timed window became fetch
+wait charged to the rate. Corrected, arm H reads 393,855-433,285 rec/s and the margin widens to
+roughly **540x**. **The tumbling 69x is unaffected** - that arm sits on the winning side of the
+same fetcher race at this record count. Cited as a method finding: **an arm whose rate is a
+division by elapsed time will silently price a stall as throughput**, and the harness now raises
+rather than averaging - `measure_host` fails any window containing a `consume()` over 100 ms.
+
+**The larger correction is to the floor, not the figure.** F2 was defined as *whatever a stateless
+single-threaded reimplementation measures* - no store, no changelog, no restore, no rebalance
+recovery, no exactly-once. That is the floor for a product Kafka Streams is not in the business of
+being, so the comparison answers *"can a toy beat an engine at toy work"*, which it can at any
+transport speed. Removing the crossing entirely does **not** invert it: with sub-microsecond
+crossings available (747ns GraalWasm, 19.9ns Numba `@cfunc`) and the engine's own state-store cache
+on, the wrapper reaches 69,265 / 169,748 rec/s and still loses 6.64x / 4.70x in-session.
+
+**So this write-up's title is the durable claim and its numbers are not the argument for it.** The
+question that decides the design is the crossover named in the title - *how many of the features a
+user actually came for can be added back to the reimplementation before hand-rolling becomes the
+worse choice* - and no figure here measures it. That measurement is under way, one feature at a
+time, starting with durability.
