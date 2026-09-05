@@ -7,6 +7,7 @@ package bz.stub.parallelconsumer.internal;
 
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode;
+import bz.stub.parallelconsumer.internal.utils.RecordBatchSummary;
 import bz.stub.parallelconsumer.state.WorkManager;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
@@ -124,7 +125,13 @@ public class ConsumerOffsetCommitter<K, V> extends AbstractOffsetCommitter<K, V>
                 log.debug("Committing offsets Async");
                 consumerMgr.commitAsync(offsetsToSend, (offsets, exception) -> {
                     if (exception != null) {
-                        log.error("Error committing offsets: {}, exception: ", offsets, exception);
+                        // Every partition and offset stays on this line - astubbs#168 (confluentinc#629) asked for
+                        // exactly them - and only the metadata string is reduced, to its length: it is PC's encoded
+                        // offset map, up to OffsetMapCodecManager.DefaultMaxMetadataSize of base64 PER PARTITION, and
+                        // interpolating the map rendered all of it on the one line that most needs to survive log
+                        // truncation. The map in full is one level down, where it has to be asked for.
+                        log.error("Error committing offsets: {}, exception: ", RecordBatchSummary.summariseCommit(offsets), exception);
+                        log.debug("Failed commit in full: {}", offsets);
                         // todo keep work in limbo until async response is received?
                     }
                 });
