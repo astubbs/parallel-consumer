@@ -758,8 +758,8 @@ they are the healthy baseline the Linux failures now have to be read against.
 | iteration | leaves | joins | worst LeaveGroup | worst JoinGroup |
 |---|---|---|---|---|
 | 1 | 89 | 172 | 2.83s | 3.00s |
-| 2 | ~100 | ~180 | 2.87s | 3.00s |
-| 3 | see log | see log | ~2.9s | 3.00s |
+| 2 | 106 | 205 | 2.87s | 3.00s |
+| 3 | 91 | 175 | 2.76s | 3.00s |
 
 Under the profile's own churn - a toggle every 0-500ms across eleven secondaries - **no LeaveGroup and
 no JoinGroup ever waited longer than one heartbeat interval.** The join phase always completed on the
