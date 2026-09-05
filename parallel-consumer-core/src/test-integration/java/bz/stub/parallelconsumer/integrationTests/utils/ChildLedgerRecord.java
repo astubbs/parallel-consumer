@@ -19,11 +19,13 @@ import java.util.Map;
  * the same path its firings do.
  * <p>
  * The five monotonic counters are the child's own {@link ConservationLedger} snapshot at close. {@code sharesSummed}
- * is the harness's observation of the share the child was ENTITLED to: {@code creditsPerQuantum} as reported by
- * the child's navigator view, sampled several times per quantum and summed over every quantum index observed -
- * a sum of what the assignment granted, against which {@code minted} (what was actually materialised) is
- * checked. An untagged child emits one record with {@link #UNTAGGED_RESOURCE} and zero counters, so the parent
- * still learns it ended cleanly.
+ * is the harness's observation of the share the child was ENTITLED to: the allocator's EXACT per-index
+ * entitlement ({@code PartitionShareResourceAllocator#entitledCredits} - what the index's read mints, not the
+ * rotation-averaged gauge the view reports), sampled several times per quantum and summed over every quantum
+ * index observed - a sum of what the assignment granted, against which {@code minted} (what was actually
+ * materialised) is checked; the emission samples once more after the processor closes, so the last minted
+ * index is always in the sum. An untagged child emits one record with {@link #UNTAGGED_RESOURCE} and zero
+ * counters, so the parent still learns it ended cleanly.
  * <p>
  * Wire form: space-separated {@code key=value} pairs, one record per (instance, resource); the record key is the
  * instance id.
@@ -45,7 +47,7 @@ public class ChildLedgerRecord {
     long overdraft;
     long overdraftBeyondBurst;
     long outstanding;
-    /** Sum over observed quantum indexes of the child's credits-per-quantum share (see class javadoc). */
+    /** Sum over observed quantum indexes of the child's exact per-index entitlement (see class javadoc). */
     double sharesSummed;
     /** How many distinct quantum indexes the share sampler observed. */
     long quantaObserved;

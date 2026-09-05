@@ -204,6 +204,32 @@ public class PartitionShareResourceAllocator implements ResourceAllocator {
                 .orElse(0L);
     }
 
+    /**
+     * Pure read - the credits this instance is ENTITLED to for quantum {@code quantumIndex} of
+     * {@code resourceName}: exactly what {@link #readQuantum} mints for that index, from the snapshot effective
+     * for it and the rotation, and nothing else. A projection: no lease is minted and no counter moves, so a
+     * read index reproduces its minted lease and an unread one (the current index before its read, or a future
+     * one) says what the mint will be. This is the index's ACTUAL grant, which {@link #localRatePerSecond} and
+     * the gauges built on it deliberately are not - they carry the rotation-AVERAGED share (R9's "why am I at
+     * 1Hz" number), whereas a conservation check against an average is off by the rotation's phase (up to half
+     * the slots a contiguous block holds). The multi-process harness sums this per index it observes, so the
+     * fleet identity (R10) compares minted against an exact entitlement. Accurate for the current index and
+     * any later one; a past index is resolved only as far as the pruned publication history still reaches.
+     * {@code 0} when the resource is unknown.
+     */
+    public long entitledCredits(String resourceName, long quantumIndex) {
+        return registry.lookup(resourceName)
+                .map(contract -> shareOf(effectiveFor(contract, quantumIndex), contract, quantumIndex))
+                .orElse(0L);
+    }
+
+    /** {@link #entitledCredits(String, long)} for the quantum containing {@code now}. */
+    public long entitledCredits(String resourceName, Instant now) {
+        return registry.lookup(resourceName)
+                .map(contract -> entitledCredits(resourceName, quantumIndexOf(now, contract.getQuantum())))
+                .orElse(0L);
+    }
+
     // ------------------------------------------------------------------
     // Membership lifecycle - no-ops: the group's assignment is the membership (KTD1)
     // ------------------------------------------------------------------

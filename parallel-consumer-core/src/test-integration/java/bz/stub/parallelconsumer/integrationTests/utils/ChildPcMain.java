@@ -32,7 +32,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.Locale;
 import java.util.Map;
-import java.util.OptionalDouble;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -234,6 +234,9 @@ public final class ChildPcMain {
         }
         PartitionShareResourceAllocator allocator = module.partitionShareAllocator().orElseThrow(() ->
                 new IllegalStateException("a tagged child built no partition-share allocator"));
+        // The processor is closed, so nothing mints again: one synchronous sample now covers the index the
+        // last read minted in, which the periodic sampler may not have reached yet - the run's end effect.
+        sampler.sample();
         Instant now = module.clock().instant();
         for (String resource : options.getResourceTags()) {
             ConservationLedger ledger = allocator.conservationLedger(resource, now);
@@ -261,9 +264,15 @@ public final class ChildPcMain {
     // ------------------------------------------------------------------
 
     /**
-     * Samples the child's own view of its share per quantum index (on the module clock, so a skewed child's
-     * indexes are its own) and keeps the largest value seen per index - the share is constant within a quantum,
-     * so the max only guards against a sample taken astride a boundary.
+     * Samples the child's EXACT entitlement per quantum index - {@link PartitionShareResourceAllocator#entitledCredits},
+     * what the allocator mints for that index - on the module clock, so a skewed child's indexes are its own,
+     * and keeps the largest value seen per index (the entitlement is fixed at the index's start, so the max
+     * only guards against a sample taken astride a boundary). Not the view's {@code creditsPerQuantum}: that is
+     * the rotation-AVERAGED gauge, and a conservation sum over it is off by the rotation's phase - the churn
+     * ladder failed a rung by exactly that deviation before this sampler read the exact value. The ledger
+     * emission takes one more sample synchronously after the processor has closed, so the index of the last
+     * mint is always in the sum: before that, a child stopped inside the first 200 ms of an index could mint
+     * the index and never sample it, and a full holder's index is worth the whole grant, not one credit.
      */
     private static final class ShareSampler {
         private final OffsetClockModule module;
@@ -288,17 +297,17 @@ public final class ChildPcMain {
         }
 
         void sample() {
-            NavigatorView view = module.navigatorView();
+            Optional<PartitionShareResourceAllocator> allocator = module.partitionShareAllocator();
+            if (!allocator.isPresent()) {
+                return; // an untagged child holds no allocator and has no share to sample
+            }
             Instant now = module.clock().instant();
             for (String resource : options.getResourceTags()) {
-                OptionalDouble credits = view.creditsPerQuantum(resource);
-                if (!credits.isPresent()) {
-                    continue;
-                }
                 ResourceContract contract = options.contractNamed(resource);
                 long quantumIndex = Math.floorDiv(now.toEpochMilli(), contract.getQuantum().toMillis());
+                double entitled = allocator.get().entitledCredits(resource, quantumIndex);
                 creditsByQuantum.computeIfAbsent(resource, ignored -> new ConcurrentHashMap<>())
-                        .merge(quantumIndex, credits.getAsDouble(), Math::max);
+                        .merge(quantumIndex, entitled, Math::max);
             }
         }
 

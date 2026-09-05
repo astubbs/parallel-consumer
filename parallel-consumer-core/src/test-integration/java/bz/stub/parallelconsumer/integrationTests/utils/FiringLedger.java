@@ -106,6 +106,15 @@ public final class FiringLedger implements AutoCloseable {
             return forResource(resource).stream().mapToDouble(ChildLedgerRecord::getSharesSummed).sum();
         }
 
+        /**
+         * Only the named instances' records - a ledger shared across a ladder's rungs holds every rung's
+         * records, and a rung's identity is over its own children alone.
+         */
+        public FleetLedger restrictedTo(Set<String> instances) {
+            return new FleetLedger(records.stream().filter(r -> instances.contains(r.getInstanceId()))
+                    .collect(Collectors.toList()));
+        }
+
         /** Every child's own identity closes (R10's per-instance half, read back from the broker). */
         public void assertEachIdentityBalances() {
             for (ChildLedgerRecord record : records) {
@@ -321,6 +330,22 @@ public final class FiringLedger implements AutoCloseable {
     /** Every ledger record read so far. */
     public FleetLedger fleetLedger() {
         return new FleetLedger(new ArrayList<>(ledgerRecords));
+    }
+
+    /**
+     * Stops the given children gracefully (exit 0 each, asserted), then waits for every one's end-of-run record
+     * and returns the fleet ledger restricted to exactly those children - the storyline-closing step every
+     * navigator lane performs before it asserts the fleet identity (R10). Children a storyline killed are not
+     * passed: a killed child has no record, by definition.
+     */
+    public FleetLedger stopAndCollect(Collection<ChildPcProcess> children, Duration stopBudget, Duration ledgerBudget) {
+        Set<String> instances = new TreeSet<>();
+        for (ChildPcProcess child : children) {
+            int exit = child.stopGracefully(stopBudget);
+            assertThat(exit).as("%s stops cleanly", child.getOptions().getInstanceId()).isZero();
+            instances.add(child.getOptions().getInstanceId());
+        }
+        return awaitLedgerRecords(instances, ledgerBudget).restrictedTo(instances);
     }
 
     // ------------------------------------------------------------------

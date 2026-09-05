@@ -292,6 +292,53 @@ class PartitionShareResourceAllocatorTest {
     }
 
     // ------------------------------------------------------------------
+    // R10's fleet ledger: the exact per-index entitlement, distinct from the averaged gauge
+    // ------------------------------------------------------------------
+
+    /**
+     * Covers R10 / AE7's instrument. {@link PartitionShareResourceAllocator#entitledCredits} is the index's
+     * ACTUAL grant - what {@code readQuantum} mints for it - not the rotation-averaged share the gauges carry:
+     * for a read index it equals the minted lease; for the unread index ahead it predicts what the read then
+     * mints; over a whole rotation the per-index values sum to the averaged share while individual indexes
+     * differ from it (a half share of twelve slots mints 0 in some indexes and 2 in others, never 1.0). The
+     * multi-process harness sums this per observed index, so minted is checked against an exact entitlement:
+     * summed against the averaged gauge instead, the churn ladder failed a rung by exactly the rotation's phase
+     * deviation, with nothing over-minted.
+     */
+    @Test
+    void entitledCreditsIsTheIndexsActualGrantNotTheAveragedGauge() {
+        PartitionShareResourceAllocator a = newInstance();
+        publish(a, holding(12, 6, 7, 8, 9, 10, 11)); // six of twelve: the ladder's half share, 1.0 per quantum averaged
+        long firstIndex = quantumIndexOf(now(), QUANTUM) + 1;
+        long predictedNext = a.entitledCredits(API_X, firstIndex);
+        long rotationSum = 0;
+        Set<Long> distinctGrants = new HashSet<>();
+        for (int step = 0; step < 12; step++) {
+            nextQuantum();
+            long index = quantumIndexOf(now(), QUANTUM);
+            long before = ledger(a).getMinted();
+            read(a);
+            long minted = ledger(a).getMinted() - before;
+            assertWithMessage("index %s: the unread projection said what the read then minted", index)
+                    .that(minted).isEqualTo(predictedNext);
+            assertWithMessage("index %s: the read index reproduces its minted lease", index)
+                    .that(a.entitledCredits(API_X, index)).isEqualTo(minted);
+            assertThat(a.entitledCredits(API_X, now())).isEqualTo(minted);
+            assertThat(credits(a)).isEqualTo((int) minted);
+            rotationSum += minted;
+            distinctGrants.add(minted);
+            predictedNext = a.entitledCredits(API_X, index + 1);
+        }
+        double averagedOverRotation = a.localRatePerSecond(INSTANCE, API_X, now()) * QUANTUM.getSeconds() * 12;
+        assertWithMessage("over a whole rotation the exact grants sum to the averaged share")
+                .that((double) rotationSum).isEqualTo(averagedOverRotation);
+        assertWithMessage("individual indexes carry the rotation's actual grant, not the average")
+                .that(distinctGrants).containsAtLeast(0L, 2L);
+        assertThat(a.entitledCredits("unknown", firstIndex)).isEqualTo(0);
+        assertIdentityCloses(a);
+    }
+
+    // ------------------------------------------------------------------
     // KTD11: clock skew is priced, not assumed away
     // ------------------------------------------------------------------
 

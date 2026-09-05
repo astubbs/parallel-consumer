@@ -9,6 +9,7 @@ import bz.stub.parallelconsumer.integrationTests.utils.ChildPcMain;
 import bz.stub.parallelconsumer.integrationTests.utils.ChildPcOptions;
 import bz.stub.parallelconsumer.integrationTests.utils.ChildPcProcess;
 import bz.stub.parallelconsumer.integrationTests.utils.FiringLedger;
+import bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.FleetIdentity;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.admin.ConsumerGroupDescription;
@@ -27,7 +28,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import java.util.TreeSet;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 
@@ -38,7 +38,7 @@ import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnve
 import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.RESOURCE;
 import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.WINDOW;
 import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.assertCountWithinTolerance;
-import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.conservationSlack;
+import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.assertFleetIdentity;
 import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.expectedFirings;
 import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.joinUndershootFloor;
 import static bz.stub.parallelconsumer.integrationTests.utils.NavigatorProofEnvelope.overshootBound;
@@ -503,28 +503,8 @@ class NavigatorPartitionShareIT extends BrokerIntegrationTest<String, String> {
      * child has no record, by definition.
      */
     private FiringLedger.FleetLedger stopAndAssertFleetIdentity(ChildPcProcess... toStop) {
-        Set<String> instances = new TreeSet<>();
-        for (ChildPcProcess child : toStop) {
-            int exit = child.stopGracefully(STOP_BUDGET);
-            assertThat(exit).as("%s stops cleanly", child.getOptions().getInstanceId()).isZero();
-            instances.add(child.getOptions().getInstanceId());
-        }
-        FiringLedger.FleetLedger fleet = ledger.awaitLedgerRecords(instances, LEDGER_BUDGET);
-        fleet.assertEachIdentityBalances();
-        List<ChildLedgerRecord> tagged = fleet.forResource(RESOURCE);
-        for (ChildLedgerRecord record : fleet.getRecords()) {
-            log.info("R10 record: {}", record.format());
-        }
-        long minted = fleet.mintedTotal(RESOURCE);
-        long overdraft = fleet.overdraftTotal(RESOURCE);
-        double shares = fleet.sharesSummedTotal(RESOURCE);
-        long ceiling = (long) Math.ceil(shares) + conservationSlack(tagged.size());
-        log.info("R10 fleet identity: minted {} + overdraft {} = {} against summed shares {} across {} tagged "
-                + "children (ceiling {})", minted, overdraft, minted + overdraft, shares, tagged.size(), ceiling);
-        assertThat(minted + overdraft)
-                .as("R10/AE7: the fleet's minted plus overdraft never exceeds its summed shares plus one credit "
-                        + "of slack per child")
-                .isLessThanOrEqualTo(ceiling);
+        FiringLedger.FleetLedger fleet = ledger.stopAndCollect(Arrays.asList(toStop), STOP_BUDGET, LEDGER_BUDGET);
+        FleetIdentity ignoredIdentity = assertFleetIdentity(fleet); // the ladder records it; here the assertion is the point
         return fleet;
     }
 

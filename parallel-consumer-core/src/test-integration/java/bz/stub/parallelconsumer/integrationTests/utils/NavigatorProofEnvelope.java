@@ -5,8 +5,11 @@ package bz.stub.parallelconsumer.integrationTests.utils;
  */
 
 import bz.stub.parallelconsumer.navigator.ResourceContract;
+import lombok.Value;
+import lombok.extern.slf4j.Slf4j;
 
 import java.time.Duration;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.data.Percentage.withPercentage;
@@ -44,6 +47,7 @@ import static org.assertj.core.data.Percentage.withPercentage;
  * @author Antony Stubbs
  * @see FiringLedger#countIn
  */
+@Slf4j
 public final class NavigatorProofEnvelope {
 
     private NavigatorProofEnvelope() {
@@ -158,14 +162,54 @@ public final class NavigatorProofEnvelope {
 
     /**
      * The fleet-conservation tolerance (R10, AE7). "Summed shares" is the harness's sampled sum of each child's
-     * {@code creditsPerQuantum} per quantum index - a rotation-AVERAGED share (1.5 for three quarters), sampled
-     * from before the first mint to after the last - so a child can legitimately mint up to one credit more than
-     * its sampled sum: the partial rotation at each end of its life (a three-quarter holder mints 2,2 across a
-     * rotation whose sampled average is 1.5, 1.5), and a sampler pass that straddled a boundary. One credit per
-     * child, on top of rounding the sum up.
+     * EXACT per-index entitlement ({@code PartitionShareResourceAllocator#entitledCredits}, what the index's
+     * read mints), so over every index the sampler visited minted and entitlement agree to the credit, and the
+     * child samples once more at ledger emission so the last minted index is always visited. What the slack
+     * covers is ONLY a sampler pass starved past a whole index mid-run (a paused sampler thread), one credit
+     * per child. It is deliberately NOT a rotation allowance, and not an end-of-run allowance either: the
+     * first ladder run summed the rotation-AVERAGED gauge and a twelve-slot half share failed by exactly the
+     * rotation's phase deviation (predicted +2, observed +2) with nothing over-minted; the next summed the exact
+     * entitlement without the closing sample and one child ran two credits over on a final index worth the
+     * whole grant, inside the ceiling only by borrowing a sibling's credit. Pricing either would have hidden
+     * both, and an averaged sum cannot be a conservation check.
      */
     public static long conservationSlack(int children) {
         return children;
+    }
+
+    /** The two sides of the fleet identity as one storyline observed them, for the record and the log. */
+    @Value
+    public static class FleetIdentity {
+        long minted;
+        long overdraft;
+        double sharesSummed;
+        int taggedChildren;
+        /** {@code ceil(sharesSummed) + conservationSlack(taggedChildren)} - what minted plus overdraft may reach. */
+        long ceiling;
+    }
+
+    /**
+     * The fleet identity (R10, AE7) over a collected fleet ledger: every child's own identity balances, and the
+     * tagged children's minted plus overdraft stays inside their summed shares plus {@link #conservationSlack}.
+     * Every record and both sides of the identity go to the log, so a run's evidence outlives the assertion.
+     */
+    public static FleetIdentity assertFleetIdentity(FiringLedger.FleetLedger fleet) {
+        fleet.assertEachIdentityBalances();
+        List<ChildLedgerRecord> tagged = fleet.forResource(RESOURCE);
+        for (ChildLedgerRecord record : fleet.getRecords()) {
+            log.info("R10 record: {}", record.format());
+        }
+        long minted = fleet.mintedTotal(RESOURCE);
+        long overdraft = fleet.overdraftTotal(RESOURCE);
+        double shares = fleet.sharesSummedTotal(RESOURCE);
+        long ceiling = (long) Math.ceil(shares) + conservationSlack(tagged.size());
+        log.info("R10 fleet identity: minted {} + overdraft {} = {} against summed shares {} across {} tagged "
+                + "children (ceiling {})", minted, overdraft, minted + overdraft, shares, tagged.size(), ceiling);
+        assertThat(minted + overdraft)
+                .as("R10/AE7: the fleet's minted plus overdraft never exceeds its summed shares plus one credit "
+                        + "of slack per child")
+                .isLessThanOrEqualTo(ceiling);
+        return new FleetIdentity(minted, overdraft, shares, tagged.size(), ceiling);
     }
 
     // ------------------------------------------------------------------
