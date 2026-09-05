@@ -124,6 +124,10 @@ set -euo pipefail
 # The four-way arrangement is preserved on branch ci/shard-integration-four if that trade ever
 # looks different.
 # ---------------------------------------------------------------------------------------------
+# The groups the gating run excludes. ONE list, handed both to failsafe and to the coverage gate
+# below - a class tagged into one of these is not expected to report, and two copies of this list
+# would drift in the direction that matters: a group excluded here but not there fails every build.
+readonly EXCLUDED_GROUPS=performance,chaos,quarantined,lincheck
 readonly HEAVY_CLASSES="PartitionStateCommittedOffsetIT,Rebalance857CommitSyncDeadlockProbe3IT,Rebalance857CommitSyncDeadlockProbe2IT,TransactionAndCommitModeTest,MultiInstanceRebalanceTest,RebalanceEoSDeadlockTest,Rebalance857CommitSyncDeadlockProbeIT"
 
 # A class in two lists would run twice and be paid for twice, and both shards would pass. With one
@@ -169,7 +173,7 @@ esac
   -Dmaven.javadoc.skip=true \
   -Dmaven.source.skip=true \
   -Dlombok.delombok.skip=true \
-  -Dexcluded.groups=performance,chaos,quarantined,lincheck \
+  -Dexcluded.groups="${EXCLUDED_GROUPS}" \
   ${SHARD_ARGS[@]+"${SHARD_ARGS[@]}"} \
   "$@"
 
@@ -247,53 +251,14 @@ fi
 #   - no @Test/@RepeatedTest/@ParameterizedTest - a helper class, not a test
 # Verified against run 33831283169: 37 required, 0 missing.
 if [ "${INTEGRATION_SHARD:-}" = "rest" ]; then
-    unrun=""
-    while IFS= read -r f; do
-        # CLASS-LEVEL only, anchored at column 0. A file-wide grep exempts the WHOLE class the
-        # moment one method carries @Quarantined beside ordinary @Test methods - which silently
-        # drops those ordinary methods from the "must have run somewhere" requirement, the exact
-        # gap this check exists to close. Class-level annotations are unindented; method-level ones
-        # are inside the class body and therefore indented, so the anchor separates them. Not
-        # hypothetical: the file-wide form exempted LoadTest and MultiInstanceRebalanceTest, both of
-        # which carry a method-level @Tag("performance") beside ordinary tests and both of which run.
-        grep -qE '^@(Quarantined|Tag\("(chaos|performance)"\))' "$f" && continue
-        # A test class need not DECLARE its test methods - it can inherit them, which is how the
-        # four 857 probe subclasses work: the @RepeatedTest lives on their shared abstract base and
-        # each subclass is one line. Checking only for a declared annotation skipped them, and
-        # Probe4IT is in the catch-all rather than HEAVY_CLASSES, so nothing else covered it: it
-        # could have stopped running with nothing going red. So: declared annotation, OR extends a
-        # type in this tree that declares one.
-        if ! grep -qE '^[[:space:]]*@(Test|RepeatedTest|ParameterizedTest)\b' "$f"; then
-            inherits=false
-            while read -r parent; do
-                pf=$(find . -name "${parent}.java" -not -path './.git/*' -not -path '*/target/*' | head -1)
-                [ -n "$pf" ] && grep -qE '^[[:space:]]*@(Test|RepeatedTest|ParameterizedTest)\b' "$pf" && inherits=true && break
-            done < <(grep -oE 'extends[[:space:]]+[A-Za-z0-9_]+' "$f" | awk '{print $2}' | sort -u)
-            [ "$inherits" = true ] || continue
-        fi
-        # CLASS DECLARATIONS, not the filename. Java allows several package-private top-level
-        # classes per file - the four 857 probe subclasses share one - and failsafe collects
-        # compiled CLASSES, so a filename-derived name sees only the first and is blind to the
-        # rest. Probe4IT is in the catch-all rather than HEAVY_CLASSES, so nothing else covered
-        # it: it could have stopped running with nothing going red.
-        while read -r decl; do
-            [ -z "$decl" ] && continue
-            # abstract is judged PER DECLARATION, not per file: a file may hold an abstract base
-            # and a concrete test, and skipping the whole file would drop the concrete one.
-            case "$decl" in *abstract*) continue ;; esac
-            cls=${decl##* }
-            case ",${HEAVY_CLASSES}," in *",${cls},"*) continue ;; esac
-            report_exists "$cls" || unrun="${unrun} ${cls}"
-        done < <(grep -oE '^([a-z]+ )*class [A-Za-z0-9_]+' "$f")
-    done < <(find . -path '*/integrationTest*/*' -name '*.java' -not -path './.git/*' -not -path '*/target/*')
-    if [ -n "$unrun" ]; then
-        echo "ci-integration-test: FAILED - integration test file(s) in the tree that NO shard ran:" >&2
-        printf '    %s\n' $unrun >&2
-        echo "  These exist as source and produced no failsafe report anywhere. Most likely the class" >&2
-        echo "  is not in a package failsafe collects (**/integrationTest*/**), so it silently never" >&2
-        echo "  runs - in this arrangement or the single-job one. Check the package before the shards." >&2
+    # Every test class the COMPILER produced must have a report in some shard. This used to be a shell
+    # scan of the .java sources and every defect it had was a text-matching one - a file-wide grep,
+    # a filename read as a class name, an `extends` matched inside a javadoc sentence. The gate reads
+    # bytecode instead, where those shapes do not exist; its header and self-test own the detail.
+    node bin/check-integration-shard-coverage.mjs --heavy-classes "$HEAVY_CLASSES" --excluded-groups "$EXCLUDED_GROUPS" || {
+        echo "ci-integration-test: FAILED - the coverage gate did not pass (see above)." >&2
         exit 1
-    fi
+    }
 fi
 
 # EVERY class that ran must live in an integrationTest package, in EVERY shard. This is the guard
