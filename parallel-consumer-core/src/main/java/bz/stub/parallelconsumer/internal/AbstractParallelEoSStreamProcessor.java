@@ -342,6 +342,16 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     private Gauge loadFactorGauge;
     private Gauge statusGauge;
 
+    /**
+     * How long close may take. Starts as {@link ParallelConsumerOptions#getShutdownTimeout()} and is replaced by the
+     * caller's {@link Duration} for the rest of that close in {@link #close(Duration, DrainingMode)}.
+     * <p>
+     * Protected, like the other fields a subclass engine needs to read: an engine that owns resources of its own (the
+     * Vert.x module's {@code Vertx} and {@code WebClient}) tears them down in a {@code finally} around
+     * {@link #close(DrainingMode)}, and bounding that wait by this value rather than the configured default is what
+     * lets the caller's per-close {@link Duration} apply to the whole close, not only to the part this class runs.
+     */
+    @Getter(PROTECTED)
     private Duration shutdownTimeout;
 
     /**
