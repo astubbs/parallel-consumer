@@ -700,3 +700,50 @@ move the profile's rate, and now measured not to be needed for the single or thr
 are harmless and guarded, but a change that fixes nothing observable should not ship under a
 commit message that says it fixes the stall. Whether to keep them as hygiene or drop them is a
 reviewer's call; this note recommends **dropping them**, so that what lands is only what can be shown.
+
+
+## The close-path wait is MEASURED now, 2026-09-05: LeaveGroup is not answered until the join phase completes
+
+`ClosingMemberRebalanceIT.closingAMemberWhoseOwnJoinIsUnansweredMustNotHoldTheGroup` closes the
+JOINING member the instant the coordinator reports `PREPARING_REBALANCE` - while that member's own
+JoinGroup (with member id, after `MEMBER_ID_REQUIRED`) is in flight. Eager and cooperative, one joiner
+and three. With the coordinator loggers raised, every joiner shows the same sequence:
+
+```
+32:43.758  JoinGroup sent (member id assigned)
+32:43.890  onLeavePrepare gen=-1 memberId=member#5   <- closed 130ms later, JoinGroup still pending
+32:43.890  LeaveGroup sent
+32:46.517  settled members: "group is already rebalancing"   <- their next heartbeat, 3s later
+32:46.525  settled members: Successfully joined gen=2        <- join phase completes
+32:46.529  LeaveGroup response arrives                       <- 4ms after that, 2.64s after it was sent
+32:46.535  Control loop ending clean (CLOSED)
+```
+
+A LeaveGroup from a stable member is answered in ~10ms (the settled-member cases, and A in the
+single-close run). A LeaveGroup from a member whose JoinGroup is pending is answered **only when the
+join phase completes** - the coordinator has already removed the member, but the response is not
+delivered until every other member has (re)joined. Close therefore costs one full join phase, which
+is one heartbeat interval (~3s) in a healthy group and unbounded in one whose join phase keeps
+failing to complete. Passed at 2.7s against a 10s bound, so it is a guard on the bound, and a
+record of the cost.
+
+### What this does and does not close
+
+It closes the question this note has carried since the stack was captured: **what are the stuck
+instances waiting for in `awaitPendingRequests`.** Their own LeaveGroup response, which waits on the
+join phase. That is no longer an inference.
+
+It does NOT reproduce the profile's stall, because here the join phase completes in 3s and there it
+evidently does not for ~25s. What keeps a 12-member join phase from completing for 25s under
+continuous churn is the remaining unknown, and it is a different experiment: the storm itself, at
+reduced scale, with these loggers raised - not another single-event arm. Two candidates, both
+untested: a member that is neither polling nor left (the coordinator waits on it for the rebalance
+timeout), or a join phase that is repeatedly restarted by the next toggle before it can complete.
+
+### What this rules out for the fix
+
+Polling more before close - the discharge poll - could never have helped: the wait is for a
+response the coordinator will not send until other members act, and no amount of polling by the
+closer changes that. Any repair is one of: not waiting for that response (a bounded consumer close
+once LeaveGroup is sent - the coordinator already has it), or keeping the join phase completing under
+churn, which is a group-level property this note cannot yet name the lever for.
