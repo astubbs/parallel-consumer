@@ -123,7 +123,11 @@ class PartitionStateRegistrationOrder370Test {
         }
     }
 
-    final CompletingOnPublishShardManager[] installed = new CompletingOnPublishShardManager[1];
+    /**
+     * The shard manager the module below builds, captured on the way past: the seam has to be armed from the
+     * test, and {@link PCModule#shardManager(WorkManager)} hands back the base type.
+     */
+    CompletingOnPublishShardManager installed;
 
     final PCModuleTestEnv module = new PCModuleTestEnv(ParallelConsumerOptions.<String, String>builder()
             .ordering(UNORDERED)
@@ -132,7 +136,7 @@ class PartitionStateRegistrationOrder370Test {
         @Override
         protected ShardManager<String, String> createShardManager(WorkManager<String, String> workManagerInstance) {
             var sm = new CompletingOnPublishShardManager(this, workManagerInstance);
-            installed[0] = sm;
+            installed = sm;
             return sm;
         }
     };
@@ -143,6 +147,16 @@ class PartitionStateRegistrationOrder370Test {
 
     {
         wm.onPartitionsAssigned(UniLists.of(TP));
+    }
+
+    /**
+     * The installed seam, with the fixture guard both tests need: a module that built a plain {@link ShardManager}
+     * would leave every assertion below measuring nothing.
+     */
+    private CompletingOnPublishShardManager installedShardManager() {
+        assertWithMessage("fixture: the module must have built the racing shard manager")
+                .that(installed).isNotNull();
+        return installed;
     }
 
     private void registerTheRecord() {
@@ -159,8 +173,7 @@ class PartitionStateRegistrationOrder370Test {
      */
     @Test
     void aCompletionTheInstantARecordIsPublishedIsAValidCompletion() {
-        CompletingOnPublishShardManager sm = installed[0];
-        assertWithMessage("fixture: the module must have built the racing shard manager").that(sm).isNotNull();
+        CompletingOnPublishShardManager sm = installedShardManager();
         sm.armCompletionOnNextPublish();
 
         registerTheRecord();
@@ -190,8 +203,7 @@ class PartitionStateRegistrationOrder370Test {
      */
     @Test
     void aRecordRegisteredWithoutInterferenceIsIncompleteAndSelectable() {
-        CompletingOnPublishShardManager sm = installed[0];
-        assertWithMessage("fixture: the module must have built the racing shard manager").that(sm).isNotNull();
+        CompletingOnPublishShardManager sm = installedShardManager();
 
         registerTheRecord();
 
