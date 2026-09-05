@@ -7,8 +7,15 @@ import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.domain.JavaMethod;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.platform.commons.support.AnnotationSupport;
 
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+import java.lang.reflect.Method;
 import java.net.URISyntaxException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -33,6 +40,11 @@ import static com.google.common.truth.Truth.assertWithMessage;
  * Deliberately broker-free and untagged, so it gates every default build - the same reasoning as
  * {@code ProgressProbeLedgerIT}: a register that is only checked when someone remembers to run a slow lane is
  * not a gate.
+ * <p>
+ * Being untagged is also what makes {@link #everyCoveredClaimMustHaveAProofThisRunCanSelect()} possible: this
+ * class keeps running in runs that deselect the proofs, which is precisely when someone needs to be told that the
+ * report below cannot mean what it appears to mean. Tagging it would buy silence in that case instead of an
+ * explanation, and would take the two source-drift checks - which depend on no test running at all - down with it.
  */
 class TransactionalClaimCoverageTest {
 
@@ -190,6 +202,12 @@ class TransactionalClaimCoverageTest {
      * is not hypothetical: quarantining is a sanctioned move in this repo and the default {@code excluded.groups}
      * drops the tag from the gating lanes, so an ordinary, correct quarantine would silently hollow out a claim.
      * The annotation on the owning class counts too - it disables or excludes every method in it.
+     * <p>
+     * Every rule here is about the code as WRITTEN, and so gives the same answer in every run - including the
+     * {@link Quarantined} one, which is a standing policy ("a claim proof may not be quarantined, because the
+     * gating lanes drop that tag") rather than a reading of the run in hand.
+     * {@link #everyCoveredClaimMustHaveAProofThisRunCanSelect()} asks the other question - what THIS run
+     * selected - so the two overlap on the default build and neither one subsumes the other. Do not collapse them.
      */
     @Test
     void claimProofsMustLiveWhereATestRunnerWillFindThem() {
@@ -236,5 +254,162 @@ class TransactionalClaimCoverageTest {
                 + "register asserting coverage nothing exercises")
                 .that(unreachable)
                 .isEmpty();
+    }
+
+    /**
+     * The claim-coverage check again, but asking what THIS run selected rather than what the code says.
+     * <p>
+     * {@link #everyClaimWeSayIsCoveredHasATestReferencingIt()} and the checks around it read the code as written,
+     * so they give the same answer in every run; this one reads the run in hand, and it exists because the two can
+     * disagree while both stay green. {@code pom.xml} documents overriding {@code -Dexcluded.groups}, and nearly
+     * every claim proof carries {@code @Tag("transactions")}: run
+     * {@code -Dexcluded.groups=transactions,performance,chaos} and no proof is ever selected, while this class -
+     * broker-free, untagged, and reading compiled annotations rather than results - still reports every claim
+     * covered, every parked claim explained and every sentence intact. A fully green register over a run that
+     * proved nothing, because the register's selection criteria and the proofs' selection criteria were disjoint.
+     * <p>
+     * Judged per CLAIM rather than per method, deliberately: a claim with two proofs, one of them tagged, is still
+     * proven in a run that drops the tagged one, and failing there would be the register reporting a gap it does
+     * not have. A claim with no proof at all is the sibling check's finding, not this one's, so it is left alone
+     * here rather than reported twice.
+     * <p>
+     * <b>What this can and cannot see.</b> Tag filters are the half that is shared: surefire and failsafe are both
+     * configured from the same {@code ${included.groups}}/{@code ${excluded.groups}} pair, so a tag verdict reached
+     * here holds for a proof in either lane. Lane selection is the half that is not - {@code bin/ci-unit-test.sh}
+     * passes {@code -DskipITs} and runs no integration proof at all - and checking that would contradict the
+     * register's design, which spans the two lanes deliberately (see {@link #compiledTestClasses}). So this asks
+     * only whether the tags would let a proof run, never whether this particular lane got to it.
+     */
+    @Test
+    void everyCoveredClaimMustHaveAProofThisRunCanSelect() {
+        RunTagFilter filter = RunTagFilter.ofCurrentRun();
+
+        Set<TransactionalClaim> selectable = EnumSet.noneOf(TransactionalClaim.class);
+        Map<TransactionalClaim, List<String>> deselected = new EnumMap<>(TransactionalClaim.class);
+        for (JavaMethod method : claimProvingMethods()) {
+            Set<String> tags = effectiveTagsOf(method);
+            boolean runWillSelect = filter.selects(tags);
+            String where = method.getOwner().getName() + "#" + method.getName();
+            for (TransactionalClaim claim : method.getAnnotationOfType(ProvesClaim.class).value()) {
+                if (runWillSelect) {
+                    selectable.add(claim);
+                } else {
+                    deselected.computeIfAbsent(claim, ignored -> new ArrayList<>())
+                            .add(where + " (" + filter.whyNotSelected(tags) + ")");
+                }
+            }
+        }
+
+        List<String> unexercised = new ArrayList<>();
+        for (TransactionalClaim claim : TransactionalClaim.values()) {
+            List<String> proofsThisRunDropped = deselected.get(claim);
+            // a claim with no proof AT ALL is everyClaimWeSayIsCoveredHasATestReferencingIt's finding, not this
+            // one's - null here means exactly that, so it is passed over rather than reported twice
+            if (claim.getStatus().isCoverageEnforced()
+                    && !selectable.contains(claim)
+                    && proofsThisRunDropped != null) {
+                unexercised.add(claim.name() + " - every proof deselected: "
+                        + String.join(", ", proofsThisRunDropped));
+            }
+        }
+
+        assertWithMessage("This run's tag filters deselected every proof of the claims below, so the coverage this "
+                + "register reports was not exercised by anything here (" + filter + "). Either stop excluding the "
+                + "tags that carry the claim proofs, or accept that the register cannot certify this run - it is "
+                + "reporting on tests that did not execute")
+                .that(unexercised)
+                .isEmpty();
+    }
+
+    /**
+     * The tags JUnit would apply to this method - its own, plus its declaring class's.
+     * <p>
+     * Resolved with JUnit's own {@link AnnotationSupport} rather than by matching {@code @Tag} annotations by hand,
+     * so the meta-annotated and inherited cases come out exactly as the launcher computes them - notably
+     * {@link Quarantined}, which is a {@code @Tag("quarantined")} CARRIER rather than a {@code @Tag} itself, and
+     * the tags a proof inherits from a superclass.
+     */
+    private static Set<String> effectiveTagsOf(JavaMethod method) {
+        return effectiveTagsOf(method.reflect());
+    }
+
+    /**
+     * The resolution itself, split from the ArchUnit wrapper above so
+     * {@link #tagResolutionSeesMetaAnnotationsAndSuperclassesTheWayTheLauncherDoes()} can drive it from a fixture.
+     * Scanning the compiled tree cannot reach these cases: the only meta-annotated tag carrier here is
+     * {@link Quarantined}, and a claim proof carrying it is forbidden outright by
+     * {@link #claimProofsMustLiveWhereATestRunnerWillFindThem()}, so no real input exercises the path.
+     */
+    private static Set<String> effectiveTagsOf(Method reflected) {
+        List<Tag> onTheMethod = AnnotationSupport.findRepeatableAnnotations(reflected, Tag.class);
+        List<Tag> onTheClass = AnnotationSupport.findRepeatableAnnotations(reflected.getDeclaringClass(), Tag.class);
+
+        Set<String> tags = new LinkedHashSet<>(onTheMethod.size() + onTheClass.size());
+        for (Tag tag : onTheMethod) {
+            tags.add(tag.value().trim());
+        }
+        for (Tag tag : onTheClass) {
+            tags.add(tag.value().trim());
+        }
+        return tags;
+    }
+
+    /**
+     * A tag carrier standing in for {@link Quarantined}, whose own meta-annotation is asserted by
+     * {@code QuarantinedAnnotationContractTest#annotationIsMetaTaggedWithTheQuarantinedTag}.
+     * <p>
+     * The real annotation cannot be used here. {@code bin/check-quarantine-registry.sh} scans the tree for classes
+     * carrying {@link Quarantined} and fails any that has no entry in {@code docs/quarantined-tests.md}; a fixture
+     * would read to that gate as an undocumented quarantine and have to be answered with a registry entry for a
+     * test that is not quarantined. A local carrier proves the property that would actually regress - that
+     * resolution follows meta-annotations at all - without lying to a different gate to do it.
+     */
+    @Target(ElementType.METHOD)
+    @Retention(RetentionPolicy.RUNTIME)
+    @Tag("carried-through-a-meta-annotation")
+    private @interface CarriesATagWithoutBeingOne {
+    }
+
+    @Tag("from-the-superclass")
+    private static class TaggedAncestor {
+    }
+
+    private static final class TagFixture extends TaggedAncestor {
+
+        @Tag("from-the-method")
+        @CarriesATagWithoutBeingOne
+        void carriesBothKinds() {
+        }
+
+        void carriesNothingOfItsOwn() {
+        }
+    }
+
+    /**
+     * The tag reading must match what the launcher computes, including the two cases no real input here reaches.
+     * <p>
+     * This closes a gap a review found: {@link #effectiveTagsOf(Method)} is asserted to resolve meta-annotated and
+     * inherited tags "the way the launcher does", and nothing checked it. Every {@code @ProvesClaim} method in the
+     * tree carries plain, directly-declared {@code @Tag}s, so swapping {@link AnnotationSupport} for a hand-rolled
+     * {@code isAnnotatedWith(Tag.class)} would pass the whole suite while silently making
+     * {@link #everyCoveredClaimMustHaveAProofThisRunCanSelect()} blind to a proof deselected through a carrier -
+     * which is this PR's own failure class, one layer down in the gate that fixes it.
+     */
+    @Test
+    void tagResolutionSeesMetaAnnotationsAndSuperclassesTheWayTheLauncherDoes() throws NoSuchMethodException {
+        Set<String> both = effectiveTagsOf(TagFixture.class.getDeclaredMethod("carriesBothKinds"));
+
+        assertWithMessage("a directly declared @Tag on the method")
+                .that(both).contains("from-the-method");
+        assertWithMessage("a tag reached only through a meta-annotation - the shape @Quarantined has, and the one "
+                + "a hand-rolled isAnnotatedWith(Tag.class) would miss")
+                .that(both).contains("carried-through-a-meta-annotation");
+        assertWithMessage("a tag inherited from a superclass, which JUnit applies and a declared-annotations-only "
+                + "read would drop")
+                .that(both).contains("from-the-superclass");
+
+        assertWithMessage("a method with no tags of its own still inherits its class's")
+                .that(effectiveTagsOf(TagFixture.class.getDeclaredMethod("carriesNothingOfItsOwn")))
+                .containsExactly("from-the-superclass");
     }
 }

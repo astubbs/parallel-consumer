@@ -10,26 +10,13 @@ applied there; these are the ones that need a design decision rather than an edi
 recorded instead of rushed.
 <!-- post-merge: checked-end --> Ranked by how much false assurance each one buys.
 
-## 1. A documented, supported build invocation runs zero claim proofs and still reports green
+The item that stood at the top of this list - a supported `-Dexcluded.groups` override running zero
+claim proofs while the register still reported full coverage - is fixed. Its reasoning, including the
+option that was rejected and why, is in
+[`docs/solutions/workflow-issues/a-gate-cannot-certify-a-run-whose-filters-it-cannot-see.md`](../solutions/workflow-issues/a-gate-cannot-certify-a-run-whose-filters-it-cannot-see.md);
+the resulting behaviour is in [`docs/testing.md`](../testing.md), "The transactional claim register".
 
-Every `@ProvesClaim` method lives in a class tagged `@Tag("transactions")`.
-`TransactionalClaimCoverageTest` is deliberately **untagged**, so it gates every default build.
-
-`pom.xml`'s own help text documents `-Dexcluded.groups=transactions,performance,chaos` as supported.
-Run that and the build executes **no claim proofs at all**, while the register still reports every
-claim covered, every parked claim explained, and every sentence intact. A fully green report on a run
-that verified nothing.
-
-The gate reads compiled annotations via ArchUnit, so it cannot tell a proof that ran and passed from
-one that was never selected. The guard's selection criteria and the proofs' selection criteria are
-disjoint, which is the whole bug.
-
-**Options.** Simplest: give the coverage test the same `@Tag("transactions")` as everything it
-guards, so excluding the tag excludes the now-meaningless report too. Stronger, if an untagged gate
-is wanted: fail when `excluded.groups` names a tag carried by any class holding a `@ProvesClaim`
-method, so the register refuses to report coverage in a run that could not have exercised it.
-
-## 2. The drift check can be satisfied while the guarantee is weakened
+## 1. The drift check can be satisfied while the guarantee is weakened
 
 `everyRecordedSentenceStillAppearsInItsSource` does `contains(expected)` on whitespace-normalised
 source. So editing a javadoc claim from
@@ -54,7 +41,7 @@ sentence boundary, so a prepended qualifier fails. And give the README template 
 treatment the javadoc has, so a claim moved off the published region fails even though the file still
 contains the words.
 
-## 3. Two ITs prove the same defect, and only one is gated
+## 2. Two ITs prove the same defect, and only one is gated
 
 `TransactionalPartialResultSetIT` and
 `TransactionalBatchVisibilityIT#aTerminallyFailedSendLeavesTheWholeTransactionInvisible` drive the
@@ -79,10 +66,11 @@ control arm, sentinel proving the verifier read past the region), so fold in
 commit attempt than `requestCommitAsap` - and delete the duplicate. If both are kept deliberately,
 annotate the survivor with `@ProvesClaim` and add its trigger guard.
 
-**Note on where:** the trigger-guard gap is in astubbs#261's own file. Fixing it there, while that PR
-is still open, keeps the standalone PR sound rather than having it inherit a fix from downstream.
+**Note on where:** the trigger-guard gap is in astubbs#261's own file. That PR has since merged
+(2026-08-14), so the fix is now an ordinary change on master rather than something to route into an
+open branch.
 
-## 4. The new shared teardown makes "PC failed to close" unobservable
+## 3. The new shared teardown makes "PC failed to close" unobservable
 
 `BrokerIntegrationTest.closeRegisteredTestClients` catches `Exception` per closeable and logs a
 warning. `register()` takes PC instances, not just Kafka clients.
@@ -95,14 +83,20 @@ the default for the ~29 classes that will start using `register()`.
 **Option.** Split it: keep `register(T)` strict, and add `registerExpectedToFailOnClose(T)` for the
 arms that intend a broken client.
 
-## 5. The gate that guards every other gate is itself ungated
+## 4. The gate that guards every other gate is itself ungated
 
-`TransactionalClaimCoverageTest` has no self-test. Its four scenarios were verified by hand:
+`TransactionalClaimCoverageTest`'s original checks have no self-test. Its four scenarios were verified
+by hand:
 
 - an enforced constant with no `@ProvesClaim` fails
 - editing a javadoc claim sentence fails
 - a `NOT_YET_COVERED` constant with no reason fails
 - a `@ProvesClaim` in an uncollectable class fails
+
+The fifth check, `claimProofsMustNotBeDeselectedByThisRunsTagFilters`, is the exception: its decision
+logic lives in `RunTagFilter` and is covered by `RunTagFilterTest`, including the branch that fires
+only when the pom is wrong. That is the shape the four above still need - a decision extracted far
+enough from the ArchUnit scan to be driven directly.
 
 `Source.readPublishedText()` in particular has no unit test at all - missing markers, empty region,
 and the javadoc-prefix/whitespace normalisation are untested, yet the entire drift half rests on that
@@ -111,7 +105,7 @@ parser. The suite contains two exemplary demonstrations that its *test assertion
 `thePartialResultSetAssertionRejectsASetSplitAcrossTwoTransactions`); the register's own checks have
 no equivalent.
 
-## 6. Smaller items
+## 5. Smaller items
 
 - **Fixture composition is duplicated** across three ITs - two topics, a warm-up transaction, verifiers
   caught up, failure capture - about 10-15 near-identical lines each. The shared *utilities* were
