@@ -4,8 +4,6 @@ package bz.stub.parallelconsumer.vertx;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
-import bz.stub.parallelconsumer.ParallelConsumerOptions;
-import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import io.vertx.core.Vertx;
 import io.vertx.core.VertxOptions;
 import io.vertx.ext.web.client.WebClient;
@@ -35,16 +33,24 @@ class VertxCloseReleasesEngineTest extends VertxBaseUnitTest {
     private Vertx vertxSpy;
     private WebClient webClientSpy;
 
+    /**
+     * Substitutes a spy for the engine the processor is built on, so {@code verify} can see whether close
+     * released it. Only the instance changes - {@link VertxBaseUnitTest#initAsyncConsumer} still owns the
+     * options and the construction.
+     */
     @Override
-    protected AbstractParallelEoSStreamProcessor initAsyncConsumer(ParallelConsumerOptions parallelConsumerOptions) {
-        VertxOptions vertxOptions = new VertxOptions();
-        vertxSpy = spy(Vertx.vertx(vertxOptions));
-        webClientSpy = spy(WebClient.create(vertxSpy));
-        var build = parallelConsumerOptions.toBuilder()
-                .maxConcurrency(10)
-                .build();
-        vertxAsync = new JStreamVertxParallelEoSStreamProcessor<>(vertxSpy, webClientSpy, build);
-        return vertxAsync;
+    protected Vertx createVertx(VertxOptions vertxOptions) {
+        vertxSpy = spy(super.createVertx(vertxOptions));
+        return vertxSpy;
+    }
+
+    /**
+     * The same substitution for the web client, built on the spied engine {@link #createVertx} returned.
+     */
+    @Override
+    protected WebClient createWebClient(Vertx vertx) {
+        webClientSpy = spy(super.createWebClient(vertx));
+        return webClientSpy;
     }
 
     /**

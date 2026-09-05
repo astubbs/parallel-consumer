@@ -22,14 +22,33 @@ public abstract class VertxBaseUnitTest extends ParallelEoSStreamProcessorTestBa
     @Override
     protected AbstractParallelEoSStreamProcessor initAsyncConsumer(ParallelConsumerOptions parallelConsumerOptions) {
         VertxOptions vertxOptions = new VertxOptions();
-        Vertx vertx = Vertx.vertx(vertxOptions);
-        WebClient wc = WebClient.create(vertx);
+        Vertx vertx = createVertx(vertxOptions);
+        WebClient wc = createWebClient(vertx);
         var build = parallelConsumerOptions.toBuilder()
                 .maxConcurrency(10)
                 .build();
         vertxAsync = new JStreamVertxParallelEoSStreamProcessor<>(vertx, wc, build);
 
         return vertxAsync;
+    }
+
+    /**
+     * The engine instance {@link #initAsyncConsumer} hands to the processor.
+     * <p>
+     * A seam, not a preference: a subclass that needs to observe the engine - a Mockito spy, say - can
+     * substitute the instance here without restating {@link #initAsyncConsumer}'s options-builder and
+     * construction, which is the copy that would otherwise drift the next time either changes.
+     */
+    protected Vertx createVertx(VertxOptions vertxOptions) {
+        return Vertx.vertx(vertxOptions);
+    }
+
+    /**
+     * The web client {@link #initAsyncConsumer} hands to the processor, built on whatever
+     * {@link #createVertx} returned. The same seam, for the same reason.
+     */
+    protected WebClient createWebClient(Vertx vertx) {
+        return WebClient.create(vertx);
     }
 
     @BeforeEach
