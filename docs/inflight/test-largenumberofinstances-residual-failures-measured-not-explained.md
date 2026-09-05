@@ -645,3 +645,55 @@ candidates, in the order they should be tried:
 **Do not read the third as the easy one.** Backing the timeout off is what makes the rate look better
 without the mechanism changing, and this note exists because that move has already cost this project
 four months once.
+
+
+## A deterministic reproducer was built, and it does NOT reproduce - 2026-09-05
+
+`ClosingMemberRebalanceIT`, on `ManagedPCInstance` (the capacity profile's own harness), forces the
+window the profile only draws by chance: the admin client is polled until the coordinator reports
+`PREPARING_REBALANCE`/`COMPLETING_REBALANCE`, and only then are members closed. A matrix over the two
+variables the profile has and the green twin lacks, moved one at a time:
+
+| assignor | simultaneous closers | victims' close | survivors |
+|---|---|---|---|
+| eager | 1 | 0.0s | kept consuming |
+| cooperative | 1 | 0.0s | kept consuming |
+| eager | 3 | 0.0s, 0.0s, 0.0s | kept consuming |
+| cooperative | 3 | 0.1s, 0.0s, 0.0s | kept consuming |
+
+Commit mode `PERIODIC_CONSUMER_ASYNCHRONOUS` throughout, as in the profile. **Every close was
+instant and no survivor stalled.** Run against BOTH master's product code and the tree carrying the `doClose()`
+discharge poll: identical.
+
+### Three things this settles, one it does not
+
+- **A member closing mid-rebalance is handled cleanly by Kafka and by PC.** With the coordinator
+  loggers raised: `onLeavePrepare` with a valid generation, LeaveGroup sent within 2ms, LeaveGroup
+  answered within ~10ms, `Control loop ending clean` within ~0.3s, survivors re-synced ~2.6s later.
+  Three at once changes nothing. This is why the discharge-poll fix measured 2/60: it repairs a case
+  that was not broken.
+- **The first cut of this reproducer reported a 15-second freeze that was an exhausted topic** - the
+  last committed offsets summed to exactly the 4,000 produced. It now sizes and GUARDS its backlog
+  (`REMAINING_FLOOR`, checked before the close and after the liveness window) so a run that cannot
+  discriminate fails saying so, rather than as a fake stall. Recorded because "the survivors consumed
+  nothing" is exactly what a real freeze looks like, and only the offsets told them apart.
+- **"Close took 15.2s" was the instrument, not the close.** The duration was read from the main thread
+  after a 15s await expired. It is now recorded on the closer thread the instant `close()` returns,
+  and reads NaN rather than a number if it never did.
+
+**What it does not settle:** the profile's stall. Ten of twelve instances parked in
+`AbstractCoordinator.close -> awaitPendingRequests` for ~25s remains an observation nothing here
+reproduces. What the profile has that this matrix does not is the storm itself - restarts joining while
+other members are mid-close, toggles every 0-500ms, 12 members on 80 partitions, a background producer.
+The next reproducer has to carry one of those, and the cheapest guess is **a member closed while its
+own first JoinGroup is still unanswered** - a just-restarted instance - because that is the one state
+in which `maybeLeaveGroup` sends nothing (`generation.hasMemberId()` is false) and the coordinator is
+left waiting on a member that has already gone. Untested; stated as the next arm, not a finding.
+
+### On the `doClose()` discharge poll and the `ConsumerManager` one-attempt allowance
+
+The `doClose()` discharge poll and the `ConsumerManager` one-attempt allowance are measured not to
+move the profile's rate, and now measured not to be needed for the single or three-way close. They
+are harmless and guarded, but a change that fixes nothing observable should not ship under a
+commit message that says it fixes the stall. Whether to keep them as hygiene or drop them is a
+reviewer's call; this note recommends **dropping them**, so that what lands is only what can be shown.
