@@ -397,3 +397,22 @@ Caught by `bin/test-torture-overnight.sh`, whose `wedge` case fails against the 
 against the new. The lesson this file already records - a wrong verdict on a right number reads as a
 finding - held for the second time in four days.
 <!-- file-refs: N/A - the harness moved to branch test/overnight-torture-harness-v2; named here as the instrument that produced these runs, not as a file in this tree -->
+
+**Seventh sighting, 2026-09-05 - and two more the same hour on unrelated branches, which is the point.**
+`churnStormMeetsSlosAndBalancesLedger` killed fail-fast (`probe violation during run`) on
+astubbs/parallel-consumer#434 at head `4409adc02`,
+[job 101227221022](https://github.com/astubbs/parallel-consumer/actions/runs/33937004185/job/101227221022),
+seed `5684946990969099277`, after 142s. Replay:
+`./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dincluded.groups=chaos -Dexcluded.groups= -Dchaos.seed=5684946990969099277`.
+
+The autopsy crossed **no** calibrated bound: peaks `rebalanceDwell=5715ms lagStagnation=132294ms`, with 23
+partitions of `w1` frozen at 129-135s stagnant and lag 56-1132 - the whole fleet member, not a key. That is the
+stall/stagnation shape the runner-load confound above predicts. The recorded history makes the confound the
+leading explanation rather than a guess: the same probe violation fired on `feats/inflight-rank-cli` at 01:43 and
+`docs/v6-announcement` at 01:40, neither of which touches the engine, and passed on six other heads in the same
+two hours.
+
+The branch's own change is ruled out by the mode gate, not by argument: it adds a send-callback detection site
+behind `ProducerRecovery#canRecover()`, which requires the transactional commit mode, and this scenario is
+`PERIODIC_CONSUMER_ASYNCHRONOUS` - the first fact in this file. The job log carries none of the lines that path
+would emit (`Recorded producer invalidation`, `Producer recovery`).
