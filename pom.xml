@@ -1109,6 +1109,12 @@
                          Default matches nothing. bin/ci-integration-test.sh is the only caller. -->
                     <excludes>
                         <exclude>${it.excluded.classes}</exclude>
+                        <!-- Configuring <excludes> REPLACES failsafe's defaults rather than adding to them,
+                             and the default it replaces is this one: inner classes. Without it the first
+                             @Nested integration test class would run twice, once under its outer class
+                             and once alone, with both shards green - and bin/lib/compiled-classes.mjs
+                             skips every `$` class on the premise that this default is in force. -->
+                        <exclude>**/*$*</exclude>
                     </excludes>
                     <jvm>${jvm.location}/bin/java</jvm>
                     <skipTests>${skipTests}</skipTests>

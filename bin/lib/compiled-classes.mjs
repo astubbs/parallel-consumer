@@ -142,9 +142,14 @@ export function inspect(names, classpath, { javap = javapBinary(), batch = 60 } 
                 encoding: 'utf8', maxBuffer: 512 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'],
             })
         } catch (e) {
-            // javap exits non-zero when ANY name fails to resolve, but still prints the ones that
-            // did. Keep that partial output rather than losing the whole batch - a class that cannot
-            // be read simply never enters the index, and the caller reports it as unresolved.
+            // Two different failures share this catch, and only one is tolerable. javap RAN and
+            // exited non-zero because a name did not resolve: it still printed the classes that did,
+            // so keep that partial output and let the caller report the rest as unresolved. javap
+            // did NOT run - missing binary (ENOENT), a bad JAVA_HOME, no exit status at all - and
+            // swallowing that left an empty index, zero required classes, and a gate that printed
+            // "every class produced a report" over nothing. That is the green-while-red this whole
+            // module exists to prevent, so it is rethrown and the gate exits 2.
+            if (e.status == null) throw e
             text = (e.stdout || '').toString()
         }
         out.push(...parseJavap(text))
@@ -183,8 +188,13 @@ function resolveMetaTags(index, classpath, opts) {
     }
     const meta = new Map()
     for (const r of inspect([...wanted], classpath, opts)) meta.set(r.name, r.classTags)
+    // An annotation type may already BE in the index - the gate indexes every compiled test class,
+    // and a project-defined annotation like @Quarantined compiles into the same tree. Its tags are
+    // then on its index record, not in `meta`; the first draft only looked in `meta` and silently
+    // dropped every meta-annotated group the moment the candidate set widened.
+    const tagsOf = (a) => (index.get(a) ?? { classTags: meta.get(a) ?? [] }).classTags
     for (const r of index.values()) {
-        const inherited = r.classAnnotations.flatMap((a) => meta.get(a) ?? [])
+        const inherited = r.classAnnotations.flatMap(tagsOf)
         r.effectiveTags = [...new Set([...r.classTags, ...inherited])]
     }
 }
@@ -215,10 +225,25 @@ export function producesReport(index, name) {
     return false
 }
 
+/** Is this class, or any class it inherits from, in a package matching `packageRe`? */
+export function inIntegrationLineage(index, name, packageRe, seen = new Set()) {
+    if (packageRe.test(name)) return true
+    const r = index.get(name)
+    if (!r || !r.superName || seen.has(name)) return false
+    seen.add(name)
+    return inIntegrationLineage(index, r.superName, packageRe, seen)
+}
+
 /**
- * The classes that MUST have produced a failsafe report: concrete, not an inner class, matching the
- * package pattern failsafe collects, carrying test methods of their own or by inheritance, and not
- * tagged into a group the run excluded.
+ * The classes that MUST have produced a failsafe report: concrete, not an inner class, carrying test
+ * methods of their own or by inheritance, not tagged into a group the run excluded, and in the
+ * integration LINEAGE - either in a package failsafe collects, or extending a class that is.
+ *
+ * The lineage half is the case the shell comment always promised and the first cut did not deliver:
+ * a test class moved OUT of an integrationTest package (still extending BrokerIntegrationTest) is
+ * silently uncollected by failsafe, and a gate that pre-filtered its candidates by package could
+ * never demand it. Indexing every compiled test class and asking "does your ancestry reach an
+ * integration package" is what makes the stderr text true.
  */
 export function classesRequiringReports(index, packageRe, excludedTags = []) {
     const excluded = new Set(excludedTags)
@@ -226,7 +251,7 @@ export function classesRequiringReports(index, packageRe, excludedTags = []) {
     for (const [name, r] of index) {
         if (r.isAbstract || r.isInterface) continue
         if (name.includes('$')) continue            // inner/@Nested - reported under the enclosing class
-        if (!packageRe.test(name)) continue
+        if (!inIntegrationLineage(index, name, packageRe)) continue
         if (!producesReport(index, name)) continue  // a helper that happens to live in the same package
         if ((r.effectiveTags ?? r.classTags).some((t) => excluded.has(t))) continue
         required.push(name)

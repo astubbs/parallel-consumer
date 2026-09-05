@@ -25,7 +25,7 @@
 // could not compile its fixtures has proven nothing.
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -102,6 +102,10 @@ public class MultiTopicTest { @ParameterizedTest void eachTopic() {} }`,
     'fx/other/SameNameIT.java': 'package fx.other; import org.junit.jupiter.api.Test; public class SameNameIT { @Test void b() {} }',
     // Outside any integrationTests package: never in scope however many tests it has.
     'fx/unit/PlainTest.java': 'package fx.unit; import org.junit.jupiter.api.Test; public class PlainTest { @Test void u() {} }',
+    // Right base, WRONG package: extends an integration base but was moved out of the package.
+    // failsafe will not collect it, so it silently stops running - the exact case the gate's error
+    // text promises to catch, and which a package pre-filter on candidates could never see.
+    'fx/misc/StrayIT.java': 'package fx.misc; public class StrayIT extends fx.integrationTests.ProbeBase {}',
 }
 
 // --- compile -----------------------------------------------------------------------------------------
@@ -131,7 +135,7 @@ try {
     // --- library: what the compiler said ---------------------------------------------------------
     const PKG = /(^|\.)integrationTest[^.]*\./
     const all = classFilesUnder(classes)
-    const index = buildIndex(all.filter((n) => PKG.test(n)), classes)
+    const index = buildIndex(all, classes)
     const get = (simple) => index.get(`fx.integrationTests.${simple}`)
 
     check('abstract is read from the access flags', get('ProbeBase').isAbstract, true)
@@ -153,9 +157,10 @@ try {
     // base IS a test class - JUnit runs the inherited tests - and the first draft of this expectation
     // left it out. `OuterIT` is in here because its only tests live in a @Nested inner class, which
     // Jupiter reports under the enclosing class.
-    check('required set: concrete test classes in scope, minus excluded groups', simple, [
-        'LeafIT', 'LoadTest', 'Middle', 'MultiTopicTest', 'OuterIT', 'Probe2IT', 'Probe3IT', 'Probe4IT', 'ProbeIT', 'SameNameIT',
+    check('required set: concrete test classes in integration lineage, minus excluded groups', simple, [
+        'LeafIT', 'LoadTest', 'Middle', 'MultiTopicTest', 'OuterIT', 'Probe2IT', 'Probe3IT', 'Probe4IT', 'ProbeIT', 'SameNameIT', 'StrayIT',
     ])
+    check('  ...a test moved OUT of the package but extending an integration base IS demanded', required.includes('fx.misc.StrayIT'), true)
     check('  ...an undecorated concrete subclass of a test base IS demanded', simple.includes('Middle'), true)
     check('  ...a class whose only tests are @Nested IS demanded (reported under it)', simple.includes('OuterIT'), true)
     check('  ...the abstract base is not demanded', simple.includes('ProbeBase'), false)
@@ -172,14 +177,46 @@ try {
     check('  ...with the class-level flags, not a member\'s', parsed[0].isAbstract, false)
 
     // --- the gate end to end, against the fixture tree ----------------------------------------------
-    const run = () => spawnSync('node', [GATE, '--heavy-classes', 'ProbeIT,Probe2IT', '--excluded-groups', 'chaos,quarantined'], {
-        encoding: 'utf8', env: { ...process.env, SHARD_COVERAGE_ROOT: tmp },
+    const run = (extraEnv = {}, gatePath = GATE) => spawnSync('node', [gatePath, '--heavy-classes', 'ProbeIT,Probe2IT', '--excluded-groups', 'chaos,quarantined'], {
+        encoding: 'utf8', env: { ...process.env, SHARD_COVERAGE_ROOT: tmp, ...extraEnv },
     })
     let r = run()
     check('no reports at all is nothing-in-scope (exit 3), not a pass', r.status, 3)
 
+    // Neither opt-in set: the gate must decline to judge, not demand every class from whatever is
+    // on disk. Built by deleting the fixture root from the env, not by pointing at another tree.
+    const noOptIn = { ...process.env }; delete noOptIn.SHARD_COVERAGE_ROOT; delete noOptIn.SHARD_COVERAGE_ENFORCE
+    r = spawnSync('node', [GATE], { encoding: 'utf8', env: noOptIn })
+    check('without SHARD_COVERAGE_ENFORCE or SHARD_COVERAGE_ROOT it is nothing-in-scope (exit 3)', r.status, 3)
+    contains('  ...and says it is opt-in', r.stdout, 'opt-in')
+
+    // javap that cannot run: an empty JAVA_HOME and a PATH with no JDK. The green-while-red case -
+    // an empty index must be "could not run", never "every class reported".
+    const noJdk = mkdtempSync(join(tmpdir(), 'no-jdk-'))
+    mkdirSync(join(noJdk, 'bin'))
+    writeFileSync(join(reportsDir, 'TEST-fx.integrationTests.Probe3IT.xml'), '<testsuite/>\n')
+    // PATH keeps node's own directory (so the gate itself can spawn) and nothing else, so `javap`
+    // resolves neither through JAVA_HOME nor PATH. Emptying PATH entirely broke the spawn of node.
+    r = run({ JAVA_HOME: noJdk, PATH: dirname(process.execPath) })
+    check('javap unavailable is could-not-run (exit 2), never a pass', r.status, 2)
+    contains('  ...and names the cause', r.stderr, 'javap')
+    rmSync(join(reportsDir, 'TEST-fx.integrationTests.Probe3IT.xml'))
+    rmSync(noJdk, { recursive: true, force: true })
+
+    // Invoked through a symlink: the direct-invocation guard compares realpaths, so main() still
+    // runs. Exit 3 here (no reports yet) is the CORRECT answer; the broken spelling guard produced
+    // exit 0 with no output at all, which is why output is asserted too.
+    const linkDir = mkdtempSync(join(tmpdir(), 'gate-link-'))
+    const link = join(linkDir, 'coverage-gate.mjs')
+    symlinkSync(GATE, link)
+    r = run({}, link)
+    check('a symlinked invocation still runs main() (exit 3 with output, not silent exit 0)', r.status, 3)
+    check('  ...and produced output', r.stdout.length > 0, true)
+    rmSync(linkDir, { recursive: true, force: true })
+
     const report = (fqcn) => writeFileSync(join(reportsDir, `TEST-${fqcn}.xml`), '<testsuite/>\n')
     for (const s of ['LeafIT', 'LoadTest', 'Middle', 'MultiTopicTest', 'OuterIT', 'Probe3IT', 'ProbeIT', 'Probe2IT', 'SameNameIT']) report(`fx.integrationTests.${s}`)
+    report('fx.misc.StrayIT')
     r = run()
     check('one required class with no report fails (exit 1)', r.status, 1)
     contains('  ...and it is named', r.stderr, 'fx.integrationTests.Probe4IT')

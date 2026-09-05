@@ -98,11 +98,27 @@ jobs:
       # exits 3 unless SHARD_BALANCE_NETWORK is set, because `check-*` is blanket-granted to the PR
       # reviewer and auto-run by check-all.sh's glob, and bin/AGENTS.md forbids that prefix a
       # network read beyond `gh`. This job is the one place that opts in - so the gate still runs,
-      # and the grant still cannot reach the network. Advisory: it reports drift and exits 0.
+      # and the grant still cannot reach the network.
+      #
+      # ADVISORY MEANS THE JOB STAYS GREEN WHEN CODECOV DOES NOT. This job is a REQUIRED check, and
+      # the script exits 2 when api.codecov.io is unreachable and 3 when the corpus is empty - both
+      # "could not measure", neither a finding. Run bare, either would block every merge in the repo
+      # for the duration of a Codecov hiccup, which is the opposite of advisory. So 2 and 3 become a
+      # warning annotation and exit 0; only 1 (drift over a --fail-over bound, unused here) fails.
+      # Same shape as maven.yml's throughput step.
       - name: Integration shard drift, the one place the Codecov read is opted into
         env:
           SHARD_BALANCE_NETWORK: '1'
-        run: node bin/check-integration-shard-balance.mjs
+        run: |
+          set +e
+          node bin/check-integration-shard-balance.mjs
+          rc=$?
+          set -e
+          case "$rc" in
+            0) ;;
+            2|3) echo "::warning title=Integration shard drift::could not measure (exit $rc) - advisory, not failing the required check" ;;
+            *) exit "$rc" ;;
+          esac
 
   # WHY THIS LANE EXISTS. Every other job in this file is ubuntu, so the shell harness was only ever
   # exercised against GNU coreutils and bash 5, while contributors run it on macOS with BSD userland

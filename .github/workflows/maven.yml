@@ -118,7 +118,8 @@ jobs:
             scenarios: ""
             shard: ""
           # Keeps the name "Integration Tests" because that is the context the master ruleset
-          # requires. "(heavy)" is NOT required until the ruleset is updated - see the PR.
+          # required first; "Integration Tests (heavy)" was added to the ruleset alongside it
+          # (astubbs/parallel-consumer#442), so both shards gate.
           - suite: integration
             name: "Integration Tests"
             cmd: "INTEGRATION_SHARD=rest bin/ci-integration-test.sh -DforkCount=4 -DreuseForks=true"

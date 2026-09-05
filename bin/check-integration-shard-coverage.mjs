@@ -34,6 +34,7 @@ import { readdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { buildIndex, classFilesUnder, classesRequiringReports } from './lib/compiled-classes.mjs'
+import { invokedDirectly } from './lib/invoked-directly.mjs'
 import { heavyClassesFromScript } from './lib/shard-script.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -56,7 +57,10 @@ export function walk(root) {
         let entries
         try { entries = readdirSync(dir) } catch { return }
         for (const e of entries) {
-            if (e === '.git' || e === 'node_modules') continue
+            // `.claude` holds this repo's sibling worktrees; walking into them unions every
+            // branch's target/ trees, so stale reports could satisfy a demand and another branch's
+            // classes could be demanded here.
+            if (e === '.git' || e === 'node_modules' || e === '.claude') continue
             const p = join(dir, e)
             let st
             try { st = statSync(p) } catch { continue }
@@ -79,7 +83,10 @@ export function reportedClasses(reports) {
 
 export function evaluate({ classDirs, reports, heavy, excludedGroups }) {
     const classpath = classDirs.join(':')
-    const candidates = classDirs.flatMap(classFilesUnder).filter((n) => INTEGRATION_PACKAGE.test(n))
+    // EVERY compiled test class, not only those in an integration package: the lineage rule in
+    // classesRequiringReports needs to see a test class that was moved out of the package but still
+    // extends an integration base, which a package pre-filter here would hide from it.
+    const candidates = classDirs.flatMap(classFilesUnder)
     const index = buildIndex(candidates, classpath)
     const required = classesRequiringReports(index, INTEGRATION_PACKAGE, excludedGroups)
     const reported = reportedClasses(reports)
@@ -100,6 +107,16 @@ export function evaluate({ classDirs, reports, heavy, excludedGroups }) {
 function main() {
     const heavy = (arg('--heavy-classes', '') || (heavyClassesFromScript() ?? []).join(',')).split(',').filter(Boolean)
     const excludedGroups = arg('--excluded-groups', '').split(',').map((s) => s.trim()).filter(Boolean)
+    // OPT-IN, like SHARD_BALANCE_NETWORK: bin/ci-integration-test.sh sets SHARD_COVERAGE_ENFORCE=1
+    // after the run whose reports this must reconcile, and the self-test points SHARD_COVERAGE_ROOT
+    // at a fixture tree. Anywhere else - check-all.sh on a laptop with a partial local integration
+    // run - the reports on disk are not a run this gate can judge, and demanding all of them from
+    // a handful is a false RED that teaches people to ignore the gate.
+    if (!process.env.SHARD_COVERAGE_ENFORCE && !process.env.SHARD_COVERAGE_ROOT) {
+        console.log('check-integration-shard-coverage: reconciles a COMPLETE integration run, which is opt-in - nothing in scope')
+        console.log('  bin/ci-integration-test.sh sets SHARD_COVERAGE_ENFORCE=1 after the run it gates; SHARD_COVERAGE_ROOT points at a fixture tree.')
+        process.exit(3)
+    }
     const { classDirs, reports } = walk(ROOT)
 
     if (classDirs.length === 0) {
@@ -111,8 +128,24 @@ function main() {
         process.exit(3)
     }
 
-    const r = evaluate({ classDirs, reports, heavy, excludedGroups })
-    console.log(`check-integration-shard-coverage: ${r.candidates} compiled classes in integration packages, ${r.required.length} must report, ${r.reported} reports found`)
+    let r
+    try {
+        r = evaluate({ classDirs, reports, heavy, excludedGroups })
+    } catch (e) {
+        // inspect() rethrows when javap did not run at all (ENOENT, bad JAVA_HOME). That is "could
+        // not run", exit 2 - never an uncaught stack trace, and never the exit 0 an empty index
+        // would otherwise have produced.
+        console.error(`check-integration-shard-coverage: FAILED to run javap - ${e.message}. Is a JDK on JAVA_HOME or PATH? Nothing can be demanded, so nothing is being guarded.`)
+        process.exit(2)
+    }
+    // Candidates but nothing indexed means javap read nothing - a missing or broken JDK, not an
+    // empty suite. An empty required set from that state would print "every class reported" over
+    // nothing, so it is "could not run", never a pass.
+    if (r.candidates > 0 && r.indexed === 0) {
+        console.error(`check-integration-shard-coverage: FAILED to inspect any of ${r.candidates} compiled classes - is javap on JAVA_HOME or PATH? Nothing can be demanded, so nothing is being guarded.`)
+        process.exit(2)
+    }
+    console.log(`check-integration-shard-coverage: ${r.candidates} compiled test classes, ${r.required.length} in integration lineage must report, ${r.reported} reports found`)
     if (excludedGroups.length) console.log(`  excluded groups honoured: ${excludedGroups.join(', ')}`)
 
     if (r.missing.length === 0) {
@@ -121,13 +154,14 @@ function main() {
     }
     console.error('check-integration-shard-coverage: FAILED - test class(es) the compiler produced that NO shard ran:')
     for (const n of r.missing) console.error(`    ${n}`)
-    console.error('  Each exists as a compiled class with JUnit test methods (own or inherited) and produced no')
-    console.error('  failsafe report anywhere. Most likely the class is not in a package failsafe collects, so it')
-    console.error('  silently never runs - in this arrangement or the single-job one. Check the package first.')
+    console.error('  Each is a compiled class with JUnit test methods (own or inherited) whose ancestry reaches an')
+    console.error('  integrationTest package, and produced no failsafe report anywhere. Most likely it sits outside')
+    console.error('  a package failsafe collects - moved, or created beside its base - so it silently never runs, in')
+    console.error('  this arrangement or the single-job one. Check the package first.')
     if (r.missingHeavy.length) {
         console.error(`  (also absent, but named in HEAVY_CLASSES so the heavy shard owns them: ${r.missingHeavy.join(', ')})`)
     }
     process.exit(1)
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) main()
+if (invokedDirectly(import.meta.url)) main()

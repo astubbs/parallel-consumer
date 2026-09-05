@@ -168,13 +168,18 @@ class QuarantinedAnnotationContractTest {
         String reference = value.replaceAll("^\"|\"$", "");
         if (reference.startsWith("$")) {
             String name = reference.replaceAll("^\\$\\{?|\\}$", "");
+            // The captured value is restricted to list characters, so an assignment of the shape
+            // NAME=${OVERRIDE:-a,b,c} - which would make the gating list env-overridable while its
+            // comma-split still contains every required tag - does not match at all and fails below.
             java.util.regex.Matcher assignment = java.util.regex.Pattern
-                    .compile("(?m)^\\s*(?:readonly\\s+)?" + java.util.regex.Pattern.quote(name) + "=\"?([^\"\\s]*)\"?\\s*$")
+                    .compile("(?m)^\\s*(?:readonly\\s+)?" + java.util.regex.Pattern.quote(name) + "=\"?([A-Za-z0-9_,]+)\"?\\s*$")
                     .matcher(body);
-            assertWithMessage(script + " passes -Dexcluded.groups=" + value + " but never assigns " + name
-                    + " - the list must be hardcoded in the script, not inherited")
+            assertWithMessage(script + " passes -Dexcluded.groups=" + value + " but has no plain assignment of " + name
+                    + " - the list must be hardcoded in the script as a literal, not inherited or overridable")
                     .that(assignment.find()).isTrue();
-            return assignment.group(1);
+            String resolved = assignment.group(1);
+            assertWithMessage(name + " must resolve to a literal list, not another reference").that(resolved).doesNotContain("$");
+            return resolved;
         }
         return value;
     }

@@ -60,13 +60,10 @@ earlier version of this paragraph said the split was worth 161s and the shard co
 from the pre-split model, which assumed the four probe classes would be 89s each when they measure
 138-166s. Same lesson as the serial-build work above, arrived at with better numbers.
 
-**A BLOCKING PREREQUISITE, and it is not in the diff.** `Integration Tests` is a required status
-check in the `master` ruleset; `Integration Tests (heavy)` is not, and adding a job does not add a
-requirement. Merging the split without adding the new context to the ruleset makes
-`Rebalance857CommitSyncDeadlockProbeIT` NON-GATING - a PR could go red on it and still merge. That
-is the same shape as the Lincheck harnesses that existed without running anywhere, and nothing goes
-red to announce it. There is no naming trick that avoids this: each matrix entry produces its own
-check context, so whichever job keeps the required name, the other one is ungated.
+**The second required check.** `Integration Tests (heavy)` produces its own status context, and adding
+a job does not add a requirement, so the heavy shard's classes would have been non-gating. It was added to
+the `master` ruleset's required checks alongside `Integration Tests` while astubbs/parallel-consumer#442 was
+open; both shards gate. <!-- post-merge: checked -->
 
 ## Why this is the remaining lever, and why it was not taken first
 

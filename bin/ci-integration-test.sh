@@ -92,11 +92,15 @@ set -euo pipefail
 #      is irrelevant while the catch-all is work-bound at 275s, and a 300s class is the whole
 #      problem. `bin/check-integration-shard-balance.mjs` prints both numbers.
 #   2. Keep the two shards' WALLS close, not their class counts or their totals. The heavy set is
-#      five classes against the catch-all's twenty-three, and that is correct - the point is
+#      seven classes against the catch-all's thirty-odd, and that is correct - the point is
 #      balance of wall-clock, and a shard of few big classes packs differently from many small ones.
-#   3. Prefer a heavy set that is a MULTIPLE OF forkCount (4) or comfortably more than it. Five
-#      classes over four forks means one fork runs two - which is exactly why the heavy set is
-#      sized at five and not four: the sixth-largest class would have made a fork run two BIG ones.
+#   3. Think in FORKS. forkCount is 4, so a heavy set of seven means three forks run two classes
+#      and one runs one; what matters is that no fork is handed two of the BIGGEST. The
+#      pre-rebalance set was sized at five for exactly that reason, and the rebalance to seven was
+#      taken from measured walls, not from this rule - which is rule 5.
+#      (History: an earlier revision of this guide still said "five" after the list had grown to
+#      seven, and a maintainer applying rule 3 literally would have removed two classes and undone
+#      the measured rebalance. The number in this guide is descriptive; the list is the truth.)
 #   4. REMOVING is as much a part of this as adding. A class that got faster, or a suite that grew
 #      around it, leaves the list over-weighted; the balance checker reports drift in both
 #      directions and does not care which way you fix it.
@@ -217,8 +221,9 @@ if [ -n "${SHARD_EXPECT}" ]; then
     fi
 elif [ "${INTEGRATION_SHARD:-}" = "rest" ]; then
     # The catch-all must contain NONE of the named classes and still not be empty.
-    found=$(all_reports | wc -l | tr -d ' ')
-    if [ "$found" -eq 0 ]; then
+    # `-z`, not `wc -l`: the cached list is printed with a trailing newline, so an EMPTY tree still
+    # counts one line and a count-based guard can never fire (found by review after the caching).
+    if [ -z "$REPORTS" ]; then
         echo "ci-integration-test: FAILED - the catch-all shard produced no failsafe reports at all." >&2
         exit 1
     fi
@@ -258,7 +263,7 @@ if [ "${INTEGRATION_SHARD:-}" = "rest" ]; then
     # scan of the .java sources and every defect it had was a text-matching one - a file-wide grep,
     # a filename read as a class name, an `extends` matched inside a javadoc sentence. The gate reads
     # bytecode instead, where those shapes do not exist; its header and self-test own the detail.
-    node bin/check-integration-shard-coverage.mjs --heavy-classes "$HEAVY_CLASSES" --excluded-groups "$EXCLUDED_GROUPS" || {
+    SHARD_COVERAGE_ENFORCE=1 node bin/check-integration-shard-coverage.mjs --heavy-classes "$HEAVY_CLASSES" --excluded-groups "$EXCLUDED_GROUPS" || {
         echo "ci-integration-test: FAILED - the coverage gate did not pass (see above)." >&2
         exit 1
     }

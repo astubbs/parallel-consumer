@@ -86,9 +86,7 @@ import static org.hamcrest.number.OrderingComparison.greaterThan;
  * Expected signature on the defect arm: control thread crash ~10s after the revoke, cause chain
  * containing "Timeout waiting for commit response". Expected on the fixed arm: INFO log
  * "Skipping offset commit during partition revocation" and all assertions pass.
- */
-@Slf4j
-/**
+ * <p>
  * <b>Calibration status</b>, 2026-08-31 - read this before running, so a result already established
  * is not re-derived. Run as four cells against a control cut from this branch's HEAD with
  * {@code commitLock.tryLock()} replaced by {@code commitLock.lock()} (blocking rather than
@@ -104,6 +102,7 @@ import static org.hamcrest.number.OrderingComparison.greaterThan;
  * {@code -Dpc.log.level=info} or the revoke fork's two log lines are filtered out and every cell
  * reports zero declines - which reads exactly like a run in which the race never happened.
  */
+@Slf4j
 abstract class Rebalance857CommitSyncDeadlockProbeBase extends BrokerIntegrationTest<String, String> {
 
     /*
