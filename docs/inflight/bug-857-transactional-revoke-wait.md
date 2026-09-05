@@ -62,6 +62,49 @@ the correction; only its attribution moves.
 
 No seed was captured.
 
+## Sighting: `ChaosRevokeUnderWorkTransactionalIT.revokeUnderWorkStaysProtocolHonestInTransactionalMode`, 1 failure in 2 runs, 2026-09-05
+
+<!-- post-merge: checked - astubbs/parallel-consumer#448 is cited for its permanent diff content, which does not change after merge or if its branch is deleted -->
+astubbs/parallel-consumer#448, a docs-and-data PR - entries added under `docs/data/`, markdown notes
+edited, and one long-`@Disabled` sanity test deleted under `integrationTests/sanity/`
+(`git diff --name-status <merge-base>..<head>` gives the shape). Failed in "Chaos Pain
+Suite 2/4" on
+[run 33938124400, job 101230384149](https://github.com/astubbs/parallel-consumer/actions/runs/33938124400/job/101230384149),
+head `3ef5a009a`.
+
+**Why the branch cannot have caused it**, on ground the deleted test file does not undermine - it is
+a Java deletion, so "touches no Java" would be false and is not the argument. Nothing under
+`src/main` changed and nothing in the `chaostests` package changed, so neither the product code under
+test nor the scenario itself moved. Nor can removing a class reshuffle the shard: `.github/workflows/maven.yml`
+gives each chaos shard a **hardcoded** `scenarios:` class list, passed through as `CHAOS_SCENARIOS`
+(Suite 2/4 is `ChaosRevokeUnderWorkTransactionalIT,ChaosRevokeUnderWorkKeyOrderIT`), so shard
+composition is fixed by that file rather than derived from what the tree contains. A class in the
+`sanity` package, not `@Tag("chaos")`, was never selected by any shard and its removal changes none
+of them.
+
+**Failing condition:** `AbstractRevokeUnderWorkScenario.runRevokeUnderWorkScenario:283`, the
+Awaitility condition aliased *"backlog drained after the storm settles (quiet phase)"* did not
+complete within its 5-minute bound - `ConditionTimeout`, 366.8s elapsed. Seed
+`7976335177229963841` (scenario `w4tx`, printed by `AbstractRevokeUnderWorkScenario`'s
+`"=== CHAOS {} revoke-under-work (cooperative={}): seed={} (replay: {}) ==="` banner;
+replay: `./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dincluded.groups=chaos
+-Dexcluded.groups= -Dchaos.seed=7976335177229963841`). The run's own `settleRun` summary reported
+`probe violations=[]` - no gating probe fired; the failure is the drain-await itself timing out.
+Several `CLASS2_STALL/LAG_STAGNATION` non-gating observations were logged in the same window
+(per-partition lag stagnant ~154s against the 150s bound).
+
+A rerun of the same job on the same commit
+([job 101232514184](https://github.com/astubbs/parallel-consumer/actions/runs/33938124400/job/101232514184))
+passed.
+
+**This is this scenario's first recorded red.** Its own class javadoc records "Calibration status:
+UNCALIBRATED" and, before this, only one prior run: GREEN in 144s on 2026-09-01 with
+`probe violations=[]`, on the confluentinc#857 branch. The javadoc states the open question this
+sighting bears on without resolving it - "It is not yet known whether it goes red on master, red
+only under particular timing, or green because the revoke wait needs a sharper shape than this
+family produces." **Not diagnosed here**, and no replay of this seed has been run - recorded only so
+it is not lost with the run's logs.
+
 ## User-facing report
 
 **astubbs#44 (confluentinc#803)** - *"Transactional Producer instance gets timeout getting commit lock

@@ -81,12 +81,15 @@ entries:
     blocks_1_0: false
     stage: in-progress
     stage_detail: >-
-      Fixes land on master continuously, each with a guard. The poll/control deadlock
-      (confluentinc#857) is no longer a drafted mitigation: astubbs#29 carries a fix measured
-      against a control that differs by one term, on both rebalance assignors, with the pre-fix arm
-      failing every repetition and the fixed arm none. It remains unmerged, and the family is not
-      closed by it - the transactional revoke wait (astubbs#44, which carries
-      upstream's verified-bug label) is a separate defect in a commit mode that fix cannot reach.
+      Fixes land on master continuously, each with a guard. astubbs#29 merged the fix for one
+      poll/control deadlock mechanism (confluentinc#857): measured against a control that differs by
+      one term, on both rebalance assignors, with the pre-fix arm failing every repetition and the
+      fixed arm none. The family is not closed by it - the transactional revoke wait (astubbs#44,
+      which carries upstream's verified-bug label) is a separate defect in a commit mode that fix
+      cannot reach, a third mechanism (a closing instance polling too little to leave its group
+      cleanly) has an open fix attempt in astubbs#444, and the family ledger
+      (`docs/inflight/bug-857-family.md`) still carries unattributed stall sightings reproducing on
+      trees that already carry astubbs#29's fix.
     why_now: The release claim rests on it, and the evidence has to be inspectable rather than asserted.
     done_when: >-
       No known critical defect open in release scope, and each resolution has a named guard that
