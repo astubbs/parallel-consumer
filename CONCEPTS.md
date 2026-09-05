@@ -327,3 +327,10 @@ The navigator's unit of delegated capacity: permission for one execution against
 minted per quantum (the fixed time slice a grant covers), spent locally at the moment a record is
 claimed for dispatch, and expiring unspent at the quantum's end. Death of a holder loses its
 credits; nothing re-mints an issued quantum - so failure wastes capacity but never creates it.
+
+**Partition-share**
+The navigator's allocation strategy in which an instance's share of a resource is the fraction of
+its subscription's partitions it currently holds, read from the consumer group's own assignment and
+re-divided by the group's own rebalance. It needs no coordination beyond what consuming already
+costs, so there is no controller to elect, fence or lose - and the share it hands out is a proxy for
+demand by partition, not a measurement of it.
