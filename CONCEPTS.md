@@ -330,7 +330,14 @@ credits; nothing re-mints an issued quantum - so failure wastes capacity but nev
 
 **Partition-share**
 The navigator's allocation strategy in which an instance's share of a resource is the fraction of
-its subscription's partitions it currently holds, read from the consumer group's own assignment and
-re-divided by the group's own rebalance. It needs no coordination beyond what consuming already
-costs, so there is no controller to elect, fence or lose - and the share it hands out is a proxy for
-demand by partition, not a measurement of it.
+its subscription's partitions it currently holds - held over the total across every subscribed
+topic - read from the consumer group's own assignment and re-divided by the group's own rebalance.
+It needs no coordination beyond what consuming already costs, so there is no controller to elect,
+fence or lose - and the share it hands out is a proxy for demand by partition, not a measurement of
+it. A share worth less than one whole credit per quantum is not rounded away: it accrues through a
+remainder that rotates by quantum over the partitions, and a partition's place in that rotation is
+its position across the whole sorted subscription rather than its index within its own topic, so
+every instance derives the same division and the fleet's shares sum to exactly the grant. A partition
+changing hands does not change a lease already issued: its share is last minted for the quantum in
+which the revocation lands, and its new holder first mints it at the following boundary - so a move
+briefly under-uses the rate rather than minting one quantum twice.

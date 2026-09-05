@@ -355,3 +355,19 @@ carries the group-observation waits (`awaitGroupStable` for uneven splits, `awai
 `rungBarrier`). `ChildPcProcessHarnessIT` is the harness's own proof - a harness failure must be
 distinguishable from a mechanism failure, and every scenario there is one such distinction - so read
 it before extending the harness, and extend the harness rather than a lane when a lane needs more.
+
+**Two navigator lanes ride that harness**, and their class javadocs own the detail.
+`NavigatorPartitionShareIT` is the asserted two-JVM storyline: tagged children sharing one rate,
+an untagged bystander untouched, kill-one convergence, uneven splits, idle share, two groups, and a
+joiner - counts over windows anchored to observed group stability, never gated on latency.
+`NavigatorChurnLadderIT` is the churn ladder: rungs of N children joining and leaving under both
+assignment protocols with clock skew injected per child, measuring the fleet's maximum aggregate
+overshoot per rung. It writes its dated record into `target/navigator-ladder/`, the Integration Tests
+row uploads that beside the failsafe report as one artifact, and **the record is committed under
+[`docs/test-hardening/`](test-hardening/) from that artifact, verbatim, with the workflow run URL in
+its header** - a CI job cannot commit into the PR, so the only hand step is the download and the
+provenance. Both lanes close a storyline through the same fleet ledger, and its ceiling is the
+**exact per-index entitlement**: what each quantum index's read actually mints, sampled per index on
+the child's own clock with one more sample after the processor stops so the last minted index is in
+the sum. It is deliberately not the share gauge a user reads - that one is the rotation AVERAGE, and
+a conservation check against an average is off by the rotation's phase.
