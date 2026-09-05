@@ -20,8 +20,15 @@ is written. Release = strip `-SNAPSHOT` and merge to `master`; `publish.yml` run
 deploys via the `maven-central` profile, tags `v<version>` and cuts a GitHub release
 ([`docs/releasing.md`](../releasing.md)).
 
-**No longer blocked by the quarantine guard** - astubbs#80 emptied the registry when it merged, so
-`release.yml`'s "no release while tests are quarantined" gate now passes.
+**Still blocked by the quarantine guard.** astubbs#80 did empty the registry when it merged, and this
+block used to stop there - but the registry has not stayed empty.
+[`docs/quarantined-tests.md`](../quarantined-tests.md) carries
+`MultiInstanceRebalanceTest.largeNumberOfInstances`, an unowned entry for a rebalance stall that is
+measured but not explained, so that file's rule 5 - a release is blocked while the list is non-empty -
+still bites and `release.yml`'s "no release while tests are quarantined" gate does not pass today.
+Read the registry rather than this line: it is the enforced copy, and the gate reads it, not this
+note. The "no disabled tests" gate below is a **separate** one, and it being met says nothing about
+this.
 
 ## Bugs found while triaging the upstream mirrors (2026-08-05)
 
@@ -170,8 +177,17 @@ The one name this section never carried was the actual last `@Disabled` on maste
 (`docs/test-hardening/inactive-tests-audit-2026-08-08.md` §1.5 has the full diagnosis). It carried no
 product behaviour to preserve, so it is deleted rather than fixed or quarantined; the deletion and its
 evidence are recorded in a new dated entry under `docs/test-hardening/`.
-`grep -rn @Disabled --include=*.java .` now returns nothing but comments and javadoc mentioning the
-annotation historically, none of them a live annotation.
+`grep -rn "@Disabled" --include="*.java" .` no longer returns a live bare `@Disabled` on any test
+class or method - which is what this gate asks. It does still match: javadoc and comment prose about
+the annotation, two `@Disabled` string literals inside `TransactionalClaimCoverageTest`'s assertion
+messages, and one `@DisabledOnOs(OS.WINDOWS)` platform guard on `AbstractQuarantineScriptTest`. None
+of those switches a test off. Run the command rather than trusting a summary here; the deletion entry
+under `docs/test-hardening/` breaks the matches down one by one.
+
+**Worth saying in release copy: this was inherited debt, not a rule being broken here.** Every test
+this gate ever named was disabled before the fork existed, in the years before this repo had a rule
+against muting or the `@Quarantined` mechanism that replaced it - per-test provenance, with the
+commit that disabled each one, is in `docs/test-hardening/inactive-tests-audit-2026-08-08.md`.
 
 AGENTS.md already gives the reasoning for why muting is the wrong answer generally: it "loses the
 signal - a 'known flake' can be a real product bug". This mattered to the release rather than only to
@@ -310,7 +326,13 @@ is fixed and regression-guarded.
 racing-double seam tests are a reusable deterministic technique for race reproduction, and the
 Lincheck / jcstress evaluation resolved to adopt both arms:
 the Lincheck lane (astubbs#347) and the jcstress probe module (astubbs#348) both merged 2026-08-25,
-the calibration having held - Lincheck refound four real races unaided. That gives the fork
+the calibration having held - **Lincheck refound three of the four named torn-read defects unaided,
+plus one nobody had put on the list**; the fourth was produced once by the model checker and did not
+reproduce. Say it that way in the announcement, not "four real races": the verdict table in
+`docs/plans/2026-08-25-001-test-lincheck-poc-plan.md` states row 3 at its weakest defensible strength
+on purpose, and the three-of-four number is the one `docs/data/testing-evidence.yaml`'s `lincheck`
+entry carries. Finding a defect nobody had named is the stronger half of the claim anyway - it is the
+thing a seam-based test cannot do. That gives the fork
 scheduler-controlled concurrency testing as a standing lane, something upstream never had, and it is
 shipped rather than roadmap material. **Paid before the release: an entry in
 `docs/data/testing-evidence.yaml`** alongside the suite-as-evidence material, which is where this

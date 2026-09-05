@@ -783,7 +783,10 @@ Not listed as work: `largeNumberOfInstances` is owned by open PR astubbs#29. The
 `@Timeout(120)` on a shared `MockConsumerTestBase` and adds the assertion
 `MockConsumerEarlyCloseTest` was missing - and **`@Timeout(60)` would have been wrong**, because two
 of those tests wait 45s and 50s internally, so it would have raced them rather than fixing them.
-`ProgressBarTest.width` is a deliberate manual check. Five of the ten deleted stubs (§4 of the audit)
+`ProgressBarTest.width` was a deliberate manual check, and has since been **deleted** - it was the
+last `@Disabled` test on master and the release gate made that the deciding factor
+([`docs/test-hardening/progressbartest-deleted-2026-09-05.md`](test-hardening/progressbartest-deleted-2026-09-05.md)).
+Five of the ten deleted stubs (§4 of the audit)
 are already covered by named enabled tests, and `truncationOnCommit` is obsolete - on-commit
 truncation is structurally unreachable, and the truncation that does exist happens on the bootstrap
 poll and is covered by `PartitionStateCommittedOffsetTest`.

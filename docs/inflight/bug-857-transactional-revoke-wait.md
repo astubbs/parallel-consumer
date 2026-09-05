@@ -65,18 +65,28 @@ No seed was captured.
 ## Sighting: `ChaosRevokeUnderWorkTransactionalIT.revokeUnderWorkStaysProtocolHonestInTransactionalMode`, 1 failure in 2 runs, 2026-09-05
 
 <!-- post-merge: checked - astubbs/parallel-consumer#448 is cited for its permanent diff content, which does not change after merge or if its branch is deleted -->
-astubbs/parallel-consumer#448, a docs/data-only PR whose diff touches no Java and no pom (two
-`docs/data/testing-evidence.yaml` entries added, one unrelated `@Disabled` sanity test deleted under
-`integrationTests/sanity/`, three markdown notes edited - `git diff --name-only` against the merge
-base confirms nothing under `src/main` or the `chaostests` package changed). Failed in "Chaos Pain
+astubbs/parallel-consumer#448, a docs-and-data PR - entries added under `docs/data/`, markdown notes
+edited, and one long-`@Disabled` sanity test deleted under `integrationTests/sanity/`
+(`git diff --name-status <merge-base>..<head>` gives the shape). Failed in "Chaos Pain
 Suite 2/4" on
 [run 33938124400, job 101230384149](https://github.com/astubbs/parallel-consumer/actions/runs/33938124400/job/101230384149),
 head `3ef5a009a`.
 
+**Why the branch cannot have caused it**, on ground the deleted test file does not undermine - it is
+a Java deletion, so "touches no Java" would be false and is not the argument. Nothing under
+`src/main` changed and nothing in the `chaostests` package changed, so neither the product code under
+test nor the scenario itself moved. Nor can removing a class reshuffle the shard: `.github/workflows/maven.yml`
+gives each chaos shard a **hardcoded** `scenarios:` class list, passed through as `CHAOS_SCENARIOS`
+(Suite 2/4 is `ChaosRevokeUnderWorkTransactionalIT,ChaosRevokeUnderWorkKeyOrderIT`), so shard
+composition is fixed by that file rather than derived from what the tree contains. A class in the
+`sanity` package, not `@Tag("chaos")`, was never selected by any shard and its removal changes none
+of them.
+
 **Failing condition:** `AbstractRevokeUnderWorkScenario.runRevokeUnderWorkScenario:283`, the
 Awaitility condition aliased *"backlog drained after the storm settles (quiet phase)"* did not
 complete within its 5-minute bound - `ConditionTimeout`, 366.8s elapsed. Seed
-`7976335177229963841` (scenario `w4tx`, printed at `AbstractRevokeUnderWorkScenario.java:211`;
+`7976335177229963841` (scenario `w4tx`, printed by `AbstractRevokeUnderWorkScenario`'s
+`"=== CHAOS {} revoke-under-work (cooperative={}): seed={} (replay: {}) ==="` banner;
 replay: `./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dincluded.groups=chaos
 -Dexcluded.groups= -Dchaos.seed=7976335177229963841`). The run's own `settleRun` summary reported
 `probe violations=[]` - no gating probe fired; the failure is the drain-await itself timing out.
