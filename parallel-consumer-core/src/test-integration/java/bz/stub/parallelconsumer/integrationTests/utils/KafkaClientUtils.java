@@ -30,6 +30,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.testcontainers.containers.KafkaContainer;
 import pl.tlinkowski.unij.api.UniLists;
+import pl.tlinkowski.unij.api.UniMaps;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -315,6 +316,20 @@ public class KafkaClientUtils implements AutoCloseable {
      */
     public CreateTopicsResult createTopic(String name, int numPartitions) {
         return createTopicsBlocking(UniLists.of(new NewTopic(name, numPartitions, (short) 1)));
+    }
+
+    /** As {@link #createTopic(String, int)}, with per-topic broker configs (e.g. the timestamp type). */
+    public CreateTopicsResult createTopic(String name, int numPartitions, java.util.Map<String, String> configs) {
+        return createTopicsBlocking(UniLists.of(new NewTopic(name, numPartitions, (short) 1).configs(configs)));
+    }
+
+    /**
+     * A topic whose records carry the BROKER's clock ({@code message.timestamp.type=LogAppendTime}) - one clock
+     * for a whole fleet of producers, however skewed their own (the multi-process navigator harness's KTD8). A
+     * {@link FiringLedger} needs exactly one partition, so that is the only shape offered.
+     */
+    public CreateTopicsResult createLogAppendTimeTopic(String name) {
+        return createTopic(name, 1, UniMaps.of("message.timestamp.type", "LogAppendTime"));
     }
 
     public List<NewTopic> createTopics(int numTopics) {

@@ -345,3 +345,13 @@ extend them. Duplicating an existing helper is how bugs get reintroduced - a cop
 logic once drifted to a 1-second timeout and became a flaky-CI source (see
 [`docs/solutions/test-issues/`](solutions/test-issues/)). When you must add a helper, put it in the
 shared util, not the test.
+
+**Multi-process tests never touch a `Process` directly.** The child-JVM harness lives beside those
+helpers in `integrationTests/utils/`: `ChildPcProcess` launches, observes and kills a child JVM running
+`ChildPcMain` (one PC instance, built from `ChildPcOptions` - the one argument contract both sides
+share), `FiringLedger` counts every child's firings on the broker's clock from a log-append-time
+output topic and aggregates the children's end-of-run `ChildLedgerRecord`s, and `BrokerIntegrationTest`
+carries the group-observation waits (`awaitGroupStable` for uneven splits, `awaitGroupMemberCount`,
+`rungBarrier`). `ChildPcProcessHarnessIT` is the harness's own proof - a harness failure must be
+distinguishable from a mechanism failure, and every scenario there is one such distinction - so read
+it before extending the harness, and extend the harness rather than a lane when a lane needs more.
