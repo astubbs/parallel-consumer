@@ -398,6 +398,8 @@ against the new. The lesson this file already records - a wrong verdict on a rig
 finding - held for the second time in four days.
 <!-- file-refs: N/A - the harness moved to branch test/overnight-torture-harness-v2; named here as the instrument that produced these runs, not as a file in this tree -->
 
+<!-- post-merge: checked-begin - a dated sighting, written in the past tense against a PR number and a
+     job link rather than a branch name, so it stays resolvable after the branch is deleted -->
 **Seventh sighting, 2026-09-05 - and two more the same hour on unrelated branches, which is the point.**
 `churnStormMeetsSlosAndBalancesLedger` killed fail-fast (`probe violation during run`) on
 astubbs/parallel-consumer#434 at head `4409adc02`,
@@ -416,3 +418,4 @@ The branch's own change is ruled out by the mode gate, not by argument: it adds 
 behind `ProducerRecovery#canRecover()`, which requires the transactional commit mode, and this scenario is
 `PERIODIC_CONSUMER_ASYNCHRONOUS` - the first fact in this file. The job log carries none of the lines that path
 would emit (`Recorded producer invalidation`, `Producer recovery`).
+<!-- post-merge: checked-end -->
