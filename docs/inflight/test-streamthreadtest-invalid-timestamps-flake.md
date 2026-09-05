@@ -2,6 +2,7 @@
 
 <!-- inflight-type: bug -->
 <!-- inflight-impact: misdirection -->
+<!-- flaky-case: org.apache.kafka.streams.processor.internals.StreamThreadTest#shouldLogAndRecordSkippedRecordsForInvalidTimestamps -->
 
 `StreamThreadTest.shouldLogAndRecordSkippedRecordsForInvalidTimestamps[3]` fails intermittently in the
 upstream-Kafka suite that `parallel-consumer-streams` runs against its patched classes. Diagnosed
@@ -43,6 +44,20 @@ produces on this stack. Consistent with the forest's originally measured rate ra
 The example agent deliberately stopped re-running to chase green, which is the habit this note
 exists to prevent.
 
+**Sighted once more on the reconciliation branch**, seam off: one failure in three runs of the whole
+upstream execution on one machine, at parameterisation `[3]` and the same assertion line. The other
+two runs were the seam-on evidence lane's control arm, which was clean both times - so the same tree
+produced a clean control twice and a red one once, in the same session. That is a pass/fail pair on
+an unchanged tree, which is the strongest shape this ledger collects, and it is why the lane is built
+to name this case from here rather than abort on it.
+
+**And on both cascaded rungs' first CI run after the classifier warm landed** - the Unit lane of
+astubbs/parallel-consumer#388 and of astubbs/parallel-consumer#389, same parameterisation `[3]`, same
+assertion, in runs where every other lane was green. Those two runs are worth reading for a second
+reason: neither hit the Maven Central classifier timeout, so the suite actually ran, which is what the
+`prepare-deps` warm was cascaded down the spine to make possible. The flake is now the only thing
+reddening that lane.
+
 ## Why this matters more than one flaky test
 
 **Every agent working on this module is told that "Kafka's own suites, zero failures with the seam
@@ -63,6 +78,19 @@ So the gate needs restating rather than repeating. Options, in rough order of pr
   patch - which is where a change to a Kafka test class can actually live.
 - **State the gate as "zero failures other than this named case"**, which is honest but relies on every
   future agent knowing the exception.
+
+**The third option is now MECHANICAL for the seam-on lane, and only for it.** The
+`flaky-case:` marker at the top of this note is machine-readable, and
+`bin/ci-streams-seam-on-evidence.sh` reads every note in this directory for one. That lane runs Kafka's
+suite twice, and its control arm is the seam-off run - so a control-arm failure has to be either
+ledgered here, in which case the lane names this note and carries on, or unknown, in which case the
+lane stops and says the control is not a control. **That relocates the signal instead of destroying
+it, which is what a re-run would do**, and it means the lane's own gate does not depend on a
+developer remembering the exception.
+
+It changes nothing for the ordinary build. The seam-off oracle in the module's normal `test` phase
+still goes red on this case, still with no record of why at the point of failure, so the options above
+are still open and this note is still live.
 
 Until then, when this case fails: **do not chase it, and do not "fix" the code under test.** Confirm it
 is this test and this parameterisation, then re-run. Anything else that fails is real.

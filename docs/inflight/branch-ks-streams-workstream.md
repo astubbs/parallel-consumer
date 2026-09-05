@@ -11,10 +11,17 @@ reach them. Records do go through PC, **with the seam switched on**, which it is
 
 **What is still off `master`** is most of what makes that seam usable: refusing unsupported topology
 shapes (so today an unsupported one is dispatched rather than refused - the reason the seam defaults
-off), task lifecycle and rebalance, stream time and punctuation, the benchmarks and the seam-on
-upstream evidence lane, the example module, and the plan documents and in-flight notes of the
-workstream. The module is **not published** either way. So an agent listing this directory still
-sees sideways references to most of the work and no way in.
+off), task lifecycle and rebalance, stream time and punctuation, error surfacing and backpressure,
+and the plan documents and in-flight notes of the workstream. **The evidence suite - the seam-on
+divergence lane, the broker-backed laws and the realistic benchmark - is the rung that removed
+itself from this list**, so what master lacks is the semantics, not the means of measuring them. The
+module is **not published** either way. So an agent listing this directory still sees sideways
+references to most of the work and no way in.
+
+`parallel-consumer-examples/parallel-consumer-example-streams-pc` is the other exception: a runnable
+demo of the seam, which is where to go first for what it does and does not do. It runs the same
+workload with the switch off and on, prints the dispatch counters as evidence rather than assertion,
+and prints a negative control and a within-run noise floor beside the headline.
 
 **What it is.** Give a Kafka Streams topology PC's per-key concurrency by replacing Streams' record
 selection with PC's `WorkManager` and running the processor chain on PC's worker pool, applied as a

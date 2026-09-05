@@ -18,6 +18,22 @@ baseline for comparison is 15/20 runs fully clean, zero stall-class failures.
 | `PartitionStateCommittedOffsetIT.committedOffsetRemoved[3] none` | 1 sighting (2026-08-05) | `RebalanceInProgressException` out of the test's own setup |
 | `PartitionStateCommittedOffsetIT.committedOffsetRemoved[2] earliest` | 1 sighting (2026-08-25, astubbs#353, [job 97859037375](https://github.com/astubbs/parallel-consumer/actions/runs/32865269364/job/97859037375)) | `checkHowManyRecordsWithKeyPresent` expected 2 got 1 - the `[1] latest` assertion signature (solved 2026-08-05 as a nudge race) appearing on the `earliest` parameter; `probe clean` autopsy (test-side, not consumer-group progress), on a branch with no Java <!-- post-merge: checked --> |
 | `TransactionTimeoutsTest.commitTimeout[2]` | 1 sighting (2026-08-06, astubbs#204) | incompletes `[8]` where the parameter pins `[8, 12]` |
+| `TransactionAndCommitModeTest` - `testDefaultMaxPoll`, `testLowMaxPoll`, `testHighMaxPollEnum`, `testTransactionalDefaultMaxPoll` | 7 cases in one local run (2026-09-01) | `All keys sent to input-topic should be processed and produced, within time` at ~40s, across four commit modes; the same run's `PartitionStateCommittedOffsetIT.committedOffsetRemoved[3] none` threw `RebalanceInProgressException`, which is the row above repeating |
+
+**The 2026-09-01 sighting is worth more than its tally row, because the load was measured rather than
+assumed.** It came from a `-am` build of `parallel-consumer-streams` on a developer machine, which
+runs core's whole integration suite alongside the streams module's brokers - so several broker
+<!-- post-merge: checked-begin -->
+<!-- The branch is named outright rather than called "this branch", and the claim beside it is a
+     command anyone can re-run against whatever that ref resolves to - so the sentence still reads
+     correctly once the branch is gone. -->
+containers were up at once. The branch it was seen on (`feats/ks-streams-reconciled`) changes **zero
+files under `parallel-consumer-core`**, which is checkable rather than asserted:
+`git diff --name-only origin/master...HEAD -- parallel-consumer-core` is empty. Re-running the
+streams module alone, with core installed rather than built beside it, was green in every arm. So
+this is the family's signature - contention, not the change under test - and it is recorded rather
+than re-run past.
+<!-- post-merge: checked-end -->
 
 **A third member has now left the family, and it left by being reclassified rather than fixed-as-tight.**
 `TransactionTimeoutsTest.commitTimeout[1]` failed once on CI (2026-08-07,
