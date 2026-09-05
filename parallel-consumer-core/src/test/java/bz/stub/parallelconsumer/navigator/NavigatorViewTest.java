@@ -141,9 +141,63 @@ class NavigatorViewTest {
             assertThat(view.localRatePerSecond(API_A).isPresent()).isFalse();
             assertThat(view.globalRatePerSecond(API_A).isPresent()).isFalse();
             assertThat(view.localRatePerSecond(null).isPresent()).isFalse();
+            assertThat(view.shareFraction(API_A).isPresent()).isFalse();
+            assertThat(view.creditsPerQuantum(API_A).isPresent()).isFalse();
         }
         // AE6: an untagged instance's view must never touch the allocator
         Mockito.verifyNoInteractions(untouchedAllocator);
+    }
+
+    // -----------------------------------------------------------------------------------------------------
+    // R9 / AE3 (partition-share): the share reads - fraction and credits per quantum, from the two rate reads
+    // -----------------------------------------------------------------------------------------------------
+
+    /**
+     * Under the DEFAULT strategy the engine builds the partition-share allocator; a holder of three of the
+     * subscription's four partitions reads a three-quarter share, worth three credits per quantum at 4/sec on a
+     * one-second quantum - and the pair derives from {@code localRatePerSecond / globalRatePerSecond} alone.
+     */
+    @Test
+    void partitionShareViewReportsTheFractionAndCreditsPerQuantum() {
+        clock = MutableClock.epochUTC();
+        var options = ParallelConsumerOptions.<String, String>builder()
+                .ordering(ParallelConsumerOptions.ProcessingOrder.UNORDERED)
+                .pcInstanceTag(MEMBER)
+                .resourceTags(UniLists.of(API_A))
+                .resourceContracts(UniLists.of(new ResourceContract(API_A, 4.0, 4, ONE_SECOND)))
+                .build();
+        module = new PCModuleTestEnv(options, clock);
+        PartitionShareResourceAllocator partitionShare = module.partitionShareAllocator().orElseThrow(
+                () -> new AssertionError("the default strategy builds the partition-share allocator"));
+        NavigatorView view = module.navigatorView();
+
+        // before any assignment: tagged, so constrained - and the share is a real zero (R5), not empty
+        assertThat(view.shareFraction(API_A).getAsDouble()).isEqualTo(0.0);
+        assertThat(view.creditsPerQuantum(API_A).getAsDouble()).isEqualTo(0.0);
+
+        Map<String, Integer> totals = new HashMap<>();
+        totals.put(TOPIC, 4);
+        partitionShare.publish(AssignmentSnapshot.resolved(
+                new java.util.HashSet<>(Arrays.asList(TP0, TP1, new TopicPartition(TOPIC, 2))), totals),
+                clock.instant());
+        clock.add(ONE_SECOND); // the publication is effective from the next quantum (R4)
+
+        assertThat(view.shareFraction(API_A).getAsDouble()).isEqualTo(0.75);
+        assertThat(view.creditsPerQuantum(API_A).getAsDouble()).isEqualTo(3.0);
+        assertThat(view.localRatePerSecond(API_A).getAsDouble()).isEqualTo(3.0);
+        assertThat(view.globalRatePerSecond(API_A).getAsDouble()).isEqualTo(4.0);
+        // an un-tagged name stays unconstrained for the share reads too (AE6)
+        assertThat(view.shareFraction("api-nobody-registered").isPresent()).isFalse();
+        assertThat(view.creditsPerQuantum(null).isPresent()).isFalse();
+    }
+
+    /** The inert singleton answers the share reads with the unconstrained shape, like every other read. */
+    @Test
+    void inertViewShareReadsAreEmpty() {
+        NavigatorView inert = NavigatorView.inert();
+
+        assertThat(inert.shareFraction(API_A).isPresent()).isFalse();
+        assertThat(inert.creditsPerQuantum(API_A).isPresent()).isFalse();
     }
 
     // -----------------------------------------------------------------------------------------------------

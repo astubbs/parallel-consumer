@@ -92,6 +92,22 @@ public final class ParticipantBackedNavigatorView implements NavigatorView {
         return OptionalDouble.of(participant.globalRatePerSecond(resourceName));
     }
 
+    @Override
+    public OptionalDouble shareFraction(String resourceName) {
+        if (isUnconstrained(resourceName)) {
+            return OptionalDouble.empty();
+        }
+        return OptionalDouble.of(participant.shareFraction(resourceName, clock.instant()));
+    }
+
+    @Override
+    public OptionalDouble creditsPerQuantum(String resourceName) {
+        if (isUnconstrained(resourceName)) {
+            return OptionalDouble.empty();
+        }
+        return OptionalDouble.of(participant.creditsPerQuantum(resourceName, clock.instant()));
+    }
+
     /**
      * AE6's unconstrained shape: the navigator constrains this instance on a name only when the instance is
      * active AND tags that name - anything else (untagged instance, un-tagged or unknown name, null) reads as

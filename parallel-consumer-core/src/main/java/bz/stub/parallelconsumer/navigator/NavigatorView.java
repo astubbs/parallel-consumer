@@ -89,6 +89,25 @@ public interface NavigatorView {
     OptionalDouble globalRatePerSecond(String resourceName);
 
     /**
+     * This instance's current share of {@code resourceName}'s declared rate, as a fraction in {@code [0, 1]}
+     * (the partition-share plan's R9): {@link #localRatePerSecond} over {@link #globalRatePerSecond}, so under
+     * partition-share it is the fraction of the subscription's partitions this instance holds - three
+     * quarters for a holder of three partitions out of four (AE3). {@code 0.0} is a real answer: no partition
+     * held, or the partition total still unresolved (R5), or a shut valve. Empty means unconstrained here,
+     * exactly as {@link #localRatePerSecond} defines it.
+     */
+    OptionalDouble shareFraction(String resourceName);
+
+    /**
+     * What this instance's current share of {@code resourceName} is worth in credits per quantum (R9):
+     * {@link #localRatePerSecond} times the resource's quantum length in seconds - the "why am I at 1Hz"
+     * number, read from one instance. Fractional values are real: a share below one credit per quantum accrues
+     * through the allocator's remainder rotation rather than rounding to zero (AE3). Empty means unconstrained
+     * here, exactly as {@link #localRatePerSecond} defines it.
+     */
+    OptionalDouble creditsPerQuantum(String resourceName);
+
+    /**
      * The untagged instance's view (R3, AE6): {@link #isActive()} false and every query the empty/unconstrained
      * shape, at zero cost - it holds no allocator and can touch nothing.
      */
