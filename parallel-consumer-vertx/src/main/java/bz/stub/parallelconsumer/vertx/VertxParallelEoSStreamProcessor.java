@@ -9,6 +9,7 @@ import bz.stub.parallelconsumer.PCRetriableException;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.PollContext;
 import bz.stub.parallelconsumer.PollContextInternal;
+import bz.stub.parallelconsumer.internal.AbstractParallelEoSStreamProcessor;
 import bz.stub.parallelconsumer.internal.ExternalEngine;
 import bz.stub.parallelconsumer.internal.MdcPropagation;
 import bz.stub.parallelconsumer.internal.PCInternalRuntimeException;
@@ -403,19 +404,52 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
     }
 
     /**
-     * Close the concurrent Vertx consumer system
+     * Close the concurrent Vertx consumer system.
+     * <p>
+     * This is the single method every {@link bz.stub.parallelconsumer.internal.DrainingCloseable} entry
+     * point resolves to: the no-argument {@code close()}, {@code closeDrainFirst()} and
+     * {@code closeDontDrainFirst()} default methods call {@code close(DrainingMode)} directly, and
+     * {@link AbstractParallelEoSStreamProcessor#close(Duration, DrainingMode)} records the caller's timeout
+     * in a field and then delegates to {@code close(DrainingMode)} too - so overriding only this overload,
+     * rather than the {@link Duration}-taking one, is what makes every entry point release the Vert.x
+     * engine. (Overriding both would double-run this teardown: the base class's {@code close(Duration,
+     * DrainingMode)} calls {@code close(drainMode)} internally, which dispatches virtually back to
+     * whichever override is more derived.)
+     * <p>
+     * The Vert.x teardown runs in a {@code finally}, so a {@code super.close(...)} that throws still
+     * releases the {@link WebClient} and {@link Vertx} engine rather than stranding them.
      *
-     * @param timeout   how long to wait before giving up
      * @param drainMode wait for messages already consumed from the broker to be processed before closing
      */
     @SneakyThrows
     @Override
-    public void close(Duration timeout, DrainingMode drainMode) {
+    public void close(DrainingMode drainMode) {
         log.info("Vert.x async consumer closing...");
-        super.close(timeout, drainMode);
+        try {
+            super.close(drainMode);
+        } finally {
+            closeVertxEngine();
+        }
+    }
+
+    /**
+     * Releases the Vert.x {@link WebClient} and {@link Vertx} engine, bounded by
+     * {@link ParallelConsumerOptions#getShutdownTimeout()}.
+     * <p>
+     * That is always the configured default, even when a caller reached here via
+     * {@link AbstractParallelEoSStreamProcessor#close(Duration, DrainingMode)} with its own timeout: that
+     * overload records the override in a private field on the base class, which this class has no access
+     * to, so this wait cannot see it. The trade-off is deliberate - the alternative was re-overriding the
+     * {@link Duration}-taking overload too, which is exactly the duplicated-teardown shape
+     * {@link #close(DrainingMode)}'s javadoc explains avoiding. A caller who needs the Vert.x-side wait
+     * itself bounded differently should configure {@link ParallelConsumerOptions#getShutdownTimeout()}
+     * rather than the per-call override.
+     */
+    @SneakyThrows
+    private void closeVertxEngine() {
         webClient.close();
         Future<Void> close = vertx.close();
-        var timer = Time.SYSTEM.timer(timeout);
+        var timer = Time.SYSTEM.timer(options.getShutdownTimeout());
         while (!close.isComplete()) {
             log.trace("Waiting on close to complete");
             Thread.sleep(100);
