@@ -747,3 +747,27 @@ response the coordinator will not send until other members act, and no amount of
 closer changes that. Any repair is one of: not waiting for that response (a bounded consumer close
 once LeaveGroup is sent - the coordinator already has it), or keeping the join phase completing under
 churn, which is a group-level property this note cannot yet name the lever for.
+
+
+## The storm itself, on the machine that never fails: a hard 3-second ceiling - 2026-09-05
+
+`largeNumberOfInstances` at `perf.scale=0.5`, three iterations, the two coordinator loggers raised.
+All three passed (this machine has never failed it), and that is the point of running them here:
+they are the healthy baseline the Linux failures now have to be read against.
+
+| iteration | leaves | joins | worst LeaveGroup | worst JoinGroup |
+|---|---|---|---|---|
+| 1 | 89 | 172 | 2.83s | 3.00s |
+| 2 | ~100 | ~180 | 2.87s | 3.00s |
+| 3 | see log | see log | ~2.9s | 3.00s |
+
+Under the profile's own churn - a toggle every 0-500ms across eleven secondaries - **no LeaveGroup and
+no JoinGroup ever waited longer than one heartbeat interval.** The join phase always completed on the
+next heartbeat. Nothing here waits 25 seconds, so the Linux stall needs something churn alone does not
+produce.
+
+**What the Linux batch dispatched at `3fcecf6e` (run 33939841725) therefore decides**, with the same
+loggers on and the same analyser: if a failing iteration shows LeaveGroups or JoinGroups unanswered
+for ~25s, the members and the instant are named and the fleet dump says what each was doing; if every
+latency there is also ~3s and the fleet still froze, the wait is not in the coordinator protocol and
+the search has been one layer too low.
