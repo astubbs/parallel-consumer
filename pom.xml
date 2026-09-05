@@ -46,6 +46,7 @@
         <!-- Same reasoning as the protocol module above: an ordinary JVM module, in the default reactor. -->
         <module>parallel-consumer-proxy</module>
         <module>parallel-consumer-proxy-clients</module>
+        <module>parallel-consumer-proxy-streams</module>
         <module>parallel-consumer-examples</module>
     </modules>
 

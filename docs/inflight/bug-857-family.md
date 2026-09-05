@@ -730,6 +730,13 @@ and per the table in
 the GREEN side needs two or three replays before it settles anything. **Nobody has replayed it.**
 Recorded as unresolved.
 
+**Fourteenth sighting, 2026-08-17 - the eager `CLASS2_STALL` again, and a DIFFERENT arm from the
+fleet `NO_PROGRESS` pair above, and it reproduces the second sighting almost exactly.**
+
+(Observed before the eighth, and numbered last because it arrived by merge rather than in date
+order - it was recorded on this branch as its seventh and later its thirteenth, numbers master had
+since given to different sightings.)
+
 <!-- post-merge: checked-begin -->
 **Fourteenth sighting, 2026-08-25 - THREE reds on a docs-and-comments branch, fresh seeds each time,
 and the contention explanation does NOT fit.** `Chaos Pain Suite` failed at three consecutive heads

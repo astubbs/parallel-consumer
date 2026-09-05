@@ -1,0 +1,437 @@
+// Copyright (C) 2026 Antony Stubbs and contributors
+
+syntax = "proto3";
+
+// EXPERIMENTAL AND UNFROZEN, deliberately, and this is the whole reason the schema lives here
+// rather than beside the v1 wire.
+//
+// The v1 protocol is additive-only: nothing may be removed, renumbered, retyped or renamed. A
+// message shape chosen to keep an argument type system OUT of a proof does not belong in a
+// contract every client library inherits forever. Everything below may change or disappear.
+//
+// Keeping it in this module also keeps three gates clean. The specification-coverage test reads
+// only the descriptor file that declares the v1 Configure message, so this file is invisible to
+// it. The lint gate runs over the protocol module's proto root, which this is not under. And the
+// breaking-change gate refuses to run at all if it finds a second copy of the frozen file's path.
+//
+// Promotion into the frozen wire is a separate, later decision taken against a real Kafka Streams
+// design - not a side effect of this proof.
+package parallelconsumer.streams.v1alpha1;
+
+option java_package = "bz.stub.parallelconsumer.streams.protocol.v1alpha1";
+option java_multiple_files = true;
+option java_outer_classname = "StreamsProto";
+
+// One bidirectional stream carries a whole session: the handshake, the topology description, and
+// then per-record invocations for as long as the topology runs.
+//
+// It does NOT reuse the v1 Session RPC, and that is forced rather than stylistic. The v1 handshake
+// rejects a Configure naming neither a topic list nor a topic pattern, and builds a Parallel
+// Consumer engine from that subscription. A Streams topology names its own sources, so a Streams
+// session cannot open on it without fabricating a subscription and standing up an engine nothing
+// uses.
+service StreamsService {
+  rpc Session(stream StreamsClientMessage) returns (stream StreamsServerMessage);
+}
+
+message StreamsClientMessage {
+  oneof message {
+    Open open = 1;
+    BuilderCall builder_call = 2;
+    RegisterFunction register_function = 3;
+    DescribeComplete describe_complete = 4;
+    InvocationResult invocation_result = 5;
+    Describe describe = 6;
+    Get get = 7;
+  }
+}
+
+message StreamsServerMessage {
+  oneof message {
+    Ready ready = 1;
+    HandleAssigned handle_assigned = 2;
+    Invocation invocation = 3;
+    Fault fault = 4;
+    TopologyDescription topology_description = 5;
+    GetResult get_result = 6;
+  }
+}
+
+// The handshake. First message on the stream; nothing else is accepted before it.
+message Open {
+  optional string application_id = 1;
+  // Passed to the Kafka Streams instance as-is. Credentials travel here and are never echoed back.
+  map<string, string> kafka_properties = 2;
+}
+
+message Ready {
+  optional string application_id = 1;
+}
+
+// One call against the topology builder. The client chooses call_id and the server echoes it on
+// the HandleAssigned that answers, so a client can match answers without assuming ordering.
+message BuilderCall {
+  optional int64 call_id = 1;
+  oneof call {
+    Source source = 2;
+    MapValues map_values = 3;
+    GroupByKey group_by_key = 4;
+    Count count = 5;
+    Sink sink = 6;
+    Reduce reduce = 7;
+    Join join = 8;
+    WindowedBy windowed_by = 9;
+    Aggregate aggregate = 10;
+    ToStream to_stream = 11;
+  }
+}
+
+message Source {
+  optional string topic = 1;
+}
+
+// The one operator that crosses the boundary. function_token names a function the client
+// registered; no callable, address or source text ever crosses.
+message MapValues {
+  optional int64 handle = 1;
+  optional int64 function_token = 2;
+}
+
+message GroupByKey {
+  optional int64 handle = 1;
+}
+
+// The aggregation. Its store is in-memory by design - see the plan's decision on state stores.
+message Count {
+  optional int64 handle = 1;
+  optional string store_name = 2;
+}
+
+// Combine each key's values with a function the HOST supplies. Unlike count, whose result the engine
+// computes alone, this is the first operator whose STATE passes through the host: the stored
+// aggregate crosses the boundary, the host's reducer combines it with the new value, and the answer
+// crosses back to be stored. Mirrors Kafka's Reducer<V> exactly - two values in, one out, no key and
+// no initializer - so the host's function signature is the framework's, not one this wire invented.
+message Reduce {
+  optional int64 handle = 1;
+  optional int64 function_token = 2;
+  optional string store_name = 3;
+}
+
+message Sink {
+  optional int64 handle = 1;
+  optional string topic = 2;
+}
+
+// Windows a grouped stream by time, minting a time-windowed stream. Half of the aggregation pair -
+// two calls rather than one fused call, so the window specification lives in exactly one place
+// where the store, the read path and the sink refusal can all read it back.
+message WindowedBy {
+  optional int64 handle = 1;
+  optional TimeWindowSpec window = 2;
+}
+
+// A time window, in milliseconds. ALL FOUR fields are always present - a specification with a
+// field missing is refused by name, never defaulted, because every default here is a trap:
+// a defaulted advance silently turns a hopping window into a point, and a defaulted retention is
+// Kafka's own `size + grace`, under which a one-hour window retains roughly the currently-open
+// window and nothing else - so a host that later range-reads coexisting windows would find them
+// gone for a reason with nothing to do with its own code. Tumbling is advance equal to size.
+message TimeWindowSpec {
+  optional int64 size_ms = 1;
+  optional int64 advance_ms = 2;
+  optional int64 grace_ms = 3;
+  // Applied to the window store. Must be at least size_ms + grace_ms; below that the builder call
+  // is refused with the minimum named, rather than surfacing as Kafka's own exception later.
+  optional int64 retention_ms = 4;
+}
+
+// The windowed aggregation, and the first operator that carries a VALUE on a builder call:
+// `initial` is the initializer's result, captured once as bytes. It never crosses per record -
+// Kafka's Initializer is zero-argument and pure, so the host supplies its value at build time and
+// the engine hands out a fresh copy each time a key opens a new window. The per-record function is
+// named by token exactly as map_values and reduce name theirs.
+//
+// `function_token` and `combine` are ALTERNATIVES, and exactly one must be set. The token places
+// the host's function at the aggregator, called once per record per overlapping window; the
+// combine names a fold the ENGINE executes, so nothing crosses the boundary per record and the
+// host meets the aggregation only at its emits. A call setting both is describing two different
+// aggregations at once, and one setting neither is describing none - each is refused by name
+// rather than resolved by precedence, because a precedence rule here would silently discard half
+// of what the host said. `initial` belongs to the token placement only: a combine kind defines
+// its own empty accumulator, so initial bytes sent alongside a combine are refused rather than
+// silently dropped.
+message Aggregate {
+  optional int64 handle = 1;
+  optional bytes initial = 2;
+  optional int64 function_token = 3;
+  optional string store_name = 4;
+  optional CombineKind combine = 5;
+}
+
+// An engine-executed combine, named rather than supplied: the host picks one from this set, and
+// no callable crosses - a function sent to run per record would be the aggregator placement
+// wearing a different name.
+//
+// TWO kinds, and the second is a control requirement rather than coverage. A placement
+// measurement needs a crossing-free arm that differs from the host-function arm by exactly one
+// term - the crossing. APPEND_BYTES collects raw values, so its accumulator, store, changelog
+// and emit payload all grow with window occupancy where a host fold's do not: that is two terms
+// changed, which voids the control. LAST_BYTES keeps only the newest value, so its accumulator
+// is bounded like a fold's and only the crossing differs. So the control arm takes LAST_BYTES,
+// and APPEND_BYTES exists for the placement where collecting is the point.
+enum CombineKind {
+  COMBINE_KIND_UNSPECIFIED = 0;
+  // Length-prefixed concatenation of record values in arrival order: each value is preceded by
+  // its length as four big-endian bytes, so a reader splits on declared boundaries rather than
+  // guessing. The accumulator grows with window occupancy.
+  COMBINE_KIND_APPEND_BYTES = 1;
+  // Keeps only the newest value; the accumulator is bounded by one value's size.
+  COMBINE_KIND_LAST_BYTES = 2;
+}
+
+// Re-keys a windowed table to its INNER key, minting a plain byte-keyed stream - the one call that
+// makes a windowed table consumable. Nothing else on this wire accepts a windowed handle:
+// map_values takes a stream, and sink refuses a windowed key because no topic encoding exists for
+// one that other Kafka Streams consumers could read. The window is dropped here, not encoded, so
+// no internal layout reaches a topic. The cost lands on the reader: the sunk topic carries one
+// record per emit per window under colliding inner keys, so last-value-per-key stops meaning
+// "final aggregate" over it.
+message ToStream {
+  optional int64 handle = 1;
+}
+
+// Handles are server-minted and opaque to the client, which may only name them back.
+//
+// Delivery contract: `handle` and `type` are present exactly when the call minted a handle. A
+// non-minting call (sink) is answered with neither, so the wire has ONE presence signal for "a
+// handle was minted" rather than two that could diverge.
+message HandleAssigned {
+  optional int64 call_id = 1;
+  optional int64 handle = 2;
+  optional HandleType type = 3;
+}
+
+// What a handle IS, declared at mint time - which is when the host needs it, because the host is
+// about to name this handle in its next call and to read what the topology writes.
+//
+// This exists because an operator can mint a value the host never supplied: count() produces a
+// table of longs, and without this message the host can only know that by convention. Every
+// aggregation, reduce and join mints a typed value the same way, so the type travels on the wire
+// or each one becomes engine-side tribal knowledge.
+message HandleType {
+  optional HandleKind kind = 1;
+  optional DataType key_type = 2;
+  optional DataType value_type = 3;
+
+  // Present exactly when the handle is windowed: a time-windowed stream, and the windowed table
+  // its aggregate mints. This is the growth path the DataType comment below promised - a
+  // parameterised type arrives as an additive STRUCTURED field beside the flat enums, not as a
+  // recursive type or a new enum member. It rides on the type, never on a second map keyed by
+  // handle: the handle store already records one fact per handle, and a parallel map would be a
+  // second copy of the same fact, waiting to drift.
+  optional TimeWindowSpec window = 4;
+}
+
+enum HandleKind {
+  HANDLE_KIND_UNSPECIFIED = 0;
+  HANDLE_KIND_STREAM = 1;
+  HANDLE_KIND_GROUPED_STREAM = 2;
+  HANDLE_KIND_TABLE = 3;
+  // Minted by windowed_by, consumed by aggregate and nothing else. The windowed TABLE the
+  // aggregate mints is HANDLE_KIND_TABLE with `window` present on its HandleType - the kind
+  // vocabulary grows by one member per operator family, not one per parameterisation.
+  HANDLE_KIND_TIME_WINDOWED_STREAM = 4;
+}
+
+// The value vocabulary. Growth path: a new mintable type is a new member here (additive), plus
+// regenerated stubs, one engine serde-selection branch, and the client's mirrored member and
+// decode branch - the engine refuses to sink a type it has no serde for, and a client refuses to
+// decode a type it does not know, so a missing branch on either side fails loudly. Parameterised
+// types (windowed keys, lists) are the known limit of an enum; when one arrives it becomes an
+// additive structured field beside these, or a reshape of this unfrozen wire.
+enum DataType {
+  DATA_TYPE_UNSPECIFIED = 0;
+  DATA_TYPE_BYTES = 1;
+  DATA_TYPE_LONG = 2;
+}
+
+message RegisterFunction {
+  optional int64 token = 1;
+  // Free text for diagnostics only; the engine never interprets it.
+  optional string description = 2;
+}
+
+// The topology is built and started on this message, and not before.
+message DescribeComplete {
+}
+
+// Join each record of a stream against the current value for its key in a table, combining the two
+// with a function the HOST supplies. The table is one this topology already built, so no new source
+// kind and no join window are needed - this is the smallest join Kafka Streams offers.
+//
+// It is also the first NON-LINEAR topology: two handles go in and one comes out, so the graph stops
+// being a chain. That is what makes it worth building beyond the extra operator.
+message Join {
+  optional int64 stream_handle = 1;
+  optional int64 table_handle = 2;
+  optional int64 function_token = 3;
+}
+
+// Reads one key from a running store - an interactive query.
+//
+// The host built the table but has no other way to see inside it: without this it can only observe
+// state indirectly, by consuming whatever the topology happens to sink. That is a real gap for a
+// language whose only window into the engine is this wire.
+message Get {
+  optional string store_name = 1;
+  optional bytes key = 2;
+
+  // Correlation, chosen by the client and echoed on the GetResult that answers - the same contract
+  // BuilderCall/HandleAssigned already carry, and for the same reason: without it a client holds one
+  // answer slot for every query in the session, so two concurrent callers receive each other's
+  // answers with no error anywhere. That is not hypothetical - it was the observed defect this field
+  // exists to close.
+  optional int64 call_id = 3;
+}
+
+// One answer to Get.
+message GetResult {
+  // FOUND distinguishes an absent key from a present one holding empty bytes. Without it the two are
+  // the same on the wire, and a host cannot tell "no such key" from "a key whose value is empty".
+  optional bool found = 1;
+  optional bytes value = 2;
+
+  // How to decode `value`. A count store holds longs and a reduce store holds bytes, so the answer
+  // has to say which - the same reason handles carry their type.
+  optional DataType value_type = 3;
+
+  // Set instead of the rest when the query could not be served at all - no such store, or the
+  // topology is not running yet.
+  optional string error = 4;
+
+  // The call_id of the Get this answers, echoed verbatim. Absent only when the query carried none.
+  optional int64 call_id = 5;
+}
+
+// Asks what the topology currently looks like. Answered with exactly one TopologyDescription.
+//
+// The host built this topology, so it might seem to know already - but it does not. It issued
+// builder calls and holds opaque handles; the engine is the only side that has ever seen the
+// assembled graph, including the nodes Kafka Streams generated rather than the host naming them,
+// the sub-topology split, and the repartition topics an aggregation implies.
+message Describe {
+  // Correlation, echoed on the TopologyDescription that answers. Describe shares Get's shape
+  // exactly, so it shares Get's defect exactly: one description slot for every describe in the
+  // session. A fix that correlated only queries would leave this one live and look complete.
+  optional int64 call_id = 1;
+}
+
+// One answer to Describe. Carries the SAME information twice, deliberately, because the two forms
+// have different consumers.
+message TopologyDescription {
+  // Exactly what Topology.describe().toString() produces.
+  //
+  // This is a compatibility surface, not a convenience: every Kafka Streams topology visualiser in
+  // existence parses this text, so a host that can print it can use all of them. That is a real
+  // capability handed to a language whose ecosystem has no such tooling and no way to grow any.
+  optional string text = 1;
+
+  // The same graph already parsed. Present so this side's own tooling never has to re-parse the
+  // text above - it is a human-readable rendering with no stability guarantee, and every tool that
+  // consumes it has had to reverse-engineer its format.
+  repeated Subtopology subtopologies = 2;
+
+  // Global stores cannot arise from the builder methods this protocol exposes, so this is expected
+  // to be empty. It exists so that if one ever does, it is visibly reported rather than silently
+  // dropped from the structured form while remaining in the text.
+  repeated string global_store_names = 3;
+
+  // The call_id of the Describe this answers, echoed verbatim. It rides on the description itself
+  // rather than on an envelope around it, exactly as HandleAssigned carries both its call_id and the
+  // handle it minted - one shape for every correlated answer on this wire, not two.
+  optional int64 call_id = 4;
+}
+
+message Subtopology {
+  optional int32 id = 1;
+  repeated Node nodes = 2;
+}
+
+message Node {
+  optional string name = 1;
+  repeated string predecessors = 2;
+  repeated string successors = 3;
+  optional NodeKind kind = 4;
+  // Source nodes carry the topics they read; a sink carries the one it writes.
+  repeated string topics = 5;
+  // State stores a processor node is connected to.
+  repeated string stores = 6;
+  // Set instead of topics when a source subscribes by pattern.
+  optional string topic_pattern = 7;
+}
+
+enum NodeKind {
+  NODE_KIND_UNSPECIFIED = 0;
+  NODE_KIND_SOURCE = 1;
+  NODE_KIND_PROCESSOR = 2;
+  NODE_KIND_SINK = 3;
+}
+
+// Sent when an operator reaches a client-supplied function. The stream thread that emitted it is
+// blocked until the matching result returns.
+message Invocation {
+  optional int64 correlation = 1;
+  optional int64 function_token = 2;
+  optional bytes key = 3;
+  optional bytes value = 4;
+
+  // What kind of function the host should call, and therefore which fields below are meaningful.
+  //
+  // Explicit rather than inferred from which fields are set. With two shapes, presence was enough: an
+  // aggregate meant "combine". With three it is not, because a reducer and a joiner BOTH take two
+  // values - so a wire that made the host guess would have it call the wrong one with arguments that
+  // are the right type and the wrong meaning, and produce a plausible wrong answer.
+  optional InvocationKind kind = 6;
+
+  // The table-side value, for a joiner. The stream-side value is `value`.
+  optional bytes right = 7;
+
+  // The current stored aggregate, for a reducer. PRESENT distinguishes a reduction from a mapping -
+  // absent means the host should call a one-record function, present means it should combine. It is
+  // absent rather than empty on the first value for a key, because Kafka's Reducer is not called at
+  // all for that record: the value becomes the aggregate untouched, and an empty-bytes aggregate
+  // would be a different and wrong thing to hand a host.
+  //
+  // No key travels with a reduction, because Kafka's Reducer does not receive one and inventing a
+  // richer signature here would put the host's function out of step with the framework it wraps.
+  optional bytes aggregate = 5;
+}
+
+// Which foreign function shape an invocation is asking for, and hence what it carries:
+//   MAP       - key and value
+//   REDUCE    - aggregate and value
+//   JOIN      - value (the stream side) and right (the table side)
+//   AGGREGATE - key, value and aggregate: Kafka's Aggregator receives all three, and unlike
+//               REDUCE the aggregate is present on a key's FIRST value too - the initializer's
+//               bytes, handed out engine-side - so the first value reaches the host, which a
+//               reduction can never give. No new field: the three it carries already travel.
+enum InvocationKind {
+  INVOCATION_KIND_UNSPECIFIED = 0;
+  INVOCATION_KIND_MAP = 1;
+  INVOCATION_KIND_REDUCE = 2;
+  INVOCATION_KIND_JOIN = 3;
+  INVOCATION_KIND_AGGREGATE = 4;
+}
+
+message InvocationResult {
+  optional int64 correlation = 1;
+  optional bytes value = 2;
+  // Set instead of value when the client's function failed. The record fails rather than silently
+  // succeeding: a wrong value entering an aggregation is worse than a failed record.
+  optional string error = 3;
+}
+
+message Fault {
+  optional string reason = 1;
+}

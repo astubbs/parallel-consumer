@@ -48,6 +48,8 @@ usage: demo/run.sh [options]
   --bootstrap ADDR   an existing broker; omit to start one
   --topic NAME       an existing topic; omit to create one
 
+  --streams          the Kafka Streams arm instead: a topology described from Python
+  --function-delay-ms N  streams arm only - slow the Python transform, the failure arm
   --docker           run in a container, broker as a compose sibling
   --native           run on this machine's own Python and JDK toolchains
   -h, --help         this
@@ -72,6 +74,10 @@ export PC_DEMO_BANNER_PRINTED=1
 # variable and aborts. That fails exactly the no-argument case, which is the double-click case.
 args=()
 mode="auto"
+# Which demo runs. The comparison arm is the default and the one the README leads with; the Streams
+# arm is a separate proof with its own module and its own experimental protocol, so it is opt-in
+# rather than another column in the comparison table.
+arm="comparison"
 bootstrap_given="${PC_DEMO_BOOTSTRAP:-}"
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -81,6 +87,10 @@ while [ $# -gt 0 ]; do
         --records|--delay-ms|--concurrency|--partitions|--replay-factor|--topic)
             if [ $# -lt 2 ]; then echo "$1 needs a value" >&2; exit 2; fi
             args+=("$1" "$2"); shift 2 ;;
+        --function-delay-ms|--timeout)
+            if [ $# -lt 2 ]; then echo "$1 needs a value" >&2; exit 2; fi
+            args+=("$1" "$2"); shift 2 ;;
+        --streams) arm="streams"; shift ;;
         --docker)  mode="docker"; shift ;;
         --native)  mode="native"; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -124,6 +134,15 @@ if ! docker info >/dev/null 2>&1; then
     exit 1
 fi
 
+if [ "$mode" = "docker" ] && [ "$arm" = "streams" ]; then
+    # Refused rather than ignored. The demo image's entrypoint is the comparison demo, so a
+    # container run of --streams would build, start and report the WRONG demo while looking like
+    # it had honoured the flag.
+    echo "--streams has no container path yet: the demo image runs the comparison demo." >&2
+    echo "Run it natively - demo/run.sh --streams --native" >&2
+    exit 2
+fi
+
 if [ "$mode" = "docker" ]; then
     # The broker is a COMPOSE SIBLING and the demo container is never given the host Docker
     # socket: a documented socket mount is root-equivalent host access taught as the normal way to
@@ -151,13 +170,25 @@ fi
 # parallel-consumer-core's TEST jar, whose logback-test.xml then configures logging for the sidecar
 # and prints logback's own status report to STDOUT - ahead of the `port: <n>` line the client library
 # scans for. It survives only because that scan tolerates preceding lines.
-echo "Building the sidecar's classpath..."
-./mvnw --batch-mode -q -pl :parallel-consumer-proxy -am -DskipTests \
-    -DincludeScope=runtime package dependency:build-classpath \
-    '-Dmdep.outputFile=${project.build.directory}/proxy-classpath.txt'
+if [ "$arm" = "streams" ]; then
+    # The Streams arm's engine is a DIFFERENT module with a different main class, so it needs its
+    # own classpath. Same -am and -DincludeScope=runtime reasoning as below, for the same reasons.
+    echo "Building the Streams engine's classpath..."
+    ./mvnw --batch-mode -q -pl :parallel-consumer-proxy-streams -am -DskipTests \
+        -DincludeScope=runtime package dependency:build-classpath \
+        '-Dmdep.outputFile=${project.build.directory}/streams-classpath.txt'
 
-PC_DEMO_SIDECAR_CLASSPATH="$(cat parallel-consumer-proxy/target/proxy-classpath.txt):$PWD/parallel-consumer-proxy/target/classes"
-export PC_DEMO_SIDECAR_CLASSPATH
+    PC_DEMO_STREAMS_CLASSPATH="$(cat parallel-consumer-proxy-streams/target/streams-classpath.txt):$PWD/parallel-consumer-proxy-streams/target/classes"
+    export PC_DEMO_STREAMS_CLASSPATH
+else
+    echo "Building the sidecar's classpath..."
+    ./mvnw --batch-mode -q -pl :parallel-consumer-proxy -am -DskipTests \
+        -DincludeScope=runtime package dependency:build-classpath \
+        '-Dmdep.outputFile=${project.build.directory}/proxy-classpath.txt'
+
+    PC_DEMO_SIDECAR_CLASSPATH="$(cat parallel-consumer-proxy/target/proxy-classpath.txt):$PWD/parallel-consumer-proxy/target/classes"
+    export PC_DEMO_SIDECAR_CLASSPATH
+fi
 
 # The venv, with the demo's own extra on top of the package's. `make` is the module's one recipe,
 # so a developer and this script install identically.
@@ -191,5 +222,9 @@ fi
 # call, so `set -e` does not exit before the trap has stopped the broker - and a scripted caller
 # sees exactly what the demo returned.
 status=0
-"$MODULE_DIR/.venv/bin/python" "$DEMO_DIR/reference_demo.py" ${args[@]+"${args[@]}"} || status=$?
+if [ "$arm" = "streams" ]; then
+    "$MODULE_DIR/.venv/bin/python" "$DEMO_DIR/streams_demo.py" ${args[@]+"${args[@]}"} || status=$?
+else
+    "$MODULE_DIR/.venv/bin/python" "$DEMO_DIR/reference_demo.py" ${args[@]+"${args[@]}"} || status=$?
+fi
 exit "$status"

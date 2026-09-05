@@ -170,6 +170,14 @@ batched, where Share Groups acknowledge per message to the broker, so per-record
 lower - at the cost of a sidecar process where Share Groups need none, and with poison-record
 handling staying broker-side there.
 
+**And wrapping the client means DELIVERING Share Groups to non-JVM languages, not only competing
+with them.** The paragraph above positions Parallel Consumer against Share Groups on per-record
+overhead, and that comparison stands. But Share Groups land in the Java client first and librdkafka
+follows later - which is the currency argument applied to the newest thing in Kafka. A Go, Python or
+Rust team wanting Share Groups early would get them here before their own ecosystem has them, from
+the same wrapper that carries everything else. The segment named above as "who will want Share
+Groups first" is therefore a segment this fork can serve rather than argue with.
+
 **Wrapping the core client APIs is a staged possibility, and 2026-08-22 removed its main
 objection.** The sidecar already embeds a full Java Kafka client, so exposing consume, produce and
 admin over the same protocol would give every language the reference client rather than a
@@ -217,24 +225,187 @@ raise and it should be visibly answered rather than absent.
 surface - consumer, producer, admin, and **Kafka Streams** - delivered to every language through the
 model the language proxy already proves.
 
+**Parity is the goal, not speed.** A wrapper does not have to beat JVM Kafka Streams; it has to
+exist. In a language with no Streams implementation the honest comparison is against *nothing*, so a
+topology that runs at a fraction of JVM throughput is still the only one there is. This is the
+sentence that decides whether a measured cost is a failure or a price, and it is why
+[Marketing](#marketing) says to claim the feature set and not general speed. It is a claim about
+what success means, not a prediction that the cost will be small.
+
 **Streams is a better fit for this model than a plain consumer, which is counter-intuitive and is
 the whole reason to write it down.** A Streams application is mostly *declarative*: the topology, the
 joins, the aggregations, the windowing, the state stores and exactly-once are all engine-side and
 never need to cross a boundary. The only thing that must cross is the user's per-record function -
 and a per-record function crossing a boundary is precisely what the language proxy already does.
 
-So the hard part of Streams-in-another-language is not the streaming; it is that a topology has no
-portable description. That is an IDL to design, in the same class of work as the existing protocol,
-rather than an unsolved problem.
+**Measured 2026-08-25, and the paragraph above is falsified for windowed aggregation - in two
+ways.** (The spike: `docs/plans/2026-08-25-001-feat-streams-windowed-aggregation-plan.md`; the
+numbers: `docs/inflight/perf-streams-windowing-multiplier.md`.) First, the declarative claim
+over-reached: a windowed aggregation calls the user's function once per *overlapping window*, so the
+crossing is per-window, not per-record - hopping one hour by five minutes crosses twelve times per
+record, measured exactly. Second, and larger: for windowed aggregation the honest comparison is
+**not** "against nothing". A user can reimplement it in a plain dictionary over the consumer they
+already have, and that stateless single-threaded reimplementation measured **69x** the wrapper's
+tumbling rate and **122x** its hopping rate. The fitted cost model - 33us + 135us per crossing per
+record, over the current single-session transport - puts that floor out of reach at *any* window
+multiplier, including one: the losing term is the per-crossing cost, not windowing. **Windowed
+aggregation is therefore recorded as not offered, at both measured specifications and both
+placements** (moving the host to the emit side genuinely collapses the crossing count, and cannot
+close two orders of magnitude). The parity sentence stands where reimplementation is genuinely hard
+- topology plumbing, joins, repartitioning, fault-tolerant state - but where a user's dictionary is
+the honest alternative, "it exists" is not enough, and that boundary is now a measured question
+rather than an assumption. Scope: verdicts taken against a non-durable reimplementation, over the
+single-session transport, bounded by the untested premise that windowing is not optional in
+practice. What would reopen it is a transport that cuts the per-crossing cost by roughly two orders
+of magnitude - the embedded/FFI direction - not any windowing or placement design.
 
-**What would need real thought, listed so nobody rediscovers it as a surprise:** state stores the
-host wants to read (interactive queries need protocol surface of their own), punctuators (fine - a
-scheduled callback is just another kind of work frame in a pull model), and RocksDB under a native
-image, which is its own reachability adventure.
+So the hard part of Streams-in-another-language is not the streaming; it is that a topology has no
+portable description. ~~That is an IDL to design~~ - **and the proof of concept showed it is not.**
+See below.
 
 **And the honest sequencing:** this is a long way past the current milestone. Admin first, on
-evidence, exactly as above. Tracked as a proof-of-concept in
+evidence, exactly as above. Tracked in
 [`docs/inflight/next-kafka-streams-foreign-wrappers.md`](docs/inflight/next-kafka-streams-foreign-wrappers.md).
+
+### One dependency, five capabilities, ten languages
+
+**The packaging is the product, and it is a stronger claim than any single capability in it.**
+
+A user installs one thing and imports one name:
+
+```python
+import parallel_consumer   # admin, consumer, producer, parallel consumer, streams
+```
+
+Each of those competes with something established. `confluent-kafka` already does admin, consumer
+and producer well, and does not need replacing. **The bundle competes with nothing**, because the
+last two entries do not exist for that user at any price. A Python team that wants topic
+administration, key-ordered concurrency beyond partition count, and a stream topology cannot
+assemble that today from anything - not because the pieces are expensive, but because two of them
+are absent from the ecosystem.
+
+**And the same surface, in every language.** The value compounds across the fan-out rather than
+per-language: one mental model for a polyglot organisation, one set of documentation, one set of
+examples that translate. That is an argument no single-language library can make, and it is
+available to us only because every binding is a transport swap over identical frames
+([`docs/language-bindings.md`](docs/language-bindings.md)).
+
+**What this changes about how the work is described.** The transport is an implementation detail the
+user should never have to know about - whether a call goes over a socket or a C ABI is our decision
+to revisit, not their dependency. It follows that the unified surface should be designed before the
+individual pieces are published, because a facade retrofitted over five separately-shipped libraries
+is a different and worse thing than one designed as a whole. This is a reason to sequence the
+packaging decision early even though the capabilities land over time.
+
+**The honest counterweight, and it is real.** A single dependency that carries a JVM sidecar is a
+heavier install than a library that does one thing, and a user who wants only a producer is being
+handed an engine they will not run. The answer is probably that the pieces stay separately usable
+underneath the unified surface rather than that the surface is abandoned - but that is a design
+question, and "one import" must not become "one enormous artifact you cannot opt out of".
+
+**For Java, this argument does not apply** and should not be made - a Java team already has all five
+natively. See the version-decoupling case below for the one that does.
+
+### What the Kafka Streams proof of concept settled
+
+Run 2026-08-23. A Python program described a five-operator topology, supplied the per-record
+function, and the counts came out exactly right. Four things it changed, three of which are
+positioning rather than engineering.
+
+**No IDL was needed, so the bulk of the cost above does not exist.** Replaying builder calls against
+a live builder and handing back opaque handles gets the topology built with no shared model of what
+a topology *is* - so nothing can drift as Kafka Streams adds operators, and a new operator is one
+more member of a protobuf `oneof`. The caveat is real and belongs next to the claim: this buys
+cheapness by giving up inspectability. Beam chose an IDL because a *runner* must reason about a
+pipeline to fuse and optimise it and to run it on more than one engine. We only build, so we can
+take the cheaper road; if cross-engine portability ever matters, the IDL returns.
+
+**Nothing of the user's code crosses, and that beats the obvious comparison.** Beam serializes the
+user function into the pipeline - a pickled DoFn travelling in the proto - because its harness may
+run on another machine. That is the origin of a well-known Python tax: closures and lambdas that
+will not pickle, and functions that may not hold a live resource. Our harness is the host process
+itself, so we send a token and call the function where it already lives. **A user can capture
+anything - a database handle, a loaded model, an open socket - because nothing is ever serialized.**
+For the machine-learning audience in the section below, that is not a detail; a loaded model is
+precisely the thing that cannot be pickled into a pipeline.
+
+**The nearest shipped competitor is PyFlink, and the differentiator is that we need no cluster.**
+PyFlink and PySpark are the same shape as this - a Python API over a JVM engine, Py4J for the
+control plane - and both are attached to a cluster a platform team operates. **Kafka Streams is a
+library: it runs inside the user's own process.** So "Kafka Streams from Python" means embedded,
+stateful, exactly-once stream processing with no infrastructure to stand up, which PyFlink
+structurally cannot offer. On the other side, the Python-native reimplementations - Quix Streams,
+Faust, Bytewax - are embedded but have to rebuild state, windowing and exactly-once themselves.
+Nothing occupies the intersection.
+
+**The durability argument, which is the one to lead with.** The Python-native field has a record of
+abandonment: Robinhood's Faust was abandoned and survives as a community fork, and Bytewax became
+community-maintained when its backing company wound down. Reimplementing state, windowing and
+exactly-once is more than a small team can sustain. **Wrapping the real engine means inheriting
+Apache Kafka's maintenance instead of competing with it** - and it means inheriting its tooling too.
+The proof of concept can print `Topology.describe()`, which every Kafka Streams visualiser parses,
+so a Python user gets diagramming that no Python-native framework has or can easily grow.
+
+**What still needs real thought, updated by the run:** typed handles, because an operator that mints
+a value the host never supplied (a `count` produces a `Long`) currently has to be special-cased, and
+every aggregation and join has that shape - this is the next real design question. Then engine state,
+because the protocol cannot report a rebalance and the demo had to ask Kafka's admin API from
+outside. Interactive queries need protocol surface of their own. Punctuators are confirmed cheap.
+Exactly-once is genuinely open: what a foreign function's side effects mean inside a transaction is
+not a plumbing question. RocksDB under a native image remains its own reachability adventure.
+
+**One prediction was refuted and is worth remembering, because the instinct is strong and wrong:** a
+foreign function slower than the poll interval was expected to get the engine evicted from its
+group. It does not - Kafka Streams interleaves its polling and keeps its membership. Throughput
+collapses instead. Slowness is a performance problem here, not a liveness hazard.
+
+### The gap runs both ways, and the return direction may be the larger market
+
+Everything above points one way: those ecosystems have no Kafka Streams, so give them Kafka Streams.
+**The same mechanism points the other way, at a bigger and better-funded audience.**
+
+Kafka Streams users are on the JVM. The JVM has no PyTorch, no scikit-learn, no transformers, no
+spaCy, no pandas. Today a team that wants one of those inside a topology has two options: export the
+model into something the JVM can run, which constrains what they can build, or stand up a service
+and call it over the network from inside the topology - a second deployment, a second scaling story,
+serialization twice, and hand-rolled retry semantics.
+
+**Our constraint is already their status quo.** A Kafka Streams operator is synchronous, so an HTTP
+call from inside one blocks the stream thread exactly as a call to a foreign function would, with
+the same rebalance exposure when it runs long. Against what they do now, this is not a compromise
+they must accept - it is the same blocking, minus the network hop and minus the second service.
+
+**And it needs a strict subset of the work.** A JVM team writes its topology in Java, so there is no
+topology description to carry and no handle protocol to design. All that crosses is the per-record
+function - the piece the language proxy already carries in four languages. The direction that serves
+non-JVM users needs everything; this one needs only the shared core.
+
+**The honest counterweight:** model serving over the network buys things a co-located process gives
+up - independent scaling, GPU pooling, model versioning and canarying. Teams already invested in a
+serving platform are not the ones to sell this to. The teams to sell it to are the ones who stood up
+a Flask service because they had no other way to get a Python function into a stream.
+
+### The one Java case, and it is not the obvious one
+
+Worth settling because it keeps being asked. A Java team already has all of this natively,
+in-process, with no boundary - so a wrapper is *strictly worse* for them on every axis that first
+comes to mind. Virtual threads are an argument for using Parallel Consumer directly, not through a
+proxy; a boundary crossing is pure loss when you are already on the JVM.
+
+**The case that does hold is version decoupling, and it is stronger than it first sounds.** The
+sidecar runs its own JVM and its own Kafka client, so the client version stops being tied to the
+application's runtime. An application pinned to an old JDK, or to an old client jar it cannot move
+off without a dependency fight, reaches modern broker features by talking to a sidecar instead of by
+upgrading itself.
+
+Share groups (KIP-932) are the worked example, and the reasoning is easy to get backwards. It is
+true that share groups need broker support - but they need a **new client** as well, and that is the
+half an old application cannot supply. A sidecar supplies it. The same argument applies to every
+future Kafka feature that lands client-side, which is what makes this a standing case rather than
+one feature's workaround.
+
+**Scope it honestly:** this is a migration and legacy-estate argument, not a reason for a greenfield
+Java service to adopt a proxy. Do not sell it as one.
 
 ### Languages with no Kafka client at all
 

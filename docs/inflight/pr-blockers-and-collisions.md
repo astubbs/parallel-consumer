@@ -17,6 +17,16 @@ Blockers, collisions, and decisions someone is waiting on. Not a PR list - `gh` 
 - **astubbs#38 (JUnit 6) is blocked on something other than the version bump.** JUnit 6 needs Java 17, *and*
   `archunit-junit5` will not run on it with no `archunit-junit6` engine in existence. The ArchUnit
   tests must be rewired first. See `deps-deferred-majors.md`.
+- **astubbs#51 (virtual threads) collides with astubbs#57** - both edit `PCMetrics.java`. Sequence, don't parallelise.
+- **File ownership right now:** astubbs#57 owns metrics + partition state, astubbs#106 owns the offset encoders, and
+  astubbs#29 will want the poll/lifecycle internals astubbs#80 reshaped. Pick parallel work accordingly.
+- **astubbs#334 does not target `master`.** Its base is `feats/go-vendored-pc` and its body carries
+  `depends on astubbs/parallel-consumer#340`, so `Check PR Dependencies` is red **by design** until
+  the parents merge - that is the gate working, not a fault. Its branch also needs the weekend Codex
+  strategy commit, which was **cherry-picked deliberately**: the branch carrying it,
+  `docs/codex-strategy-conversation`, is far ahead of master and conflicts in five files, while the
+  one commit wanted from it is purely additive. **Do not merge that branch to get it.**
+
 <!-- post-merge: checked-begin -->
 - **astubbs#51 (virtual threads) collides with astubbs#57** - both edit `PCMetrics.java`. Sequence,
   don't parallelise; whichever is still open rebases onto the other.

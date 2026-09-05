@@ -27,6 +27,22 @@ document meaning opposite things.
 "AK" is already the repo's abbreviation for Apache Kafka. The comparison demo names its serial lane
 `AK_CORE` for the same reason.
 
+**Bundling** (never "batching", for the boundary)
+How many records cross the language boundary in one hop. A transport concern, invisible in the
+user's function signature: a client can bundle a hundred records per hop and still hand the user one
+at a time. Borrowed from Apache Beam, which calls exactly this unit a bundle.
+<p>
+Say **bundling**, because "batching" already means something else here and the collision was
+actively costing us: the two were being treated as one decision when they are independent axes with
+different owners, different difficulty, and different answers for Parallel Consumer and for Kafka
+Streams. `docs/language-bindings.md` maps the axes;
+`docs/inflight/next-batching-modes-for-clients.md` owns both definitions.
+
+**Batching** (the user's signature, never the wire)
+How many records the user's function receives per call. Core's API is already batch-shaped - `poll`
+hands the user a context of records - so a batch size of one is the degenerate case rather than a
+separate API. Says nothing about how many hops those records took to arrive.
+
 ## Parallel consumption
 
 **Control loop**
@@ -105,6 +121,18 @@ only when something is dirty.
 
 The asymmetry is load-bearing: a partition whose records are all failing is never dirty, so no commit
 is attempted for it, and anything waiting on a commit-time behaviour will wait indefinitely.
+
+## Streams proxy
+
+**Handle** (and **typed handle**)
+In the experimental Streams protocol, the engine performs each of the host's builder calls against a
+real topology builder and answers with a handle - a server-minted opaque integer the host may only
+name back in later calls. The host never holds the builder object, only its number.
+
+A *typed* handle travels with what it is: its kind (stream, grouped stream, table) and the key and
+value types it carries. The type matters because an operator can mint a value the host never supplied
+- a count produces a table of longs - and without the type on the wire, what a handle carries is
+engine-side convention the host has to know rather than be told.
 
 ## Test reliability
 
@@ -250,6 +278,10 @@ books, and here is the list you are expected to shorten".
   a real deadline missed under contention, and an unforceable trigger is an awaited event that never
   occurred. All three present as the same expired await, and the whole diagnostic difficulty of this
   area is telling them apart.
+- **"Batching" was doing two jobs.** It meant both the user-facing API shape and the number of
+  records per boundary crossing, and because one word covered both, they were being weighed as a
+  single decision. They are independent: see **bundling** under Naming. Resolved 2026-08-24, after
+  the crossing cost was measured and the two answers turned out to differ.
 - **An un-priced bound is the fifth member, and the only one that is a test-authoring fault rather
   than a diagnosis problem.** A probabilistic probe whose budget was chosen because it passed, not
   priced against a measured hit rate, presents as an ordinary intermittent red. It is told apart by

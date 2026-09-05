@@ -1,0 +1,22 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+# One module, one file, one owner: bin/check-docs-data.sh merges this fragment into the
+# testing-evidence corpus.
+
+schema_version: 1
+kind: testing-evidence
+module_evidence:
+  - id: proxy-streams-poc
+    artifact: parallel-consumer-proxy-streams
+    coverage: >-
+      Module wiring only, at this point: the shared test conventions run against this module's test
+      packages, and the module compiles against stock Kafka Streams through its public builder API
+      with no patched or shadowed Kafka on the classpath. Behavioural evidence arrives with the
+      topology assembler and the invocation bridge.
+    inspect:
+      - parallel-consumer-proxy-streams/src/test/java/bz/stub/parallelconsumer/streams/TestConventionsArchTest.java
+    limitation: >-
+      This is a feasibility proof and the evidence should be read as such. Nothing here shows a
+      record crossing the boundary, and the end-to-end run lives in the Python client's demo rather
+      than in this module's suite - a real topology needs a broker, and that suite is deliberately
+      free of Docker.

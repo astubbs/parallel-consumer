@@ -1,5 +1,8 @@
 # Pre-v6: the shared test suite is a product feature, and the clients must be able to prove it
 
+<!-- inflight-type: task -->
+<!-- inflight-impact: release-gate -->
+
 Owner's requirement, 2026-08-15. When ten client libraries ship at once, the first honest question a
 reader will ask is whether they are generated slop. **The answer has to be visible, not asserted**:
 every client passes the same conformance suite, exercising the same scenarios, with the same
@@ -7,6 +10,12 @@ assertions - and that fact belongs in the documentation as a feature of the prod
 footnote in a contributing guide.
 
 This is pre-v6 because the credibility problem arrives with the release, not after it.
+
+**The Kafka Streams binding inherits this requirement, and can make a stronger version of the
+claim.** Its conformance design records expected results by running each spec through plain Java
+Kafka Streams, so the oracle is Apache Kafka's own engine rather than anything we wrote -
+[`test-cross-binding-streams-conformance.md`](test-cross-binding-streams-conformance.md) holds
+that design and the three extractions it is earmarked for.
 
 ## What has to exist
 

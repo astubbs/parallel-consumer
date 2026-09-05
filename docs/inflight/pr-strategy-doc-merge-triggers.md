@@ -29,6 +29,7 @@ Same family, same section: **`fix/transactional-produce-callback-abort`** and
 guarantee that holds - but the doc should not claim it more strongly than the fixed code supports.
 See [`bug-producing-lock-double-release.md`](bug-producing-lock-double-release.md).
 
+
 ## Change who the product is for
 
 **`feats/ks-on-pc-spike`** (astubbs#255) and **`feats/connect-on-pc-spike`** (astubbs#240, plus its

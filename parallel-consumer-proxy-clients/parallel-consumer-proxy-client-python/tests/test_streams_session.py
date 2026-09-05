@@ -1,0 +1,902 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+"""The Streams session, driven against a fake engine.
+
+No broker, no server, no Docker - this suite is deliberately free of all three, and the end-to-end
+run lives in the demo instead. What is reachable here is the part that matters on this side: that
+the builder names handles the engine minted, that a function is represented by a token and never by
+anything else, and that an invocation is answered on its own correlation.
+"""
+
+from __future__ import annotations
+
+import copy
+import logging
+import pickle
+import queue
+import struct
+import threading
+from collections.abc import Iterator
+from typing import cast
+
+import pytest
+
+from parallel_consumer._generated import streams_pb2 as pb
+from parallel_consumer.streams import (
+    CombineKind,
+    DataType,
+    FunctionKind,
+    HandleKind,
+    StreamsError,
+    StreamsSession,
+)
+
+
+class FakeEngine:
+    """Answers like the engine would: Ready for the handshake, a minted handle per builder call."""
+
+    def __init__(self, *, fault_on_call: int | None = None) -> None:
+        self.sent: list[pb.StreamsClientMessage] = []
+        self._outbound: queue.Queue[pb.StreamsServerMessage | None] = queue.Queue()
+        self._next_handle = 100
+        self._fault_on_call = fault_on_call
+        #: What the next query is answered with. Absent by default, so a test that forgets to
+        #: arrange a value gets the honest answer, not a stale one from an earlier case.
+        self._get_answer = pb.GetResult(found=False, value_type=pb.DATA_TYPE_BYTES)
+        self._forced_type: pb.HandleType | None = None
+        self._answer_bare = False
+        #: The type each mint answered with, keyed by handle - what lets an ``aggregate`` answer
+        #: carry the window of the windowed handle it names, as the real engine's handle store does.
+        self._minted_types: dict[int, pb.HandleType] = {}
+        self._lock = threading.Lock()
+
+    # -- the transport surface the session uses --
+    def send(self, message: pb.StreamsClientMessage) -> None:
+        with self._lock:
+            self.sent.append(message)
+        kind = message.WhichOneof("message")
+        if kind == "open":
+            self._outbound.put(pb.StreamsServerMessage(
+                ready=pb.Ready(application_id=message.open.application_id)))
+        elif kind == "get":
+            self._outbound.put(pb.StreamsServerMessage(
+                get_result=self._answered(self._get_answer, message.get.call_id)))
+        elif kind == "describe":
+            self._outbound.put(pb.StreamsServerMessage(
+                topology_description=pb.TopologyDescription(
+                    call_id=message.describe.call_id,
+                    text="Topologies:\n   Sub-topology: 0\n    Source: KSTREAM-SOURCE-0000000000",
+                    subtopologies=[pb.Subtopology(id=0, nodes=[
+                        pb.Node(name="KSTREAM-SOURCE-0000000000",
+                                kind=pb.NODE_KIND_SOURCE, topics=["input"])])])))
+        elif kind == "builder_call":
+            call_id = message.builder_call.call_id
+            if self._fault_on_call == call_id:
+                self._outbound.put(pb.StreamsServerMessage(
+                    fault=pb.Fault(
+                        reason=f"call {call_id} names handle 4242, which does not exist")))
+                return
+            method = message.builder_call.WhichOneof("call")
+            if method == "sink":
+                # A sink mints nothing: its answer carries neither handle nor type, like the
+                # engine's. A forced type is still consumed - the seam is single-shot, and
+                # leaking it onto the NEXT call would type a neighbouring handle wrongly.
+                self._forced_type = None
+                self._outbound.put(pb.StreamsServerMessage(
+                    handle_assigned=pb.HandleAssigned(call_id=call_id)))
+                return
+            self._next_handle += 1
+            if self._answer_bare:
+                self._answer_bare = False
+                self._outbound.put(pb.StreamsServerMessage(
+                    handle_assigned=pb.HandleAssigned(call_id=call_id, handle=self._next_handle)))
+                return
+            answered_type = self._forced_type
+            if answered_type is None:
+                answered_type = self._type_of(method, message.builder_call)
+            self._forced_type = None
+            self._minted_types[self._next_handle] = answered_type
+            self._outbound.put(pb.StreamsServerMessage(
+                handle_assigned=pb.HandleAssigned(
+                    call_id=call_id, handle=self._next_handle, type=answered_type)))
+
+    @staticmethod
+    def _answered(answer: pb.GetResult, call_id: int) -> pb.GetResult:
+        """The arranged answer, stamped with the call id of the query it is answering.
+
+        Copied rather than mutated: ``_get_answer`` is arranged once and may answer several
+        queries, and stamping it in place would leave the previous query's id on it.
+        """
+        stamped = pb.GetResult()
+        stamped.CopyFrom(answer)
+        stamped.call_id = call_id
+        return stamped
+
+    def _type_of(self, method: str | None, call: pb.BuilderCall) -> pb.HandleType:
+        """The type the real engine records for each minting method.
+
+        ``windowed_by`` echoes the window the CALL carried, and ``aggregate`` carries the window
+        of the handle it names - looked up from what that handle's mint answered, exactly as the
+        engine reads its handle store. Instrument-checked (R4): with this method transposing
+        size_ms and advance_ms into the echoed window, the round-trip assertion in
+        test_streams_windowing.py fails naming the transposed fields - so a fake that invents its
+        own window cannot pass.
+        """
+        if method == "group_by_key":
+            return pb.HandleType(
+                kind=pb.HANDLE_KIND_GROUPED_STREAM,
+                key_type=pb.DATA_TYPE_BYTES, value_type=pb.DATA_TYPE_BYTES)
+        if method == "count":
+            return pb.HandleType(
+                kind=pb.HANDLE_KIND_TABLE,
+                key_type=pb.DATA_TYPE_BYTES, value_type=pb.DATA_TYPE_LONG)
+        if method == "windowed_by":
+            return pb.HandleType(
+                kind=pb.HANDLE_KIND_TIME_WINDOWED_STREAM,
+                key_type=pb.DATA_TYPE_BYTES, value_type=pb.DATA_TYPE_BYTES,
+                window=call.windowed_by.window)
+        if method == "aggregate":
+            aggregated = self._minted_types.get(call.aggregate.handle, pb.HandleType())
+            return pb.HandleType(
+                kind=pb.HANDLE_KIND_TABLE,
+                key_type=pb.DATA_TYPE_BYTES, value_type=pb.DATA_TYPE_BYTES,
+                window=aggregated.window if aggregated.HasField("window") else None)
+        # source, map_values and to_stream all mint plain byte streams - to_stream DROPS the
+        # window at the re-key, which is its whole job.
+        return pb.HandleType(
+            kind=pb.HANDLE_KIND_STREAM,
+            key_type=pb.DATA_TYPE_BYTES, value_type=pb.DATA_TYPE_BYTES)
+
+    def responses(self) -> Iterator[pb.StreamsServerMessage]:
+        while True:
+            message = self._outbound.get()
+            if message is None:
+                return
+            yield message
+
+    def close(self) -> None:
+        self._outbound.put(None)
+
+    # -- test seam: answer the next builder call with a caller-chosen type --
+    def answer_next_call_with_type(self, handle_type: pb.HandleType) -> None:
+        self._forced_type = handle_type
+
+    # -- test seam: answer the next minting call with a handle but NO type --
+    def answer_next_call_bare(self) -> None:
+        self._answer_bare = True
+
+    # -- test seam: make the engine ask for a record to be mapped --
+    def reduce_invoke(self, correlation: int, token: int, aggregate: bytes, value: bytes) -> None:
+        """A reduction: an aggregate is present and no key travels, as the engine sends it."""
+        self._outbound.put(pb.StreamsServerMessage(
+            invocation=pb.Invocation(
+                correlation=correlation, function_token=token, aggregate=aggregate, value=value,
+                kind=pb.INVOCATION_KIND_REDUCE)))
+
+    def join_invoke(
+        self, correlation: int, token: int, stream_value: bytes, table_value: bytes,
+    ) -> None:
+        """A join: two values and no key, the same fields a reduction fills but a different kind."""
+        self._outbound.put(pb.StreamsServerMessage(
+            invocation=pb.Invocation(
+                correlation=correlation, function_token=token, value=stream_value,
+                right=table_value, kind=pb.INVOCATION_KIND_JOIN)))
+
+    def aggregate_invoke(
+        self, correlation: int, token: int, key: bytes, value: bytes, aggregate: bytes,
+    ) -> None:
+        """An aggregation step: key, value AND aggregate all travel - the first 3-field shape."""
+        self._outbound.put(pb.StreamsServerMessage(
+            invocation=pb.Invocation(
+                correlation=correlation, function_token=token, key=key, value=value,
+                aggregate=aggregate, kind=pb.INVOCATION_KIND_AGGREGATE)))
+
+    def invoke(self, correlation: int, token: int, key: bytes, value: bytes) -> None:
+        self._outbound.put(pb.StreamsServerMessage(
+            invocation=pb.Invocation(
+                correlation=correlation, function_token=token, key=key, value=value,
+                kind=pb.INVOCATION_KIND_MAP)))
+
+    def kindless_invoke(self, correlation: int, token: int, value: bytes) -> None:
+        """An invocation from an engine that named no kind - version skew, or an engine bug."""
+        self._outbound.put(pb.StreamsServerMessage(
+            invocation=pb.Invocation(
+                correlation=correlation, function_token=token, value=value)))
+
+    def await_client_message(self, kind: str, timeout: float = 5.0) -> pb.StreamsClientMessage:
+        deadline = threading.Event()
+        for _ in range(int(timeout * 200)):
+            with self._lock:
+                for message in reversed(self.sent):
+                    if message.WhichOneof("message") == kind:
+                        return message
+            deadline.wait(0.005)
+        raise AssertionError(f"the client never sent a {kind}")
+
+
+@pytest.fixture()
+def engine() -> Iterator[FakeEngine]:
+    fake = FakeEngine()
+    yield fake
+    fake.close()
+
+
+def test_the_builder_issues_the_five_calls_each_naming_the_prior_handle(engine: FakeEngine) -> None:
+    session = StreamsSession(engine)
+    session.open("counts", {"bootstrap.servers": "localhost:19092"})
+    builder = session.builder()
+
+    source = builder.source("in")
+    mapped = builder.map_values(source, lambda key, value: value)
+    grouped = builder.group_by_key(mapped)
+    counted = builder.count(grouped, "counts-store")
+    builder.sink(counted, "out")
+
+    calls = [m.builder_call for m in engine.sent if m.WhichOneof("message") == "builder_call"]
+    assert [c.WhichOneof("call") for c in calls] == [
+        "source", "map_values", "group_by_key", "count", "sink"]
+    # Each call names the handle the previous one produced - which is the whole point of handles.
+    assert calls[1].map_values.handle == source
+    assert calls[2].group_by_key.handle == mapped
+    assert calls[3].count.handle == grouped
+    assert calls[4].sink.handle == counted
+    session.close()
+
+
+def test_a_handle_knows_what_it_is_and_what_it_carries(engine: FakeEngine) -> None:
+    session = StreamsSession(engine)
+    session.open("counts", {})
+    builder = session.builder()
+
+    source = builder.source("in")
+    counted = builder.count(builder.group_by_key(source), "counts-store")
+
+    assert source.kind is HandleKind.STREAM
+    assert source.value_type is DataType.BYTES
+    # The mint whose value the host never supplied: the type field is the only way to know this.
+    assert counted.kind is HandleKind.TABLE
+    assert counted.key_type is DataType.BYTES
+    assert counted.value_type is DataType.LONG
+    session.close()
+
+
+def test_the_reported_type_decodes_a_sink_value_without_tribal_knowledge() -> None:
+    # Kafka's Serdes.Long() writes 8 bytes, big-endian, signed - and now nobody has to know that.
+    assert DataType.LONG.decode(struct.pack(">q", 1002)) == 1002
+    assert DataType.LONG.decode(struct.pack(">q", -7)) == -7
+    payload = b"as-supplied"
+    assert DataType.BYTES.decode(payload) is payload
+
+
+def test_decoding_a_type_this_client_does_not_know_is_refused_by_name() -> None:
+    with pytest.raises(StreamsError, match="UNKNOWN"):
+        DataType.UNKNOWN.decode(b"\x00")
+    with pytest.raises(StreamsError, match="UNSPECIFIED"):
+        DataType.UNSPECIFIED.decode(b"\x00")
+
+
+def test_a_wire_type_this_client_does_not_recognise_degrades_to_unknown(
+    engine: FakeEngine,
+) -> None:
+    session = StreamsSession(engine)
+    session.open("counts", {})
+
+    # An engine newer than this client: enum values it has never heard of. proto3 enums are open,
+    # so the values travel; the client must degrade explicitly rather than crash or guess bytes.
+    # The casts exist because the generated stubs (rightly) type the fields to the KNOWN values -
+    # exactly the mismatch this test manufactures.
+    engine.answer_next_call_with_type(pb.HandleType(
+        kind=cast(pb.HandleKind, 99),
+        key_type=cast(pb.DataType, 98),
+        value_type=cast(pb.DataType, 97)))
+    handle = session.builder().source("in")
+
+    assert handle.kind is HandleKind.UNKNOWN
+    assert handle.key_type is DataType.UNKNOWN
+    assert handle.value_type is DataType.UNKNOWN
+    session.close()
+
+
+def test_the_python_enums_mirror_the_wire_constants_exactly() -> None:
+    """The hand-mirrored enums are the one place client and engine could drift.
+
+    Both directions: every client member (bar UNKNOWN, which is client-local) is a wire value
+    with the same number, and every wire value has a client member - so a DataType added to the
+    proto without a mirrored member fails here instead of at a host's runtime.
+    """
+    wire_kinds = {name.removeprefix("HANDLE_KIND_"): number
+                  for name, number in pb.HandleKind.items()}
+    assert {m.name: m.value for m in HandleKind if m is not HandleKind.UNKNOWN} == wire_kinds
+
+    wire_types = {name.removeprefix("DATA_TYPE_"): number
+                  for name, number in pb.DataType.items()}
+    assert {m.name: m.value for m in DataType if m is not DataType.UNKNOWN} == wire_types
+
+    wire_combines = {name.removeprefix("COMBINE_KIND_"): number
+                     for name, number in pb.CombineKind.items()}
+    assert {m.name: m.value for m in CombineKind} == wire_combines
+
+
+def test_a_sink_answer_without_handle_or_type_is_inert_rather_than_fatal(
+    engine: FakeEngine,
+) -> None:
+    session = StreamsSession(engine)
+    session.open("counts", {})
+    builder = session.builder()
+
+    source = builder.source("in")
+    builder.sink(source, "out")
+
+    # The sink's answer carried neither handle nor type; the call completed and the session lives.
+    grouped = builder.group_by_key(source)
+    assert grouped.kind is HandleKind.GROUPED_STREAM
+    session.close()
+
+
+def test_decoding_malformed_long_bytes_is_a_streams_error_not_a_crash() -> None:
+    # A foreign or truncated record, and a tombstone a caller forgot to filter: both are
+    # StreamsError, so a host's except-StreamsError handling holds and no reader thread dies
+    # on a raw struct.error or TypeError.
+    with pytest.raises(StreamsError, match="8 bytes"):
+        DataType.LONG.decode(b"short")
+    with pytest.raises(StreamsError, match="8 bytes"):
+        DataType.LONG.decode(cast(bytes, None))
+
+
+def test_a_handle_survives_deepcopy_and_pickle_with_its_types(engine: FakeEngine) -> None:
+    session = StreamsSession(engine)
+    session.open("counts", {})
+    counted = session.builder().count(session.builder().group_by_key(
+        session.builder().source("in")), "counts-store")
+
+    copied = copy.deepcopy(counted)
+    pickled = pickle.loads(pickle.dumps(counted))  # noqa: S301 - round-tripping our own value
+
+    assert copied == counted and copied.value_type is DataType.LONG
+    assert pickled == counted and pickled.kind is HandleKind.TABLE
+    assert pickled.key_type is DataType.BYTES
+    session.close()
+
+
+def test_a_handle_without_a_type_warns_of_version_skew(
+    engine: FakeEngine, caplog: pytest.LogCaptureFixture,
+) -> None:
+    session = StreamsSession(engine)
+    session.open("counts", {})
+
+    # An engine that mints a handle but says nothing about it - the invariant the proto states
+    # is broken, and the client says so at the mint rather than at a much later failed decode.
+    engine.answer_next_call_bare()
+    with caplog.at_level(logging.WARNING):
+        handle = session.builder().source("in")
+
+    assert handle.kind is HandleKind.UNKNOWN
+    assert any("without a type" in record.message for record in caplog.records)
+    session.close()
+
+
+def test_a_function_is_represented_by_a_token_and_nothing_else(engine: FakeEngine) -> None:
+    session = StreamsSession(engine)
+    session.open("counts", {})
+    builder = session.builder()
+
+    def upper(key: bytes, value: bytes) -> bytes:
+        return value.upper()
+
+    source = builder.source("in")
+    builder.map_values(source, upper)
+
+    registration = engine.await_client_message("register_function")
+    assert registration.register_function.token > 0
+
+    # Nothing about the callable itself may cross: not its address, not its bytecode, not its
+    # source.
+    on_the_wire = b"".join(m.SerializeToString() for m in engine.sent)
+    assert b"lambda" not in on_the_wire
+    assert b"return value.upper()" not in on_the_wire
+    assert str(id(upper)).encode() not in on_the_wire
+    session.close()
+
+
+def test_an_invocation_is_answered_on_its_own_correlation(engine: FakeEngine) -> None:
+    session = StreamsSession(engine)
+    session.open("counts", {})
+    builder = session.builder()
+    source = builder.source("in")
+    builder.map_values(source, lambda key, value: value + b"!")
+
+    token = engine.await_client_message("register_function").register_function.token
+    engine.invoke(correlation=77, token=token, key=b"k", value=b"v")
+
+    answer = engine.await_client_message("invocation_result").invocation_result
+    assert answer.correlation == 77
+    assert answer.value == b"v!"
+    assert not answer.HasField("error")
+    session.close()
+
+
+def test_a_failing_function_reports_an_error_rather_than_a_substitute_value(
+    engine: FakeEngine,
+) -> None:
+    session = StreamsSession(engine)
+    session.open("counts", {})
+    builder = session.builder()
+    source = builder.source("in")
+
+    def explode(key: bytes, value: bytes) -> bytes:
+        raise ValueError("no")
+
+    builder.map_values(source, explode)
+    token = engine.await_client_message("register_function").register_function.token
+    engine.invoke(correlation=88, token=token, key=b"k", value=b"v")
+
+    answer = engine.await_client_message("invocation_result").invocation_result
+    assert answer.correlation == 88
+    assert "ValueError" in answer.error
+    # A failed record is visible; a substitute value entering an aggregation is a wrong count.
+    assert not answer.HasField("value")
+    session.close()
+
+
+def test_an_invocation_for_an_unregistered_token_is_answered_rather_than_ignored(
+    engine: FakeEngine,
+) -> None:
+    session = StreamsSession(engine)
+    session.open("counts", {})
+
+    engine.invoke(correlation=99, token=4242, key=b"k", value=b"v")
+
+    answer = engine.await_client_message("invocation_result").invocation_result
+    assert answer.correlation == 99
+    # Silence would leave a stream thread blocked until its timeout for no reason.
+    assert "4242" in answer.error
+    session.close()
+
+
+def test_a_fault_surfaces_to_the_caller_rather_than_hanging() -> None:
+    engine = FakeEngine(fault_on_call=1)
+    session = StreamsSession(engine)
+    session.open("counts", {})
+
+    with pytest.raises(StreamsError, match="4242"):
+        session.builder().source("in")
+    engine.close()
+
+
+class BreakingEngine(FakeEngine):
+    """An engine whose response stream *raises* when it ends, the way a cancelled gRPC call does.
+
+    The base fake ends its iterator cleanly, which is the one shape that cannot reproduce the bug
+    this pair of tests covers: a clean end is silent either way.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.breakage = RuntimeError("Stream removed (Channel closed!)")
+
+    def responses(self) -> Iterator[pb.StreamsServerMessage]:
+        while True:
+            message = self._outbound.get()
+            if message is None:
+                raise self.breakage
+            yield message
+
+    def break_unasked(self) -> None:
+        """Breaks the stream without the client having asked for it."""
+        self._outbound.put(None)
+
+
+def _await_reader_exit(session: StreamsSession, timeout: float = 5.0) -> None:
+    reader = session._reader
+    assert reader is not None
+    reader.join(timeout)
+    assert not reader.is_alive(), "the reader thread did not exit"
+
+
+def test_closing_the_session_is_not_reported_as_a_fault() -> None:
+    """A deliberate close breaks the stream; that is the close, not an engine failure.
+
+    Without this the demo printed a CANCELLED error on every clean shutdown, which trains a reader
+    to ignore the one channel that would carry a real failure.
+    """
+    engine = BreakingEngine()
+    session = StreamsSession(engine)
+    session.open("counts", {})
+
+    session.close()
+    _await_reader_exit(session)
+
+    assert session._fault is None
+
+
+def test_a_stream_that_breaks_on_its_own_is_still_reported_as_a_fault() -> None:
+    """The other half: silence must be bought by the close, not by the exception handler."""
+    engine = BreakingEngine()
+    session = StreamsSession(engine)
+    session.open("counts", {})
+
+    engine.break_unasked()
+    _await_reader_exit(session)
+
+    assert session._fault is not None
+    assert "Channel closed" in session._fault
+
+
+def test_describe_returns_the_graph_the_engine_assembled(engine: FakeEngine) -> None:
+    """The host asks because it does not know: it holds handles, not a graph."""
+    session = StreamsSession(engine)
+    session.open("counts", {})
+
+    description = session.describe()
+
+    assert description.subtopologies[0].nodes[0].topics == ["input"]
+    assert description.subtopologies[0].nodes[0].kind == pb.NODE_KIND_SOURCE
+    # The text matters as much as the structure: it is what every existing Kafka Streams
+    # visualiser parses, and it is the whole reason a language with no such tooling gets any.
+    assert description.text.startswith("Topologies:")
+
+
+class SlowDescribeEngine(FakeEngine):
+    """Answers a describe LATE, and differently each time.
+
+    Both properties are load-bearing, and the first version of these tests had neither - it used
+    the base fake, which answers inside ``send`` before ``describe`` even begins waiting. That
+    hides the two defects these tests exist for: an answer already sitting there satisfies a stale
+    event just as well as a fresh one, and a waiter that never actually waits cannot be woken by
+    anything. Both tests passed against deliberately broken code until this class existed.
+    """
+
+    def __init__(self, *, delay: float = 0.05, answer: bool = True) -> None:
+        super().__init__()
+        self._delay = delay
+        self._answer = answer
+        self.describes = 0
+
+    def send(self, message: pb.StreamsClientMessage) -> None:
+        if not self._answer and message.WhichOneof("message") == "get":
+            # Swallowed deliberately. The base fake answers a query inside send(), which
+            # would settle the waiter before the fault could reach it - so a test about a
+            # fault interrupting a pending query could never exercise one.
+            with self._lock:
+                self.sent.append(message)
+            return
+        if message.WhichOneof("message") == "describe":
+            with self._lock:
+                self.sent.append(message)
+                self.describes += 1
+                nth = self.describes
+            if self._answer:
+                threading.Timer(
+                    self._delay, self._deliver, args=(nth, message.describe.call_id)).start()
+            return
+        super().send(message)
+
+    def _deliver(self, nth: int, call_id: int) -> None:
+        self._outbound.put(pb.StreamsServerMessage(
+            topology_description=pb.TopologyDescription(
+                call_id=call_id, text=f"description {nth}")))
+
+    def fault_later(self, reason: str) -> None:
+        threading.Timer(self._delay, self._outbound.put, args=(
+            pb.StreamsServerMessage(fault=pb.Fault(reason=reason)),)).start()
+
+
+def test_a_second_describe_waits_for_its_own_answer() -> None:
+    """The event from the previous answer must not satisfy the next request.
+
+    Without the reset, the second call returns instantly holding the FIRST description - the host
+    asks a changed topology what it looks like and is told what it used to look like.
+    """
+    engine = SlowDescribeEngine()
+    session = StreamsSession(engine)
+    session.open("counts", {})
+
+    first = session.describe()
+    second = session.describe()
+
+    assert first.text == "description 1"
+    assert second.text == "description 2"
+
+
+def test_a_fault_releases_a_describe_waiter_rather_than_letting_it_time_out() -> None:
+    """A session that fails WHILE a describe is waiting must report that, not hang to the timeout.
+
+    The fault has to arrive after the wait begins and the engine must never answer - which is the
+    real shape of the bug. At the call site a missed wakeup is indistinguishable from a hang, and a
+    hang gets diagnosed as a network problem rather than as the error the engine actually sent.
+    """
+    engine = SlowDescribeEngine(answer=False)
+    session = StreamsSession(engine)
+    session.open("counts", {})
+
+    engine.fault_later("the engine gave up")
+
+    # Generous enough that a real answer would arrive, short enough that a missed wakeup shows up
+    # as a failure here rather than as a slow suite.
+    with pytest.raises(StreamsError, match="the engine gave up"):
+        session.describe(timeout=3.0)
+
+
+def test_a_reducer_is_called_with_the_stored_aggregate(engine: FakeEngine) -> None:
+    """The aggregate is the reducer's first argument - not the key, which does not travel at all."""
+    session = StreamsSession(engine)
+    session.open("counts", {})
+    seen: list[tuple[bytes, bytes]] = []
+
+    def combine(aggregate: bytes, value: bytes) -> bytes:
+        seen.append((aggregate, value))
+        return aggregate + value
+
+    token = session.register(combine, kind=FunctionKind.REDUCE)
+    engine.reduce_invoke(1, token, b"running", b"next")
+
+    result = engine.await_client_message("invocation_result")
+    assert seen == [(b"running", b"next")]
+    assert result.invocation_result.value == b"runningnext"
+
+
+def test_a_mapping_sent_to_a_reducer_is_refused_rather_than_guessed(engine: FakeEngine) -> None:
+    """A shape mismatch means one side is confused about the topology.
+
+    Calling anyway would hand the reducer a KEY where it expects an aggregate, and since both are
+    opaque bytes the answer would be plausible and wrong - the worst available outcome, because
+    nothing downstream could detect it.
+    """
+    session = StreamsSession(engine)
+    session.open("counts", {})
+    called = False
+
+    def combine(aggregate: bytes, value: bytes) -> bytes:
+        nonlocal called
+        called = True
+        return aggregate
+
+    token = session.register(combine, kind=FunctionKind.REDUCE)
+    engine.invoke(1, token, b"a-key", b"a-value")   # a MAPPING - no aggregate
+
+    result = engine.await_client_message("invocation_result")
+    assert not called, "the reducer must not be called with a key standing in for an aggregate"
+    assert "registered as REDUCE" in result.invocation_result.error
+
+
+def test_a_reduction_sent_to_a_mapper_is_refused_too(engine: FakeEngine) -> None:
+    """The other direction, so the guard is not one-sided."""
+    session = StreamsSession(engine)
+    session.open("counts", {})
+    called = False
+
+    def transform(key: bytes, value: bytes) -> bytes:
+        nonlocal called
+        called = True
+        return value
+
+    token = session.register(transform)
+    engine.reduce_invoke(1, token, b"agg", b"val")
+
+    result = engine.await_client_message("invocation_result")
+    assert not called
+    assert "registered as MAP" in result.invocation_result.error
+
+
+def test_the_builder_issues_a_reduce_naming_its_store(engine: FakeEngine) -> None:
+    session = StreamsSession(engine)
+    session.open("counts", {})
+    builder = session.builder()
+    grouped = builder.group_by_key(builder.source("in"))
+    builder.reduce(grouped, lambda a, v: a + v, "reduced-store")
+
+    call = engine.await_client_message("builder_call")
+    assert call.builder_call.WhichOneof("call") == "reduce"
+    assert call.builder_call.reduce.store_name == "reduced-store"
+    assert call.builder_call.reduce.handle == grouped
+
+
+def test_a_query_returns_the_value_decoded_by_the_reported_type(engine: FakeEngine) -> None:
+    session = StreamsSession(engine)
+    session.open("counts", {})
+    engine._get_answer = pb.GetResult(found=True, value=b"\x00\x00\x00\x00\x00\x00\x00\x07",
+                                      value_type=pb.DATA_TYPE_LONG)
+
+    assert session.get("counted", b"a") == 7
+
+    sent = engine.await_client_message("get")
+    assert sent.get.store_name == "counted"
+    assert sent.get.key == b"a"
+
+
+def test_an_absent_key_is_None_and_an_empty_value_is_not(engine: FakeEngine) -> None:
+    """The distinction the engine's `found` flag exists for.
+
+    Collapsing them would tell a host its data was gone when the stored value is simply empty, and
+    both are perfectly ordinary states for a byte-valued store to be in.
+    """
+    session = StreamsSession(engine)
+    session.open("counts", {})
+
+    engine._get_answer = pb.GetResult(found=False, value_type=pb.DATA_TYPE_BYTES)
+    assert session.get("reduced", b"a") is None
+
+    engine._get_answer = pb.GetResult(found=True, value=b"", value_type=pb.DATA_TYPE_BYTES)
+    assert session.get("reduced", b"a") == b""
+
+
+def test_a_query_that_could_not_be_served_raises_rather_than_reporting_absence(
+        engine: FakeEngine) -> None:
+    """A store that cannot be read is not the same as a key that is not there."""
+    session = StreamsSession(engine)
+    session.open("counts", {})
+    engine._get_answer = pb.GetResult(error="the store is still restoring")
+
+    with pytest.raises(StreamsError, match="still restoring"):
+        session.get("reduced", b"a")
+
+
+class AnswersWithoutACorrelation(FakeEngine):
+    """Answers every query, and never echoes the call id - an engine predating the correlation.
+
+    The shape that matters for skew: the answer is on the wire and is perfectly well formed, so
+    nothing about the transport looks wrong. Only the correlation is missing.
+    """
+
+    def send(self, message: pb.StreamsClientMessage) -> None:
+        if message.WhichOneof("message") != "get":
+            super().send(message)
+            return
+        with self._lock:
+            self.sent.append(message)
+        self._outbound.put(pb.StreamsServerMessage(get_result=self._get_answer))
+
+
+def test_an_answer_naming_no_call_is_dropped_rather_than_given_to_whoever_is_waiting() -> None:
+    """An uncorrelated answer must reach nobody, even though somebody is waiting for one.
+
+    The tempting fallback - "no call id, so give it to the only waiter" - is the single-slot bug
+    wearing a disguise: it is right exactly while there is one waiter, and silently wrong the
+    moment there are two. Failing the query is honest; the caller learns it got no answer instead
+    of learning the wrong one.
+    """
+    engine = AnswersWithoutACorrelation()
+    session = StreamsSession(engine)
+    session.open("counts", {})
+    engine._get_answer = pb.GetResult(found=True, value=b"v", value_type=pb.DATA_TYPE_BYTES)
+
+    with pytest.raises(StreamsError, match="did not answer"):
+        session.get("reduced", b"a", timeout=0.5)
+
+    engine.close()
+
+
+class DescribesConcurrently(FakeEngine):
+    """Answers every describe LATE and with a text naming the call it answers.
+
+    The delay is what makes the test concurrent rather than sequential: every describe is sent
+    before any answer lands, so all the waiters are in flight at once. The base fake answers inside
+    ``send``, which would settle each describe before the next was even asked.
+    """
+
+    def __init__(self, *, delay: float = 0.1) -> None:
+        super().__init__()
+        self._delay = delay
+
+    def send(self, message: pb.StreamsClientMessage) -> None:
+        if message.WhichOneof("message") != "describe":
+            super().send(message)
+            return
+        with self._lock:
+            self.sent.append(message)
+        call_id = message.describe.call_id
+        threading.Timer(self._delay, self._outbound.put, args=(
+            pb.StreamsServerMessage(topology_description=pb.TopologyDescription(
+                call_id=call_id, text=f"description for call {call_id}")),)).start()
+
+
+def test_concurrent_describes_each_receive_their_own_answer() -> None:
+    """``describe`` had the query's defect exactly, and needed the query's fix exactly.
+
+    One ``_described`` event and one ``_description`` slot for the whole session, so two hosts
+    threads asking what the topology looks like were both handed whichever answer landed last.
+    Parametrising the re-entrancy tests over all three crossings was what stopped a fix that
+    correlated queries and left this one alone from looking complete.
+
+    Asserting that the descriptions are DISTINCT rather than matching each caller to its own text:
+    a caller cannot see the call id it was allocated, and duplicates are precisely what one shared
+    slot produces.
+    """
+    engine = DescribesConcurrently()
+    session = StreamsSession(engine)
+    session.open("counts", {})
+
+    collected: list[str] = []
+    collected_lock = threading.Lock()
+    all_ready = threading.Barrier(8)
+
+    def ask() -> None:
+        all_ready.wait(timeout=10)
+        description = session.describe(timeout=10.0)
+        with collected_lock:
+            collected.append(description.text)
+
+    threads = [threading.Thread(target=ask, name=f"describer-{n}") for n in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=20)
+    session.close()
+
+    assert len(collected) == 8, "not every describe returned"
+    assert len(set(collected)) == 8, f"two describes were handed the same answer: {collected}"
+
+
+def test_a_second_query_waits_for_its_own_answer() -> None:
+    """The stale-event bug, in the shape it takes for queries."""
+    engine = SlowDescribeEngine(answer=False)
+    session = StreamsSession(engine)
+    session.open("counts", {})
+    engine.fault_later("the engine gave up")
+
+    with pytest.raises(StreamsError, match="the engine gave up"):
+        session.get("reduced", b"a", timeout=3.0)
+
+
+def test_a_joiner_is_called_with_the_stream_value_before_the_table_value(
+        engine: FakeEngine) -> None:
+    """Both sides are bytes, so only an assertion on order can tell a transposition from a pass."""
+    session = StreamsSession(engine)
+    session.open("joins", {})
+    seen: list[tuple[bytes, bytes]] = []
+
+    def combine(stream_value: bytes, table_value: bytes) -> bytes:
+        seen.append((stream_value, table_value))
+        return stream_value + b">" + table_value
+
+    token = session.register(combine, kind=FunctionKind.JOIN)
+    engine.join_invoke(1, token, b"event", b"fact")
+
+    result = engine.await_client_message("invocation_result")
+    assert seen == [(b"event", b"fact")]
+    assert result.invocation_result.value == b"event>fact"
+
+
+def test_a_join_sent_to_a_reducer_is_refused_although_both_carry_two_values(
+        engine: FakeEngine) -> None:
+    """The case that made an explicit kind necessary.
+
+    A reduction and a join both arrive as two byte strings, so nothing about the payload
+    distinguishes them. Before the kind was on the wire this call would have gone straight through
+    to the reducer with a table value standing in for its aggregate.
+    """
+    session = StreamsSession(engine)
+    session.open("joins", {})
+    called = False
+
+    def combine(aggregate: bytes, value: bytes) -> bytes:
+        nonlocal called
+        called = True
+        return aggregate
+
+    token = session.register(combine, kind=FunctionKind.REDUCE)
+    engine.join_invoke(1, token, b"event", b"fact")
+
+    result = engine.await_client_message("invocation_result")
+    assert not called, "the reducer must not be called with a table value as its aggregate"
+    assert "registered as REDUCE" in result.invocation_result.error
+    assert "arrived as JOIN" in result.invocation_result.error
+
+
+def test_an_invocation_naming_no_kind_is_refused_rather_than_inferred(engine: FakeEngine) -> None:
+    """Field presence used to be enough to infer the shape. With three shapes it is a guess."""
+    session = StreamsSession(engine)
+    session.open("joins", {})
+    called = False
+
+    def transform(key: bytes, value: bytes) -> bytes:
+        nonlocal called
+        called = True
+        return value
+
+    token = session.register(transform)
+    engine.kindless_invoke(1, token, b"v")
+
+    result = engine.await_client_message("invocation_result")
+    assert not called
+    assert "named no kind" in result.invocation_result.error

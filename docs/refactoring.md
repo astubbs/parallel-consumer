@@ -143,6 +143,12 @@ diagnosing the mirror rather than while reading the file:
 Large, mostly interdependent, several **undecided**. Most trace to confluentinc#200.
 Do not start one casually.
 
+### Relocate TestConventionRules out of core's test-jar (small)
+
+`TestConventionRules` lives in core's test-jar, so the dependency-free proxy client Java API module
+cannot wire it and `EveryModuleWiresUpArchUnitTest` carries a one-module exemption naming that pom's
+constraint. Move the rules to a dependency-neutral test artifact and the exemption list goes back to
+empty.
 ### The portable-mtime probe exists three times
 
 `hook_file_mtime` in `.claude/hooks/lib/hook-common.sh`, `_mtime` in

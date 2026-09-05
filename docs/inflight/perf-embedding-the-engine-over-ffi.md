@@ -229,3 +229,86 @@ easiest thing to mistake for a decision to ship.
 - [`perf-native-image-sidecar-works.md`](perf-native-image-sidecar-works.md) - the executable build,
   the five-attempt log, and the reachability capture reused here.
 - `docs/plans/2026-08-14-001-feat-language-proxy-plan.md` - KTD13, KTD41, and the Dead ends section.
+
+## Candidate raised 2026-08-25: compile the FUNCTION, not just embed the engine
+
+Raised by the owner after the windowing spike's bet-off
+([`perf-streams-windowing-multiplier.md`](perf-streams-windowing-multiplier.md)): intercept user
+functions at registration and compile them to C-ABI artifacts the engine calls directly - in the
+embedded shape, the engine invokes a function POINTER the host registered, and the crossing
+disappears entirely rather than shrinking to a queue handoff.
+
+- **Mechanism exists for Python: Numba `@cfunc`** - restricted-Python JIT to an LLVM-compiled C
+  function pointer, no interpreter, no GIL. The registration wire already carries function tokens,
+  so "this token is also callable natively" is one additive capability field. The nopython coverage
+  cliff routes per function: compute-light folds (exactly the class the windowing verdict was lost
+  on) compile; I/O-bound functions stay on the wire, where the hop is noise against the work.
+  GraalPy is the competing shape (host Python on the engine runtime) and changes what users install.
+- **Sizing before any design work**: a direct native call (~0.1-1us) is the only shape that reaches
+  the two-orders-of-magnitude reopening condition `STRATEGY.md` names; the embedded queue seam alone
+  still pays two thread handoffs. But the ceiling relocates rather than vanishes - U6's arm D
+  (zero crossings) ran ~20k rec/s, the engine's own floor on that box - so the perfect version
+  closes the reimplementation gap from ~100x to single digits, and the verdict question becomes
+  parity-plus-durability against a published rate bound rather than a rout.
+- **The spike to run first is a crossing-cost ladder, not the interception machinery**: (a) gRPC
+  baseline (135us, measured), (b) embedded pull-queue handoff, (c) Numba cfunc pointer called from
+  the native-image engine, (d) GraalPy polyglot comparison - pre-registered bar for (c): at or
+  under ~1.35us marginal, with the end-to-end ceiling re-derived against the engine floor.
+  Hazards inherited from this note: crash isolation (a segfaulting compiled function kills the
+  topology process where the sidecar dies loudly), CTD7's stack-swap FFI incompatibility, the
+  per-entry isolate thread-attach rule, and the release-matrix gate on shipping anything embedded.
+
+### Prior art for the candidate, surveyed 2026-08-25 - the repo had not looked
+
+The earlier sweeps covered streaming architectures (Beam/PyFlink/PySpark/Faust/Quix/Bytewax, in
+the windowing plan's Problem Frame) and per-language FFI mechanics (the parked C-client note);
+the UDF-compilation family was unsurveyed until this entry.
+
+- **The pattern ships today.** cuDF/RAPIDS intercepts user Python UDFs at runtime, compiles them
+  with Numba, and runs them inside the engine; `scipy.LowLevelCallable` + Numba `@cfunc` is the
+  established CPU idiom for native libraries taking compiled-Python C callbacks. Bodo and Codon
+  are the whole-program end of the same family. **Redpanda Data Transforms is the nearest
+  neighbour in this domain**: user functions compiled to WASM, run inside the broker, sandboxed.
+- **The Graal-family strategy** is hosting rather than compiling: GraalPy/Truffle puts Python on
+  the runtime this repo already builds with (near-free polyglot calls after warmup), composing
+  with the native-image tooling - against the Jython cautionary tale (died on the C-extension
+  cliff, which GraalPy still fights) and a real AOT-versus-Truffle-warmup tension.
+- **WASM may fit this product best and stays in the family (GraalWasm)**: Numba serves Python
+  only, but a WASM UDF fast path gives all ten bindings one target, one sandboxed engine-side
+  runtime, and restores the crash isolation a raw C pointer gives up - at the cost of Python's
+  to-WASM toolchain being the least mature of the bindings'.
+- **The third ecosystem answer is already half-built here**: DuckDB/Polars answer slow UDFs by
+  growing the engine's expression algebra so users declare rather than ship code - the declared
+  combine (U5) generalised. Cheapest lane; parity-limited by construction (KTD16).
+
+The crossing-cost ladder therefore gains arms: (e) GraalPy polyglot call, (f) GraalWasm UDF -
+with (f) the only candidate serving every binding, and the same pre-registered bar.
+
+### Owner direction, 2026-08-25: the full binding set does not gate the fast path
+
+A WASM fast path that serves only the WASM-capable bindings is an acceptable product shape for a
+while - do not let ten-language coverage block a simple win. Consequences for the candidate above:
+
+- **The GraalWasm arm is promoted to primary candidate**; Numba `@cfunc` demotes to a
+  Python-specific fallback rather than the lead mechanism.
+- The first fast-path slice may target the to-WASM-mature bindings (Rust, Go, TypeScript/JS,
+  C/C++, .NET) and skip Python/Ruby until their toolchains catch up - which aligns the coverage
+  boundary with the workload boundary: the compiled-language audiences bring the compute-tight
+  functions the fast path exists for, while I/O-bound work stays on the wire path where the hop
+  is noise.
+- The crossing-cost ladder keeps every arm (the bar is unchanged), but a GraalWasm result alone
+  is now sufficient to green-light a product slice.
+
+### Refinement, 2026-08-25: the seam is one C-ABI contract; WASM is a producer, not the seam
+
+Owner's observation, and it collapses the candidate's shape: define the fast path as a C-signature
+registration contract (a native callable over byte spans), and every route becomes a producer of
+that one seam - Numba `@cfunc` emits it directly (so Python needs no to-WASM toolchain to join),
+wasm2c / Wasmtime-AOT lower a WASM module to it (so WASM is the portable authoring and interchange
+format rather than the calling convention), and a Mojo or Rust function is it already. Sandboxing
+becomes a per-registration POLICY rather than an architecture fork: run the WASM form inside the
+engine's embedded runtime when isolation matters, lower to native and call raw when the last
+microsecond does - same artifact, two execution modes. Side benefit: a host can dlopen and
+unit-test the exact native artifact the engine will call before registering it. The trade to keep
+explicit: a raw pointer carries no sandbox - safety exists only in the in-engine mode. The ladder
+spike's arms are unchanged; what this settles is that they all land on one engine-side surface.

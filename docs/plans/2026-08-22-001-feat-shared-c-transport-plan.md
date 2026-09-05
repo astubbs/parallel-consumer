@@ -146,6 +146,48 @@ if any of these holds:**
   method, so the transport is shaped quite differently from Go's, and the protocol shape still
   survived. One kill condition down, two open.
 
+**THE ARITHMETIC, MEASURED 2026-08-24, and it is smaller than the number this plan was written
+against.** "Not meaningfully faster" had no figure behind it; it has one now. See
+[`../inflight/perf-streams-crossing-attribution.md`](../inflight/perf-streams-crossing-attribution.md).
+
+- **The prize is ~150us per record, not ~450us.** The published 400-450us round trip was measured
+  at a record count where roughly 250us of it is fixed warm-up and commit cadence that an arm with
+  *no crossing at all* pays too. The steady-state crossing slope is 140-160us.
+- So an embedded hop landing at 20us saves ~130us per record, not ~430us: a per-thread ceiling of
+  roughly 6,700/sec becomes roughly 50,000/sec. Still worth having, and worth a third of what the
+  old number implied.
+- **The bar, written before building:** if the embedded transport does not cut the per-record
+  crossing to about a third of the sidecar's - under ~50us against the measured ~150us - then the
+  performance argument is weak and only CTD1's no-second-process argument survives. That is not an
+  automatic kill, because the first condition above requires both halves, but it is the line at
+  which the speed claim should stop being made.
+- **Good news for the track, not bad:** the same experiment ruled out the scenario that WOULD have
+  killed it. Kafka's and Kafka Streams' own marginal per-record work measured at statistically zero
+  (slope -0.3us/record, bounded above by ~15us), so there is no large engine-side cost hiding behind
+  the crossing and making a transport improvement pointless.
+
+**REFINED 2026-08-24: the prize is payload-dependent, and that changes who this track competes
+with.** See
+[`../inflight/perf-crossing-fixed-versus-per-byte.md`](../inflight/perf-crossing-fixed-versus-per-byte.md).
+The ~150us splits into **about 120us fixed plus ~6.5us per KB**, and the consequence is not
+arithmetic detail - it decides whether this track has a job at all.
+
+- **On small records, bundling can take almost the whole prize before this track ships.** Under a
+  few KB the crossing is essentially all fixed cost, and one frame carrying a hundred records
+  divides that by a hundred. If bundling lands first on sub-KB workloads, an embedded transport
+  arrives to find ~1us per record left to argue over. **This is a new and serious threat to the
+  performance case, and it is not the one this plan was written to guard against.**
+- **On large records, this track is the ONLY lever, and bundling cannot touch it.** Above about
+  18 KB the per-byte copy overtakes the fixed cost, and bundling amortises nothing there - it still
+  copies every byte. A shared-memory transport passing a pointer is the only thing that removes
+  that term. **That is the defensible niche, and it should be stated as the case for the track
+  rather than the general speed claim.**
+- **So the honest framing of the kill criterion is now conditional.** The bar below still stands as
+  written, but a failure to clear it matters far less if the target workloads are large-payload,
+  and far more if they are small - because in the small case bundling is both cheaper to build and
+  nearly as effective. Whoever revisits this should establish the payload profile of the intended
+  workloads FIRST; it is a cheaper question than either build and it reorders both.
+
 ### CTD3 - The measurement must compare like with like
 
 Any throughput comparison MUST run the sidecar arm as a **native image**, not a JVM. The Go
@@ -156,6 +198,17 @@ The output should be a **crossover point** - the per-record processing duration 
 stops mattering - measured across a sweep (nothing, 1ms, 10ms, 100ms, 1s), reporting warm and cold
 separately. A single duration cannot show a crossover, and the crossover is the number that is
 useful in documentation whichever side wins.
+
+**AMENDED 2026-08-24: measure a slope, never a single record count.** Learned by nearly getting it
+wrong. The crossing path warms up over tens of thousands of invocations - per-record cost fell from
+471us to 159us across one sweep - and both arms carry a fixed startup and commit-cadence component
+of roughly 0.5-0.9 seconds regardless of how many records they process. A single measurement at the
+demo's default scale would have reported the boundary as about a fifth of the total cost, which is a
+confident wrong attribution rather than a noisy one.
+
+So any comparison here sweeps the record count and takes the slope of window against count, which
+cancels the fixed part, and discards the warm region. Report the run count and the spread of the
+pairwise slopes, not one number.
 
 ### CTD4 - The isolate thread is looked up per call, never cached
 
