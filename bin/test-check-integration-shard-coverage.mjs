@@ -25,11 +25,11 @@
 // could not compile its fixtures has proven nothing.
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { buildIndex, classFilesUnder, classesRequiringReports, inheritsTest, javapBinary, parseJavap } from './lib/compiled-classes.mjs'
+import { buildIndex, classFilesUnder, classesRequiringReports, inheritsTest, javapBinary, jdkBinary, parseJavap } from './lib/compiled-classes.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const GATE = join(HERE, 'check-integration-shard-coverage.mjs')
@@ -42,12 +42,6 @@ const check = (desc, actual, expected) => {
 const contains = (desc, haystack, needle) => {
     if (haystack.includes(needle)) console.log(`ok    ${desc}`)
     else { console.error(`FAIL  ${desc}\n        expected to contain: ${JSON.stringify(needle)}\n        actual:\n${haystack}`); failures++ }
-}
-
-function javacBinary() {
-    const home = process.env.JAVA_HOME
-    if (home && existsSync(join(home, 'bin', 'javac'))) return join(home, 'bin', 'javac')
-    return 'javac'
 }
 
 // --- fixture sources -------------------------------------------------------------------------------
@@ -125,9 +119,9 @@ for (const [rel, body] of Object.entries({ ...STUBS, ...FIXTURES })) {
     writeFileSync(p, body + '\n')
     sources.push(p)
 }
-const javac = spawnSync(javacBinary(), ['-d', classes, ...sources], { encoding: 'utf8' })
+const javac = spawnSync(jdkBinary('javac'), ['-d', classes, ...sources], { encoding: 'utf8' })
 if (javac.status !== 0) {
-    console.error(`could not compile the fixtures with ${javacBinary()} - a JDK is required for this self-test`)
+    console.error(`could not compile the fixtures with ${jdkBinary('javac')} - a JDK is required for this self-test`)
     console.error(javac.stderr || javac.error)
     rmSync(tmp, { recursive: true, force: true })
     process.exit(2)

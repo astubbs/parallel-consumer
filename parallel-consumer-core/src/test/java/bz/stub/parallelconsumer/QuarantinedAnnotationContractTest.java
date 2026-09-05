@@ -158,7 +158,25 @@ class QuarantinedAnnotationContractTest {
         String flag = "-Dexcluded.groups=";
         int start = body.indexOf(flag);
         assertWithMessage(script + " must pass an explicit -Dexcluded.groups").that(start).isAtLeast(0);
-        return body.substring(start + flag.length()).split("\\s")[0];
+        String value = body.substring(start + flag.length()).split("\\s")[0];
+        // The list may be hardcoded ONCE as a shell variable and passed by reference - a wrapper that
+        // hands the same list to failsafe and to a coverage gate must not carry two copies of it, and
+        // "hardcoded" means "written in this script rather than inherited from the pom", which a
+        // `readonly EXCLUDED_GROUPS=...` line satisfies exactly as an inline literal does. Resolve one
+        // level of `"${NAME}"` / `$NAME` to that assignment; anything else is returned verbatim, so a
+        // wrapper that really did stop hardcoding the list still fails the membership checks.
+        String reference = value.replaceAll("^\"|\"$", "");
+        if (reference.startsWith("$")) {
+            String name = reference.replaceAll("^\\$\\{?|\\}$", "");
+            java.util.regex.Matcher assignment = java.util.regex.Pattern
+                    .compile("(?m)^\\s*(?:readonly\\s+)?" + java.util.regex.Pattern.quote(name) + "=\"?([^\"\\s]*)\"?\\s*$")
+                    .matcher(body);
+            assertWithMessage(script + " passes -Dexcluded.groups=" + value + " but never assigns " + name
+                    + " - the list must be hardcoded in the script, not inherited")
+                    .that(assignment.find()).isTrue();
+            return assignment.group(1);
+        }
+        return value;
     }
 
     private static List<String> groups(String commaSeparated) {

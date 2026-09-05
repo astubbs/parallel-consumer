@@ -187,7 +187,10 @@ esac
 # example modules too - VertxConcurrencyIT and CoreAppMetricsIntegrationTest among them - and a
 # core-only glob reports those as MISSING while they ran and passed elsewhere in the reactor. That
 # is a false RED, and it failed two shards on the first four-way run.
-all_reports() { find . -path '*/target/failsafe-reports/TEST-*.xml' -not -path './.git/*' 2>/dev/null; }
+# Enumerated ONCE, after the build: every guard below reads the same list, and re-running a tree-wide
+# find per class name was up to nine identical traversals for one answer (simplify pass, astubbs#442).
+REPORTS="$(find . -path '*/target/failsafe-reports/TEST-*.xml' -not -path './.git/*' 2>/dev/null)"
+all_reports() { printf '%s\n' "$REPORTS"; }
 report_exists() {  # report_exists <simple class name>
     # Herestring, NOT `all_reports | grep -q`. Under `set -o pipefail` that pipeline inverts its own
     # answer: grep -q exits on the first match, find takes EPIPE and dies 141, and pipefail promotes

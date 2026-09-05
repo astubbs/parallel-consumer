@@ -20,7 +20,6 @@ import org.junit.jupiter.api.BeforeEach;
 import pl.tlinkowski.unij.api.UniLists;
 import pl.tlinkowski.unij.api.UniSets;
 
-import java.time.Duration;
 import java.util.Collection;
 import java.util.Properties;
 import java.util.concurrent.CountDownLatch;

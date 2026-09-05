@@ -49,11 +49,14 @@ const TEST_DESCRIPTORS = [
 ]
 const TAG_ANNOTATION = 'org.junit.jupiter.api.Tag'
 
-export function javapBinary() {
+/** A JDK tool by name: JAVA_HOME's copy when one is set and present, otherwise whatever PATH has. */
+export function jdkBinary(name) {
     const home = process.env.JAVA_HOME
-    if (home && existsSync(join(home, 'bin', 'javap'))) return join(home, 'bin', 'javap')
-    return 'javap'
+    if (home && existsSync(join(home, 'bin', name))) return join(home, 'bin', name)
+    return name
 }
+
+export const javapBinary = () => jdkBinary('javap')
 
 /** Every `.class` file under `dir`, as fully-qualified class names. Inner classes included. */
 export function classFilesUnder(dir) {

@@ -30,15 +30,14 @@
 // which check-all.sh renders as a visible skip rather than a pass). SHARD_COVERAGE_ROOT points the
 // walk at a fixture tree for the self-test, the way CHAOS_SHARDS_CHECK_ROOT does for the chaos gate.
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import { readdirSync, statSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { dirname } from 'node:path'
 import { buildIndex, classFilesUnder, classesRequiringReports } from './lib/compiled-classes.mjs'
+import { heavyClassesFromScript } from './lib/shard-script.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = process.env.SHARD_COVERAGE_ROOT || join(HERE, '..')
-const SCRIPT = join(HERE, 'ci-integration-test.sh')
 
 // The package pattern failsafe collects. The pom's <includes> is `**/integrationTest*/**`, which as a
 // package is any segment starting `integrationTest`.
@@ -78,14 +77,6 @@ export function reportedClasses(reports) {
     return new Set(reports.map((p) => p.replace(/^.*\/TEST-/, '').replace(/\.xml$/, '')))
 }
 
-/** The shipped HEAVY_CLASSES, read from the script so this cannot drift from what CI actually selects. */
-function heavyFromScript() {
-    try {
-        const m = readFileSync(SCRIPT, 'utf8').match(/readonly HEAVY_CLASSES="([^"]*)"/)
-        return m ? m[1].split(',').filter(Boolean) : []
-    } catch { return [] }
-}
-
 export function evaluate({ classDirs, reports, heavy, excludedGroups }) {
     const classpath = classDirs.join(':')
     const candidates = classDirs.flatMap(classFilesUnder).filter((n) => INTEGRATION_PACKAGE.test(n))
@@ -107,7 +98,7 @@ export function evaluate({ classDirs, reports, heavy, excludedGroups }) {
 }
 
 function main() {
-    const heavy = (arg('--heavy-classes', '') || heavyFromScript().join(',')).split(',').filter(Boolean)
+    const heavy = (arg('--heavy-classes', '') || (heavyClassesFromScript() ?? []).join(',')).split(',').filter(Boolean)
     const excludedGroups = arg('--excluded-groups', '').split(',').map((s) => s.trim()).filter(Boolean)
     const { classDirs, reports } = walk(ROOT)
 

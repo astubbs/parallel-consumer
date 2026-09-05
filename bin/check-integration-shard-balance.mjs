@@ -28,12 +28,9 @@
 
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
 import { slowest } from './lib/codecov.mjs'
+import { heavyClassesFromScript } from './lib/shard-script.mjs'
 
-const HERE = dirname(fileURLToPath(import.meta.url))
-const SCRIPT = join(HERE, 'ci-integration-test.sh')
 const BUILD_OVERHEAD_SECONDS = 160 // serial build + job setup, re-paid by every shard
 const FORKS = 4 // forkCount inside each shard; a measured ceiling, see the script's header
 
@@ -53,12 +50,6 @@ if (failOverIdx > -1) {
         console.error(`check-integration-shard-balance: --fail-over needs one finite, non-negative threshold in seconds (got ${raw ?? 'nothing'})`)
         process.exit(2)
     }
-}
-
-// --- the partition as it is checked in -------------------------------------------------------
-function heavyFromScript() {
-    const m = readFileSync(SCRIPT, 'utf8').match(/readonly HEAVY_CLASSES="([^"]*)"/)
-    return m ? m[1].split(',').filter(Boolean) : null
 }
 
 // --- packing ---------------------------------------------------------------------------------
@@ -83,7 +74,7 @@ const shardWall = (classes) => Math.max(...lpt(classes, FORKS).sums) + BUILD_OVE
 const criticalPath = (shards) => Math.max(...shards.map(shardWall))
 
 // --- main ------------------------------------------------------------------------------------
-const heavy = heavyFromScript()
+const heavy = heavyClassesFromScript()
 if (!heavy) {
     console.error('check-integration-shard-balance: could not read HEAVY_CLASSES from bin/ci-integration-test.sh')
     process.exit(2)
