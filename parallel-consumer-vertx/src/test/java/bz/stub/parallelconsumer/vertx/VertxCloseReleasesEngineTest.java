@@ -4,105 +4,87 @@ package bz.stub.parallelconsumer.vertx;
  * Copyright (C) 2026 Antony Stubbs and contributors
  */
 
+import bz.stub.parallelconsumer.internal.DrainingCloseable.DrainingMode;
 import io.vertx.core.Vertx;
 import io.vertx.core.VertxOptions;
-import io.vertx.ext.web.client.WebClient;
-import lombok.extern.slf4j.Slf4j;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.NoSuchElementException;
+import java.util.concurrent.TimeoutException;
 
+import static com.google.common.truth.Truth.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.mockito.Mockito.spy;
-import static org.mockito.Mockito.verify;
 
 /**
- * Pins a fix to {@link VertxParallelEoSStreamProcessor}: every
- * {@link bz.stub.parallelconsumer.internal.DrainingCloseable} entry point must release the Vert.x
- * {@link Vertx} engine and {@link WebClient}, not only the {@link java.time.Duration}-taking overload
- * that used to be the sole place they were released.
- * <p>
- * None of these tests ever call {@code poll(...)}, so {@code vertxAsync} stays in {@code State.UNUSED}
- * until the test closes it - the cheapest way to reach every {@code close} entry point without a
- * running control thread.
+ * The owning half of the contract {@link VertxCloseTestBase} describes: an engine the processor built itself is
+ * released by every close entry point, a teardown that fails cannot replace the failure {@code super.close(...)}
+ * was already throwing, and the wait for the engine honours the caller's {@link Duration}.
+ * {@link VertxCloseLeavesACallerSuppliedEngineRunningTest} pins the other half.
  */
-@Slf4j
-class VertxCloseReleasesEngineTest extends VertxBaseUnitTest {
-
-    private Vertx vertxSpy;
-    private WebClient webClientSpy;
+class VertxCloseReleasesEngineTest extends VertxCloseTestBase {
 
     /**
-     * Substitutes a spy for the engine the processor is built on, so {@code verify} can see whether close
-     * released it. Only the instance changes - {@link VertxBaseUnitTest#initAsyncConsumer} still owns the
-     * options and the construction.
+     * How long the caller gives the close in the tests below. Well short of the configured default (10s), so a wait
+     * bounded by the default rather than by this is unmistakable in the elapsed time.
+     */
+    private static final Duration CALLERS_TIMEOUT = Duration.ofMillis(300);
+
+    /**
+     * Anything near the configured 10s default means the caller's {@link Duration} was ignored; anything near
+     * {@link #CALLERS_TIMEOUT} means it was honoured. The bound sits far from both, so neither side is timing-sensitive.
+     */
+    private static final Duration FAR_SHORT_OF_THE_DEFAULT = Duration.ofSeconds(5);
+
+    /**
+     * Hands the processor nothing, so it builds and owns the engine - the case under test.
      */
     @Override
     protected Vertx createVertx(VertxOptions vertxOptions) {
-        vertxSpy = spy(super.createVertx(vertxOptions));
-        return vertxSpy;
+        return null;
     }
 
-    /**
-     * The same substitution for the web client, built on the spied engine {@link #createVertx} returned.
-     */
-    @Override
-    protected WebClient createWebClient(Vertx vertx) {
-        webClientSpy = spy(super.createWebClient(vertx));
-        return webClientSpy;
+    @ParameterizedTest
+    @EnumSource(CloseEntryPoint.class)
+    void everyCloseEntryPointReleasesTheEngineTheProcessorBuilt(CloseEntryPoint entryPoint) {
+        var probe = EngineProbeVerticle.deployOn(vertxAsync.getVertx());
+
+        entryPoint.closeVia(vertxAsync);
+
+        assertThat(probe.engineBeganClosing()).isTrue();
     }
 
-    /**
-     * Replaces the inherited {@code @AfterEach close()} entirely - JUnit 5 drops an inherited lifecycle
-     * method once a subclass overrides it, unless the override repeats the annotation, so this fully
-     * takes over teardown for this class rather than running alongside the original.
-     * <p>
-     * That is deliberate: {@link #aThrowingCloseStillReleasesTheVertxEngine()} drives
-     * {@code closeDrainFirst()} on a never-started ({@code State.UNUSED}) instance, which - a separate,
-     * pre-existing defect this PR does not fix - leaves {@code state} stuck at {@code DRAINING}/
-     * {@code CLOSING} forever: {@code transitionToDraining} sets {@code DRAINING} unconditionally, unlike
-     * {@code transitionToClosing}'s {@code State.UNUSED} guard, so {@code waitForClose} then dereferences
-     * an empty {@code controlThreadFuture} on an instance that never started. The inherited teardown's own
-     * unguarded {@code parentParallelConsumer.close()} would hit that same defect a second time and fail
-     * the {@code @AfterEach} itself, reporting an otherwise-passing test as an error.
-     */
-    @Override
-    @AfterEach
-    public void close() {
+    @Test
+    void aFailingTeardownIsSuppressedOnTheCloseFailureRatherThanReplacingIt() {
+        var heldOpen = EngineProbeVerticle.deployHoldingOpen(vertxAsync.getVertx());
         try {
-            super.close();
-        } catch (Exception expectedOnATestThatDrainsANeverStartedInstance) {
-            log.debug("Ignoring the never-started-drain defect's re-throw while releasing test resources",
-                    expectedOnATestThatDrainsANeverStartedInstance);
+            // DRAIN on a never-started instance makes super.close throw (see the base class javadoc); the held-open
+            // engine makes the Vert.x teardown time out. Both fail - the caller must still see the first.
+            var closeFailure = assertThrows(NoSuchElementException.class,
+                    () -> vertxAsync.close(CALLERS_TIMEOUT, DrainingMode.DRAIN));
+
+            assertThat(heldOpen.engineBeganClosing()).isTrue();
+            assertThat(closeFailure.getSuppressed()).hasLength(1);
+            assertThat(closeFailure.getSuppressed()[0]).isInstanceOf(TimeoutException.class);
+        } finally {
+            heldOpen.releaseAndAwaitShutdown();
         }
     }
 
     @Test
-    void noArgCloseReleasesTheVertxEngine() {
-        vertxAsync.close();
+    void closeWithADurationBoundsTheWaitForTheEngineByThatDuration() {
+        var heldOpen = EngineProbeVerticle.deployHoldingOpen(vertxAsync.getVertx());
+        try {
+            Instant started = Instant.now();
+            assertThrows(TimeoutException.class, () -> vertxAsync.close(CALLERS_TIMEOUT, DrainingMode.DONT_DRAIN));
+            Duration elapsed = Duration.between(started, Instant.now());
 
-        verify(webClientSpy).close();
-        verify(vertxSpy).close();
-    }
-
-    @Test
-    void closeDontDrainFirstReleasesTheVertxEngine() {
-        vertxAsync.closeDontDrainFirst();
-
-        verify(webClientSpy).close();
-        verify(vertxSpy).close();
-    }
-
-    @Test
-    void aThrowingCloseStillReleasesTheVertxEngine() {
-        // DrainingMode.DRAIN on a never-started instance throws NoSuchElementException (see this class's
-        // javadoc) - real, deterministic, and exactly the shape close(DrainingMode) must survive. If this
-        // assertion ever starts failing because that other defect got fixed, swap in another throwing
-        // mechanism rather than deleting the exception-safety coverage below.
-        assertThrows(NoSuchElementException.class, () -> vertxAsync.closeDrainFirst());
-
-        verify(webClientSpy).close();
-        verify(vertxSpy).close();
+            assertThat(elapsed).isLessThan(FAR_SHORT_OF_THE_DEFAULT);
+        } finally {
+            heldOpen.releaseAndAwaitShutdown();
+        }
     }
 }
