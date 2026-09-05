@@ -4,7 +4,7 @@ package bz.stub.parallelconsumer.conformance;
  */
 
 import bz.stub.parallelconsumer.proxy.harness.HarnessScenario;
-import bz.stub.parallelconsumer.proxy.harness.ProxyHarness;
+import bz.stub.parallelconsumer.proxy.harness.ConformanceHarness;
 import org.awaitility.Awaitility;
 
 import java.time.Duration;
@@ -254,7 +254,7 @@ public final class ConformanceScenarios {
      * "never committed at all", because a commit of offset 0 says only that the engine's commit loop ran -
      * it is the frontier reaching 1 that would mean the unreported record had been counted as done.
      */
-    private static void assertNoCommitAdvancesPast(ProxyHarness harness, RunnerTranscript transcript) {
+    private static void assertNoCommitAdvancesPast(ConformanceHarness harness, RunnerTranscript transcript) {
         Awaitility.await()
                 .during(NO_COMMIT_SETTLE)
                 .atMost(NO_COMMIT_SETTLE.plusSeconds(5))

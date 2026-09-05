@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Antony Stubbs and contributors
+
 #
 # Copyright (C) 2026 Antony Stubbs and contributors
 #

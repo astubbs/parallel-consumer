@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+    SpotBugs exclusions for the Java reference demo (astubbs#242). The gate itself is bound in the
+    Java client aggregator's pom, which owns the policy: a dismissal is named class by class and
+    pattern by pattern with the reason written beside it, and a module-wide or pattern-wide
+    exclusion is the thing to refuse - it silences the finding for code nobody has written yet.
+
+    WHY THIS FILE APPEARED. The demo predates this repository turning fb-contrib on with
+    includeTests, so its findings arrived at merge rather than at write time. Each was read at the
+    site before being dismissed; none is a mute for convenience, and every entry below names the
+    ONE class it applies to.
+
+    Every entry is a judgement, not a mute. If you are adding one, write why, or fix the code.
+
+-->
+<FindBugsFilter>
+
+    <!--
+        THE DEMO'S OUTPUT *IS* PRE-RENDERED TEXT, so "{}" alone is the correct format string rather
+        than a lazy one. Three sites: the usage error, the banner-and-effective-configuration
+        announcement, and the results table. Each hands slf4j a string that was built to be printed
+        verbatim - a table with its own column alignment, a multi-line banner - so there is nothing
+        to interpolate around it. The alternative fb-contrib is steering towards is passing the
+        variable AS the format string, which is worse: a rendered table containing braces would then
+        be parsed as placeholders.
+    -->
+    <Match>
+        <Class name="bz.stub.parallelconsumer.client.demo.ReferenceDemo"/>
+        <Bug pattern="SLF4J_SIGN_ONLY_FORMAT"/>
+    </Match>
+
+    <!--
+        A TABLE RENDERER READS THE ROWS IT RENDERS. CE_CLASS_ENVY fires on renderTable because it
+        calls ArmResult's accessors more than its own - which is the definition of a renderer, and
+        the alternative is moving presentation into the value type so that a record of a measurement
+        also knows about column widths. Scoped to this class: a future method here that really is
+        living in another class's data is still reported.
+    -->
+    <Match>
+        <Class name="bz.stub.parallelconsumer.client.demo.ReferenceDemo"/>
+        <Bug pattern="CE_CLASS_ENVY"/>
+    </Match>
+
+    <!--
+        baselineOf is PRIVATE and its one caller already holds a List. Widening the parameter to
+        Collection would buy no caller anything and would lose the ordering the arms are reported
+        in, which the list carries and a Collection does not promise.
+    -->
+    <Match>
+        <Class name="bz.stub.parallelconsumer.client.demo.ReferenceDemo"/>
+        <Method name="baselineOf"/>
+        <Bug pattern="OCP_OVERLY_CONCRETE_COLLECTION_PARAMETER"/>
+    </Match>
+
+    <!--
+        THE LOCK IS THE POINT, AND IT IS ALREADY THE SECOND ANSWER TO A SPOTBUGS FINDING. The raw-gRPC
+        control arm's workers all report through one StreamObserver, which is not safe for concurrent
+        onNext, so they serialise on a dedicated `reportLock`. It was the AtomicReference that was
+        synchronized on until JLM_JSR166_UTILCONCURRENT_MONITORENTER rightly rejected that; the
+        comment at the site records the change. NOS_NON_OWNED_SYNCHRONIZATION now objects that the
+        lock is a captured local rather than a field of the locking class - true, because the class
+        is the anonymous StreamObserver, and a lock owned by the arm that creates both the observer
+        and its workers is the correct scope. The regex covers the anonymous inner classes, whose
+        numbering is not stable enough to name one by one.
+    -->
+    <Match>
+        <Class name="~bz\.stub\.parallelconsumer\.client\.demo\.ReferenceDemo(\$\d+)?"/>
+        <Bug pattern="NOS_NON_OWNED_SYNCHRONIZATION"/>
+    </Match>
+
+    <!--
+        A DEMO'S FAILURE MODE IS A SENTENCE THE READER CAN ACT ON, not a checked exception it makes
+        them handle. Kafka's Admin and Producer futures throw ExecutionException; these three methods
+        catch it and rethrow IllegalStateException naming what to do about it - which topic flag to
+        pass, and with what value. Two of them hand e.getCause() straight through as the cause, so
+        nothing is lost, and the third is the seeding failure, which carries the first producer
+        exception it collected.
+
+        (Flag names are deliberately not quoted here: a double hyphen cannot appear inside an XML
+        comment, and SpotBugs reports an unreadable filter as a WARNING it then continues past - so
+        the whole file goes silently unapplied and the gate simply keeps failing.)
+
+        EXS_EXCEPTION_SOFTENING_NO_CONSTRAINTS is the right rule for a library, whose caller has to be
+        able to distinguish failures programmatically. It is the wrong rule for a main() whose only
+        caller is a person reading a terminal - and this module is a program, not a surface anything
+        depends on. Named method by method so a new one has to be argued for.
+    -->
+    <Match>
+        <Class name="bz.stub.parallelconsumer.client.demo.DemoBroker"/>
+        <Or>
+            <Method name="ensureTopic"/>
+            <Method name="partitionsOf"/>
+            <Method name="seed"/>
+        </Or>
+        <Bug pattern="EXS_EXCEPTION_SOFTENING_NO_CONSTRAINTS"/>
+    </Match>
+
+    <!--
+        THE EXCEPTION IN HAND IS NOT THE FAILURE BEING REPORTED. Inside the TopicExistsException
+        catch, an existing topic is fine; what is thrown is a DIFFERENT finding made afterwards - the
+        existing topic has the wrong partition count - and attaching "topic already exists" as its
+        cause would point the reader at the thing that is working. The message names the mismatch and
+        both remedies instead. Scoped to the one method and the one pattern.
+    -->
+    <Match>
+        <Class name="bz.stub.parallelconsumer.client.demo.DemoBroker"/>
+        <Method name="ensureTopic"/>
+        <Bug pattern="LEST_LOST_EXCEPTION_STACK_TRACE"/>
+    </Match>
+
+    <!--
+        THE SAME TWO JUDGEMENTS, IN THE TEST TREE. `includeTests` is on for this repository because
+        test code is main code for a concurrency library, and these two are the test-side instances
+        of the rules already answered above.
+
+        awaitQuietly is a test helper whose entire job is to turn InterruptedException into a
+        failure the test can report; a checked signature would push the same conversion into every
+        caller. ReferenceDemoIT's assertion lambda reads an ArmResult's accessors, which is what
+        asserting about a value type looks like.
+    -->
+    <Match>
+        <Class name="bz.stub.parallelconsumer.client.demo.ArmCompletionTest"/>
+        <Method name="awaitQuietly"/>
+        <Bug pattern="EXS_EXCEPTION_SOFTENING_NO_CONSTRAINTS"/>
+    </Match>
+    <Match>
+        <Class name="bz.stub.parallelconsumer.client.demo.integrationTests.ReferenceDemoIT"/>
+        <Bug pattern="CE_CLASS_ENVY"/>
+    </Match>
+
+</FindBugsFilter>

@@ -44,7 +44,7 @@ import java.util.function.BooleanSupplier;
  * <h2>What it does not do</h2>
  *
  * It reports death. It does not decide what happens next - that is {@link DrainCoordinator}'s job, and
- * separating them is what lets the drain be tested without killing a process.
+ * separating the signal from the response is what lets either be tested without killing a process.
  *
  * @author Antony Stubbs
  */

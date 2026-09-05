@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (C) 2026 Antony Stubbs and contributors
+
+    SpotBugs exclusions for the Java harness lane (astubbs#242; the policy is in
+    docs/client-static-analysis.md). The gate itself is bound in the parent pom.
+
+    One entry, naming one class, one method and one pattern. Every entry here is a judgement, not a
+    mute: if you are adding one, write why, or fix the code.
+
+-->
+<FindBugsFilter>
+
+    <!--
+        THE SOCKET IS NEVER SERVED ON. findsecbugs wants an SSLServerSocket; this one is opened on
+        the loopback address purely to have the OS allocate a port number, and it is closed inside
+        the same try-with-resources before anything connects to it - the test needs a port that is
+        valid and NOT listening, which is the control arm proving the sibling assertion fails for the
+        reason it names rather than on any error at all. There is no traffic to encrypt.
+
+        The wider posture is the same call astubbs/parallel-consumer#384 recorded for the sidecar's
+        own tests: this listener is plaintext BY DESIGN, because loopback-only binding plus
+        one-connection admission is what the sidecar offers instead of transport security, and a test
+        that used TLS would be testing a listener that does not exist.
+
+        Scoped to the one method, so any other socket opened in this module is still reported.
+    -->
+    <Match>
+        <Class name="bz.stub.parallelconsumer.client.harness.SidecarHandshakeTest"/>
+        <Method name="aSidecarThatIsNotListeningFailsDifferentlyFromOneThatRefuses"/>
+        <Bug pattern="UNENCRYPTED_SERVER_SOCKET"/>
+    </Match>
+
+</FindBugsFilter>

@@ -260,7 +260,7 @@ The counting itself stays a matter for each client's own tests, which is where t
 ```
    the suite's JVM                                    the runner's process
   ┌────────────────────────────────┐                 ┌────────────────────────┐
-  │ ProxyHarness                   │                 │ conformance runner     │
+  │ ConformanceHarness                   │                 │ conformance runner     │
   │  ├─ MockConsumer/MockProducer  │                 │  └─ the client library │
   │  ├─ the engine                 │◄──── gRPC ──────┤     (used as an app    │
   │  └─ a gRPC server on :ephemeral│                 │      would use it)     │

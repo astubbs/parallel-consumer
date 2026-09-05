@@ -54,17 +54,25 @@ echo "==> platform: $(uname -s) $(uname -m), building .$LIB_EXT"
 mkdir -p "$BUILD_DIR"
 
 # The proxy module's classes plus its full runtime classpath. Built with JDK 17.
+#
+# -DincludeScope, and NOT -Dmdep.includeScope. build-classpath honours the "mdep." prefix on
+# outputFile but NOT on includeScope, so the prefixed spelling is ignored in silence and the
+# DEFAULT scope - test - is written instead. The build stays green either way, which is what makes
+# it worth a comment: it put JUnit, Mockito, ArchUnit, Testcontainers, logback and core's test jar
+# - logback-test.xml and all - into a library whose entire purpose is to be linked into somebody
+# else's process. Same one-word trap as astubbs#385, which hit the native sidecar's build.
 echo "==> resolving the proxy module's runtime classpath"
 CP_FILE="$BUILD_DIR/proxy-classpath.txt"
 (cd "$REPO_ROOT" && JAVA_HOME="$JDK17" ./mvnw -q -pl parallel-consumer-proxy -am \
     -DskipTests -Dcopyright.skip=true \
-    package dependency:build-classpath "-Dmdep.outputFile=$CP_FILE" -Dmdep.includeScope=runtime \
+    package dependency:build-classpath "-Dmdep.outputFile=$CP_FILE" -DincludeScope=runtime \
     >"$BUILD_DIR/maven.log" 2>&1) || { echo "maven failed; see $BUILD_DIR/maven.log" >&2; exit 1; }
 
 PROXY_CLASSES="$REPO_ROOT/parallel-consumer-proxy/target/classes"
-# Jabel (the Java 17 -> 8 bytecode plugin) is on the proxy's RUNTIME classpath, where it does not
-# belong. javac 23 auto-loads it as a compiler plugin and then crashes with a NoSuchFieldError, so
-# it is filtered rather than tolerated - and it has no business in a native image either.
+# Jabel (the Java 17 -> 8 bytecode plugin) is provided-scope, so the scope fix above already keeps
+# it off this classpath. The filter stays as a guard, because when it IS present javac 23 auto-loads
+# it as a compiler plugin and then crashes with a NoSuchFieldError - a failure that reads as
+# anything but a stray dependency.
 CLASSPATH="$PROXY_CLASSES:$(tr ':' '\n' < "$CP_FILE" | grep -v jabel | paste -sd: -)"
 
 # Compile the FFI entry points against that classpath, with GraalVM's own javac so the class file

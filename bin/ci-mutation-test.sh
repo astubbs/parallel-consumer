@@ -15,15 +15,47 @@
 # Usage: bin/ci-mutation-test.sh [extra-maven-args...]   (e.g. -Dverbose=true)
 #
 # Env overrides: PIT_THREADS, PIT_BASE_REF, PIT_FULL_SWEEP, PIT_TARGET_CLASSES, PIT_TARGET_TESTS,
-# PIT_DECIDABLE_PACKAGES (regex: which changed classes a PR run will mutate - see below).
+# PIT_DECIDABLE_PACKAGES (regex: which changed classes a PR run will mutate - see below),
+# PIT_MIN_MUTANTS (the floor a run must score to count as a run; default 1), PIT_DRY_RUN_LOG
+# (self-test seam - see bin/test-ci-mutation-test.sh).
 # Prefer PIT_TARGET_CLASSES / PIT_TARGET_TESTS over passing a second -DtargetClasses in "$@": duplicate
 # -D flags resolve by last-wins, which is implicit and easy to get backwards.
 #
 # WHERE THIS RUNS: exactly one per-PR lane - maven.yml -> "Mutation Tests (PIT, PR-scoped)", advisory.
 # The full sweep is manual-only (.github/workflows/mutation-full-sweep.yml) because it has never
 # completed. See docs/plans/2026-08-03-002-mutation-testing-plan.md.
+#
+# ---------------------------------------------------------------------------------------------
+# THE EXIT CODE IS THE VERDICT. Four states, and none of them share a code:
+#
+#   0  PIT ran and EVALUATED at least PIT_MIN_MUTANTS mutants. Survivors do NOT change this - a
+#      score is a conversation starter, not a gate, and that is unchanged.
+#   2  CANNOT RUN. The scope matches nothing that exists, the tree has no main sources, PIT was
+#      asked to mutate something and produced no statistics / zero mutants, or it generated mutants
+#      and evaluated none of them (every result MEMORY_ERROR / RUN_ERROR / NON_VIABLE, or no
+#      mutations.xml written at all).
+#   3  NOTHING IN SCOPE. No core main-source class changed, or none of the ones that did are in a
+#      package where a survivor is decidable. Legitimate, common, and deliberately not 0.
+#   *  PIT's own exit status, passed through.
+#
+# WHY, measured 2026-08-25: across the last 40 `maven.yml` pull_request runs the
+# "Mutation Tests (PIT, PR-scoped)" check reported success 40 times and scored ZERO mutants 40
+# times - 23 runs with no core main-source change, 14 outside the decidable packages, the rest
+# still in flight. Each skip was individually correct. The problem is that "correct skip", "stale
+# scope that can never match again" and "185 mutants killed" were all the same green tick, which is
+# precisely the shape AGENTS.md warns about under "Confirm the mutation lane scored mutants rather
+# than trusting its tick". Separating the codes is what lets maven.yml react differently to each.
+#
+# The 2 follows bin/check-shell-lint.sh and bin/lib/node-gate.sh: "the tool could not run" must
+# never share a code with "the tool ran and the code is clean".
+# ---------------------------------------------------------------------------------------------
 
 set -euo pipefail
+
+# One transform, two callers. Converts a repo-relative .java path to a fully-qualified class name.
+# It was written out twice - once in the inert-config guard and once in the changed-class scan - and
+# a transform that exists twice is one that can be corrected in one place only.
+path_to_fqcn() { sed -E 's#.*/src/main/java/##; s#/#.#g; s#\.java$##'; }
 
 # Append to the GitHub job summary when running in Actions; no-op locally. A mutation run's output is
 # otherwise a log nobody reads behind a tick that means "nothing to mutate" at least as often as it
@@ -43,7 +75,53 @@ else
   CORES=2
 fi
 THREADS="${PIT_THREADS:-$CORES}"
+MIN_MUTANTS="${PIT_MIN_MUTANTS:-1}"
 echo "PIT: using ${THREADS} thread(s) (cores=${CORES}); minion heap -Xmx2g => ~$((THREADS * 2))g peak"
+
+# DECIDABLE PACKAGES. Which changed classes a PR run will mutate; see the long argument at the point
+# of use below. Read here rather than there so the inert-config guard can validate it on EVERY run,
+# including the ones that would otherwise skip before ever looking at it.
+#
+# Still offsets.* alone. `state.*` was the standing next candidate and was MEASURED on 2026-08-25
+# rather than argued: it hangs, exactly as internal.* does. The numbers and the control arm are in
+# docs/inflight/ci-mutation-testing.md - do not widen it back without reading them.
+DECIDABLE="${PIT_DECIDABLE_PACKAGES:-^bz\.stub\.parallelconsumer\.offsets\.}"
+
+# ---------------------------------------------------------------------------------------------
+# INERT-CONFIG GUARD: does the scope still match anything that exists?
+#
+# Every scoping decision below is a regex or a glob over fully qualified class names, and the
+# package has already moved once (io.confluent.* -> bz.stub.*). A scope that no longer matches
+# anything does not error - it falls through to "nothing to mutate, skipping" and exits 0, which in
+# the checks list is the same green tick as a run that killed every mutant. AGENTS.md names this
+# exact failure.
+#
+# So the scope is validated against the classes actually in the tree BEFORE it decides anything,
+# on every run - including runs that would have skipped. A stale scope is then caught by the next
+# PR of any kind, rather than by the next PR that happens to touch the one package it names.
+# ---------------------------------------------------------------------------------------------
+ALL_MAIN_CLASSES=$(git ls-files -- parallel-consumer-core/src/main/java 2>/dev/null \
+  | { grep -E '\.java$' || true; } \
+  | path_to_fqcn)
+if [ -z "$ALL_MAIN_CLASSES" ]; then
+  echo "PIT: no core main-source classes found under parallel-consumer-core/src/main/java - CANNOT RUN." >&2
+  echo "PIT: this is NOT a pass. Either the checkout is wrong or the module moved." >&2
+  summary "### Mutation (PIT): CANNOT RUN"
+  summary "No core main-source classes were found under \`parallel-consumer-core/src/main/java\`."
+  summary "Either the checkout is wrong or the module moved. **This is not a clean result.**"
+  exit 2
+fi
+DECIDABLE_IN_TREE=$(printf '%s\n' "$ALL_MAIN_CLASSES" | { grep -cE "$DECIDABLE" || true; })
+if [ "$DECIDABLE_IN_TREE" -eq 0 ]; then
+  echo "PIT: the decidable scope '${DECIDABLE}' matches NOTHING in the tree - CANNOT RUN." >&2
+  echo "PIT: the scope is stale (a package rename is the usual cause), so every run would 'skip'." >&2
+  summary "### Mutation (PIT): CANNOT RUN - the scope is stale"
+  summary "\`PIT_DECIDABLE_PACKAGES\` is \`${DECIDABLE}\`, which matches **no class** in"
+  summary "\`parallel-consumer-core/src/main/java\`. Every run would report \"nothing to mutate\""
+  summary "and exit green while scoring nothing. Fix the regex; do not silence this."
+  exit 2
+fi
+echo "PIT: decidable scope '${DECIDABLE}' matches ${DECIDABLE_IN_TREE} class(es) in the tree"
 
 # Scope: on a PR, mutate ONLY the core main-source classes CHANGED vs the base branch. The full sweep is
 # impractically slow (it has never completed on CI). Set PIT_BASE_REF to override; GITHUB_BASE_REF is set
@@ -81,14 +159,16 @@ if [ -n "$BASE_REF" ] && git rev-parse --verify -q "origin/${BASE_REF}^{commit}"
   # --diff-filter=d drops deletions: a deleted class has no target/classes entry, and pitest's
   # failWhenNoMutations (default true) would then fail the goal outright instead of the "nothing to mutate" skip.
   CHANGED_ALL=$(git diff --name-only --diff-filter=d "origin/${BASE_REF}" HEAD -- parallel-consumer-core/src/main/java/ 2>/dev/null \
-    | sed -E 's#.*/src/main/java/##; s#/#.#g; s#\.java$##' \
+    | path_to_fqcn \
     | { grep -E '^bz\.stub\.parallelconsumer\.' || true; })
   if [ -z "$CHANGED_ALL" ]; then
     echo "PIT: no core main-source classes changed vs origin/${BASE_REF} - nothing to mutate, skipping."
     summary "### Mutation (PIT): skipped"
     summary "No core main-source classes changed vs \`origin/${BASE_REF}\`, so there was nothing to mutate."
     summary "**This green tick is not evidence about test quality** - it means no work was done."
-    exit 0
+    # 3, not 0 - "nothing in scope" is a distinct outcome from "scored mutants" and the caller has to
+    # be able to tell them apart. See the exit-code contract in this file's header.
+    exit 3
   fi
 
   # DECIDABLE PACKAGES ONLY. Mutating what changed is the right instinct, but it is not free of the
@@ -98,10 +178,10 @@ if [ -n "$BASE_REF" ] && git rev-parse --verify -q "origin/${BASE_REF}^{commit}"
   # no protection, it just converts "slow" into "cancelled with nothing scored", which is the same zero
   # signal the full sweep produced for months.
   #
-  # So the lane mutates changed classes only where a survivor is DECIDABLE. Start narrow, deliberately:
-  # offsets.* alone, the case argued in the plan doc. Widen it (state.* is the obvious candidate) once
-  # this demonstrably works, not before - walk the scope SIDEWAYS, then up, and only on evidence.
-  DECIDABLE="${PIT_DECIDABLE_PACKAGES:-^bz\.stub\.parallelconsumer\.offsets\.}"
+  # So the lane mutates changed classes only where a survivor is DECIDABLE. The scope walks SIDEWAYS
+  # on evidence, never up by argument; DECIDABLE is read at the top of this file so the inert-config
+  # guard can validate it, and docs/inflight/ci-mutation-testing.md records what each widening
+  # measured before it was made.
   CHANGED=$(printf '%s\n' "$CHANGED_ALL" | { grep -E "$DECIDABLE" || true; })
   SKIPPED=$(printf '%s\n' "$CHANGED_ALL" | { grep -Ev "$DECIDABLE" || true; })
   if [ -z "$CHANGED" ]; then
@@ -116,7 +196,10 @@ if [ -n "$BASE_REF" ] && git rev-parse --verify -q "origin/${BASE_REF}^{commit}"
     summary '```'
     summary "$SKIPPED"
     summary '```'
-    exit 0
+    # 3, not 0 - see the exit-code contract in this file's header. The scope regex has already been
+    # proved live against the tree above, so this really is "your PR touched nothing decidable"
+    # rather than "the scope is broken".
+    exit 3
   fi
   # Emit "Foo,Foo$*" per FQCN: the class itself PLUS its nested/synthetic members (Lombok @Builder inner
   # classes, anonymous classes, lambdas). A bare "Foo*" would over-match siblings that merely share the
@@ -130,8 +213,42 @@ if [ -n "$BASE_REF" ] && git rev-parse --verify -q "origin/${BASE_REF}^{commit}"
   fi
 else
   echo "PIT: no resolvable base ref - full sweep of ${TARGET_CLASSES}"
+  # The same inert-config question for the full-sweep path, whose target is a PIT glob rather than a
+  # regex. Only the literal prefix before the first '*' can be checked, which is enough to catch the
+  # rename class: `bz.stub.parallelconsumer.offsets.` either names classes that exist or it does not.
+  # pitest's own failWhenNoMutations would eventually notice, but as a maven failure at the end of a
+  # coverage pass rather than as a stale-scope diagnosis before it.
+  #
+  # It is a COMMA-SEPARATED LIST, and one entry matching is enough. Treating it as a single string
+  # was the first version of this guard and it rejected a perfectly good `Foo,Foo$*` target - caught
+  # by running the lane rather than by the self-test, which is why both cases are now arms in
+  # bin/test-ci-mutation-test.sh.
+  TC_MATCHED=0
+  TC_PREFIXES=""
+  IFS=',' read -r -a TC_PARTS <<< "$TARGET_CLASSES"
+  for tc_part in "${TC_PARTS[@]}"; do
+    tc_prefix="${tc_part%%\**}"   # everything before the first glob star
+    tc_prefix="${tc_prefix%\$}"   # a trailing '$' marks nested classes; it is not part of a name
+    if [ -z "$tc_prefix" ]; then TC_MATCHED=1; break; fi   # a bare '*' targets everything
+    TC_PREFIXES="${TC_PREFIXES}${TC_PREFIXES:+, }${tc_prefix}"
+    if grep -qF "$tc_prefix" <<< "$ALL_MAIN_CLASSES"; then TC_MATCHED=1; break; fi
+  done
+  if [ "$TC_MATCHED" -eq 0 ]; then
+    echo "PIT: full-sweep target '${TARGET_CLASSES}' matches NOTHING in the tree - CANNOT RUN." >&2
+    echo "PIT: this is NOT a pass. The target is stale - a package rename is the usual cause." >&2
+    summary "### Mutation (PIT): CANNOT RUN - the sweep target is stale"
+    summary "No class under \`parallel-consumer-core/src/main/java\` starts with any of \`${TC_PREFIXES}\`."
+    summary "Every sweep would score nothing. Fix the target; **this is not a clean result.**"
+    exit 2
+  fi
 fi
 
+# The Lincheck lane is excluded BY NAME in -DexcludedTestClasses below, not by tag, for the reason the
+# next note gives:
+# whether pitest honours excluded.groups is unverified, and being wrong is expensive here rather than
+# merely inaccurate. Each Lincheck class runs a scheduler-controlled search taking seconds, and pitest
+# re-runs its covering tests once per mutant.
+#
 # NB: pitest does not honour excluded.groups - @Quarantined (and chaos/performance) tests are only
 # excluded here coincidentally, via the integrationTests source-dir glob. If a quarantined UNIT test
 # ever exists when this runs, wire excludedGroups into pitest explicitly (ce-review P3 finding).
@@ -143,20 +260,49 @@ fi
 # skipFailingTests is set in the POM, not here: its PitMojo @Parameter declares a defaultValue and no
 # `property`, so -DskipFailingTests is SILENTLY IGNORED - no warning, it just doesn't apply. Check for a
 # `property` before concluding that some other pitest setting "doesn't work" from the command line.
-set +e
-./mvnw --batch-mode -Pci test-compile org.pitest:pitest-maven:mutationCoverage \
-  -Djacoco.skip=true \
-  -DtargetClasses="${TARGET_CLASSES}" \
-  -DtargetTests="${TARGET_TESTS}" \
-  -DexcludedTestClasses="bz.stub.parallelconsumer.integrationTests.*" \
-  -DjvmArgs=-Xmx2g \
-  -DoutputFormats=XML,HTML \
-  -DtimeoutConstant=30000 -DtimeoutFactor=3.0 \
-  -Dthreads="${THREADS}" \
-  -pl parallel-consumer-core -am \
-  "$@" 2>&1 | tee "$PIT_LOG"
-STATUS=${PIPESTATUS[0]}
-set -e
+if [ -n "${PIT_DRY_RUN_LOG:-}" ]; then
+  # SELF-TEST SEAM, and nothing in CI sets it. bin/test-ci-mutation-test.sh needs to prove that the
+  # verdict below can go red - "PIT produced no statistics" and "PIT generated zero mutants" - and
+  # neither is reachable in seconds through a real build. So the run is replaced by a canned log and
+  # everything downstream is exercised unchanged. It announces itself loudly for the same reason the
+  # skip paths do: a seam that can silently stand in for the real thing is the defect this file is
+  # about.
+  echo "PIT: DRY RUN - reading a canned PIT log from ${PIT_DRY_RUN_LOG} instead of building."
+  cp "$PIT_DRY_RUN_LOG" "$PIT_LOG"
+  STATUS=0
+else
+  set +e
+  # BUILT AS AN ARRAY, NOT A BACKSLASH CONTINUATION, AND THAT IS THE POINT. A `#` line inside a
+  # continuation does not comment out one line: the continuation splices it onto the command, the
+  # shell truncates the command there, and every remaining line runs as a SEPARATE command. That
+  # shipped here - it silently dropped `-pl parallel-consumer-core -am` so the lane mutated every
+  # module, dropped the exclusions, and exited 127 from the orphaned argument, whose `tee` then
+  # overwrote the log this script parses for its verdict.
+  #
+  # An array element cannot do that, because there is no continuation to splice through - so a
+  # comment may sit beside any element below, safely. This is a structural guard rather than a
+  # warning somebody has to remember: reintroducing the defect now requires converting this back
+  # to a continuation first. `bin/test-ci-mutation-test.sh` pins the argv either way.
+  pit_args=(
+    --batch-mode -Pci test-compile org.pitest:pitest-maven:mutationCoverage
+    -Djacoco.skip=true
+    -DtargetClasses="${TARGET_CLASSES}"
+    -DtargetTests="${TARGET_TESTS}"
+    # The Lincheck harnesses are excluded as PIT TESTS (astubbs#347, inherited via master): each
+    # asserts that a violation IS found, so using them as the suite PIT mutates against is
+    # meaningless and slow. They remain mutable TARGETS - this excludes them from the test set,
+    # not from the target set. This is the comment whose placement broke the lane; here it is inert.
+    -DexcludedTestClasses="bz.stub.parallelconsumer.integrationTests.*,bz.stub.parallelconsumer.state.*Lincheck*"
+    -DjvmArgs=-Xmx2g
+    "-DoutputFormats=XML,HTML"
+    -DtimeoutConstant=30000 -DtimeoutFactor=3.0
+    -Dthreads="${THREADS}"
+    -pl parallel-consumer-core -am
+  )
+  ./mvnw "${pit_args[@]}" "$@" 2>&1 | tee "$PIT_LOG"
+  STATUS=${PIPESTATUS[0]}
+  set -e
+fi
 
 # Report what actually happened. PIT prints ">> " lines twice over: a per-class running tally during
 # analysis, then the run totals under a "- Statistics" banner at the end. Take only the final block -
@@ -166,6 +312,12 @@ set -e
 STATS=$(awk '/^- Statistics$/ {found = 1; out = ""; next}
              found && /^>> / {out = out $0 "\n"}
              END {printf "%s", out}' "$PIT_LOG")
+# THE NUMBER, not the presence of the block. A tidy, complete statistics block over zero mutants is
+# the harder half of the vacuity problem to spot: everything reads normal and the score line says
+# nothing was measured. `tail -1` because a mutated-class tally can carry the same wording, and the
+# final block is the run total. Missing block => 0, which the floor below then rejects.
+GENERATED=$(sed -nE 's/^>> Generated ([0-9]+) mutations.*/\1/p' <<< "$STATS" | tail -1)
+GENERATED="${GENERATED:-0}"
 summary "### Mutation (PIT)"
 summary ""
 summary "Mutated: \`${TARGET_CLASSES}\`"
@@ -220,8 +372,19 @@ if [ -n "$STATS" ]; then
       summary "#### Survived (${TOTAL}) - each is a behaviour nothing asserts"
       summary '```'
       # Cap the table, but never silently: a truncated list that looks complete is worse than no list.
-      printf '%s\n' "$SURVIVORS" | head -50 \
-        | awk -F'\t' '{ printf "%-12s %-34s %s\n", $3, $1 ":" $2, $4 }' >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+      #
+      # The cap is awk's, NOT `head -50`, and that is a correctness fix rather than a tidy-up. Under
+      # `set -o pipefail`, `printf ... | head -50` lets head exit after 50 lines; once the unread
+      # remainder exceeds the 64 KiB pipe buffer, printf takes SIGPIPE, the pipeline reports 141, and
+      # pipefail promotes that to the script's exit status - killing the run BEFORE the mutation
+      # verdict below. A large but perfectly valid PIT report would have made this lane look broken.
+      # awk consumes its whole input and simply stops printing after NR 50, so nothing closes early.
+      #
+      # bin/check-shell-sigpipe.sh guards the sibling case (`| grep -q`) but deliberately scopes
+      # `head` out as "common, usually harmless" - correct as a blanket rule, and this is the site
+      # where it was not harmless. Found by an independent review, not by the gate.
+      printf '%s\n' "$SURVIVORS" \
+        | awk -F'\t' 'NR <= 50 { printf "%-12s %-34s %s\n", $3, $1 ":" $2, $4 }' >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
       summary '```'
       if [ "$TOTAL" -gt 50 ]; then
         summary "_Showing the first 50 of ${TOTAL}. Full detail in the HTML report under \`${REPORT%/*}\`._"
@@ -265,4 +428,53 @@ else
     summary "Usual causes: the coverage pass never finished, or minions died (MEMORY_ERROR / TIMED_OUT)."
   fi
 fi
-exit "$STATUS"
+
+# ---------------------------------------------------------------------------------------------
+# THE VERDICT. Everything above reports; this decides. See the exit-code contract in the header.
+#
+# PIT's own failure wins, because it is the more specific diagnosis - a maven or minion failure is
+# a different thing from "ran fine, measured nothing", and collapsing them would lose which.
+# ---------------------------------------------------------------------------------------------
+if [ "$STATUS" -ne 0 ]; then
+  echo "PIT: exited ${STATUS} after generating ${GENERATED} mutant(s)." >&2
+  exit "$STATUS"
+fi
+# GENERATED counts mutants CREATED, which is not the same as mutants EVALUATED, and the verdict must
+# turn on the second. A run whose minions all die returns MEMORY_ERROR or RUN_ERROR for every mutant:
+# it generated plenty, scored none, and against a generated-count floor it exits 0. That is not
+# hypothetical here - the plan that scoped this lane recorded `state.*` hanging with minions dying,
+# which is exactly the shape. An independent review caught the verdict still reading GENERATED while
+# the survivor table twenty lines up already drew the right distinction.
+#
+# KILLED / SURVIVED / TIMED_OUT / NO_COVERAGE are all real outcomes (PIT scores a timeout as a kill,
+# and no-coverage is a genuine finding). MEMORY_ERROR / RUN_ERROR / NON_VIABLE are infrastructure
+# failures or invalid bytecode - the mutant was never actually tried.
+EVALUATED=0
+UNEVALUATED=0
+VERDICT_REPORT="parallel-consumer-core/target/pit-reports/mutations.xml"
+if [ -f "$VERDICT_REPORT" ]; then
+  # The `|| true` is load-bearing under `set -o pipefail`: a grep that matches nothing exits 1, which
+  # kills the whole script mid-assignment and produces an exit 1 with no output at all - neither the
+  # pass this run might deserve nor the exit 2 a vacuous one must give. An all-KILLED report has no
+  # MEMORY_ERROR in it, so the no-match case is the NORMAL case here, not the exceptional one.
+  EVALUATED=$({ grep -oE "status='(KILLED|SURVIVED|TIMED_OUT|NO_COVERAGE)'" "$VERDICT_REPORT" || true; } | wc -l | tr -d ' ')
+  UNEVALUATED=$({ grep -oE "status='(MEMORY_ERROR|RUN_ERROR|NON_VIABLE)'" "$VERDICT_REPORT" || true; } | wc -l | tr -d ' ')
+fi
+
+if [ "$EVALUATED" -lt "$MIN_MUTANTS" ]; then
+  echo "PIT: the run scored NOTHING - ${GENERATED} mutant(s) generated, ${EVALUATED} EVALUATED, floor is ${MIN_MUTANTS}." >&2
+  if [ "$UNEVALUATED" -gt 0 ]; then
+    echo "PIT: ${UNEVALUATED} mutant(s) came back MEMORY_ERROR / RUN_ERROR / NON_VIABLE - the minions died or the bytecode would not load." >&2
+    echo "PIT: that is an infrastructure failure, not a clean run. Generating mutants is not scoring them." >&2
+  fi
+  echo "PIT: exiting 2. A lane that measured nothing must not report the same result as one that did." >&2
+  summary ""
+  summary "**This run scored NOTHING** (${GENERATED} generated, ${EVALUATED} evaluated, floor \`${MIN_MUTANTS}\`),"
+  summary "even though it had classes to mutate. That is a broken lane, not a clean pull request."
+  exit 2
+fi
+if [ "$UNEVALUATED" -gt 0 ]; then
+  echo "PIT: warning - ${UNEVALUATED} of ${GENERATED} mutant(s) were never evaluated (minion death or unloadable bytecode)." >&2
+fi
+echo "PIT: scored ${EVALUATED} evaluated mutant(s) of ${GENERATED} generated - the lane did work."
+exit 0

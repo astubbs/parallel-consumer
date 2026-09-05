@@ -54,7 +54,7 @@ Master's astubbs#309 defers the native-core rewrite, and its safety argument res
 places **on this branch**: the conformance suite must pin engine behaviour at the **protocol
 contract**, never at Java internals, so a second engine implementation can pass it black-box.
 
-**Two concrete doubts, unaudited:** the `core` binding drives `ProxyHarness#start`, a plain
+**Two concrete doubts, unaudited:** the `core` binding drives `ConformanceHarness#start`, a plain
 `ParallelEoSStreamProcessor`; and scenarios assert through `harness.awaitCommittedOffset(...)`, which
 reads the mock consumer's commit history rather than anything on the wire. If a non-Java engine could
 not pass the five scenarios as written, astubbs#309's framing is weaker than it reads. **An audit, not

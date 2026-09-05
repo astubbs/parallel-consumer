@@ -4,7 +4,6 @@ package bz.stub.parallelconsumer.streams;
  */
 
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.InvocationKind;
-import com.github.bsideup.jabel.Desugar;
 
 /**
  * One request for the host to run a function, and everything that request carries.
@@ -15,9 +14,53 @@ import com.github.bsideup.jabel.Desugar;
  *
  * <p>The factory methods are the only way to build one, so a call cannot exist whose kind disagrees with the
  * fields it carries.
+ *
+ * <p><b>A plain final class rather than a record, and not by preference.</b> Error Prone 2.42.0 - which this
+ * module inherited when the language-proxy stack merged down - does not report on a Jabel-desugared record, it
+ * CRASHES, taking the whole compilation with it. Neither term can move: the root pom pins Error Prone at
+ * 2.42.0 because 2.43.0 needs a JVM this build cannot use. The proxy module converted five value types for the
+ * same reason (astubbs/parallel-consumer#293); this is the sixth. The accessors keep their record names, so
+ * nothing at a call site changed.
  */
-@Desugar // Jabel requires the annotation on every record
-public record ForeignCall(InvocationKind kind, byte[] key, byte[] value, byte[] aggregate, byte[] right) {
+public final class ForeignCall {
+
+    private final InvocationKind kind;
+
+    private final byte[] key;
+
+    private final byte[] value;
+
+    private final byte[] aggregate;
+
+    private final byte[] right;
+
+    private ForeignCall(InvocationKind kind, byte[] key, byte[] value, byte[] aggregate, byte[] right) {
+        this.kind = kind;
+        this.key = key;
+        this.value = value;
+        this.aggregate = aggregate;
+        this.right = right;
+    }
+
+    public InvocationKind kind() {
+        return kind;
+    }
+
+    public byte[] key() {
+        return key;
+    }
+
+    public byte[] value() {
+        return value;
+    }
+
+    public byte[] aggregate() {
+        return aggregate;
+    }
+
+    public byte[] right() {
+        return right;
+    }
 
     /** A stateless transform: the record's key and value. */
     public static ForeignCall map(byte[] key, byte[] value) {

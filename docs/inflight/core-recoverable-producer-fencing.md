@@ -13,7 +13,7 @@ be treated as "our partitions moved, clean up and rejoin" - which is what Kafka 
 ## What happens today
 
 `ProducerManager.commitOffsets()` catches `ProducerFencedException` from `sendOffsetsToTransaction`
-and rethrows it wrapped in `InternalRuntimeException`. That propagates out of
+and rethrows it wrapped in `PCInternalRuntimeException`. That propagates out of
 `AbstractOffsetCommitter.retrieveOffsetsAndCommit()`, out of `commitOffsetsThatAreReady()`, out of
 `controlLoop()`, and lands in the supervisor loop, which records it as `failureReason`, calls
 `doClose()` and rethrows. The instance is gone.
@@ -55,7 +55,7 @@ its generation for reasons unrelated to a revoke. The two changes are complement
   re-initialise tasks; PC's control loop has no equivalent re-entry point today, so this may need a
   state-machine addition rather than just an exception swap. **This is the part to investigate
   first** - it determines whether this is a small change or a structural one.
-- Whether other fatal paths deserve the same treatment. `InternalRuntimeException` is used widely;
+- Whether other fatal paths deserve the same treatment. `PCInternalRuntimeException` is used widely;
   this proposal deliberately does not widen beyond fencing.
 
 Tracked as astubbs#225.

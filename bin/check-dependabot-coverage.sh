@@ -38,9 +38,11 @@
 #
 # UNCOVERABLE, AND NAMED RATHER THAN IGNORED: parallel-consumer-proxy-client-cpp has no package
 # manager at all (CMake resolves through find_package/PkgConfig against system packages), so there
-# is no manifest, no lockfile and nothing for any updater to bump. It is listed in UNCOVERABLE
-# below and printed on every run, including green ones, so "C++ is not covered" stays a stated fact
-# rather than an absence somebody has to notice.
+# is no manifest a package updater can read, no lockfile and nothing for any updater to bump. It is
+# listed in UNCOVERABLE below and printed on every run, including green ones, so "C++ is not
+# covered" stays a stated fact rather than an absence somebody has to notice. The entry is kept
+# whatever that module's build file looks like: dropping it would make the absence silent again,
+# which is the whole failure this script is about.
 #
 # EXIT CODES - the same split bin/check-ossindex-audit.sh uses, for the same reason:
 #

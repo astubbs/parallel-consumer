@@ -41,8 +41,9 @@ import java.util.concurrent.TimeUnit;
  * <b>Bind posture (R17/R18).</b> The bind address is {@link InetAddress#getLoopbackAddress()} unless
  * configured otherwise, and the bind is {@link NettyServerBuilder#forAddress(java.net.SocketAddress)} with an
  * explicit address - never {@code ServerBuilder.forPort}, which binds the wildcard address. The port defaults
- * to ephemeral so no well-known port is guessable; {@link #port()} reports the chosen one, and the lifecycle
- * channel (U10's unit) is what carries it to the parent process. A non-loopback bind address refuses to start
+ * to ephemeral so no well-known port is guessable; {@link #port()} reports the chosen one, and
+ * {@code bz.stub.parallelconsumer.proxy.Main} is what prints it to the parent process. A non-loopback bind
+ * address refuses to start
  * unless {@link Builder#exposeUnauthenticatedSurfaceBeyondLoopback()} was called - the opt-in's name states
  * what it does, per R18 - and when it is present the server starts but warns with the surface's full recorded
  * capability: no authentication, offset advancement, and receipt of the Kafka credentials and a

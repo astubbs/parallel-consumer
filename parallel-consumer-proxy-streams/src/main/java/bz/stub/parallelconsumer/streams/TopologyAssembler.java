@@ -9,7 +9,6 @@ import bz.stub.parallelconsumer.streams.protocol.v1alpha1.DataType;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.HandleKind;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.HandleType;
 import bz.stub.parallelconsumer.streams.protocol.v1alpha1.TimeWindowSpec;
-import com.github.bsideup.jabel.Desugar;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.utils.Bytes;
@@ -96,10 +95,18 @@ public class TopologyAssembler {
      * as a bare {@code ClassCastException} leaking a Kafka Streams implementation class name to the host. That
      * validation is what makes the erased casts in {@link #resolve} and {@link #sink} safe. Package-visible so the
      * mismatch refusal is testable.
+     *
+     * <p>A plain final class rather than a record because Error Prone 2.42.0 crashes on a Jabel-desugared
+     * record rather than reporting on it - the same conversion, for the same reason, as
+     * {@link ForeignCall}. The accessors keep their record names.
      */
-    @Desugar // Jabel requires the annotation on every record
-    record Minted(Object node, HandleType type) {
-        Minted {
+    static final class Minted {
+
+        private final Object node;
+
+        private final HandleType type;
+
+        Minted(Object node, HandleType type) {
             Class<?> required = switch (type.getKind()) {
                 case HANDLE_KIND_STREAM -> KStream.class;
                 case HANDLE_KIND_GROUPED_STREAM -> KGroupedStream.class;
@@ -112,6 +119,16 @@ public class TopologyAssembler {
                 throw new IllegalArgumentException("engine bug: a mint paired a "
                         + node.getClass().getSimpleName() + " with recorded kind " + kindName(type.getKind()));
             }
+            this.node = node;
+            this.type = type;
+        }
+
+        Object node() {
+            return node;
+        }
+
+        HandleType type() {
+            return type;
         }
     }
 

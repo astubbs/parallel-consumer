@@ -27,7 +27,8 @@
 #
 #   0  the build (and --test, when asked) succeeded
 #   1  the build or the test FAILED - a real, reported failure
-#   2  CANNOT RUN: Docker is not installed, its daemon is unreachable, or buildx is missing
+#   2  CANNOT RUN: Docker is not installed, its daemon is unreachable, buildx is missing, or the
+#      host cannot execute what the image produced (see the host-OS guard below)
 #   3  usage error: unknown language, bad flag
 #
 # --test on the container route runs the EXTRACTED artifact on the host, and that is the portability
@@ -119,7 +120,21 @@ build_in_container() {
 #
 # At least one pair must exist: an extraction that produced no claim at all must never read as a
 # pass, which is the same rule as "a missing toolchain is exit 2, not a pass".
+#
+# THE HOST HAS TO BE ABLE TO EXECUTE THE IMAGE'S OUTPUT, and where it cannot this is exit 2 rather
+# than a failure. Both images are Linux, so on a macOS developer box every extracted binary is an
+# ELF the kernel will not load - the static one "fails" and so does the dynamic control, which this
+# function would otherwise report as "the extracted build is not portable". That reading is wrong in
+# the most expensive way available: a real portability regression and a developer on the wrong OS
+# produce the identical red. The image build itself is unaffected and still runs the module's own
+# tests and static analysis inside the container, which is why `bin/build-client.sh <lang>` without
+# --test remains a real check on any host.
+require_host_can_run_the_image_output() {
+    [ "$(uname -s)" = "Linux" ] || die 2 "CANNOT RUN: the $LANGUAGE image builds Linux binaries and this host is $(uname -s), so running the extracted artifacts here would prove nothing about portability. The container build (without --test) still ran the module's own tests inside the image."
+}
+
 test_in_container() {
+    require_host_can_run_the_image_output
     local module_dir="$CLIENTS_DIR/$MODULE_PREFIX$LANGUAGE"
     local out_dir="$module_dir/target/container"
     local pairs=0 static_binary dynamic_binary

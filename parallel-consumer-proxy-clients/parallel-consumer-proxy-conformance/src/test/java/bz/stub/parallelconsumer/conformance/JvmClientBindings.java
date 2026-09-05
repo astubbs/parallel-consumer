@@ -7,7 +7,7 @@ import bz.stub.parallelconsumer.client.ParallelConsumerClient;
 import bz.stub.parallelconsumer.client.RecordProcessor;
 import bz.stub.parallelconsumer.client.direct.DirectParallelConsumerClient;
 import bz.stub.parallelconsumer.client.grpc.GrpcParallelConsumerClient;
-import bz.stub.parallelconsumer.proxy.harness.ProxyHarness;
+import bz.stub.parallelconsumer.proxy.harness.ConformanceHarness;
 
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
@@ -33,9 +33,16 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class JvmClientBindings {
 
     /**
+     * The gRPC cell's name, as a constant because two self-retiring guards assert about it by name -
+     * {@link TheEngineArrivingMustBringTheGrpcBindingTest} here and its sibling in the harness module. A
+     * literal in three places is how one of them ends up asserting about a string nothing registers.
+     */
+    static final String JAVA_GRPC = "java-grpc";
+
+    /**
      * The in-process transport: the shared client API bound straight to core, with no protocol anywhere
      * beneath it. The harness lends it the mock Kafka clients whose commit history the assertions read, and
-     * the client brings its own engine - {@link ProxyHarness#startEmbeddedClient} is that lane.
+     * the client brings its own engine - {@link ConformanceHarness#startEmbeddedClient} is that lane.
      */
     public static JvmClientBinding javaDirect() {
         return new JvmClientBinding("java-direct", JvmClientBindings::startDirect);
@@ -47,7 +54,7 @@ public final class JvmClientBindings {
      * process boundary, and {@link JvmClientBinding} carries the reasoning for that.
      */
     public static JvmClientBinding javaGrpc() {
-        return new JvmClientBinding("java-grpc", JvmClientBindings::startGrpc);
+        return new JvmClientBinding(JAVA_GRPC, JvmClientBindings::startGrpc);
     }
 
     /** Every JVM client binding, whether or not this run selected it. */
@@ -55,7 +62,7 @@ public final class JvmClientBindings {
         return List.of(javaDirect(), javaGrpc());
     }
 
-    private static ParallelConsumerClient startDirect(ProxyHarness harness, ConformanceScenario scenario,
+    private static ParallelConsumerClient startDirect(ConformanceHarness harness, ConformanceScenario scenario,
                                                       RecordProcessor processor) {
         // The client is built INSIDE the lane because it is its own rebalance listener, and the harness has
         // to hold that listener to perform the manual assignment a MockConsumer needs. The reference escapes
@@ -74,7 +81,7 @@ public final class JvmClientBindings {
         return started.get();
     }
 
-    private static ParallelConsumerClient startGrpc(ProxyHarness harness, ConformanceScenario scenario,
+    private static ParallelConsumerClient startGrpc(ConformanceHarness harness, ConformanceScenario scenario,
                                                     RecordProcessor processor) {
         int port = harness.startEngine();
         var client = GrpcParallelConsumerClient.builder()

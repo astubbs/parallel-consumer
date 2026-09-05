@@ -73,7 +73,7 @@ test_layers:
     limitation: It covers changed, decidable offset classes on a PR; a skipped or narrow run is not a project-wide coverage claim.
     inspect:
       - path: bin/ci-mutation-test.sh
-        demonstrates: PR-scoped mutation selection and an explicit warning that a green skip is not evidence.
+        demonstrates: PR-scoped mutation selection, and an exit code that separates a scored run from a skip and from a lane that could not run at all.
   - id: chaos
     proves: Rebalance, revocation and stalled-progress behavior under calibrated disruption.
     command: bin/chaos-test.sh
