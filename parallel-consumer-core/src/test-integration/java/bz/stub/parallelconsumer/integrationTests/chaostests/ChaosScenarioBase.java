@@ -170,12 +170,18 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> i
     }
 
     /**
-     * Per-poll diagnostic progress line for a {@link #diagnosableWait} wait - only emitted under
-     * {@code -Dchaos.diagnoseStallRecovery=true}, so it costs nothing in a gating run. Both counters are
-     * needed because a completion counter alone cannot tell "nothing is finishing" from "nothing is
+     * Per-poll diagnostic progress lines for a {@link #diagnosableWait} wait - only emitted under
+     * {@code -Dchaos.diagnoseStallRecovery=true}, so they cost nothing in a gating run. Both fleet
+     * counters are needed because a completion counter alone cannot tell "nothing is finishing" from "nothing is
      * happening": a fleet all sitting inside a heavy-tail dwell reads as a flat consumed line while
      * fully busy. {@code inFlight} (started-minus-consumed) is the difference that makes a flat line
      * interpretable.
+     * <p>
+     * <b>A second, per-instance line follows it</b>, because the fleet counters answer only the
+     * fleet-level question. {@code INSTANCE_STALL/NO_WORK_COMPLETED} accuses one member, and a fleet
+     * that drains around a wedged member drains exactly like a healthy one - so the fleet line
+     * classifies that violation not at all. {@code ProgressProbe#instanceProgressSnapshot} carries
+     * what does.
      *
      * @param phaseLabel      names the wait in the log line (e.g. "quiet phase", "run")
      * @param expectedMessages the scenario's total backlog size, for the consumed/expected ratio
@@ -190,6 +196,12 @@ abstract class ChaosScenarioBase extends BrokerIntegrationTest<String, String> i
         log.info("[diagnose] {}: consumed={}/{} started={} inFlight={} violations={} observations={} done={}",
                 phaseLabel, consumed, expectedMessages, started, started - consumed,
                 probe.getViolations().size(), probe.getObservations().size(), done);
+        // Second line, per instance: the fleet counters above cannot classify an INSTANCE_STALL
+        // violation, which accuses ONE member - see ProgressProbe#instanceProgressSnapshot.
+        String instances = probe.instanceProgressSnapshot();
+        if (!instances.isEmpty()) {
+            log.info("[diagnose] {} instances: {}", phaseLabel, instances);
+        }
     }
 
     /**

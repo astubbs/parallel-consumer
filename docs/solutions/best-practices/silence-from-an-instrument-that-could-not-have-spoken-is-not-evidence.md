@@ -1,6 +1,7 @@
 ---
 title: "Silence from an instrument that could not have spoken is not evidence"
 date: 2026-09-01
+last_updated: 2026-09-04
 category: best-practices
 module: parallel-consumer-core
 problem_type: best_practice
@@ -12,6 +13,8 @@ applies_when:
   - "A logger level pins a module below the level a diagnostic was written at (info/debug lines under a warn-pinned profile)"
   - "A newly added detector has never been demonstrated firing on a tree deliberately built to fail it"
   - "About to write 'probe clean' or 'no evidence' into a plan, PR body, or diagnosis on the strength of a quiet detector"
+  - "A diagnostic reports at one granularity (fleet, suite, aggregate) while the detector it is meant to classify accuses one member (an instance, a shard, a partition)"
+  - "A non-reproduction is about to be read as though it were the same evidence a reproduction-plus-diagnostic would have given"
 tags:
   - false-negative
   - instrumentation
@@ -20,17 +23,20 @@ tags:
   - silent-failure
   - test-timeouts
   - chaos-testing
+  - diagnostic-scope
 ---
 
 # Silence from an instrument that could not have spoken is not evidence
 
 ## Context
 
-While diagnosing the astubbs#29 / confluentinc#857 paused-consumption stall, three unrelated
-mechanisms each produced the same shape of false negative: an instrument reported nothing wrong, in
-a way that was structurally indistinguishable from a genuine all-clear. All three surfaced within
-days of each other, on the same investigation, and each one steered the diagnosis away from the real
-defect for a period measured in weeks, not minutes.
+While diagnosing the astubbs#29 / confluentinc#857 paused-consumption stall, four unrelated
+mechanisms each produced the same shape of false reading: an instrument reported nothing wrong, in
+a way that was structurally indistinguishable from a genuine all-clear. The first three surfaced
+within days of each other, on the same investigation, and each one steered the diagnosis away from
+the real defect for a period measured in weeks, not minutes. **The fourth, added 2026-09-04, is the
+one that shows the trap has a positive-output form** - there the instrument was not silent at all.
+It answered loudly, correctly, and about something else.
 
 1. **A bound longer than the enclosing timeout.** The chaos suite's `ProgressProbe` calibrates
    `INSTANCE_STALL_BOUND` and `LAG_STAGNATION_BOUND` at 150 seconds each, and `NO_PROGRESS_WINDOW`
@@ -71,8 +77,37 @@ defect for a period measured in weeks, not minutes.
    landed, which is the habit worth copying: an instrument records that it is unarmed at birth,
    because nobody remembers later.
 
-All three are the same failure in different clothing: **the instrument's silence was read as a
-verdict about the system, when it was actually a fact about the instrument.**
+4. **A reach that is wide enough but at the wrong GRANULARITY - and this one is not silence.** The
+   chaos suite's recovery diagnostic (`-Dchaos.diagnoseStallRecovery=true`, `ChaosScenarioBase`,
+   `DIAGNOSE_STALL_RECOVERY`) drops the fail-fast and keeps sampling after a violation, so a run can
+   be read for whether the system recovered. It correctly demoted the fleet-scoped `NO_PROGRESS`
+   detector: six firings, replayed with recovery watching, all drained. But
+   `ChaosScenarioBase#logDiagnosticProgress` logged only fleet-scoped counters - consumed, started,
+   in-flight - while the suite's *gating* liveness detector,
+   `INSTANCE_STALL/NO_WORK_COMPLETED`, accuses one named member. A fleet drains to its target around
+   a single wedged instance in exactly the way it drains when every instance is healthy, so the
+   diagnostic could not produce a different reading for the two worlds. Every instance-level sighting
+   on that line sat unclassified for the line's whole life while "the backlog drained" kept being
+   offered as though it had settled them. Widening the instrument settled it in one run: a
+   per-member token (`ProgressProbe#instanceProgressSnapshot`) showed instance 0 live with its
+   completion count frozen for the entire remainder of the run while the fleet finished cleanly -
+   a real, non-recovering wedge that the fleet line reported as a clean drain
+   (astubbs/parallel-consumer#435, open as of writing).
+
+   Two details from that episode are worth more than the episode. **First, a non-reproduction was
+   twice read as though it were a drain.** A separate firing of the same detector was waved off as
+   "known load-shaped" on the strength of a replay that came back clean - but a clean replay is
+   silent on recover-or-wedge, because the mechanism never ran. That is mechanism 3 wearing
+   mechanism 4's clothes: an instrument that could not have spoken, read as though it had.
+   (session history) **Second, this same flag had itself already been a silent no-op** on this exact
+   scenario: it was implemented in one scenario base class while `ChaosChurnStormIT` extended
+   another, so runs that claimed to use the diagnostic were measuring nothing until it was lifted
+   into the shared base. (session history)
+
+All four are the same failure in different clothing: **the instrument's output was read as a verdict
+about the system, when it was actually a fact about the instrument.** Silence is the commonest form
+and the one this doc is named for. The fourth is the reminder that a confident, well-formed,
+perfectly correct answer is the same trap when it answers a different question than the one asked.
 
 ## Guidance
 
@@ -100,6 +135,38 @@ Verifying reach is cheap and mechanical once you know to do it:
 - **For a new detector**, demonstrate it firing on a tree known to be broken before trusting its
   silence on a tree that might be fixed. An assertion nobody has seen fail is decoration, not
   evidence (`docs/investigating.md`).
+
+### Check the instrument's GRANULARITY against the claim, not only its reach
+
+Reach asks whether the instrument could have spoken at all. Granularity asks whether it could have
+spoken *about the thing being accused*. An instrument can be perfectly armed, perfectly calibrated,
+and still structurally unable to settle the question, because it reports one level up from where the
+claim lives. The check is mechanical: name the subject of the detector's assertion (this instance,
+this shard, this partition), then look at the diagnostic's output and ask whether any field in it
+varies with that subject. If none does, the diagnostic cannot classify that detector's firings, and
+its clean verdict is a fact about its own scope.
+
+This is the harder half to notice, because nothing looks wrong. A silent instrument at least invites
+the question "should it have said something?". An aggregate instrument answers fluently and on time,
+and its answer is *correct* - just about a different subject. Aggregates are especially prone to it
+because a healthy majority hides one sick member by construction: a fleet total climbing to its
+target is consistent both with every member finishing and with all-but-one finishing.
+
+### Give a diagnostic a second, independently-moving counter
+
+A single frozen number is ambiguous by design. "This counter has not moved for 150 seconds" is
+equally consistent with the thing being watched having stopped, and with the counter itself having
+stopped being updated - a stale or phantom counter, which is a real recorded defect class in this
+repo (`docs/inflight/bug-number-records-out-for-processing-is-a-plain-int.md`). Both produce
+identical silence, so a lone reading always needs interpretation, and interpretation is where the
+confident wrong answer enters.
+
+Pair it with a second counter whose behaviour differs between those explanations. In the episode
+above, the completion count froze while the records-out-for-processing count kept climbing - a shape
+a phantom counter cannot produce, because a phantom is not replenished. The pairing turned an
+ambiguous reading into a classification without any further runs. When adding a counter to a
+diagnostic, ask which distinct true states could produce the same value, and add whatever second
+signal separates them.
 
 ### Move load-bearing diagnostics somewhere no log profile can filter them
 
@@ -131,8 +198,15 @@ Reach for this whenever a diagnosis leans on an instrument's *absence* of a sign
 verdict, a zero-hit grep for a diagnostic line, a detector that never fired, an assertion that never
 raised. Before treating that absence as "nothing wrong", check whether the instrument was capable of
 producing anything else - a shorter enclosing deadline, a filtered log level, or a detector never
-armed are the three concrete traps found here, but the underlying question generalizes to any
+armed are three of the four concrete traps found here, but the underlying question generalizes to any
 instrument with a reach shorter than the claim being read off it.
+
+Reach for it equally when a diagnosis leans on an instrument's *presence* of a signal that is not
+about the accused subject: an aggregate that drained, a suite that passed, a fleet that completed,
+offered as evidence about one member. Ask whether the aggregate would look identical whether or not
+that member individually succeeded. If it would, the aggregate result is not evidence either way.
+And treat a non-reproduction as its own case: a clean replay says the mechanism did not run, which
+is silent on what the mechanism does when it does run.
 
 ## Examples
 
@@ -206,3 +280,8 @@ removes; the gap here is named rather than papered over with a rule that looks l
 - `docs/investigating.md` - "Verify your instrumentation actually reached the run" owns the general
   rule this doc's mechanism 2 is one instance of.
 - `docs/logging.md` - owns the test logback profiles and their per-package levels referenced above.
+- `docs/inflight/test-857-churn-storm-async-stalls.md` - the ledger mechanism 4 came from, including
+  the run of prior measurement failures of this same shape that it records against itself.
+- `docs/inflight/test-per-shard-liveness-has-no-gate.md` - the same granularity mismatch one level
+  finer and still open: `INSTANCE_STALL` is per-instance, so one wedged shard on an instance whose
+  other shards keep completing is a claim no detector in the suite can currently classify.
