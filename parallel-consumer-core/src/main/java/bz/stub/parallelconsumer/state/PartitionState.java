@@ -273,6 +273,22 @@ public class PartitionState<K, V> {
         return incompleteOffsets.size();
     }
 
+    /**
+     * Records a completed offset: it leaves {@link #incompleteOffsets}, and the high-water mark and dirty flag
+     * follow.
+     * <p>
+     * <b>If you are here from the assert below, it has fired for three shapes, and all three are closed and
+     * pinned.</b> Do not read it as proof of a double delivery - that was the right inference for the 2026-08-22
+     * sightings because every one carried {@code deliveryCount == 2}, and it was the evidence that made it
+     * right, not the assert. The shapes: a work claim decided before another selector's completion (closed by
+     * astubbs#335, pinned by {@code WorkClaimStateMachineTest}); a completion acting on a partition state
+     * swapped by a rebalance after its staleness check (closed by astubbs#346, pinned by
+     * {@code WorkManagerStaleCheckDoubleLookupTest}); and a record selected and completed between being
+     * published to its shard and its offset being registered - the one shape with no double delivery at all
+     * (closed by astubbs#370, pinned by {@code PartitionStateRegistrationOrder370Test}). A fourth would need
+     * an offset removed from the incomplete set by some route other than this method, or a completion for an
+     * offset this state never registered.
+     */
     public void onSuccess(long offset) {
         //noinspection OptionalAssignedToNull - null check to see if key existed
         boolean removedFromIncompletes = this.incompleteOffsets.remove(offset) != null; // NOSONAR
@@ -349,6 +365,23 @@ public class PartitionState<K, V> {
         return !Objects.equals(epochOfInboundRecords, currentPartitionEpoch);
     }
 
+    /**
+     * Registers a polled batch: each record not already complete goes into {@link #incompleteOffsets} and then
+     * into its shard, in that order - see the loop body for why the order is the contract.
+     * <p>
+     * <b>Thread model, derived from the callers rather than declared (2026-09-05).</b> The one production route
+     * here is {@code AbstractParallelEoSStreamProcessor#processWorkCompleteMailBox}, on the control thread: the
+     * broker-poll thread's {@code registerWork} only posts the batch to the mailbox, and the same drain loop
+     * that calls {@code WorkManager#registerWork} also calls {@code WorkManager#handleFutureResult}, so on the
+     * shipped engine a registration and a completion never overlap. That is what made the old publish-first
+     * order safe by accident. It is <em>not</em> asserted here: the Lincheck harnesses
+     * ({@code PartitionStateLincheckTest}, {@code WorkManagerLincheckTest}) deliberately drive
+     * {@link #onSuccess(long)} and {@code handleFutureResult} from several threads to measure exactly the
+     * interleavings a guard would refuse, and the direct-pull engine will select from worker threads. The
+     * register-then-publish order is the invariant that survives all of those; the plain {@code long}s this
+     * method writes ({@code offsetHighestSeen}) are the residue that still assumes one writer, and the
+     * {@code jcstress-poc} module's {@code SeenSucceededOrderingProbes} owns that question.
+     */
     public void maybeRegisterNewPollBatchAsWork(@NonNull EpochAndRecordsMap<K, V>.RecordsAndEpoch recordsAndEpoch) {
         if (epochIsStale(recordsAndEpoch)) {
             // Expected during any rebalance: a rebalance between poll() and registration means these
@@ -374,8 +407,18 @@ public class PartitionState<K, V> {
             if (isRecordPreviouslyCompleted(aRecord)) {
                 log.trace("Record previously completed, skipping. offset: {}", aRecord.offset());
             } else {
-                getShardManager().addWorkContainer(epochOfInboundRecords, aRecord);
+                // REGISTER, then PUBLISH - the order is the invariant, and it is the only thing here that
+                // keeps a completion valid whichever thread selects the record. The offset enters
+                // incompleteOffsets first, so by the time a shard scan can reach the container, the state
+                // its completion removes from already holds it. Publishing first (the order until
+                // astubbs#370) left a gap in which the container was selectable and its offset absent:
+                // a completion landing there tripped onSuccess's assert, and without -ea it silently
+                // re-registered an already-completed offset that nothing could ever complete again, pinning
+                // the commit frontier below it. Both maps are concurrent, so the put here happens-before
+                // the shard's put and that happens-before any scanner's get - no thread model required.
+                // Pinned by PartitionStateRegistrationOrder370Test.
                 addNewIncompleteRecord(aRecord);
+                getShardManager().addWorkContainer(epochOfInboundRecords, aRecord);
             }
         }
 
