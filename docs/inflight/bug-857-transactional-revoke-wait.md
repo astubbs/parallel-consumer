@@ -62,6 +62,39 @@ the correction; only its attribution moves.
 
 No seed was captured.
 
+## Sighting: `ChaosRevokeUnderWorkTransactionalIT.revokeUnderWorkStaysProtocolHonestInTransactionalMode`, 1 failure in 2 runs, 2026-09-05
+
+<!-- post-merge: checked - astubbs/parallel-consumer#448 is cited for its permanent diff content, which does not change after merge or if its branch is deleted -->
+astubbs/parallel-consumer#448, a docs/data-only PR whose diff touches no Java and no pom (two
+`docs/data/testing-evidence.yaml` entries added, one unrelated `@Disabled` sanity test deleted under
+`integrationTests/sanity/`, three markdown notes edited - `git diff --name-only` against the merge
+base confirms nothing under `src/main` or the `chaostests` package changed). Failed in "Chaos Pain
+Suite 2/4" on
+[run 33938124400, job 101230384149](https://github.com/astubbs/parallel-consumer/actions/runs/33938124400/job/101230384149),
+head `3ef5a009a`.
+
+**Failing condition:** `AbstractRevokeUnderWorkScenario.runRevokeUnderWorkScenario:283`, the
+Awaitility condition aliased *"backlog drained after the storm settles (quiet phase)"* did not
+complete within its 5-minute bound - `ConditionTimeout`, 366.8s elapsed. Seed
+`7976335177229963841` (scenario `w4tx`, printed at `AbstractRevokeUnderWorkScenario.java:211`;
+replay: `./mvnw -Pci -pl parallel-consumer-core -am verify -DskipUTs=true -Dincluded.groups=chaos
+-Dexcluded.groups= -Dchaos.seed=7976335177229963841`). The run's own `settleRun` summary reported
+`probe violations=[]` - no gating probe fired; the failure is the drain-await itself timing out.
+Several `CLASS2_STALL/LAG_STAGNATION` non-gating observations were logged in the same window
+(per-partition lag stagnant ~154s against the 150s bound).
+
+A rerun of the same job on the same commit
+([job 101232514184](https://github.com/astubbs/parallel-consumer/actions/runs/33938124400/job/101232514184))
+passed.
+
+**This is this scenario's first recorded red.** Its own class javadoc records "Calibration status:
+UNCALIBRATED" and, before this, only one prior run: GREEN in 144s on 2026-09-01 with
+`probe violations=[]`, on the confluentinc#857 branch. The javadoc states the open question this
+sighting bears on without resolving it - "It is not yet known whether it goes red on master, red
+only under particular timing, or green because the revoke wait needs a sharper shape than this
+family produces." **Not diagnosed here**, and no replay of this seed has been run - recorded only so
+it is not lost with the run's logs.
+
 ## User-facing report
 
 **astubbs#44 (confluentinc#803)** - *"Transactional Producer instance gets timeout getting commit lock
