@@ -233,8 +233,9 @@ and no affordable sample count changes that: the variance is in the fleet, not i
 
 That is an argument for a structural change rather than more tuning. Sharding is the only lever
 whose effect would exceed 119s, and
-[`docs/inflight/ci-shard-the-integration-gate.md`](../inflight/ci-shard-the-integration-gate.md)
-carries it with the ordering argument - the serial build work is what each shard re-pays, so cutting
+[`docs/solutions/performance-issues/shard-count-buys-nothing-while-one-class-sets-the-floor-2026-09-07.md`](../solutions/performance-issues/shard-count-buys-nothing-while-one-class-sets-the-floor-2026-09-07.md)
+carries it with the ordering argument (it was the inflight note `ci-shard-the-integration-gate.md`
+when this was written; the note was extracted there once the split landed in astubbs#442) - the serial build work is what each shard re-pays, so cutting
 it first is what makes sharding pay.
 
 **And the method generalises past this lane.** When an effect sits below the noise floor, the way
