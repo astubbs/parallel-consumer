@@ -167,4 +167,37 @@ Each of these outlived this PR and now has its own note, so nothing is restated 
   than failing. `issue-response-118.md` drafts that half; per this directory's rules it is posted only
   on explicit instruction, and it outlives this PR rather than being deleted with it.
 
+## The rule above now has its first customer - the opaque rider (2026-09-06)
+
+"The fix has to ship *before* the encoding that would trigger it" was written here as a general
+constraint. The opaque rider (astubbs#255,
+`docs/plans/2026-09-05-001-feat-offset-metadata-rider-plan.md`) is the first encoding to be shipped
+behind it, and it is the case that turns the constraint into a release decision rather than a
+principle.
+
+- **The minimum-reader-version rule.** A rider must not be configured until every member of the
+  consumer group already runs a Parallel Consumer carrying this policy applied to every unreadable
+  payload. Anything older throws from inside the rebalance callback on the envelope's magic byte
+  before any policy is consulted, and the metadata is durable, so one such member - or a rollback to
+  one - crash-loops on every restart and rebalance. Unsetting the option does not heal it: a
+  partition with nothing outstanding never commits, so nothing overwrites the payload.
+- **The recovery procedure.** Stop the members, then
+  `kafka-consumer-groups --reset-offsets --to-current` against the group. It preserves the committed
+  position; what it costs is the offset map, so records completed beyond the frontier replay. It is
+  stated in full in `docs/features/offset-metadata-rider.yaml`, in the option's own javadoc
+  (`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java`,
+  anchor `riderSupplier`), and once at `INFO` when a supplier is configured. Deliberately no
+  in-product remediation mode: the external route needs no permanent surface for a time-bounded
+  hazard.
+- **The open release question, which is the reason this paragraph is here rather than only in the
+  plan.** Both this policy and the rider are unreleased, so 0.6.0.0 would be the first release with
+  either, and the rule above cannot be satisfied by any earlier version. The recommendation is to
+  **split** them - 0.6.0.0 ships the envelope decoder and the read-back, the `riderSupplier` option
+  ships in the following minor - so that a rollback from the release that first writes riders lands
+  on one that already reads them. The alternative is shipping both together and relying on the
+  opt-in, the `INFO` line and the recovery procedure. **The decision owner is the release, not the
+  implementation**; nothing in the rider's code changes either way. The reasoning and the cost of
+  each side are in that plan's `Open Questions`, and `docs/features/offset-metadata-rider.yaml`
+  carries `availability.target_release`, which is what has to move when the release decides.
+
 <!-- post-merge: checked-end -->

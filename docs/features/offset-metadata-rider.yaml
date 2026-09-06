@@ -1,0 +1,57 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Opaque rider in the committed offset metadata
+category: delivery
+module: parallel-consumer-core
+maturity: production-use
+availability:
+  status: planned
+  target_release: 0.6.0.0
+release_assumptions:
+  - The decoder for the rider envelope and the read-back are the half a group needs before any member may write one, and they ship in 0.6.0.0.
+  - Whether the write side - the riderSupplier option - also ships in 0.6.0.0 or is held to the following minor is the release owner's call, not this record's. The recommendation in docs/plans/2026-09-05-001-feat-offset-metadata-rider-plan.md (see its Open Questions) is to split them, so that a rollback from the release that first writes riders lands on one that already reads them; shipping both together gives the first customer its fix sooner and leaves the hazard to the opt-in, the startup log line and the recovery procedure below. Change target_release rather than assuming this sentence.
+  - Do not change this record to published before an embedder has exercised the slot end to end, including a restart that reads back what a shutdown commit wrote.
+summary: Hand Parallel Consumer a few opaque bytes per partition at commit time, which it carries inside its own offset-metadata payload without interpreting them and hands back after a restart.
+use_this_when:
+  - An application embedding Parallel Consumer needs a small amount of per-partition state to survive a restart, and the consumer group's commit metadata is the only durable slot available to it.
+  - You would otherwise write that state into the same metadata field yourself, which Parallel Consumer already owns for its offset map - two writers of one field read each other's bytes as corruption.
+  - Every member of the consumer group already runs a Parallel Consumer that carries the unreadable-offset-metadata policy. This is a precondition, not a preference - see the boundaries below.
+setup:
+  option: ParallelConsumerOptions.riderSupplier
+  values:
+    - A function from a RiderContext - naming the partition, the offset the commit is paired with, and the most bytes the supplier may return - to the bytes to carry. Unset by default.
+    - Unset is byte-for-byte the behaviour of a build that has never heard of riders, so leaving it alone changes nothing on the wire.
+    - Returning null or a zero-length array both mean "no rider for this call". A zero-length rider is not a representable value: that spelling is reserved for Parallel Consumer's own marker for a rider it dropped for size, so a reader can tell "dropped" from "never configured".
+    - The bytes are opaque and unversioned by Parallel Consumer. The embedder puts its own version byte first.
+  read_back: Decoding a committed metadata string back to its rider goes through the codec's single decode choke point and takes an InvalidOffsetMetadataHandlingPolicy explicitly. There is no overload without one.
+opt_in:
+  mechanism: Set riderSupplier on ParallelConsumerOptions. Configuring nothing leaves the committed payload unchanged.
+  isolated_from_stable_modules: false
+boundaries:
+  - "Minimum reader version, and it is a hard precondition. Every Parallel Consumer released before the unreadable-offset-metadata policy governed every unreadable payload throws from inside the rebalance callback when it meets a magic byte it does not know, before any policy is consulted. The metadata is durable in __consumer_offsets, so one such member in the group - or a rollback to one - crash-loops on every restart and rebalance until the group's offsets are rewritten. Parallel Consumer logs this requirement once at INFO when a supplier is configured."
+  - "Unsetting riderSupplier does not heal a group that has already been poisoned: a partition with nothing outstanding never commits, so the offending metadata is never overwritten."
+  - "Recovery, if it happens anyway. Stop the group's members, then run kafka-consumer-groups --reset-offsets --to-current against the group. It preserves the committed position, so no record before the frontier is reprocessed. What it costs is the offset map: records that completed beyond the committed offset are replayed, because the encoding that recorded them is what the reset discards."
+  - The rider is charged against the metadata size cap and never against the back-pressure threshold. Back-pressure exists so a payload can shrink as work completes and rider bytes do not shrink, so charging them there would make a rider a floor the mechanism cannot relieve, and on a caught-up partition a permanent block.
+  - Configuring a rider never costs a partition metadata it would otherwise have committed. When the assembled payload will not fit, Parallel Consumer sheds the rider, then the dropped-rider marker, then the envelope itself, and only after all three does it strip the offset map as it always has.
+  - Metadata on a caught-up partition no longer means Parallel Consumer has holes in flight. A partition with nothing outstanding now commits a rider-only payload where it previously committed nothing, so operator tooling that reads "metadata present" as "work is in flight" is wrong on the steady-state path.
+  - The rider rides only on commits that would have happened anyway. It never makes a partition dirty, so a partition that completes no records writes no rider, however often the supplier would answer.
+  - The supplier is user code on an engine thread - the broker-poll thread under the consumer commit modes, the control thread while it holds the produce write lock under the transactional producer, and the shutdown commit. It must be pure, cheap and non-blocking, may be called more than once in a commit cycle, and its answer may be discarded without reaching the broker. A throw, a null, or a rider over its cap is caught, logged once through a rate limiter, and treated as no rider for that call; the commit still happens.
+  - The shutdown commit is the one a restart reads, so an embedder's rider state has to outlive its own teardown.
+  - The rider is partition-scoped and instance-agnostic. Whichever member of the group next owns the partition reads it, not necessarily the one that wrote it.
+  - Parallel Consumer never interprets, compresses or validates the rider. It knows the length and nothing else.
+validation:
+  - Before configuring a supplier, confirm every member of the consumer group runs a build carrying the unreadable-offset-metadata policy, including anything that might be rolled back to.
+  - Verify a restart reads back what the shutdown commit wrote, not only what a periodic commit wrote.
+references:
+  - label: The option and its compatibility rule
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/ParallelConsumerOptions.java
+  - label: The envelope format
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/offsets/OffsetRiderEnvelope.java
+  - label: The budget ladder that decides what is shed
+    path: parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/state/RiderBudgetRung.java
+  - label: The policy that governs an envelope a reader cannot decode
+    path: docs/features/invalid-offset-metadata-policy.yaml
+  - label: Why one owner and an opaque rider, rather than two writers of one field
+    path: docs/solutions/architecture-patterns/one-owner-per-metadata-field-with-an-opaque-rider.md
