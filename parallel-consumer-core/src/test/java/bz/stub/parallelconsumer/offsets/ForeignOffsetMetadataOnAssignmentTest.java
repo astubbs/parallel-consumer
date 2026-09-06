@@ -13,11 +13,15 @@ import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.consumer.OffsetResetStrategy;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import pl.tlinkowski.unij.api.UniLists;
 import pl.tlinkowski.unij.api.UniMaps;
 
 import java.util.Base64;
 import java.util.function.UnaryOperator;
+import java.util.stream.Stream;
 
 import static bz.stub.parallelconsumer.offsets.OffsetCodecTestUtils.magicByteOfAnEncodingThatDoesNotExistYet;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -145,6 +149,78 @@ class ForeignOffsetMetadataOnAssignmentTest {
         assertThat(wm.getPm().getPartitionState(TP))
                 .as("partition should still be assigned")
                 .isNotNull();
+    }
+
+    /**
+     * Malformed {@link OffsetRiderEnvelope} payloads, at the same frame.
+     * <p>
+     * The envelope is the one structure in the payload whose <em>length field</em> is read out of bytes a stranger may
+     * have written, so each shape here is a way that field or the payload around it can lie. They are pinned at
+     * {@code onPartitionsAssigned} rather than at the decoder because the failure that matters is the one that escapes
+     * the rebalance callback and takes the consumer down - and because the typed exception must NOT be an
+     * {@link OffsetDecodingError}, which {@code loadPartitionStateForAssignment} swallows even under {@code FAIL}.
+     *
+     * @see OffsetRiderEnvelope#unwrap
+     */
+    static Stream<Arguments> malformedEnvelopes() {
+        byte magic = OffsetRiderEnvelope.MAGIC_BYTE;
+        byte unknownInner = magicByteOfAnEncodingThatDoesNotExistYet();
+        return Stream.of(
+                Arguments.of("rider length claims more bytes than follow",
+                        new byte[]{magic, 0, 8, 1, 2},
+                        CorruptOffsetMetadataException.class),
+                // 0xFFFF read as a signed short is -1; read unsigned it is 65535, and either way it overruns. The
+                // signed reading used to be the interesting one: a negative length drives allocation and loops.
+                Arguments.of("rider length field is 0xFFFF - negative if read signed",
+                        new byte[]{magic, (byte) 0xFF, (byte) 0xFF, 1, 2},
+                        CorruptOffsetMetadataException.class),
+                Arguments.of("envelope shorter than its own header",
+                        new byte[]{magic, 0},
+                        CorruptOffsetMetadataException.class),
+                Arguments.of("inner body truncated mid length field",
+                        new byte[]{magic, 0, 1, 7, OffsetEncoding.BitSetV2.magicByte, 1, 2},
+                        CorruptOffsetMetadataException.class),
+                // The envelope never nests: accepting one would start an unbounded recursion off metadata PC did not
+                // write, which is a stack overflow rather than a policy decision.
+                Arguments.of("envelope inside an envelope",
+                        new byte[]{magic, 0, 1, 7, magic, 0, 0},
+                        CorruptOffsetMetadataException.class),
+                // The forward-compatibility case one layer down: the envelope parses, and what it carries is an
+                // encoding this build has never heard of.
+                Arguments.of("inner magic byte belongs to no encoding this build knows",
+                        new byte[]{magic, 0, 1, 7, unknownInner, 0, 0},
+                        UnknownOffsetMetadataMagicException.class)
+        );
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("malformedEnvelopes")
+    void malformedEnvelopeDoesNotEscapeOnPartitionsAssignedUnderDefaultPolicy(String name, byte[] payload,
+                                                                             Class<?> ignoredExpected) {
+        var module = moduleWithCommittedMetadata(Base64.getEncoder().encodeToString(payload));
+        WorkManager<String, String> wm = module.workManager();
+
+        assertThatCode(() -> wm.onPartitionsAssigned(UniLists.of(TP)))
+                .as("a malformed rider envelope must not escape the rebalance listener under the default policy")
+                .doesNotThrowAnyException();
+
+        assertThat(wm.getPm().getPartitionState(TP).getOffsetHighestSeen())
+                .as("IGNORE resumes from the committed offset, so the highest seen is the offset below it")
+                .isEqualTo(COMMITTED_OFFSET - 1);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("malformedEnvelopes")
+    void failPolicyStopsOnAMalformedEnvelope(String name, byte[] payload, Class<?> expected) {
+        var module = moduleWithCommittedMetadata(Base64.getEncoder().encodeToString(payload),
+                ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.FAIL);
+        WorkManager<String, String> wm = module.workManager();
+
+        assertThatThrownBy(() -> wm.onPartitionsAssigned(UniLists.of(TP)))
+                .as("FAIL must stop rather than discard a payload whose envelope it could not read")
+                .isInstanceOf(expected)
+                .as("an OffsetDecodingError would be swallowed by loadPartitionStateForAssignment, even under FAIL")
+                .isNotInstanceOf(OffsetDecodingError.class);
     }
 
     /**

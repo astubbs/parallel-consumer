@@ -69,6 +69,11 @@ public class OffsetMapCodecManager<K, V> {
 
     public static final Charset CHARSET_TO_USE = UTF_8;
 
+    /**
+     * What a caught-up partition has to encode: nothing.
+     */
+    private static final byte[] NO_INNER_BYTES = new byte[0];
+
     private final PCModule module;
 
     private Timer offsetEncodingTimer;
@@ -110,6 +115,46 @@ public class OffsetMapCodecManager<K, V> {
 
         public static HighestOffsetAndIncompletes of() {
             return new HighestOffsetAndIncompletes(Optional.empty(), new TreeSet<>());
+        }
+    }
+
+    /**
+     * Everything one committed metadata payload said: the offsets, and what its rider slot held.
+     * <p>
+     * A sibling of {@link HighestOffsetAndIncompletes} rather than a field on it, deliberately. That type is a public
+     * {@code @Value}: a fifth field would change its generated constructor's arity, and an array field would make its
+     * {@code equals} identity-based. It is also the return type of four public methods that must keep it - the
+     * {@code NoSuchMethodError} this class's javadoc records came from replacing one of those rather than adding to
+     * it.
+     * <p>
+     * So the rider travels here instead, on a package-private decode family the public overloads delegate to and
+     * project down from.
+     *
+     * @see EncodedOffsetPair#decodeToRiderAndIncompletes
+     */
+    @Value
+    public static class DecodedMetadata {
+
+        /**
+         * Exactly what the public decode overloads return - this value adds to it and never alters it.
+         */
+        HighestOffsetAndIncompletes offsets;
+
+        /**
+         * What the payload said about the rider slot: none, dropped, present with bytes, or unreadable when the
+         * policy discarded the metadata.
+         */
+        OffsetRiderEnvelope.Rider rider;
+
+        public static DecodedMetadata of(HighestOffsetAndIncompletes offsets, OffsetRiderEnvelope.Rider rider) {
+            return new DecodedMetadata(offsets, rider);
+        }
+
+        /**
+         * A payload that carried no envelope at all.
+         */
+        public static DecodedMetadata of(HighestOffsetAndIncompletes offsets) {
+            return new DecodedMetadata(offsets, OffsetRiderEnvelope.Rider.none());
         }
     }
 
@@ -254,6 +299,23 @@ public class OffsetMapCodecManager<K, V> {
                                                                                        String base64EncodedOffsetPayload,
                                                                                        InvalidOffsetMetadataHandlingPolicy errorPolicy,
                                                                                        TopicPartition tp) throws OffsetDecodingError {
+        return deserialiseMetadataFromBase64(committedOffsetForPartition, base64EncodedOffsetPayload, errorPolicy, tp)
+                .getOffsets();
+    }
+
+    /**
+     * The same decode as {@link #deserialiseIncompleteOffsetMapFromBase64(long, String,
+     * InvalidOffsetMetadataHandlingPolicy, TopicPartition)}, carrying the rider slot as well as the offsets.
+     * <p>
+     * Package-private on purpose: the public overloads above are the API, and they project this down. The rider is
+     * reached from outside the package through the read-back entry point, not through here.
+     */
+    // TODO(refactor): this class is a flagged hotspot (docs/refactoring.md) - the decode family and the encode
+    //  entry points both want extracting into their own types rather than growing a fifth and sixth static here.
+    static DecodedMetadata deserialiseMetadataFromBase64(long committedOffsetForPartition,
+                                                         String base64EncodedOffsetPayload,
+                                                         InvalidOffsetMetadataHandlingPolicy errorPolicy,
+                                                         TopicPartition tp) throws OffsetDecodingError {
         byte[] decodedBytes;
         try {
             decodedBytes = OffsetSimpleSerialisation.decodeBase64(base64EncodedOffsetPayload);
@@ -263,14 +325,16 @@ public class OffsetMapCodecManager<K, V> {
             // loadPartitionStateForAssignment catches unconditionally - so a deployment that chose FAIL silently
             // dropped the offset map and replayed completed records instead of stopping. Arbitrary bytes left by
             // another framework take this path readily, which made it the widest hole in the policy's coverage.
-            return EncodedOffsetPair.handleUnreadableMetadata(committedOffsetForPartition,
+            // Nothing is known about the rider slot of a payload that never decoded, so it reports UNREADABLE rather
+            // than "no rider was configured" - see DecodedMetadata.
+            return DecodedMetadata.of(EncodedOffsetPair.handleUnreadableMetadata(committedOffsetForPartition,
                     errorPolicy,
                     msg("the metadata is not valid base64"),
                     () -> new CorruptOffsetMetadataException("metadata is not valid base64",
                             EncodedOffsetPair.describeSource(tp, committedOffsetForPartition)),
-                    tp);
+                    tp), OffsetRiderEnvelope.Rider.unreadable());
         }
-        return decodeCompressedOffsets(committedOffsetForPartition, decodedBytes, errorPolicy, tp);
+        return decodeCompressedMetadata(committedOffsetForPartition, decodedBytes, errorPolicy, tp);
     }
 
     PartitionState<K, V> decodePartitionState(TopicPartition tp, OffsetAndMetadata offsetData) throws OffsetDecodingError {
@@ -280,9 +344,57 @@ public class OffsetMapCodecManager<K, V> {
         return new PartitionState<>(epoch, module, tp, incompletes);
     }
 
+    /**
+     * The whole write side in one call, with no rider: encode the offset map once and turn it into the metadata
+     * string. Byte for byte what this method produced before the rider existed.
+     */
     public String makeOffsetMetadataPayload(long baseOffsetForPartition, PartitionState<K, V> state) throws NoEncodingPossibleException {
-        String offsetMap = serialiseIncompleteOffsetMapToBase64(baseOffsetForPartition, state);
-        return offsetMap;
+        byte[] innerBytes = encodeOffsetsToInnerBytes(baseOffsetForPartition, state);
+        return assembleMetadataPayload(innerBytes, OffsetRiderEnvelope.Rider.none());
+    }
+
+    /**
+     * Step one of the write side, for a caller that needs the encoded offset map <em>before</em> it decides what to
+     * wrap around it: the budget ladder repacks these same bytes rather than encoding again.
+     * <p>
+     * <b>The encoder competition runs exactly once per call</b>, and so do its meters
+     * ({@link PCMetricsDef#OFFSETS_ENCODING_USAGE}, {@link PCMetricsDef#OFFSETS_ENCODING_TIME}). A second pass would
+     * snapshot a later hole map - the confluentinc#894 tear class - and double-count both.
+     *
+     * @return the offset map, its magic byte first; <b>empty</b> when the partition has nothing incomplete, which is
+     *         the caught-up case: there is no map to write, and a rider (if there is one) rides alone. The condition
+     *         is {@link PartitionState#hasIncompleteOffsets()}, the same one {@code tryToEncodeOffsets} returns early
+     *         on, rather than "nothing incomplete BELOW the highest succeeded" - offsets in flight above the mark
+     *         still get the encoding this build has always written for them.
+     * @throws NoEncodingPossibleException as {@link #encodeOffsetsCompressed} does, and for the same reason
+     */
+    public byte[] encodeOffsetsToInnerBytes(long baseOffsetForPartition, PartitionState<K, V> state)
+            throws NoEncodingPossibleException {
+        if (!state.hasIncompleteOffsets()) {
+            return NO_INNER_BYTES;
+        }
+        return encodeOffsetsCompressed(baseOffsetForPartition, state);
+    }
+
+    /**
+     * Step two of the write side: inner bytes plus a rider slot become the string that goes in the commit's metadata
+     * field.
+     * <p>
+     * With {@link OffsetRiderEnvelope.RiderState#NONE} there is no envelope at all - the inner bytes go through the
+     * outer codec unchanged, which is what makes a payload written with no rider byte-identical to one written by a
+     * build that had never heard of riders. {@code PRESENT} and {@code DROPPED} are wrapped;
+     * {@link OffsetRiderEnvelope.RiderState#UNREADABLE} is a read-side answer and reaching here with one is a
+     * programming error, which {@link OffsetRiderEnvelope#wrap} rejects.
+     *
+     * @param innerBytes the encoded offset map, or empty for a caught-up partition
+     * @param rider      what to put in the rider slot - never {@code null}; {@link OffsetRiderEnvelope.Rider#none()}
+     *                   is how "no rider" is spelled
+     */
+    public String assembleMetadataPayload(byte[] innerBytes, OffsetRiderEnvelope.Rider rider) {
+        if (rider.getState() == OffsetRiderEnvelope.RiderState.NONE) {
+            return OffsetSimpleSerialisation.base64(innerBytes);
+        }
+        return OffsetSimpleSerialisation.base64(OffsetRiderEnvelope.wrap(innerBytes, rider));
     }
 
     String serialiseIncompleteOffsetMapToBase64(long baseOffsetForPartition, PartitionState<K, V> state) throws NoEncodingPossibleException {
@@ -384,15 +496,33 @@ public class OffsetMapCodecManager<K, V> {
                                                                byte[] decodedBytes,
                                                                InvalidOffsetMetadataHandlingPolicy errorPolicy,
                                                                TopicPartition tp) {
+        return decodeCompressedMetadata(nextExpectedOffset, decodedBytes, errorPolicy, tp).getOffsets();
+    }
+
+    /**
+     * The single decode choke point, carrying the rider slot as well as the offsets.
+     * <p>
+     * Every decode entry point in this class funnels through here, which is what keeps the empty-payload branch, the
+     * rider-only branch inside {@link EncodedOffsetPair#decodeToRiderAndIncompletes} and
+     * {@link EncodedOffsetPair#handleUnreadableMetadata} all answering {@code nextExpectedOffset - 1}: the three must
+     * agree, because one higher marks the committed record itself as done.
+     *
+     * @see #decodeCompressedOffsets(long, byte[], InvalidOffsetMetadataHandlingPolicy, TopicPartition)
+     */
+    static DecodedMetadata decodeCompressedMetadata(long nextExpectedOffset,
+                                                    byte[] decodedBytes,
+                                                    InvalidOffsetMetadataHandlingPolicy errorPolicy,
+                                                    TopicPartition tp) {
 
         // if no offset bitmap data
         if (decodedBytes.length == 0) {
             // in this case, as there is no encoded offset data in the matadata, the highest we previously saw must be
             // the offset before the committed offset
             long highestSeenOffsetIsThen = nextExpectedOffset - 1;
-            return HighestOffsetAndIncompletes.of(highestSeenOffsetIsThen);
+            // no envelope was written, so no rider was configured when this was committed
+            return DecodedMetadata.of(HighestOffsetAndIncompletes.of(highestSeenOffsetIsThen));
         } else {
-            return EncodedOffsetPair.decodeToIncompletes(decodedBytes, nextExpectedOffset, errorPolicy, tp);
+            return EncodedOffsetPair.decodeToRiderAndIncompletes(decodedBytes, nextExpectedOffset, errorPolicy, tp);
         }
     }
 

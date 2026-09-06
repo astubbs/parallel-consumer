@@ -443,6 +443,10 @@ cosmetic - see the last bullet.*
   `question sneaky throws usage` / `enforce max uncommitted`: `sneaky throws` IO handling;
   missing `max-uncommitted < Short.MAX` bound.
 
+- The rider work added a second decode family and two encode entry points here rather than a new type
+  (`TODO(refactor)` on `deserialiseMetadataFromBase64`): the decode family and the write side both want
+  extracting out of this class, which is the encode/decode split above seen from a third angle.
+
 - **Not thread-safe if encoding is ever parallelised (latent, tied to confluentinc#200).**
   Since confluentinc#892 / astubbs#57 the instance is *cached and shared* (per-partition
   `PartitionState.om` for encoding; one `PartitionStateManager.offsetMapCodecManager` for
