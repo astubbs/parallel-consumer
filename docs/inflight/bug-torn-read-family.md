@@ -142,7 +142,10 @@ cannot be found by anyone listing this directory.
 
 - [`bug-async-commit-marked-successful-before-broker-ack.md`](bug-async-commit-marked-successful-before-broker-ack.md)
 - [`bug-unsynchronised-cross-thread-counter-maps.md`](bug-unsynchronised-cross-thread-counter-maps.md)
-- [`bug-reset-offset-map-npe-on-partial-assignment.md`](bug-reset-offset-map-npe-on-partial-assignment.md)
+- `resetOffsetMapAndRemoveWork` dereferencing a state a failed assignment never installed - fixed;
+  `PartitionStateManagerRevokeAfterFailedAssignmentTest` is its regression test, and its javadoc
+  records why astubbs#345's single-read shard idiom only resembled it: same symptom family, a
+  different null, one thread and no race.
 - [`bug-brokerpollsystem-pause-api-is-racy-and-uncalled.md`](bug-brokerpollsystem-pause-api-is-racy-and-uncalled.md)
 
 ## No shipped static analysis can see this family - verified empirically, not assumed

@@ -70,6 +70,14 @@ so a control thread blocked in `ConsumerOffsetCommitter#commitAndWait` is releas
 of waiting out `offsetCommitTimeout`. The thread still dies and PC still closes; only the reporting
 improved.
 
+**"PC then closes the whole instance" is true of PC's own state, not of the Kafka consumer.** In the
+consumer-commit modes the close that follows a poller death never reaches `consumer.close()` -
+`maybeCloseConsumer` in `internal/AbstractParallelEoSStreamProcessor.java` is gated on the
+transactional committer - so no LeaveGroup is sent and the member's partitions stay assigned to it
+until `max.poll.interval.ms` expires. That defect and its trace are
+`bug-poller-death-leaves-the-consumer-open-in-consumer-commit-modes.md`; a seam that let the poll
+loop continue would remove it as a side effect, one that terminates the instance would not.
+
 **The death is wrapped twice** - `void supervise()` in `internal/BrokerPollSystem.java` into
 `PCInternalRuntimeException`, then `failureReason = new RuntimeException` in
 `internal/AbstractParallelEoSStreamProcessor.java` into a bare one. That is the complaint in

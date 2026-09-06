@@ -48,14 +48,16 @@ the second. The four are named by their fixing PRs, which stay citable after eac
   that it is a policy about the method rather than a question about one call site. Do not answer it
   here.
 <!-- post-merge: checked-begin -->
-- **`getEpochOfPartition` is documented nullable** - its javadoc says "or null if not yet assigned" -
-  and `OffsetMapCodecManager` unboxes the result into `PartitionState`'s primitive `long` parameter
-  on the next line. **It now has its own note,
-  [`bug-epoch-null-unboxes-on-partition-assignment.md`](bug-epoch-null-unboxes-on-partition-assignment.md),
-  because the ratchet stopped watching it**: the identity was retired on astubbs#57 after Infer
-  stopped reporting it, and the code it is about was not touched by that PR. Read that note before
-  concluding from a green lane that this is fixed. This entry's earlier claim that it needs no policy
-  decision was wrong - null means *not yet assigned*, so the caller has to choose what that means.
+- **`getEpochOfPartition` is documented nullable and was unboxed into `PartitionState`'s primitive
+  `long` in `OffsetMapCodecManager` - settled, and not by the analyser.** The identity was retired on
+  astubbs#57 after Infer stopped reporting it without the code changing, which is the silenced-not-fixed
+  case; the trace that settled it (null unreachable at both sites, because `onPartitionsAssigned`
+  writes every epoch before it loads any state) and the decision that the ratchet needs no third
+  state for that case are in
+  [`docs/solutions/workflow-issues/a-silenced-static-finding-is-not-a-fixed-one-2026-09-05.md`](../solutions/workflow-issues/a-silenced-static-finding-is-not-a-fixed-one-2026-09-05.md).
+  The guard is `OffsetMapCodecManager.epochOfPartitionBeingAssigned`, whose javadoc carries the
+  cleared suspicion; `OffsetMapCodecManagerAssignmentEpochTest` pins it. The `getPartitionState`
+  group above is a different question and is untouched.
 <!-- post-merge: checked-end -->
 
 Why NullAway is silent on all of them: it reasons from annotations, and `getPartitionState` carries
@@ -149,7 +151,9 @@ reported known findings as new. Both sides are now sorted with `LC_ALL=C sort`.
 ## Delete when
 
 Every group above is fixed and retired from the ratchet, or has its own note. `getEpochOfPartition`
-should still go first - it is the smallest - but it does need a decision, which its own note carries.
+went first; `resetOffsetMapAndRemoveWork` is out of the `getPartitionState` group too - it no longer
+reads the map before writing it, and `PartitionStateManagerRevokeAfterFailedAssignmentTest` drives
+the absent-state path it used to dereference. The rest of that group waits on the arrival-guard note.
 
 <!-- post-merge: checked-begin -->
 **A retirement from the ratchet is not by itself evidence of a fix.** astubbs#57 retired five
