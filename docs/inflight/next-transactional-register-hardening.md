@@ -93,7 +93,7 @@ by hand:
 - a `NOT_YET_COVERED` constant with no reason fails
 - a `@ProvesClaim` in an uncollectable class fails
 
-The fifth check, `claimProofsMustNotBeDeselectedByThisRunsTagFilters`, is the exception: its decision
+The fifth check, `everyCoveredClaimMustHaveAProofThisRunCanSelect`, is the exception: its decision
 logic lives in `RunTagFilter` and is covered by `RunTagFilterTest`, including the branch that fires
 only when the pom is wrong. That is the shape the four above still need - a decision extracted far
 enough from the ArchUnit scan to be driven directly.
