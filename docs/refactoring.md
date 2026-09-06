@@ -443,13 +443,16 @@ cosmetic - see the last bullet.*
   `question sneaky throws usage` / `enforce max uncommitted`: `sneaky throws` IO handling;
   missing `max-uncommitted < Short.MAX` bound.
 
-- **Not thread-safe if encoding is ever parallelised (latent, tied to confluentinc#200).**
+- **The cached-and-shared instance is still only safe by the schedule, not by construction.**
   Since confluentinc#892 / astubbs#57 the instance is *cached and shared* (per-partition
   `PartitionState.om` for encoding; one `PartitionStateManager.offsetMapCodecManager` for
-  decode). That is correct *today* only because encoding runs single-threaded on the control
-  thread: `encodingCounters` is a plain `HashMap` mutated in `getCounterMeterForEncoding` on
-  the encode path. If the confluentinc#200 thread-model refactor ever parallelises encoding it
-  races - make it concurrent, or confine it. Not a bug in the current single-threaded design.
+  decode). The `encodingCounters` cache - a final reference - is now a `ConcurrentHashMap`
+  populated with a single `computeIfAbsent`, so its check-then-act no longer depends on the
+  schedule, and the discriminator that made the class safe (`commitLock`, not the identity of any
+  one thread) is recorded on that field. The fields that still do depend on it are the non-final
+  ones: `offsetEncodingTimer`, and the two mutable statics `DefaultMaxMetadataSize` and
+  `forcedCodec` - the last of which the encode path reads on every commit. Re-audit those three if
+  confluentinc#200 parallelises encoding.
 
 ### offsets/OffsetSimultaneousEncoder.java
 - `TODO VERY large offset ranges is slow`: large offset ranges (→ `Integer.MAX_VALUE`) are slow -

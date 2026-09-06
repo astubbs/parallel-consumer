@@ -50,6 +50,11 @@ class OffsetEncodingBackPressureUnitTest extends ParallelEoSStreamProcessorTestB
     @SneakyThrows
     @Test
     @ResourceLock(value = OffsetMapCodecManager.METADATA_DATA_SIZE_RESOURCE_LOCK, mode = ResourceAccessMode.READ_WRITE)
+    // this test writes forcedCodec too, and the readers of that static (WorkManagerOffsetMapCodecManagerTest,
+    // EncodingCounterRegistrationIsAtomicTest) and its other writer (OffsetEncodingTests) exclude each other
+    // through the compression lock - so without it here they could run alongside this write and see BitSetV2
+    // forced under them. The sibling OffsetEncodingBackPressureTest is @Isolated and needs neither.
+    @ResourceLock(value = OffsetSimultaneousEncoder.COMPRESSION_FORCED_RESOURCE_LOCK, mode = ResourceAccessMode.READ_WRITE)
     void backPressureShouldPreventTooManyMessagesBeingQueuedForProcessing() throws OffsetDecodingError {
         final int numberOfRecords = 1_00;
 

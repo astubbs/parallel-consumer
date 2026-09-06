@@ -180,6 +180,12 @@ second sighting from the rebalance path.
 > survived it: the `ArrayList` reproduction moved into `PCMetrics859Test`'s class javadoc, and the
 > second sighting - the plain `HashMap` counter maps, which astubbs#57 does not touch - into
 > `docs/inflight/bug-metrics-counter-maps-are-plain-hashmaps.md`.
+>
+> **Citation repair, 2026-09-05.** That second note is gone too, retired once the last of the four
+> counter maps was made concurrent. Read it as this plan read it with
+> `git show fb5ea9346:docs/inflight/bug-metrics-counter-maps-are-plain-hashmaps.md`; what survived
+> it, including this sighting and the limits the note placed on it, is
+> [`docs/solutions/logic-errors/the-metrics-counter-maps-were-plain-hashmaps-2026-09-05.md`](../solutions/logic-errors/the-metrics-counter-maps-were-plain-hashmaps-2026-09-05.md).
 
 This is the answer to "can it find what we have not already found", which the calibration proper
 cannot address by construction. One proof of concept, one new defect, on a hot path, unprompted.

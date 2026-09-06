@@ -24,6 +24,7 @@ import org.apache.kafka.common.errors.WakeupException;
 import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static bz.stub.parallelconsumer.internal.utils.StringUtils.msg;
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -72,7 +73,48 @@ public class OffsetMapCodecManager<K, V> {
     private final PCModule module;
 
     private Timer offsetEncodingTimer;
-    private final Map<OffsetEncoding, Counter> encodingCounters = new HashMap<>();
+
+    /**
+     * Which encoding each commit chose, one counter per {@link OffsetEncoding}, populated lazily by
+     * {@link #getCounterMeterForEncoding(OffsetEncoding)} on the encode path.
+     *
+     * <p>Concurrent, and populated with a single {@code computeIfAbsent} rather than a
+     * {@code get}-then-{@code put}, because the map is a cache whose miss handler <em>registers a meter</em> -
+     * so the check and the act have to be one step. Two encoders interleaving inside that window both see the
+     * miss and both register, and that second registration is the cost: one redundant trip through
+     * {@code PCMetrics.track} under {@code metersLock} - the monitor {@code close()} and every rebalance's
+     * meter registration also contend for it - paid once. Both threads {@code put} the <em>same</em> key, so an
+     * entry exists whichever write wins and every later encode hits the cache; micrometer returns the same
+     * {@code Counter} for the same id, so the reported value is right too. An entry that never appears needs
+     * two <em>different</em> encodings landing in one bucket of the plain {@link HashMap}, with one thread's
+     * write of the chain head dropping the other's node - and that needs no resize, so the map's size does not
+     * rule it out. The last of the four unguarded metrics collections named by
+     * {@code docs/solutions/logic-errors/the-metrics-counter-maps-were-plain-hashmaps-2026-09-05.md};
+     * astubbs#267 made the other three concurrent and missed this one because it sits on the encode path
+     * rather than in the rebalance callbacks.
+     *
+     * <p><b>Cleared suspicion, 2026-09-05: nothing interleaves here today.</b> The suspicion the next reader
+     * will form is that two threads encode at once, because this repo has demonstrated exactly that on the
+     * commit path. The discriminator is {@code AbstractParallelEoSStreamProcessor.tryCommitOffsetsOnRevoke},
+     * which takes {@code commitLock} with {@code tryLock} and <em>declines</em> rather than blocking, so the
+     * broker-poll thread's revoke commit and the control thread's commit are mutually exclusive; and
+     * {@code ConsumerOffsetCommitter.commit} routes a non-owner caller through the request queue instead of
+     * encoding on the calling thread. One encoder at a time, per instance, in every commit mode. This is
+     * therefore a latent defect made unreachable by the scheduler - not a live one - and it is fixed anyway
+     * because that is a property of the commit scheduler rather than of this class, which is the rule
+     * {@code docs/solutions/architecture-patterns/a-query-must-never-mutate-derive-thread-safety-from-callers.md}
+     * states as "prefer the guarantee you own".
+     *
+     * <p><b>What would reopen it</b>: confluentinc#233 splitting encode from decode, or confluentinc#200
+     * parallelising encoding - and nothing would go red to tell you, because no gate reasons about which
+     * thread reaches this field. {@code EncodingCounterRegistrationIsAtomicTest} pins the atomicity instead,
+     * by driving the interleaving through a seam rather than waiting for the scheduler to supply one.
+     *
+     * <p><b>What is NOT the argument</b>, so nobody re-derives it: table corruption on resize. There are
+     * twelve {@link OffsetEncoding} constants and a default {@link HashMap} resizes above twelve entries, so
+     * this map never resized and never could; the dropped bucket node above is the corruption that needs none.
+     */
+    private final Map<OffsetEncoding, Counter> encodingCounters = new ConcurrentHashMap<>();
 
     private final PCMetrics pcMetrics;
 
@@ -339,14 +381,13 @@ public class OffsetMapCodecManager<K, V> {
         }
     }
 
+    /**
+     * @see #encodingCounters for why this is one {@code computeIfAbsent} and not a {@code get}-then-{@code put}
+     */
     private Counter getCounterMeterForEncoding(OffsetEncoding encoding) {
-        Counter counter = encodingCounters.get(encoding);
-        if (counter == null) {
-            counter = pcMetrics.getCounterFromMetricDef(PCMetricsDef.OFFSETS_ENCODING_USAGE,
-                    Tag.of("encoding", encoding.name()));
-            encodingCounters.put(encoding, counter);
-        }
-        return counter;
+        return encodingCounters.computeIfAbsent(encoding, enc ->
+                pcMetrics.getCounterFromMetricDef(PCMetricsDef.OFFSETS_ENCODING_USAGE,
+                        Tag.of("encoding", enc.name())));
     }
 
     /**
