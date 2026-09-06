@@ -96,8 +96,8 @@ This is a rule because a filename cannot be qualified. Prose has
 number below the threshold is a coin flip between two repos that both have one. A filename is bare by
 construction, so the convention is the only thing standing between a reader and the wrong issue.
 
-**Older names predate this and disagree** - `bug-857-family.md` and `branch-912-vertx-leak.md` carry
-confluentinc numbers, `perf-192-followups.md` carries a fork one. They are left alone rather than
+**Older names predate this and disagree** - `bug-857-family.md` carries a
+confluentinc number, `perf-192-followups.md` carries a fork one. They are left alone rather than
 swept, because renaming a note breaks every citation of it for no gain in what the note says. Read an
 existing number by its prefix and check it; write new ones the way this section says.
 
@@ -124,6 +124,13 @@ existing number by its prefix and check it; write new ones the way this section 
   Never leave a "delete this when #NN merges" marker on `master`. The merge is exactly when nobody
   is looking here, so the marker outlives the work and the next reader inherits a stale note that
   reads as live.
+- **A PR earns its working note at its first commit, not its last.** A `pr-` note (or `branch-`,
+  until a PR number exists) opened at the start costs one file and collects each finding where it
+  happens; opened at the end it is a reconstruction. astubbs#29 ran for months without one - its
+  findings landed in topic docs or nowhere, and several survived only because the owner asked the
+  right question before they were lost. The PR template's checklist box asks for the note, so a
+  missing one is caught at PR-open rather than never; `N/A` is honest for a PR that carries nothing
+  `gh` cannot show.
 - **Known problems with the code on this branch belong here**, even when a GitHub issue exists - link
   the issue and keep it short. An agent picking up work scans this directory; it will not read every
   issue on the tracker. An unrecorded defect is one the next session rediscovers, or ships on top of.
@@ -194,9 +201,10 @@ state it twice; that is how the two drift apart.
 ## Tagging a note
 
 **This section is the source of truth for what each tag MEANS.** The machine-readable sets live in
-`bin/lib/inflight-tags.sh`, sourced by both the gate (`bin/check-inflight-tags.sh`, which names this
-file when it fails) and the session index - so a value here and a value there must never disagree:
-change this table and that lib in the same commit.
+`bin/lib/inflight-tags.mjs`, imported by the session index and read by the gate
+(`bin/check-inflight-tags.sh`, which names this file when it fails) through the thin
+`bin/lib/inflight-tags.sh` wrapper - so a value here and a value there must never disagree: change
+this table and that lib in the same commit.
 <!-- file-refs: N/A - the tag gate and its shared vocabulary lib ship in astubbs#324; this doc is their owner and lands first, so the notes it describes are never explained by a retired scheme -->
 
 The fields are HTML comments after the heading. Only `inflight-type` is always required:
@@ -244,6 +252,13 @@ The fields are HTML comments after the heading. Only `inflight-type` is always r
 already says the latter. The impact answers the question a reader actually has, and it spans
 prefixes - `misdirection` covers notes filed under `ci-`, `test-`, `branch-`, `deps-` and `static-`.
 
+**A single consequence axis was tried and rejected - do not re-propose it.**
+`<!-- inflight-class: X -->` folded kind and consequence into one field, so it could not say that a
+feature addressing a crash belongs beside the crashes - the case `bin/lib/inflight-tags.mjs`'s header
+names when it explains why the impact sets are partitioned by type. The three axes here are its
+successor and carry the sentence above forward unchanged. Branch
+`ci/inflight-index-by-type-and-priority`, merged superseded into astubbs#400.
+
 The impacts, in the order `.claude/hooks/inject-recorded-knowledge.sh` presents them at session
 start. **The order is not severity - signal integrity comes first**, because you cannot judge the
 state of the code through instruments that lie, and acting on a false green is worse than acting on
@@ -286,7 +301,7 @@ reason - the first is `type: feature`, the second is a `state`.
   **The set is closed on purpose.** A free-text field becomes tag soup within a month and then
   partitions nothing, which is the failure this whole scheme exists to prevent. Add a value by
   reading the corpus and finding a group the existing values cannot express - the way the impacts
-  were derived - and put it in `bin/lib/inflight-tags.sh` AND this table in the same commit.
+  were derived - and put it in `bin/lib/inflight-tags.mjs` AND this table in the same commit.
   `bin/check-inflight-tags.sh` validates each value separately, so one typo names itself instead of
   silently founding a group of one.
 
@@ -302,7 +317,7 @@ reason - the first is `type: feature`, the second is a `state`.
   count too, which is why none is written here.
 
 **Add a value when the corpus needs one, do not force a note into a poor fit** - the set was derived
-by reading the notes, not chosen in advance. Add it to this table AND to `bin/lib/inflight-tags.sh`
+by reading the notes, not chosen in advance. Add it to this table AND to `bin/lib/inflight-tags.mjs`
 in the same commit, and say why. The gate checks SHAPE, never judgement: it cannot tell you that a
 valid impact is the wrong one for that note, and six such corrections were needed when this scheme
 landed.

@@ -233,7 +233,7 @@ if [ -n "$capdir" ]; then
             [ -f "$m" ] || continue
             # HERESTRING, not a pipe: `writer | grep -q` under pipefail reports failure BECAUSE it
             # matched - grep exits on first match, the writer takes EPIPE, pipefail promotes it.
-            # bin/check-shell-sigpipe.sh caught this the moment it was written.
+            # the sigpipe check caught this the moment it was written.
             if grep -qF "check-vanish.sh" <<<"$(tail -1 "$m" 2>/dev/null)"; then
                 rm -f "$m" "${m%.meta}.out"
                 deleted=1

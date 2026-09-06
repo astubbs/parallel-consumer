@@ -263,6 +263,7 @@ observable is identical:
 - The mirror image, one line away in a workflow: `mvn ... | tee log` **without** `set -o pipefail`
   takes `tee`'s exit status, so a Maven `BUILD FAILURE` leaves the step green. Piping a build's
   output anywhere is enough to lose its verdict.
+<!-- file-refs: N/A - names bin/check-shell-sigpipe.sh, retired 2026-09-01 when its single rule became a row in bin/lib/source-patterns.mjs. This is a dated record of what was true then and docs/citations.md forbids rewriting it to match today's tree. -->
 
 ## When to Apply
 

@@ -37,8 +37,27 @@
          INFO. Measured over the 387-test core unit suite, that was 196 banner dumps inside 5,520 lines
          of output, now 3,687. Reading one failing class meant scrolling past its options dump once per
          test. -->
+
+    <!-- PROVE which config loaded rather than assuming - logback prints the file URL it read:
+             -Dlogback.statusListenerClass=ch.qos.logback.core.status.OnConsoleStatusListener
+
+         WHICH FILE THE INTEGRATION SUITE READS: this one. An integration profile exists
+         (src/test-integration/resources/logback-integration-test.xml) and NOTHING SELECTS IT - no
+         pom, no bin/ script and no workflow passes -Dlogback.configurationFile, so logback takes
+         logback-test.xml off the classpath by its default lookup. This comment previously said the
+         integration suite had "its own profile, selected explicitly", which was never true in
+         practice, and is how that profile came to have no siloed streams without anyone noticing.
+         docs/logging.md owns the why. -->
+
+    <!-- SILOED LOG STREAMS - shared with the integration profile so the two cannot drift, and so
+         neither can lose the streams by being the one that gets selected. logback-silos.xml owns
+         the appenders, the routing and the reasoning. -->
+    <include resource="logback-silos.xml"/>
+
     <root level="${pc.log.level:-warn}">
         <appender-ref ref="STDOUT"/>
+        <appender-ref ref="ERRORS"/>
+        <appender-ref ref="WARNINGS"/>
     </root>
 
     <!-- current -->

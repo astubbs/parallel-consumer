@@ -36,14 +36,13 @@ Release mechanics live in [`release-0.6.0.0.md`](release-0.6.0.0.md); the tracki
     record before it lands, or it ships undocumented.
   - Re-read the maturity wording itself. `stable` was withdrawn because it was untrue; the
     replacement, `production-use`, is only as good as the critical-defect gate holding.
-- **The rest of astubbs#197's triage list.** Four non-blocking defects were found while checking the
-  two blocking ones; three are still open (the fourth, an `OffsetEncoding` magic-byte hazard, was
-  fixed in astubbs#217): `PCModule` builds `DynamicLoadFactor(static, static)` when
-  `messageBufferSize` is set, so "Max loading factor steps reached" WARNs on every control-loop pass
-  for anyone following the README's own tuning advice (astubbs#155); MDC context is not captured at
-  submit time, so a caller's `trace_id` is lost into the worker pool and the vert.x event loop;
-  and `release.yml` publishes an empty GitHub Release body, so the
-  curated changelog never reaches the release page.
+<!-- post-merge: checked-begin -->
+- **The rest of astubbs#197's triage list**, minus the ones that have since been picked up (an
+  `OffsetEncoding` magic-byte hazard in astubbs#217, the "Max loading factor steps reached" WARN in
+  astubbs#201). Still open: MDC context is not captured at submit time, so a caller's `trace_id` is
+  lost into the worker pool and the vert.x event loop; and `release.yml` publishes an empty GitHub
+  Release body, so the curated changelog never reaches the release page.
+<!-- post-merge: checked-end -->
 - **After it ships:** ~11 mirrored issues describe 0.6.0.0 in the future tense and need the real
   coordinate; astubbs#186, astubbs#188 and astubbs#195 close with a pointer to the release.
 - **Three `3.9.1` references - one was wrong, two are not.** The genuine defect was the CI

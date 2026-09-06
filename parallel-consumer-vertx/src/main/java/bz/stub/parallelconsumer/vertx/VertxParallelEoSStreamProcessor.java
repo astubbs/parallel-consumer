@@ -259,8 +259,9 @@ public class VertxParallelEoSStreamProcessor<K, V> extends ExternalEngine<K, V>
                     try {
                         addToMailbox(context, wc);
                     } catch (PCInternalRuntimeException pcInvariantBroke) {
-                        // The EXPECTED shape - one of PC's own invariants, reachable here as
-                        // ProduceLockNotHeldException from the produce-lock release inside addToMailbox. Terminal, per
+                        // The EXPECTED shape - one of PC's own invariants. It was reachable here as
+                        // ProduceLockNotHeldException from the produce-lock release inside addToMailbox until
+                        // astubbs#257 made cleanUpContext the single release point. Terminal, per
                         // the operator ruling: if the record cannot be posted, PC can no longer account for it, and
                         // continuing risks a silent skip. Escalation only records the reason and moves the state,
                         // because throwing would skip vert.x's remaining listeners and strand the sibling containers,

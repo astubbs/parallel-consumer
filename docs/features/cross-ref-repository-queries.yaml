@@ -1,0 +1,74 @@
+# Copyright (C) 2026 Antony Stubbs and contributors
+
+schema_version: 1
+kind: feature
+title: Repository queries that read every branch, not the working tree
+category: engineering
+module: repository
+maturity: production-use
+availability:
+  status: published
+  since: 0.6.0.0
+  evidence:
+    tag: 0.6.0.0
+    path: bin/inflight.mjs
+    basis: >
+      The front door and its libraries are in the tree with a negative-controlled self-test, and
+      AGENTS.md's prior-art table names the command rather than a working-tree grep.
+summary: >
+  The sibling of the in-flight system: a query layer that answers across every ref instead of the
+  one checked out. Measured on this repository, 580 of the 901 documents under docs/ exist only on
+  branches that have not merged - so a working-tree grep answers a narrower question than the one
+  asked and returns a false negative carrying the authority of a completed check.
+use_this_when:
+  - You are about to conclude "no prior art" and want that to mean something.
+  - Two branches may disagree about a shared note and you need to know which carries content the
+    baseline has never held.
+  - You found a branch and do not know what it is, who owns it, or whether deleting it loses work.
+  - You want to know what would be lost if a machine died - notes that exist on a branch and have
+    never reached the baseline.
+setup:
+  artifact: none - it is the repository
+  steps:
+    - Run bin/inflight.mjs help; every command states when to reach for it, not just what it does.
+    - Read docs/inflight-tool.md for worked examples and why each working-tree answer is wrong.
+    - Exit 0 means it RAN, whatever it found; exit 2 means it could not run. Never conflate them.
+opt_in:
+  required: false
+  isolated_from_stable_modules: false
+boundaries:
+  - >
+    It is not a tracker and does not try to be. Backlog (the markdown-file tracker) is the one
+    surveyed tool that keeps task state in the working tree and reconciles it across branches - and
+    reconciling is the opposite of what this does, since it resolves every branch disagreement to a
+    single winner rather than reporting it; driven and recorded in
+    docs/plans/2026-09-02-001-investigate-adopt-or-build-re-run.md. This reads a repository rather
+    than owning a schema. What no surveyed tracker does - making a forge's own graph queryable from
+    the repo - is recorded as unbuilt in docs/inflight/ci-inflight-next-commands.md.
+  - >
+    It reads EVERY ref - tags and refs/backup included, not only branches - and says which of them
+    are archives. A note held only by a tag is preserved on purpose rather than stranded, so the
+    enumeration is wide and the answer carries the distinction; reporting preserved work as lost is
+    the error that sends someone to rescue something nobody lost.
+  - >
+    Answers are only as fresh as the refs. Every command reports staleness it can detect - a stale
+    fetch, a shallow clone, a HEAD behind the baseline, the main checkout - because a complete search
+    of a stale corpus reads exactly like a complete search of a current one.
+  - >
+    Divergence is reported, distance is not. A branch that has not merged recently differs from the
+    baseline and grows more different daily without anyone acting; for the most-edited note that is
+    198 of 274 carrying refs. Reporting it would bury the versions that actually carry new content.
+  - >
+    Git data is never cached, deliberately - git is already a cache, and a corpus cache that lived
+    here was deleted because it hid a design mistake rather than paying for itself. Only GitHub
+    answers are held, and the cache layer states its own policy per kind rather than being kept
+    correct from outside: an ABSENCE is never stored, because "this branch has no PR" is the answer
+    that goes stale in the dangerous direction.
+  - >
+    The tracking-gap detector reports a branch nothing explains, and it can be wrong in the
+    direction that gets a detector ignored: an integration branch and a stack base both looked
+    untracked before a PR's base ref and its parents were consulted.
+references:
+  - docs/inflight-tool.md
+  - docs/inflight/ci-inflight-next-commands.md
+  - docs/solutions/workflow-issues/prior-art-lives-on-branches-2026-09-01.md

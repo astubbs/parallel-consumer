@@ -14,10 +14,14 @@ package bz.stub.parallelconsumer.internal;
  * naming this type says what it is guarding against; a catch naming {@code Throwable} says only that the author was
  * being careful.
  * <p>
- * Reachable in transactional commit mode when a produce lock is released without being held - the double-release
- * question {@code docs/inflight/bug-producing-lock-double-release.md} records, on a path that has already produced two
- * flakes. It is always a PC bug rather than an operating condition, which is why the mailbox path treats it as
- * terminal: see {@link AbstractParallelEoSStreamProcessor#failFatallyOnUnmailboxableRecord}.
+ * Raised in transactional commit mode when a produce lock is released without being held. <b>The double release that
+ * named this type has since been fixed</b> - astubbs#257 made {@code AbstractParallelEoSStreamProcessor#cleanUpContext}
+ * the single release point and took the lock out of the context as it releases it, so the second release is a no-op
+ * rather than a throw, and the mailbox path no longer releases the lock at all. The type stays because
+ * {@link ProducerManager#finishProducing}'s {@code ensureProduceStarted} check stays: it is the assertion that the
+ * invariant still holds, and it needs a name to be caught by. It is always a PC bug rather than an operating
+ * condition, which is why the mailbox path treats it as terminal: see
+ * {@link AbstractParallelEoSStreamProcessor#failFatallyOnUnmailboxableRecord}.
  * <p>
  * {@code docs/inflight/core-exception-hierarchy-cleanup.md} owns the wider cleanup this is one instance of.
  */

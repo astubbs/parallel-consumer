@@ -1,13 +1,64 @@
 # Copyright (C) 2026 Antony Stubbs and contributors
 
+# STATUSES ARE FLAG-SCOPED, because a coverage COMPARISON only means something when both sides were
+# measured the same way - and here they are not measured the same way by default.
+#
+# A pull request runs the `test` matrix and uploads five flags: unit, integration, performance,
+# lincheck, chaos. Master runs one full build and uploads two: unit and integration. So the OVERALL
+# total is a comparison between five flags and two, and it cannot be made honest by tuning a
+# threshold. Before the master job was split it was worse - one `default` flag against the suite
+# flags, disjoint sets - and it read as -3.53% on a pull request that touched zero Java, with Files,
+# Lines and Branches all identical.
+#
+# So the total is INFORMATIONAL and the GATES are per flag, where both sides come from the same pom
+# executions with the same `-Pci` profile and the same `-Dexcluded.groups`.
+
 coverage:
   status:
     project:
+      # The whole-repository number, reported and never gating. It is the honest place for a figure
+      # nobody can compare like-for-like: read it as a trend, not as a verdict.
       default:
-        # Fail if overall coverage drops from the base branch
         target: auto
         threshold: 1%
-    patch:
-      default:
-        # Don't enforce a minimum on new code — just track it
         informational: true
+
+      # THE GATES. `unit` on master comes from ci-build.sh's surefire half and on a PR from
+      # ci-unit-test.sh; `integration` from the failsafe half and ci-integration-test.sh. Same
+      # profile, same exclusions, same jacoco executions - so a drop here is a real drop.
+      unit:
+        target: auto
+        threshold: 1%
+        flags:
+          - unit
+      integration:
+        target: auto
+        threshold: 1%
+        flags:
+          - integration
+
+      # NO GATE for performance, lincheck or chaos: those suites run on pull requests only, so
+      # master carries no counterpart to compare against and any status over them would be
+      # comparing a measurement with nothing. They still contribute to the informational total.
+
+    patch:
+      # Don't enforce a minimum on new code - just track it.
+      default:
+        informational: true
+
+# CARRYFORWARD IS OFF, EXPLICITLY, though that is also the default - it is stated because it is the
+# reflexive fix for the problem above and it is the wrong one. Carrying a flag forward merges the
+# LAST measurement of that flag into a run that did not produce it, so a genuine drop in any line
+# the stale report covered is masked. That trades a noisy false positive for a silent false
+# negative, which is the worse of the two here.
+flags:
+  unit:
+    carryforward: false
+  integration:
+    carryforward: false
+  performance:
+    carryforward: false
+  lincheck:
+    carryforward: false
+  chaos:
+    carryforward: false

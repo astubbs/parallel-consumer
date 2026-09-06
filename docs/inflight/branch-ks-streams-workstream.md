@@ -8,6 +8,31 @@ A signpost, not a handover. None of this work is on `master` - not the
 `parallel-consumer-streams` module, not its plan documents, not its own in-flight notes - so an
 agent listing this directory sees only the sideways references other notes make to it and no way in.
 
+**Where it actually lives, as of 2026-09-02.** This note was a signpost that named no branches, so it
+said the workstream exists without saying how to reach it. Found by `bin/inflight.mjs branch`, which
+reported `origin/feats/ks-streams-reconciled` as tracked nowhere; it is not an orphan, it is the
+integration branch, and the shape is:
+
+| Branch | PR |
+|---|---|
+| `origin/feats/ks-streams-fork-machinery` | astubbs/parallel-consumer#379 |
+| `origin/feats/ks-streams-execution-seam` | astubbs/parallel-consumer#388 |
+| `origin/feats/ks-streams-refusal-envelope` | astubbs/parallel-consumer#389 |
+| `origin/feats/ks-streams-example` | astubbs/parallel-consumer#391 |
+| `origin/feats/ks-streams-task-lifecycle` | astubbs/parallel-consumer#394 |
+| `origin/feats/ks-streams-error-surfacing` | astubbs/parallel-consumer#395 |
+| `origin/feats/ks-streams-stream-time-punctuation` | astubbs/parallel-consumer#396 |
+| `origin/test/ks-streams-evidence-suite` | astubbs/parallel-consumer#398 |
+
+**`origin/feats/ks-streams-reconciled` fully contains all eight and has no PR of its own** - it is
+where they are integrated, which is why nothing tracks it and why it should not be read as stranded
+work. It carries 13 in-flight notes `origin/master` has never had. Above it,
+**astubbs/parallel-consumer#271** (`origin/feats/ks-on-pc-spike`) contains the reconciled branch in
+turn, at 120 commits and 29 notes off master.
+
+Reproduce with `bin/inflight.mjs branch origin/feats/ks-streams-reconciled`; containment is exact
+rather than inferred from names, so this stays true as branches move.
+
 **What it is.** Give a Kafka Streams topology PC's per-key concurrency by replacing Streams' record
 selection with PC's `WorkManager` and running the processor chain on PC's worker pool, applied as a
 build-time patch to a fork of Kafka's `processor.internals`. Swapping in a PC-backed `Consumer` via

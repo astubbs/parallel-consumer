@@ -4,7 +4,13 @@
 #
 
 # Run the Lincheck lane - scheduler-controlled concurrency testing over parallel-consumer-core's state
-# classes. Non-gating and opt-in, the same shape as bin/chaos-test.sh.
+# classes. Called by the "Lincheck" leg of the `test` matrix in .github/workflows/maven.yml, where it
+# GATES - the same shape as bin/chaos-test.sh, which is also gating now.
+#
+# This header said "non-gating and opt-in" until the lane was actually wired into CI, which it was not
+# for the first week of its life: six test classes and this script, referenced by no workflow, while
+# every CI script excluded the tag. A runner whose own header describes a lane nobody runs is how that
+# stays invisible.
 #
 # FIVE flags have to line up, which is why this script exists rather than an mvnw line in a doc - and
 # every one of them fails SILENTLY on its own:

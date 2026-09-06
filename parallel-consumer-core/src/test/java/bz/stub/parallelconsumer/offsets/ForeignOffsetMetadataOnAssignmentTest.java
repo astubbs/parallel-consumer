@@ -17,19 +17,25 @@ import pl.tlinkowski.unij.api.UniLists;
 import pl.tlinkowski.unij.api.UniMaps;
 
 import java.util.Base64;
+import java.util.function.UnaryOperator;
 
+import static bz.stub.parallelconsumer.offsets.OffsetCodecTestUtils.magicByteOfAnEncodingThatDoesNotExistYet;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * When PC is assigned a partition whose committed offset metadata was written by something that isn't PC, decoding that
  * metadata must not take the whole consumer down.
  * <p>
  * The metadata field of a committed offset is free-form - anything sharing the consumer group (a previous Kafka Streams
- * app, another framework, an operator's tooling) may have written bytes there that PC cannot decode. PC's own recovery
- * path already exists: {@link OffsetMapCodecManager#loadPartitionStateForAssignment} logs and drops an undecodable
- * offset map, falling back to a default partition state. These tests pin that the recovery path is actually reached,
- * rather than the error escaping the rebalance listener.
+ * app, another framework, an operator's tooling), or a newer PC using an encoding this build does not have, may have
+ * written bytes there that PC cannot decode. Which way that goes is the user's call, via
+ * {@link ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy}: the default {@code IGNORE} discards the metadata
+ * and resumes from the committed offset, while {@code FAIL} stops rather than silently replay.
+ * <p>
+ * These tests pin both halves at the {@code onPartitionsAssigned} frame from the reported trace - that the default does
+ * not take the consumer down, and that {@code FAIL} genuinely does.
  *
  * @see <a href="https://github.com/astubbs/parallel-consumer/issues/118">astubbs#118</a>
  * @see <a href="https://github.com/confluentinc/parallel-consumer/issues/326">confluentinc#326</a>
@@ -49,23 +55,39 @@ class ForeignOffsetMetadataOnAssignmentTest {
      */
     private PCModuleTestEnv moduleWithCommittedMetadata(String metadata,
                                                         ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy policy) {
+        return moduleWithCommittedMetadata(metadata, builder -> builder.invalidOffsetMetadataPolicy(policy));
+    }
+
+    /**
+     * The same, but leaving {@link ParallelConsumerOptions#getInvalidOffsetMetadataPolicy()} unset - which is the
+     * configuration the astubbs#118 reporter actually ran, and so the one the regression must be pinned under.
+     */
+    private PCModuleTestEnv moduleWithCommittedMetadata(String metadata) {
+        return moduleWithCommittedMetadata(metadata, builder -> builder);
+    }
+
+    private PCModuleTestEnv moduleWithCommittedMetadata(String metadata,
+                                                        UnaryOperator<ParallelConsumerOptions.ParallelConsumerOptionsBuilder<String, String>> configure) {
         mockConsumer = new MockConsumer<>(OffsetResetStrategy.EARLIEST);
         mockConsumer.assign(UniLists.of(TP));
         mockConsumer.commitSync(UniMaps.of(TP, new OffsetAndMetadata(COMMITTED_OFFSET, metadata)));
 
-        var options = ParallelConsumerOptions.<String, String>builder()
-                .consumer(mockConsumer)
-                .invalidOffsetMetadataPolicy(policy)
-                .build();
+        var options = configure.apply(ParallelConsumerOptions.<String, String>builder()
+                .consumer(mockConsumer)).build();
         return new PCModuleTestEnv(options);
     }
 
     /**
      * Base64 of a payload whose leading magic byte matches no {@link OffsetEncoding} - neither one of PC's own codecs
      * nor either of the Kafka Streams magic numbers PC recognises.
+     * <p>
+     * The byte is derived from the enum, not written here. Hard coding one made this test's subject depend on a
+     * coincidence: the day an encoding claims that byte, this stops exercising the unknown-magic path and goes on
+     * passing, which is the one outcome a forward-compatibility test must not have.
      */
     private static String foreignMetadata() {
-        return Base64.getEncoder().encodeToString(new byte[]{(byte) 42, 0, 0, 0});
+        return Base64.getEncoder().encodeToString(
+                new byte[]{magicByteOfAnEncodingThatDoesNotExistYet(), 0, 0, 0});
     }
 
     /**
@@ -74,18 +96,35 @@ class ForeignOffsetMetadataOnAssignmentTest {
      * and PC shuts down.
      */
     @Test
-    void unknownMagicByteDoesNotEscapeOnPartitionsAssigned() {
-        var module = moduleWithCommittedMetadata(foreignMetadata(),
-                ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.FAIL);
+    void unknownMagicByteDoesNotEscapeOnPartitionsAssignedUnderDefaultPolicy() {
+        var module = moduleWithCommittedMetadata(foreignMetadata());
         WorkManager<String, String> wm = module.workManager();
 
         assertThatCode(() -> wm.onPartitionsAssigned(UniLists.of(TP)))
-                .as("undecodable offset metadata must not escape the rebalance listener")
+                .as("undecodable offset metadata must not escape the rebalance listener under the default policy")
                 .doesNotThrowAnyException();
 
         assertThat(wm.getPm().getPartitionState(TP))
                 .as("partition should still be assigned, with a default (dropped offset map) state")
                 .isNotNull();
+    }
+
+    /**
+     * The other half of the contract. {@code FAIL} exists so a deployment can refuse to silently discard an offset map
+     * - discarding it replays records that completed but were not committed - so it has to actually stop.
+     * <p>
+     * On master this case was not reachable: undecodable metadata bypassed the policy entirely and was recovered from
+     * under {@code FAIL} too, which is the defect astubbs#197's release ledger recorded as item 5.
+     */
+    @Test
+    void failPolicyStopsRatherThanDiscardingForeignMetadata() {
+        var module = moduleWithCommittedMetadata(foreignMetadata(),
+                ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.FAIL);
+        WorkManager<String, String> wm = module.workManager();
+
+        assertThatThrownBy(() -> wm.onPartitionsAssigned(UniLists.of(TP)))
+                .as("FAIL must not silently discard metadata it cannot read")
+                .isInstanceOf(UnknownOffsetMetadataMagicException.class);
     }
 
     /**

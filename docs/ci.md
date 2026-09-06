@@ -16,7 +16,7 @@ The counts are XML attributes and the `AMBIENT PROBE AUTOPSY` is captured inside
 neither depends on the console stream surviving:
 
 ```bash
-gh run download <run-id> -R astubbs/parallel-consumer -n "highcpu-fast-feedback-reports-Chaos Pain Suite-<n>" -D /tmp/reports
+gh run download <run-id> -R astubbs/parallel-consumer -p 'chaos-suite-reports-*' -D /tmp/reports   # one artifact per shard
 # then parse /tmp/reports/**/failsafe-reports/TEST-*.xml - `errors`/`failures` are attributes
 ```
 
@@ -62,10 +62,15 @@ document. This section is the detail behind it.
 - **`maven.yml`** - build and test on every push/PR. PRs run two tiers in parallel: split suites on
   the pom's default Kafka version (`bin/ci-unit-test.sh`, `bin/ci-integration-test.sh`,
   `bin/performance-test.sh`) for fast feedback, and an experimental Kafka 4.x compatibility check
-  (`bin/ci-build.sh`). It also carries **`Chaos Pain Suite`**, the per-PR ambient tripwire,
-  which moved here from the self-hosted box on 2026-08-26 - see
-  ["Chaos does not need the self-hosted box"](#chaos-does-not-need-the-self-hosted-box). It is
-  **gating**, like the suite it replaced: a chaos RED is a real finding. Also carries the seconds-fast Quarantine Audit job, SpotBugs, duplicate
+  (`bin/ci-build.sh`). It also carries the **`Chaos Pain Suite`**, the per-PR ambient tripwire,
+  as four shard jobs (`Chaos Pain Suite 1/4` to `4/4`) - it moved here from the self-hosted box on
+  2026-08-26 and was split on 2026-09-03; see
+  ["Chaos does not need the self-hosted box"](#chaos-does-not-need-the-self-hosted-box) and
+  ["Chaos runs as four shards"](#chaos-runs-as-four-shards). Every shard is
+  **gating**, like the job they replaced: a chaos RED is a real finding. The **`Integration
+  Tests`** lane is likewise two gating shards since astubbs#442 - a named heavy set and a
+  catch-all defined by subtraction; see
+  ["The Integration Tests lane runs as two shards"](#the-integration-tests-lane-runs-as-two-shards). Also carries the seconds-fast Quarantine Audit job, SpotBugs, duplicate
   detection, PR-scoped mutation testing (PIT), and dependency vulnerability scanning. Push to
   master runs a single full `bin/ci-build.sh` on the default Kafka version to gate SNAPSHOT
   publishing. All jobs use explicit `cache/restore` with rotating keys from the `prepare-deps`
@@ -80,14 +85,25 @@ document. This section is the detail behind it.
 - **`quarantine-lane.yml`** - runs the `@Quarantined` tests on every PR push, every push to master,
   and on dispatch. Its job is the **required** check `tests`, so the job name is an API here too -
   but the test-running step is `continue-on-error`, so red quarantined tests cannot block a merge.
-  See [`docs/testing.md`](testing.md).
+  Reporting is **two steps, and the split is the point**: `bin/quarantine-lane-report.sh` classifies
+  and *may* fail the job (its lane-leak self-check is what proves the lane ran only quarantined
+  tests), then a separate `continue-on-error` step posts the comment, so a rate limit while
+  commenting cannot red a healthy lane. **Both reporting steps run even when the registry is
+  empty** - gated on the emptiness check having run, not on its answer - because the PR that removes
+  the LAST quarantine is the one that has to retract the previous push's "delete the annotation and
+  the registry entry" comment; the execution steps are still skipped, there being nothing to run.
+  See [`docs/testing.md`](testing.md), and
+  [`docs/solutions/workflow-issues/the-run-that-had-to-retract-was-the-one-gated-silent-2026-09-02.md`](solutions/workflow-issues/the-run-that-had-to-retract-was-the-one-gated-silent-2026-09-02.md)
+  for the class.
 - **`pr-checklist.yml`** - hosts the PR-body gates: the template checklist (rule in AGENTS.md, PR
   Discipline), the changelog-citation gate (`changelog-ref-gate.js`, see
   [`docs/releasing.md`](releasing.md)), the issue-reference gate (`issue-ref-gate.js`, see
   [`docs/issue-references.md`](issue-references.md)) and the file-reference gate
   (`file-ref-gate.js`, see [`docs/citations.md`](citations.md)), which fails a cited repo path that
   does not exist - whole tree, so a deletion that strands a citation fails the PR that made it. Each gate's logic is a unit-tested module and its self-test runs first, so a
-  broken rule fails loudly rather than passing - or failing - every PR silently.
+  broken rule fails loudly rather than passing - or failing - every PR silently. The self-test step
+  **discovers** `.github/scripts/*.test.js` rather than naming them, so a module added there is
+  covered without an edit here or in the workflow.
 - **`check-dependencies.yml`** - "PR Dependency Check". Reads `depends on
   astubbs/parallel-consumer#N` lines from the PR body and blocks the child until every parent has
   merged. Produces the **required** check `Check PR Dependencies`, so a stacked PR cannot merge out
@@ -102,21 +118,23 @@ document. This section is the detail behind it.
 
   What the lane covers, and why each one is not obvious:
 
-  - **`check-shell-sigpipe.sh`** fails any script piping into `grep -q` under `pipefail`. That
-    construct can report failure *because* it matched, once the producer still has more than a pipe
-    buffer left to write when `grep` exits - so it passes every small fixture and surfaces only in
-    production. ShellCheck does not detect it. Full mechanism in the script header and in
-    [`solutions/workflow-issues/a-check-that-reports-success-without-having-run.md`](solutions/workflow-issues/a-check-that-reports-success-without-having-run.md).
+  - **`check-source-patterns.mjs`**, rule `sigpipe-into-grep-q`, fails any script piping into
+    `grep -q` under `pipefail`. That construct inverts its own answer - `grep -q` exits on match, the
+    writer takes EPIPE, and `pipefail` promotes it - so a MATCH reports failure. It shipped in
+    `check-review-posted.sh` and reported "no review posted" on four PRs whose reviews had posted.
+    Was `check-shell-sigpipe.sh` until it became a row in `bin/lib/source-patterns.mjs`.
   - **`check-shell-hazards.sh`** fails coreutils flags that mean different things on GNU and BSD -
     `stat -f` exits 1 on GNU while printing filesystem prose to stdout, `sed -i` takes its suffix
-    attached on one and as the next argument on the other. Same class as the above, and it should
-    eventually absorb it ([`inflight/ci-fold-sigpipe-into-shell-hazards.md`](inflight/ci-fold-sigpipe-into-shell-hazards.md)).
+    attached on one and as the next argument on the other. Same class as the above, and the migration
+    runs the other way: it is the candidate to be folded INTO `bin/lib/source-patterns.mjs`, whose
+    rule table is already the same design in a language without shell's traps
+    (`docs/inflight/ci-what-else-folds-into-the-rule-table.md`).
   - **`test-rename-packages.sh`** self-tests the package-rename tool - run by hand once per branch,
     exactly the shape that rots unnoticed between the day it is written and the day a whole rename
     depends on it.
   - **`check-action-versions.sh`** keeps every GitHub Action pinned to one version across workflows.
   - **`check-inflight-tags.sh`** validates every `docs/inflight/` note's tags against the closed sets
-    in `bin/lib/inflight-tags.sh` ([`docs/inflight/AGENTS.md`](inflight/AGENTS.md) owns their
+    in `bin/lib/inflight-tags.mjs` ([`docs/inflight/AGENTS.md`](inflight/AGENTS.md) owns their
     meanings), failing the commit that mistyped a tag rather than leaving the next session to notice
     the index could not place a note.
   - **`check-test-log-config.sh`** pins the four library modules' `logback-test.xml` to the
@@ -158,6 +176,48 @@ document. This section is the detail behind it.
     skipped for fork PRs and dies early on a token expiry, so the list would go unwatched exactly
     when it matters most. **`deps: CVE exclusion expiry` is a new job name and is NOT yet a required
     status check** - adding it to the master ruleset is a separate, deliberate act.
+
+### The PR report comments share one module - `sticky-report-comment.js`
+
+Three steps post a comment on every PR: the **throughput report** and the **SpotBugs summary** in
+`maven.yml`, and the **quarantine lane report** in `quarantine-lane.yml`. They share
+`.github/scripts/sticky-report-comment.js`, which owns five behaviours that are not domain-specific:
+
+- find our own last comment by marker - **paginated**, and filtered to `user.type === 'Bot'`
+- read a machine-readable payload back out of it, so a run can render a **delta**
+- **update in place** normally, but post a **fresh comment when the status changed**
+- **retire the old comment before creating the new one**, then link it forward
+- stamp the head sha, a PR-context commit link, the run, and the time
+
+Every one of them was written for the throughput comment in astubbs/parallel-consumer#407 and every
+one of them had been WRONG in production. They live in a module rather than in three copies of the
+YAML because copying them is how the original defects reached two steps at once. The module's header
+carries the reasoning and the measurements behind each; `sticky-report-comment.test.js` pins each
+against the defect it replaced, and the PR Checklist job runs it.
+
+**What a "status change" means is the caller's, and only that.** The throughput report's status is
+its verdict; the quarantine lane's is a sorted digest of every quarantined test's outcome, so a test
+going from failing to passing - which means its fix landed and the annotation plus the registry entry
+should be deleted - posts a new comment instead of silently editing one thirty scrolls up. Each
+producer writes its own payload: `pc-throughput-data` from `bin/check-throughput-regression.mjs`,
+`quarantine-lane-data` from `bin/quarantine-lane-report.sh`. Nothing enforces that a producer and its
+reader agree on the marker's name, so `grep -rn <marker-name>` is the list to change if one moves.
+
+**A body can also be a CORRECTION rather than a report** - `postWhenAbsent: false` posts nothing when
+we have not already spoken on that PR. The quarantine lane's emptied-lane body is the only user: on a
+PR whose earlier push demanded an annotation be deleted it is the retraction and must be posted, and
+on a PR that never carried a report it would be an announcement that nothing is quarantined, on every
+PR, forever. "Spoken" includes a comment of ours that an earlier run retired and then failed to
+replace - the retire-then-create order makes that the failure mode - which the next run completes
+(`action: recovered`) whether it is a correction or an ordinary report: a lane that emptied, refilled
+and reported again still links the retired comment forward. A correction also folds the comment it
+retires under its heading in a `<details>` block: that comment was wrong, not merely older, and a
+prefixed heading above a fully visible ACTION REQUIRED table still leads with the table. The post
+step logs `result.action`, so a `skipped` run says so in the job log.
+
+The SpotBugs step uses the module's lookup and stamp but keeps its own update-or-create: whether a
+clean-to-dirty SpotBugs transition deserves a new comment is a judgement nobody has made, and adding
+the stamp needs no such decision.
 
 ### `CodeQL` is a required check that no workflow file produces
 
@@ -270,7 +330,8 @@ had. A hosted runner gives each job **its own VM**, so co-residency cannot occur
 load-bearing: it passes no `forkCount` and no `-Dparallel-tests`, so the suite was never configured
 to exploit the cores it was placed there for.
 
-It now runs as `Chaos Pain Suite` in `maven.yml`, and it is **gating** - a chaos RED is a
+It now runs in `maven.yml` - as four shard jobs since 2026-09-03, see
+["Chaos runs as four shards"](#chaos-runs-as-four-shards) - and it is **gating** - a chaos RED is a
 real finding. Do not re-add it to the self-hosted lane: chaos would then run twice per PR, and the
 second copy is the one that has to be scheduled against a finite box. On-demand seeded hunts stay in
 `chaos-pain.yml`.
@@ -280,6 +341,114 @@ hosted job's per-scenario test counts were not read (the job-log endpoint return
 rules out a zero-scenario run - that is build-only, ~2 minutes - but the standing rule still applies:
 read the job's own `Chaos suite timing` summary and its zero-tests-selected warning before trusting a
 green.
+
+### Chaos runs as four shards
+
+**Since 2026-09-03 (astubbs#421) the Chaos Pain Suite is four matrix jobs, `Chaos Pain Suite 1/4`
+to `4/4`, each a VM running two scenario classes.** The suite had not got slower; it had got bigger -
+eight `@Tag("chaos")` classes run serially in one JVM put the job at 15-20 minutes, the wall-clock
+floor for feedback on every PR. Measured on three dispatched runs of that shape the scenarios summed
+to 17-20 minutes with ~1 minute of build and broker start; three runs of the four-shard shape came
+in at 370-423s critical path, every class reporting exactly once with its seed, for about 15% more
+runner-minutes (the per-VM overhead, paid four times).
+
+**The ceiling is the longest scenario, not the total divided by the shard count**, so the shards are
+packed longest-first from measured per-class medians - the numbers are in the matrix comment beside
+the entries. Any one class can run about twice its median on a given run and which one varies, so
+the longest shard moves around; the packing keeps the *average* bin balanced and a doubled 180s class
+inside a two-class shard is the remaining floor. Eight one-class shards would not lower it.
+
+**How a shard selects its classes, and the guard that makes it safe.** `bin/chaos-test.sh` stays the
+single entry point for the gate and for `chaos-pain.yml`; a shard's `scenarios:` matrix value reaches
+it as `CHAOS_SCENARIOS` (env, never spliced into the script) and becomes `-Dit.test` plus
+`-Dfailsafe.failIfNoSpecifiedTests=false` - the latter because `-am` builds the parent first and it
+matches nothing. Turning that flag off is exactly what makes a shard able to run fewer scenarios
+than it was assigned and still exit 0, which is the mutation lane's old "nothing to mutate,
+skipping" shape. So the script's own summary compares the classes that produced a report against
+the ones requested and turns a green exit red naming the missing scenario; a real Maven failure is
+never relabelled. With `CHAOS_SCENARIOS` unset - `chaos-pain.yml`, a local replay - nothing changes.
+
+**The matrix is static, and `bin/check-chaos-shards.mjs` keeps it honest.** A static list is
+greppable and reviewable; its cost is drift as scenarios are added, renamed or retagged. The gate
+fails when the chaos-tagged classes under `chaostests/` are not partitioned exactly once across the
+`suite: chaos` entries, naming what is unassigned, duplicated, unknown or empty. **Adding a scenario**
+therefore means adding it to whichever shard keeps the bins balanced by *its* measured duration, and
+the gate tells you if you forgot. `@Quarantined` is deliberately not the gate's business: a
+quarantined class still belongs to a shard on paper, `bin/chaos-test.sh` excludes it at run time,
+and the missing-report guard is what notices.
+
+**Reading a red shard.** Each shard uploads its own artifact, `chaos-suite-reports-<run>-shard<N>`,
+and prints its own `Chaos suite timing` summary with each class's seed and replay command, so a red
+shard is reproducible on its own. The replay command reproduces the schedule, not the sharding - a
+seed that fires on the gate can be replayed under the one-JVM local recipe in `docs/testing.md`.
+
+**Two things that did not survive measurement.** `-DforkCount=2` inside one VM, the integration
+lane's pattern, halved the wall-clock but its first sample went red on `ChaosChurnStormIT`'s
+`INSTANCE_STALL` probe; seeded control arms then showed the failure belongs to the seed (it
+reproduced under one fork on a different probe) and not to forking - but forking adds CPU contention
+exactly where the 857 ledger says those detectors are load-sensitive, and failsafe lacks the
+per-fork log-silo wiring surefire has. Sharding gives every shard the gate's own configuration on its
+own VM, so it inherits the existing per-class rate without adding to it. And the required-check name:
+master's ruleset required `Chaos Pain Suite` by that exact name, so landing the split means replacing
+it with the four shard names in the same step - a required check that no job reports blocks every
+PR. `gh api repos/astubbs/parallel-consumer/rules/branches/master` lists what is required today.
+
+### The Integration Tests lane runs as two shards
+
+**Since astubbs#442 the `Integration Tests` lane is two jobs: `Integration Tests (heavy)` runs
+exactly the classes named in `HEAVY_CLASSES` in `bin/ci-integration-test.sh`, and `Integration
+Tests` runs everything else, by subtraction.** Both are required checks on `master`; the catch-all
+kept the original name because the ruleset required that context first, and `(heavy)` was added
+alongside it - adding a job never adds a requirement, so a shard nobody required would gate nothing.
+`gh api repos/astubbs/parallel-consumer/rules/branches/master` lists what is required today.
+
+**The shape is one named set plus a catch-all, NOT the chaos suite's four balanced bins, and the
+difference is the point.** A balanced N-way split has to be re-sized as the suite changes, and its
+failure mode is silent: a new class belongs to no bin, stops running, and nothing goes red. Here a
+new test runs in the catch-all by default, and the only way to lose one is to name it in
+`HEAVY_CLASSES` and then delete it - which fails the heavy shard loudly while the catch-all keeps
+running the test. The script header owns the sizing guide and how the seven-class set was derived;
+the measurements, and why the shard COUNT mattered less than splitting one class first, are in
+[`solutions/performance-issues/shard-count-buys-nothing-while-one-class-sets-the-floor-2026-09-07.md`](solutions/performance-issues/shard-count-buys-nothing-while-one-class-sets-the-floor-2026-09-07.md).
+
+**The guards, and what each one caught.** Every one was added because a real run passed while
+doing the wrong thing:
+
+- **Completeness is asserted from bytecode.** `bin/check-integration-shard-coverage.mjs` reads
+  `target/test-classes` through `javap` and demands a failsafe report for every test class whose
+  ancestry reaches an integration package, minus the excluded groups - so an inherited test, a
+  `@Nested` class, a meta-annotated `@Quarantined`, or a class moved out of the package are all
+  seen as `javac` saw them. A `javap` that cannot run exits 2, never a pass over an empty index.
+  Why it reads bytecode rather than `.java` text:
+  [`solutions/best-practices/a-guard-that-greps-java-must-read-what-javac-decided.md`](solutions/best-practices/a-guard-that-greps-java-must-read-what-javac-decided.md).
+- **Every report must come from an `integrationTest` package.** `-Dit.test=!Class` REPLACES
+  failsafe's `<includes>`, and both test source roots compile into one `target/test-classes`, so the
+  first catch-all ran the entire unit suite under failsafe - and passed, because running MORE tests
+  than you meant to fails nothing. The pom now carries a `<excludes>` for the shard, and this guard
+  is what would notice the next such leak.
+- **Every class named in `HEAVY_CLASSES` must produce a report in the heavy shard.** A rename or a
+  deletion turns the LIST wrong, not the suite: the heavy shard fails naming the class while the
+  catch-all, defined by subtraction, keeps running whatever the class became.
+- **No class may appear in two lists**, or it runs and is paid for twice while both shards pass.
+- **Drift is a number.** `bin/check-integration-shard-balance.mjs` recomputes the best two-way
+  partition from recorded per-class times and reports how much wall the shipped one leaves on the
+  table; it also names a listed class with no recorded history, which is what a rename looks like
+  before the build catches it. Advisory by default - this lane's wall-clock noise is too wide to
+  block a merge on - with `--fail-over <seconds>` for a caller that wants it blocking. Its Codecov
+  read is opt-in behind `SHARD_BALANCE_NETWORK`, which only the `Repo Hygiene` job sets, because a
+  `check-*` script is granted to the review agent by name and `bin/AGENTS.md` forbids that prefix a
+  network read; the variable is deliberately not `CI`, since that agent runs inside Actions.
+
+**Reading a red shard.** A red `Integration Tests (heavy)` whose log says a listed class produced
+no report is a LIST defect - a rename or deletion - not a test failure; fix `HEAVY_CLASSES`. A test
+failure names its class in the Maven summary as before; the two integration flakes the lane
+surfaced are in [`inflight/test-untracked-ci-flakes.md`](inflight/test-untracked-ci-flakes.md)
+with control arms rather than retried into green, and the lane deliberately passes no retry. Both
+shards pass `forkCount=4`, which is a measured ceiling, not a floor - the script header says why.
+
+**Four shards was built, measured faster, and not taken** - a cost trade recorded in
+[`inflight/ci-four-shard-integration-gate.md`](inflight/ci-four-shard-integration-gate.md) with
+what would change the answer.
 
 ### The box decides its own concurrency
 
@@ -323,7 +492,7 @@ where capacity lives - the number of runners serving the label.
 #### Reading a cancelled or absent chaos check
 
 **A CANCELLED check is rendered as a FAILING one.** `gh pr checks` prints `conclusion=cancelled` as
-`fail`, so a red `Performance (optional)` or `Chaos Pain Suite` may mean *it never ran* rather than
+`fail`, so a red `Performance (optional)` or `Chaos Pain Suite n/4` shard may mean *it never ran* rather than
 that something regressed - check `conclusion` before believing it. A cancelled chaos check means
 **not measured**: neither a pass nor a failure.
 
@@ -800,6 +969,95 @@ It is deliberately a second job rather than a second step in `claude-review`, so
 *which* half is missing without opening anything - and so `claude-review`, a required check matched by
 name in the master ruleset, did not have to be renamed. It is **not head-sensitive**, matching the
 automated half: an LGTM on any commit counts for the whole PR, permanently.
+
+## Codecov
+
+Two different Codecov products run here, from the same workflow, and confusing them is the first
+mistake to avoid.
+
+**Coverage** is jacoco XML. **Test Analytics** is the JUnit XML surefire and failsafe already write;
+it gives per-test outcome and wall-clock per commit, and is what `bin/inflight.mjs codecov` reads.
+They upload separately, are configured separately, and a failure in one says nothing about the other.
+
+`CODECOV_TOKEN` is a repository secret. `7894373cc` added it and documented it in `AGENTS.md`; the
+restructuring lost that, and this section is where it now lives.
+
+### Two lanes upload coverage, and they are NOT symmetric
+
+| Lane | Runs on | Uploads |
+|---|---|---|
+| `build` | push to master only | every module's `jacoco/jacoco.xml` as flag `unit`; every module's `jacoco-it/jacoco.xml` as flag `integration` - one half per flag |
+| `test` matrix | pull requests only | **both** halves, under one flag per suite (`flags: ${{ matrix.suite }}`) |
+<!-- file-refs: N/A - jacoco paths are generated build output under target/, named because the
+     asymmetry between the two lanes IS which file goes to which flag -->
+
+**A per-suite flag reading 0% on the default branch is correct, not a broken upload.** The flags
+endpoint reports default-branch coverage, and on master only `build` runs. A reader who does not know
+that files a bug against the uploader; this is the third time that has nearly happened.
+
+### The per-flag gates, and why they failed
+
+`codecov.yml` gates on `unit` and `integration` per flag, at `target: auto, threshold: 1%`, and makes
+the overall project number informational. Its reasoning is sound and worth reading in place: a total
+that compares five flags on a PR against two on master cannot be made honest by tuning a threshold.
+
+**The gates failed because the two lanes uploaded different file SETS, and the cause was the inert
+`**` glob.** The uploader's CLI does not expand `**`, and nothing routed `files:` through a shell, so
+the pattern arrived literally, matched nothing, and the CLI fell back to its own tree-wide search. On
+master's full build that search found EVERY jacoco report - both halves, every module - so `unit` and
+`integration` each received the whole tree and reported the same number. On a pull request each suite
+job has produced only its own half, so the same fallback found only that half.
+
+Measured, from the upload logs rather than inferred:
+
+| Lane | Flag | Declared `files:` | What the CLI actually uploaded |
+|---|---|---|---|
+| `build` (master) | `unit` | `jacoco/jacoco.xml` | **every jacoco report in the tree - both halves** (`not_found` on the glob, then tree-wide fallback) |
+| `build` (master) | `integration` | `jacoco-it/jacoco.xml` | the same set |
+| `test` (PR) | `integration` | both globs | 4 reports, all `jacoco-it` - the unit half does not exist in that job |
+<!-- file-refs: N/A - jacoco paths are generated build output under target/, and which files reach
+     which flag IS the defect described here -->
+
+So a PR's `integration` flag was compared against a master `integration` flag that silently contained
+the unit half as well. The delta measured that difference, not the branch. The confirming detail: on
+master both flags reported an identical figure, which only makes sense if both hold the same data.
+
+**It was the same defect as the one fixed for the test-results upload in this repository's history -
+a `files:` line that reads as configuration and does nothing.** The fix is the same, and every
+`codecov/codecov-action` call in `maven.yml` now carries it: a preceding step expands the pattern with
+`find`, hands the real comma-joined list over through `$GITHUB_OUTPUT`, and sets `disable_search:
+true` so the fallback cannot silently re-widen the set. An upload whose collector found nothing is
+skipped rather than handed an empty `files:`, because empty is what re-opens the fallback. The master
+`build` job collects the two halves into separate outputs, since one half per flag is the split these
+gates compare.
+
+**It is not proven, and it could not be proven before merging.** The comparison exists only on the
+server, and only once both sides have re-uploaded under real file lists, so the first clean per-flag
+comparison after master has run the `build` job is the evidence. Inside that window a PR is still
+compared against a base assembled the old way, so **a red per-flag gate there is the old defect being
+measured, not a regression**. Tracked in
+[`docs/inflight/ci-the-coverage-uploads-still-use-the-inert-glob.md`](inflight/ci-the-coverage-uploads-still-use-the-inert-glob.md),
+which owns the outstanding proof and the condition for closing it.
+
+**A second, independent cause reads the same from the check list**: a master run cancelled before it
+uploaded, which leaves Codecov with no report for that base commit and every PR comparing against
+older master data. The files count in the diff block tells them apart - equal on both sides is the
+glob, base short by more than the PR adds is the missing upload - and the inflight note above carries
+the measurement.
+
+### Reading it without a browser
+
+The API answers **unauthenticated** because this repository is public, which is what makes it usable
+from CI and from a fresh agent sandbox:
+
+```
+https://api.codecov.io/api/v2/github/astubbs/repos/parallel-consumer/...
+```
+
+`totals/`, `flags/`, `commits/`, `branches/`, `coverage/` and `test-analytics/` all answer. `branch`
+and `commit_sha` filter server-side; `flags`, `interval` and `outcome` are accepted and **ignored**,
+which is the failure mode where a filter that does nothing reads as one that matched everything.
+[`docs/inflight-tool.md`](inflight-tool.md) owns the commands built on this.
 
 ## Self-hosted lanes
 

@@ -6,6 +6,7 @@ package bz.stub.parallelconsumer.state;
  */
 
 import bz.stub.parallelconsumer.internal.utils.KafkaUtils;
+import bz.stub.parallelconsumer.internal.utils.RecordBatchSummary;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.internal.EpochAndRecordsMap;
 import bz.stub.parallelconsumer.internal.PCModule;
@@ -80,10 +81,19 @@ public class RemovedPartitionState<K, V> extends PartitionState<K, V> {
         return null;
     }
 
+    /**
+     * Logs a <em>bounded</em> summary of what was dropped - the topic-partition, the record count and the offset
+     * range, which is what an operator needs to correlate the drop with a rebalance. The batch itself scales with
+     * {@code max.poll.records}, so interpolating it here produced a line that log tooling truncated
+     * (astubbs#169 / confluentinc#631); it is still available in full at {@code DEBUG}.
+     */
     @Override
     public void maybeRegisterNewPollBatchAsWork(@NonNull EpochAndRecordsMap<K, V>.RecordsAndEpoch recordsAndEpoch) {
         // no-op
-        log.warn("Dropping polled record batch for partition no longer assigned. WC: {}", recordsAndEpoch);
+        log.warn("Dropping polled record batch for partition no longer assigned: {} (epoch at poll: {})",
+                RecordBatchSummary.summariseRecords(recordsAndEpoch.getTopicPartition(), recordsAndEpoch.getRecords()),
+                recordsAndEpoch.getEpochOfPartitionAtPoll());
+        log.debug("Dropped polled record batch in full: {}", recordsAndEpoch);
     }
 
     /**

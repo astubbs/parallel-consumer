@@ -64,10 +64,10 @@
 #
 # DEGRADED READS ARE LOUD, NEVER SHORT. An injection hook's correct output on a boring branch is
 # silence, which is byte-identical to being broken - so a section that cannot be built says so by
-# name instead of being omitted. That is not a hypothesis here: `inject-recorded-knowledge.sh` uses
-# GNU-only `xargs -r`, and under a BSD `xargs` its Registers section silently drops from 13 entries
-# to 4 while closed notes get relabelled as mis-tagged. A truncated-but-plausible index is worse
-# than no index.
+# name instead of being omitted. That is not a hypothesis here: `inject-recorded-knowledge.sh` used
+# GNU-only `xargs -r` while its scan was bash, and under a BSD `xargs` its Registers section silently
+# dropped from 13 entries to 4 while closed notes got relabelled as mis-tagged (the scan is
+# `bin/inflight.mjs docs index` now). A truncated-but-plausible index is worse than no index.
 #
 # BSD-CLEAN FROM LINE ONE. No `stat -c`, `mapfile`, `readarray`, `grep -P`, `date -d`,
 # `readlink -f`, `touch -d`, `xargs -r`, no bare `mktemp`, and no `timeout(1)` - that last one is GNU
@@ -107,7 +107,8 @@ cat > "$payload_file" 2>/dev/null || exit 0
 # CHEAP BAIL BEFORE PAYING FOR python3, which fires on every tool call of every subagent. Every key
 # tested here precedes `tool_input` in the payloads Claude Code emits, so 4 KB is enough to decide
 # and a 150 KB dispatch prompt is never read. `head -c` on a FILE, not a pipe into grep - the
-# pipefail/EPIPE trap bin/AGENTS.md documents, which bin/check-shell-sigpipe.sh scans this directory
+# pipefail/EPIPE trap bin/AGENTS.md documents, which the `sigpipe-into-grep-q` rule in
+# bin/lib/source-patterns.mjs scans this directory
 # for.
 head=$(head -c 4000 "$payload_file" 2>/dev/null) || exit 0
 case "$head" in

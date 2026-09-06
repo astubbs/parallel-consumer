@@ -380,7 +380,7 @@ if [ -n "$STATS" ]; then
       # verdict below. A large but perfectly valid PIT report would have made this lane look broken.
       # awk consumes its whole input and simply stops printing after NR 50, so nothing closes early.
       #
-      # bin/check-shell-sigpipe.sh guards the sibling case (`| grep -q`) but deliberately scopes
+      # `sigpipe-into-grep-q` guards the sibling case (`| grep -q`) but deliberately scopes
       # `head` out as "common, usually harmless" - correct as a blanket rule, and this is the site
       # where it was not harmless. Found by an independent review, not by the gate.
       printf '%s\n' "$SURVIVORS" \

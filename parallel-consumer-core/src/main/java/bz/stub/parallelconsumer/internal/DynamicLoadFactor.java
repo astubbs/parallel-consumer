@@ -64,16 +64,47 @@ public class DynamicLoadFactor {
      * finishes, theres at least one more entry for it in the queue.
      */
     @Getter
-    private int maxFactor;
+    private final int maxFactor;
 
     @Getter
     private int currentFactor;
     private long lastSteppedFactor = currentFactor;
     private Instant lastStepTime = Instant.MIN;
 
+    /**
+     * True when this factor is fixed - it starts at its ceiling, so there is nothing for the stepping machinery to do
+     * and being "at max" carries no information.
+     * <p>
+     * This is the shape produced by {@link bz.stub.parallelconsumer.ParallelConsumerOptions#messageBufferSize},
+     * which pins both bounds to the factor that yields the requested buffer size, and by explicitly configuring
+     * {@link bz.stub.parallelconsumer.ParallelConsumerOptions#initialLoadFactor} equal to
+     * {@link bz.stub.parallelconsumer.ParallelConsumerOptions#maximumLoadFactor}. In both cases the user asked for
+     * a fixed buffer, so being at the ceiling says nothing the configuration did not already say.
+     * <p>
+     * Deliberately {@code ==} and not {@code >=}. An inverted pair - an initial factor <em>above</em> the maximum -
+     * also cannot step, but it is a typo rather than a request, and classifying it as fixed would silence the only
+     * report that would ever have told the user about it.
+     * {@link bz.stub.parallelconsumer.ParallelConsumerOptions#validate()} now rejects an inverted pair outright, so
+     * a configured one no longer reaches here - but this constructor is internal and takes the two bounds directly,
+     * so the classification still has to hold on its own rather than widen to {@code >=} on the strength of a check
+     * upstream of it.
+     */
+    @Getter
+    private final boolean staticFactor;
+
     public DynamicLoadFactor(int initial, int maximum) {
         this.currentFactor = initial;
         this.maxFactor = maximum;
+        this.staticFactor = initial == maximum;
+    }
+
+    /**
+     * A load factor pinned to a single value - it can never step, because it starts at its own ceiling.
+     *
+     * @param factor the fixed factor to use for the lifetime of the instance
+     */
+    public static DynamicLoadFactor fixedAt(int factor) {
+        return new DynamicLoadFactor(factor, factor);
     }
 
     /**
@@ -82,6 +113,10 @@ public class DynamicLoadFactor {
      * @return true if could step up
      */
     public boolean maybeStepUp() {
+        if (staticFactor) {
+            // nothing to step to - don't engage the stepping machinery at all
+            return false;
+        }
         if (couldStep()) {
             return doStep();
         }

@@ -63,14 +63,19 @@
         </dependency>
         <!-- Real Jackson to parse the Prometheus metadata JSON in the integration test (we must NOT use the
              copy Testcontainers bundles under org.testcontainers.shaded.* - enforced by TestConventionRules).
-             Kept as a module-local, explicitly-versioned test dep on purpose: jackson-databind is a transitive
-             dependency of WireMock (parallel-consumer-vertx), and pinning it globally via root
-             dependencyManagement forced WireMock onto an incompatible Jackson and broke VertxTest (HTTP 500).
-             So this stays scoped to just this module. -->
+
+             Version comes from jackson.examples.version in the examples parent, which carries the
+             reasoning for the number and for why it is not managed at the root.
+
+             A bare databind pin is enough HERE, unlike example-streams, because nothing else in this
+             module resolves jackson: databind brings jackson-core and jackson-annotations on its own
+             line. Confirm that still holds before changing the version, with dependency:tree scoped
+             to this module and filtered to com.fasterxml.jackson; core and annotations must land on
+             the same version as databind, or this needs the BOM treatment example-streams uses. -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
-            <version>2.17.2</version>
+            <version>${jackson.examples.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

@@ -383,7 +383,15 @@ public class KafkaTestUtils {
     }
 
     /**
-     * Checks that the ordering of the results is the same as the ordering of the input records
+     * Checks that the ordering of the results is the same as the ordering of the input records.
+     * <p>
+     * <b>Only valid where a record cannot be REDELIVERED</b> - one instance, a {@code MockConsumer}, no
+     * rebalance, drained before checking. It asserts a gapless {@code +1} value sequence of exactly the
+     * produced size over the whole run, so the first at-least-once duplicate or post-revoke redelivery
+     * fails it, correctly-behaving consumer or not. Under churn the equivalent check has to be scoped to
+     * an ordering window, which is a different assertion with a different failure mode: see
+     * {@code KeyOrderLedger} in {@code src/test-integration/.../integrationTests/chaostests}, and grep
+     * {@code LEDGER_KEY_ORDER}. Do not reach for this one from a rebalance test.
      */
     // todo move to specific assertion utils class, along with other legacy assertion utils?
     public static <T> void checkExactOrdering(Map<String, Queue<PollContext<String, String>>> results,

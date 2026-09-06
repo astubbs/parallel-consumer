@@ -74,6 +74,15 @@ truncate, and check the log you did fetch is complete before diagnosing from it:
 [`docs/solutions/workflow-issues/gh-run-view-log-truncation.md`](solutions/workflow-issues/gh-run-view-log-truncation.md)
 **owns those routes** and the completeness check.
 
+**Locally there is no artifact, and the confirming re-run destroys the evidence.** CI uploads the
+failsafe XML, so a failure's report survives being looked at; on a developer box the re-run writes
+over `target/*-reports/TEST-<class>.xml` in place, taking the autopsy, the seed and the assertion's
+actual-versus-expected with it. **Copy the report aside before you re-run** - `cp
+parallel-consumer-core/target/*-reports/TEST-<class>.xml /tmp/`. The re-run that proves "it passes in
+isolation" is precisely the one that overwrites the failure it is being compared against: on
+2026-08-19 a `PCMetricsTest` sighting lost its actual-versus-expected that way, leaving only a
+timing the ledger already had, and so could not be told apart from ordinary load.
+
 **A failing chaos test's autopsy carries its own replay.** `chaos seed:` and `chaos replay:` sit
 directly under the failure line, the replay command complete - the `chaos` tag is excluded by
 default, so the seed alone does not select the test. **First move on a chaos failure is to run that
@@ -86,11 +95,19 @@ there rather than only in the run-start log line: `ChaosSeed` and `AmbientProbeE
 needs `LAG_STAGNATION_MIN_LAG` (50) of real lag sustained past `LAG_STAGNATION_BOUND` (150s), and
 rebalance dwell needs `REBALANCE_DWELL_BOUND` (15s). A test with a handful of records, or one that
 fails inside a window shorter than those bounds, cannot trip either - so its autopsy prints
-`probe clean` and the accompanying sentence "the fault is likely in the test itself" carries no
-evidence at all. Check the test's record count and failure window against those constants before
+`probe clean` and the sentence beside it carries no evidence at all. Check the test's record count and failure window against those constants before
 treating a clean probe as a finding. This is not hypothetical: the `commitTimeout` autopsy of
 2026-08-07 read `probe clean` on a 15-record test that failed in 35s, where the thresholds are 50
 records and 150s.
+
+**The sharper case is a group that never formed at all**, where the probe cannot be informative
+even in principle. A broker container that fails to start, Docker or network trouble, or anything
+throwing before the clients open, leaves the detectors with nothing to sample - and produces a clean
+autopsy indistinguishable from a genuine test fault. Seen on astubbs#116: `ContainerLaunchException:
+Container startup failed for image confluentinc/cp-kafka:7.9.0`, autopsy `probe clean`, cause
+Docker. **Read the autopsy's own `failure:` line first**; it is printed above the verdict precisely
+so the exception is seen before the classification. The clean line now says only that nothing in
+group progress explains the failure, and names this case, rather than pointing at the test.
 
 ## Quarantine lane (`@Quarantined`)
 
@@ -123,6 +140,12 @@ Rules:
    proving the failure is master-state. A hunch stays red and blocks, on purpose.
    [`docs/quarantined-tests.md`](quarantined-tests.md) **owns the full rule** and the reasoning
    behind the 2026-08-19 change from "diagnosis" to "evidence".
+   **Where the sightings can come from without re-reading expired logs:**
+   `bin/inflight.mjs codecov test <name>` prints that one test's recorded outcome per commit, and
+   `codecov flaky` lists every test ever recorded with more than one outcome - history that outlives
+   a CI log. It reports candidates and never a verdict, because the same evidence fits a regression
+   that landed between two commits; rule 1 is unchanged by it.
+   [`docs/inflight-tool.md`](inflight-tool.md) **owns those commands**.
 2. **Quarantine is master-state, not PR-state** - see AGENTS.md, Testing.
 3. **The owning fix PR deletes the annotation AND its registry entry in the same commit** after
    merging master, atomically restoring the test to the gating lane. An owning PR is the goal, not
@@ -130,6 +153,31 @@ Rules:
 
 A non-empty lane blocks releases - see [`docs/releasing.md`](releasing.md). Run the lane locally
 with `bin/quarantined-test.sh`.
+
+## The transactional claim register (`@Tag("transactions")`)
+
+`TransactionalClaim` records every transactional guarantee this project documents, and
+`TransactionalClaimCoverageTest` gates the register in both directions: each claim recorded as
+covered must be referenced by a `@ProvesClaim` test method, and each claim's recorded sentence must
+still appear in the javadoc or README it was taken from. It is broker-free and untagged, so it runs
+in every default build rather than only in the lane holding the proofs.
+
+Nearly every `@ProvesClaim` method carries `@Tag("transactions")`, which is **not** in the pom's
+default `excluded.groups` - so an ordinary build runs the proofs and the register together.
+
+**Exclude that tag and the register fails rather than reporting coverage it did not exercise.**
+Before this gate existed, `-Dexcluded.groups=transactions,...` deselected every tagged proof while
+the register still reported every claim covered, every parked claim explained and every sentence
+intact - a fully green report over a run that verified nothing, because the register reads compiled
+annotations and cannot see what the run selected. `RunTagFilter` closes that: `pom.xml` forwards
+`${included.groups}`/`${excluded.groups}` into the test JVM through `systemPropertyVariables` on
+**both** surefire and failsafe, and the register refuses to certify a run whose tag filters
+deselected the proofs. Tag filters are checked, lane selection is not - `bin/ci-unit-test.sh` skips
+the ITs by design, and the register deliberately spans both lanes.
+
+If you hit that failure, the fix is to stop excluding the tag, not to weaken the gate. Deleting the
+`systemPropertyVariables` block does not quietly disable it either: `RunTagFilter` raises, because a
+filter it cannot read must never read as "nothing was filtered".
 
 ## Does a test earn its place? Mutate a guard and see who notices (optional)
 
@@ -168,13 +216,18 @@ Two things that make the result trustworthy:
 A `@RepeatedTest` is the shape to look at hardest: repetition is what you reach for when you cannot
 force a race and hope to draw it, so it is often a hope-based test sitting in a gating lane.
 
-## Chaos Pain Suite (on-demand bug detector - never gates)
+## Chaos Pain Suite (seeded bug detector - gates every PR, hunts on demand)
 
 A seeded, calibrated chaos suite (`integrationTests.chaostests`: `ChaosConductor`, `ProgressProbe`,
 `ChaosScenarioBase`) that hunts the "alive but not progressing" bug class: rebalance-dwell zombies,
 protocol-invisible per-partition lag stagnation (Class 2), drain overruns, and record loss or
 duplication. Tagged `@Tag("chaos")` and excluded from all default and gating suites via `pom.xml`'s
 `excluded.groups` default.
+
+W1 and W4 make no ordering claim and record no history: they run `UNORDERED` over a unique key
+per record, so `KeyOrderLedger` is W5's instrument alone. `KafkaTestUtils.checkExactOrdering` is
+the no-redelivery equivalent for mock-consumer tests and must not be reached for from a
+rebalance test.
 
 **What it can assert, so you know whether a question is already answerable.** Reach for an existing
 capability before building one - the calibration behind each of these is the expensive part, not the
@@ -201,10 +254,13 @@ bound and then drain completely, the latter two being the seeds
 150s bound looks like *whatever crossed it* - the probe samples every 5s, so the number is bound plus
 detection latency and encodes no severity; do not read a tight cluster of them across runs as
 corroboration. And the liveness claim the bound was standing in for now belongs to
-`INSTANCE_STALL/NO_WORK_COMPLETED`, which watches COMPLETIONS - any returned work result re-arms it -
-so it structurally cannot fire on slow-but-progressing. A run where Class 2 observes and
-`INSTANCE_STALL` stays silent is measured slow, not wedged. `Class2ObservationIT` guards the routing;
-it is untagged deliberately, so it gates every default integration build.
+`INSTANCE_STALL/NO_WORK_COMPLETED`, which watches COMPLETIONS, so it does not fire on an instance
+that is finishing records however slowly. Read that as **only a SUCCESSFUL result re-arms it** -
+`onFailureResult` and the revoked-partition drop both return a work result and notify nothing, and
+the bound's arithmetic budgets for the second but not the first. `ProgressProbe#INSTANCE_STALL_BOUND`
+owns the detail, including why the budget is not established for W1's continuous churn. A run where
+Class 2 observes and `INSTANCE_STALL` stays silent is measured slow, not wedged. `Class2ObservationIT`
+guards the routing; it is untagged deliberately, so it gates every default integration build.
 
 **The demotion REDUCED per-shard coverage, and that is a known gap rather than a relocation.**
 `INSTANCE_STALL` is per-INSTANCE, so one wedged shard on an instance whose other shards keep
@@ -254,12 +310,14 @@ is why the chaos job summary prints the peak rather than a verdict - read it as 
 - **Replay a schedule**: every run logs its seed and the full replay command, and a failure repeats
   both inside its autopsy block (above, where truncation cannot reach them); add
   `-Dchaos.seed=<seed>`.
-- **CI**: per same-repo PR commit via the highcpu fast-feedback lane (check `highcpu / Chaos Pain
-  Suite` - not optional: a chaos RED shows red); on-demand seeded hunts via `chaos-pain.yml`, e.g.
+- **CI**: on every PR as four gating shard jobs in `maven.yml` (`Chaos Pain Suite 1/4` to `4/4`,
+  two scenario classes each, packed longest-first - `docs/ci.md`, "Chaos runs as four shards", owns
+  the split and its guard); on-demand seeded hunts via `chaos-pain.yml`, e.g.
   `gh workflow run chaos-pain.yml -R astubbs/parallel-consumer -f seed=42 -f reps=3`. Both call
-  `bin/chaos-test.sh`. Unlike the local recipe above, CI runs **exclude** `@Quarantined` chaos
-  scenarios (the Quarantine Lane owns those), so they can select zero tests - the job summary flags
-  that loudly.
+  `bin/chaos-test.sh`; a shard selects its classes through `CHAOS_SCENARIOS`, and a shard whose
+  requested scenario produced no report fails rather than reading green. Unlike the local recipe
+  above, CI runs **exclude** `@Quarantined` chaos scenarios (the Quarantine Lane owns those), so an
+  unsharded run can select zero tests - the job summary flags that loudly.
 - **Probe a fix PR** (the suite's primary purpose): on the fix PR's branch (merge master in first
   if the branch predates the suite landing there), run the suite at a commit before the fix - expect
   RED, and the violation names the mechanism - and again at the fix, expecting GREEN. The local
@@ -268,6 +326,12 @@ is why the chaos job summary prints the peak rather than a verdict - read it as 
 - **A RED run is investigation food, not flake noise.** The probes are calibrated against the real
   historical drain-zombie defect (RED on pre-fix compositions, GREEN on fixed; thresholds sit in
   measured gaps). **Never loosen a probe to go green** - tune the workload or conductor instead.
+- **A workload artifact reads exactly like a defect, and the tuning is the finding.** W5's calibration
+  produced a 154s `CLASS2_STALL/LAG_STAGNATION` that was neither a stall nor probe noise: its heavy
+  tail is spaced on the record index, so with `HEAVY_EVERY` a multiple of `KEY_SPACE` every heavy
+  record landed on one key, and KEY ordering serialised the whole tail onto one shard. Its scenario
+  javadoc carries the arithmetic, and `heavyRecordsMustNotAllShareOneKey` is the check - the pattern to
+  copy is turning the conclusion into an assertion rather than a comment.
 
 ## Lincheck lane (`@Tag("lincheck")`) - scheduler-controlled concurrency testing, never gates
 
@@ -344,6 +408,56 @@ disagree, because a tag the pom excludes and a wrapper does not runs in the GATI
 
 Calibration result, the obstacles, and the cost tables:
 [`docs/plans/2026-08-25-001-test-lincheck-poc-plan.md`](plans/2026-08-25-001-test-lincheck-poc-plan.md).
+
+## Experiment runners - instruments, not a lane
+
+Every section above describes a **lane**: a way of running tests that reports pass or fail. The
+scripts here are not a lane. They **drive** the chaos and performance lanes repeatedly and report a
+*measurement* - a rate, a trajectory, a classification of what caught a failure. None of them
+asserts anything, and none of them gates.
+
+**Reach for one when your question is empirical.** "Does this fail, and why" is a test. "How OFTEN
+does it fail, and does that move when I change X" is one of these, and running a test once cannot
+answer it.
+
+| Ask this | Run | Its question is | Where |
+|---|---|---|---|
+| How often does `largeNumberOfInstances` fail, and how? | `bin/exp-measure-large-instances-failure-rate.sh [n]` | **open** - unmeasured since the 2026-01 upstream report on confluentinc#857 | anywhere |
+| Does that failure rate move with SCALE? | `bin/exp-sweep-large-instances-scale.sh` | **open** - rate rising with scale points at the group coordinator, flat points at PC | anywhere |
+| Does the `NO_PROGRESS` detector MISS real failures? | `bin/exp-audit-stall-detector-silence.sh [n]` | **open, reopened 2026-08-31** - a detector that stays quiet on a real failure is worse than an absent one, because the suite goes green on its silence | anywhere |
+| Did the async stall drain or wedge? | **RETIRED 2026-09-01 - answered** | the backlog drained on all six firings collected; method and discriminator in [`solutions/test-flakiness/collect-more-firings-not-more-seeds-2026-09-01.md`](solutions/test-flakiness/collect-more-firings-not-more-seeds-2026-09-01.md) |
+| All of the above, unattended, one tally | `bin/exp-batch-857.sh` | a batch of whatever was outstanding when it was written - read its header before trusting its scope | local only |
+
+**"Local only" is enforced, not advisory.** Those two compare this tree against sibling worktrees
+(`.claude/worktrees/pr29`, `.claude/worktrees/pre-344`) that exist only where somebody cut them, so
+they refuse to start without them (exit 2) rather than recording a missing-tree row and finishing
+green. They are deliberately absent from the dispatch workflow's choices for the same reason.
+
+The tracking note for that first row lives on the branch the runners came from and is not on master
+yet, so the row deliberately cites no path - a link into a file that only exists on another branch
+reads as a broken reference to everyone else. Grep `docs/inflight/` for `largenumberofinstances` once
+that work lands, and add the link then.
+<!-- file-refs: N/A - deliberately names no path, for the reason stated -->
+
+**Choosing between these and the lanes above:**
+
+- Replaying a known schedule to see a failure again -> `bin/chaos-test.sh` with `CHAOS_SEED`.
+- Running one scenario once while you change code -> the IT directly, or the chaos lane.
+- Asking how often, at what rate, or whether a number moves -> an experiment runner.
+
+The distinction that matters is that a rate needs N runs. A single run gives a pass or a fail, which
+is not a rate, and no lane in this repo aggregates results across runs.
+
+**The single-tree ones can be dispatched instead of run locally.** `.github/workflows/experiments.yml`
+offers each of those as a `workflow_dispatch` choice on the high-CPU runner, which is where the
+expensive ones belong - a ten-iteration batch is a runner-hour, not a desk-hour. The `largeNumberOfInstances` rate also
+runs weekly on a schedule, alone, because its question is open and a rate nothing samples stays
+unmeasured. **Nothing here runs on push and nothing gates**; that workflow's header carries the
+reasoning, including why gating on a rate would need a threshold nobody has the spread to choose.
+
+**When a question in that table is ANSWERED, the row and the script both go**, and the method moves
+to [`docs/solutions/`](solutions/). [`bin/AGENTS.md`](../bin/AGENTS.md) owns that lifecycle; this
+table is the discovery half of it, and a row that outlives its script is worse than no row.
 
 ## Mutation-check every new assertion, not just the risky-looking ones
 

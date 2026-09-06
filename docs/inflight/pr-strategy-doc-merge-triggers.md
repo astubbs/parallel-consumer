@@ -17,17 +17,28 @@ titles, or divergence, ask `gh` and `git`.
 
 ## Can falsify a claim already published
 
-**`test/transactional-mode-battle-test`** - proves or falsifies every documented transactional
-guarantee. `STRATEGY.md` ("Our approach") and the README's Share Groups table both rest on PC being
-the only way to get exactly-once *together with* parallelism. If that suite falsified any documented
-guarantee, the strongest claim in the comparison is the one that has to move, and the README table's
-`Exactly-once` row moves with it. Read the branch's own inflight note mapping reported transactional
-issues against what it proved.
+<!-- post-merge: checked-begin - names the PR rather than the branch, which is deleted on merge, and
+     states the suite's arrival in the past tense -->
+**astubbs#262** - proves or falsifies every documented transactional guarantee. `STRATEGY.md` ("Our
+approach") and the README's Share Groups table both rest on PC being the only way to get exactly-once
+*together with* parallelism. It refuted two of them against a master that lacked astubbs#257 - at
+`batchSize >= 2` the consumer stalled outright - and both read `PROVED` again with that fix merged in,
+so the headline stands rather than moves. `STRATEGY.md` already says so; the standing trigger is the
+register, not this note - a claim refuted later still moves the README table's `Exactly-once` row. The
+register is `TransactionalClaim` and `TransactionalClaimCoverageTest` under
+`parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/`, which fail the build when a claim is
+recorded as covered with no test behind it, or when a recorded sentence leaves the file it was quoted
+from.
+<!-- post-merge: checked-end -->
 
-Same family, same section: **`fix/transactional-produce-callback-abort`** and
-**`fix/produce-lock-double-release`**. A transactional guarantee that needed a fix to hold is still a
-guarantee that holds - but the doc should not claim it more strongly than the fixed code supports.
-See [`bug-producing-lock-double-release.md`](bug-producing-lock-double-release.md).
+<!-- post-merge: checked-begin -->
+Same family, same section: **`fix/transactional-produce-callback-abort`**, still open, and the
+produce-lock double release, which landed as astubbs#257. A transactional guarantee that needed a fix
+to hold is still a guarantee that holds - but the doc should not claim it more strongly than the fixed
+code supports. astubbs#257's answer is recorded in §11 of
+[`../plans/2026-08-03-001-investigate-transactional-commit-flake.md`](../plans/2026-08-03-001-investigate-transactional-commit-flake.md),
+so the trigger it represents has fired and only the callback-abort branch is still pending here.
+<!-- post-merge: checked-end -->
 
 ## Change who the product is for
 

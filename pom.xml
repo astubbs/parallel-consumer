@@ -89,6 +89,9 @@
         <skipTests>false</skipTests>
         <skipITs>${skipTests}</skipITs>
         <skipUTs>${skipTests}</skipUTs>
+        <!-- Failsafe <excludes> for shard selection - see the failsafe plugin block. The default
+             deliberately matches no file, so an unset build runs the whole integration suite. -->
+        <it.excluded.classes>**/__no_class_matches_this__.java</it.excluded.classes>
 
         <!-- JUnit 5 test groups (failsafe). Override on the command line:
              -Dincluded.groups=performance    (run only performance tests)
@@ -96,7 +99,10 @@
              -Dincluded.groups=lincheck       (run only the Lincheck lane - use bin/lincheck-test.sh, which
                                                also activates -Plincheck for the JVM args it needs)
              -Dexcluded.groups=               (run everything incl. performance, chaos + quarantined)
-             -Dexcluded.groups=transactions,performance,chaos  (skip multiple groups)
+             -Dexcluded.groups=performance,chaos,quarantined,lincheck,transactions  (skip multiple groups)
+             NB excluding `transactions` deselects nearly every @ProvesClaim method, and
+             TransactionalClaimCoverageTest FAILS rather than reporting coverage it did not exercise -
+             that is the gate working. Exclude the group only when you accept losing that report.
              NB overrides REPLACE the default list - include performance, chaos AND quarantined when
              excluding. `quarantined` = known-failing-on-master tests (see @Quarantined): out of the
              gating suites so green means mergeable, but still run by the non-gating CI lane
@@ -750,6 +756,17 @@
                         <excludeVulnerabilityId>CVE-2026-14683</excludeVulnerabilityId>
                         <excludeVulnerabilityId>CVE-2026-14686</excludeVulnerabilityId>
 
+                        <!-- org.latencyutils:LatencyUtils (via micrometer-core, beside HdrHistogram above
+                             and of the same kind). VulDB-assigned, published 2026-08-31, CVSS 1.9,
+                             "the attack needs to be launched locally": a local caller corrupting the
+                             pause detector's own histogram is not an attack on this library or its
+                             users. 2.0.3 is the newest release on Central (2014), so there is nothing
+                             to upgrade to, and it is transitive so it is not independently upgradable
+                             either. Not in GHSA, which is why Dependabot is silent.
+                             RETIRE WHEN: LatencyUtils publishes a fixed release, micrometer-core drops
+                             the dependency, or the record is rejected/withdrawn. -->
+                        <excludeVulnerabilityId>CVE-2026-82596</excludeVulnerabilityId>
+
                         <!-- io.netty:netty-codec-http (via vertx-core). No public record exists: not
                              in OSV, not in GHSA, and cveawg.mitre.org returns CVE_RECORD_DNE. The
                              neighbouring ids are the real Netty August 2026 batch (-59898, -59899,
@@ -767,68 +784,39 @@
                              scopes it to HTTP *server* instrumentation, and this project uses only
                              Counter/Gauge/Timer/DistributionSummary/KafkaClientMetrics, with
                              example-metrics serving over the JDK's own com.sun.net.httpserver.
+                             CVE-2026-59295 (5.9, CWE-400) is the same component, the same blocker and
+                             the same retire condition, so it shares this comment rather than repeating
+                             it. Unbounded memory growth in MicrometerHttpClientInterceptor when an
+                             instrumented Apache HttpAsyncClient request fails before a response.
+                             Unreachable here for a structural reason rather than a judgement call:
+                             neither MicrometerHttpClientInterceptor nor any Apache HttpAsyncClient
+                             appears anywhere in this repo's sources or poms, and the micrometer
+                             surface actually used is metric primitives plus KafkaClientMetrics,
+                             ExecutorServiceMetrics and CompositeMeterRegistry. Re-check that if this
+                             project ever instruments an HTTP client: grep the sources and poms for
+                             MicrometerHttpClientInterceptor and for HttpAsyncClient, and re-argue
+                             this entry if either appears.
+
                              RETIRE WHEN: the io.micrometer.prometheus -> prometheusmetrics package
-                             rename is migrated, which is what unblocks 1.15.x. -->
+                             rename is migrated, which is what unblocks 1.15.x - and it retires BOTH
+                             ids below, since 1.15.12 is past each of them. -->
                         <excludeVulnerabilityId>CVE-2026-40984</excludeVulnerabilityId>
+                        <excludeVulnerabilityId>CVE-2026-59295</excludeVulnerabilityId>
 
                         <!-- com.fasterxml.jackson.core:jackson-databind (example-streams only). False
                              positive: GHSA-rcqc-6cw3-h962 gives introduced 2.21.0 / fixed 2.21.4, and
-                             the module resolves 2.18.9. The vulnerable code is in unwrapped-creator
+                             the module resolves a 2.18.x - see jackson.examples.version in the
+                             examples parent for which one. Stated as the line rather than the exact
+                             version deliberately: what makes this a false positive is being below
+                             2.21.0, so a patch bump must not be able to make this comment wrong. It
+                             already did once, when 2.18.9 here went stale the moment the bom moved to
+                             2.18.10. The vulnerable code is in unwrapped-creator
                              handling that the 2.18 line does not have. OSS Index's version range is
                              over-broad; Dependabot does not report it.
                              RETIRE WHEN: OSS Index corrects the range, or the module moves onto a
                              2.21.x that is genuinely in scope (then it needs >= 2.21.5, not an
                              exclusion). -->
                         <excludeVulnerabilityId>CVE-2026-54518</excludeVulnerabilityId>
-
-                        <!-- ==== TEMPORARY-SINCE: 2026-08-11 - delete when Jackson 2.18.10 ships ====
-
-                             The date is machine-read by bin/check-cve-exclusions.sh, which fails the
-                             Repo Hygiene check once this entry is 90 days old. Change it only after
-                             re-checking upstream, never to buy quiet.
-
-                             com.fasterxml.jackson.core:jackson-databind, example-streams only, at
-                             runtime scope via kafka-streams 3.9.2. Unlike everything above, these two
-                             are NOT permanent: both fixes are already merged upstream on the 2.18
-                             branch, milestone 2.18.10, and there is simply no release carrying them
-                             yet.
-
-                               CVE-2026-68497 (8.7, CWE-770) - unbounded allocation deserializing
-                               javax.xml.datatype.Duration / XMLGregorianCalendar. Fix: FasterXML/
-                               jackson-databind#6127, merged 2026-07-29, adds the StreamReadConstraints
-                               number-length limit to CoreXMLDeserializers.
-
-                               CVE-2026-19032 (6.3, CWE-470) - java.nio.file.Path deserialization
-                               accepts arbitrary URI schemes. Fix: FasterXML/jackson-databind#6129,
-                               merged 2026-08-06, restricts the accepted schemes.
-
-                             There is nothing to bump TO. Neither id is in OSV, NVD or GHSA yet, so the
-                             only public record is Sonatype's own; the fixed-version data comes from the
-                             two merged PRs. Every released 2.x artifact predates both merges - the
-                             newest on each line are 2.18.9 (2026-07-08), 2.21.5 (2026-07-07) and
-                             2.22.1 (2026-07-07) - so moving up a line does not help, and moving lines
-                             is separately blocked (2.21.0-2.21.3 would make CVE-2026-54518 above real,
-                             and a global pin breaks VertxTest through wiremock-jre8).
-
-                             Neither is reachable in this example: StreamsApp is String-serde end to
-                             end, constructs no ObjectMapper, and never names Path, Duration or
-                             XMLGregorianCalendar. jackson-databind is present only because
-                             kafka-streams drags it in for its own internal metadata.
-
-                             Being an example is why this is excludable rather than shipped risk: the
-                             examples parent sets maven.deploy.skip / maven.install.skip /
-                             skipPublishing, so no consumer of the library inherits this dependency.
-                             That is a statement about blast radius, not about the vulnerability -
-                             an example is still code people copy, and if either advisory had touched
-                             core, vertx, reactor or mutiny this would have been a bump or a stop, not
-                             an exclusion. It was checked: they resolve no jackson-databind at runtime
-                             at all.
-
-                             RETIRE WHEN: jackson-databind 2.18.10 is on Central. Then bump the
-                             jackson-bom import in parallel-consumer-example-streams/pom.xml and DELETE
-                             these two lines - do not carry them forward. -->
-                        <excludeVulnerabilityId>CVE-2026-68497</excludeVulnerabilityId>
-                        <excludeVulnerabilityId>CVE-2026-19032</excludeVulnerabilityId>
                     </excludeVulnerabilityIds>
                 </configuration>
                 <executions>
@@ -1094,6 +1082,19 @@
                          still run (and fail) in the gating Unit Tests lane (ce-review P1 finding). -->
                     <groups>${included.groups}</groups>
                     <excludedGroups>${excluded.groups}</excludedGroups>
+                    <!-- The two elements above go to the JUnit Platform, which does not pass them on, so a test
+                         cannot otherwise see which tests its own run selected. RunTagFilter reads these; the gate
+                         that needs them is TransactionalClaimCoverageTest, which certifies that every documented
+                         transactional guarantee has a proof and could not previously tell that a run had excluded
+                         every one of those proofs by tag. Forwarded from the SAME properties the filters use, so
+                         the two cannot disagree, and set on failsafe as well so moving a gate between the lanes
+                         does not silently blind it. Deleting this block does not quietly disable the gate:
+                         RunTagFilter raises, because a filter it cannot read must never read as "nothing was
+                         filtered". -->
+                    <systemPropertyVariables>
+                        <pc.run.includedGroups>${included.groups}</pc.run.includedGroups>
+                        <pc.run.excludedGroups>${excluded.groups}</pc.run.excludedGroups>
+                    </systemPropertyVariables>
                 </configuration>
             </plugin>
             <plugin>
@@ -1113,6 +1114,24 @@
                         <!-- Integration tests need to be in a package named `integrationTest` -->
                         <include>**/integrationTest*/**/*.java</include>
                     </includes>
+                    <!-- Shard selection for the catch-all lane. This exists rather than a
+                         -Dit.test=!Class because SETTING it.test REPLACES the <includes> above,
+                         and both source roots compile into the same target/test-classes - so
+                         `-Dit.test=!X` silently drops the integrationTest package restriction and
+                         runs the whole UNIT suite under failsafe as well. Measured: 168 classes
+                         and 981 tests instead of 42 and 204, and it passed, because running MORE
+                         tests fails nothing. An <excludes> leaves the include filter intact, so
+                         the catch-all stays inside the integration packages by construction.
+                         Default matches nothing. bin/ci-integration-test.sh is the only caller. -->
+                    <excludes>
+                        <exclude>${it.excluded.classes}</exclude>
+                        <!-- Configuring <excludes> REPLACES failsafe's defaults rather than adding to them,
+                             and the default it replaces is this one: inner classes. Without it the first
+                             @Nested integration test class would run twice, once under its outer class
+                             and once alone, with both shards green - and bin/lib/compiled-classes.mjs
+                             skips every `$` class on the premise that this default is in force. -->
+                        <exclude>**/*$*</exclude>
+                    </excludes>
                     <jvm>${jvm.location}/bin/java</jvm>
                     <skipTests>${skipTests}</skipTests>
                     <skipITs>${skipITs}</skipITs>
@@ -1121,15 +1140,26 @@
                          dedicated hardware: what actually runs them is the "Performance Tests" leg of
                          maven.yml (ubuntu-latest, a REQUIRED check on every PR, via bin/performance-test.sh)
                          and chaos-pain.yml on the self-hosted runner.
-                         Select them with BOTH -Dincluded.groups=performance AND -Dexcluded.groups= - which is
-                         what bin/performance-test.sh does, and the reason to use it rather than a hand-rolled
-                         mvnw line. The include alone selects nothing: exclusion beats inclusion in JUnit
+                         Select them with BOTH -Dincluded.groups=performance AND an -Dexcluded.groups= that
+                         does not list performance - which is what bin/performance-test.sh does, and the reason
+                         to use it rather than a hand-rolled mvnw line. That script passes
+                         -Dexcluded.groups=quarantined rather than an empty value, because an override REPLACES
+                         the default list and an empty one would drop the quarantine exclusion too, letting a
+                         @Quarantined performance test keep gating the required lane. Use an empty value only
+                         when you deliberately want the quarantined ones as well. The include alone selects
+                         nothing: exclusion beats inclusion in JUnit
                          Platform and excluded.groups already contains performance, so the run exits BUILD
                          SUCCESS having tested nothing. NOT -Dgroups=performance either: the groups element
                          below is pinned to ${included.groups}, so the explicit pom value wins and a bare
                          -Dgroups is silently ignored - the same trap as -DforkCount vs -Dsurefire.forkCount. -->
                     <groups>${included.groups}</groups>
                     <excludedGroups>${excluded.groups}</excludedGroups>
+                    <!-- Surefire's copy above owns the reasoning. Both plugins carry it deliberately, and
+                         RunTagFilterTest fails if only one does. -->
+                    <systemPropertyVariables>
+                        <pc.run.includedGroups>${included.groups}</pc.run.includedGroups>
+                        <pc.run.excludedGroups>${excluded.groups}</pc.run.excludedGroups>
+                    </systemPropertyVariables>
                 </configuration>
             </plugin>
             <plugin>
@@ -1330,7 +1360,27 @@
                                         <exclude>com.github.javafaker</exclude>
                                     </excludes>
                                 </bannedDependencies>
-                                <reactorModuleConvergence />
+                                <!-- The <message> is the actionable half. This rule's default text is
+                                     "Module parents have been found which could not be found in the reactor",
+                                     which is what a contributor gets from `mvn -pl <module>` and says nothing
+                                     about the fix - and the same subset build is how people arrive at the
+                                     "cannot find symbol: class ManagedTruth" report in
+                                     astubbs#180      https://github.com/astubbs/parallel-consumer/issues/180
+                                     confluentinc#861 https://github.com/confluentinc/parallel-consumer/issues/861
+                                     The message body is deliberately left-aligned: Maven echoes the element's
+                                     text verbatim, one [ERROR] line per newline, so any indentation here is
+                                     reprinted in the contributor's terminal. Do not re-indent it to match the
+                                     surrounding POM. Keep it in sync with docs/building.md. -->
+                                <reactorModuleConvergence>
+                                    <message>
+This build was invoked on a SUBSET of the reactor (e.g. `-pl &lt;module&gt;`), so the parent POM is not in it.
+  Build the whole reactor:      ./mvnw test-compile          (from the repo root)
+  ...or pull in dependencies:   ./mvnw -pl &lt;module&gt; -am test-compile
+A subset build also skips `generate-test-sources`, which is where the Google Truth assertion subjects
+(bz.stub.parallelconsumer.ManagedTruth and friends) are generated - so it is also how you end up with
+"cannot find symbol: class ManagedTruth". See docs/building.md.
+                                    </message>
+                                </reactorModuleConvergence>
                                 <!-- Register item 5. wiremock-jre8 pinning ASM 9.4 made Lincheck's
                                      transformer die per-class WHILE REPORTING SUCCESS - a false PASS
                                      on every calibration verdict, caught only by a deliberately

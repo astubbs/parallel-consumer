@@ -75,7 +75,8 @@ is the standing rule, not an open task.
 
 ## Also stale in the mirror body
 
-astubbs#173's `## Fork status` is otherwise sound - astubbs#29 is still open, `commitOffsetsThatAreReady`
+<!-- post-merge: checked -->
+astubbs#173's `## Fork status` is otherwise sound - it names astubbs#29 as the fork's work on this, `commitOffsetsThatAreReady`
 still takes the `synchronized (commitCommand)` monitor on master
 (`parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/AbstractParallelEoSStreamProcessor.java`,
 grep `Synchronizing on commitCommand` - the bare `synchronized (commitCommand)` appears four times in
@@ -85,6 +86,7 @@ duplicates. Two corrections:
 - *"Only the transactional (EOS) commit mode gives exactly-once"* contradicts our own README
   (`src/docs/README_TEMPLATE.adoc`, grep `does not prevent _duplicate message replay_`; the template
   is the source, `README.adoc` is generated). Offering it as the answer here is misleading.
+<!-- post-merge: checked -->
 - astubbs#29 is named as the closest fork work, which is true, but its `tryCommitOffsetsOnRevoke()`
   deliberately *skips* the revocation commit under lock contention, trading redelivery for killing
   the deadlock. It moves this symptom the wrong way, and the mirror reads as though it helps.

@@ -290,8 +290,11 @@ public abstract class ExternalEngine<K, V> extends AbstractParallelEoSStreamProc
                 addToMailbox(pollContext, wc);
             } catch (PCInternalRuntimeException pcInvariantBroke) {
                 // The EXPECTED shape, named so the code says what it is guarding against: one of PC's own
-                // invariants, and the known route is ProduceLockNotHeldException out of the produce-lock release
-                // inside addToMailbox. Terminal either way - see failFatallyOnUnmailboxableRecord.
+                // invariants. The known route was ProduceLockNotHeldException out of the produce-lock release
+                // inside addToMailbox; astubbs#257 moved that release to cleanUpContext, so no named route is
+                // left and this arm is now a classifier rather than a guard against a specific bug. Kept: the
+                // override below still runs PC's own code. Terminal either way - see
+                // failFatallyOnUnmailboxableRecord.
                 failFatallyOnUnmailboxableRecord(wc, pcInvariantBroke);
             } catch (Throwable nothingElseIsExpected) {
                 // Backstop, and it stays broad on purpose: anything escaping this loop strands every container

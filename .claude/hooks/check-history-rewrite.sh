@@ -20,6 +20,25 @@
 # review running right now. With nothing found it still stops, but says so honestly - and says WHICH
 # nothing it found, because "this branch has no PR" and "the lookup never answered" are different
 # facts that one message used to report identically.
+#
+# WHICH BRANCH, AND HOW IT WAS DECIDED. This hook does not run in the directory its guarded command
+# runs in, and this repository keeps many worktrees checked out at once - so the original
+# `git rev-parse --abbrev-ref HEAD` answered about whichever branch the SESSION sat on. Twice on
+# 2026-08-31 that named a completely unrelated branch: a force-push of `feats/proxy-verdict-free-return`
+# (open PR astubbs/parallel-consumer#295, with review history - the case this hook exists for) and a
+# `git commit --amend` in the `feats/ks-streams-fork-machinery` worktree were BOTH reported against
+# `docs/god-branch-decomposition-plan`, the plan worktree the session happened to occupy. The most
+# confident sentence this hook can print - "the lookup ran and came back empty" - was describing the
+# wrong target, which is the same silent-wrong-answer class as the wrong-REPOSITORY fix in
+# astubbs/parallel-consumer#364, one field over.
+#
+# So the branch is taken from the strongest source available, and the message says which one:
+#   1. the push refspec, when the command names one - the only authoritative answer, and free,
+#      because the token scan below has already split the command;
+#   2. otherwise the HEAD of a directory, chosen from a `cd <path> &&` prefix, then the tool call's
+#      own `cwd` from the payload, then this hook process's directory as a last resort.
+# Anything but (1) is a GUESS about where the command runs, and the refusal says so in as many
+# words rather than presenting it as a measured fact.
 set -uo pipefail
 
 payload="$(cat 2>/dev/null || true)"
@@ -40,33 +59,188 @@ esac
 # TOKENS, NOT SUBSTRINGS - the rule the sibling hooks state. `git commit -m "rebase notes"` and
 # `gh pr comment --body "we should force-push"` must not fire. An unbalanced quote makes shlex raise,
 # and that fails open.
-verdict="$(printf '%s' "$payload" | python3 -c '
-import json, shlex, sys
+#
+# FOUR LINES OUT, NOT ONE, and they are all read from the SAME token walk: the verdict, the branch
+# the push refspec names, a leading `cd <path>` the command changes into, and the payload's own
+# `cwd`. Deriving the last three anywhere else would mean tokenising the command a second time, which
+# is how two copies of a scan start disagreeing. An empty line is a real answer - "the command did
+# not say" - and the working-directory arm below is what turns each one into a message.
+scan="$(printf '%s' "$payload" | python3 -c '
+import json, os, shlex, sys
 try:
     data = json.load(sys.stdin)
     cmd = data.get("tool_input", {}).get("command", "")
-    toks = shlex.split(cmd)
+    payload_cwd = data.get("cwd") or ""
+    # OPERATOR-AWARE, INCLUDING NEWLINE, the same lexer pre-commit-gate.sh uses. Plain shlex.split
+    # left operators fused to their neighbours (`feature&&git` read as a branch name) and treated a
+    # line break as whitespace, so `git push -f<newline>git log -1` swallowed the next command as
+    # push arguments and named `log` as the branch - a confident wrong answer, found by two
+    # reviewers at once on astubbs/parallel-consumer#382. A QUOTED newline is untouched: posix
+    # shlex keeps quoted text one token, so a multiline commit message still lexes as one argument.
+    lex = shlex.shlex(cmd, posix=True, punctuation_chars="();<>|&;\n")
+    lex.whitespace = " \t\r"
+    lex.whitespace_split = True
+    toks = list(lex)
 except Exception:
     sys.exit(0)
 
 FORCE = {"--force", "-f", "--force-with-lease", "--force-if-includes"}
+# Push options that consume a SEPARATE value token. Dropping only the flag would leave its value
+# where the repository or the refspec should be.
+PUSH_VALUE_FLAGS = {"-o", "--push-option", "--receive-pack", "--exec", "--repo", "--recurse-submodules"}
+OPERATORS = set("();<>|&\n")  # must name the same characters as the lexer punctuation above
+
+
+def push_head_ref(rest, sub):
+    """The REMOTE-side branch name this push publishes, or "" when the command names none.
+
+    THE PR HEAD IS THE DESTINATION, NOT THE SOURCE: `git push origin src:dst` publishes `dst`, so
+    `dst` is what a pull request has as its head branch. `+src` is the force spelling of `src`.
+    A push with no refspec, `HEAD`, a bare `refs/`-something and `tag <name>` all name nothing this
+    can read as a branch, and each returns "" so the caller falls back and SAYS it fell back.
+
+    The same rule is spelled out a second time, in bash, as `hook_push_head_ref` in
+    .claude/hooks/lib/hook-common.sh. This hook REFUSES tool calls, so it may not depend on a
+    library it might fail to source (astubbs/parallel-consumer#341); the duplication is tracked with
+    the rest of it in docs/inflight/ci-pr-lookup-is-copied-into-three-hooks.md.
+    """
+    try:
+        args = rest[rest.index(sub) + 1:]
+    except ValueError:
+        return ""
+    positional = []
+    j = 0
+    while j < len(args):
+        t = args[j]
+        # A shell operator ends this command; everything after it belongs to the next one.
+        if t and all(c in OPERATORS for c in t):
+            break
+        if t in PUSH_VALUE_FLAGS:
+            j += 2
+            continue
+        if t.startswith("-"):
+            j += 1
+            continue
+        positional.append(t)
+        j += 1
+    # positional[0] is the repository, positional[1] the first refspec. A multi-refspec push is
+    # answered with its first, which is incomplete rather than wrong - that branch really is one of
+    # the branches being rewritten.
+    if len(positional) < 2 or positional[1] == "tag":
+        return ""
+    src, sep, dst = positional[1].partition(":")
+    name = (dst if sep else src).lstrip("+")
+    if name.startswith("refs/heads/"):
+        name = name[len("refs/heads/"):]
+    if not name or name == "HEAD" or name.startswith("refs/"):
+        return ""
+    # A `$` or backtick is unexpanded SOURCE TEXT, not the branch git will see - answering with the
+    # literal is the confident-wrong-answer class this hook exists to kill. Fall back to the
+    # labelled inferred tier instead. Mirrored in hook_push_head_ref (hook-common.sh).
+    if "$" in name or "`" in name:
+        return ""
+    return name
+
+
+# A LEADING `cd <path> &&` IS THE COMMAND SAYING WHERE IT RUNS, and it outranks the payload cwd for
+# exactly that reason. Only a LEADING one, AND ONLY WHEN IT IS THE ONLY ONE: this used to trust the
+# first `cd` unconditionally, but `cd A && x && cd B && git commit --amend` runs the amend in B, and
+# presenting A as "the directory the command changes into" is a measured-sounding wrong answer -
+# the exact class this hook exists to kill (reliability review, astubbs/parallel-consumer#382,
+# reproduced with the real tokeniser). With more than one command-position `cd` the honest answer
+# is "ambiguous", so this falls through to the payload cwd, whose label already says it is a guess.
+# The unspaced `cd path&&git ...` form is handled by the operator-aware lexer above.
+cd_prefix = ""
+cd_count = 0
+at_cmd = True
+for t in toks:
+    if t and all(c in OPERATORS for c in t):
+        at_cmd = True
+        continue
+    if at_cmd and t == "cd":
+        cd_count += 1
+    at_cmd = False
+# ...AND ONLY WHEN THE JOIN PRESERVES THE CWD. `cd /x & git commit` backgrounds the cd into a
+# subshell and `cd /x | cmd` pipes it into one - the commit stays in the payload cwd either way,
+# so trusting the prefix would gate an unrelated tree (Codex review, astubbs/parallel-consumer#382).
+# Only `&&`, `;` and a newline hand the changed directory to the next command in the same shell;
+# operator runs may carry trailing newlines/semicolons, so strip those before comparing.
+if cd_count == 1 and len(toks) > 2 and toks[0] == "cd" and not toks[1].startswith("-"):
+    joiner = toks[2].strip("\n;")
+    if joiner in ("", "&&"):
+        cd_prefix = toks[1]
+
+
+def resolve_against(path, base):
+    """A RELATIVE command-named path is relative to where the COMMAND runs - the payload cwd -
+    never to this hook process, whose directory describes the session. `parallel-consumer-core`
+    exists in every worktree of this repository, so testing a relative path from the wrong
+    directory SUCCEEDS on the wrong tree rather than failing. Unresolvable (no base to anchor it)
+    returns "", which drops to the next, labelled tier rather than guessing
+    (astubbs/parallel-consumer#382, found cross-model)."""
+    if not path:
+        return ""
+    if os.path.isabs(path):
+        return path
+    if base:
+        return os.path.join(base, path)
+    return ""
+
+
+cd_prefix = resolve_against(cd_prefix, payload_cwd)
+
+verdict = ""
+ref = ""
+git_c = ""
 for i, t in enumerate(toks):
     if t.rsplit("/", 1)[-1] != "git":
         continue
     rest = toks[i+1:]
-    sub = next((x for x in rest if not x.startswith("-")), None)
+    # GLOBAL FLAGS THAT TAKE A VALUE, skipped WITH their value - `git -C /path push --force` put
+    # "/path" where the subcommand should be, so the guard matched nothing and a force-push
+    # sailed through in silence (correctness review, astubbs/parallel-consumer#382; the same
+    # defect hook_git_invocations records for the reminders). `-C` is also RECORDED: it is the
+    # command relocating itself, the strongest working-directory statement available. The walk
+    # stops at an operator so the next command cannot donate a subcommand.
+    GIT_VALUE_FLAGS = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path")
+    sub = None
+    # RESET PER INVOCATION: a -C recorded while scanning an earlier command in a compound payload
+    # must not survive into the invocation that carries the verdict - `git -C /a status && git
+    # commit --amend` runs the amend in the payload cwd, not /a (Codex review,
+    # astubbs/parallel-consumer#382). And REPEATED -C values COMPOSE, each relative one applied
+    # from the previous, so only the chain - never just the last token - names the directory.
+    git_c = ""
+    j = 0
+    while j < len(rest):
+        x = rest[j]
+        if x and all(c in OPERATORS for c in x):
+            break
+        if x in GIT_VALUE_FLAGS:
+            if x == "-C" and j + 1 < len(rest):
+                nxt = rest[j + 1]
+                if os.path.isabs(nxt) or not git_c:
+                    git_c = nxt
+                else:
+                    git_c = os.path.join(git_c, nxt)
+            j += 2
+            continue
+        if x.startswith("-"):
+            j += 1
+            continue
+        sub = x
+        break
     flags = set(rest)
     # An env-prefixed override reaches here as a token, not as process env.
     if any(x == "REWRITE_HISTORY_CONFIRMED=1" for x in toks):
         sys.exit(0)
     if sub == "push" and (flags & FORCE or any(x.startswith("--force-with-lease=") for x in rest)):
-        print("force-push"); break
+        verdict, ref = "force-push", push_head_ref(rest, sub); break
     if sub == "rebase" and "--abort" not in flags and "--continue" not in flags and "--skip" not in flags:
-        print("rebase"); break
+        verdict = "rebase"; break
     if sub == "commit" and "--amend" in flags:
-        print("amend"); break
+        verdict = "amend"; break
     if sub in ("filter-branch", "filter-repo"):
-        print(sub); break
+        verdict = sub; break
     # EVERY OTHER WAY TO MOVE A REF AND LOSE COMMITS. Found by probing the first version, which
     # caught only the obvious four - a guard that reaches just the shapes you thought of is a
     # documented bypass.
@@ -77,27 +251,74 @@ for i, t in enumerate(toks):
         if tgt and not tgt.startswith("origin/") and not tgt.startswith("upstream/"):
             import re as _re
             if _re.search(r"[~^]", tgt) or _re.fullmatch(r"[0-9a-f]{7,40}", tgt):
-                print("reset-backwards"); break
+                verdict = "reset-backwards"; break
     if sub == "branch" and "-f" in flags or (sub == "branch" and "--force" in flags):
-        print("branch -f"); break
+        verdict = "branch -f"; break
     if sub in ("checkout", "switch"):
         moved = "-B" in flags or "-C" in flags
         # `-B name` alone just points at HEAD; `-B name <start>` moves the ref somewhere else.
         if moved:
             after = rest[rest.index("-B") + 1:] if "-B" in rest else rest[rest.index("-C") + 1:]
             if len([x for x in after if not x.startswith("-")]) >= 2:
-                print("branch reset via " + sub); break
+                verdict = "branch reset via " + sub; break
     if sub == "update-ref" and any(x.startswith("refs/heads/") for x in rest):
-        print("update-ref"); break
+        verdict = "update-ref"; break
     if sub == "push" and ("--delete" in flags or "-d" in flags or any(x.startswith(":") and len(x) > 1 for x in rest)):
-        print("remote branch deletion"); break
+        verdict, ref = "remote branch deletion", push_head_ref(rest, sub); break
+
+if verdict:
+    # `git -C <rel>` is relative to where git runs - after any leading `cd` - so it anchors to the
+    # resolved cd_prefix first and the payload cwd second.
+    git_c = resolve_against(git_c, cd_prefix or payload_cwd)
+    print(verdict)
+    print(ref)
+    print(cd_prefix)
+    print(payload_cwd)
+    print(git_c)
 ' 2>/dev/null || true)"
+# A HERESTRING, NOT A HEREDOC: an unquoted heredoc would expand `$` and `\` inside a path, and a
+# quoted one would not expand `$scan` at all. `IFS=` keeps a path's own leading spaces.
+{ IFS= read -r verdict; IFS= read -r pushed_ref; IFS= read -r cd_prefix; IFS= read -r payload_cwd; IFS= read -r git_c_dir; } <<<"$scan"
 [ -n "$verdict" ] || exit 0
+
+# WHERE THE COMMAND RUNS IS NOT WHERE THIS HOOK RUNS - see the header. Strongest source first, and
+# whichever one answers is carried into the refusal, because the operator cannot check an answer
+# whose provenance is hidden.
+workdir=""
+workdir_desc=""
+if [ -n "$git_c_dir" ] && [ -d "$git_c_dir" ]; then
+    workdir="$git_c_dir"
+    workdir_desc="the directory the command names with -C"
+elif [ -n "$cd_prefix" ] && [ -d "$cd_prefix" ]; then
+    workdir="$cd_prefix"
+    workdir_desc="the directory the command changes into"
+elif [ -n "$payload_cwd" ] && [ -d "$payload_cwd" ]; then
+    workdir="$payload_cwd"
+    workdir_desc="this tool call's own working directory"
+else
+    workdir="$PWD"
+    workdir_desc="this hook process's directory, because the tool call did not say where it runs"
+fi
+if ! cd "$workdir" 2>/dev/null; then
+    workdir_desc="this hook process's directory, because \`$workdir\` could not be entered"
+    workdir="$PWD"
+fi
 
 root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$root" ] || exit 0
 cd "$root" 2>/dev/null || exit 0
-branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+
+# THE PROVENANCE SENTENCE IS NOT DECORATION. Everything below - the PR number, the thread count, the
+# runs in progress - is about `$branch`, and when the command did not name a branch that is a GUESS
+# about which worktree this call belongs to. Saying so is what turns a wrong answer into a checkable
+# one; the two incidents in the header are both cases where it read as measured fact.
+provenance=""
+if [ -n "$pushed_ref" ]; then
+    branch="$pushed_ref"
+else
+    branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    provenance="THE COMMAND DOES NOT NAME A BRANCH, so this hook used \`${branch:-<none>}\` - the current HEAD of ${root}, reached from ${workdir_desc} (\`${workdir}\`). This repository normally has several worktrees checked out at once, so that may not be where your command runs: check it is the branch you are rewriting before reading anything below as being about it. "
+fi
 
 # WHAT WOULD ACTUALLY BE LOST. Best-effort: a missing PR, a missing gh or a dead network all fall
 # through to the refusal rather than letting the rewrite past - the point is the pause, the detail is
@@ -222,7 +443,10 @@ try:
         threads, threads_problem = threads_call.result()
         runs, runs_problem = runs_call.result()
 
-    parts = ["This branch is %s#%s." % (slug, number)]
+    # NAME THE BRANCH, not just the PR. Everything that follows is a measurement of one branch, and
+    # a reader who cannot see which one cannot tell a correct answer from the wrong-worktree answer
+    # this hook used to give (see WHICH BRANCH at the top of this file).
+    parts = ["`%s` is %s#%s." % (BRANCH, slug, number)]
     found = False
     unmeasured = []
     if threads_problem:
@@ -259,6 +483,7 @@ PY
 )"
 fi
 [ -n "$detail" ] || detail="The pull-request lookup produced no answer at all, so nothing could be measured - which is not the same as nothing being at risk."
+detail="${provenance}${detail}"
 
 export VERDICT="$verdict"
 export DETAIL="$detail"

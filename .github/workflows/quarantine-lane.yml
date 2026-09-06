@@ -21,6 +21,17 @@ permissions:
   contents: read
   pull-requests: write  # sticky lane report comment + merge-blocking unexpected-pass threads
 
+# ONE RUN PER PR. Without this, two pushes close together run this workflow concurrently, and
+# postStickyReport has no server-side lock between reading the existing comment and writing. Before
+# this PR that race lost an edit; now that a status change POSTS A FRESH COMMENT it can leave two
+# live markers, and the lookup takes the first match oldest-first - so the newer one is orphaned and
+# every later update writes to a comment nobody reads. maven.yml already guards its consumer of the
+# same module this way.
+concurrency:
+  group: quarantine-lane-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+
 jobs:
   # Quarantine LANE RUN: actually executes the @Quarantined tests - known-failing-on-master tests
   # excluded from the gating suites - so we still see when they start passing (their fixes landed),
@@ -57,6 +68,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: bin/check-quarantine-owners.sh
+      # `found` gates the EXECUTION steps only - there is nothing to run when the registry is empty.
+      # The two REPORTING steps below are gated on `steps.any.outcome` instead, which is still
+      # `success` when the lane is empty, because the run that empties the lane is precisely the run
+      # that has to retract the previous push's "delete the annotation and the registry entry"
+      # comment. Gating those on `found` made that the one run guaranteed not to speak, and the
+      # instruction stayed live on the PR that had already carried it out. The class, and why the
+      # empty case is a report rather than a silence:
+      # docs/solutions/workflow-issues/the-run-that-had-to-retract-was-the-one-gated-silent-2026-09-02.md
       - name: Check the lane is not empty
         id: any
         run: |
@@ -87,13 +106,66 @@ jobs:
         env:
           QUARANTINE_SKIP_CHECKS: "1"  # the fail-fast steps above already ran them as gating checks
         run: bin/quarantined-test.sh -DforkCount=4 -DreuseForks=true
-      - name: Report lane outcomes to the PR (sticky comment + merge-blocking threads on unexpected passes)
-        if: always() && steps.any.outputs.found == 'true' && github.event_name == 'pull_request'
+      # Two steps, and the split is deliberate. This one CLASSIFIES: it writes
+      # target/quarantine-lane-report.md and opens the merge-blocking review threads, and it must be
+      # able to fail the job - its lane-leak self-check exits 1 when a non-quarantined test ran, which
+      # is the proof that the lane runs ONLY quarantined tests. The step below POSTS, and must NOT be
+      # able to fail the job. Running both under one `continue-on-error` would have swallowed the
+      # leak check; running both without one lets a rate limit while commenting red a healthy lane.
+      # IT ALSO RUNS ON PUSH-TO-MASTER NOW, where it used to be gated to `pull_request`. Two things
+      # follow, both wanted: the master-state record lands in the job log instead of nowhere, and the
+      # lane-leak self-check - the proof that this lane runs ONLY quarantined tests - runs against
+      # master rather than only against PR heads, which is where a regressed `<groups>` binding would
+      # actually live.
+      # `steps.any.outcome == 'success'`, NOT `outputs.found` - see the note on that step. It is
+      # still `skipped` when a fail-fast gate above rejected the registry, so a report is never built
+      # from a state a gate has just refused.
+      - name: Classify lane outcomes (writes the report, opens threads on unexpected passes)
+        if: always() && steps.any.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
+          # Empty on a push-to-master run, which is the log-only path: the report file is still
+          # written and no comment or thread is attempted.
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: bin/quarantine-lane-report.sh
+      - name: Post the quarantine lane report to the PR
+        if: always() && steps.any.outcome == 'success' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        # SAME-REPOSITORY PRs ONLY, and A COMMENT WRITE MUST NOT FAIL THE JOB - both for the reasons
+        # the throughput step in maven.yml states at length. On a fork PR the token is read-only and
+        # the write 403s; the report is still in the job log either way.
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs')
+            const path = 'target/quarantine-lane-report.md'
+            if (!fs.existsSync(path)) return
+            const body = fs.readFileSync(path, 'utf8')
+
+            // SHARED WITH THE THROUGHPUT REPORT, deliberately and not by copying.
+            // .github/scripts/quarantine-report-comment.js carries what is this report's own - the
+            // marker, the outcome vocabulary, and the delta that names which test moved - and
+            // configures .github/scripts/sticky-report-comment.js, which owns the mechanics every
+            // report needs. Both were written and measured for the throughput comment in
+            // astubbs/parallel-consumer#407 and now live in one place with their own self-tests.
+            //
+            // WHAT A "STATUS CHANGE" MEANS HERE: any row's OUTCOME moving. The one that matters is a
+            // test going from failing to PASSING, because a deterministic quarantined test that
+            // starts passing means its fix landed and the annotation plus the registry entry are now
+            // wrong. That transition used to happen by silently editing a comment nobody was looking
+            // at. Rows entering or leaving the lane count too - a PR that quarantines a test, or
+            // deletes a quarantine, has changed what this report is about.
+            //
+            // THE LAST ROW LEAVING is the one this step is now reachable for, and the only report
+            // that RETRACTS rather than states: it withdraws the previous push's demand that an
+            // annotation and a registry entry be deleted, on the PR that just deleted them. With
+            // nothing of ours on the PR to retract it posts nothing at all.
+            const report = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/quarantine-report-comment.js`)
+            const result = await report.post({ github, context, core, body })
+            // `skipped` is a legitimate outcome here and looks identical to a step that did nothing
+            // wrong - name it, so the log answers "did it post?" without reading the PR.
+            core.info(`quarantine lane report: ${result.action}${result.url ? ` ${result.url}` : ''}`)
       - name: Summarize quarantine lane
         if: steps.any.outputs.found == 'true'
         run: |

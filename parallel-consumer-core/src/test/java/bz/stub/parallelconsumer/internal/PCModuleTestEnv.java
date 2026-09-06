@@ -31,6 +31,42 @@ public class PCModuleTestEnv extends PCModule<String, String> {
     private WorkManager<String, String> workManager;
     private final DynamicLoadFactor limitedDynamicLoadFactor = new LimitedDynamicExtraLoadFactor();
 
+
+    /**
+     * A module whose processor does <b>not</b> close itself, for a test that drives the control loop by hand and
+     * therefore owns the lifecycle - closing would also NPE on the mocked producer's absent transaction manager.
+     * <p>
+     * Shared because three tests had written the same anonymous subclass out separately, and the resulting
+     * whole-file likeness is what pushed {@code dups: similarity} over its increase-vs-base cap. The engine
+     * compares files including their comments, so a copied block costs twice: once as structure and again as the
+     * prose explaining it.
+     *
+     * @param options            what the module is built with
+     * @param alwaysTimeToCommit forces {@code isTimeToCommitNow()}, for a test that wants a commit attempt on every
+     *                           control-loop pass rather than waiting out the real interval
+     */
+    public static PCModuleTestEnv withHandDrivenProcessor(ParallelConsumerOptions<String, String> options,
+                                                          boolean alwaysTimeToCommit) {
+        return new PCModuleTestEnv(options) {
+            @Override
+            protected AbstractParallelEoSStreamProcessor<String, String> pc() {
+                if (parallelEoSStreamProcessor == null) {
+                    parallelEoSStreamProcessor = new bz.stub.parallelconsumer.ParallelEoSStreamProcessor<String, String>(options(), this) {
+                        @Override
+                        protected boolean isTimeToCommitNow() {
+                            return alwaysTimeToCommit || super.isTimeToCommitNow();
+                        }
+
+                        @Override
+                        public void close() {
+                        }
+                    };
+                }
+                return parallelEoSStreamProcessor;
+            }
+        };
+    }
+
     @Override
     protected DynamicLoadFactor dynamicExtraLoadFactor() {
         return limitedDynamicLoadFactor;

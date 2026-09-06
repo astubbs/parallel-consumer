@@ -53,3 +53,17 @@ inherits more than the three hooks named above:
   so must read stderr, whereas `gh pr list --head` exits 0 with empty output for a real absence and
   non-zero only on failure. Its slug derivation also predates the `file://` fix. Read it for the
   shape of the problem, not for code to lift.
+
+**The INPUT to the lookup was wrong too, and that half is now fixed - it adds a fourth duplicated
+thing this dedup task inherits.** Full incident and mechanism:
+[`a-hook-processes-own-directory-describes-the-session-not-the-command-2026-08-31.md`](../solutions/workflow-issues/a-hook-processes-own-directory-describes-the-session-not-the-command-2026-08-31.md).
+In short - every copy derived the branch from the hook process's own directory (the session's, not
+the guarded command's), fixed by deriving it from the push refspec, then a leading `cd`, then the
+payload's `cwd`, then the hook's own directory as a labelled last resort. That adds a **fourth**
+duplicated thing: the refspec rule now exists twice for the same fail-open reason the lookup itself
+is triplicated - `hook_push_head_ref` in `.claude/hooks/lib/hook-common.sh` (bash) and
+`push_head_ref` inside `.claude/hooks/check-history-rewrite.sh` (python). The derivation rule now has
+**three** consumers in total (the two above plus `.claude/hooks/pre-commit-gate.sh`'s own directory
+derivation), and only the advisory push hooks that already source `hook-common.sh` can share
+`hook_push_head_ref` - the two that refuse still have to inline, for the reason astubbs#341 gives
+above. Whoever folds the three lookups together folds this in too.

@@ -63,7 +63,8 @@ if [ "$rc" -eq 0 ]; then
 fi
 
 # Herestring, not a pipe: `printf | grep -q` takes EPIPE under pipefail and turns a MATCH into a
-# failure. bin/check-shell-sigpipe.sh enforces this across the directory.
+# failure. The `sigpipe-into-grep-q` rule in bin/lib/source-patterns.mjs enforces this across the
+# directory.
 if grep -q '^INVALID:' <<<"$out"; then
   echo "check-upstream-map: $MANIFEST does not satisfy its schema" >&2
   exit 1

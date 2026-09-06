@@ -35,6 +35,26 @@
         <maven.deploy.skip>true</maven.deploy.skip>
         <maven.install.skip>true</maven.install.skip>
         <gpg.skip>true</gpg.skip>
+
+        <!-- The Jackson two example modules pin, single-sourced here so the two cannot drift apart.
+
+             WHY A PROPERTY HERE RATHER THAN dependencyManagement IN THE ROOT POM. jackson-databind
+             is transitive to WireMock in parallel-consumer-vertx, and managing its version at the
+             root forces WireMock onto an incompatible Jackson and breaks VertxTest with HTTP 500.
+             A property states a version without imposing one on anything, and this parent is
+             inherited only by the example modules, so vertx cannot see it either way. Each module
+             still declares its own dependency; only the number is shared.
+
+             WHY 2.18.10, AND WHY 2.18.9 IS THE FLOOR. kafka-streams 3.9.2 drags in 2.16.2, which is
+             vulnerable to CVE-2026-54512, 54513, 54514, 54515 and 59888. CVE-2026-59889 was
+             introduced in 2.18.0 and only fixed in 2.18.9, so anything from 2.18.0 to 2.18.8 would
+             trade one advisory for another. 2.18.10 additionally carries the fixes for
+             CVE-2026-68497 and CVE-2026-19032, which this repo held as dated TEMPORARY exclusions
+             in the root pom until it shipped.
+
+             RETIRE WHEN: kafka-streams ships Jackson 2.18.10 or newer. 3.9.2 is the last 3.9.x, and
+             4.x is behind the Java 11 baseline move. -->
+        <jackson.examples.version>2.18.10</jackson.examples.version>
     </properties>
 
     <build>

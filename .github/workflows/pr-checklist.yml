@@ -41,19 +41,49 @@ jobs:
         with:
           persist-credentials: false
 
-      # The gate's own logic is subtle enough to have shipped two real misjudgements already, so it
-      # is unit tested and the tests run before the gate does.
-      - name: Self-test the changelog gate logic
-        run: node .github/scripts/changelog-ref-gate.test.js
+      # COMPILE EVERY NODE SCRIPT BEFORE RUNNING ANY OF THEM. `node --check` parses without executing,
+      # so a syntax error in a script that only runs on some branches - or only when a rule matches -
+      # is caught here rather than by the unlucky PR that first reaches it. Shell had the same hole and
+      # bin/check-shell-lint.sh closed it; Node arriving in bin/ (bin/AGENTS.md, "Write it in Node")
+      # would otherwise have reopened it in a new language.
+      #
+      # NOT static analysis, and it is not sold as one: it is a compile. Real analysis for JavaScript
+      # means either an npm toolchain this repo has deliberately never had, or adding
+      # javascript-typescript to CodeQL's default setup - which is a repository SETTING rather than a
+      # file, and is tracked in docs/inflight/ci-javascript-is-the-one-language-nobody-analyses.md.
+      - name: Compile-check every Node script
+        run: |
+          set -euo pipefail
+          found=0
+          while IFS= read -r f; do
+            found=$((found + 1))
+            node --check "$f"
+          done < <(git ls-files '*.mjs' '*.js' ':!:**/node_modules/**')
+          # A loop that matched nothing exits 0 and looks identical to a clean pass - the failure this
+          # repo has hit repeatedly. Say the count, and fail if the glob went stale.
+          echo "compile-checked $found Node script(s)"
+          [ "$found" -gt 0 ] || { echo "no Node scripts matched - the glob is wrong" >&2; exit 1; }
 
-      - name: Self-test the issue-reference gate logic
-        run: node .github/scripts/issue-ref-gate.test.js
-
-      - name: Self-test the file-reference gate logic
-        run: node .github/scripts/file-ref-gate.test.js
-
-      - name: Self-test the roadmap stage gate logic
-        run: node .github/scripts/roadmap-stage-gate.test.js
+      # The gates' own logic is subtle enough to have shipped two real misjudgements already, so each
+      # is unit tested and the tests run before the gates do.
+      #
+      # DISCOVERED, NOT LISTED - the same property bin/check-all.sh exists to hold, for the same
+      # reason. This was four named steps, one per gate, so a module added to .github/scripts/ with a
+      # `.test.js` sibling ran nowhere until somebody remembered to wire it here, and its gate looked
+      # tested. `sticky-report-comment.test.js` was the fifth and would have been the first to find
+      # out. The count assertion is the other half, copied from the compile-check above: a loop that
+      # matched nothing exits 0 and is indistinguishable from a clean pass.
+      - name: Self-test every gate module in .github/scripts
+        run: |
+          set -euo pipefail
+          found=0
+          while IFS= read -r t; do
+            found=$((found + 1))
+            echo "--- $t"
+            node "$t"
+          done < <(git ls-files '.github/scripts/*.test.js')
+          echo "ran $found gate self-test(s)"
+          [ "$found" -gt 0 ] || { echo "no gate self-tests matched - the glob is wrong" >&2; exit 1; }
 
       # The local mirror (bin/check-issue-refs.sh) fetches the PR body via gh to honour the
       # `issue-refs: N/A` opt-out the way this workflow does; that plumbing is shell, not gate

@@ -306,7 +306,10 @@ EOF
 # Confluent header; if their content has diverged from the fork-point blob they must
 # also carry the modifications line. (The first three were relocated in fface195; the
 # MockConsumer* trio was renamed so surefire would actually collect them - their old
-# names matched none of its include patterns, so they had never run in CI.)
+# names matched none of its include patterns, so they had never run in CI; LongPollingMockConsumer
+# moved src/test -> src/main so downstream users get it without the test-jar, astubbs#159 /
+# confluentinc#526 - the package is unchanged, so PACKAGE_MOVES alone would resolve it to a
+# src/main fork-point path upstream never had.)
 #
 # These paths move with the package rename too, and BOTH halves are normalised through
 # PACKAGE_MOVES before use, so an entry matches whichever spelling it is written in. The
@@ -321,6 +324,7 @@ parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/MockConsumerCommit
 parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/MockConsumerSaslAuthenticationTest.java|parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/MockConsumerTestWithSaslAuthenticationException.java
 parallel-consumer-core/src/test/java/bz/stub/parallelconsumer/MockConsumerEarlyCloseTest.java|parallel-consumer-core/src/test/java/io/confluent/parallelconsumer/MockConsumerTestWithEarlyClose.java
 parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/PCInternalRuntimeException.java|parallel-consumer-core/src/main/java/io/confluent/parallelconsumer/internal/InternalRuntimeException.java
+parallel-consumer-core/src/main/java/bz/stub/parallelconsumer/internal/utils/LongPollingMockConsumer.java|parallel-consumer-core/src/test/java/io/confluent/csid/utils/LongPollingMockConsumer.java
 ${COPYRIGHT_CHECK_EXTRA_RENAMES:-}
 "
 
