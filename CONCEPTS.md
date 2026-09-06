@@ -53,6 +53,12 @@ be committing its starting offset. That property is also what makes the frontier
 asserting about a commit: which intermediate offsets a partition commits on the way there depends on
 when the periodic commit happens to fire, but where it ends up does not.
 
+**Rider**
+An opaque blob an embedder asks the consumer to carry inside a partition's committed offset metadata, beside
+the frontier's own encoding, and to hand back after a restart. The consumer never reads it; it only knows
+its length, so it can budget the field. Best-effort by contract: when the field is over its cap the rider is
+dropped before the frontier's encoding is, because the encoding is what makes a crash recoverable.
+
 **Assignment epoch**
 A per-partition counter incremented each time the partition is assigned to this instance. Records
 are stamped with the partition's current epoch as they are polled and carry it through processing;
