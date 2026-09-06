@@ -224,6 +224,55 @@ class ForeignOffsetMetadataOnAssignmentTest {
     }
 
     /**
+     * AE6, on one classpath: a payload Parallel Consumer really wrote with a rider envelope, whose <em>leading</em>
+     * byte a reader that predates the envelope resolves as unknown.
+     * <p>
+     * The rewrite is not a shortcut around building an old reader - it is the same operation
+     * {@code OffsetRiderUpgradeDowngradeTest} performs against a broker with a plain {@code KafkaConsumer}, because
+     * there is no released artifact to run and no second classloader to run it in (KTD11). Pinning it here as well
+     * means the unit suite fails if that degradation ever stops being the unknown-magic path, without needing Docker.
+     * <p>
+     * Distinct from {@link #foreignMetadata()} above, which is four arbitrary bytes behind an unclaimed magic byte:
+     * this payload is a well-formed envelope in every byte but the first, so it also proves that nothing downstream
+     * peeks past the magic byte and recognises the envelope anyway.
+     */
+    private static String envelopePayloadReadByAnOlderReader() {
+        byte[] envelope = OffsetRiderEnvelope.wrap(
+                new byte[]{OffsetEncoding.BitSetV2.magicByte, 0, 2, 0},
+                OffsetRiderEnvelope.Rider.present(new byte[]{1, 2, 3, 4, 5, 6, 7, 8}));
+        envelope[0] = magicByteOfAnEncodingThatDoesNotExistYet();
+        return Base64.getEncoder().encodeToString(envelope);
+    }
+
+    @Test
+    void anEnvelopeSeenByAReaderThatDoesNotKnowItResumesFromTheCommittedOffsetUnderIgnore() {
+        var module = moduleWithCommittedMetadata(envelopePayloadReadByAnOlderReader(),
+                ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.IGNORE);
+        WorkManager<String, String> wm = module.workManager();
+
+        assertThatCode(() -> wm.onPartitionsAssigned(UniLists.of(TP)))
+                .as("AE6: an old reader must warn and carry on, not take the consumer down")
+                .doesNotThrowAnyException();
+
+        assertThat(wm.getPm().getPartitionState(TP).getOffsetHighestSeen())
+                .as("IGNORE resumes from the committed offset, so the highest seen is the offset below it")
+                .isEqualTo(COMMITTED_OFFSET - 1);
+    }
+
+    @Test
+    void anEnvelopeSeenByAReaderThatDoesNotKnowItStopsUnderFail() {
+        var module = moduleWithCommittedMetadata(envelopePayloadReadByAnOlderReader(),
+                ParallelConsumerOptions.InvalidOffsetMetadataHandlingPolicy.FAIL);
+        WorkManager<String, String> wm = module.workManager();
+
+        assertThatThrownBy(() -> wm.onPartitionsAssigned(UniLists.of(TP)))
+                .as("AE6: FAIL must stop rather than replay from a payload it cannot read")
+                .isInstanceOf(UnknownOffsetMetadataMagicException.class)
+                .as("an OffsetDecodingError would be swallowed by loadPartitionStateForAssignment, even under FAIL")
+                .isNotInstanceOf(OffsetDecodingError.class);
+    }
+
+    /**
      * Kafka Streams metadata under the IGNORE policy - the case upstream 0.5.2.6 added the option for. Pinned here at
      * the assignment level (existing coverage only exercises {@link EncodedOffsetPair} directly).
      */

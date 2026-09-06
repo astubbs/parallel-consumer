@@ -75,7 +75,11 @@ public class OffsetCodecTestUtils {
      * Derived from the enum rather than hard coded, so that adding an encoding cannot silently turn a
      * forward-compatibility test into a test of that new encoding.
      */
-    static byte magicByteOfAnEncodingThatDoesNotExistYet() {
+    // public, not package-private: the broker-backed OffsetRiderUpgradeDowngradeTest rewrites a committed payload's
+    // leading byte to this value to simulate an old reader, and it lives in the integrationTests package. Widened
+    // rather than copied - a hand-coded byte there would stop naming an unclaimed one the day an encoding takes it,
+    // and the test would go on passing while no longer exercising the unknown-magic path.
+    public static byte magicByteOfAnEncodingThatDoesNotExistYet() {
         Set<Byte> claimed = Arrays.stream(OffsetEncoding.values())
                 .map(OffsetEncoding::getMagicByte)
                 .collect(Collectors.toSet());

@@ -337,6 +337,73 @@ public class OffsetMapCodecManager<K, V> {
         return decodeCompressedMetadata(committedOffsetForPartition, decodedBytes, errorPolicy, tp);
     }
 
+    /**
+     * Reads the opaque rider back out of one partition's committed offset metadata - the public half of the embedder
+     * API whose write half is {@link ParallelConsumerOptions#getRiderSupplier()}.
+     * <p>
+     * <b>This is the route for an embedder that does not own Parallel Consumer's consumer.</b> The rider is
+     * partition-scoped and durable, so an embedder that wants it before (or without) handing the partition to PC
+     * fetches the committed offset and its metadata field with its own consumer or admin client - {@code
+     * Consumer#committed} or {@code AdminClient#listConsumerGroupOffsets} - and hands the two here. PC's own
+     * assignment path does not go through this method and does not keep what it reads: it builds
+     * {@link PartitionState} from the incompletes and discards the rider.
+     * <p>
+     * <b>What the four answers mean to an embedder</b>, which are four different situations and not degrees of one:
+     * <ul>
+     *     <li>{@link OffsetRiderEnvelope.RiderState#PRESENT} - these are the bytes the supplier returned for this
+     *     partition. Decode them.</li>
+     *     <li>{@link OffsetRiderEnvelope.RiderState#NONE} - no rider was configured when this was committed, or the
+     *     budget ladder had to shed the envelope itself to keep the hole map (R9). Start from nothing.</li>
+     *     <li>{@link OffsetRiderEnvelope.RiderState#DROPPED} - a rider existed and was too big for the commit it
+     *     would have ridden on. Also start from nothing, but the supplier is producing more bytes than PC can carry
+     *     and the dropped-rider counter says how often.</li>
+     *     <li>{@link OffsetRiderEnvelope.RiderState#UNREADABLE} - this build could not read the metadata at all and
+     *     {@code IGNORE} discarded it, so what the rider slot held is <em>unknown</em> rather than absent. Never
+     *     returned under {@code FAIL}, which throws instead.</li>
+     * </ul>
+     * An envelope that parsed keeps its rider even when the hole map inside it did not: the two are structurally
+     * independent, so a corrupt inner body still answers {@code PRESENT} under {@code IGNORE}.
+     * <p>
+     * <b>The policy is a required parameter, and no overload without one is ever added.</b> There is no default that
+     * is not a decision on the caller's behalf: {@code IGNORE} is PC's runtime default and silently discards an
+     * offset map, while {@link #deserialiseIncompleteOffsetMapFromBase64(long, String)} - the policy-less helper in
+     * this class - deliberately picks the opposite, {@code FAIL}, on the grounds that a helper with no user to ask
+     * must not discard on one. A convenience overload here would have to pick one of those two and would read at the
+     * call site as though the choice did not matter. It does: it decides whether an embedder that cannot read the
+     * metadata restarts from an unknown state or refuses to start.
+     * <p>
+     * <b>The committed offset is not decoration.</b> It is the base the payload's offsets are relative to, and it is
+     * the only thing that locates this metadata in the diagnostics of the failure path - see
+     * {@link EncodedOffsetPair#describeSource}, which renders it into the exception {@code FAIL} throws and the
+     * warning {@code IGNORE} logs. This overload has no {@link TopicPartition} to name, so under {@code FAIL} the
+     * offset is the whole of the operator's clue about which commit holds the bad payload.
+     *
+     * @param committedOffset the committed offset the metadata was written against - the NEXT offset to be polled,
+     *                        exactly as {@code OffsetAndMetadata#offset()} reports it
+     * @param metadata        the {@code metadata} field of that committed offset; empty means nothing was written,
+     *                        which is {@link OffsetRiderEnvelope.RiderState#NONE}
+     * @param policy          what to do with metadata this build cannot read - required, see above
+     * @return the rider slot's state, and a copy of its bytes when it has any
+     * @throws OffsetDecodingError    declared like every other entry point in this family. The base64 failure it
+     *                                once named is now settled by {@code policy} instead, but the declaration stays:
+     *                                dropping it would be a source-incompatible change to a public signature for no
+     *                                gain, and the outer string codec is where a future checked failure would arise
+     * @throws CorruptOffsetMetadataException      under {@code FAIL}, when the payload is not readable metadata
+     * @throws UnknownOffsetMetadataMagicException under {@code FAIL}, when its magic byte belongs to no encoding this
+     *                                             build knows - deliberately NOT an {@link OffsetDecodingError}, so
+     *                                             it escapes the rebalance callback rather than being swallowed
+     * @see ParallelConsumerOptions#getRiderSupplier()
+     */
+    public static OffsetRiderEnvelope.Rider decodeRider(long committedOffset,
+                                                        String metadata,
+                                                        InvalidOffsetMetadataHandlingPolicy policy) throws OffsetDecodingError {
+        // Straight through the string-level entry point rather than round the outer codec: decodeCompressedMetadata
+        // stays the single decode choke point, so this answers with whatever the assignment path would have seen for
+        // the same string, including the policy's fallback. The Rider it returns copies its bytes out on every
+        // getBytes() call, so nothing this method allocated is shared with the caller.
+        return deserialiseMetadataFromBase64(committedOffset, metadata, policy, null).getRider();
+    }
+
     PartitionState<K, V> decodePartitionState(TopicPartition tp, OffsetAndMetadata offsetData) throws OffsetDecodingError {
         HighestOffsetAndIncompletes incompletes = decodeOffsetMapForPartition(tp, offsetData);
         log.debug("Loaded incomplete offsets from offset payload {}", incompletes);
