@@ -10,6 +10,9 @@ import bz.stub.parallelconsumer.internal.utils.TimeUtils;
 import bz.stub.parallelconsumer.*;
 import bz.stub.parallelconsumer.metrics.PCMetrics;
 import bz.stub.parallelconsumer.metrics.PCMetricsDef;
+import bz.stub.parallelconsumer.internal.navigator.NavigatorParticipant;
+import bz.stub.parallelconsumer.navigator.AssignmentSnapshot;
+import bz.stub.parallelconsumer.navigator.PartitionShareResourceAllocator;
 import bz.stub.parallelconsumer.state.WorkContainer;
 import bz.stub.parallelconsumer.internal.admission.AdmissionBoundarySignals;
 import bz.stub.parallelconsumer.state.WorkManager;
@@ -22,6 +25,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.MockConsumer;
 import org.apache.kafka.clients.consumer.internals.ConsumerCoordinator;
+import org.apache.kafka.common.PartitionInfo;
 import org.apache.kafka.common.TopicPartition;
 import org.slf4j.MDC;
 
@@ -314,6 +318,58 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     @Getter
     private int numberOfAssignedPartitions;
 
+    /**
+     * The engine-built partition-share allocator the rebalance callbacks publish to (the partition-share
+     * plan's KTD2, KTD4) - {@link PCModule#partitionShareAllocator()} captured ONCE at construction, so the
+     * callbacks read a final field and never touch the module's memoisation lock. Empty for an untagged
+     * instance and under the in-process and custom strategies, where the callbacks publish nothing.
+     */
+    private final Optional<PartitionShareResourceAllocator> partitionShareAllocator;
+
+    /**
+     * How long {@link #onPartitionsAssigned} waits on ONE topic's partition-count read
+     * ({@link org.apache.kafka.clients.consumer.Consumer#partitionsFor(String, Duration)}, KTD3). The callback
+     * runs on the broker-poll thread inside {@code consumer.poll()}, after the consumer has just refreshed the
+     * metadata the assignment came from, so the read is a cache hit in practice and this timeout is only the
+     * bound on the exceptional path (the topic evicted from the metadata cache between the refresh and the
+     * callback). <b>The callback's real wait budget is this value times the subscribed-topic count</b>: the
+     * read is per topic in {@link org.apache.kafka.clients.consumer.Consumer#subscription()}, and a decline on
+     * any topic ends the loop early. Master's {@code rebalanceCallbacksMustNotBlock} ArchUnit rule cannot see a wait
+     * behind interface dispatch, so nothing static bounds this - the value is the bound. Calibrated at
+     * implementation: a few hundred milliseconds keeps a ten-topic subscription under the default
+     * {@code max.poll.interval.ms} by an order of magnitude, while a genuine broker round trip on a warm
+     * connection completes well inside it.
+     */
+    static final Duration PARTITION_TOTAL_READ_TIMEOUT = Duration.ofMillis(250);
+
+    /**
+     * The partitions this instance currently holds, as the navigator's snapshot numerator (KTD2). <b>Confined to
+     * the broker-poll thread</b>: it is touched ONLY inside the three rebalance callbacks, which run on that
+     * thread inside {@code consumer.poll()} (or on a single test thread driving the callbacks directly), and it
+     * is never read anywhere else - the control thread sees the assignment only through the immutable
+     * {@link AssignmentSnapshot} the callbacks publish. There is therefore no lock to name in a
+     * {@code @GuardedBy}: the confinement IS the invariant, and a second thread touching this set would be a
+     * defect in the caller, not a race to annotate. Same shape as {@link #numberOfAssignedPartitions}.
+     */
+    private final Set<TopicPartition> navigatorHeldPartitions = new HashSet<>();
+
+    /**
+     * The last RESOLVED partition total per subscribed topic (KTD3) - the snapshot's denominator - or empty
+     * while unresolved. Same confinement as {@link #navigatorHeldPartitions}: refreshed on every assign by the
+     * timed metadata read, kept as-is by a revoke or loss (nothing changed the totals, so the last read still
+     * describes them), and emptied by any declined read (a stale total at the very rebalance that changed it is
+     * the one case that over-mints, so a decline never keeps the previous total - R5 then mints nothing until
+     * the next assignment resolves it).
+     */
+    private final Map<String, Integer> navigatorPartitionTotals = new HashMap<>();
+
+    /**
+     * Rate-limits the declined-metadata-read warning (KTD3) - the callback can decline once per topic per
+     * rebalance, and a rebalance storm should not become a log storm. Confined to the broker-poll thread with
+     * the two fields above; {@link RateLimiter} is not thread-safe and needs no lock here.
+     */
+    private final RateLimiter partitionTotalDeclineLogLimiter = new RateLimiter(5);
+
     private final RateLimiter queueStatsLimiter = new RateLimiter();
 
     /**
@@ -424,6 +480,9 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
         sizeWorkerPoolForAdmission();
 
         this.wm = module.workManager();
+
+        // captured once, on the constructing thread, so the rebalance callbacks read a final field (KTD4)
+        this.partitionShareAllocator = module.partitionShareAllocator();
 
         this.brokerPollSubsystem = module.brokerPoller(this);
 
@@ -902,6 +961,13 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
             // The reset decision itself is taken on the control thread, at the admission tick.
             module.admissionController().onPartitionsRevoked(partitions);
         }
+        // Also FIRST: the navigator's held set loses the revoked partitions before the commit and the
+        // truncation below, either of which can throw. Kafka has already decided the partitions are leaving,
+        // so a failure here must not leave the held set claiming them - the next assign would publish
+        // held-plus over a stale numerator and this instance would mint a share it no longer owns (the one
+        // direction the fleet bound does not cover). Publishing here also ends the revoked lease at the
+        // quantum the revocation STARTS in, which is R4's "the quantum the revocation lands in".
+        publishNavigatorAssignmentAfterLoss(partitions);
         isRebalanceInProgress.set(true);
         while (isTransactionCommittingInProgress())
             Thread.sleep(100); //wait for the transaction to finish committing
@@ -936,6 +1002,11 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     public void onPartitionsAssigned(Collection<TopicPartition> partitions) {
         numberOfAssignedPartitions = numberOfAssignedPartitions + partitions.size();
         log.info("Assigned {} total ({} new) partition(s) {}", numberOfAssignedPartitions, partitions.size(), partitions);
+        // FIRST, before the work manager's registration can throw: the navigator's held set gains the new
+        // partitions and the totals are re-read, so the held set never falls behind the group's view of this
+        // member (the same discipline as the revoke and loss callbacks). The snapshot takes effect from the
+        // next quantum boundary either way.
+        publishNavigatorAssignmentAfterAssign(partitions);
         wm.onPartitionsAssigned(partitions);
         if (isAdaptiveConcurrencyActive()) {
             // cycle end for the KTD9 assignment-delta gate - the controller compares against its baseline here
@@ -954,12 +1025,123 @@ public abstract class AbstractParallelEoSStreamProcessor<K, V> implements Parall
     @Override
     public void onPartitionsLost(Collection<TopicPartition> partitions) {
         numberOfAssignedPartitions = numberOfAssignedPartitions - partitions.size();
+        // FIRST, before the truncation can throw - the partitions are already gone (see onPartitionsRevoked)
+        publishNavigatorAssignmentAfterLoss(partitions);
         wm.onPartitionsLost(partitions);
         if (isAdaptiveConcurrencyActive()) {
             // a loss ends a cycle with no assignment half, so the delta gate compares here too
             module.admissionController().onPartitionsLost(partitions);
         }
         usersConsumerRebalanceListener.ifPresent(x -> x.onPartitionsLost(partitions));
+    }
+
+    /**
+     * The navigator half of a revoke or loss (the partition-share plan's R4, KTD2): the held set minus
+     * {@code partitions}, published FIRST in the callback - before the commit or truncation that can throw -
+     * so the revoked share stops being minted from the next quantum whatever else the callback does,
+     * under the totals the last assignment resolved - a revoke changes no topic's partition count, so the
+     * denominator is kept, and only an assign re-reads it. No-op unless this instance runs the engine-built
+     * partition-share allocator.
+     * <p>
+     * <b>Callback discipline.</b> Everything here is a plain set mutation on poll-thread-confined state plus
+     * one lock-free {@link PartitionShareResourceAllocator#publish} - no monitor, lock or condition the control
+     * or commit thread can hold, which is the shape
+     * {@code docs/solutions/runtime-errors/revoke-path-commit-deadlock-between-poll-and-control-threads.md}
+     * demands of anything on this path.
+     */
+    private void publishNavigatorAssignmentAfterLoss(Collection<TopicPartition> partitions) {
+        if (!partitionShareAllocator.isPresent()) {
+            return;
+        }
+        navigatorHeldPartitions.removeAll(partitions);
+        publishNavigatorAssignment();
+    }
+
+    /**
+     * The navigator half of an assign (R2, R4, KTD3): the held set plus {@code partitions} - possibly empty
+     * under the cooperative protocol, which fires this on every member after every rebalance - under totals
+     * re-read NOW for every topic in the consumer's current
+     * {@link org.apache.kafka.clients.consumer.Consumer#subscription()} (so a pattern subscription's newly
+     * matched topic is counted the rebalance it appears). A declined read on ANY topic
+     * publishes an {@link AssignmentSnapshot#unresolved unresolved} snapshot, never the previous total: the
+     * instance then mints nothing (R5) until the next assignment resolves it. The published snapshot takes
+     * effect from the next quantum boundary (R4's next-quantum rule).
+     * <p>
+     * Same callback discipline as {@link #publishNavigatorAssignmentAfterLoss}; the one wait on this path is
+     * the timed metadata read, bounded by {@link #PARTITION_TOTAL_READ_TIMEOUT} per subscribed topic.
+     */
+    private void publishNavigatorAssignmentAfterAssign(Collection<TopicPartition> partitions) {
+        if (!partitionShareAllocator.isPresent()) {
+            return;
+        }
+        navigatorHeldPartitions.addAll(partitions);
+        navigatorPartitionTotals.clear();
+        Optional<Map<String, Integer>> totals = readSubscribedPartitionTotals();
+        totals.ifPresent(navigatorPartitionTotals::putAll);
+        publishNavigatorAssignment();
+    }
+
+    /**
+     * Publishes the current held set under the current totals - resolved when every subscribed topic's total is
+     * known, unresolved otherwise. {@link AssignmentSnapshot#resolved} refuses a numerator its denominator does
+     * not describe (a held partition on a topic the totals do not name, or beyond its topic's total - metadata
+     * that predates the assignment); that is published as unresolved too, with the same rate-limited warning,
+     * rather than minted from (R5).
+     */
+    private void publishNavigatorAssignment() {
+        PartitionShareResourceAllocator allocator = partitionShareAllocator.get();
+        Set<TopicPartition> held = new HashSet<>(navigatorHeldPartitions);
+        AssignmentSnapshot snapshot;
+        if (navigatorPartitionTotals.isEmpty()) {
+            snapshot = AssignmentSnapshot.unresolved(held);
+        } else {
+            try {
+                snapshot = AssignmentSnapshot.resolved(held, navigatorPartitionTotals);
+            } catch (IllegalArgumentException torn) {
+                navigatorPartitionTotals.clear();
+                warnPartitionTotalDeclined("the assignment", torn.getMessage(), null);
+                snapshot = AssignmentSnapshot.unresolved(held);
+            }
+        }
+        allocator.publish(snapshot, module.clock().instant());
+    }
+
+    /**
+     * KTD3's timed denominator read: every topic in the consumer's current subscription, each through
+     * {@link org.apache.kafka.clients.consumer.Consumer#partitionsFor(String, Duration)} under
+     * {@link #PARTITION_TOTAL_READ_TIMEOUT}. ANY timeout, exception, null or empty result declines the whole
+     * read - empty, so the caller publishes unresolved - and warns, rate-limited, naming the topic and the
+     * reason. The loop stops at the first decline: with the
+     * total unknown for one topic the fraction is unknown for all, and the remaining reads would only spend
+     * more of the callback's wait budget.
+     */
+    private Optional<Map<String, Integer>> readSubscribedPartitionTotals() {
+        Map<String, Integer> totals = new HashMap<>();
+        for (String topic : consumer.subscription()) {
+            List<PartitionInfo> partitionInfos;
+            try {
+                partitionInfos = consumer.partitionsFor(topic, PARTITION_TOTAL_READ_TIMEOUT);
+            } catch (RuntimeException e) {
+                // includes the client's TimeoutException and InterruptException - both RuntimeExceptions
+                warnPartitionTotalDeclined(topic, "the read threw", e);
+                return Optional.empty();
+            }
+            if (partitionInfos == null || partitionInfos.isEmpty()) {
+                warnPartitionTotalDeclined(topic, partitionInfos == null ? "the read returned null"
+                        : "the read returned no partitions", null);
+                return Optional.empty();
+            }
+            totals.put(topic, partitionInfos.size());
+        }
+        return Optional.of(totals);
+    }
+
+    private void warnPartitionTotalDeclined(String topic, String reason, Throwable cause) {
+        partitionTotalDeclineLogLimiter.performIfNotLimited(() -> log.warn(
+                NavigatorParticipant.LOG_PREFIX + " ({}): partition total for {} could not be resolved - {}. This "
+                        + "instance mints no share of its tagged resources (R5) until the next partition "
+                        + "assignment resolves the total; tagged work is deferred, not dropped.",
+                myId.orElse("unnamed"), topic, reason, cause));
     }
 
     /**

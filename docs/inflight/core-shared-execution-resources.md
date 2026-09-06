@@ -1,7 +1,7 @@
 # Shared execution resources: one new abstraction, a ridiculous number of features fall out
 
 <!-- inflight-type: feature -->
-<!-- inflight-state: deferred - the concrete candidate design for the distributed-throttling track; the gating decisions in that note remain the owner's -->
+<!-- inflight-state: deferred - the in-process and partition-share rungs have landed; what is still open here is the controller rung, designed below and not built -->
 
 From the follow-up Codex strategy conversation, 2026-08-29 ~1:20pm - the exchange where, in the
 owner's words, "the scheduler dawned on me". This is the most concrete feature design either
@@ -124,6 +124,87 @@ seam - swap transport, not the seam; useful-demand signals feeding the division 
 the placeholder); and the successor/epoch no-re-mint proof - v1's no-re-mint is determinism plus
 ledgers inside one allocator instance, and the epoch-fenced successor-cannot-re-mint-an-interval
 guarantee is deliberately still owed by the distributed rung.
+
+### The partition-share rung landed (2026-09-06)
+
+<!-- post-merge: checked -->
+Landed with the partition-share rung of astubbs#228, planned in
+[`docs/plans/2026-09-05-1046-feat-navigator-partition-share-plan.md`](../plans/2026-09-05-1046-feat-navigator-partition-share-plan.md).
+The micro-MVP's promise now holds across JVM boundaries, still with no control plane: the consumer
+group's own assignment is the division, and the group's own rebalance re-divides it.
+
+What landed:
+
+- **The allocation strategy is an explicit menu and nothing is chosen silently.** `PARTITION_SHARE`
+  is the default, `IN_PROCESS` selects the shared in-JVM stub, `CUSTOM` takes an application
+  allocator. An allocator instance supplied without a strategy that uses it fails validation naming
+  both fields, so the in-process rung's applications migrate by one deliberate line rather than
+  being switched under.
+- **A second allocator behind the UNCHANGED `ResourceAllocator` seam.** An instance's share of a
+  tagged resource is the fraction of its subscription's partitions it holds, minted locally per
+  quantum from the same remainder rotation the in-process allocator uses. The seam's stub rule held:
+  the transport changed, the seam did not.
+- **The rotation slot is the partition's fleet-stable ORDINAL, never the bare partition index.** The
+  ordinal is the cumulative partition count of the subscribed topics sorted by name before the
+  partition's topic, plus its own index. The bare index collides across topics, so partition 0 of
+  two topics would share slot 0 and the high slots would never be held. The plan review caught this
+  before it was built, and a mutation that reverts it is killed by the two-topic test.
+- **The assignment crosses the poll and control threads as one immutable snapshot** (held partitions
+  plus per-topic totals, captured together) published lock-free from the rebalance callbacks. A
+  quantum mints from the newest snapshot published before its start, so a mid-quantum publish
+  affects the next index and no index is minted twice on one clock.
+- **An unresolved total is declined strictly, never papered over with the previous one.** Any
+  timeout, exception, empty or null result from the metadata read publishes an unresolved snapshot,
+  which mints nothing. Keeping a stale total at exactly the rebalance that changed it is the one
+  case that over-mints; undershoot with loud deferral attribution stays inside the bound.
+- **The proof runs across real process boundaries.** A child-JVM harness in the shared integration
+  utilities, an asserted two-JVM storyline, and a churn ladder that publishes the overshoot bound as
+  a measured curve under both assignment protocols with injected clock skew. The record is written
+  by the run and committed under [`docs/test-hardening/`](../test-hardening/) from the CI artifact,
+  with the run URL that produced it. [`docs/testing.md`](../testing.md) owns the lane inventory.
+
+The lesson worth carrying, from building the ladder's fleet identity: **a conservation check must
+compare against the EXACT per-index entitlement, not against a rotation-averaged share.** The share
+gauge a user reads is deliberately the rotation average, because "why am I at 1Hz" wants an average;
+summing that average per index and calling it the ceiling is off by the rotation's phase, by up to
+half the slots a contiguous block holds. The allocator grew a pure `entitledCredits` read for the
+harness to sum instead, and the child samples it once more after its processor stops so the last
+minted index is always in the sum.
+
+### The controller rung, designed and not built (R15)
+
+The remaining rung, and the one that reaches astubbs#228's cross-application half. Its allocation
+model, in the owner's own words: **clients continuously report the capacity they want; the
+partition-owned controller sums the reports and assigns capacity unevenly by request; the total is
+the maximum reached over time** - the discovered envelope, rather than a number anybody configures.
+
+What the partition-share rung settled for it:
+
+- **Announcements are keyed by app id, and each app assigns only its own partition.** The announce
+  topic's key is the application's identity, so an application writes only where it owns the key and
+  the controller reads the fleet from one place.
+- **Membership is lease-TTL**, not the consumer group's, because the controller's members are
+  applications rather than one group's instances.
+- **The fenced-writer question is a `transactional.id` cost question**, not a correctness unknown:
+  Kafka does not fence a plain produce by consumer generation, so fencing means a transactional
+  writer per control partition, and what is undecided is whether that cardinality is affordable.
+- **Policy is even-spread first, demand-weighted second.** Even spread is the placeholder that makes
+  the transport provable; the demand weighting is what the model above is for, and it is why
+  partition-share's idle-share waste is the controller's problem to solve rather than this rung's.
+- **The cross-application case is a global controllers' group**, one level up from the per-app
+  group, with the same shape as the per-app one.
+- **Pacing derives from the slot ordinal (KD7).** Staggered division was deferred off the
+  partition-share rung with the contract left at name, rate, quantum and burst; the ordinal already
+  gives every partition a stable phase, so a paced grant is a phase per slot rather than a new
+  contract field.
+- **Kafka Streams and assignor-carried grants were considered and rejected (KD8).** A compacted
+  topic read by a plain consumer is a KTable minus the runtime, and KS would add a dependency, a
+  second group and a competing threading model to buy standby state the controller must not need.
+  Carrying grants in a custom assignor's user-data looked like the controller for free, but KIP-848
+  moves assignment server-side and drops client-side assignors.
+
+Still to decide at that rung: whether the per-control-partition `transactional.id` cardinality is
+affordable, and the controller's fallback mode when its owner is unreachable.
 
 ## The v1 the conversation itself insisted on
 

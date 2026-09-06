@@ -37,6 +37,8 @@ import java.util.Map;
 import java.util.function.IntFunction;
 import java.util.stream.Collectors;
 
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.AllocationStrategy.IN_PROCESS;
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.AllocationStrategy.CUSTOM;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 
@@ -96,6 +98,7 @@ class NavigatorAttributionTest {
                 .ordering(ordering)
                 .pcInstanceTag(MEMBER)
                 .resourceTags(tags)
+                .allocationStrategy(IN_PROCESS)
                 .resourceAllocator(allocator)
                 .meterRegistry(registry)
                 .build();
@@ -399,6 +402,7 @@ class NavigatorAttributionTest {
         var options = ParallelConsumerOptions.<String, String>builder()
                 .ordering(ParallelConsumerOptions.ProcessingOrder.UNORDERED)
                 .pcInstanceTag(MEMBER)
+                .allocationStrategy(CUSTOM)
                 .resourceAllocator(untouchedAllocator)
                 .meterRegistry(registry)
                 .build();

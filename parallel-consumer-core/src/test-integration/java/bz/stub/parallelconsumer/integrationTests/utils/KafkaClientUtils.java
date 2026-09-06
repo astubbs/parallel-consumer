@@ -30,6 +30,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.testcontainers.containers.KafkaContainer;
 import pl.tlinkowski.unij.api.UniLists;
+import pl.tlinkowski.unij.api.UniMaps;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -317,6 +318,20 @@ public class KafkaClientUtils implements AutoCloseable {
         return createTopicsBlocking(UniLists.of(new NewTopic(name, numPartitions, (short) 1)));
     }
 
+    /** As {@link #createTopic(String, int)}, with per-topic broker configs (e.g. the timestamp type). */
+    public CreateTopicsResult createTopic(String name, int numPartitions, java.util.Map<String, String> configs) {
+        return createTopicsBlocking(UniLists.of(new NewTopic(name, numPartitions, (short) 1).configs(configs)));
+    }
+
+    /**
+     * A topic whose records carry the BROKER's clock ({@code message.timestamp.type=LogAppendTime}) - one clock
+     * for a whole fleet of producers, however skewed their own (the multi-process navigator harness's KTD8). A
+     * {@link FiringLedger} needs exactly one partition, so that is the only shape offered.
+     */
+    public CreateTopicsResult createLogAppendTimeTopic(String name) {
+        return createTopic(name, 1, UniMaps.of("message.timestamp.type", "LogAppendTime"));
+    }
+
     public List<NewTopic> createTopics(int numTopics) {
         List<NewTopic> newTopics = IntStreamEx.range(numTopics)
                 .mapToObj(i
@@ -371,17 +386,38 @@ public class KafkaClientUtils implements AutoCloseable {
 
     public List<String> produceMessages(String topicName, long numberToSend, String prefix, long numberOfUniqueKeys) throws InterruptedException, ExecutionException {
         log.info("Producing {} messages to {}", numberToSend, topicName);
+        var mu = new ModelUtils(new PCModuleTestEnv());
+        List<ProducerRecord<String, String>> recs = new ArrayList<>();
+        while (recs.size() < numberToSend) { //generate records in blocks of numberOfUniqueKeys
+            recs.addAll(mu.createProducerRecords(topicName, numberOfUniqueKeys, prefix));
+        }
+        recs = recs.subList(0, (int) numberToSend); //trim back to requested number to send
+        return sendAndAwait(recs);
+    }
+
+    /**
+     * Produces {@code numberToSend} records to ONE partition of {@code topicName}, explicitly - for a lane that
+     * needs backlog on exactly the partitions one consumer holds (the partition-share proof's idle-share
+     * scenario), where a keyed produce would spread across the topic. Same send-and-await as
+     * {@link #produceMessages(String, long)}; keys carry the partition so they stay unique across partitions.
+     */
+    public List<String> produceMessagesToPartition(String topicName, int partition, long numberToSend)
+            throws InterruptedException, ExecutionException {
+        log.info("Producing {} messages to {}-{}", numberToSend, topicName, partition);
+        List<ProducerRecord<String, String>> recs = new ArrayList<>();
+        for (int i = 0; i < numberToSend; i++) {
+            recs.add(new ProducerRecord<>(topicName, partition, "p" + partition + "-key-" + i, "value-" + i));
+        }
+        return sendAndAwait(recs);
+    }
+
+    /** Sends every record on a fresh non-transactional producer and waits for every broker ack. */
+    private List<String> sendAndAwait(List<ProducerRecord<String, String>> recs)
+            throws InterruptedException, ExecutionException {
+        long numberToSend = recs.size();
         final List<String> expectedKeys = new ArrayList<>();
         List<Future<RecordMetadata>> sends = new ArrayList<>();
         try (Producer<String, String> kafkaProducer = createNewProducer(false)) {
-
-            var mu = new ModelUtils(new PCModuleTestEnv());
-            List<ProducerRecord<String, String>> recs = new ArrayList<>();
-            while (recs.size() < numberToSend) { //generate records in blocks of numberOfUniqueKeys
-                recs.addAll(mu.createProducerRecords(topicName, numberOfUniqueKeys, prefix));
-            }
-            recs = recs.subList(0, (int) numberToSend); //trim back to requested number to send
-
             for (var record : recs) {
                 Future<RecordMetadata> send = kafkaProducer.send(record, (meta, exception) -> {
                     if (exception != null) {

@@ -10,15 +10,18 @@ import bz.stub.parallelconsumer.ParallelConsumer;
 import bz.stub.parallelconsumer.ParallelConsumerOptions;
 import bz.stub.parallelconsumer.ParallelConsumerOptions.ParallelConsumerOptionsBuilder;
 import bz.stub.parallelconsumer.ParallelEoSStreamProcessor;
+import bz.stub.parallelconsumer.integrationTests.utils.FiringLedger;
 import bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.kafka.clients.admin.ConsumerGroupDescription;
 import org.apache.kafka.clients.admin.CreateTopicsResult;
 import org.apache.kafka.clients.admin.OffsetSpec;
 import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.common.ConsumerGroupState;
 import org.apache.kafka.common.TopicPartition;
 import org.awaitility.Awaitility;
 import org.awaitility.core.ConditionTimeoutException;
@@ -34,10 +37,20 @@ import pl.tlinkowski.unij.api.UniMaps;
 import pl.tlinkowski.unij.api.UniSets;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.UnaryOperator;
+import java.util.stream.Collectors;
 
 import static org.apache.commons.lang3.RandomUtils.nextInt;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -320,22 +333,127 @@ public abstract class BrokerIntegrationTest<K, V> {
                 expectedMembers);
     }
 
+    /**
+     * The uneven-split sibling of {@link #awaitGroupStableWithOnePartitionEach} (the multi-process harness's
+     * KTD8): waits until the current group reports exactly {@code expectedMembers}, its state is {@code Stable},
+     * the members' assignments are pairwise disjoint, and together they cover every partition of every topic
+     * they touch - a three-to-one split passes, a member holding nothing passes (more members than
+     * partitions), a partition owned twice or by nobody does not. The timeout message names what was observed,
+     * so a group that never settles is distinguishable from one that settled at the wrong size.
+     *
+     * @return the stable description, so the caller can read the split it got
+     */
+    protected ConsumerGroupDescription awaitGroupStable(int expectedMembers,
+                                                                                       Duration budget) {
+        var latest = new AtomicReference<String>("(not yet described)");
+        try {
+            Awaitility.await("group " + getKcu().getGroupId() + " stable with " + expectedMembers + " members")
+                    .atMost(budget).pollInterval(Duration.ofMillis(250)).untilAsserted(() -> {
+                        var description = describeGroup();
+                        latest.set(describeMembers(description));
+                        assertThat(description.members()).as("members").hasSize(expectedMembers);
+                        assertThat(description.state()).as("group state")
+                                .isEqualTo(ConsumerGroupState.STABLE);
+                        var owned = new ArrayList<TopicPartition>();
+                        for (var member : description.members()) {
+                            owned.addAll(member.assignment().topicPartitions());
+                        }
+                        assertThat(owned).as("no partition owned twice").doesNotHaveDuplicates();
+                        var topics = owned.stream().map(TopicPartition::topic).collect(Collectors.toSet());
+                        var expectedPartitions = new ArrayList<TopicPartition>();
+                        for (var entry : partitionCountsOf(topics).entrySet()) {
+                            for (int p = 0; p < entry.getValue(); p++) {
+                                expectedPartitions.add(new TopicPartition(entry.getKey(), p));
+                            }
+                        }
+                        assertThat(owned).as("every partition of every subscribed topic owned exactly once")
+                                .containsExactlyInAnyOrderElementsOf(expectedPartitions);
+                    });
+        } catch (ConditionTimeoutException timeout) {
+            throw new ConditionTimeoutException("group " + getKcu().getGroupId() + " was not stable with "
+                    + expectedMembers + " members within " + budget + "; last observed: " + latest.get(), timeout);
+        }
+        var description = describeGroup();
+        log.info("Consumer group {} stable: {}", getKcu().getGroupId(), describeMembers(description));
+        return description;
+    }
+
+    /**
+     * Waits until the current group reports exactly {@code expectedMembers} (any state) - the "member gone"
+     * observation after a kill, where the group passes through a rebalance before it is stable again.
+     *
+     * @return how long the wait took, for the lane to REPORT (never to gate on - KTD13)
+     */
+    protected Duration awaitGroupMemberCount(int expectedMembers, Duration budget) {
+        var started = Instant.now();
+        var latest = new AtomicReference<String>("(not yet described)");
+        try {
+            Awaitility.await("group " + getKcu().getGroupId() + " at " + expectedMembers + " members")
+                    .atMost(budget).pollInterval(Duration.ofMillis(100)).untilAsserted(() -> {
+                        var description = describeGroup();
+                        latest.set(describeMembers(description));
+                        assertThat(description.members()).as("members").hasSize(expectedMembers);
+                    });
+        } catch (ConditionTimeoutException timeout) {
+            throw new ConditionTimeoutException("group " + getKcu().getGroupId() + " did not reach "
+                    + expectedMembers + " members within " + budget + "; last observed: " + latest.get(), timeout);
+        }
+        return Duration.between(started, Instant.now());
+    }
+
+    /**
+     * The inter-rung barrier (KTD8): the group is re-confirmed stable at the next rung's size, the departed
+     * members' tail is drained on the broker's clock, and the returned broker instant is where the next window
+     * opens - so one rung's tail never lands in the next rung's window.
+     */
+    protected Instant rungBarrier(FiringLedger ledger,
+                                            int expectedMembers, Set<String> departed, Duration settle,
+                                            Duration budget) {
+        awaitGroupStable(expectedMembers, budget);
+        Instant quiet = ledger.awaitTailQuiet(departed, settle, budget);
+        // stability could have been lost while the tail drained - the window opens on a group that is stable NOW
+        awaitGroupStable(expectedMembers, budget);
+        return ledger.anchorNow().isAfter(quiet) ? ledger.anchorNow() : quiet;
+    }
+
+    /** One line naming each member (by client id) with the partitions it holds, plus the group state. */
+    protected static String describeMembers(ConsumerGroupDescription description) {
+        var members = new ArrayList<String>();
+        for (var member : description.members()) {
+            members.add(member.clientId() + "=" + member.assignment().topicPartitions());
+        }
+        return "state " + description.state() + ", " + members.size() + " members " + members;
+    }
+
+    /** Partition count per topic, from the admin client. */
     @SneakyThrows
-    protected org.apache.kafka.clients.admin.ConsumerGroupDescription describeGroup() {
+    protected Map<String, Integer> partitionCountsOf(Collection<String> topics) {
+        var counts = new HashMap<String, Integer>();
+        for (var entry : getKcu().getAdmin().describeTopics(topics).allTopicNames().get(30, TimeUnit.SECONDS)
+                .entrySet()) {
+            counts.put(entry.getKey(), entry.getValue().partitions().size());
+        }
+        return counts;
+    }
+
+    @SneakyThrows
+    protected ConsumerGroupDescription describeGroup() {
         String groupId = getKcu().getGroupId();
         return getKcu().getAdmin()
-                .describeConsumerGroups(java.util.Collections.singleton(groupId))
+                .describeConsumerGroups(Collections.singleton(groupId))
                 .all().get()
                 .get(groupId);
     }
 
     /**
      * Count of hook-recorded firings in {@code [start, end)} - the anchored-window measurement primitive
-     * shared by the navigator test and demo. Insertion order is irrelevant, only the timestamps count.
+     * shared by the navigator test and demo. Insertion order is irrelevant, only the timestamps count. The
+     * one implementation is {@link FiringLedger#countIn}, which
+     * the multi-process lanes apply to broker timestamps.
      */
-    protected static long countIn(java.util.concurrent.ConcurrentLinkedQueue<java.time.Instant> firings,
-                                  java.time.Instant start, java.time.Instant end) {
-        return firings.stream().filter(firing -> !firing.isBefore(start) && firing.isBefore(end)).count();
+    protected static long countIn(ConcurrentLinkedQueue<Instant> firings,
+                                  Instant start, Instant end) {
+        return FiringLedger.countIn(firings, start, end);
     }
 
 }

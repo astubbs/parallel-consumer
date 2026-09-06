@@ -44,6 +44,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
+import static bz.stub.parallelconsumer.ParallelConsumerOptions.AllocationStrategy.IN_PROCESS;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.CommitMode.PERIODIC_CONSUMER_ASYNCHRONOUS;
 import static bz.stub.parallelconsumer.ParallelConsumerOptions.ProcessingOrder.PARTITION;
 import static bz.stub.parallelconsumer.integrationTests.utils.KafkaClientUtils.GroupOption.NEW_GROUP;
@@ -337,6 +338,7 @@ class NavigatorRateShareTest extends BrokerIntegrationTest<String, String> {
                         .ordering(PARTITION); // the MultiInstance pattern - and at 1Hz, ordering never binds
         if (sharedAllocatorOrNull != null) {
             builder.resourceTags(Collections.singletonList(RESOURCE))
+                    .allocationStrategy(IN_PROCESS)
                     .resourceAllocator(sharedAllocatorOrNull);
         }
         ParallelConsumerOptions<String, String> options = builder.build();
